@@ -2,9 +2,11 @@
 //! line, Composer. Rendering only — everything it shows is folded in core,
 //! and every key it answers to belongs to the cockpit above it.
 
+use ferrite_core::docview::{Instruments, Level, Tests};
 use ferrite_core::transcript::{
     Block, Body, Class, Diff, Span, Status, Style, Token, ToolBlock, ToolState, Transcript,
 };
+use ferrite_core::workspace::WorkspaceBinding;
 use ferrite_core::{Decision, ThreadId};
 use gpui::prelude::*;
 use gpui::{
@@ -19,6 +21,7 @@ const BG_PANE: u32 = 0x0e0e0e;
 const BG_CODE: u32 = 0x141414;
 const BORDER: u32 = 0x232323;
 const BORDER_FOCUSED: u32 = 0x3a3a3a;
+const LED_RUNNING: u32 = 0x6fa8dc;
 const HAIRLINE: u32 = 0x1a1a1a;
 const TEXT_PRIMARY: u32 = 0xf3f4f7;
 const TEXT_SECONDARY: u32 = 0xa7abb4;
@@ -54,17 +57,29 @@ impl PaneView {
     }
 }
 
+/// Everything one Pane draws, as the cockpit reads it for this frame.
+pub struct PaneState<'a> {
+    pub transcript: Option<&'a Transcript>,
+    pub decision: Option<&'a Decision>,
+    pub queued: Option<&'a str>,
+    pub workspace: Option<&'a WorkspaceBinding>,
+    pub focused: bool,
+    pub blocked: bool,
+}
+
 /// One Pane. A Thread with no transcript is one the cockpit could not open;
 /// it still gets a cell, because a Pane that vanishes hides the problem.
-pub fn render_pane(
-    view: &PaneView,
-    transcript: Option<&Transcript>,
-    decision: Option<&Decision>,
-    queued: Option<&str>,
-    focused: bool,
-    blocked: bool,
-    visible: usize,
-) -> impl IntoElement {
+pub fn render_pane(view: &PaneView, state: PaneState<'_>, level: Level) -> impl IntoElement {
+    let PaneState {
+        transcript,
+        decision,
+        queued,
+        workspace,
+        focused,
+        blocked,
+    } = state;
+    // One border rule for every level, so focus reads the same at arm's length
+    // as it does across the room.
     let border = if focused {
         BORDER_FOCUSED
     } else if blocked {
@@ -72,22 +87,35 @@ pub fn render_pane(
     } else {
         BORDER
     };
-    let mut pane = div()
+    let shell = div()
         .flex()
         .flex_col()
         .flex_1()
         .min_h_0()
-        .bg(rgb(BG_PANE))
+        .bg(rgb(if blocked { BG_DECISION } else { BG_PANE }))
         .border_1()
         .border_color(rgb(border))
         .rounded_sm()
-        .overflow_hidden()
-        .child(header(view.thread, transcript));
+        .overflow_hidden();
+
+    // Far enough away, a Pane is one signal: no header, no transcript,
+    // nothing that stops reading at a glance.
+    if level == Level::Wall {
+        return shell.child(wall(view.thread, transcript, blocked));
+    }
+
+    let mut pane = shell.child(header(view.thread, transcript, workspace));
+    // Mid: what the Thread is doing, above what it said.
+    if level == Level::Instruments {
+        if let Some(transcript) = transcript {
+            pane = pane.child(instruments(transcript));
+        }
+    }
 
     match transcript {
         Some(transcript) => {
             pane = pane
-                .child(body(view, transcript, visible))
+                .child(body(view, transcript, level.visible_blocks()))
                 .child(status_line(transcript));
         }
         None => {
@@ -105,6 +133,8 @@ pub fn render_pane(
         }
     }
 
+    // A held prompt is exactly what an operator glancing at instruments wants
+    // to see, so it shows wherever there is a Pane to show it in.
     if let Some(held) = queued {
         pane = pane.child(queued_line(held));
     }
@@ -115,13 +145,134 @@ pub fn render_pane(
                 .track_focus(&view.decision_focus),
         );
     }
-    if transcript.is_some() {
+    // Only the near view has room to answer in.
+    if transcript.is_some() && level == Level::Transcript {
         pane = pane.child(composer_line(view, focused));
     }
     pane
 }
 
-fn header(thread: ThreadId, transcript: Option<&Transcript>) -> impl IntoElement {
+fn wall(thread: ThreadId, transcript: Option<&Transcript>, blocked: bool) -> Div {
+    let (led, label) = match transcript.map(|t| t.status()) {
+        None => (TEXT_MUTED, "parked"),
+        Some(Status::Streaming) => (LED_RUNNING, "running"),
+        Some(Status::Blocked) => (TEXT_NOTICE, "waiting"),
+        Some(Status::Closed) => (DIFF_REMOVED, "closed"),
+        Some(Status::Idle) => (TEXT_MUTED, "idle"),
+    };
+    div()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_h_0()
+        .items_center()
+        .justify_center()
+        .gap(px(4.))
+        .child(
+            div()
+                .w(px(14.))
+                .h(px(14.))
+                .rounded_full()
+                .bg(rgb(led))
+                .flex_shrink_0(),
+        )
+        .child(
+            div()
+                .text_size(px(11.))
+                .text_color(rgb(TEXT_SECONDARY))
+                .child(SharedString::from(format!("{thread:02}"))),
+        )
+        .child(
+            div()
+                .text_size(px(10.))
+                .text_color(rgb(if blocked { TEXT_NOTICE } else { TEXT_MUTED }))
+                .child(SharedString::from(label)),
+        )
+}
+
+/// L2: the Thread's work, in one row that never wraps.
+fn instruments(transcript: &Transcript) -> impl IntoElement {
+    let read = Instruments::of(transcript);
+    let mut row = div()
+        .flex()
+        .flex_shrink_0()
+        .gap(px(10.))
+        .px(px(8.))
+        .py(px(3.))
+        .border_b_1()
+        .border_color(rgb(HAIRLINE))
+        .text_size(px(11.));
+
+    if let Some(todos) = read.todos {
+        row = row.child(
+            div()
+                .text_color(rgb(TEXT_SECONDARY))
+                .child(SharedString::from(format!(
+                    "{}/{} done",
+                    todos.done, todos.total
+                ))),
+        );
+    }
+    row = row.child(match read.tests {
+        Some(Tests::Passed) => div()
+            .text_color(rgb(DIFF_ADDED))
+            .child(SharedString::from("tests pass")),
+        Some(Tests::Failed) => div()
+            .text_color(rgb(DIFF_REMOVED))
+            .child(SharedString::from("tests fail")),
+        None => div()
+            .text_color(rgb(TEXT_MUTED))
+            .child(SharedString::from("no tests run")),
+    });
+    if read.added > 0 || read.removed > 0 {
+        row = row.child(
+            div()
+                .flex()
+                .gap(px(4.))
+                .child(
+                    div()
+                        .text_color(rgb(DIFF_ADDED))
+                        .child(SharedString::from(format!("+{}", read.added))),
+                )
+                .child(
+                    div()
+                        .text_color(rgb(DIFF_REMOVED))
+                        .child(SharedString::from(format!("−{}", read.removed))),
+                )
+                .child(
+                    div()
+                        .text_color(rgb(TEXT_MUTED))
+                        .child(SharedString::from(format!(
+                            "{} file{}",
+                            read.files,
+                            if read.files == 1 { "" } else { "s" }
+                        ))),
+                ),
+        );
+    }
+    row
+}
+
+/// Which checkout a Thread works in — a worktree's own name, or "main" for
+/// the shared one. One line, because an operator running many Threads has to
+/// know which of them can trample the others.
+fn binding_label(workspace: Option<&WorkspaceBinding>) -> SharedString {
+    match workspace {
+        Some(WorkspaceBinding::Worktree { path, .. }) => SharedString::from(
+            path.file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| "worktree".into()),
+        ),
+        Some(WorkspaceBinding::Main { .. }) => SharedString::from("main"),
+        None => SharedString::from(""),
+    }
+}
+
+fn header(
+    thread: ThreadId,
+    transcript: Option<&Transcript>,
+    workspace: Option<&WorkspaceBinding>,
+) -> impl IntoElement {
     let subtitle = match transcript.and_then(|t| Some((t.model()?, t.session_id()?))) {
         Some((model, id)) => {
             let short: String = id.chars().take(8).collect();
@@ -140,9 +291,21 @@ fn header(thread: ThreadId, transcript: Option<&Transcript>) -> impl IntoElement
         .border_color(rgb(HAIRLINE))
         .child(
             div()
-                .text_size(px(11.))
-                .text_color(rgb(TEXT_PRIMARY))
-                .child(SharedString::from(format!("thread-{thread:02}"))),
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(rgb(TEXT_PRIMARY))
+                        .child(SharedString::from(format!("thread-{thread:02}"))),
+                )
+                .child(
+                    div()
+                        .text_size(px(10.))
+                        .text_color(rgb(TEXT_MUTED))
+                        .child(binding_label(workspace)),
+                ),
         )
         .child(
             div()
@@ -150,20 +313,6 @@ fn header(thread: ThreadId, transcript: Option<&Transcript>) -> impl IntoElement
                 .text_color(rgb(TEXT_MUTED))
                 .child(subtitle),
         )
-}
-
-/// Blocks a Pane draws, by how much room it has. A cell of a 24-Pane wall
-/// shows a dozen lines; walking a whole Thread's history every frame is work
-/// nobody can see, and it is what turns a 120fps cockpit into a 30fps one
-/// after a minute of streaming. Size decides — the same rule semantic zoom
-/// will use for everything else.
-pub fn visible_blocks(panes: usize) -> usize {
-    match panes {
-        0..=1 => 200,
-        2..=4 => 80,
-        5..=9 => 40,
-        _ => 20,
-    }
 }
 
 fn body(view: &PaneView, transcript: &Transcript, visible: usize) -> impl IntoElement {
@@ -630,6 +779,27 @@ mod tests {
         ) -> impl IntoElement {
             div()
         }
+    }
+
+    /// An operator running many Threads has to know which of them share the
+    /// checkout and which cannot trample it.
+    #[test]
+    fn the_chrome_names_the_workspace_a_thread_works_in() {
+        assert_eq!(
+            binding_label(Some(&WorkspaceBinding::Worktree {
+                repo: "/repo".into(),
+                path: "/repo/../ferrite-thread-3".into(),
+            })),
+            "ferrite-thread-3"
+        );
+        assert_eq!(
+            binding_label(Some(&WorkspaceBinding::Main {
+                checkout: "/repo".into()
+            })),
+            "main"
+        );
+        // A Thread from before bindings existed claims nothing.
+        assert_eq!(binding_label(None), "");
     }
 
     /// The app is thin by design, so its render test is that every Block kind

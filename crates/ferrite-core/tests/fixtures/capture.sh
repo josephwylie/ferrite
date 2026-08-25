@@ -95,6 +95,16 @@ for scenario in $WANTED; do
             --prompt 'Use the Edit tool to change the word bravo to delta in ferrite-edit.txt, then say done.' \
             -- --safe-mode --allowedTools 'Read Edit'
         ;;
+    # (g) Whatever this CLI calls its todo list. 2.1.243 advertises no
+    # TodoWrite — its Task* tools are the background-agent family — so this
+    # capture exists to answer "is there a todo tool at all", and the L2
+    # progress instrument is built on what it finds, or dropped if it finds
+    # nothing.
+    todo)
+        capture todo \
+            --prompt 'Plan the work for tidying a small repo as a three-step todo list, track it with your todo tool, then mark the first step complete and say done.' \
+            -- --safe-mode
+        ;;
     # (b) A Decision. No --allowedTools, and --permission-prompt-tool stdio is
     # what makes the CLI ask over the control protocol instead of refusing
     # outright. Write always prompts in the default permission mode, whereas a

@@ -50,6 +50,9 @@ TIMEOUT = 300
 IDENTIFYING = re.compile(r'"(email|organization)":"[^"]*"')
 INSTALLATION = re.compile(r'"installationId":"[0-9a-f-]{36}"')
 HOSTS = {socket.gethostname(), socket.gethostname().split(".")[0] + ".local"}
+# Word-bounded and derived from $HOME, never hardcoded.
+USERNAME = os.path.basename(os.path.expanduser("~"))
+BARE_USERNAME = re.compile(rf"\b{re.escape(USERNAME)}\b") if USERNAME else None
 PATHS = [(path, mask)
          for directory, mask in ((CWD, "/workspace"), (os.path.expanduser("~"), "/home/operator"))
          for path in {directory, os.path.realpath(directory)}]
@@ -58,6 +61,10 @@ PATHS = [(path, mask)
 def redact(line):
     for path, mask in PATHS:
         line = line.replace(path, mask)
+    # The account name on its own: tool output prints it bare (an `ls -l`
+    # owner column), which masking home directories does not cover.
+    if BARE_USERNAME is not None:
+        line = BARE_USERNAME.sub("operator", line)
     for host in HOSTS:
         line = line.replace(host, "operator.local")
     line = INSTALLATION.sub('"installationId":"00000000-0000-0000-0000-000000000000"', line)

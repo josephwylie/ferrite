@@ -44,11 +44,23 @@ IDENTIFYING = re.compile(r'"(email|organization)":"[^"]*"')
 PATHS = [(path, mask)
          for directory, mask in ((CWD, "/workspace"), (os.path.expanduser("~"), "/home/operator"))
          for path in {directory, os.path.realpath(directory)}]
+# The account name on its own, with no path around it. Tool output prints it
+# bare — `ls -l` puts it in the owner column — so masking home directories is
+# not enough. Derived from $HOME rather than hardcoded. Word boundaries stop
+# it matching inside longer words, but an account named after a common word
+# will still mask that word wherever it appears: over-redaction, which is the
+# safe direction for a fixture that ships publicly.
+USERNAME = os.path.basename(os.path.expanduser("~"))
+BARE_USERNAME = re.compile(rf"\b{re.escape(USERNAME)}\b") if USERNAME else None
 
 
 def redact(line):
     for path, mask in PATHS:
         line = line.replace(path, mask)
+    # After the paths: a masked home is already "operator", and what is left
+    # is the name standing on its own.
+    if BARE_USERNAME is not None:
+        line = BARE_USERNAME.sub("operator", line)
     return IDENTIFYING.sub(r'"\1":"operator@example.invalid"', line)
 
 

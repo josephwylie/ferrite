@@ -300,6 +300,10 @@ mod tests {
             "permission-always",
             include_str!("../../../tests/fixtures/claude-permission-always-2.1.243.jsonl"),
         ),
+        (
+            "todo",
+            include_str!("../../../tests/fixtures/claude-todo-2.1.243.jsonl"),
+        ),
     ];
 
     /// Every event the committed capture of `claude` 2.1.243 yields, in order.
@@ -472,6 +476,9 @@ mod tests {
                 // Two Writes, one Decision: the standing answer was adopted on
                 // the first, and the CLI never gated the second.
                 ("permission-always", 58, 15),
+                // The Thread plans: three TaskCreate calls and the update that
+                // ticks the first off, which is what L2's progress counts.
+                ("todo", 190, 47),
             ]
         );
     }

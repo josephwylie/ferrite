@@ -187,6 +187,16 @@ pub struct Update {
     pub boundary: Option<Boundary>,
 }
 
+/// A Thread's own plan, as it works it. Counted off the tool calls the
+/// provider already makes — `claude` 2.1.243 plans with TaskCreate and marks
+/// work done with TaskUpdate, which is what the committed `todo` capture
+/// shows. A provider that plans some other way simply has none of this.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Todos {
+    pub done: usize,
+    pub total: usize,
+}
+
 /// How much of the model's context a Thread has spent. Codex reports this and
 /// never reports dollars; Claude reports dollars and not this.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -229,6 +239,10 @@ pub struct Transcript {
     usage: Option<Usage>,
     /// Which reasoning summary part the tail Block belongs to.
     summary_index: Option<u64>,
+    /// The Thread's plan: how many steps it made, and which it has finished.
+    /// Ids rather than a count, because a step can be completed twice.
+    planned: usize,
+    completed: std::collections::BTreeSet<String>,
 }
 
 /// Blocks a long-running Thread keeps in memory. Generous enough that a Pane
@@ -261,6 +275,8 @@ impl Transcript {
             last_cost: None,
             usage: None,
             summary_index: None,
+            planned: 0,
+            completed: std::collections::BTreeSet::new(),
         }
     }
 
@@ -282,6 +298,17 @@ impl Transcript {
 
     pub fn usage(&self) -> Option<Usage> {
         self.usage
+    }
+
+    /// The Thread's plan, once it has made one.
+    pub fn todos(&self) -> Option<Todos> {
+        (self.planned > 0).then_some(Todos {
+            // The CLI assigns task ids and TaskCreate never echoes them, so a
+            // completion cannot be matched to the step it finished. Clamping
+            // is the honest bound: a Pane may under-report, never overshoot.
+            done: self.completed.len().min(self.planned),
+            total: self.planned,
+        })
     }
 
     pub fn blocks(&self) -> &[Block] {
@@ -394,6 +421,7 @@ impl Transcript {
                 }
             }
             Input::Event(SessionEvent::ToolStarted { id, name, input }) => {
+                self.plan(&name, &input);
                 let block = self.push(Body::Tool(ToolBlock {
                     call: id,
                     summary: tool_summary(&input),
@@ -485,6 +513,20 @@ impl Transcript {
             dirty.extend(self.write_open(body));
         }
         dirty
+    }
+
+    /// Watch the Thread plan and tick its own work off. Nothing is stored but
+    /// the counts: the plan's prose is already in the tool rows.
+    fn plan(&mut self, name: &str, input: &serde_json::Value) {
+        match name {
+            "TaskCreate" => self.planned += 1,
+            "TaskUpdate" if input.get("status").and_then(|s| s.as_str()) == Some("completed") => {
+                if let Some(task) = input.get("taskId").and_then(|id| id.as_str()) {
+                    self.completed.insert(task.to_string());
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Thinking streams like prose but never shares a Block with the answer.
@@ -1129,6 +1171,67 @@ mod tests {
             body_text(&transcript.blocks()[1]),
             "Now checking the tests."
         );
+    }
+
+    /// The shapes are the committed `todo` capture's, not remembered ones:
+    /// 2.1.243 has no TodoWrite — it plans with TaskCreate/TaskUpdate.
+    #[test]
+    fn a_planned_todo_list_is_counted_as_it_is_worked() {
+        let mut transcript = Transcript::default();
+        assert_eq!(transcript.todos(), None, "a Thread with no plan has none");
+
+        for subject in ["init git", "add docs", "make dirs"] {
+            transcript.apply(started(
+                &format!("t{subject}"),
+                "TaskCreate",
+                serde_json::json!({ "subject": subject, "activeForm": subject }),
+            ));
+        }
+        transcript.apply(started(
+            "u1",
+            "TaskUpdate",
+            serde_json::json!({ "taskId": "1", "status": "completed" }),
+        ));
+
+        assert_eq!(transcript.todos(), Some(Todos { done: 1, total: 3 }));
+
+        // A status that is not completion moves nothing.
+        transcript.apply(started(
+            "u2",
+            "TaskUpdate",
+            serde_json::json!({ "taskId": "2", "status": "in_progress" }),
+        ));
+        assert_eq!(transcript.todos(), Some(Todos { done: 1, total: 3 }));
+
+        // And completing the same task twice is still one task done.
+        transcript.apply(started(
+            "u3",
+            "TaskUpdate",
+            serde_json::json!({ "taskId": "1", "status": "completed" }),
+        ));
+        assert_eq!(transcript.todos(), Some(Todos { done: 1, total: 3 }));
+    }
+
+    /// The CLI assigns task ids and never echoes them back on TaskCreate, so
+    /// a completion cannot be matched to a creation. What can be promised is
+    /// that the count never overshoots: "2/1 done" is nonsense on a Pane.
+    #[test]
+    fn finished_work_never_outruns_the_plan() {
+        let mut transcript = Transcript::default();
+        transcript.apply(started(
+            "c1",
+            "TaskCreate",
+            serde_json::json!({ "subject": "the only step" }),
+        ));
+        for task in ["1", "2", "3"] {
+            transcript.apply(started(
+                &format!("u{task}"),
+                "TaskUpdate",
+                serde_json::json!({ "taskId": task, "status": "completed" }),
+            ));
+        }
+
+        assert_eq!(transcript.todos(), Some(Todos { done: 1, total: 1 }));
     }
 
     #[test]

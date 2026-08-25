@@ -30,6 +30,22 @@ fn main() {
             std::process::exit(2);
         }
     };
+    // Every --import <path>: a session file from the Claude or Codex CLI,
+    // adopted as a Thread of its own.
+    let mut imports: Vec<String> = Vec::new();
+    for (at, arg) in args.iter().enumerate() {
+        if arg != "--import" {
+            continue;
+        }
+        match args.get(at + 1) {
+            Some(path) => imports.push(path.clone()),
+            // Silently dropping it would look like an import that did nothing.
+            None => {
+                eprintln!("ferrite: --import needs the path of a session file");
+                std::process::exit(2);
+            }
+        }
+    }
     // How many Panes to open. The wall's own number is 24, which is what the
     // perf run uses.
     let panes: usize = flag(&args, "--panes")
@@ -52,11 +68,19 @@ fn main() {
             KeyBinding::new("y", cockpit::Allow, Some("Decision")),
             KeyBinding::new("n", cockpit::Deny, Some("Decision")),
             KeyBinding::new("a", cockpit::Always, Some("Decision")),
+            // At wall range no Pane holds a Composer, so the same keys answer
+            // whichever Thread is flagged without focusing it first.
+            KeyBinding::new("y", cockpit::Allow, Some("Wall")),
+            KeyBinding::new("n", cockpit::Deny, Some("Wall")),
+            KeyBinding::new("a", cockpit::Always, Some("Wall")),
             // The cockpit: walk the grid, and jump to whoever needs answering.
             KeyBinding::new("cmd-]", cockpit::NextPane, None),
             KeyBinding::new("cmd-[", cockpit::PreviousPane, None),
             KeyBinding::new("cmd-d", cockpit::NextDecision, None),
             KeyBinding::new("cmd-n", cockpit::NewThread, None),
+            // Shift: the same new Thread, in its own worktree instead of the
+            // checkout the operator is sitting in.
+            KeyBinding::new("cmd-shift-n", cockpit::NewWorktreeThread, None),
             // Close parks the Thread; it is still there, and reopening revives it.
             KeyBinding::new("cmd-w", cockpit::CloseThread, None),
             // And back again: the most recently parked Thread, revived.
@@ -72,9 +96,21 @@ fn main() {
                 std::process::exit(1);
             }
         };
+        let (adopted, refused) = cockpit::adopt(&store, &imports);
+        for refusal in refused {
+            eprintln!("ferrite: {refusal}");
+        }
+
         let mut core = Cockpit::new(store, Box::new(Spawn { demo, load }));
         core.watch_memory(Box::new(ProcessRss), RSS_LIMIT);
-        cockpit::threads_for(&mut core, panes.max(1), provider);
+        for thread in adopted {
+            if let Err(e) = core.revive(thread) {
+                eprintln!("ferrite: imported thread {thread} would not open: {e}");
+            }
+        }
+        if core.threads().is_empty() {
+            cockpit::threads_for(&mut core, panes.max(1), provider);
+        }
 
         let bounds = Bounds::centered(None, size(px(1440.), px(900.)), cx);
         let window = cx
