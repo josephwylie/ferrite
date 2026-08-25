@@ -3,8 +3,12 @@
 
 use std::time::Duration;
 
+use std::sync::mpsc::Receiver;
+use std::sync::Arc;
+
 use ferrite_core::transcript::{
-    Block, Body, Class, Diff, Input, Span, Status, Style, Token, ToolBlock, ToolState, Transcript,
+    Block, Body, Class, Diff, Input, Lexer, Span, Status, Style, Token, ToolBlock, ToolState,
+    Transcript,
 };
 use ferrite_core::SessionEvent;
 use gpui::prelude::*;
@@ -31,6 +35,9 @@ const TEXT_NOTICE: u32 = 0xd9a05b;
 const TEXT_CODE: u32 = 0xc7ccd6;
 const DIFF_ADDED: u32 = 0x7fb069;
 const DIFF_REMOVED: u32 = 0xcf6f6f;
+const CODE_KEYWORD: u32 = 0x8fa8f0;
+const CODE_STRING: u32 = 0x9ec78a;
+const CODE_NUMBER: u32 = 0xd0a26a;
 
 const PUMP_MS: u64 = 16;
 
@@ -41,6 +48,8 @@ pub struct Pane {
     title: SharedString,
     provider: SharedString,
     transcript: Transcript,
+    /// Highlighting answers, on their way back into the same apply path.
+    highlights: Receiver<Input>,
     scroll: ScrollHandle,
 }
 
@@ -64,13 +73,15 @@ impl Pane {
             .detach();
         }
 
+        let (lexer, highlights) = Lexer::new();
         Self {
             session,
             spawn_error,
             composer: cx.new(Composer::new),
             title: "thread-01".into(),
             provider: "claude".into(),
-            transcript: Transcript::default(),
+            transcript: Transcript::new(Arc::new(lexer)),
+            highlights,
             scroll: ScrollHandle::new(),
         }
     }
@@ -79,19 +90,29 @@ impl Pane {
         &self.composer
     }
 
-    /// Drain whatever the Session produced since the last frame.
+    /// Drain whatever arrived since the last frame: the Session's events, and
+    /// any highlighting the lexer has finished.
     fn pump(&mut self, cx: &mut Context<Self>) {
-        let Some(session) = &self.session else {
-            return;
+        let events: Vec<SessionEvent> = match &self.session {
+            Some(session) => session.events().try_iter().collect(),
+            None => Vec::new(),
         };
-        let events: Vec<SessionEvent> = session.events().try_iter().collect();
-        if events.is_empty() {
+        let answers: Vec<Input> = self.highlights.try_iter().collect();
+        if events.is_empty() && answers.is_empty() {
             return;
         }
+
+        let streamed = !events.is_empty();
         for event in events {
             self.transcript.apply(Input::Event(event));
         }
-        self.scroll.scroll_to_bottom();
+        for answer in answers {
+            self.transcript.apply(answer);
+        }
+        // Colour arriving late must not yank the view; new content must.
+        if streamed {
+            self.scroll.scroll_to_bottom();
+        }
         cx.notify();
     }
 
@@ -246,7 +267,7 @@ impl Pane {
 
 /// One Block, drawn at terminal density: no card chrome anywhere it can be
 /// avoided, one hairline where structure genuinely needs a boundary.
-pub fn render_block(block: &Block) -> AnyElement {
+fn render_block(block: &Block) -> AnyElement {
     let row = div().w_full().flex_shrink_0();
     match &block.body {
         Body::Prompt(line) => row
@@ -454,10 +475,10 @@ fn code(source: &str, tokens: Option<&[Token]>) -> StyledText {
         }
         let color = match token.class {
             Class::Plain => TEXT_CODE,
-            Class::Keyword => 0x8fa8f0,
-            Class::Str => 0x9ec78a,
+            Class::Keyword => CODE_KEYWORD,
+            Class::Str => CODE_STRING,
             Class::Comment => TEXT_THINKING,
-            Class::Number => 0xd0a26a,
+            Class::Number => CODE_NUMBER,
         };
         highlights.push((
             at..end,
@@ -512,7 +533,8 @@ mod tests {
 
     /// A transcript holding one of every Block kind the Pane can draw.
     fn every_kind() -> Transcript {
-        let mut transcript = Transcript::default();
+        let (lexer, answers) = Lexer::new();
+        let mut transcript = Transcript::new(Arc::new(lexer));
         transcript.apply(Input::Prompt("run the tests".into()));
         transcript.apply(Input::Event(SessionEvent::ThinkingDelta {
             text: "weighing it up".into(),
@@ -568,6 +590,11 @@ mod tests {
             cost_usd: Some(0.038),
         }));
         transcript.apply(Input::Notice("send failed: broken pipe".into()));
+        // Feed the lexer's answers back, so the smoke render paints highlighted
+        // code rather than the plain fallback.
+        for answer in answers.try_iter() {
+            transcript.apply(answer);
+        }
         transcript
     }
 

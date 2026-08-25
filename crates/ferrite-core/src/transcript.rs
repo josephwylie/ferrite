@@ -1,11 +1,15 @@
 //! Folds SessionEvents into stable-identity Blocks.
 //!
 //! Events in, Blocks out — no window, no timers. Every apply reports exactly
-//! which Blocks changed, so a Pane repaints those and nothing else.
+//! which Blocks changed. That is the seam the wall will repaint through; the
+//! single Pane shipping today still redraws whole and drops the report.
 
 use std::sync::Arc;
 
 use crate::{Hunk, SessionEvent, ToolResult};
+
+mod highlight;
+pub use highlight::Lexer;
 
 /// A Block's identity, stable for as long as the Block lives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -193,7 +197,7 @@ pub enum Boundary {
 
 pub struct Transcript {
     blocks: Vec<Block>,
-    next_id: u64,
+    last_id: u64,
     /// The Block still growing, and the raw markdown it was folded from.
     open: Option<BlockId>,
     source: String,
@@ -206,8 +210,9 @@ pub struct Transcript {
     last_cost: Option<f64>,
 }
 
-/// Blocks a long-running Thread keeps in memory. Generous: a Pane that has
-/// been streaming all day still scrolls back through a real conversation.
+/// Blocks a long-running Thread keeps in memory. Generous enough that a Pane
+/// streaming all day scrolls back through the Thread's own history rather
+/// than a recent sliver of it.
 const DEFAULT_CAPACITY: usize = 2000;
 
 impl Default for Transcript {
@@ -224,7 +229,7 @@ impl Transcript {
     pub fn with_capacity(highlighter: Arc<dyn Highlighter>, capacity: usize) -> Self {
         Self {
             blocks: Vec::new(),
-            next_id: 0,
+            last_id: 0,
             open: None,
             source: String::new(),
             highlighter,
@@ -514,8 +519,8 @@ impl Transcript {
     }
 
     fn mint(&mut self) -> BlockId {
-        self.next_id += 1;
-        BlockId(self.next_id)
+        self.last_id += 1;
+        BlockId(self.last_id)
     }
 }
 
@@ -1049,6 +1054,110 @@ mod tests {
             }
             other => panic!("expected a tool row, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_failed_tool_carries_its_error_trimmed_to_a_row() {
+        let mut transcript = Transcript::default();
+        transcript.apply(started("toolu_1", "Bash", serde_json::Value::Null));
+
+        transcript.apply(completed("toolu_1", &"x".repeat(500), true));
+
+        let Body::Tool(tool) = &transcript.blocks()[0].body else {
+            panic!("expected a tool row")
+        };
+        let ToolState::Failed(message) = &tool.state else {
+            panic!("expected a failure, got {:?}", tool.state)
+        };
+        assert_eq!(message.chars().count(), 201);
+        assert!(message.ends_with('…'));
+    }
+
+    #[test]
+    fn an_interrupted_turn_says_so_and_carries_no_cost() {
+        let mut transcript = Transcript::default();
+        transcript.apply(text("half a thou"));
+
+        transcript.apply(Input::Event(SessionEvent::TurnEnded {
+            outcome: crate::TurnOutcome::Interrupted,
+            cost_usd: None,
+        }));
+
+        assert_eq!(transcript.status(), Status::Idle);
+        assert_eq!(transcript.last_cost(), None);
+        let last = transcript.blocks().last().unwrap();
+        assert!(matches!(last.body, Body::Meta(_)));
+        assert_eq!(body_text(last), "interrupted");
+    }
+
+    #[test]
+    fn a_failed_turn_surfaces_the_providers_message() {
+        let mut transcript = Transcript::default();
+
+        transcript.apply(Input::Event(SessionEvent::TurnEnded {
+            outcome: crate::TurnOutcome::Error("model overloaded".into()),
+            cost_usd: None,
+        }));
+
+        assert_eq!(transcript.status(), Status::Idle);
+        let last = transcript.blocks().last().unwrap();
+        assert!(matches!(last.body, Body::Notice(_)));
+        assert_eq!(body_text(last), "model overloaded");
+    }
+
+    #[test]
+    fn prompting_a_closed_or_blocked_session_never_shows_streaming() {
+        let mut closed = Transcript::default();
+        closed.apply(Input::Event(SessionEvent::Closed {
+            reason: "claude CLI exited".into(),
+        }));
+        closed.apply(Input::Prompt("anyone there?".into()));
+        assert_eq!(closed.status(), Status::Closed);
+
+        let mut blocked = Transcript::default();
+        blocked.apply(Input::Event(SessionEvent::DecisionRequested {
+            id: "perm_01".into(),
+            tool_use_id: "toolu_01".into(),
+            tool_name: "Write".into(),
+            description: "ferrite-perm.txt".into(),
+            input: serde_json::Value::Null,
+            suggestions: vec![],
+        }));
+        blocked.apply(Input::Prompt("go ahead".into()));
+        // The Decision is still what the Session waits on, not this prompt.
+        assert_eq!(blocked.status(), Status::Blocked);
+    }
+
+    #[test]
+    fn a_rust_fence_comes_back_highlighted_through_the_apply_path() {
+        let (lexer, answers) = Lexer::new();
+        let mut transcript = Transcript::new(std::sync::Arc::new(lexer));
+
+        transcript.apply(text("```rust\nfn main() { let x = 1; }\n```\n\n"));
+
+        // The lexer answered on its own channel; a pump feeds that back in.
+        let answer = answers.try_recv().expect("the lexer answered");
+        let update = transcript.apply(answer);
+
+        let code = transcript
+            .blocks()
+            .iter()
+            .find(|block| matches!(block.body, Body::Code { .. }))
+            .expect("a code block");
+        assert_eq!(update.dirty, vec![code.id]);
+        let Body::Code { tokens, .. } = &code.body else {
+            unreachable!()
+        };
+        let tokens = tokens.as_deref().expect("tokens for a settled fence");
+        assert!(
+            tokens
+                .iter()
+                .any(|token| token.class == Class::Keyword && token.text == "fn"),
+            "no keyword in {tokens:?}"
+        );
+        // The Pane maps tokens onto the source by length, so they must cover it.
+        let covered: String = tokens.iter().map(|token| token.text.as_str()).collect();
+        assert_eq!(covered, "fn main() { let x = 1; }");
     }
 
     #[derive(Default)]
