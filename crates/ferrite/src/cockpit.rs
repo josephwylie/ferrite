@@ -59,6 +59,11 @@ pub struct CockpitView {
     /// Pane holds a Composer, this handle is what keeps the keyboard alive.
     focus: FocusHandle,
     perf: Option<Perf>,
+    /// Threads the operator parked this launch, oldest first — cmd-o pops the
+    /// tail, the one just closed. In memory only, deliberately: the store
+    /// keeps no park order, so a relaunch forgets it and reopen falls back to
+    /// creation order (accepted v1 behavior).
+    park_order: Vec<ThreadId>,
     /// When the watchdog last swept. Sweeping costs a `ps`/`tasklist` per
     /// live Session, so it runs on its own slow cadence, never per frame.
     swept: std::time::Instant,
@@ -100,6 +105,7 @@ impl CockpitView {
                 frames: 0,
                 since: std::time::Instant::now(),
             }),
+            park_order: Vec::new(),
             swept: std::time::Instant::now(),
         }
     }
@@ -321,10 +327,20 @@ impl CockpitView {
     }
 
     /// Reopen the Thread parked most recently — the one the operator just
-    /// closed, which is the one they want back. Choosing among older ones
-    /// wants a picker, and that is not this ticket.
+    /// closed, which is the one they want back. The order is remembered only
+    /// for this launch: once it is drained — Threads parked before a relaunch
+    /// are never in it — the newest-created parked Thread is next (accepted
+    /// v1 behavior). Choosing among older ones wants a picker, and that is
+    /// not this ticket.
     fn reopen_thread(&mut self, _: &ReopenThread, _window: &mut Window, cx: &mut Context<Self>) {
-        let Some(thread) = self.cockpit.parked().unwrap_or_default().last().copied() else {
+        // A Thread whose revive fails below keeps its park but loses its
+        // slot in the order: cmd-o moves on rather than jamming on it, and
+        // the creation-order fallback still reaches it.
+        let Some(thread) = self
+            .park_order
+            .pop()
+            .or_else(|| self.cockpit.parked().unwrap_or_default().last().copied())
+        else {
             return;
         };
         match self.cockpit.revive(thread) {
@@ -346,6 +362,9 @@ impl CockpitView {
         if let Err(e) = self.cockpit.park(thread) {
             eprintln!("ferrite: thread {thread} did not park cleanly: {e}");
         }
+        // Parked even on a flush error — the Session is gone either way, so
+        // cmd-o should still bring this Thread back first.
+        self.park_order.push(thread);
         self.panes.retain(|pane| pane.thread != thread);
         self.focused = self.focused.min(self.panes.len().saturating_sub(1));
         cx.notify();
@@ -739,6 +758,133 @@ mod tests {
                         if line.starts_with("revived")
                 )),
                 "a revived Pane must not pretend it never died: {blocks:?}"
+            );
+        });
+    }
+
+    /// The two Threads of a cockpit, in creation order. Pane order follows a
+    /// HashMap, so tests about park order must not read it off the grid.
+    fn created(
+        view: &gpui::Entity<CockpitView>,
+        cx: &mut gpui::VisualTestContext,
+    ) -> (ThreadId, ThreadId) {
+        view.read_with(cx, |view, _| {
+            let mut ids: Vec<ThreadId> = view.panes.iter().map(|pane| pane.thread).collect();
+            ids.sort();
+            (ids[0], ids[1])
+        })
+    }
+
+    /// #17: cmd-o follows park order, not creation order. Create A then B,
+    /// park B then A — the Thread that comes back is A, the one the operator
+    /// just closed.
+    #[gpui::test]
+    fn reopening_revives_the_thread_parked_most_recently(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("park-order", 2);
+        cx.update(|cx| {
+            cx.bind_keys([
+                KeyBinding::new("cmd-w", CloseThread, None),
+                KeyBinding::new("cmd-o", ReopenThread, None),
+            ]);
+        });
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        tick(cx);
+        let (a, b) = created(&view, cx);
+
+        view.update(cx, |view, _| view.focused = view.pane_for(b).unwrap());
+        cx.simulate_keystrokes("cmd-w"); // park B
+        cx.simulate_keystrokes("cmd-w"); // then A — the most recent park
+        cx.simulate_keystrokes("cmd-o");
+
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.panes.len(), 1);
+            assert_eq!(
+                view.panes[0].thread, a,
+                "cmd-o must revive the just-parked {a}, not the newest-created {b}"
+            );
+        });
+    }
+
+    /// Reopening again keeps walking the park order backwards: park A then B,
+    /// and two cmd-o bring back B first, then A.
+    #[gpui::test]
+    fn reopening_again_walks_the_park_order_backwards(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("park-order-again", 2);
+        cx.update(|cx| {
+            cx.bind_keys([
+                KeyBinding::new("cmd-w", CloseThread, None),
+                KeyBinding::new("cmd-o", ReopenThread, None),
+            ]);
+        });
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        tick(cx);
+        let (a, b) = created(&view, cx);
+
+        view.update(cx, |view, _| view.focused = view.pane_for(a).unwrap());
+        cx.simulate_keystrokes("cmd-w"); // park A
+        cx.simulate_keystrokes("cmd-w"); // then B
+
+        cx.simulate_keystrokes("cmd-o");
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.panes.len(), 1);
+            assert_eq!(view.panes[0].thread, b, "the last park comes back first");
+        });
+
+        cx.simulate_keystrokes("cmd-o");
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.panes.len(), 2);
+            assert!(
+                view.panes.iter().any(|pane| pane.thread == a),
+                "and the one before it comes back next"
+            );
+        });
+    }
+
+    /// The park order is memory, not store: a Thread parked before this
+    /// launch is not in it. This launch's parks come back first, and only
+    /// then does cmd-o fall back to the newest-created parked Thread.
+    #[gpui::test]
+    fn reopening_falls_back_to_creation_order_for_threads_parked_before_launch(
+        cx: &mut TestAppContext,
+    ) {
+        let fake = Fake::default();
+        let store = Store::open(scratch("park-order-fallback")).unwrap();
+        let mut core = Cockpit::new(store, Box::new(fake.clone()));
+        let a = core
+            .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
+            .unwrap();
+        let b = core
+            .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
+            .unwrap();
+        // Parked before the view exists — a previous launch, as far as the
+        // view can know.
+        core.park(b).unwrap();
+        cx.update(|cx| {
+            cx.bind_keys([
+                KeyBinding::new("cmd-w", CloseThread, None),
+                KeyBinding::new("cmd-o", ReopenThread, None),
+            ]);
+        });
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        tick(cx);
+        view.read_with(cx, |view, _| assert_eq!(view.panes.len(), 1));
+
+        cx.simulate_keystrokes("cmd-w"); // park A — this launch's only park
+        cx.simulate_keystrokes("cmd-o");
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.panes.len(), 1);
+            assert_eq!(
+                view.panes[0].thread, a,
+                "the just-parked {a} outranks the newer-created {b}"
+            );
+        });
+
+        cx.simulate_keystrokes("cmd-o"); // the order is drained: creation order
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.panes.len(), 2);
+            assert!(
+                view.panes.iter().any(|pane| pane.thread == b),
+                "the pre-launch park still comes back, by creation order"
             );
         });
     }
