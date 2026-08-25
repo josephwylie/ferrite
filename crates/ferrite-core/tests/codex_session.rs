@@ -179,6 +179,13 @@ const PRELUDE_BODY: &str = concat!(
     "exec cat > /dev/null",
 );
 
+/// What a stub that intends to EXIT must do first: consume the host's
+/// handshake writes. Spawn is still writing `initialized` and `thread/start`
+/// when a stub that never reads quits — the pipe breaks mid-handshake and the
+/// test races the scheduler (it lost that race on a slow CI runner).
+const DRAIN_HANDSHAKE: &str =
+    r#"while read -r line; do case "$line" in *thread/start*) break;; esac; done"#;
+
 #[test]
 fn an_unreadable_version_banner_is_its_own_error() {
     match spawn_failure_of(stub("codex-mute", "echo 'codex-cli'")) {
@@ -802,7 +809,10 @@ fn interrupting_before_any_turn_writes_nothing() {
 
 #[test]
 fn stdout_eof_closes_the_session_with_the_exit_status() {
-    let program = stub("codex-quits", &format!("{PRELUDE}\nexit 0"));
+    let program = stub(
+        "codex-quits",
+        &format!("{PRELUDE}\n{DRAIN_HANDSHAKE}\nexit 0"),
+    );
     let session = CodexSession::spawn(config(program)).unwrap();
     match drain(session.events()).as_slice() {
         [SessionEvent::Init { .. }, SessionEvent::Closed { reason }] => {
@@ -816,7 +826,7 @@ fn stdout_eof_closes_the_session_with_the_exit_status() {
 fn an_abnormal_exit_explains_itself_with_stderr() {
     let program = stub(
         "codex-crashes",
-        &format!("{PRELUDE}\necho 'fatal: no auth token' >&2\nexit 3"),
+        &format!("{PRELUDE}\n{DRAIN_HANDSHAKE}\necho 'fatal: no auth token' >&2\nexit 3"),
     );
     let session = CodexSession::spawn(config(program)).unwrap();
     match drain(session.events()).as_slice() {
@@ -835,7 +845,7 @@ fn only_the_tail_of_a_noisy_stderr_is_kept() {
     let program = stub(
         "codex-noisy",
         &format!(
-            "{PRELUDE}\ni=1\nwhile [ $i -le 100 ]; do echo \"noise $i\" >&2; i=$((i+1)); done\nexit 3"
+            "{PRELUDE}\n{DRAIN_HANDSHAKE}\ni=1\nwhile [ $i -le 100 ]; do echo \"noise $i\" >&2; i=$((i+1)); done\nexit 3"
         ),
     );
     let session = CodexSession::spawn(config(program)).unwrap();
