@@ -175,9 +175,12 @@ pub struct ClaudeSession {
 impl ClaudeSession {
     /// Version-check the CLI, then spawn it in stream-json mode.
     pub fn spawn(config: ClaudeConfig) -> Result<Self, ClaudeSpawnError> {
-        check_version(&config.program)?;
+        // On Windows an npm install is a `claude.cmd` shim a bare name
+        // cannot exec; everything spawns through the resolved answer.
+        let program = super::spawnable_program(&config.program);
+        check_version(&program)?;
 
-        let mut command = Command::new(&config.program);
+        let mut command = Command::new(&program);
         command.args([
             "-p",
             "--input-format",
@@ -214,7 +217,7 @@ impl ClaudeSession {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|e| spawn_error(&config.program, e))?;
+            .map_err(|e| spawn_error(&program, e))?;
 
         let stdin = child.stdin.take().expect("stdin was piped");
         let stdout = child.stdout.take().expect("stdout was piped");

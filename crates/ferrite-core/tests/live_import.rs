@@ -97,7 +97,11 @@ fn settled_session_file(root: &Path, session_id: &str) -> PathBuf {
 }
 
 fn home(join: &str) -> PathBuf {
-    PathBuf::from(std::env::var("HOME").expect("HOME is set")).join(join)
+    // Windows spells the home directory USERPROFILE, not HOME.
+    let base = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .expect("a home directory is set");
+    PathBuf::from(base).join(join)
 }
 
 /// The whole claude acceptance path: session → file → import → resumed

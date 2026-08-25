@@ -136,12 +136,35 @@ impl RssSampler for ProcessRss {
 }
 
 /// One process's resident bytes, the way the panes24 spike reads it.
+#[cfg(not(windows))]
 pub(crate) fn rss_bytes(pid: u32) -> Option<u64> {
     let out = std::process::Command::new("ps")
         .args(["-o", "rss=", "-p", &pid.to_string()])
         .output()
         .ok()?;
     let kilobytes: u64 = String::from_utf8(out.stdout).ok()?.trim().parse().ok()?;
+    Some(kilobytes * 1024)
+}
+
+/// One process's resident bytes. Windows has no `ps`; `tasklist` is the
+/// stock instrument, and its working-set column is also kilobytes.
+#[cfg(windows)]
+pub(crate) fn rss_bytes(pid: u32) -> Option<u64> {
+    let out = std::process::Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
+        .output()
+        .ok()?;
+    tasklist_rss(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// The memory column of one `tasklist` CSV row — the last quoted field,
+/// `"12,345 K"`. Digit grouping is locale-typed (`.` in German), so only the
+/// digits are read.
+#[cfg(any(windows, test))]
+fn tasklist_rss(row: &str) -> Option<u64> {
+    let field = row.trim().rsplit('"').nth(1)?;
+    let digits: String = field.chars().filter(char::is_ascii_digit).collect();
+    let kilobytes: u64 = digits.parse().ok()?;
     Some(kilobytes * 1024)
 }
 
@@ -348,6 +371,26 @@ fn turn(thinking: &[&str], text: &str, cost: f64) -> Vec<Step> {
 mod tests {
     use super::*;
     use ferrite_core::transcript::{Body, Input, Status, Transcript};
+
+    /// Runs against whichever process table this platform has — `ps` here,
+    /// `tasklist` when the suite runs on Windows.
+    #[test]
+    fn the_rss_sampler_reads_this_very_process() {
+        let rss = rss_bytes(std::process::id()).expect("own pid must sample");
+        assert!(rss > 1024 * 1024, "resident bytes were {rss}");
+    }
+
+    #[test]
+    fn a_tasklist_row_yields_bytes_whatever_the_locale_groups_with() {
+        for row in [
+            "\"node.exe\",\"1234\",\"Console\",\"1\",\"54,321 K\"\r\n",
+            "\"node.exe\",\"1234\",\"Console\",\"1\",\"54.321 K\"",
+        ] {
+            assert_eq!(tasklist_rss(row), Some(54_321 * 1024), "{row:?}");
+        }
+        assert_eq!(tasklist_rss("INFO: No tasks are running.\r\n"), None);
+        assert_eq!(tasklist_rss(""), None);
+    }
 
     #[test]
     fn replaying_the_demo_script_leaves_a_paid_turn_and_a_thread_on_the_operator() {

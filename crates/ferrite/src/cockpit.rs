@@ -59,13 +59,13 @@ pub struct CockpitView {
     /// Pane holds a Composer, this handle is what keeps the keyboard alive.
     focus: FocusHandle,
     perf: Option<Perf>,
-    /// When the watchdog last swept. Sweeping costs a `ps` per live Session,
-    /// so it runs on its own slow cadence, never per frame.
+    /// When the watchdog last swept. Sweeping costs a `ps`/`tasklist` per
+    /// live Session, so it runs on its own slow cadence, never per frame.
     swept: std::time::Instant,
 }
 
 /// How often the watchdog sweeps. Leaks grow over seconds, not frames; a
-/// sweep per frame would spawn a `ps` per Session per tick.
+/// sweep per frame would spawn a `ps`/`tasklist` per Session per tick.
 const SWEEP_INTERVAL: Duration = Duration::from_secs(2);
 
 /// The panes24 instrument, kept behind an env var: frames actually painted,
@@ -440,7 +440,7 @@ impl Render for CockpitView {
             .flex_col()
             .size_full()
             .bg(rgb(pane::BG_WINDOW))
-            .font_family("Menlo")
+            .font_family(crate::MONO_FONT)
             .track_focus(&self.focus)
             // At wall range no Pane holds a Composer, so the answer keys are
             // not competing with typing: they answer whichever Thread is

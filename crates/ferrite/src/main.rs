@@ -1,6 +1,7 @@
 // Ferrite: the cockpit window and the pump behind it.
 mod cockpit;
 mod composer;
+mod keymap;
 mod line;
 mod pane;
 mod session;
@@ -17,6 +18,14 @@ actions!(ferrite, [Quit]);
 /// One Session may hold this much before the watchdog replaces it. Generous:
 /// a busy agent legitimately grows, and a restart costs the operator context.
 const RSS_LIMIT: u64 = 4 * 1024 * 1024 * 1024;
+
+/// The cockpit's one face. Menlo ships with macOS; Consolas with Windows
+/// (Cascadia Mono only arrives with Windows Terminal, so it cannot be
+/// assumed).
+#[cfg(target_os = "macos")]
+pub(crate) const MONO_FONT: &str = "Menlo";
+#[cfg(not(target_os = "macos"))]
+pub(crate) const MONO_FONT: &str = "Consolas";
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -53,40 +62,8 @@ fn main() {
         .unwrap_or(1);
 
     Application::new().run(move |cx: &mut App| {
-        cx.bind_keys([
-            KeyBinding::new("backspace", composer::Backspace, None),
-            KeyBinding::new("delete", composer::Delete, None),
-            KeyBinding::new("left", composer::Left, None),
-            KeyBinding::new("right", composer::Right, None),
-            KeyBinding::new("home", composer::Home, None),
-            KeyBinding::new("end", composer::End, None),
-            KeyBinding::new("cmd-v", composer::Paste, None),
-            KeyBinding::new("enter", cockpit::Submit, None),
-            KeyBinding::new("escape", cockpit::Interrupt, None),
-            // Only while a Decision holds the keyboard: elsewhere these are
-            // just letters going into the Composer.
-            KeyBinding::new("y", cockpit::Allow, Some("Decision")),
-            KeyBinding::new("n", cockpit::Deny, Some("Decision")),
-            KeyBinding::new("a", cockpit::Always, Some("Decision")),
-            // At wall range no Pane holds a Composer, so the same keys answer
-            // whichever Thread is flagged without focusing it first.
-            KeyBinding::new("y", cockpit::Allow, Some("Wall")),
-            KeyBinding::new("n", cockpit::Deny, Some("Wall")),
-            KeyBinding::new("a", cockpit::Always, Some("Wall")),
-            // The cockpit: walk the grid, and jump to whoever needs answering.
-            KeyBinding::new("cmd-]", cockpit::NextPane, None),
-            KeyBinding::new("cmd-[", cockpit::PreviousPane, None),
-            KeyBinding::new("cmd-d", cockpit::NextDecision, None),
-            KeyBinding::new("cmd-n", cockpit::NewThread, None),
-            // Shift: the same new Thread, in its own worktree instead of the
-            // checkout the operator is sitting in.
-            KeyBinding::new("cmd-shift-n", cockpit::NewWorktreeThread, None),
-            // Close parks the Thread; it is still there, and reopening revives it.
-            KeyBinding::new("cmd-w", cockpit::CloseThread, None),
-            // And back again: the most recently parked Thread, revived.
-            KeyBinding::new("cmd-o", cockpit::ReopenThread, None),
-            KeyBinding::new("cmd-q", Quit, None),
-        ]);
+        let bindings = load_bindings(keymap::PLATFORM, cx);
+        cx.bind_keys(bindings);
         cx.on_action(|_: &Quit, cx| cx.quit());
 
         let store = match Store::open(store_dir()) {
@@ -139,10 +116,65 @@ fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
 }
 
 /// Where Threads live between runs.
+/// The platform key table (crate::keymap), built into live bindings. The
+/// table is data so both platforms' spellings stay testable; actions are
+/// rebuilt from their registered names here, and the test below keeps a
+/// renamed action from surviving to a launch panic.
+fn load_bindings(platform: keymap::Platform, cx: &mut App) -> Vec<KeyBinding> {
+    keymap::bindings(platform)
+        .into_iter()
+        .map(|(keystroke, action, context)| {
+            let action = cx
+                .build_action(action, None)
+                .expect("the keymap names registered actions");
+            let context = context.map(|context| {
+                KeyBindingContextPredicate::parse(context)
+                    .expect("the keymap contexts parse")
+                    .into()
+            });
+            KeyBinding::load(
+                &keystroke,
+                action,
+                context,
+                false,
+                None,
+                &DummyKeyboardMapper,
+            )
+            .expect("the keymap keystrokes parse")
+        })
+        .collect()
+}
+
 fn store_dir() -> std::path::PathBuf {
     if let Ok(dir) = std::env::var("FERRITE_STORE") {
         return dir.into();
     }
-    let base = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    std::path::PathBuf::from(base).join(".ferrite/threads")
+    // Windows spells the home directory USERPROFILE, not HOME.
+    let base = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".into());
+    std::path::PathBuf::from(base)
+        .join(".ferrite")
+        .join("threads")
+}
+
+#[cfg(test)]
+mod tests {
+    // No `use super::*`: the crate root globs `gpui::*`, whose `test` macro
+    // would capture the `#[test]` this macro expands to and recurse.
+    use super::{keymap, load_bindings};
+
+    /// The keymap's action names are strings; startup rebuilds real actions
+    /// from them. Without this, a renamed action would only fail at launch.
+    #[gpui::test]
+    fn every_table_entry_builds_for_both_platforms(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            for platform in [keymap::Platform::Mac, keymap::Platform::Windows] {
+                assert_eq!(
+                    load_bindings(platform, cx).len(),
+                    keymap::bindings(platform).len()
+                );
+            }
+        });
+    }
 }

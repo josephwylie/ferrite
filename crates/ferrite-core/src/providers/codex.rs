@@ -195,9 +195,12 @@ impl CodexSession {
     /// initialize, initialized, then thread/start — or thread/resume when the
     /// config names a thread to pick back up.
     pub fn spawn(config: CodexConfig) -> Result<Self, CodexSpawnError> {
-        check_version(&config.program)?;
+        // On Windows an npm install is a `codex.cmd` shim a bare name
+        // cannot exec; everything spawns through the resolved answer.
+        let program = super::spawnable_program(&config.program);
+        check_version(&program)?;
 
-        let mut command = Command::new(&config.program);
+        let mut command = Command::new(&program);
         command.arg("app-server");
         if let Some(cwd) = &config.cwd {
             // The thread's cwd travels in thread/start; the process gets the
@@ -209,7 +212,7 @@ impl CodexSession {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|e| spawn_error(&config.program, e))?;
+            .map_err(|e| spawn_error(&program, e))?;
 
         let stdin = child.stdin.take().expect("stdin was piped");
         let stdout = child.stdout.take().expect("stdout was piped");

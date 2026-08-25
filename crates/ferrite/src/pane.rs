@@ -852,7 +852,7 @@ mod tests {
                     .flex()
                     .flex_col()
                     .w(px(900.))
-                    .font_family("Menlo")
+                    .font_family(crate::MONO_FONT)
                     .text_size(px(12.))
                     .children(blocks.iter().map(render_block))
             },
@@ -888,7 +888,7 @@ mod tests {
                     .flex()
                     .flex_col()
                     .w(px(900.))
-                    .font_family("Menlo")
+                    .font_family(crate::MONO_FONT)
                     .text_size(px(12.))
                     .child(decision_card(&decision))
                     .child(decision_card(&unreadable))
