@@ -1,0 +1,10 @@
+[package]
+name = "ferrite-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Ferrite headless core: providers, transcript, store, workspace. No UI."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }

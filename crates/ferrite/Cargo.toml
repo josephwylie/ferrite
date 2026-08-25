@@ -1,0 +1,11 @@
+[package]
+name = "ferrite"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Ferrite: native multi-provider agent cockpit (GPUI app)"
+
+[dependencies]
+ferrite-core = { path = "../ferrite-core" }
+# Pinned published release (ADR-0001); upgrades are deliberate events.
+gpui = "=0.2.2"
