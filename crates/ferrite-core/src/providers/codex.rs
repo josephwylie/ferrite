@@ -365,9 +365,13 @@ impl CodexSession {
     /// to the model (the wire's "decline" takes no text — the model learns
     /// only that the tool was rejected).
     pub fn respond_to_decision(&mut self, id: &str, answer: DecisionAnswer) -> io::Result<()> {
-        let decision = match answer {
-            DecisionAnswer::Allow { .. } => "accept",
-            DecisionAnswer::Deny { .. } => "decline",
+        let decision = match &answer {
+            DecisionAnswer::Allow { .. } => serde_json::json!("accept"),
+            DecisionAnswer::Deny { .. } => serde_json::json!("decline"),
+            // The standing answer is one of the request's own
+            // `availableDecisions`, echoed back whole: the server takes the
+            // object exactly as it offered it.
+            DecisionAnswer::AllowAlways { suggestion, .. } => suggestion.clone(),
         };
         // The server's id space is its own: 0.149.1 numbers requests with
         // integers, which `DecisionRequested` carried as text. Echo back the

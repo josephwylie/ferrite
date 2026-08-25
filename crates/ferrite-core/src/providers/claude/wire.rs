@@ -7,7 +7,7 @@
 use serde_json::Value;
 
 use super::ClaudeCapabilities;
-use crate::{Hunk, SessionEvent, ToolResult, TurnOutcome};
+use crate::{Decision, Hunk, SessionEvent, ToolResult, TurnOutcome};
 
 /// The answer to spawn's initialize control request, if this line is it.
 ///
@@ -140,31 +140,39 @@ fn parse_hunk(value: &Value) -> Option<Hunk> {
 /// request against 2.1.243 is `can_use_tool`; anything else it grows later is
 /// ignored, which leaves the turn hanging but never corrupts the stream.
 ///
-/// TODO(#5): a `can_use_tool` missing `tool_use_id`/`tool_name` is also
-/// dropped by the `?` chain below — the CLI then waits forever on an answer
-/// Ferrite never knew to ask for. Never seen on 2.1.243; when #5 handles
-/// stale Decisions, surface this as a visible failure instead.
+/// A request Ferrite cannot fully read is still a request the CLI is blocked
+/// on, so everything below `request_id` degrades to empty rather than dropping
+/// the event: an operator who can see a Decision can always deny it, and the
+/// turn moves. `request_id` itself stays required — without it there is no
+/// answer to send, and a card promising otherwise would be a lie.
 fn parse_control_request(value: &Value) -> Option<SessionEvent> {
     let request = value.get("request")?;
     if request.get("subtype")?.as_str()? != "can_use_tool" {
         return None;
     }
     Some(SessionEvent::DecisionRequested {
-        id: value.get("request_id")?.as_str()?.to_string(),
-        tool_use_id: request.get("tool_use_id")?.as_str()?.to_string(),
-        tool_name: request.get("tool_name")?.as_str()?.to_string(),
-        description: request
-            .get("description")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
-        input: request.get("input").cloned().unwrap_or(Value::Null),
-        suggestions: request
-            .get("permission_suggestions")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default(),
+        decision: Decision {
+            id: value.get("request_id")?.as_str()?.to_string(),
+            tool_use_id: text(request, "tool_use_id"),
+            tool_name: text(request, "tool_name"),
+            description: text(request, "description"),
+            input: request.get("input").cloned().unwrap_or(Value::Null),
+            suggestions: request
+                .get("permission_suggestions")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default(),
+        },
     })
+}
+
+/// A string field, or empty when the provider left it out.
+fn text(value: &Value, key: &str) -> String {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
 }
 
 fn content_block<'a>(value: &'a Value, kind: &str) -> Option<&'a Value> {
@@ -287,6 +295,10 @@ mod tests {
         (
             "edit",
             include_str!("../../../tests/fixtures/claude-edit-2.1.243.jsonl"),
+        ),
+        (
+            "permission-always",
+            include_str!("../../../tests/fixtures/claude-permission-always-2.1.243.jsonl"),
         ),
     ];
 
@@ -457,6 +469,9 @@ mod tests {
                 // Read then Edit: two tool calls, and the patch hunks the diff
                 // cards are built from.
                 ("edit", 70, 16),
+                // Two Writes, one Decision: the standing answer was adopted on
+                // the first, and the CLI never gated the second.
+                ("permission-always", 58, 15),
             ]
         );
     }
@@ -607,6 +622,26 @@ mod tests {
         );
     }
 
+    /// The hazard #5 inherited: a request Ferrite cannot describe is still a
+    /// request the CLI is blocked on. Surfacing it with an answerable id lets
+    /// the operator deny it; dropping it hangs the turn with nothing on screen.
+    #[test]
+    fn a_permission_request_missing_its_tool_details_is_still_answerable() {
+        let line = r#"{"type":"control_request","request_id":"req_1","request":{"subtype":"can_use_tool"}}"#;
+
+        let event = parse_line(line).expect("a malformed request must still surface");
+
+        let SessionEvent::DecisionRequested { decision } = event else {
+            panic!("expected a Decision, got {event:?}")
+        };
+        assert_eq!(decision.id, "req_1");
+        assert!(
+            decision.tool_name.is_empty(),
+            "nothing was said, so nothing is named"
+        );
+        assert!(decision.tool_use_id.is_empty());
+    }
+
     #[test]
     fn junk_lines_are_ignored_never_fatal() {
         for line in [
@@ -624,7 +659,10 @@ mod tests {
             // whatever the vendor adds next. Ignoring one strands that request,
             // but the stream keeps flowing.
             r#"{"type":"control_request","request_id":"1","request":{"subtype":"hook_callback"}}"#,
-            r#"{"type":"control_request","request_id":"1","request":{"subtype":"can_use_tool"}}"#,
+            // A `can_use_tool` with nothing else in it used to sit here. It is
+            // not junk — it is a turn the CLI has stopped on — and it now
+            // surfaces answerable: see the test below.
+            r#"{"type":"control_request","request":{"subtype":"can_use_tool"}}"#,
             // An assistant turn is only interesting when it carries a tool
             // call; text and thinking arrive as deltas, and the snapshot lines
             // that repeat them must not double them up.

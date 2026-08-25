@@ -279,6 +279,14 @@ impl ClaudeSession {
             DecisionAnswer::Deny { message } => {
                 serde_json::json!({"behavior": "deny", "message": message})
             }
+            // `updatedPermissions` carries the CLI's own suggestion back to
+            // it; the permission-always capture proves a second call in the
+            // same turn is then not gated at all.
+            DecisionAnswer::AllowAlways { input, suggestion } => serde_json::json!({
+                "behavior": "allow",
+                "updatedInput": input,
+                "updatedPermissions": [suggestion],
+            }),
         };
         self.write_line(&serde_json::json!({
             "type": "control_response",

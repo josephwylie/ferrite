@@ -1,0 +1,5 @@
+{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"clientInfo": {"name": "ferrite", "version": "0.1.0"}}}
+{"jsonrpc": "2.0", "method": "initialized"}
+{"jsonrpc": "2.0", "id": 2, "method": "thread/start", "params": {"cwd": "/workspace", "model": "gpt-5.4-mini", "approvalPolicy": "on-request", "sandbox": "read-only"}}
+{"jsonrpc": "2.0", "id": 3, "method": "turn/start", "params": {"threadId": "01a037b8-5b18-7b80-97e5-f425f34b3206", "input": [{"type": "text", "text": "Run the shell command `printf ok > ferrite-perm.txt` twice, as two separate tool calls, then say done."}]}}
+{"jsonrpc": "2.0", "id": 0, "result": {"decision": {"acceptWithExecpolicyAmendment": {"execpolicy_amendment": ["/bin/zsh", "-lc", "printf ok > ferrite-perm.txt"]}}}}

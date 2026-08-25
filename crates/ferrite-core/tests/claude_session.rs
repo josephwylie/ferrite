@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 use ferrite_core::providers::{ClaudeCapabilities, ClaudeConfig, ClaudeSession, ClaudeSpawnError};
-use ferrite_core::{DecisionAnswer, SessionEvent, TurnOutcome};
+use ferrite_core::{Decision, DecisionAnswer, SessionEvent, TurnOutcome};
 
 const VERSION_CASE: &str = "case \"$1\" in --version) echo '2.1.243 (Claude Code)'; exit 0;; esac";
 
@@ -274,12 +274,15 @@ fn a_permission_request_arrives_as_a_decision_naming_its_tool_call() {
         .collect();
     assert_eq!(decisions.len(), 1, "expected one Decision: {events:?}");
     let SessionEvent::DecisionRequested {
-        id,
-        tool_use_id,
-        tool_name,
-        description,
-        input,
-        suggestions,
+        decision:
+            Decision {
+                id,
+                tool_use_id,
+                tool_name,
+                description,
+                input,
+                suggestions,
+            },
     } = decisions[0]
     else {
         unreachable!()
@@ -325,7 +328,10 @@ fn answering(fixture_name: &str, answer: impl Fn(&SessionEvent) -> DecisionAnswe
         let left = deadline.saturating_duration_since(Instant::now());
         match session.events().recv_timeout(left) {
             Ok(event @ SessionEvent::DecisionRequested { .. }) => {
-                let SessionEvent::DecisionRequested { id, .. } = &event else {
+                let SessionEvent::DecisionRequested {
+                    decision: Decision { id, .. },
+                } = &event
+                else {
                     unreachable!()
                 };
                 session.respond_to_decision(id, answer(&event)).unwrap();
@@ -357,7 +363,10 @@ fn recorded_answer(fixture_name: &str) -> Value {
 #[test]
 fn allowing_a_decision_writes_what_the_cli_accepted() {
     let sent = answering("permission-allow-2.1.243", |event| {
-        let SessionEvent::DecisionRequested { input, .. } = event else {
+        let SessionEvent::DecisionRequested {
+            decision: Decision { input, .. },
+        } = event
+        else {
             unreachable!()
         };
         DecisionAnswer::Allow {
@@ -365,6 +374,23 @@ fn allowing_a_decision_writes_what_the_cli_accepted() {
         }
     });
     assert_eq!(sent, recorded_answer("permission-allow-2.1.243"));
+}
+
+/// "Always" is a claim about the future: the capture behind this test answered
+/// one Write with the CLI's own suggestion adopted, and the second Write in
+/// that same turn was never gated. The bytes below are what bought that.
+#[test]
+fn adopting_a_standing_answer_writes_the_permission_change_the_cli_honoured() {
+    let sent = answering("permission-always-2.1.243", |event| {
+        let SessionEvent::DecisionRequested { decision } = event else {
+            unreachable!()
+        };
+        DecisionAnswer::AllowAlways {
+            input: decision.input.clone(),
+            suggestion: decision.suggestions.first().cloned().unwrap(),
+        }
+    });
+    assert_eq!(sent, recorded_answer("permission-always-2.1.243"));
 }
 
 #[test]

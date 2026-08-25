@@ -9,7 +9,7 @@ use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
 use ferrite_core::providers::{ClaudeConfig, ClaudeSession};
-use ferrite_core::{DecisionAnswer, SessionEvent, TurnOutcome};
+use ferrite_core::{Decision, DecisionAnswer, SessionEvent, TurnOutcome};
 
 /// Generous: a real turn crosses the network and may be rate limited.
 const TURN_TIMEOUT: Duration = Duration::from_secs(180);
@@ -132,7 +132,10 @@ fn turn_answering(
         match session.events().recv_timeout(left) {
             Ok(event @ SessionEvent::DecisionRequested { .. }) => {
                 println!("{event:?}");
-                let SessionEvent::DecisionRequested { id, .. } = &event else {
+                let SessionEvent::DecisionRequested {
+                    decision: Decision { id, .. },
+                } = &event
+                else {
                     unreachable!()
                 };
                 session
@@ -172,7 +175,10 @@ fn allowing_a_decision_runs_the_tool() {
     );
 
     let (outcome, tools) = turn_answering(&mut session, WRITE_PROMPT, |event| {
-        let SessionEvent::DecisionRequested { input, .. } = event else {
+        let SessionEvent::DecisionRequested {
+            decision: Decision { input, .. },
+        } = event
+        else {
             unreachable!()
         };
         DecisionAnswer::Allow {

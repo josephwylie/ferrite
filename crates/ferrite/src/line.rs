@@ -31,6 +31,15 @@ impl Line {
         self.selection.clone()
     }
 
+    /// Put a line back, ready to edit at its end — a prompt recalled from the
+    /// queue, or history.
+    pub fn set(&mut self, text: String) {
+        let at = text.len();
+        self.content = text;
+        self.selection = at..at;
+        self.marked = None;
+    }
+
     /// Hand the line over and clear it — what Enter does.
     pub fn take(&mut self) -> String {
         self.selection = 0..0;
@@ -222,6 +231,18 @@ mod tests {
         assert_eq!(line.text(), "");
         assert_eq!(line.cursor(), 0);
         assert_eq!(line.take(), ""); // nothing left to send
+    }
+
+    #[test]
+    fn a_line_can_be_handed_back_with_the_cursor_at_the_end() {
+        let mut line = Line::default();
+        line.replace(None, "half typed");
+
+        line.set("a prompt taken back off the queue".into());
+
+        assert_eq!(line.text(), "a prompt taken back off the queue");
+        assert_eq!(line.cursor(), line.text().len());
+        assert_eq!(line.marked(), None);
     }
 
     #[test]

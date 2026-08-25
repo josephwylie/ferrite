@@ -9,7 +9,7 @@ use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
 use ferrite_core::providers::{CodexConfig, CodexSession};
-use ferrite_core::{DecisionAnswer, SessionEvent, TurnOutcome};
+use ferrite_core::{Decision, DecisionAnswer, SessionEvent, TurnOutcome};
 
 /// Generous: a real turn crosses the network and may be rate limited.
 const TURN_TIMEOUT: Duration = Duration::from_secs(180);
@@ -127,7 +127,10 @@ fn turn_answering(
         match session.events().recv_timeout(left) {
             Ok(event @ SessionEvent::DecisionRequested { .. }) => {
                 println!("{event:?}");
-                let SessionEvent::DecisionRequested { id, .. } = &event else {
+                let SessionEvent::DecisionRequested {
+                    decision: Decision { id, .. },
+                } = &event
+                else {
                     unreachable!()
                 };
                 session.respond_to_decision(&id.clone(), answer()).unwrap();
@@ -206,7 +209,9 @@ fn denying_a_decision_leaves_the_session_running() {
     loop {
         let left = deadline.saturating_duration_since(Instant::now());
         match session.events().recv_timeout(left) {
-            Ok(SessionEvent::DecisionRequested { id, .. }) if !declined => {
+            Ok(SessionEvent::DecisionRequested {
+                decision: Decision { id, .. },
+            }) if !declined => {
                 declined = true;
                 session
                     .respond_to_decision(

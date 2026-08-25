@@ -68,7 +68,7 @@ capture() {
         python3 "$DIR/capture_codex.py" "$@"
 }
 
-WANTED=${*:-initialize hello tool approval-allow approval-deny approval-patch interrupt resume error}
+WANTED=${*:-initialize hello tool approval-allow approval-always approval-deny approval-patch interrupt resume error}
 
 for scenario in $WANTED; do
     case $scenario in
@@ -103,6 +103,17 @@ for scenario in $WANTED; do
         capture approval-allow --answer allow \
             --approval-policy on-request --sandbox read-only \
             --turn 'Create a file named ferrite-perm.txt containing exactly the word ok. Then say done.' \
+            -- -c 'notify=[]' -c 'model_reasoning_effort=low'
+        ;;
+    # The standing answer. Codex's amendment names an exact argv, so the
+    # durable effect can only show on the *same* command run twice: the first
+    # is gated and answered with the amendment, and whether the second asks
+    # again is the evidence that "always" means anything here.
+    approval-always)
+        rm -f "$WORK/cwd/ferrite-perm.txt"
+        capture approval-always --answer always \
+            --approval-policy on-request --sandbox read-only \
+            --turn 'Run the shell command `printf ok > ferrite-perm.txt` twice, as two separate tool calls, then say done.' \
             -- -c 'notify=[]' -c 'model_reasoning_effort=low'
         ;;
     approval-deny)

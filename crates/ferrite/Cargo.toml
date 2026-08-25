@@ -9,11 +9,11 @@ description = "Ferrite: native multi-provider agent cockpit (GPUI app)"
 ferrite-core = { path = "../ferrite-core" }
 # Pinned published release (ADR-0001); upgrades are deliberate events.
 gpui = "=0.2.2"
-
-# Tests only: SessionEvent carries provider payloads as `Value`, so building
-# one in a test needs the type. The app itself never inspects them.
-[dev-dependencies]
+# The demo script builds real provider events, whose payloads are the vendors'
+# own JSON. Already in the tree via ferrite-core.
 serde_json = { workspace = true }
+
+[dev-dependencies]
 # The smoke render needs a window; gpui's own test harness provides a headless
 # one, so the app's rendering is exercised without a display.
 gpui = { version = "=0.2.2", features = ["test-support"] }

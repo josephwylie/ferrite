@@ -159,6 +159,12 @@ pub enum Input {
     /// Something Ferrite itself needs to say — a send that failed, a session
     /// that was never spawned. Also not the provider's word.
     Notice(String),
+    /// The operator answered a Decision. The provider will say what happens
+    /// next; this is the record that they were the one who unblocked it.
+    Answered {
+        allowed: bool,
+        tool_name: String,
+    },
     /// A highlighter's answer, arriving whenever it is ready.
     Highlighted {
         block: BlockId,
@@ -175,6 +181,14 @@ pub struct Update {
     pub evicted: Vec<BlockId>,
     /// A point the log is worth flushing at — never mid-delta.
     pub boundary: Option<Boundary>,
+}
+
+/// How much of the model's context a Thread has spent. Codex reports this and
+/// never reports dollars; Claude reports dollars and not this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Usage {
+    pub total_tokens: u64,
+    pub context_window: Option<u64>,
 }
 
 /// What the Session is doing, as the transcript last saw it.
@@ -208,6 +222,9 @@ pub struct Transcript {
     model: Option<String>,
     session_id: Option<String>,
     last_cost: Option<f64>,
+    usage: Option<Usage>,
+    /// Which reasoning summary part the tail Block belongs to.
+    summary_index: Option<u64>,
 }
 
 /// Blocks a long-running Thread keeps in memory. Generous enough that a Pane
@@ -238,6 +255,8 @@ impl Transcript {
             model: None,
             session_id: None,
             last_cost: None,
+            usage: None,
+            summary_index: None,
         }
     }
 
@@ -257,6 +276,10 @@ impl Transcript {
         self.last_cost
     }
 
+    pub fn usage(&self) -> Option<Usage> {
+        self.usage
+    }
+
     pub fn blocks(&self) -> &[Block] {
         &self.blocks
     }
@@ -267,6 +290,9 @@ impl Transcript {
         update
     }
 
+    /// Exhaustive by construction: a new SessionEvent variant fails to compile
+    /// here until someone decides what a Pane shows for it. That is the point
+    /// of a superset event model — a wildcard would silently render nothing.
     fn fold(&mut self, input: Input) -> Update {
         match input {
             Input::Event(SessionEvent::TextDelta { text }) => {
@@ -278,8 +304,47 @@ impl Transcript {
             }
             Input::Event(SessionEvent::ThinkingDelta { text }) => {
                 self.status = Status::Streaming;
+                self.summary_index = None;
                 Update {
                     dirty: vec![self.grow_thinking(&text)],
+                    ..Update::default()
+                }
+            }
+            Input::Event(SessionEvent::ReasoningSummaryDelta {
+                text,
+                summary_index,
+            }) => {
+                self.status = Status::Streaming;
+                // The provider decides where its reasoning breaks; a new index
+                // is a new paragraph, not a continuation of the last one.
+                if self.summary_index != Some(summary_index) {
+                    self.summary_index = Some(summary_index);
+                    return Update {
+                        dirty: vec![self.push(Body::Thinking(text))],
+                        ..Update::default()
+                    };
+                }
+                Update {
+                    dirty: vec![self.grow_thinking(&text)],
+                    ..Update::default()
+                }
+            }
+            Input::Event(SessionEvent::TokenUsage {
+                total_tokens,
+                context_window,
+                ..
+            }) => {
+                self.usage = Some(Usage {
+                    total_tokens,
+                    context_window,
+                });
+                Update::default()
+            }
+            Input::Answered { allowed, tool_name } => {
+                self.status = Status::Streaming;
+                let verb = if allowed { "allowed" } else { "denied" };
+                Update {
+                    dirty: vec![self.push(Body::Meta(format!("{verb} {tool_name}")))],
                     ..Update::default()
                 }
             }
@@ -363,15 +428,12 @@ impl Transcript {
                     ..Update::default()
                 }
             }
-            Input::Event(SessionEvent::DecisionRequested {
-                tool_name,
-                description,
-                ..
-            }) => {
+            Input::Event(SessionEvent::DecisionRequested { decision }) => {
                 self.status = Status::Blocked;
                 Update {
                     dirty: vec![self.push(Body::Notice(format!(
-                        "decision needed: {tool_name} — {description}"
+                        "decision needed: {} — {}",
+                        decision.tool_name, decision.description
                     )))],
                     ..Update::default()
                 }
@@ -384,7 +446,6 @@ impl Transcript {
                     ..Update::default()
                 }
             }
-            Input::Event(_) => Update::default(),
         }
     }
 
@@ -670,6 +731,7 @@ fn spans(text: &str) -> Vec<Span> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Decision;
 
     fn started(id: &str, name: &str, input: serde_json::Value) -> Input {
         Input::Event(SessionEvent::ToolStarted {
@@ -937,12 +999,14 @@ mod tests {
         let mut transcript = Transcript::default();
 
         transcript.apply(Input::Event(SessionEvent::DecisionRequested {
-            id: "perm_01".into(),
-            tool_use_id: "toolu_01".into(),
-            tool_name: "Write".into(),
-            description: "ferrite-perm.txt".into(),
-            input: serde_json::Value::Null,
-            suggestions: vec![],
+            decision: Decision {
+                id: "perm_01".into(),
+                tool_use_id: "toolu_01".into(),
+                tool_name: "Write".into(),
+                description: "ferrite-perm.txt".into(),
+                input: serde_json::Value::Null,
+                suggestions: vec![],
+            },
         }));
 
         assert_eq!(transcript.status(), Status::Blocked);
@@ -961,6 +1025,97 @@ mod tests {
         assert_eq!(update.dirty, vec![last.id]);
         assert!(matches!(last.body, Body::Notice(_)));
         assert_eq!(body_text(last), "send failed: broken pipe");
+    }
+
+    fn reasoning(text: &str, summary_index: u64) -> Input {
+        Input::Event(SessionEvent::ReasoningSummaryDelta {
+            text: text.into(),
+            summary_index,
+        })
+    }
+
+    #[test]
+    fn answering_a_decision_records_it_and_unblocks_the_status() {
+        let mut transcript = Transcript::default();
+        transcript.apply(Input::Event(SessionEvent::DecisionRequested {
+            decision: Decision {
+                id: "perm_01".into(),
+                tool_use_id: "toolu_01".into(),
+                tool_name: "Write".into(),
+                description: "ferrite-perm.txt".into(),
+                input: serde_json::Value::Null,
+                suggestions: vec![],
+            },
+        }));
+        assert_eq!(transcript.status(), Status::Blocked);
+
+        let update = transcript.apply(Input::Answered {
+            allowed: true,
+            tool_name: "Write".into(),
+        });
+
+        // The turn runs again the moment the answer goes out.
+        assert_eq!(transcript.status(), Status::Streaming);
+        let last = transcript.blocks().last().unwrap();
+        assert_eq!(update.dirty, vec![last.id]);
+        assert!(matches!(last.body, Body::Meta(_)));
+        assert_eq!(body_text(last), "allowed Write");
+    }
+
+    #[test]
+    fn a_denied_decision_says_so() {
+        let mut transcript = Transcript::default();
+
+        transcript.apply(Input::Answered {
+            allowed: false,
+            tool_name: "Bash".into(),
+        });
+
+        assert_eq!(
+            body_text(transcript.blocks().last().unwrap()),
+            "denied Bash"
+        );
+    }
+
+    #[test]
+    fn a_reasoning_summary_breaks_where_the_provider_broke_it() {
+        let mut transcript = Transcript::default();
+
+        transcript.apply(reasoning("Considering ", 0));
+        transcript.apply(reasoning("the options.", 0));
+        transcript.apply(reasoning("Now checking the tests.", 1));
+
+        assert_eq!(transcript.blocks().len(), 2);
+        assert!(matches!(transcript.blocks()[0].body, Body::Thinking(_)));
+        assert_eq!(
+            body_text(&transcript.blocks()[0]),
+            "Considering the options."
+        );
+        assert_eq!(
+            body_text(&transcript.blocks()[1]),
+            "Now checking the tests."
+        );
+    }
+
+    #[test]
+    fn token_usage_is_kept_for_the_status_line() {
+        let mut transcript = Transcript::default();
+        assert_eq!(transcript.usage(), None);
+
+        transcript.apply(Input::Event(SessionEvent::TokenUsage {
+            total_tokens: 12_400,
+            input_tokens: 11_000,
+            cached_input_tokens: 8_000,
+            output_tokens: 1_400,
+            reasoning_output_tokens: 900,
+            context_window: Some(200_000),
+        }));
+
+        let usage = transcript
+            .usage()
+            .expect("usage after the provider reports");
+        assert_eq!(usage.total_tokens, 12_400);
+        assert_eq!(usage.context_window, Some(200_000));
     }
 
     #[test]
@@ -1116,12 +1271,14 @@ mod tests {
 
         let mut blocked = Transcript::default();
         blocked.apply(Input::Event(SessionEvent::DecisionRequested {
-            id: "perm_01".into(),
-            tool_use_id: "toolu_01".into(),
-            tool_name: "Write".into(),
-            description: "ferrite-perm.txt".into(),
-            input: serde_json::Value::Null,
-            suggestions: vec![],
+            decision: Decision {
+                id: "perm_01".into(),
+                tool_use_id: "toolu_01".into(),
+                tool_name: "Write".into(),
+                description: "ferrite-perm.txt".into(),
+                input: serde_json::Value::Null,
+                suggestions: vec![],
+            },
         }));
         blocked.apply(Input::Prompt("go ahead".into()));
         // The Decision is still what the Session waits on, not this prompt.

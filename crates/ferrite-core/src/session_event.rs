@@ -39,23 +39,8 @@ pub enum SessionEvent {
     },
     /// The Session is blocked on a Decision: only the operator can say whether
     /// this tool may run. Answer it with the provider's respond-to-Decision
-    /// call, quoting `id`.
-    DecisionRequested {
-        /// The provider's handle for this Decision.
-        id: String,
-        /// The tool call being gated — the id of its `ToolStarted`, so a Pane
-        /// can put the Decision on the tool card it blocks.
-        tool_use_id: String,
-        tool_name: String,
-        /// The provider's own one-line summary, for a Pane too small to render
-        /// `input` (the wall answers Decisions without focusing).
-        description: String,
-        input: serde_json::Value,
-        /// Standing answers the provider offers ("allow edits for this
-        /// session"). Left raw: only one shape has been observed on the wire
-        /// and a Ferrite enum built from one sample would be a guess.
-        suggestions: Vec<serde_json::Value>,
-    },
+    /// call, quoting the Decision's `id`.
+    DecisionRequested { decision: Decision },
     /// A turn finished.
     TurnEnded {
         outcome: TurnOutcome,
@@ -113,6 +98,75 @@ pub struct Hunk {
     pub lines: Vec<String>,
 }
 
+/// A tool call the operator has to rule on before it runs.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Decision {
+    /// The provider's handle for this Decision.
+    pub id: String,
+    /// The tool call being gated — the id of its `ToolStarted`, so a Pane can
+    /// put the Decision on the tool card it blocks.
+    pub tool_use_id: String,
+    pub tool_name: String,
+    /// The provider's own one-line summary, for a Pane too small to render
+    /// `input` (the wall answers Decisions without focusing).
+    pub description: String,
+    pub input: serde_json::Value,
+    /// Standing answers this request offers ("allow edits for this session"),
+    /// verbatim. Empty means this request has none to offer — Codex's
+    /// file-change approvals carry none — and the card offers no "always".
+    pub suggestions: Vec<serde_json::Value>,
+}
+
+impl Decision {
+    /// The standing answer this request offers, if it offers one. Both
+    /// providers put structured choices among plainer ones — Codex lists
+    /// `"accept"` and `"cancel"` beside its amendment object — so the
+    /// structured entry is the one that means "and don't ask again".
+    pub fn standing_answer(&self) -> Option<&serde_json::Value> {
+        self.suggestions.iter().find(|offered| offered.is_object())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn decision(suggestions: Vec<serde_json::Value>) -> Decision {
+        Decision {
+            id: "1".into(),
+            tool_use_id: "toolu_1".into(),
+            tool_name: "Write".into(),
+            description: String::new(),
+            input: serde_json::Value::Null,
+            suggestions,
+        }
+    }
+
+    /// Both shapes as the captures carry them.
+    #[test]
+    fn the_standing_answer_is_the_structured_one_each_provider_offers() {
+        let claude = decision(vec![serde_json::json!({
+            "type": "setMode", "mode": "acceptEdits", "destination": "session"
+        })]);
+        assert_eq!(claude.standing_answer(), claude.suggestions.first());
+
+        let codex = decision(vec![
+            serde_json::json!("accept"),
+            serde_json::json!({"acceptWithExecpolicyAmendment": {"execpolicy_amendment": ["x"]}}),
+            serde_json::json!("cancel"),
+        ]);
+        assert_eq!(codex.standing_answer(), codex.suggestions.get(1));
+
+        // A file-change approval offers none at all, and the card must not
+        // pretend otherwise.
+        assert_eq!(decision(vec![]).standing_answer(), None);
+        assert_eq!(
+            decision(vec![serde_json::json!("accept")]).standing_answer(),
+            None
+        );
+    }
+}
+
 /// How the operator answered a `DecisionRequested`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DecisionAnswer {
@@ -122,6 +176,14 @@ pub enum DecisionAnswer {
     /// Refuse. The message reaches the model as the tool's failed result, so
     /// the turn continues with a refusal rather than dying.
     Deny { message: String },
+    /// Allow, and adopt one of the standing answers this request offered —
+    /// echoed back exactly as it arrived in `Decision::suggestions`. Each
+    /// provider spells the adoption its own way; both were captured answering
+    /// a gated call whose repeat then ran unasked.
+    AllowAlways {
+        input: serde_json::Value,
+        suggestion: serde_json::Value,
+    },
 }
 
 /// How a turn ended.

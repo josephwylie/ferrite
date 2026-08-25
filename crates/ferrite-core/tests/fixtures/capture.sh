@@ -69,7 +69,7 @@ want() {
     case " $WANTED " in *" $1 "*) return 0 ;; *) return 1 ;; esac
 }
 
-WANTED=${*:-tool edit permission-allow permission-deny error initialize}
+WANTED=${*:-tool edit permission-allow permission-always permission-deny error initialize}
 
 for scenario in $WANTED; do
     case $scenario in
@@ -105,6 +105,16 @@ for scenario in $WANTED; do
         rm -f "$WORK/cwd/ferrite-perm.txt"
         capture permission-allow --answer allow \
             --prompt 'Create a file named ferrite-perm.txt containing exactly the word ok, using the Write tool. Then say done.' \
+            -- --safe-mode --permission-mode default --permission-prompt-tool stdio
+        ;;
+    # (f) The standing answer. Two Writes in one turn: the first is gated and
+    # answered with the CLI's own suggestion adopted, so whether a second
+    # can_use_tool arrives is the whole question — the capture is the evidence
+    # that "always" means anything.
+    permission-always)
+        rm -f "$WORK/cwd/ferrite-perm-a.txt" "$WORK/cwd/ferrite-perm-b.txt"
+        capture permission-always --answer always \
+            --prompt 'Using the Write tool twice, create ferrite-perm-a.txt containing exactly ok, then create ferrite-perm-b.txt containing exactly ok. Then say done.' \
             -- --safe-mode --permission-mode default --permission-prompt-tool stdio
         ;;
     permission-deny)

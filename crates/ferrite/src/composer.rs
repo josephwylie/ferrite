@@ -32,6 +32,12 @@ impl Composer {
         }
     }
 
+    /// Put a line back into the Composer, ready to edit at its end.
+    pub fn set(&mut self, text: String, cx: &mut Context<Self>) {
+        self.line.set(text);
+        cx.notify();
+    }
+
     /// Hand the line to the Pane and clear it.
     pub fn take(&mut self, cx: &mut Context<Self>) -> String {
         let text = self.line.take();

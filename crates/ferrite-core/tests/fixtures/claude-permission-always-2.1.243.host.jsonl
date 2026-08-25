@@ -1,0 +1,2 @@
+{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "Using the Write tool twice, create ferrite-perm-a.txt containing exactly ok, then create ferrite-perm-b.txt containing exactly ok. Then say done."}]}}
+{"type": "control_response", "response": {"subtype": "success", "request_id": "5e031ada-2a38-4be7-b648-272325740489", "response": {"behavior": "allow", "updatedInput": {"file_path": "/private/workspace/ferrite-perm-a.txt", "content": "ok"}, "updatedPermissions": [{"type": "setMode", "mode": "acceptEdits", "destination": "session"}]}}}

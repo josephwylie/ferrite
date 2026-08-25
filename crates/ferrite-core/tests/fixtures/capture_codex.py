@@ -8,6 +8,8 @@ writing to its stdin while the turn is still running.
   (no mode flag)    initialize + thread/start only: the capability handshake
   --turn TEXT       start a thread and send one user turn, stop at turn/completed
   --answer allow    answer any approval request by accepting it
+  --answer always   ... or by accepting with the execpolicy amendment the
+                    server offered, so the same command should not ask twice
   --answer deny     ... or by declining it
   --interrupt       send turn/interrupt after the first agent-message delta
   --resume          two phases: a setup turn that plants a codeword, then a
@@ -206,6 +208,13 @@ def run_turn(server, thread_id, prompt):
         if method in ("item/commandExecution/requestApproval",
                       "item/fileChange/requestApproval") and opts["answer"]:
             decision = "accept" if opts["answer"] == "allow" else "decline"
+            if opts["answer"] == "always":
+                # Echo back the standing answer the server offered, rather
+                # than a bare accept: the amendment is what makes the next
+                # identical command run unasked.
+                offered = (value.get("params") or {}).get("availableDecisions") or []
+                standing = next((d for d in offered if isinstance(d, dict)), None)
+                decision = standing if standing is not None else "accept"
             server.send({"jsonrpc": "2.0", "id": value["id"],
                          "result": {"decision": decision}})
         if (method == "item/agentMessage/delta" and opts["interrupt"]

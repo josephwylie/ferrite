@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 use ferrite_core::providers::{CodexCapabilities, CodexConfig, CodexSession, CodexSpawnError};
-use ferrite_core::{DecisionAnswer, SessionEvent, ToolResult, TurnOutcome};
+use ferrite_core::{Decision, DecisionAnswer, SessionEvent, ToolResult, TurnOutcome};
 
 const VERSION_CASE: &str = "case \"$1\" in --version) echo 'codex-cli 0.149.1'; exit 0;; esac";
 
@@ -298,12 +298,15 @@ fn an_approval_request_arrives_as_a_decision_naming_its_tool_call() {
         .collect();
     assert_eq!(decisions.len(), 1, "expected one Decision: {events:?}");
     let SessionEvent::DecisionRequested {
-        id,
-        tool_use_id,
-        tool_name,
-        description,
-        input,
-        suggestions,
+        decision:
+            Decision {
+                id,
+                tool_use_id,
+                tool_name,
+                description,
+                input,
+                suggestions,
+            },
     } = decisions[0]
     else {
         unreachable!()
@@ -337,9 +340,12 @@ fn a_patch_approval_arrives_as_a_decision_on_the_file_change() {
     let events = replay("approval-patch-0.149.1");
 
     let SessionEvent::DecisionRequested {
-        tool_use_id,
-        tool_name,
-        ..
+        decision:
+            Decision {
+                tool_use_id,
+                tool_name,
+                ..
+            },
     } = events
         .iter()
         .find(|e| matches!(e, SessionEvent::DecisionRequested { .. }))
@@ -378,7 +384,7 @@ fn an_interrupted_capture_replays_as_an_interrupted_turn() {
 /// itself: whatever `respond_to_decision` writes must match what the live
 /// capture proved works (accept → the tool ran; decline → the turn survived).
 /// `tag` keeps each caller's stub and log its own — tests run in parallel.
-fn answering(fixture_name: &str, tag: &str, answer: DecisionAnswer) -> Value {
+fn answering(fixture_name: &str, tag: &str, answer: impl Fn(&Decision) -> DecisionAnswer) -> Value {
     let log = log_path(&format!("{tag}-answer.log"));
     let _ = fs::remove_file(&log);
     let program = stub(
@@ -395,8 +401,10 @@ fn answering(fixture_name: &str, tag: &str, answer: DecisionAnswer) -> Value {
     loop {
         let left = deadline.saturating_duration_since(Instant::now());
         match session.events().recv_timeout(left) {
-            Ok(SessionEvent::DecisionRequested { id, .. }) => {
-                session.respond_to_decision(&id, answer).unwrap();
+            Ok(SessionEvent::DecisionRequested { decision }) => {
+                session
+                    .respond_to_decision(&decision.id, answer(&decision))
+                    .unwrap();
                 break;
             }
             Ok(_) => {}
@@ -422,13 +430,30 @@ fn recorded_answer(fixture_name: &str) -> Value {
         .expect("the capture answered a Decision")
 }
 
+/// The standing answer, echoed back exactly as the request offered it. The
+/// capture behind this test answered one command that way and watched the
+/// identical command run again in the same turn without a second approval.
+#[test]
+fn adopting_a_standing_answer_writes_the_amendment_the_server_accepted() {
+    let sent = answering("approval-always-0.149.1", "always", |decision| {
+        DecisionAnswer::AllowAlways {
+            input: Value::Null,
+            suggestion: decision
+                .suggestions
+                .iter()
+                .find(|offered| offered.is_object())
+                .cloned()
+                .expect("the request offers a standing answer"),
+        }
+    });
+    assert_eq!(sent, recorded_answer("approval-always-0.149.1"));
+}
+
 #[test]
 fn allowing_a_decision_writes_what_the_server_accepted() {
-    let sent = answering(
-        "approval-allow-0.149.1",
-        "allow",
-        DecisionAnswer::Allow { input: Value::Null },
-    );
+    let sent = answering("approval-allow-0.149.1", "allow", |_| {
+        DecisionAnswer::Allow { input: Value::Null }
+    });
     assert_eq!(sent, recorded_answer("approval-allow-0.149.1"));
 }
 
@@ -438,26 +463,20 @@ fn allowing_a_decision_writes_what_the_server_accepted() {
 /// the server never accepted.
 #[test]
 fn an_allow_with_edited_input_still_writes_the_bare_accept() {
-    let sent = answering(
-        "approval-allow-0.149.1",
-        "allow-edited",
+    let sent = answering("approval-allow-0.149.1", "allow-edited", |_| {
         DecisionAnswer::Allow {
             input: serde_json::json!({"command": "echo edited-by-operator"}),
-        },
-    );
+        }
+    });
     assert_eq!(sent, recorded_answer("approval-allow-0.149.1"));
 }
 
 #[test]
 fn denying_a_decision_writes_what_the_server_accepted() {
-    let sent = answering(
-        "approval-deny-0.149.1",
-        "deny",
-        DecisionAnswer::Deny {
-            // Dropped by design: the codex wire's decline carries no message.
-            message: "Ferrite operator denied this tool".into(),
-        },
-    );
+    let sent = answering("approval-deny-0.149.1", "deny", |_| DecisionAnswer::Deny {
+        // Dropped by design: the codex wire's decline carries no message.
+        message: "Ferrite operator denied this tool".into(),
+    });
     assert_eq!(sent, recorded_answer("approval-deny-0.149.1"));
 }
 

@@ -14,7 +14,7 @@
 use serde_json::Value;
 
 use super::CodexCapabilities;
-use crate::{SessionEvent, ToolResult, TurnOutcome};
+use crate::{Decision, SessionEvent, ToolResult, TurnOutcome};
 
 /// The item types Ferrite reads as tool runs. Everything else the server
 /// wraps in an item — user messages, agent messages, reasoning — either
@@ -108,25 +108,27 @@ fn parse_item(params: &Value, completed: bool) -> Option<SessionEvent> {
 /// and the params never repeat.
 fn parse_approval_request(value: &Value, params: &Value, tool_name: &str) -> Option<SessionEvent> {
     Some(SessionEvent::DecisionRequested {
-        id: rpc_id_string(value.get("id")?)?,
-        tool_use_id: params.get("itemId")?.as_str()?.to_string(),
-        tool_name: tool_name.to_string(),
-        // The provider's own one-liner: an execution approval quotes the
-        // command; a patch approval offers at most a reason (observed null),
-        // its changes living on the tool card `tool_use_id` points at.
-        description: ["command", "reason"]
-            .iter()
-            .find_map(|key| params.get(*key)?.as_str())
-            .unwrap_or_default()
-            .to_string(),
-        input: params.clone(),
-        // The standing answers Codex offers ("acceptForSession", execpolicy
-        // amendments), raw and in its own words.
-        suggestions: params
-            .get("availableDecisions")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default(),
+        decision: Decision {
+            id: rpc_id_string(value.get("id")?)?,
+            tool_use_id: params.get("itemId")?.as_str()?.to_string(),
+            tool_name: tool_name.to_string(),
+            // The provider's own one-liner: an execution approval quotes the
+            // command; a patch approval offers at most a reason (observed
+            // null), its changes living on the tool card `tool_use_id` names.
+            description: ["command", "reason"]
+                .iter()
+                .find_map(|key| params.get(*key)?.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            input: params.clone(),
+            // The standing answers Codex offers ("acceptForSession", execpolicy
+            // amendments), raw and in its own words.
+            suggestions: params
+                .get("availableDecisions")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default(),
+        },
     })
 }
 
@@ -264,6 +266,10 @@ mod tests {
         (
             "approval-deny",
             include_str!("../../../tests/fixtures/codex-approval-deny-0.149.1.jsonl"),
+        ),
+        (
+            "approval-always",
+            include_str!("../../../tests/fixtures/codex-approval-always-0.149.1.jsonl"),
         ),
         (
             "approval-patch",
@@ -457,6 +463,9 @@ mod tests {
                 // ... plus the Decision that gated the command.
                 ("approval-allow", 44, 17),
                 ("approval-deny", 66, 37),
+                // The same command twice, gated once: the execpolicy amendment
+                // was accepted, so the repeat ran unasked.
+                ("approval-always", 75, 45),
                 // The same gate for a patch instead of a command.
                 ("approval-patch", 52, 20),
                 ("interrupt", 25, 3),
@@ -503,12 +512,15 @@ mod tests {
             .collect();
         assert_eq!(decisions.len(), 1, "expected one Decision: {events:?}");
         let SessionEvent::DecisionRequested {
-            id,
-            tool_use_id,
-            tool_name,
-            description,
-            input,
-            suggestions,
+            decision:
+                Decision {
+                    id,
+                    tool_use_id,
+                    tool_name,
+                    description,
+                    input,
+                    suggestions,
+                },
         } = decisions[0]
         else {
             unreachable!()
@@ -545,11 +557,14 @@ mod tests {
     fn a_patch_approval_is_a_decision_on_the_file_change_item() {
         let events = events_of("approval-patch");
         let SessionEvent::DecisionRequested {
-            tool_use_id,
-            tool_name,
-            description,
-            suggestions,
-            ..
+            decision:
+                Decision {
+                    tool_use_id,
+                    tool_name,
+                    description,
+                    suggestions,
+                    ..
+                },
         } = events
             .iter()
             .find(|e| matches!(e, SessionEvent::DecisionRequested { .. }))

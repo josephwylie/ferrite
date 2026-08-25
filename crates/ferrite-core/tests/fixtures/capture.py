@@ -10,6 +10,8 @@ script is here to record.
   --initialize      send the initialize control request and stop at its answer
   --prompt TEXT     send one user turn and stop at its result line
   --answer allow    answer any can_use_tool request by allowing the tool
+  --answer always   ... or by allowing it and adopting the CLI's own
+                    permission suggestion, so later calls should not ask
   --answer deny     ... or by denying it with a message
   -- ARGS...        extra arguments for the CLI
 """
@@ -146,7 +148,14 @@ else:
         request = value.get("request", {})
         if request.get("subtype") != "can_use_tool" or not opts["answer"]:
             return False
-        if opts["answer"] == "allow":
+        if opts["answer"] == "always":
+            # The standing answer, adopted: allow this call AND take the
+            # permission change the CLI itself suggested. Whether the CLI
+            # honours it is exactly what this capture is for.
+            body = {"behavior": "allow",
+                    "updatedInput": request.get("input", {}),
+                    "updatedPermissions": request.get("permission_suggestions", [])}
+        elif opts["answer"] == "allow":
             body = {"behavior": "allow", "updatedInput": request.get("input", {})}
         else:
             body = {"behavior": "deny", "message": DENY_MESSAGE}
