@@ -1,0 +1,42 @@
+name: CI
+
+# Both platforms are first-class (CONTEXT.md), so both build on every push.
+on: [push, pull_request]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  macos:
+    name: macOS (Metal)
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Test core
+        run: cargo test -p ferrite-core --locked
+      - name: Build app
+        run: cargo build -p ferrite --locked
+
+  windows:
+    name: Windows (DirectX 11)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      # Committed wire fixtures are parsed byte-for-byte; keep checkout literal.
+      - name: Keep line endings as committed
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Test core
+        run: cargo test -p ferrite-core --locked
+      - name: Build app
+        run: cargo build -p ferrite --locked
