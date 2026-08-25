@@ -1,38 +1,30 @@
-//! One Pane: the visible cell for one Thread. Header, transcript, status line,
-//! Composer. Rendering only — the Blocks it draws are folded in core.
+//! One Pane: the visible cell for one Thread. Header, transcript, status
+//! line, Composer. Rendering only — everything it shows is folded in core,
+//! and every key it answers to belongs to the cockpit above it.
 
-use std::time::Duration;
-
-use std::sync::mpsc::Receiver;
-use std::sync::Arc;
-
-use ferrite_core::cockpit::{Cockpit, ThreadId, Wake};
 use ferrite_core::transcript::{
-    Block, Body, Class, Diff, Input, Lexer, Span, Status, Style, Token, ToolBlock, ToolState,
-    Transcript,
+    Block, Body, Class, Diff, Span, Status, Style, Token, ToolBlock, ToolState, Transcript,
 };
-use ferrite_core::{Decision, DecisionAnswer, SessionEvent};
+use ferrite_core::{Decision, ThreadId};
 use gpui::prelude::*;
 use gpui::{
-    actions, div, px, rgb, rgba, AnyElement, Context, Div, Entity, FocusHandle, Focusable,
-    HighlightStyle, ScrollHandle, SharedString, StyledText, Window,
+    div, px, rgb, rgba, AnyElement, Context, Div, Entity, FocusHandle, HighlightStyle,
+    ScrollHandle, SharedString, StyledText,
 };
 
 use crate::composer::Composer;
-use crate::session::Session;
 
-actions!(pane, [Submit, Interrupt, Allow, Deny, Always]);
-
-const BG_WINDOW: u32 = 0x050505;
+pub const BG_WINDOW: u32 = 0x050505;
 const BG_PANE: u32 = 0x0e0e0e;
 const BG_CODE: u32 = 0x141414;
 const BORDER: u32 = 0x232323;
+const BORDER_FOCUSED: u32 = 0x3a3a3a;
 const HAIRLINE: u32 = 0x1a1a1a;
 const TEXT_PRIMARY: u32 = 0xf3f4f7;
 const TEXT_SECONDARY: u32 = 0xa7abb4;
-const TEXT_MUTED: u32 = 0x7f8187;
+pub const TEXT_MUTED: u32 = 0x7f8187;
 const TEXT_THINKING: u32 = 0x5a5d63;
-const TEXT_NOTICE: u32 = 0xd9a05b;
+pub const TEXT_NOTICE: u32 = 0xd9a05b;
 const TEXT_CODE: u32 = 0xc7ccd6;
 const DIFF_ADDED: u32 = 0x7fb069;
 const DIFF_REMOVED: u32 = 0xcf6f6f;
@@ -41,372 +33,238 @@ const CODE_STRING: u32 = 0x9ec78a;
 const CODE_NUMBER: u32 = 0xd0a26a;
 const BG_DECISION: u32 = 0x171310;
 
-const PUMP_MS: u64 = 16;
-
-pub struct Pane {
-    session: Option<Session>,
-    spawn_error: Option<SharedString>,
-    composer: Entity<Composer>,
-    title: SharedString,
-    provider: SharedString,
-    transcript: Transcript,
-    /// Highlighting answers, on their way back into the same apply path.
-    highlights: Receiver<Input>,
-    cockpit: Cockpit,
-    thread: ThreadId,
+/// One Pane's view state: what the window owns per Thread. Everything it
+/// shows lives in core; this is the keyboard and the scrollback position.
+pub struct PaneView {
+    pub thread: ThreadId,
+    pub composer: Entity<Composer>,
+    pub scroll: ScrollHandle,
     /// A pending Decision takes the keyboard: y and n are answers, not text.
-    decision_focus: FocusHandle,
-    scroll: ScrollHandle,
+    pub decision_focus: FocusHandle,
 }
 
-impl Pane {
-    pub fn new(session: Result<Session, String>, cx: &mut Context<Self>) -> Self {
-        let (session, spawn_error) = match session {
-            Ok(session) => (Some(session), None),
-            Err(message) => (None, Some(SharedString::from(message))),
-        };
-
-        if session.is_some() {
-            cx.spawn(async move |this, cx| loop {
-                cx.background_executor()
-                    .timer(Duration::from_millis(PUMP_MS))
-                    .await;
-                let alive = this.update(cx, |pane, cx| pane.pump(cx));
-                if alive.is_err() {
-                    break;
-                }
-            })
-            .detach();
-        }
-
-        let (lexer, highlights) = Lexer::new();
+impl PaneView {
+    pub fn new<T: 'static>(thread: ThreadId, cx: &mut Context<T>) -> Self {
         Self {
-            session,
-            spawn_error,
+            thread,
             composer: cx.new(Composer::new),
-            title: "thread-01".into(),
-            provider: "claude".into(),
-            transcript: Transcript::new(Arc::new(lexer)),
-            highlights,
-            cockpit: Cockpit::default(),
-            thread: ThreadId(1),
-            decision_focus: cx.focus_handle(),
             scroll: ScrollHandle::new(),
+            decision_focus: cx.focus_handle(),
         }
     }
+}
 
-    pub fn composer(&self) -> &Entity<Composer> {
-        &self.composer
-    }
+/// One Pane. A Thread with no transcript is one the cockpit could not open;
+/// it still gets a cell, because a Pane that vanishes hides the problem.
+pub fn render_pane(
+    view: &PaneView,
+    transcript: Option<&Transcript>,
+    decision: Option<&Decision>,
+    queued: Option<&str>,
+    focused: bool,
+    blocked: bool,
+    visible: usize,
+) -> impl IntoElement {
+    let border = if focused {
+        BORDER_FOCUSED
+    } else if blocked {
+        TEXT_NOTICE
+    } else {
+        BORDER
+    };
+    let mut pane = div()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_h_0()
+        .bg(rgb(BG_PANE))
+        .border_1()
+        .border_color(rgb(border))
+        .rounded_sm()
+        .overflow_hidden()
+        .child(header(view.thread, transcript));
 
-    /// Drain whatever arrived since the last frame: the Session's events, and
-    /// any highlighting the lexer has finished.
-    fn pump(&mut self, cx: &mut Context<Self>) {
-        let events: Vec<SessionEvent> = match &self.session {
-            Some(session) => session.events().try_iter().collect(),
-            None => Vec::new(),
-        };
-        let answers: Vec<Input> = self.highlights.try_iter().collect();
-        if events.is_empty() && answers.is_empty() {
-            return;
+    match transcript {
+        Some(transcript) => {
+            pane = pane
+                .child(body(view, transcript, visible))
+                .child(status_line(transcript));
         }
-
-        let streamed = !events.is_empty();
-        let mut release = None;
-        for event in events {
-            if let Wake::Send(held) = self.cockpit.apply(self.thread, &event) {
-                release = Some(held);
-            }
-            self.transcript.apply(Input::Event(event));
-        }
-        if let Some(held) = release {
-            self.send(held);
-        }
-        for answer in answers {
-            self.transcript.apply(answer);
-        }
-        // Colour arriving late must not yank the view; new content must.
-        if streamed {
-            self.scroll.scroll_to_bottom();
-        }
-        cx.notify();
-    }
-
-    fn submit(&mut self, _: &Submit, _window: &mut Window, cx: &mut Context<Self>) {
-        let text = self.composer.update(cx, |composer, cx| composer.take(cx));
-        let text = text.trim().to_string();
-        if text.is_empty() {
-            // Enter on an empty line takes a held prompt back to edit it.
-            if let Some(held) = self.cockpit.unqueue(self.thread) {
-                self.composer
-                    .update(cx, |composer, cx| composer.set(held, cx));
-                cx.notify();
-            }
-            return;
-        }
-        // Typing does not wait for the agent; sending does.
-        if self.cockpit.busy(self.thread) {
-            self.cockpit.queue(self.thread, text);
-            cx.notify();
-            return;
-        }
-        self.send(text);
-        self.scroll.scroll_to_bottom();
-        cx.notify();
-    }
-
-    /// Put a prompt on the wire and in the transcript.
-    fn send(&mut self, text: String) {
-        match &mut self.session {
-            Some(session) => {
-                let sent = session.send(&text);
-                self.transcript.apply(Input::Prompt(text));
-                if let Err(e) = sent {
-                    self.transcript
-                        .apply(Input::Notice(format!("send failed: {e}")));
-                }
-            }
-            None => {
-                self.transcript.apply(Input::Prompt(text));
-                self.transcript.apply(Input::Notice("no session".into()));
-            }
-        }
-    }
-
-    fn allow(&mut self, _: &Allow, _window: &mut Window, cx: &mut Context<Self>) {
-        self.answer(true, cx);
-    }
-
-    fn deny(&mut self, _: &Deny, _window: &mut Window, cx: &mut Context<Self>) {
-        self.answer(false, cx);
-    }
-
-    /// Allow, and stop being asked — only where the request itself offered a
-    /// standing answer. Where it did not, the key does nothing rather than
-    /// quietly downgrading to a one-off allow the operator did not ask for.
-    fn always(&mut self, _: &Always, _window: &mut Window, cx: &mut Context<Self>) {
-        let Some(decision) = self.cockpit.pending(self.thread).cloned() else {
-            return;
-        };
-        let Some(standing) = decision.standing_answer().cloned() else {
-            return;
-        };
-        let response = DecisionAnswer::AllowAlways {
-            input: decision.input.clone(),
-            suggestion: standing,
-        };
-        self.respond(decision, true, response, cx);
-    }
-
-    /// One keystroke, one answer.
-    fn answer(&mut self, allowed: bool, cx: &mut Context<Self>) {
-        let Some(decision) = self.cockpit.pending(self.thread).cloned() else {
-            return;
-        };
-        let response = if allowed {
-            DecisionAnswer::Allow {
-                input: decision.input.clone(),
-            }
-        } else {
-            DecisionAnswer::Deny {
-                message: "The operator denied this tool.".into(),
-            }
-        };
-        self.respond(decision, allowed, response, cx);
-    }
-
-    /// The shared tail of every answer. The Cockpit decides whether the
-    /// Decision is still live: an answer to one that went stale never reaches
-    /// the provider, where it would either be ignored or land on the next
-    /// request.
-    fn respond(
-        &mut self,
-        decision: Decision,
-        allowed: bool,
-        response: DecisionAnswer,
-        cx: &mut Context<Self>,
-    ) {
-        if !self.cockpit.answer(self.thread, &decision.id) {
-            return;
-        }
-        if let Some(session) = &mut self.session {
-            if let Err(e) = session.respond_to_decision(&decision.id, response) {
-                self.transcript
-                    .apply(Input::Notice(format!("answer failed: {e}")));
-            }
-        }
-        self.transcript.apply(Input::Answered {
-            allowed,
-            tool_name: decision.tool_name,
-        });
-        self.scroll.scroll_to_bottom();
-        cx.notify();
-    }
-
-    /// The card that takes the keyboard while a Thread is blocked.
-    fn decision_card(&self, decision: &Decision, cx: &mut Context<Self>) -> impl IntoElement {
-        decision_card(decision)
-            .key_context("Decision")
-            .track_focus(&self.decision_focus)
-            .on_action(cx.listener(Self::allow))
-            .on_action(cx.listener(Self::deny))
-            .on_action(cx.listener(Self::always))
-    }
-
-    /// A prompt written while the agent was still working.
-    fn queued_line(&self, held: &str) -> impl IntoElement {
-        div()
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .gap(px(6.))
-            .px(px(8.))
-            .py(px(2.))
-            .text_size(px(11.))
-            .child(div().flex_shrink_0().text_color(rgb(TEXT_MUTED)).child("⋯"))
-            .child(
-                div()
-                    .min_w_0()
-                    .text_color(rgb(TEXT_SECONDARY))
-                    .child(SharedString::from(held.to_string())),
-            )
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .text_color(rgb(TEXT_MUTED))
-                    .child("queued · enter on an empty line to edit"),
-            )
-    }
-
-    fn interrupt(&mut self, _: &Interrupt, _window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(session) = &mut self.session {
-            if let Err(e) = session.interrupt() {
-                self.transcript
-                    .apply(Input::Notice(format!("interrupt failed: {e}")));
-            }
-        }
-        cx.notify();
-    }
-
-    fn header(&self) -> impl IntoElement {
-        let subtitle = match (self.transcript.model(), self.transcript.session_id()) {
-            (Some(model), Some(id)) => {
-                let short: String = id.chars().take(8).collect();
-                SharedString::from(format!("{model} · {short}"))
-            }
-            _ => SharedString::from("connecting…"),
-        };
-        div()
-            .flex()
-            .flex_shrink_0()
-            .justify_between()
-            .items_center()
-            .px(px(8.))
-            .py(px(5.))
-            .border_b_1()
-            .border_color(rgb(HAIRLINE))
-            .child(
+        None => {
+            pane = pane.child(
                 div()
                     .flex()
+                    .flex_1()
+                    .min_h_0()
                     .items_center()
-                    .gap(px(8.))
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(rgb(TEXT_PRIMARY))
-                            .child(self.title.clone()),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(11.))
-                            .text_color(rgb(TEXT_MUTED))
-                            .child(self.provider.clone()),
-                    ),
-            )
-            .child(
-                div()
+                    .justify_center()
                     .text_size(px(11.))
                     .text_color(rgb(TEXT_MUTED))
-                    .child(subtitle),
-            )
-    }
-
-    fn transcript(&self) -> impl IntoElement {
-        let mut body = div()
-            .id("transcript")
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .track_scroll(&self.scroll)
-            .gap(px(5.))
-            .px(px(8.))
-            .py(px(6.))
-            .text_size(px(12.));
-
-        if let Some(error) = &self.spawn_error {
-            return body.justify_center().items_center().child(
-                div()
-                    .max_w(px(520.))
-                    .text_color(rgb(TEXT_NOTICE))
-                    .child(error.clone()),
+                    .child("parked"),
             );
         }
-
-        for block in self.transcript.blocks() {
-            body = body.child(render_block(block));
-        }
-        body
     }
 
-    fn status_line(&self) -> impl IntoElement {
-        let (label, color) = match self.transcript.status() {
-            Status::Idle => ("idle", TEXT_MUTED),
-            Status::Streaming => ("streaming…", TEXT_SECONDARY),
-            Status::Blocked => ("decision needed", TEXT_NOTICE),
-            Status::Closed => ("closed", TEXT_NOTICE),
-        };
-        let mut spend = Vec::new();
-        if let Some(usage) = self.transcript.usage() {
-            spend.push(match usage.context_window {
-                Some(window) => format!("{}/{}", tokens(usage.total_tokens), tokens(window)),
-                None => tokens(usage.total_tokens),
-            });
-        }
-        if let Some(cost) = self.transcript.last_cost() {
-            spend.push(format!("${cost:.4}"));
-        }
-        let cost = SharedString::from(spend.join(" · "));
-        div()
-            .flex()
-            .flex_shrink_0()
-            .justify_between()
-            .items_center()
-            .px(px(8.))
-            .py(px(3.))
-            .border_t_1()
-            .border_color(rgb(HAIRLINE))
-            .text_size(px(11.))
-            .child(div().text_color(rgb(color)).child(label))
-            .child(div().text_color(rgb(TEXT_MUTED)).child(cost))
+    if let Some(held) = queued {
+        pane = pane.child(queued_line(held));
     }
+    if let Some(decision) = decision {
+        pane = pane.child(
+            decision_card(decision)
+                .key_context("Decision")
+                .track_focus(&view.decision_focus),
+        );
+    }
+    if transcript.is_some() {
+        pane = pane.child(composer_line(view, focused));
+    }
+    pane
+}
 
-    fn composer_line(&self) -> impl IntoElement {
-        div()
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .gap(px(6.))
-            .px(px(8.))
-            .py(px(4.))
-            .border_t_1()
-            .border_color(rgb(HAIRLINE))
-            .text_size(px(12.))
-            .text_color(rgb(TEXT_PRIMARY))
-            .child(div().text_color(rgb(TEXT_MUTED)).child("❯"))
-            .child(self.composer.clone())
+fn header(thread: ThreadId, transcript: Option<&Transcript>) -> impl IntoElement {
+    let subtitle = match transcript.and_then(|t| Some((t.model()?, t.session_id()?))) {
+        Some((model, id)) => {
+            let short: String = id.chars().take(8).collect();
+            SharedString::from(format!("{model} · {short}"))
+        }
+        None => SharedString::from("connecting…"),
+    };
+    div()
+        .flex()
+        .flex_shrink_0()
+        .justify_between()
+        .items_center()
+        .px(px(8.))
+        .py(px(4.))
+        .border_b_1()
+        .border_color(rgb(HAIRLINE))
+        .child(
+            div()
+                .text_size(px(11.))
+                .text_color(rgb(TEXT_PRIMARY))
+                .child(SharedString::from(format!("thread-{thread:02}"))),
+        )
+        .child(
+            div()
+                .text_size(px(10.))
+                .text_color(rgb(TEXT_MUTED))
+                .child(subtitle),
+        )
+}
+
+/// Blocks a Pane draws, by how much room it has. A cell of a 24-Pane wall
+/// shows a dozen lines; walking a whole Thread's history every frame is work
+/// nobody can see, and it is what turns a 120fps cockpit into a 30fps one
+/// after a minute of streaming. Size decides — the same rule semantic zoom
+/// will use for everything else.
+pub fn visible_blocks(panes: usize) -> usize {
+    match panes {
+        0..=1 => 200,
+        2..=4 => 80,
+        5..=9 => 40,
+        _ => 20,
     }
+}
+
+fn body(view: &PaneView, transcript: &Transcript, visible: usize) -> impl IntoElement {
+    let mut body = div()
+        .id(("transcript", view.thread.get() as usize))
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll()
+        .track_scroll(&view.scroll)
+        .gap(px(4.))
+        .px(px(8.))
+        .py(px(5.))
+        .text_size(px(12.));
+    let blocks = transcript.blocks();
+    let tail = blocks.len().saturating_sub(visible);
+    for block in &blocks[tail..] {
+        body = body.child(render_block(block));
+    }
+    body
+}
+
+fn status_line(transcript: &Transcript) -> impl IntoElement {
+    let (label, color) = match transcript.status() {
+        Status::Idle => ("idle", TEXT_MUTED),
+        Status::Streaming => ("streaming…", TEXT_SECONDARY),
+        Status::Blocked => ("decision needed", TEXT_NOTICE),
+        Status::Closed => ("closed", TEXT_NOTICE),
+    };
+    let mut spend = Vec::new();
+    if let Some(usage) = transcript.usage() {
+        spend.push(match usage.context_window {
+            Some(window) => format!("{}/{}", tokens(usage.total_tokens), tokens(window)),
+            None => tokens(usage.total_tokens),
+        });
+    }
+    if let Some(cost) = transcript.last_cost() {
+        spend.push(format!("${cost:.4}"));
+    }
+    div()
+        .flex()
+        .flex_shrink_0()
+        .justify_between()
+        .items_center()
+        .px(px(8.))
+        .py(px(2.))
+        .border_t_1()
+        .border_color(rgb(HAIRLINE))
+        .text_size(px(10.))
+        .child(div().text_color(rgb(color)).child(label))
+        .child(
+            div()
+                .text_color(rgb(TEXT_MUTED))
+                .child(SharedString::from(spend.join(" · "))),
+        )
+}
+
+fn composer_line(view: &PaneView, focused: bool) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(6.))
+        .px(px(8.))
+        .py(px(3.))
+        .border_t_1()
+        .border_color(rgb(HAIRLINE))
+        .text_size(px(12.))
+        .text_color(rgb(TEXT_PRIMARY))
+        .child(
+            div()
+                .text_color(rgb(if focused { TEXT_PRIMARY } else { TEXT_MUTED }))
+                .child("❯"),
+        )
+        .child(view.composer.clone())
+}
+
+/// A prompt written while the agent was still working.
+fn queued_line(held: &str) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(6.))
+        .px(px(8.))
+        .py(px(2.))
+        .text_size(px(10.))
+        .child(div().flex_shrink_0().text_color(rgb(TEXT_MUTED)).child("⋯"))
+        .child(
+            div()
+                .min_w_0()
+                .text_color(rgb(TEXT_SECONDARY))
+                .child(SharedString::from(held.to_string())),
+        )
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_color(rgb(TEXT_MUTED))
+                .child("queued"),
+        )
 }
 
 /// One Block, drawn at terminal density: no card chrome anywhere it can be
@@ -687,58 +545,13 @@ fn code(source: &str, tokens: Option<&[Token]>) -> StyledText {
     plain().with_highlights(highlights)
 }
 
-impl Render for Pane {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut pane = div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_h_0()
-            .bg(rgb(BG_PANE))
-            .border_1()
-            .border_color(rgb(BORDER))
-            .rounded_sm()
-            .overflow_hidden()
-            .child(self.header())
-            .child(self.transcript())
-            .child(self.status_line());
-
-        if self.spawn_error.is_none() {
-            if let Some(held) = self.cockpit.queued(self.thread) {
-                pane = pane.child(self.queued_line(held));
-            }
-            if let Some(decision) = self.cockpit.pending(self.thread).cloned() {
-                pane = pane.child(self.decision_card(&decision, cx));
-                if !self.decision_focus.is_focused(window) {
-                    window.focus(&self.decision_focus);
-                }
-            } else {
-                let composer = self.composer.focus_handle(cx);
-                if !composer.is_focused(window) {
-                    window.focus(&composer);
-                }
-            }
-            pane = pane.child(self.composer_line());
-        }
-
-        div()
-            .flex()
-            .flex_col()
-            .size_full()
-            .p(px(8.))
-            .bg(rgb(BG_WINDOW))
-            .font_family("Menlo")
-            .on_action(cx.listener(Self::submit))
-            .on_action(cx.listener(Self::interrupt))
-            .child(pane)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ferrite_core::{Hunk, ToolResult, TurnOutcome};
+    use ferrite_core::transcript::{Input, Lexer};
+    use ferrite_core::{Hunk, SessionEvent, ToolResult, TurnOutcome};
     use gpui::{point, size, TestAppContext};
+    use std::sync::Arc;
 
     /// A transcript holding one of every Block kind the Pane can draw.
     fn every_kind() -> Transcript {
@@ -749,7 +562,8 @@ mod tests {
             text: "weighing it up".into(),
         }));
         transcript.apply(Input::Event(SessionEvent::TextDelta {
-            text: "## Plan\nI will run `cargo test` first.\n- one\n- two\n\n```rust\nfn main() {}\n```\ndone.\n\n"
+            text: "## Plan\nI will run `cargo test` first.\n- one\n- two\n\n\
+                   ```rust\nfn main() {}\n```\ndone.\n\n"
                 .into(),
         }));
         transcript.apply(Input::Event(SessionEvent::ToolStarted {
@@ -766,14 +580,14 @@ mod tests {
         transcript.apply(Input::Event(SessionEvent::ToolStarted {
             id: "toolu_2".into(),
             name: "Edit".into(),
-            input: serde_json::json!({ "file_path": "/cockpit/x.txt" }),
+            input: serde_json::json!({ "file_path": "/workspace/x.txt" }),
         }));
         transcript.apply(Input::Event(SessionEvent::ToolCompleted {
             id: "toolu_2".into(),
             output: "applied".into(),
             is_error: false,
             result: ToolResult::FileEdit {
-                path: "/cockpit/x.txt".into(),
+                path: "/workspace/x.txt".into(),
                 hunks: vec![Hunk {
                     old_start: 1,
                     old_lines: 3,
@@ -786,7 +600,7 @@ mod tests {
         transcript.apply(Input::Event(SessionEvent::ToolStarted {
             id: "toolu_3".into(),
             name: "Read".into(),
-            input: serde_json::json!({ "file_path": "/cockpit/missing" }),
+            input: serde_json::json!({ "file_path": "/workspace/missing" }),
         }));
         transcript.apply(Input::Event(SessionEvent::ToolCompleted {
             id: "toolu_3".into(),
@@ -799,171 +613,26 @@ mod tests {
             cost_usd: Some(0.038),
         }));
         transcript.apply(Input::Notice("send failed: broken pipe".into()));
-        // Feed the lexer's answers back, so the smoke render paints highlighted
-        // code rather than the plain fallback.
+        transcript.apply(Input::Revived);
         for answer in answers.try_iter() {
             transcript.apply(answer);
         }
         transcript
     }
 
-    /// The Decision the demo script stops on, folded exactly as a live one is.
-    fn demo_decision() -> Decision {
-        let event = crate::session::script()
-            .into_iter()
-            .map(|step| step.event)
-            .find(|event| matches!(event, SessionEvent::DecisionRequested { .. }))
-            .expect("the demo stops on a Decision");
-        let mut cockpit = Cockpit::default();
-        let thread = ThreadId(1);
-        cockpit.apply(thread, &event);
-        cockpit.pending(thread).cloned().expect("pending")
-    }
-
     struct Blank;
 
     impl Render for Blank {
-        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        fn render(
+            &mut self,
+            _window: &mut gpui::Window,
+            _cx: &mut Context<Self>,
+        ) -> impl IntoElement {
             div()
         }
     }
 
-    /// The whole keystroke path: a blocked Pane, a real key, and the Decision
-    /// gone from the Cockpit because the answer went out. What the answer
-    /// looks like on the wire is proved against the captures in core.
-    #[gpui::test]
-    fn one_keystroke_answers_the_card(cx: &mut TestAppContext) {
-        let event = crate::session::script()
-            .into_iter()
-            .map(|step| step.event)
-            .find(|event| matches!(event, SessionEvent::DecisionRequested { .. }))
-            .expect("the demo stops on a Decision");
-
-        cx.update(|cx| {
-            cx.bind_keys([
-                gpui::KeyBinding::new("y", Allow, Some("Decision")),
-                gpui::KeyBinding::new("n", Deny, Some("Decision")),
-            ]);
-        });
-        let (pane, cx) = cx.add_window_view(|_, cx| {
-            Pane::new(Ok(Session::Demo(crate::session::DemoSession::start())), cx)
-        });
-
-        pane.update(cx, |pane, cx| {
-            pane.cockpit.apply(pane.thread, &event);
-            cx.notify();
-        });
-        // The window draws itself, which is what moves focus onto the card.
-        cx.run_until_parked();
-        pane.read_with(cx, |pane, _| {
-            assert!(
-                pane.cockpit.pending(pane.thread).is_some(),
-                "the card should be up before the key"
-            );
-        });
-
-        cx.simulate_keystrokes("y");
-
-        pane.read_with(cx, |pane, _| {
-            assert!(
-                pane.cockpit.pending(pane.thread).is_none(),
-                "y must answer the Decision, not type a letter"
-            );
-        });
-    }
-
-    /// The third key. The demo Decision offers a standing answer, so `a`
-    /// adopts it and the card clears. What the adoption looks like on the
-    /// wire is byte-compared against the captures in core; this proves the
-    /// keystroke reaches that path.
-    #[gpui::test]
-    fn the_a_key_adopts_the_standing_answer(cx: &mut TestAppContext) {
-        let event = crate::session::script()
-            .into_iter()
-            .map(|step| step.event)
-            .find(|event| matches!(event, SessionEvent::DecisionRequested { .. }))
-            .expect("the demo stops on a Decision");
-
-        cx.update(|cx| {
-            cx.bind_keys([gpui::KeyBinding::new("a", Always, Some("Decision"))]);
-        });
-        let (pane, cx) = cx.add_window_view(|_, cx| {
-            Pane::new(Ok(Session::Demo(crate::session::DemoSession::start())), cx)
-        });
-        pane.update(cx, |pane, cx| {
-            pane.cockpit.apply(pane.thread, &event);
-            cx.notify();
-        });
-        cx.run_until_parked();
-        pane.read_with(cx, |pane, _| {
-            assert!(
-                pane.cockpit.pending(pane.thread).is_some(),
-                "the card should be up before the key"
-            );
-        });
-
-        cx.simulate_keystrokes("a");
-
-        pane.read_with(cx, |pane, _| {
-            assert!(
-                pane.cockpit.pending(pane.thread).is_none(),
-                "a must adopt the standing answer, not type a letter"
-            );
-        });
-    }
-
-    /// The other half of the same claim: with nothing blocked, the answer keys
-    /// are letters again and go where the operator is typing.
-    #[gpui::test]
-    fn the_answer_keys_are_letters_when_nothing_is_blocked(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            cx.bind_keys([gpui::KeyBinding::new("y", Allow, Some("Decision"))]);
-        });
-        let (pane, cx) = cx.add_window_view(|_, cx| {
-            Pane::new(Ok(Session::Demo(crate::session::DemoSession::start())), cx)
-        });
-        cx.run_until_parked();
-
-        cx.simulate_keystrokes("y");
-
-        let typed = pane.update(cx, |pane, cx| {
-            pane.composer.update(cx, |composer, cx| composer.take(cx))
-        });
-        assert_eq!(typed, "y");
-    }
-
-    #[gpui::test]
-    fn a_blocked_thread_paints_its_decision_card(cx: &mut TestAppContext) {
-        let decision = demo_decision();
-        assert_eq!(decision.tool_name, "Write");
-        assert_eq!(decision.description, "ferrite-perm.txt");
-
-        // A request Ferrite could not read is still a card, or the operator
-        // has nothing to deny and the turn hangs.
-        let unreadable = Decision {
-            tool_name: String::new(),
-            description: String::new(),
-            ..decision.clone()
-        };
-
-        let (_, cx) = cx.add_window_view(|_, _| Blank);
-        cx.draw(
-            point(px(0.), px(0.)),
-            size(px(900.), px(300.)),
-            |_window, _cx| {
-                div()
-                    .flex()
-                    .flex_col()
-                    .w(px(900.))
-                    .font_family("Menlo")
-                    .text_size(px(12.))
-                    .child(decision_card(&decision))
-                    .child(decision_card(&unreadable))
-            },
-        );
-    }
-
-    /// The app is thin by design, so its one test is that every Block kind
+    /// The app is thin by design, so its render test is that every Block kind
     /// the core can produce actually lays out and paints in a window.
     #[gpui::test]
     fn every_block_kind_paints(cx: &mut TestAppContext) {
@@ -1016,6 +685,43 @@ mod tests {
                     .font_family("Menlo")
                     .text_size(px(12.))
                     .children(blocks.iter().map(render_block))
+            },
+        );
+    }
+
+    #[gpui::test]
+    fn a_blocked_thread_paints_its_decision_card(cx: &mut TestAppContext) {
+        let event = crate::session::script()
+            .into_iter()
+            .map(|step| step.event)
+            .find(|event| matches!(event, SessionEvent::DecisionRequested { .. }))
+            .expect("the demo stops on a Decision");
+        let SessionEvent::DecisionRequested { decision } = event else {
+            unreachable!()
+        };
+        assert_eq!(decision.tool_name, "Write");
+
+        // A request Ferrite could not read is still a card, or the operator
+        // has nothing to deny and the turn hangs.
+        let unreadable = Decision {
+            tool_name: String::new(),
+            description: String::new(),
+            ..decision.clone()
+        };
+
+        let (_, cx) = cx.add_window_view(|_, _| Blank);
+        cx.draw(
+            point(px(0.), px(0.)),
+            size(px(900.), px(300.)),
+            |_window, _cx| {
+                div()
+                    .flex()
+                    .flex_col()
+                    .w(px(900.))
+                    .font_family("Menlo")
+                    .text_size(px(12.))
+                    .child(decision_card(&decision))
+                    .child(decision_card(&unreadable))
             },
         );
     }

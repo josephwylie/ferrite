@@ -1,25 +1,40 @@
-// Ferrite app shell: one Thread in one Pane — the walking skeleton.
+// Ferrite: the cockpit window and the pump behind it.
+mod cockpit;
 mod composer;
 mod line;
 mod pane;
 mod session;
 
-use ferrite_core::providers::{ClaudeConfig, ClaudeSession, CodexConfig, CodexSession};
+use ferrite_core::cockpit::Cockpit;
+use ferrite_core::store::{Provider, Store};
 use gpui::*;
 
-use pane::Pane;
-use session::{DemoSession, Session};
+use cockpit::CockpitView;
+use session::{ProcessRss, Spawn};
 
 actions!(ferrite, [Quit]);
 
+/// One Session may hold this much before the watchdog replaces it. Generous:
+/// a busy agent legitimately grows, and a restart costs the operator context.
+const RSS_LIMIT: u64 = 4 * 1024 * 1024 * 1024;
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let demo = args.iter().any(|arg| arg == "--demo");
-    let provider = args
-        .iter()
-        .position(|arg| arg == "--provider")
-        .and_then(|at| args.get(at + 1))
-        .cloned();
+    let load = args.iter().any(|arg| arg == "--load");
+    let demo = load || args.iter().any(|arg| arg == "--demo");
+    let provider = match flag(&args, "--provider") {
+        None | Some("claude") => Provider::Claude,
+        Some("codex") => Provider::Codex,
+        Some(other) => {
+            eprintln!("ferrite: unknown provider `{other}` (claude, codex)");
+            std::process::exit(2);
+        }
+    };
+    // How many Panes to open. The wall's own number is 24, which is what the
+    // perf run uses.
+    let panes: usize = flag(&args, "--panes")
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(1);
 
     Application::new().run(move |cx: &mut App| {
         cx.bind_keys([
@@ -30,29 +45,38 @@ fn main() {
             KeyBinding::new("home", composer::Home, None),
             KeyBinding::new("end", composer::End, None),
             KeyBinding::new("cmd-v", composer::Paste, None),
-            KeyBinding::new("enter", pane::Submit, None),
-            // Only while a Decision holds the keyboard: elsewhere y and n are
+            KeyBinding::new("enter", cockpit::Submit, None),
+            KeyBinding::new("escape", cockpit::Interrupt, None),
+            // Only while a Decision holds the keyboard: elsewhere these are
             // just letters going into the Composer.
-            KeyBinding::new("y", pane::Allow, Some("Decision")),
-            KeyBinding::new("n", pane::Deny, Some("Decision")),
-            KeyBinding::new("a", pane::Always, Some("Decision")),
-            KeyBinding::new("escape", pane::Interrupt, None),
+            KeyBinding::new("y", cockpit::Allow, Some("Decision")),
+            KeyBinding::new("n", cockpit::Deny, Some("Decision")),
+            KeyBinding::new("a", cockpit::Always, Some("Decision")),
+            // The cockpit: walk the grid, and jump to whoever needs answering.
+            KeyBinding::new("cmd-]", cockpit::NextPane, None),
+            KeyBinding::new("cmd-[", cockpit::PreviousPane, None),
+            KeyBinding::new("cmd-d", cockpit::NextDecision, None),
+            KeyBinding::new("cmd-n", cockpit::NewThread, None),
+            // Close parks the Thread; it is still there, and reopening revives it.
+            KeyBinding::new("cmd-w", cockpit::CloseThread, None),
+            // And back again: the most recently parked Thread, revived.
+            KeyBinding::new("cmd-o", cockpit::ReopenThread, None),
             KeyBinding::new("cmd-q", Quit, None),
         ]);
         cx.on_action(|_: &Quit, cx| cx.quit());
 
-        let session = if demo {
-            Ok(Session::Demo(DemoSession::start()))
-        } else {
-            match provider.as_deref() {
-                None | Some("claude") => spawn_claude(),
-                Some("codex") => spawn_codex(),
-                // A typo must not quietly run the wrong provider.
-                Some(other) => Err(format!("unknown provider: {other}")),
+        let store = match Store::open(store_dir()) {
+            Ok(store) => store,
+            Err(e) => {
+                eprintln!("ferrite: cannot open the Thread store: {e}");
+                std::process::exit(1);
             }
         };
+        let mut core = Cockpit::new(store, Box::new(Spawn { demo, load }));
+        core.watch_memory(Box::new(ProcessRss), RSS_LIMIT);
+        cockpit::threads_for(&mut core, panes.max(1), provider);
 
-        let bounds = Bounds::centered(None, size(px(1100.), px(720.)), cx);
+        let bounds = Bounds::centered(None, size(px(1440.), px(900.)), cx);
         let window = cx
             .open_window(
                 WindowOptions {
@@ -63,39 +87,26 @@ fn main() {
                     }),
                     ..Default::default()
                 },
-                |_, cx| cx.new(|cx| Pane::new(session, cx)),
+                |_, cx| cx.new(|cx| CockpitView::new(core, cx)),
             )
             .unwrap();
 
         window
-            .update(cx, |pane, window, cx| {
-                window.focus(&pane.composer().focus_handle(cx));
-                cx.activate(true);
-            })
+            .update(cx, |_, _window, cx| cx.activate(true))
             .unwrap();
     });
 }
 
-/// The Thread's workspace binding is the current checkout for now.
-fn spawn_claude() -> Result<Session, String> {
-    let config = ClaudeConfig {
-        cwd: std::env::current_dir().ok(),
-        ..Default::default()
-    };
-    ClaudeSession::spawn(config)
-        .map(Session::Claude)
-        .map_err(|e| e.to_string())
+fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
+    let at = args.iter().position(|arg| arg == name)?;
+    args.get(at + 1).map(String::as_str)
 }
 
-/// `--provider codex`. Decisions only reach Ferrite when the server is asked
-/// to route them, so the approval policy is stated rather than inherited.
-fn spawn_codex() -> Result<Session, String> {
-    let config = CodexConfig {
-        cwd: std::env::current_dir().ok(),
-        approval_policy: Some("on-request".into()),
-        ..Default::default()
-    };
-    CodexSession::spawn(config)
-        .map(Session::Codex)
-        .map_err(|e| e.to_string())
+/// Where Threads live between runs.
+fn store_dir() -> std::path::PathBuf {
+    if let Ok(dir) = std::env::var("FERRITE_STORE") {
+        return dir.into();
+    }
+    let base = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    std::path::PathBuf::from(base).join(".ferrite/threads")
 }

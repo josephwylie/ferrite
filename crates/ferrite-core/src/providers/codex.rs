@@ -387,6 +387,11 @@ impl CodexSession {
         }))
     }
 
+    /// The process this Session runs, for a watchdog counting its memory.
+    pub fn pid(&self) -> Option<u32> {
+        self.child.lock().ok().map(|child| child.id())
+    }
+
     /// The bounded event stream. Poll with `try_recv`/`try_iter`; the UI
     /// drains this per frame.
     pub fn events(&self) -> &Receiver<SessionEvent> {

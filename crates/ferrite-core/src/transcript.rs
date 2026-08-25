@@ -165,6 +165,10 @@ pub enum Input {
         allowed: bool,
         tool_name: String,
     },
+    /// This Thread's history was replayed from the log into a fresh Session.
+    /// Never recorded — a log that replayed itself would grow one revival
+    /// line per restart.
+    Revived,
     /// A highlighter's answer, arriving whenever it is ready.
     Highlighted {
         block: BlockId,
@@ -348,6 +352,12 @@ impl Transcript {
                     ..Update::default()
                 }
             }
+            Input::Revived => Update {
+                dirty: vec![self.push(Body::Meta(
+                    "revived — new Session, history from the log".into(),
+                ))],
+                ..Update::default()
+            },
             Input::Notice(line) => Update {
                 dirty: vec![self.push(Body::Notice(line))],
                 ..Update::default()
@@ -499,7 +509,13 @@ impl Transcript {
     fn write_open(&mut self, body: Body) -> Option<BlockId> {
         match self.open {
             Some(id) => {
-                let block = self.blocks.iter_mut().find(|b| b.id == id)?;
+                // The open Block is the tail by construction. Scanning for it
+                // costs the whole transcript on every delta, which is what
+                // decays a streaming cockpit from 120fps to 30.
+                let block = match self.blocks.last_mut() {
+                    Some(block) if block.id == id => block,
+                    _ => self.blocks.iter_mut().find(|b| b.id == id)?,
+                };
                 if block.body == body {
                     return None;
                 }
@@ -1016,6 +1032,24 @@ mod tests {
     }
 
     #[test]
+    fn a_revived_thread_says_it_was_revived() {
+        let mut transcript = Transcript::default();
+        transcript.apply(Input::Prompt("from before the restart".into()));
+
+        let update = transcript.apply(Input::Revived);
+
+        // The history is real; the Session serving it is new, and the
+        // transcript says so rather than pretending nothing happened.
+        let last = transcript.blocks().last().unwrap();
+        assert_eq!(update.dirty, vec![last.id]);
+        assert!(matches!(last.body, Body::Meta(_)));
+        assert_eq!(
+            body_text(last),
+            "revived — new Session, history from the log"
+        );
+    }
+
+    #[test]
     fn ferrite_can_say_something_of_its_own() {
         let mut transcript = Transcript::default();
 
@@ -1151,6 +1185,27 @@ mod tests {
         assert_eq!(update.evicted, vec![oldest]);
         assert_eq!(transcript.blocks().len(), 2);
         assert_eq!(body_text(&transcript.blocks()[0]), "two");
+    }
+
+    /// The memory claim behind a cockpit left running all day: a Thread that
+    /// never stops talking stops growing, and says which Blocks it dropped.
+    #[test]
+    fn a_thread_that_streams_forever_stops_growing() {
+        let mut transcript = Transcript::with_capacity(std::sync::Arc::new(Unhighlighted), 50);
+        let mut evicted = 0;
+
+        for n in 0..500 {
+            let update = transcript.apply(text(&format!("paragraph {n}\n\n")));
+            evicted += update.evicted.len();
+        }
+
+        assert_eq!(transcript.blocks().len(), 50, "the cap is the whole point");
+        assert_eq!(evicted, 450, "and every drop was reported, not silent");
+        // What is left is the newest end of the Thread, not the oldest.
+        assert_eq!(
+            body_text(transcript.blocks().last().unwrap()),
+            "paragraph 499"
+        );
     }
 
     #[test]

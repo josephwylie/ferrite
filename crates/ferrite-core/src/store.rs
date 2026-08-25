@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::transcript::Input;
 use crate::SessionEvent;
+use crate::{transcript::Input, ThreadId};
 
 /// The schema this store writes. Every log names the schema it was written
 /// at in its header line; `load` accepts this version and every version
@@ -28,16 +28,6 @@ use crate::SessionEvent;
 ///   redrawn from prose). A v1 log loads with no prompts and every result
 ///   `Opaque` — exactly what v1 recorded, nothing invented.
 const SCHEMA_VERSION: u32 = 2;
-
-/// A Thread's identity in the store: the log directory's name.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ThreadId(u64);
-
-impl std::fmt::Display for ThreadId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
 
 /// Which agent backend serves this Thread — persisted so a restart knows
 /// which provider to revive the Thread on.
@@ -439,7 +429,7 @@ impl Store {
     /// Mint a new Thread and hand back its writer. The Thread is durable
     /// before this returns: a crash immediately after still shows it.
     pub fn create(&self, provider: Provider) -> io::Result<(ThreadId, ThreadWriter)> {
-        let mut next = self.thread_ids()?.last().map_or(1, |id| id.0 + 1);
+        let mut next = self.thread_ids()?.last().map_or(1, |id| id.get() + 1);
         loop {
             match fs::create_dir(self.dir.join(next.to_string())) {
                 Ok(()) => break,
@@ -447,7 +437,7 @@ impl Store {
                 Err(e) => return Err(e),
             }
         }
-        let id = ThreadId(next);
+        let id = ThreadId::new(next);
 
         let mut file = OpenOptions::new()
             .create_new(true)
@@ -476,7 +466,7 @@ impl Store {
         for entry in fs::read_dir(&self.dir)? {
             let entry = entry?;
             if let Ok(number) = entry.file_name().to_string_lossy().parse::<u64>() {
-                ids.push(ThreadId(number));
+                ids.push(ThreadId::new(number));
             }
         }
         ids.sort_unstable();
@@ -948,7 +938,7 @@ mod tests {
         plant_log(&dir, "7", V1_LOG);
 
         let store = Store::open(&dir).unwrap();
-        let thread = store.load(ThreadId(7)).unwrap();
+        let thread = store.load(ThreadId::new(7)).unwrap();
         assert_eq!(thread.provider(), Provider::Claude);
         assert_eq!(thread.resume_target(), Some("legacy-4f2a"));
         assert_eq!(
@@ -991,7 +981,7 @@ mod tests {
         plant_log(&dir, "7", V1_LOG);
         let store = Store::open(&dir).unwrap();
 
-        let mut writer = store.writer(ThreadId(7)).unwrap();
+        let mut writer = store.writer(ThreadId::new(7)).unwrap();
         writer.record_prompt("continue where you left off").unwrap();
         writer
             .record_event(&SessionEvent::TurnEnded {
@@ -1013,7 +1003,7 @@ mod tests {
             "the log still declares the old schema: {first_line}"
         );
 
-        let thread = store.load(ThreadId(7)).unwrap();
+        let thread = store.load(ThreadId::new(7)).unwrap();
         let inputs = thread.inputs();
         assert_eq!(inputs.len(), 7, "history: {inputs:?}");
         assert_eq!(
@@ -1054,7 +1044,7 @@ mod tests {
         );
         let store = Store::open(&dir).unwrap();
 
-        let mut writer = store.writer(ThreadId(4)).unwrap();
+        let mut writer = store.writer(ThreadId::new(4)).unwrap();
         writer.record_prompt("are you still there").unwrap();
         writer
             .record_event(&SessionEvent::TurnEnded {
@@ -1064,7 +1054,7 @@ mod tests {
             .unwrap();
         drop(writer);
 
-        let inputs = store.load(ThreadId(4)).unwrap().inputs();
+        let inputs = store.load(ThreadId::new(4)).unwrap().inputs();
         assert_eq!(
             inputs,
             vec![
@@ -1102,7 +1092,7 @@ mod tests {
         );
 
         let store = Store::open(&dir).unwrap();
-        match store.load(ThreadId(3)) {
+        match store.load(ThreadId::new(3)) {
             Err(LoadError::FutureSchema { found, supported }) => {
                 assert_eq!(found, 3);
                 assert_eq!(supported, SCHEMA_VERSION);

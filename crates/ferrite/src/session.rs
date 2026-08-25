@@ -9,65 +9,130 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use ferrite_core::providers::{ClaudeSession, CodexSession};
-use ferrite_core::{Decision, DecisionAnswer, SessionEvent, TurnOutcome};
-
-pub enum Session {
-    Claude(ClaudeSession),
-    Codex(CodexSession),
-    Demo(DemoSession),
-}
-
-impl Session {
-    pub fn events(&self) -> &Receiver<SessionEvent> {
-        match self {
-            Session::Claude(s) => s.events(),
-            Session::Codex(s) => s.events(),
-            Session::Demo(d) => &d.rx,
-        }
-    }
-
-    pub fn send(&mut self, text: &str) -> io::Result<()> {
-        match self {
-            Session::Claude(s) => s.send(text),
-            Session::Codex(s) => s.send(text),
-            Session::Demo(d) => {
-                d.send();
-                Ok(())
-            }
-        }
-    }
-
-    pub fn interrupt(&mut self) -> io::Result<()> {
-        match self {
-            Session::Claude(s) => s.interrupt(),
-            Session::Codex(s) => s.interrupt(),
-            Session::Demo(d) => {
-                d.interrupt();
-                Ok(())
-            }
-        }
-    }
-
-    /// Answer a Decision. Both providers take the same shape; only their wire
-    /// spelling differs, which is their own business.
-    pub fn respond_to_decision(&mut self, id: &str, answer: DecisionAnswer) -> io::Result<()> {
-        match self {
-            Session::Claude(s) => s.respond_to_decision(id, answer),
-            Session::Codex(s) => s.respond_to_decision(id, answer),
-            Session::Demo(d) => {
-                d.respond(answer);
-                Ok(())
-            }
-        }
-    }
-}
+use ferrite_core::cockpit::{RssSampler, Spawner};
+use ferrite_core::providers::{ClaudeConfig, ClaudeSession, CodexConfig, CodexSession, Session};
+use ferrite_core::store::Provider;
+use ferrite_core::{Decision, DecisionAnswer, SessionEvent, ThreadId, TurnOutcome};
 
 /// A scripted event stream: no process, same channel, same pump.
 pub struct DemoSession {
     rx: Receiver<SessionEvent>,
     tx: Sender<SessionEvent>,
     cancel: Arc<AtomicBool>,
+}
+
+impl Session for DemoSession {
+    fn events(&self) -> &Receiver<SessionEvent> {
+        &self.rx
+    }
+
+    fn send(&mut self, _text: &str) -> io::Result<()> {
+        self.play_reply();
+        Ok(())
+    }
+
+    fn interrupt(&mut self) -> io::Result<()> {
+        self.cancel.store(true, Ordering::Relaxed);
+        Ok(())
+    }
+
+    fn respond_to_decision(&mut self, _id: &str, answer: DecisionAnswer) -> io::Result<()> {
+        self.respond(answer);
+        Ok(())
+    }
+}
+
+/// The load generator behind the 24-Pane perf run: one Session streaming
+/// words forever, at the tick rate the panes24 baseline was measured at.
+pub fn streaming() -> DemoSession {
+    let (tx, rx) = mpsc::channel();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let sender = tx.clone();
+    thread::spawn(move || {
+        let words = [
+            "wiring", "the", "joiner", "into", "canvas", "path", "atlas", "stays", "per-cell",
+            "checks", "green", "vitest", "run", "passed", "resume", "session", "delta", "coalesce",
+            "channel", "spawn", "parse", "commit", "ferrite", "pane", "stream", "tokens", "metal",
+            "frame", "budget",
+        ];
+        let mut at = 0usize;
+        loop {
+            // Real prose ends paragraphs, which is what lets a transcript
+            // evict: an agent that streamed one endless line would grow one
+            // Block forever.
+            let word = words[at % words.len()];
+            let text = if at % 40 == 39 {
+                format!("{word}.\n\n")
+            } else {
+                format!("{word} ")
+            };
+            if sender.send(SessionEvent::TextDelta { text }).is_err() {
+                return;
+            }
+            at += 1;
+            thread::sleep(Duration::from_millis(8));
+        }
+    });
+    DemoSession { rx, tx, cancel }
+}
+
+/// How the app starts Sessions. `--demo` swaps every provider for the
+/// scripted one, which is also what drives the 24-Pane load test.
+pub struct Spawn {
+    pub demo: bool,
+    /// Every Session streams forever — the perf load, not a demo to read.
+    pub load: bool,
+}
+
+impl Spawner for Spawn {
+    fn spawn(&mut self, provider: Provider, resume: Option<&str>) -> io::Result<Box<dyn Session>> {
+        if self.load {
+            return Ok(Box::new(streaming()));
+        }
+        if self.demo {
+            return Ok(Box::new(DemoSession::start()));
+        }
+        let cwd = std::env::current_dir().ok();
+        match provider {
+            Provider::Claude => ClaudeSession::spawn(ClaudeConfig {
+                cwd,
+                resume: resume.map(|target| target.to_string()),
+                ..Default::default()
+            })
+            .map(|session| Box::new(session) as Box<dyn Session>)
+            // The typed spawn error keeps its words, which is what the Pane
+            // shows; only its type is lost crossing this seam.
+            .map_err(|e| io::Error::other(e.to_string())),
+            Provider::Codex => CodexSession::spawn(CodexConfig {
+                cwd,
+                approval_policy: Some("on-request".into()),
+                resume: resume.map(|target| target.to_string()),
+                ..Default::default()
+            })
+            .map(|session| Box::new(session) as Box<dyn Session>)
+            .map_err(|e| io::Error::other(e.to_string())),
+        }
+    }
+}
+
+/// Resident memory per Session, read the way the panes24 spike reads it.
+#[derive(Default)]
+pub struct ProcessRss;
+
+impl RssSampler for ProcessRss {
+    fn sample(&mut self, _thread: ThreadId, pid: Option<u32>) -> Option<u64> {
+        rss_bytes(pid?)
+    }
+}
+
+/// One process's resident bytes, the way the panes24 spike reads it.
+pub(crate) fn rss_bytes(pid: u32) -> Option<u64> {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "rss=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    let kilobytes: u64 = String::from_utf8(out.stdout).ok()?.trim().parse().ok()?;
+    Some(kilobytes * 1024)
 }
 
 impl DemoSession {
@@ -78,13 +143,9 @@ impl DemoSession {
         Self { rx, tx, cancel }
     }
 
-    fn send(&mut self) {
+    fn play_reply(&mut self) {
         self.cancel.store(false, Ordering::Relaxed);
         play(self.tx.clone(), self.cancel.clone(), reply());
-    }
-
-    fn interrupt(&mut self) {
-        self.cancel.store(true, Ordering::Relaxed);
     }
 
     /// The demo's agent does what it was told: allowed, it finishes the write
@@ -276,16 +337,12 @@ fn turn(thinking: &[&str], text: &str, cost: f64) -> Vec<Step> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ferrite_core::cockpit::{Cockpit, ThreadId};
     use ferrite_core::transcript::{Body, Input, Status, Transcript};
 
     #[test]
     fn replaying_the_demo_script_leaves_a_paid_turn_and_a_thread_on_the_operator() {
         let mut transcript = Transcript::default();
-        let mut cockpit = Cockpit::default();
-        let thread = ThreadId(1);
         for step in script() {
-            cockpit.apply(thread, &step.event);
             transcript.apply(Input::Event(step.event));
         }
 
@@ -315,11 +372,6 @@ mod tests {
             .max()
             .unwrap();
         assert!(longest > 200, "demo text must wrap; longest was {longest}");
-
-        let pending = cockpit.pending(thread).expect("a Decision to answer");
-        assert_eq!(pending.tool_name, "Write");
-        assert_eq!(pending.id, "perm_demo");
-        assert_eq!(pending.suggestions.len(), 1);
     }
 
     #[test]
