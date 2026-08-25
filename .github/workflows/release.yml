@@ -1,0 +1,87 @@
+name: Release
+
+# A pushed v* tag builds the release binary on both first-class platforms
+# (CONTEXT.md) and attaches both archives to a GitHub Release for that tag.
+on:
+  push:
+    tags: ["v*"]
+
+# The fan-in job creates the release with `gh` using the built-in token.
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # Spelled once: the build jobs package these names and the fan-in job
+  # attaches them, so a rename cannot drift between the two.
+  MACOS_ARCHIVE: ferrite-${{ github.ref_name }}-aarch64-apple-darwin.tar.gz
+  WINDOWS_ARCHIVE: ferrite-${{ github.ref_name }}-x86_64-pc-windows-msvc.zip
+
+jobs:
+  macos:
+    name: macOS arm64 (Metal)
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build release binary
+        run: cargo build --release -p ferrite --locked
+      - name: Package tar.gz
+        run: tar -czf "$MACOS_ARCHIVE" -C target/release ferrite
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: ${{ env.MACOS_ARCHIVE }}
+          if-no-files-found: error
+
+  windows:
+    name: Windows x64 (DirectX 11)
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      # Committed wire fixtures are parsed byte-for-byte; keep checkout literal.
+      - name: Keep line endings as committed
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build release binary
+        run: cargo build --release -p ferrite --locked
+      - name: Package zip
+        run: Compress-Archive -Path target/release/ferrite.exe -DestinationPath "$env:WINDOWS_ARCHIVE"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: ${{ env.WINDOWS_ARCHIVE }}
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    # Fan-in: exactly one job touches the release, so the builds cannot race
+    # each other creating it.
+    needs: [macos, windows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - name: Create release and attach artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ github.ref_name }}"
+          assets=("$MACOS_ARCHIVE" "$WINDOWS_ARCHIVE")
+          # Checked first, so a create failure stays a create failure — an
+          # unconditional fallback would bury a 5xx or token error under
+          # upload's "release not found".
+          if gh release view "$tag" > /dev/null 2>&1; then
+            # A re-run, or a hand-made release for the tag: attach onto it.
+            gh release upload "$tag" --clobber "${assets[@]}"
+          else
+            gh release create "$tag" --verify-tag --generate-notes "${assets[@]}"
+          fi

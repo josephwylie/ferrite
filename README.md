@@ -1,44 +1,82 @@
 # Ferrite
 
-Multi-provider agentic development environment: a dense, Metal-native cockpit of
-document panes, each driving a coding agent (Claude, Codex, Cursor, …) through its
-strongest native transport behind one ACP-shaped internal seam. Spun off from
-SwarmDeck learnings — no terminals, no PTYs: agents stream structured events,
-Ferrite renders them as rich documents at terminal density.
+Ferrite is a native (GPUI) cockpit for running many coding agents in parallel.
+Each **Thread** — one durable agent conversation, with its Provider and its
+workspace binding — shows in a **Pane** of the **Cockpit** grid, up to a
+24-pane wall. A Pane's size picks its semantic zoom: near, the transcript and
+a Composer; smaller, instruments; at wall range, a status LED. **Decisions** —
+anything a Thread is blocked on that only you can answer — are answerable
+straight from the wall with one key. Ferrite is not a harness and never talks
+to a Provider's API itself: it drives the official Claude and Codex CLIs and
+renders what they stream.
 
-## Settled decisions (2026-08-25)
+**v1 is keyboard-first.** There is no pointer support yet; everything is
+driven from the keyboard.
 
-- **Name**: Ferrite (Rust culture + metal + magnetic-core memory).
-- **Agent transports**: native-first — Claude via CLI stream-json + stdio control
-  protocol (pin CLI ≥ 2.1.224), Codex via `codex app-server` JSON-RPC, Cursor/Grok
-  via ACP. One internal ACP-shaped adapter trait in front of all of them.
-  Raw ACP as the uniform spine was researched and rejected (capability loss).
-- **No per-delta durable writes** — event-sourced thread log persisted at
-  block/turn boundaries (T3 Code's per-delta SQLite+WS path is the counterexample).
-- **Session pool**: LRU of hot CLI processes, reattach-on-initialize, park the rest.
-- **Renderer**: GPUI (Rust, Metal) — **spike passed 2026-08-25**: panes24 held
-  120fps (worst second 62) with 24 panes streaming ~2,880 deltas/s under
-  whole-window re-render, 86MB total RSS (~3.6MB/pane vs <10MB budget), on
-  gpui 0.2.2 from crates.io. Tauri fallback retired.
+## Requirements
 
-## Research trail
+- A working `claude` or `codex` CLI on your PATH, already logged in.
+  Ferrite checks the version at Session start: `claude` 2.1.224 up to (not
+  including) 3.0.0, `codex` 0.149.1 up to 1.0.0.
+- macOS on Apple silicon, or Windows x64.
 
-Design canvas: claude.ai artifact "SwarmDeck Rich Pane" (concept + directions).
-Research docs (currently in `../swarmdeck/docs/research/`):
-- `perf-frontier-2026-08-24.md` — ACP maturity, WKWebView scheduler gap, wry zero-copy
-- `acp-vs-native-adapters-2026-08-24.md` — why native-first transports
-- `native-metal-ui-2026-08-24.md` — GPUI vs webview, spike gate definition
-- `perf-rich-pane-recent-2026-08-24.md` — CLI version pins, park/resume support
+## Install
 
-## Layout
+Download the latest archive from
+[GitHub Releases](https://github.com/josephwylie/ferrite/releases/latest).
 
-- `spikes/panes24/` — GPUI render spike: 24 synthetic streaming panes, FPS + RSS HUD.
+### macOS (Apple silicon)
+
+```sh
+tar -xzf ferrite-v*-aarch64-apple-darwin.tar.gz
+xattr -c ferrite   # unsigned binary; clear the download quarantine
+./ferrite
+```
+
+### Windows (x64)
+
+Unzip `ferrite-v*-x86_64-pc-windows-msvc.zip` and run `ferrite.exe`. The
+binary is unsigned, so SmartScreen objects the first time: choose
+**More info → Run anyway**.
+
+## Quickstart
+
+Run `ferrite`. The Cockpit opens with one Thread on the Claude provider;
+type into the Composer and press `enter` to prompt it. A prompt sent while
+the Thread is busy is held and goes out when the turn ends; sending another
+replaces the held one.
+
+Shortcuts are spelled with `cmd` below; on Windows the same shortcuts use
+`ctrl`.
+
+- `cmd-n` — new Thread in the current checkout
+- `cmd-shift-n` — new Thread in its own git worktree
+- `escape` — interrupt the running Session
+- `y` / `n` / `a` — answer a Decision (allow / deny / always), from the
+  focused Pane or straight from the wall
+- `cmd-]` / `cmd-[` — next / previous Pane; `cmd-d` — jump to the next Decision
+- `cmd-w` — park a Thread; `cmd-o` — revive the newest parked one
+
+Flags:
+
+- `--provider claude|codex` — Provider for the first Thread (default: `claude`)
+- `--import <path>` — adopt an existing Claude or Codex CLI session file as a
+  Thread and continue it (repeatable)
+
+Threads persist in `~/.ferrite/threads` (`%USERPROFILE%\.ferrite\threads` on
+Windows; override with `FERRITE_STORE`).
 
 ## Accessibility
 
 Ferrite draws its own pixels (GPUI); there is no screen-reader support today.
 This is a known limitation, revisited when the framework grows an
 accessibility bridge upstream.
+
+## Development
+
+Rust workspace; the renderer decision and the gpui `=0.2.2` pin are recorded
+in `docs/adr/0001-gpui-renderer.md`, project vocabulary in `CONTEXT.md`, and
+the original 24-pane render spike in `spikes/panes24/`.
 
 ## License
 
