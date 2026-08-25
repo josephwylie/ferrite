@@ -18,33 +18,16 @@ use ferrite_core::ThreadId;
 use gpui::prelude::*;
 use gpui::{div, px, rgb, rgba, Div, FontWeight, Pixels, SharedString, Stateful};
 
+use crate::theme::{
+    ACCENT, EDGE, FAIL, GOOD, HAIRLINE, IDLE, INK, INK_FAINT, INK_MUTED, INK_SECONDARY, INSET,
+    TRANSPARENT, WAIT, WAIT_WASH,
+};
+
 /// The nav's two widths: the 208px column, and the 40px LED rail cmd-b
 /// folds it to. `CockpitView::cell()` subtracts whichever is live, so the
 /// nav is part of the semantic-zoom input — no special case.
 pub const WIDTH: f32 = 208.0;
 pub const RAIL_WIDTH: f32 = 40.0;
-
-// Aperture tokens the nav draws with — §1–2 of docs/design/sidebar-and-impl.md,
-// values verbatim. They move to theme.rs when #22 lands the token module;
-// until then nothing outside this file may import them.
-/// One step below the Panes' surface, so the nav reads as chrome.
-const INSET: u32 = 0x0a0a0a;
-/// rgba(255,255,255,0.07): the right edge, and the focused row's ground.
-const EDGE: u32 = 0xffffff12;
-/// rgba(255,255,255,0.045): row hover (the one-step lift), and dividers.
-const HAIRLINE: u32 = 0xffffff0b;
-const INK: u32 = 0xf3f4f7;
-const INK_SECONDARY: u32 = 0xa7abb4;
-const INK_MUTED: u32 = 0x7f8187;
-const INK_FAINT: u32 = 0x54575f;
-/// The steel focus bar — the Pane focus ring translated to a row.
-const ACCENT: u32 = 0xc7ccd6;
-const GOOD: u32 = 0x7fc99b;
-const WAIT: u32 = 0xd8c082;
-/// rgba(216,192,130,0.13): the `needs you` chip ground and the rail halo.
-const WAIT_WASH: u32 = 0xd8c08221;
-const FAIL: u32 = 0xe08c84;
-const IDLE: u32 = 0x8b8f97;
 
 /// What the nav draws this frame. Running rows are rebuilt per frame from
 /// O(1) reads (small, like the strip's labels); parked rows live in the
@@ -298,7 +281,7 @@ fn row_frame(id: (&'static str, usize), focused: bool) -> Stateful<Div> {
         .pl(px(8.))
         .pr(px(10.))
         .border_l_2()
-        .border_color(rgba(0x00000000));
+        .border_color(rgba(TRANSPARENT));
     if focused {
         return line.border_color(rgb(ACCENT)).bg(rgba(EDGE));
     }

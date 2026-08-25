@@ -65,6 +65,11 @@ pub struct ToolBlock {
     /// The patch this call applied, when it was a file edit. A row with one
     /// draws as a diff card; a row without stays a single line.
     pub diff: Option<Diff>,
+    /// The first line of the tool's output, trimmed to a row — what the
+    /// Pane's `⎿` continuation shows (DirectionDense). Errors carry their
+    /// message in `state` instead; the rest of the output was the model's
+    /// to read, never Ferrite's to keep.
+    pub result_line: Option<String>,
 }
 
 /// A file edit, ready to draw red and green.
@@ -415,8 +420,14 @@ impl Transcript {
                     ToolResult::FileEdit { path, hunks } => Some(Diff::new(path, hunks)),
                     _ => None,
                 };
+                // A failure already carries its message in the state; a
+                // success keeps its first output line for the `⎿` row.
+                let result_line = (!is_error).then(|| result_line(&output)).flatten();
                 Update {
-                    dirty: self.settle_tool(&id, state, diff).into_iter().collect(),
+                    dirty: self
+                        .settle_tool(&id, state, diff, result_line)
+                        .into_iter()
+                        .collect(),
                     ..Update::default()
                 }
             }
@@ -428,6 +439,7 @@ impl Transcript {
                     name,
                     state: ToolState::Running,
                     diff: None,
+                    result_line: None,
                 }));
                 Update {
                     dirty: vec![block],
@@ -612,7 +624,13 @@ impl Transcript {
 
     /// A result lands on the row that started the call — which is rarely the
     /// tail by the time it arrives.
-    fn settle_tool(&mut self, call: &str, state: ToolState, diff: Option<Diff>) -> Option<BlockId> {
+    fn settle_tool(
+        &mut self,
+        call: &str,
+        state: ToolState,
+        diff: Option<Diff>,
+        result_line: Option<String>,
+    ) -> Option<BlockId> {
         let block = self
             .blocks
             .iter_mut()
@@ -620,11 +638,12 @@ impl Transcript {
         let Body::Tool(tool) = &mut block.body else {
             return None;
         };
-        if tool.state == state && tool.diff == diff {
+        if tool.state == state && tool.diff == diff && tool.result_line == result_line {
             return None;
         }
         tool.state = state;
         tool.diff = diff;
+        tool.result_line = result_line;
         Some(block.id)
     }
 
@@ -646,12 +665,23 @@ impl Transcript {
 /// How much of a tool failure a row carries; the model got all of it.
 const ERROR_CHARS: usize = 200;
 
+/// How much of a tool's output its `⎿` continuation row carries — one line
+/// that never wraps at transcript density.
+const RESULT_CHARS: usize = 80;
+
 /// Cut to `limit` characters, marking the cut.
 fn trim(text: &str, limit: usize) -> String {
     if text.chars().count() <= limit {
         return text.to_string();
     }
     text.chars().take(limit).chain(['…']).collect()
+}
+
+/// The one line a settled tool row keeps of its output — the first
+/// non-blank line, trimmed. Whitespace-only output keeps nothing.
+fn result_line(output: &str) -> Option<String> {
+    let line = output.lines().find(|line| !line.trim().is_empty())?;
+    Some(trim(line.trim_end(), RESULT_CHARS))
 }
 
 /// The one line a collapsed tool row shows. Tool inputs are the vendor's own
@@ -1367,6 +1397,63 @@ mod tests {
             }
             other => panic!("expected a tool row, got {other:?}"),
         }
+    }
+
+    /// DirectionDense's `⎿` continuation: a settled tool keeps the first
+    /// line of its output, trimmed to a row — folded here, never parsed by
+    /// the Pane (#22).
+    #[test]
+    fn a_tool_result_keeps_its_first_line_for_the_continuation_row() {
+        let mut transcript = Transcript::default();
+        transcript.apply(started("toolu_1", "Bash", serde_json::Value::Null));
+
+        transcript.apply(completed(
+            "toolu_1",
+            "\n  \nexit 0 · 3.1s\nand 400 more lines nobody keeps",
+            false,
+        ));
+
+        let Body::Tool(tool) = &transcript.blocks()[0].body else {
+            panic!("expected a tool row")
+        };
+        assert_eq!(
+            tool.result_line.as_deref(),
+            Some("exit 0 · 3.1s"),
+            "the first non-blank line, without the rest"
+        );
+
+        // An overlong line is cut to a row, marked.
+        let mut long = Transcript::default();
+        long.apply(started("toolu_2", "Bash", serde_json::Value::Null));
+        long.apply(completed("toolu_2", &"x".repeat(500), false));
+        let Body::Tool(tool) = &long.blocks()[0].body else {
+            panic!("expected a tool row")
+        };
+        let line = tool.result_line.as_deref().unwrap();
+        assert_eq!(line.chars().count(), 81);
+        assert!(line.ends_with('…'));
+    }
+
+    /// The other halves of the fold: whitespace-only output keeps nothing,
+    /// and a failure keeps its message in the state, not a second copy here.
+    #[test]
+    fn blank_or_failed_output_leaves_no_continuation_row() {
+        let mut blank = Transcript::default();
+        blank.apply(started("toolu_1", "Read", serde_json::Value::Null));
+        blank.apply(completed("toolu_1", "  \n \n", false));
+        let Body::Tool(tool) = &blank.blocks()[0].body else {
+            panic!("expected a tool row")
+        };
+        assert_eq!(tool.result_line, None);
+
+        let mut failed = Transcript::default();
+        failed.apply(started("toolu_2", "Bash", serde_json::Value::Null));
+        failed.apply(completed("toolu_2", "boom", true));
+        let Body::Tool(tool) = &failed.blocks()[0].body else {
+            panic!("expected a tool row")
+        };
+        assert_eq!(tool.result_line, None);
+        assert!(matches!(&tool.state, ToolState::Failed(m) if m == "boom"));
     }
 
     #[test]

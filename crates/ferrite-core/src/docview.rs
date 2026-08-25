@@ -7,7 +7,7 @@
 use crate::transcript::{Body, Todos, ToolBlock, ToolState, Transcript};
 
 /// What L2 shows: the Thread's work, without reading the Thread.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Instruments {
     pub added: usize,
     pub removed: usize,
@@ -19,6 +19,10 @@ pub struct Instruments {
     pub running: usize,
     /// The Thread's own plan, where it made one.
     pub todos: Option<Todos>,
+    /// What is running right now, named — the newest in-flight tool, as one
+    /// trimmed line for L2's `◐` activity row. L3 never pays for this
+    /// (`Instruments::of` walks every Block); the wall shows status words.
+    pub activity: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,7 +49,11 @@ impl Instruments {
                 }
             }
             match &tool.state {
-                ToolState::Running => instruments.running += 1,
+                ToolState::Running => {
+                    instruments.running += 1;
+                    // The newest still-running call wins the activity line.
+                    instruments.activity = Some(activity_line(tool));
+                }
                 // The newest run wins: a Pane flying a stale red flag is
                 // worse than one flying none.
                 state if is_test_run(tool) => {
@@ -61,6 +69,23 @@ impl Instruments {
         instruments.todos = transcript.todos();
         instruments
     }
+}
+
+/// How much of a running tool's name+argument the activity line keeps —
+/// one glanceable fragment, not the whole command.
+const ACTIVITY_CHARS: usize = 40;
+
+/// `Bash cargo test --workspace` → the fragment an L2 cell's `◐` row shows.
+fn activity_line(tool: &ToolBlock) -> String {
+    let line = if tool.summary.is_empty() {
+        tool.name.clone()
+    } else {
+        format!("{} {}", tool.name, tool.summary)
+    };
+    if line.chars().count() <= ACTIVITY_CHARS {
+        return line;
+    }
+    line.chars().take(ACTIVITY_CHARS).chain(['…']).collect()
 }
 
 /// Tools that run a command, whose summary is therefore the command itself.
@@ -111,30 +136,30 @@ pub enum Level {
     Transcript,
 }
 
-/// Below this a Pane cannot hold a Composer and a readable transcript
-/// together; below the second, prose stops being prose at all.
-const TRANSCRIPT_WIDTH: f32 = 720.0;
-const TRANSCRIPT_HEIGHT: f32 = 520.0;
-const INSTRUMENTS_WIDTH: f32 = 300.0;
-const INSTRUMENTS_HEIGHT: f32 = 240.0;
+/// glance.md's zoom ladder: UNDER 200PX → Wall, 200–380PX → Instruments,
+/// OVER 380PX → Transcript. The captions give one number per level, and
+/// only width fits all three example cells (L2 280×176 and L1 400×264 would
+/// both fail on height) — so width is the query axis, resolving glance.md
+/// §8.1 on the comps' own evidence.
+const TRANSCRIPT_OVER: f32 = 380.0;
+const INSTRUMENTS_FROM: f32 = 200.0;
 
 impl Level {
     /// How many Blocks this level draws. A wall cell draws none — it shows a
-    /// signal, not text — and a transcript draws enough to scroll through.
+    /// signal, not text — and per the Cockpit board L2 is instruments only
+    /// ("no transcript, no prompt"); only the near view reads the Thread.
     pub fn visible_blocks(self) -> usize {
         match self {
-            Level::Wall => 0,
-            Level::Instruments => 12,
+            Level::Wall | Level::Instruments => 0,
             Level::Transcript => 200,
         }
     }
 
-    /// Size decides. Both dimensions have to carry the level: a tall sliver
-    /// cannot hold a transcript any more than a wide one can.
+    /// Size decides — the cell's width, per the ladder's captions.
     pub fn for_cell(cell: Cell) -> Self {
-        if cell.width >= TRANSCRIPT_WIDTH && cell.height >= TRANSCRIPT_HEIGHT {
+        if cell.width > TRANSCRIPT_OVER {
             Level::Transcript
-        } else if cell.width >= INSTRUMENTS_WIDTH && cell.height >= INSTRUMENTS_HEIGHT {
+        } else if cell.width >= INSTRUMENTS_FROM {
             Level::Instruments
         } else {
             Level::Wall
@@ -269,19 +294,62 @@ mod tests {
     fn each_level_draws_only_what_it_can_show() {
         // The budget is the frame's, not the transcript's: walking history
         // nobody can read is what turns a 120fps wall into a 30fps one.
+        // L2 draws instruments, not prose (Cockpit board), so it too reads
+        // no Blocks.
         assert_eq!(Level::Wall.visible_blocks(), 0);
-        assert!(Level::Instruments.visible_blocks() < Level::Transcript.visible_blocks());
+        assert_eq!(Level::Instruments.visible_blocks(), 0);
         assert!(Level::Transcript.visible_blocks() >= 100);
     }
 
+    /// glance.md's ladder, on its own example cells: UNDER 200PX → Wall,
+    /// 200–380PX → Instruments, OVER 380PX → Transcript.
     #[test]
     fn size_alone_decides_the_level() {
-        // A Pane with the window to itself reads as a transcript.
-        assert_eq!(Level::for_cell(Cell::new(1400.0, 860.0)), Level::Transcript);
-        // A quarter of that is still readable prose, but instruments earn
-        // their place before the text does.
-        assert_eq!(Level::for_cell(Cell::new(700.0, 430.0)), Level::Instruments);
-        // A cell of the 24-Pane wall carries one signal and no more.
-        assert_eq!(Level::for_cell(Cell::new(230.0, 210.0)), Level::Wall);
+        // The three cells the ZoomLadder board draws.
+        assert_eq!(Level::for_cell(Cell::new(400.0, 264.0)), Level::Transcript);
+        assert_eq!(Level::for_cell(Cell::new(280.0, 176.0)), Level::Instruments);
+        assert_eq!(Level::for_cell(Cell::new(160.0, 100.0)), Level::Wall);
+        // The wall's own computed cell (~142px wide) stays at wall level.
+        assert_eq!(Level::for_cell(Cell::new(142.3, 115.5)), Level::Wall);
+        // Boundaries: "under 200" and "over 380" are strict.
+        assert_eq!(Level::for_cell(Cell::new(200.0, 500.0)), Level::Instruments);
+        assert_eq!(Level::for_cell(Cell::new(380.0, 500.0)), Level::Instruments);
+        assert_eq!(Level::for_cell(Cell::new(380.5, 500.0)), Level::Transcript);
+        assert_eq!(Level::for_cell(Cell::new(199.9, 500.0)), Level::Wall);
+    }
+
+    /// The comps' running cells name the tool in flight; the activity line
+    /// is folded here so the Pane never re-derives it.
+    #[test]
+    fn the_newest_running_tool_names_the_activity_line() {
+        let mut transcript = Transcript::default();
+        assert_eq!(Instruments::of(&transcript).activity, None);
+
+        transcript.apply(tool("t1", "Bash", "vitest run tests/unit"));
+        assert_eq!(
+            Instruments::of(&transcript).activity.as_deref(),
+            Some("Bash vitest run tests/unit")
+        );
+
+        // A second call supersedes the first; a settled one names nothing.
+        transcript.apply(tool("t2", "Bash", "cargo check"));
+        assert_eq!(
+            Instruments::of(&transcript).activity.as_deref(),
+            Some("Bash cargo check")
+        );
+        transcript.apply(finished("t2", false, ToolResult::Opaque));
+        assert_eq!(
+            Instruments::of(&transcript).activity.as_deref(),
+            Some("Bash vitest run tests/unit"),
+            "t1 is still in flight"
+        );
+        transcript.apply(finished("t1", false, ToolResult::Opaque));
+        assert_eq!(Instruments::of(&transcript).activity, None);
+
+        // An overlong command is cut to a glanceable fragment.
+        transcript.apply(tool("t3", "Bash", &"x".repeat(100)));
+        let line = Instruments::of(&transcript).activity.unwrap();
+        assert_eq!(line.chars().count(), 41);
+        assert!(line.ends_with('…'));
     }
 }

@@ -13,9 +13,9 @@ use ferrite_core::workspace::WorkspaceChoice;
 use ferrite_core::{DecisionAnswer, ThreadId};
 use gpui::prelude::*;
 use gpui::{
-    actions, div, point, px, rgb, ClipboardItem, Context, Div, FocusHandle, Focusable, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle, SharedString,
-    Window,
+    actions, div, point, px, rgb, rgba, ClipboardItem, Context, Div, FocusHandle, Focusable,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle,
+    SharedString, Window,
 };
 
 use crate::nav;
@@ -134,10 +134,10 @@ impl Selection {
 
 /// How near the tail still counts as riding it. It must swallow the
 /// transcript's own padding — gpui reports a not-yet-overflowing scroll as
-/// having exactly that much room, the py(5.) above and below the rows in
-/// `pane::body` — while staying under one text line, so a deliberate scroll
-/// still detaches.
-const TAIL_SLACK: Pixels = px(12.);
+/// having exactly that much room, the Dense 8px above and below the rows in
+/// `pane::body` (16 together) — while staying under one 12.5px/1.45 text
+/// line (~18px), so a deliberate scroll still detaches.
+const TAIL_SLACK: Pixels = px(17.);
 
 /// Whether this scrollback is riding the tail. An operator who wheeled up is
 /// reading history: new content must not yank them down until they scroll
@@ -192,6 +192,11 @@ impl CockpitView {
             parked_rows: Vec::new(),
         };
         view.refresh_parked();
+        // The first frame's wall cards — every rebuild after rides a change.
+        let threads: Vec<ThreadId> = view.panes.iter().map(|pane| pane.thread).collect();
+        for thread in threads {
+            view.refresh_wall(thread);
+        }
         view
     }
 
@@ -221,21 +226,21 @@ impl CockpitView {
     /// changed are worth a repaint; a frame where nothing moved costs nothing.
     fn pump(&mut self, cx: &mut Context<Self>) {
         let frame = self.cockpit.pump();
-        let mut restarted = false;
+        let mut restarted = Vec::new();
         if self.swept.elapsed() >= SWEEP_INTERVAL {
             self.swept = std::time::Instant::now();
             for restart in self.cockpit.sweep() {
-                restarted = true;
                 eprintln!(
                     "ferrite: restarted thread {} after {} bytes resident",
                     restart.thread, restart.rss
                 );
+                restarted.push(restart.thread);
             }
         }
         // A restart writes a Notice even when no Session streamed this frame —
         // and a failed respawn will never stream again, so this notify is that
         // notice's only ride to the screen.
-        if frame.is_empty() && !restarted {
+        if frame.is_empty() && restarted.is_empty() {
             return;
         }
         for update in &frame {
@@ -247,8 +252,29 @@ impl CockpitView {
                     self.panes[pane].scroll.scroll_to_bottom();
                 }
             }
+            // The wall card refolds only when the Thread actually changed —
+            // this is the seam that keeps L3 free of per-frame Block walks.
+            if !update.dirty.is_empty() || !update.evicted.is_empty() {
+                self.refresh_wall(update.thread);
+            }
+        }
+        for thread in restarted {
+            self.refresh_wall(thread);
         }
         cx.notify();
+    }
+
+    /// Refold one Thread's wall card. Called wherever its transcript can
+    /// change — the pump, the operator's own acts — never per frame.
+    fn refresh_wall(&mut self, thread: ThreadId) {
+        let Some(index) = self.pane_for(thread) else {
+            return;
+        };
+        let card = pane::wall_card(
+            self.cockpit.transcript(thread),
+            self.cockpit.pending(thread),
+        );
+        self.panes[index].wall = card;
     }
 
     /// One cell of the grid, as the window is right now. Size is the only
@@ -259,9 +285,16 @@ impl CockpitView {
         let viewport = window.viewport_size();
         let rows = self.panes.len().div_ceil(columns).max(1);
         // The nav, the strip, the grid's own padding, and the gaps between
-        // cells are not the Pane's to render in.
-        let width = (f32::from(viewport.width) - self.nav_width() - 12.0) / columns as f32 - 6.0;
-        let height = (f32::from(viewport.height) - 34.0) / rows as f32 - 6.0;
+        // cells are not the Pane's to render in. (The wall's pinned legend
+        // is not subtracted: the Level is decided by width, so the legend
+        // can never flip it, and a strip that depends on the Level it is
+        // deciding would be circular.)
+        let chrome = self.nav_width() + crate::theme::GRID_PAD * 2.0;
+        let width = (f32::from(viewport.width) - chrome) / columns as f32 - crate::theme::GRID_GAP;
+        let height =
+            (f32::from(viewport.height) - crate::theme::STRIP_H - crate::theme::GRID_PAD * 2.0)
+                / rows as f32
+                - crate::theme::GRID_GAP;
         Cell::new(width.max(0.0), height.max(0.0))
     }
 
@@ -318,12 +351,34 @@ impl CockpitView {
             self.cockpit.send(thread, text);
             self.panes[self.focused].scroll.scroll_to_bottom();
         }
+        self.refresh_wall(thread);
         cx.notify();
+    }
+
+    /// Backspace on an EMPTY Composer line clears the held prompt — the
+    /// `⌫ unqueue` the queued row advertises. With text on the line the
+    /// Composer consumes the key first and this never runs.
+    fn unqueue_from_backspace(
+        &mut self,
+        _: &crate::composer::Backspace,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(thread) = self.focused_thread() else {
+            return;
+        };
+        if !self.panes[self.focused].composer.read(cx).is_empty() {
+            return;
+        }
+        if self.cockpit.unqueue(thread).is_some() {
+            cx.notify();
+        }
     }
 
     fn interrupt(&mut self, _: &Interrupt, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some(thread) = self.focused_thread() {
             self.cockpit.interrupt(thread);
+            self.refresh_wall(thread);
         }
         cx.notify();
     }
@@ -372,6 +427,7 @@ impl CockpitView {
             },
         };
         self.cockpit.respond(thread, &decision, response);
+        self.refresh_wall(thread);
         cx.notify();
     }
 
@@ -476,7 +532,12 @@ impl CockpitView {
                 }
             })
             .collect();
-        let waiting = running.iter().filter(|row| row.needs_you).count();
+        // The same rollup the strip counts — one function, two surfaces,
+        // never a disagreement.
+        let waiting = running
+            .iter()
+            .filter(|row| pane::needs_operator(row.needs_you, Some(row.status)))
+            .count();
         nav::NavState {
             running,
             waiting,
@@ -504,6 +565,7 @@ impl CockpitView {
                 self.panes.push(PaneView::new(thread, cx));
                 self.focus_pane(self.panes.len() - 1);
                 self.refresh_parked();
+                self.refresh_wall(thread);
                 cx.notify();
             }
             Err(e) => eprintln!("ferrite: thread {thread} could not be reopened: {e:?}"),
@@ -560,6 +622,7 @@ impl CockpitView {
             Ok(thread) => {
                 self.panes.push(PaneView::new(thread, cx));
                 self.focus_pane(self.panes.len() - 1);
+                self.refresh_wall(thread);
                 cx.notify();
             }
             // A worktree that git refuses is the operator's to fix; the
@@ -769,10 +832,16 @@ enum Answer {
     Always,
 }
 
-/// Columns for `count` Panes: near-square, and never wider than the 24-pane
-/// wall's six.
+/// Columns for `count` Panes: the boards' own grids are wide, not square —
+/// the Cockpit comp lays 6 cells 3×2 and the Wall lays 24 cells 6×4 — so
+/// the column count follows a 3:2 grid, never wider than the wall's six.
+/// (6×4 is also what makes the wall math work: 24 Panes at the 1440-default
+/// window land under the 200px Wall threshold, per sidebar-and-impl §2.)
 fn columns(count: usize) -> usize {
-    (count as f64).sqrt().ceil().clamp(1.0, 6.0) as usize
+    if count <= 1 {
+        return 1;
+    }
+    (count as f64 * 1.5).sqrt().ceil().clamp(1.0, 6.0) as usize
 }
 
 impl Render for CockpitView {
@@ -788,7 +857,7 @@ impl Render for CockpitView {
             self.fullscreen = None;
         }
         let fullscreen = self.fullscreen.and_then(|thread| self.pane_for(thread));
-        let blocked = self.cockpit.blocked();
+        let attention = self.attention();
         let level = self.level_now(window);
 
         // Focus follows the operator, but only onto something this level
@@ -819,22 +888,26 @@ impl Render for CockpitView {
             .flex_col()
             .flex_1()
             .min_h_0()
-            .gap(px(6.))
-            .p(px(6.));
+            .gap(px(crate::theme::GRID_GAP))
+            .p(px(crate::theme::GRID_PAD));
         if let Some(index) = fullscreen {
             // The fullscreened Pane takes the whole content area; the strip
             // above stays as the tether to the rest of the swarm. The other
             // Panes are not laid out at all — hidden siblings would still
             // cost layout — while their Sessions keep streaming through the
             // pump regardless (#20).
-            grid = grid.child(self.pane_cell(index, level, &blocked, cx));
+            grid = grid.child(self.pane_cell(index, level, cx));
         } else {
             let columns = columns(self.panes.len());
             for (row_at, row) in self.panes.chunks(columns).enumerate() {
-                let mut line = div().flex().flex_row().flex_1().min_h_0().gap(px(6.));
+                let mut line = div()
+                    .flex()
+                    .flex_row()
+                    .flex_1()
+                    .min_h_0()
+                    .gap(px(crate::theme::GRID_GAP));
                 for column in 0..row.len() {
-                    line =
-                        line.child(self.pane_cell(row_at * columns + column, level, &blocked, cx));
+                    line = line.child(self.pane_cell(row_at * columns + column, level, cx));
                 }
                 grid = grid.child(line);
             }
@@ -844,14 +917,15 @@ impl Render for CockpitView {
             .flex()
             .flex_row()
             .size_full()
-            .bg(rgb(pane::BG_WINDOW))
-            .font_family(crate::MONO_FONT)
+            .bg(rgb(crate::theme::GROUND))
+            .font_family(crate::theme::FONT_MONO)
             .track_focus(&self.focus)
             // At wall range no Pane holds a Composer, so the answer keys are
             // not competing with typing: they answer whichever Thread is
             // flagged, without the operator focusing it first.
             .when(level == Level::Wall, |wall| wall.key_context("Wall"))
             .on_action(cx.listener(Self::submit))
+            .on_action(cx.listener(Self::unqueue_from_backspace))
             .on_action(cx.listener(Self::interrupt))
             .on_action(cx.listener(Self::allow))
             .on_action(cx.listener(Self::deny))
@@ -893,8 +967,11 @@ impl Render for CockpitView {
                     .flex_1()
                     .min_w_0()
                     .min_h_0()
-                    .child(self.strip(blocked.len()))
-                    .child(grid),
+                    .child(self.strip(attention))
+                    .child(grid)
+                    // The wall's pinned legend teaches the encoding; the
+                    // nearer levels have words and do not need it.
+                    .children((level == Level::Wall && fullscreen.is_none()).then(legend)),
             )
     }
 }
@@ -903,13 +980,7 @@ impl CockpitView {
     /// One Pane's cell — the click-to-focus and drag plumbing around
     /// `render_pane`. The same cell serves a grid slot and the fullscreen
     /// view; only who lays it out differs.
-    fn pane_cell(
-        &self,
-        index: usize,
-        level: Level,
-        blocked: &[ThreadId],
-        cx: &mut Context<Self>,
-    ) -> Div {
+    fn pane_cell(&self, index: usize, level: Level, cx: &mut Context<Self>) -> Div {
         let pane = &self.panes[index];
         let focused = self
             .focused_thread()
@@ -946,11 +1017,26 @@ impl CockpitView {
                     queued: self.cockpit.queued(pane.thread),
                     workspace: self.cockpit.workspace(pane.thread),
                     focused,
-                    blocked: blocked.contains(&pane.thread),
+                    running: self.cockpit.busy(pane.thread),
                     selected,
                 },
                 level,
             ))
+    }
+
+    /// How many Threads hold the operator up right now — the strip's amber
+    /// count, the nav's `waiting`, and the wall's ring census, all through
+    /// `pane::needs_operator` so no two surfaces can disagree.
+    fn attention(&self) -> usize {
+        self.panes
+            .iter()
+            .filter(|pane| {
+                pane::needs_operator(
+                    self.cockpit.pending(pane.thread).is_some(),
+                    self.cockpit.transcript(pane.thread).map(|t| t.status()),
+                )
+            })
+            .count()
     }
 
     /// The whole nav column for this frame, rows wired to their Threads
@@ -998,36 +1084,78 @@ impl CockpitView {
             .child(rows)
     }
 
-    /// One line across the top: how many Threads, how many want answering.
-    fn strip(&self, blocked: usize) -> impl IntoElement {
-        let threads = self.panes.len();
-        let waiting = if blocked == 0 {
-            SharedString::from("all quiet")
-        } else {
-            SharedString::from(format!("{blocked} waiting on you"))
-        };
+    /// The wall header strip: the product label left, `N panes · M need
+    /// you` right — the amber fragment appears only when someone actually
+    /// needs the operator, exactly as the Cockpit and Wall boards draw it.
+    fn strip(&self, attention: usize) -> impl IntoElement {
+        let panes = self.panes.len();
+        let mut strip = div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(px(10.))
+            .h(px(crate::theme::STRIP_H))
+            .px(px(12.))
+            .border_b_1()
+            .border_color(rgba(crate::theme::HAIRLINE))
+            .child(
+                div()
+                    .font_family(crate::theme::FONT_UI)
+                    .text_size(px(crate::theme::TEXT_CODE))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(rgb(crate::theme::INK_SECONDARY))
+                    .child("ferrite"),
+            )
+            .child(div().flex_1())
+            .child(
+                div()
+                    .text_size(px(crate::theme::TEXT_ROW))
+                    .text_color(rgb(crate::theme::INK_MUTED))
+                    .child(SharedString::from(format!("{panes} panes"))),
+            );
+        if attention > 0 {
+            let verb = if attention == 1 { "needs" } else { "need" };
+            strip = strip.child(
+                div()
+                    .text_size(px(crate::theme::TEXT_ROW))
+                    .text_color(rgb(crate::theme::WAIT))
+                    .child(SharedString::from(format!("· {attention} {verb} you"))),
+            );
+        }
+        strip
+    }
+}
+
+/// The wall's pinned legend, verbatim from the Wall board: the five state
+/// swatches and the ring key.
+fn legend() -> Div {
+    let item = |swatch: u32, label: &'static str| {
         div()
             .flex()
             .flex_shrink_0()
-            .justify_between()
-            .px(px(8.))
-            .py(px(4.))
-            .text_size(px(11.))
-            .child(
-                div()
-                    .text_color(rgb(pane::TEXT_MUTED))
-                    .child(SharedString::from(format!("{threads} threads"))),
-            )
-            .child(
-                div()
-                    .text_color(rgb(if blocked == 0 {
-                        pane::TEXT_MUTED
-                    } else {
-                        pane::TEXT_NOTICE
-                    }))
-                    .child(waiting),
-            )
-    }
+            .items_center()
+            .gap(px(4.))
+            .child(div().text_color(rgb(swatch)).child("●"))
+            .child(div().child(label))
+    };
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(14.))
+        .h(px(crate::theme::LEGEND_H))
+        .px(px(12.))
+        .border_t_1()
+        .border_color(rgba(crate::theme::HAIRLINE))
+        .text_size(px(crate::theme::TEXT_CHIP_SM))
+        .text_color(rgb(crate::theme::INK_MUTED))
+        .child(item(crate::theme::GOOD, "working"))
+        .child(item(crate::theme::WAIT, "needs you"))
+        .child(item(crate::theme::FAIL, "blocked / failing"))
+        .child(item(crate::theme::GOOD, "done (dimmed)").opacity(0.7))
+        .child(item(crate::theme::IDLE, "idle"))
+        .child(div().flex_1())
+        .child(div().child("ring = focused · amber ring = decision · red ring = blocker"))
 }
 
 /// Where Ferrite was started: the repo a new Thread binds to, either as the
@@ -1205,6 +1333,64 @@ mod tests {
             assert!(
                 view.cockpit.pending(thread).is_none(),
                 "y must answer the Decision, not type a letter"
+            );
+        });
+    }
+
+    /// The queued row's `⌫ unqueue` hint is a real key: Backspace on an
+    /// empty Composer line clears the held prompt, while with text on the
+    /// line it stays an editing key and the queue survives.
+    #[gpui::test]
+    fn backspace_on_an_empty_line_unqueues_the_held_prompt(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("unqueue-key", 1);
+        cx.update(|cx| {
+            cx.bind_keys([
+                KeyBinding::new("enter", Submit, None),
+                KeyBinding::new("backspace", crate::composer::Backspace, None),
+            ]);
+        });
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        tick(cx);
+        let thread = view.read_with(cx, |view, _| view.panes[0].thread);
+        // A streaming turn makes the Session busy; the next prompt queues.
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TextDelta {
+                text: "working".into(),
+            })
+            .unwrap();
+        tick(cx);
+        view.read_with(cx, |view, _| {
+            assert!(view.cockpit.busy(thread), "the premise: a turn in flight");
+        });
+        cx.simulate_input("also this");
+        cx.simulate_keystrokes("enter");
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.cockpit.queued(thread), Some("also this"));
+        });
+
+        // With text on the line, Backspace edits; the queue is untouched.
+        cx.simulate_input("dr");
+        cx.simulate_keystrokes("backspace");
+        view.read_with(cx, |view, cx| {
+            assert!(
+                !view.panes[0].composer.read(cx).is_empty(),
+                "backspace with text is still an editing key"
+            );
+            assert_eq!(view.cockpit.queued(thread), Some("also this"));
+        });
+
+        // Emptied, the next Backspace is the advertised ⌫ unqueue.
+        cx.simulate_keystrokes("backspace");
+        view.read_with(cx, |view, cx| {
+            assert!(view.panes[0].composer.read(cx).is_empty());
+            assert_eq!(view.cockpit.queued(thread), Some("also this"));
+        });
+        cx.simulate_keystrokes("backspace");
+        view.read_with(cx, |view, _| {
+            assert_eq!(
+                view.cockpit.queued(thread),
+                None,
+                "backspace on the empty line unqueues the held prompt"
             );
         });
     }
@@ -1413,9 +1599,14 @@ mod tests {
             cx.bind_keys([KeyBinding::new("y", Allow, Some("Wall"))]);
         });
         let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
-        // 24 Panes in this window is wall range.
+        // 24 Panes at the app's default 1440×900 is wall range: 6 columns
+        // of ~197px cells, under the 200px threshold.
+        cx.simulate_resize(gpui::size(px(1440.), px(900.)));
         view.update(cx, |view, _| {
             assert_eq!(view.panes.len(), 24);
+        });
+        cx.update(|window, cx| {
+            assert_eq!(view.read(cx).level_now(window), Level::Wall);
         });
         fake.streams.borrow()[7].send(decision("perm_08")).unwrap();
         tick(cx);
@@ -1434,6 +1625,18 @@ mod tests {
             );
             assert_eq!(view.focused, 0, "and answering did not move the operator");
         });
+    }
+
+    /// The grids the boards draw: 6 cells lay 3×2 (Cockpit board) and 24
+    /// lay 6×4 (Wall board); one Pane keeps the whole width.
+    #[test]
+    fn the_grid_follows_the_boards_wide_shape() {
+        assert_eq!(columns(1), 1);
+        assert_eq!(columns(2), 2);
+        assert_eq!(columns(6), 3);
+        assert_eq!(columns(24), 6);
+        // Never wider than the wall's six, whatever the count.
+        assert_eq!(columns(48), 6);
     }
 
     /// AC1: no mode switch — the same cockpit renders at a different altitude
@@ -1544,6 +1747,8 @@ mod tests {
             cx.bind_keys([KeyBinding::new("a", Always, Some("Wall"))]);
         });
         let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        // Wall range, as above: the "Wall" key context only exists there.
+        cx.simulate_resize(gpui::size(px(1440.), px(900.)));
         // `decision()` offers no standing answer.
         fake.streams.borrow()[3].send(decision("perm_04")).unwrap();
         tick(cx);
@@ -1994,8 +2199,9 @@ mod tests {
             cx.bind_keys([KeyBinding::new("cmd-f", ToggleFullscreen, None)]);
         });
         let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
-        // Four Panes in this window sit at Instruments: no Composer anywhere.
-        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        // Four Panes in this window sit at Instruments (three ~246px
+        // columns beside the nav): no Composer anywhere.
+        cx.simulate_resize(gpui::size(px(980.), px(700.)));
         tick(cx);
         cx.simulate_input("lost");
         let typed = view.update(cx, |view, cx| {
@@ -2384,9 +2590,9 @@ mod tests {
         });
         let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
         // Sized so the Transcript threshold sits between the two nav
-        // widths: Instruments beside the 208px column, Transcript beside
-        // the 40px rail.
-        cx.simulate_resize(gpui::size(px(800.), px(700.)));
+        // widths: Instruments beside the 208px column (330px cell),
+        // Transcript beside the 40px rail (498px cell).
+        cx.simulate_resize(gpui::size(px(560.), px(700.)));
         tick(cx);
         let expanded = cx.update(|window, cx| view.read(cx).level_now(window));
         assert_eq!(

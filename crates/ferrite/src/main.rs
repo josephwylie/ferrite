@@ -6,6 +6,7 @@ mod line;
 mod nav;
 mod pane;
 mod session;
+mod theme;
 
 use ferrite_core::cockpit::Cockpit;
 use ferrite_core::store::{Provider, Store};
@@ -19,14 +20,6 @@ actions!(ferrite, [Quit]);
 /// One Session may hold this much before the watchdog replaces it. Generous:
 /// a busy agent legitimately grows, and a restart costs the operator context.
 const RSS_LIMIT: u64 = 4 * 1024 * 1024 * 1024;
-
-/// The cockpit's one face. Menlo ships with macOS; Consolas with Windows
-/// (Cascadia Mono only arrives with Windows Terminal, so it cannot be
-/// assumed).
-#[cfg(target_os = "macos")]
-pub(crate) const MONO_FONT: &str = "Menlo";
-#[cfg(not(target_os = "macos"))]
-pub(crate) const MONO_FONT: &str = "Consolas";
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();

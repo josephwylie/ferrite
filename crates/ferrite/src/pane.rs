@@ -1,69 +1,63 @@
-//! One Pane: the visible cell for one Thread. Header, transcript, status
-//! line, Composer. Rendering only — everything it shows is folded in core,
-//! and every key it answers to belongs to the cockpit above it.
+//! One Pane: the visible cell for one Thread. Header, transcript, Composer,
+//! and the three semantic-zoom renderings. Rendering only — everything it
+//! shows is folded in core, and every key it answers to belongs to the
+//! cockpit above it.
+//!
+//! The three levels follow the canon boards: L1 per DirectionDense (dense
+//! transcript, 28px merged header, PromptBox composer stack), L2 per the
+//! Cockpit board (instrument cell), L3 per the Wall board (dot · slug ·
+//! bar · status line, inset attention rings).
 
 use ferrite_core::docview::{Instruments, Level, Tests};
 use ferrite_core::transcript::{
-    Block, Body, Class, Diff, Span, Status, Style, Token, ToolBlock, ToolState, Transcript,
+    Block, Body, Class, Diff, Span, Status, Style, Todos, Token, ToolBlock, ToolState, Transcript,
 };
 use ferrite_core::workspace::WorkspaceBinding;
 use ferrite_core::{Decision, ThreadId};
 use gpui::prelude::*;
 use gpui::{
-    div, px, rgb, rgba, AnyElement, Context, Div, Entity, FocusHandle, HighlightStyle,
-    ScrollHandle, SharedString, StyledText,
+    div, px, relative, rgb, rgba, AnyElement, Context, Div, Entity, FocusHandle, FontWeight,
+    HighlightStyle, ScrollHandle, SharedString, StyledText,
 };
 
 use crate::composer::Composer;
-
-pub const BG_WINDOW: u32 = 0x050505;
-const BG_PANE: u32 = 0x0e0e0e;
-const BG_CODE: u32 = 0x141414;
-const BORDER: u32 = 0x232323;
-const BORDER_FOCUSED: u32 = 0x3a3a3a;
-const LED_RUNNING: u32 = 0x6fa8dc;
-const HAIRLINE: u32 = 0x1a1a1a;
-const TEXT_PRIMARY: u32 = 0xf3f4f7;
-const TEXT_SECONDARY: u32 = 0xa7abb4;
-pub const TEXT_MUTED: u32 = 0x7f8187;
-const TEXT_THINKING: u32 = 0x5a5d63;
-pub const TEXT_NOTICE: u32 = 0xd9a05b;
-const TEXT_CODE: u32 = 0xc7ccd6;
-const DIFF_ADDED: u32 = 0x7fb069;
-const DIFF_REMOVED: u32 = 0xcf6f6f;
-const CODE_KEYWORD: u32 = 0x8fa8f0;
-const CODE_STRING: u32 = 0x9ec78a;
-const CODE_NUMBER: u32 = 0xd0a26a;
-const BG_DECISION: u32 = 0x171310;
-/// The selection wash. The Composer paints the same value under its own
-/// selection (crate::composer reads this const), so selected text reads the
-/// same everywhere.
-pub const BG_SELECTED: u32 = 0x3f6ea830;
-/// One translucent step up whatever sits underneath: the inline-code wash,
-/// and the hover shade for rows that have no background of their own.
-const BG_HOVER: u32 = 0x2323234d;
-/// Hover on the two cards that already paint solid backgrounds — one step up
-/// each card's own colour, staying inside the pane's ramp.
-const BG_CODE_HOVER: u32 = 0x191919;
-const BG_DECISION_HOVER: u32 = 0x1e1813;
+// Every color and metric here is an Aperture token (crate::theme) — no
+// literal survives in render code, which is #22's grep-able law.
+use crate::theme;
+use crate::theme::{
+    ACCENT, CODE_KEYWORD, CODE_STR, EDGE, EDGE_STRONG, FAIL, FAIL_WASH, GOOD, GOOD_WASH, HAIRLINE,
+    HOVER, IDLE, INK, INK_FAINT, INK_MUTED, INK_SECONDARY, INK_TERTIARY, INSET, RAISED, SELECTION,
+    SURFACE, WAIT, WAIT_EDGE, WAIT_WASH,
+};
 
 /// One Pane's view state: what the window owns per Thread. Everything it
-/// shows lives in core; this is the keyboard and the scrollback position.
+/// shows lives in core; this is the keyboard, the scrollback position, and
+/// the wall cell's cached strings.
 pub struct PaneView {
     pub thread: ThreadId,
+    /// The Thread's slug name — `thread-NN` until display names exist
+    /// (sidebar-and-impl §4.2 #8). Built once; the wall must not format
+    /// names per frame.
+    pub name: SharedString,
     pub composer: Entity<Composer>,
     pub scroll: ScrollHandle,
     /// A pending Decision takes the keyboard: y and n are answers, not text.
     pub decision_focus: FocusHandle,
+    /// The wall cell's folded reading — everything the L3 recipe needs that
+    /// is not an O(1) transcript read. The cockpit rebuilds it whenever the
+    /// Thread's transcript changes; a frame never walks Blocks at L3.
+    pub wall: WallCard,
 }
 
 impl PaneView {
     pub fn new<T: 'static>(thread: ThreadId, cx: &mut Context<T>) -> Self {
         Self {
             thread,
+            name: SharedString::from(format!("thread-{thread:02}")),
             composer: cx.new(Composer::new),
             scroll: ScrollHandle::new(),
             decision_focus: cx.focus_handle(),
+            wall: WallCard::default(),
         }
     }
 }
@@ -75,10 +69,122 @@ pub struct PaneState<'a> {
     pub queued: Option<&'a str>,
     pub workspace: Option<&'a WorkspaceBinding>,
     pub focused: bool,
-    pub blocked: bool,
+    /// A turn in flight: the Composer's ❯ becomes ◐ and esc offers interrupt.
+    pub running: bool,
     /// The Blocks a drag swept, as indices into the Thread's blocks. The
     /// cockpit owns the drag; the Pane only paints the wash.
     pub selected: Option<std::ops::RangeInclusive<usize>>,
+}
+
+/// The wall's state matrix (glance.md §4), selected from O(1) reads plus the
+/// folded tests flag. Pure so the matrix is assertable without a window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WallState {
+    Working,
+    /// Working with a red test suite: red text, green dot, no ring.
+    Failing,
+    /// A Decision waits: amber dot, amber ring, two-line alert, no bar.
+    Decision,
+    /// The Session closed under the Thread: red dot, red ring, alert.
+    Blocked,
+    /// Turn complete: dimmed cell, green `✓ done`.
+    Done,
+    Idle,
+    /// No transcript in memory at all — the cockpit could not open it.
+    Parked,
+}
+
+/// glance.md's matrix, one row per state. `finished` is the honest v1 test
+/// for "done": an idle Thread that has a recorded turn cost (the Cockpit
+/// board's own done cell reads "turn complete · $0.31").
+pub fn wall_state(
+    status: Option<Status>,
+    pending: bool,
+    tests_failing: bool,
+    finished: bool,
+) -> WallState {
+    let Some(status) = status else {
+        return WallState::Parked;
+    };
+    if pending || status == Status::Blocked {
+        return WallState::Decision;
+    }
+    match status {
+        Status::Closed => WallState::Blocked,
+        Status::Streaming if tests_failing => WallState::Failing,
+        Status::Streaming => WallState::Working,
+        _ if finished => WallState::Done,
+        _ => WallState::Idle,
+    }
+}
+
+/// Whether a Thread is holding the operator up — the rollup the strip counts
+/// and the wall rings: a Decision waiting (amber) or a dead Session (red).
+/// Failing tests are noise, not a ring, and are not counted (glance.md §3.1).
+/// The strip and the nav both call this, so the two can never disagree.
+pub fn needs_operator(pending: bool, status: Option<Status>) -> bool {
+    pending || matches!(status, Some(Status::Blocked | Status::Closed))
+}
+
+/// The wall cell's folded strings — rebuilt only when the Thread changed,
+/// never per frame (the L3 budget: 24 cells × 60fps must not walk Blocks or
+/// format strings).
+#[derive(Default)]
+pub struct WallCard {
+    /// The latest test run failed (from `Instruments`, the one O(blocks)
+    /// read the wall needs).
+    pub tests_failing: bool,
+    /// Plan progress, 0..=1, when the Thread has a plan.
+    pub fraction: Option<f32>,
+    /// The working status line: `3/4 · ◐ working` or `◐ working`.
+    pub working: SharedString,
+    /// The done line: `✓ done · $0.31`, or `✓ done` before any cost.
+    pub done: SharedString,
+    /// An alert cell's second line: the Decision's subject, or the close
+    /// reason. Empty when neither applies.
+    pub context: SharedString,
+}
+
+/// Fold one Thread's wall reading. The activity phrase stays a status word —
+/// naming the running tool at L3 would put `Instruments::of` on every wall
+/// cell every rebuild during streaming for a 9px line nobody can read at
+/// distance (sidebar-and-impl §4.2 #6 keeps names at L2).
+pub fn wall_card(transcript: Option<&Transcript>, decision: Option<&Decision>) -> WallCard {
+    let Some(transcript) = transcript else {
+        return WallCard::default();
+    };
+    let todos = transcript.todos();
+    let fraction = todos.map(plan_fraction);
+    let working = match todos {
+        Some(todos) => SharedString::from(format!("{}/{} · ◐ working", todos.done, todos.total)),
+        None => SharedString::from("◐ working"),
+    };
+    let done = match transcript.last_cost() {
+        Some(cost) => SharedString::from(format!("✓ done · ${cost:.2}")),
+        None => SharedString::from("✓ done"),
+    };
+    let context = match decision {
+        Some(decision) => decision_subject(decision),
+        // A closed Thread's context is the reason it closed — the last
+        // Notice the fold pushed.
+        None if transcript.status() == Status::Closed => transcript
+            .blocks()
+            .iter()
+            .rev()
+            .find_map(|block| match &block.body {
+                Body::Notice(reason) => Some(SharedString::from(reason.clone())),
+                _ => None,
+            })
+            .unwrap_or_default(),
+        None => SharedString::default(),
+    };
+    WallCard {
+        tests_failing: Instruments::of(transcript).tests == Some(Tests::Failed),
+        fraction,
+        working,
+        done,
+        context,
+    }
 }
 
 /// One Pane. A Thread with no transcript is one the cockpit could not open;
@@ -90,182 +196,884 @@ pub fn render_pane(view: &PaneView, state: PaneState<'_>, level: Level) -> impl 
         queued,
         workspace,
         focused,
-        blocked,
+        running,
         selected,
     } = state;
-    // One border rule for every level, so focus reads the same at arm's length
-    // as it does across the room.
-    let border = if focused {
-        BORDER_FOCUSED
-    } else if blocked {
-        TEXT_NOTICE
+    let status = transcript.map(|t| t.status());
+    let state = wall_state(
+        status,
+        decision.is_some(),
+        view.wall.tests_failing,
+        transcript.and_then(|t| t.last_cost()).is_some(),
+    );
+    // The attention ring: a Decision's amber overrides focus everywhere; the
+    // red blocker ring is the wall's language (glance.md §4 — L2/L1 blocked
+    // renderings are undrawn, so red stays at L3 and the LED carries it up).
+    let ring = if decision.is_some() {
+        Some(WAIT)
+    } else if level == Level::Wall && state == WallState::Blocked {
+        Some(FAIL)
+    } else if focused {
+        Some(ACCENT)
     } else {
-        BORDER
+        None
     };
     let shell = div()
+        .relative()
         .flex()
         .flex_col()
         .flex_1()
         .min_h_0()
-        .bg(rgb(if blocked { BG_DECISION } else { BG_PANE }))
+        .bg(rgb(SURFACE))
         .border_1()
-        .border_color(rgb(border))
-        .rounded_sm()
+        .border_color(rgba(EDGE))
         .overflow_hidden();
 
     // Far enough away, a Pane is one signal: no header, no transcript,
     // nothing that stops reading at a glance.
     if level == Level::Wall {
-        return shell.child(wall(view.thread, transcript, blocked));
+        return shell
+            .child(wall_cell(view, state, focused))
+            .children(ring.map(ring_overlay));
     }
 
-    let mut pane = shell.child(header(view.thread, transcript, workspace));
-    // Mid: what the Thread is doing, above what it said.
     if level == Level::Instruments {
-        if let Some(transcript) = transcript {
-            pane = pane.child(instruments(transcript));
-        }
+        return shell
+            .child(l2_cell(view, transcript, decision, workspace, state))
+            .children(ring.map(ring_overlay));
     }
 
+    let mut pane = shell.child(dense_header(view, transcript, workspace, status));
     match transcript {
         Some(transcript) => {
             pane = pane
                 .child(body(view, transcript, level.visible_blocks(), selected))
-                .child(status_line(transcript));
+                .child(composer_region(view, transcript, decision, queued, running));
         }
         None => {
-            pane = pane.child(
-                div()
-                    .flex()
-                    .flex_1()
-                    .min_h_0()
-                    .items_center()
-                    .justify_center()
-                    .text_size(px(11.))
-                    .text_color(rgb(TEXT_MUTED))
-                    .child("parked"),
-            );
+            pane = pane.child(parked_body());
         }
     }
+    pane.children(ring.map(ring_overlay))
+}
 
-    // A held prompt is exactly what an operator glancing at instruments wants
-    // to see, so it shows wherever there is a Pane to show it in.
-    if let Some(held) = queued {
-        pane = pane.child(queued_line(held));
+/// The 1.5px inset attention ring — gpui has no inset box-shadow, so the
+/// ring is an absolute full-size overlay quad that takes no events.
+fn ring_overlay(color: u32) -> Div {
+    div()
+        .absolute()
+        .inset_0()
+        .border(px(theme::RING_W))
+        .border_color(rgb(color))
+}
+
+// ------------------------------------------------------------------ L3 wall
+
+/// The Wall board's cell recipe: 8px padding, 6px gaps, top-anchored —
+/// dot · slug name · 5px bar · one 9px status line; alert states carry a
+/// 10px colored first line instead of the bar.
+fn wall_cell(view: &PaneView, state: WallState, focused: bool) -> Div {
+    let card = &view.wall;
+    let (dot_color, hollow) = match state {
+        WallState::Working | WallState::Failing | WallState::Done => (GOOD, false),
+        WallState::Decision => (WAIT, false),
+        WallState::Blocked => (FAIL, false),
+        WallState::Idle => (IDLE, false),
+        WallState::Parked => (INK_FAINT, true),
+    };
+    let mut cell = div()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_h_0()
+        .gap(px(theme::GRID_GAP))
+        .p(px(theme::GRID_PAD))
+        .overflow_hidden()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(5.))
+                .min_w_0()
+                .child(if hollow {
+                    hollow_dot(px(theme::LED_WALL))
+                } else {
+                    led(px(theme::LED_WALL), dot_color)
+                })
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .font_family(theme::FONT_UI)
+                        .text_size(px(theme::TEXT_CHIP))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(if focused { INK } else { INK_SECONDARY }))
+                        .child(view.name.clone()),
+                ),
+        );
+    // The bar survives on working cells only; alert cells trade it for the
+    // colored first line (glance.md §3.4).
+    if matches!(state, WallState::Working | WallState::Failing) {
+        if let Some(fraction) = card.fraction {
+            cell = cell.child(bar(px(theme::BAR_H_WALL), fraction, ACCENT));
+        }
     }
+    let status_line = |text: SharedString, size: f32, color: u32| {
+        div()
+            .flex_shrink_0()
+            .min_w_0()
+            .truncate()
+            .text_size(px(size))
+            .text_color(rgb(color))
+            .child(text)
+    };
+    match state {
+        WallState::Working => {
+            cell = cell.child(status_line(
+                card.working.clone(),
+                theme::TEXT_WALL_STATUS,
+                INK_MUTED,
+            ));
+        }
+        WallState::Failing => {
+            cell = cell.child(status_line(
+                SharedString::from("✗ failing"),
+                theme::TEXT_WALL_STATUS,
+                FAIL,
+            ));
+        }
+        WallState::Decision => {
+            cell = cell.child(status_line(
+                SharedString::from("⚠ needs you"),
+                theme::TEXT_CHIP,
+                WAIT,
+            ));
+            if !card.context.is_empty() {
+                cell = cell.child(status_line(
+                    card.context.clone(),
+                    theme::TEXT_WALL_STATUS,
+                    INK_MUTED,
+                ));
+            }
+        }
+        WallState::Blocked => {
+            cell = cell.child(status_line(
+                SharedString::from("✗ closed"),
+                theme::TEXT_CHIP,
+                FAIL,
+            ));
+            if !card.context.is_empty() {
+                cell = cell.child(status_line(
+                    card.context.clone(),
+                    theme::TEXT_WALL_STATUS,
+                    INK_MUTED,
+                ));
+            }
+        }
+        WallState::Done => {
+            cell = cell
+                .child(status_line(
+                    card.done.clone(),
+                    theme::TEXT_WALL_STATUS,
+                    GOOD,
+                ))
+                .opacity(theme::DONE_WALL_OPACITY);
+        }
+        WallState::Idle => {
+            cell = cell.child(status_line(
+                SharedString::from("❯ idle"),
+                theme::TEXT_WALL_STATUS,
+                INK_MUTED,
+            ));
+        }
+        WallState::Parked => {
+            cell = cell.child(status_line(
+                SharedString::from("parked"),
+                theme::TEXT_WALL_STATUS,
+                INK_FAINT,
+            ));
+        }
+    }
+    cell
+}
+
+// ------------------------------------------------------------- L2 cell
+
+/// The Cockpit board's cell grammar: 24px header (LED · title · right meta),
+/// then instruments — progress row, badge row, and the bottom-pinned
+/// activity line. A pending Decision swaps the body for the y/n card and an
+/// idle Thread centers `❯ idle`.
+fn l2_cell(
+    view: &PaneView,
+    transcript: Option<&Transcript>,
+    decision: Option<&Decision>,
+    workspace: Option<&WorkspaceBinding>,
+    state: WallState,
+) -> Div {
+    let hot = matches!(
+        state,
+        WallState::Working | WallState::Failing | WallState::Decision | WallState::Blocked
+    );
+    let led_color = match state {
+        WallState::Decision => WAIT,
+        WallState::Blocked | WallState::Failing => FAIL,
+        WallState::Working | WallState::Done => GOOD,
+        WallState::Idle => IDLE,
+        WallState::Parked => INK_FAINT,
+    };
+    let mut header = div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .h(px(theme::CELL_HEADER_H))
+        .gap(px(6.))
+        .px(px(8.))
+        .border_b_1()
+        .border_color(rgba(HAIRLINE))
+        .child(led(px(theme::LED), led_color))
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .font_family(theme::FONT_UI)
+                .text_size(px(theme::TEXT_TITLE))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(if hot { INK } else { INK_SECONDARY }))
+                .child(view.name.clone()),
+        )
+        .child(div().flex_1());
+    header = match state {
+        WallState::Decision => header.child(needs_you_badge()),
+        WallState::Done => header.child(
+            div()
+                .flex_shrink_0()
+                .text_size(px(theme::TEXT_CHIP_SM))
+                .text_color(rgb(GOOD))
+                .child("done"),
+        ),
+        // The comp's right-meta slot carries the Thread's id; the name is
+        // already the id here, so the slot names the Workspace binding —
+        // what an operator running many Threads actually needs.
+        _ => header.child(
+            div()
+                .flex_shrink_0()
+                .text_size(px(theme::TEXT_CHIP_SM))
+                .text_color(rgb(INK_MUTED))
+                .child(binding_label(workspace)),
+        ),
+    };
+
+    let cell = div().flex().flex_col().flex_1().min_h_0();
+    let Some(transcript) = transcript else {
+        return cell.child(header).child(parked_body());
+    };
+
+    // A Decision's cell body is the card, keyed like the in-Pane card.
     if let Some(decision) = decision {
-        pane = pane.child(
-            decision_card(decision)
+        return cell.child(header).child(
+            l2_decision_body(decision)
                 .key_context("Decision")
                 .track_focus(&view.decision_focus),
         );
     }
-    // Only the near view has room to answer in.
-    if transcript.is_some() && level == Level::Transcript {
-        pane = pane.child(composer_line(view, focused));
+
+    let read = Instruments::of(transcript);
+    let mut body = div()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_h_0()
+        .p(px(theme::CELL_PAD))
+        .gap(px(8.));
+
+    if state == WallState::Idle {
+        body = body.child(
+            div()
+                .flex()
+                .flex_1()
+                .items_center()
+                .justify_center()
+                .text_size(px(theme::TEXT_META))
+                .text_color(rgb(INK_MUTED))
+                .child("❯ idle — waiting for work"),
+        );
+        return cell.child(header).child(body);
     }
-    pane
+
+    if state == WallState::Done {
+        let line = match transcript.last_cost() {
+            Some(cost) => SharedString::from(format!("turn complete · ${cost:.2}")),
+            None => SharedString::from("turn complete"),
+        };
+        body = body.child(
+            div()
+                .text_size(px(theme::TEXT_CHIP))
+                .text_color(rgb(INK_TERTIARY))
+                .child(line),
+        );
+    }
+
+    if let Some(todos) = read.todos {
+        // Progress fill follows health: accent while green, secondary while
+        // the suite is red (the Cockpit board's two data points).
+        let fill = if state == WallState::Failing {
+            INK_SECONDARY
+        } else {
+            ACCENT
+        };
+        let fraction = plan_fraction(todos);
+        body = body.child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .child(div().flex_1().child(bar(px(theme::BAR_H), fraction, fill)))
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .text_size(px(theme::TEXT_META))
+                        .text_color(rgb(fill))
+                        .child(SharedString::from(format!(
+                            "{}/{}",
+                            todos.done, todos.total
+                        ))),
+                ),
+        );
+    }
+
+    let mut badges = div().flex().items_center().gap(px(6.));
+    let mut any_badge = false;
+    match read.tests {
+        Some(Tests::Passed) => {
+            badges = badges.child(chip("✓ tests pass", GOOD, GOOD_WASH));
+            any_badge = true;
+        }
+        Some(Tests::Failed) => {
+            badges = badges.child(chip("✗ failing", FAIL, FAIL_WASH));
+            any_badge = true;
+        }
+        None => {}
+    }
+    if read.added > 0 || read.removed > 0 {
+        badges = badges.child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(4.))
+                .text_size(px(theme::TEXT_CHIP))
+                .bg(rgb(RAISED))
+                .rounded(px(theme::R_CHIP))
+                .px(px(6.))
+                .py(px(1.))
+                .child(
+                    div()
+                        .text_color(rgb(GOOD))
+                        .child(SharedString::from(format!("+{}", read.added))),
+                )
+                .child(
+                    div()
+                        .text_color(rgb(FAIL))
+                        .child(SharedString::from(format!("−{}", read.removed))),
+                ),
+        );
+        any_badge = true;
+    }
+    if any_badge {
+        body = body.child(badges);
+    }
+
+    body = body.child(div().flex_1());
+    if state == WallState::Done {
+        body = body.child(
+            div()
+                .text_size(px(theme::TEXT_CHIP))
+                .text_color(rgb(INK_MUTED))
+                .child("❯ idle"),
+        );
+    } else if let Some(activity) = read.activity {
+        body = body.child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_size(px(theme::TEXT_CHIP))
+                .text_color(rgb(INK_TERTIARY))
+                .child(SharedString::from(format!("◐ {activity}"))),
+        );
+    }
+
+    let mut content = cell.child(header).child(body);
+    if state == WallState::Done {
+        content = content.opacity(theme::DONE_CELL_OPACITY);
+    }
+    content
 }
 
-fn wall(thread: ThreadId, transcript: Option<&Transcript>, blocked: bool) -> Div {
-    let (led, label) = match transcript.map(|t| t.status()) {
-        None => (TEXT_MUTED, "parked"),
-        Some(Status::Streaming) => (LED_RUNNING, "running"),
-        Some(Status::Blocked) => (TEXT_NOTICE, "waiting"),
-        Some(Status::Closed) => (DIFF_REMOVED, "closed"),
-        Some(Status::Idle) => (TEXT_MUTED, "idle"),
-    };
+/// The Cockpit board's Decision cell body: the command, who wants it, and
+/// the y/n keycaps — no `a always` at L2.
+fn l2_decision_body(decision: &Decision) -> Div {
+    let command = decision_subject(decision);
+    let wants = decision_wants(decision, "wants approval to run");
     div()
         .flex()
         .flex_col()
         .flex_1()
         .min_h_0()
-        .items_center()
-        .justify_center()
-        .gap(px(4.))
+        .p(px(theme::CELL_PAD))
+        .gap(px(6.))
         .child(
             div()
-                .w(px(14.))
-                .h(px(14.))
-                .rounded_full()
-                .bg(rgb(led))
-                .flex_shrink_0(),
+                .min_w_0()
+                .truncate()
+                .text_size(px(theme::TEXT_META))
+                .text_color(rgb(INK))
+                .child(command),
         )
         .child(
             div()
-                .text_size(px(11.))
-                .text_color(rgb(TEXT_SECONDARY))
-                .child(SharedString::from(format!("{thread:02}"))),
+                .min_w_0()
+                .truncate()
+                .font_family(theme::FONT_UI)
+                .text_size(px(theme::TEXT_CHIP))
+                .text_color(rgb(INK_TERTIARY))
+                .child(wants),
         )
+        .child(div().flex_1())
         .child(
             div()
-                .text_size(px(10.))
-                .text_color(rgb(if blocked { TEXT_NOTICE } else { TEXT_MUTED }))
-                .child(SharedString::from(label)),
+                .flex()
+                .gap(px(6.))
+                .child(keycap("y allow", INK, EDGE_STRONG))
+                .child(keycap("n deny", INK_SECONDARY, EDGE_STRONG)),
         )
 }
 
-/// L2: the Thread's work, in one row that never wraps.
-fn instruments(transcript: &Transcript) -> impl IntoElement {
-    let read = Instruments::of(transcript);
-    let mut row = div()
+/// The amber `needs you` chip, exactly as the Cockpit board's issue-triage
+/// cell draws it.
+fn needs_you_badge() -> Div {
+    div()
+        .flex_shrink_0()
+        .text_size(px(theme::TEXT_CHIP_SM))
+        .text_color(rgb(WAIT))
+        .bg(rgba(WAIT_WASH))
+        .rounded(px(theme::R_CHIP))
+        .px(px(5.))
+        .py(px(1.))
+        .child("needs you")
+}
+
+// ---------------------------------------------------------------- L1 pane
+
+/// DirectionDense's single 28px header: LED · name · binding · spacer ·
+/// todo meter · ctx and cost as text. The todo strip, ctx bar and cost of
+/// the Main board fold into this one line at dense L1.
+fn dense_header(
+    view: &PaneView,
+    transcript: Option<&Transcript>,
+    workspace: Option<&WorkspaceBinding>,
+    status: Option<Status>,
+) -> Div {
+    let led_color = match status {
+        Some(Status::Streaming) => GOOD,
+        Some(Status::Blocked) => WAIT,
+        Some(Status::Closed) => FAIL,
+        Some(Status::Idle) => IDLE,
+        None => INK_FAINT,
+    };
+    let binding = binding_label(workspace);
+    let mut header = div()
         .flex()
         .flex_shrink_0()
-        .gap(px(10.))
-        .px(px(8.))
-        .py(px(3.))
+        .items_center()
+        .h(px(theme::HEADER_DENSE_H))
+        .gap(px(8.))
+        .px(px(10.))
         .border_b_1()
-        .border_color(rgb(HAIRLINE))
-        .text_size(px(11.));
-
-    if let Some(todos) = read.todos {
-        row = row.child(
+        .border_color(rgba(HAIRLINE))
+        .text_size(px(theme::TEXT_ROW))
+        .child(led(px(theme::LED), led_color))
+        .child(
             div()
-                .text_color(rgb(TEXT_SECONDARY))
-                .child(SharedString::from(format!(
-                    "{}/{} done",
-                    todos.done, todos.total
-                ))),
+                .flex_shrink_0()
+                .font_weight(FontWeight::BOLD)
+                .text_color(rgb(INK))
+                .child(view.name.clone()),
+        );
+    if !binding.is_empty() {
+        header = header
+            .child(div().flex_shrink_0().text_color(rgb(INK_FAINT)).child("·"))
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(rgb(INK_TERTIARY))
+                    .child(binding),
+            );
+    }
+    header = header.child(div().flex_1());
+    if let Some(todos) = transcript.and_then(|t| t.todos()) {
+        header = header.child(
+            div()
+                .flex_shrink_0()
+                .text_color(rgb(ACCENT))
+                .child(meter(todos.done, todos.total)),
         );
     }
-    row = row.child(match read.tests {
-        Some(Tests::Passed) => div()
-            .text_color(rgb(DIFF_ADDED))
-            .child(SharedString::from("tests pass")),
-        Some(Tests::Failed) => div()
-            .text_color(rgb(DIFF_REMOVED))
-            .child(SharedString::from("tests fail")),
-        None => div()
-            .text_color(rgb(TEXT_MUTED))
-            .child(SharedString::from("no tests run")),
-    });
-    if read.added > 0 || read.removed > 0 {
-        row = row.child(
+    let spend = transcript.map(spend_label).unwrap_or_default();
+    if !spend.is_empty() {
+        header = header
+            .child(div().flex_shrink_0().text_color(rgb(INK_FAINT)).child("·"))
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .text_color(rgb(INK_MUTED))
+                    .child(spend),
+            );
+    }
+    header
+}
+
+/// `▰▰▰▱ 3/4` while the glyph run stays glanceable; a long plan keeps the
+/// fraction alone (an unbounded ▰ run would eat the header).
+fn meter(done: usize, total: usize) -> SharedString {
+    const GLYPH_CAP: usize = 8;
+    if total == 0 {
+        return SharedString::default();
+    }
+    if total <= GLYPH_CAP {
+        let done = done.min(total);
+        let mut run = String::new();
+        run.extend(std::iter::repeat_n('▰', done));
+        run.extend(std::iter::repeat_n('▱', total - done));
+        return SharedString::from(format!("{run} {done}/{total}"));
+    }
+    SharedString::from(format!("{done}/{total}"))
+}
+
+/// `ctx 62% · $0.84` — the Dense header's textual instruments. Context
+/// falls back to a token count when the provider reports no window.
+fn spend_label(transcript: &Transcript) -> SharedString {
+    let mut parts = Vec::new();
+    if let Some(usage) = transcript.usage() {
+        parts.push(match usage.context_window {
+            Some(window) if window > 0 => {
+                format!("ctx {}%", (usage.total_tokens * 100 / window).min(999))
+            }
+            _ => format!("ctx {}", tokens(usage.total_tokens)),
+        });
+    }
+    if let Some(cost) = transcript.last_cost() {
+        parts.push(format!("${cost:.2}"));
+    }
+    SharedString::from(parts.join(" · "))
+}
+
+fn body(
+    view: &PaneView,
+    transcript: &Transcript,
+    visible: usize,
+    selected: Option<std::ops::RangeInclusive<usize>>,
+) -> impl IntoElement {
+    let mut body = div()
+        .id(("transcript", view.thread.get() as usize))
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll()
+        .track_scroll(&view.scroll)
+        .gap(px(theme::TRANSCRIPT_GAP))
+        .px(px(theme::TRANSCRIPT_PAD_X))
+        .py(px(theme::TRANSCRIPT_PAD_Y))
+        .text_size(px(theme::TEXT_BODY))
+        .line_height(relative(theme::LINE_TRANSCRIPT));
+    let blocks = transcript.blocks();
+    let tail = blocks.len().saturating_sub(visible);
+    for (offset, block) in blocks[tail..].iter().enumerate() {
+        let picked = selected
+            .as_ref()
+            .is_some_and(|range| range.contains(&(tail + offset)));
+        body = body.child(render_block(block, picked));
+    }
+    body
+}
+
+fn parked_body() -> Div {
+    div()
+        .flex()
+        .flex_1()
+        .min_h_0()
+        .items_center()
+        .justify_center()
+        .text_size(px(theme::TEXT_ROW))
+        .text_color(rgb(INK_MUTED))
+        .child("parked")
+}
+
+// --------------------------------------------------------------- Composer
+
+/// The PromptBox stack, top to bottom: permission card, queued row, the one
+/// growing input line, meta row. Everything stacks above the line and is
+/// driven by keys — no send button, no floating box.
+fn composer_region(
+    view: &PaneView,
+    transcript: &Transcript,
+    decision: Option<&Decision>,
+    queued: Option<&str>,
+    running: bool,
+) -> Div {
+    let mut region = div()
+        .flex()
+        .flex_col()
+        .flex_shrink_0()
+        .bg(rgb(theme::COMPOSER))
+        .border_t_1()
+        .border_color(rgba(EDGE_STRONG));
+    if let Some(decision) = decision {
+        region = region.child(
+            decision_card(decision)
+                .key_context("Decision")
+                .track_focus(&view.decision_focus),
+        );
+    }
+    if let Some(held) = queued {
+        region = region.child(queued_line(held));
+    }
+    let mut input = div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(10.))
+        .min_h(px(theme::COMPOSER_H))
+        .px(px(theme::COMPOSER_PAD_X))
+        .text_size(px(theme::TEXT_INPUT))
+        .text_color(rgb(INK))
+        .child(if running {
+            div().flex_shrink_0().text_color(rgb(ACCENT)).child("◐")
+        } else {
+            div()
+                .flex_shrink_0()
+                .font_weight(FontWeight::BOLD)
+                .text_color(rgb(ACCENT))
+                .child("❯")
+        })
+        .child(view.composer.clone());
+    if running {
+        input = input.child(
+            div()
+                .flex_shrink_0()
+                .text_size(px(theme::TEXT_CHIP))
+                .text_color(rgb(WAIT))
+                .child("esc interrupt"),
+        );
+    }
+    region = region.child(input);
+
+    // The meta row's right slot: the Session's model, where the comps put
+    // "fable-5 · max" (run durations wait on a clock core deliberately does
+    // not keep — sidebar-and-impl §4.2 #4).
+    let mut meta = div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .h(px(theme::COMPOSER_META_H))
+        .px(px(theme::COMPOSER_PAD_X))
+        .pb(px(4.))
+        .child(div().flex_1());
+    if let Some(model) = transcript.model() {
+        meta = meta.child(
+            div()
+                .text_size(px(theme::TEXT_CHIP))
+                .text_color(rgb(INK_MUTED))
+                .child(SharedString::from(model.to_string())),
+        );
+    }
+    region.child(meta)
+}
+
+/// A prompt written while the agent was still working — the ⏳ queued row.
+fn queued_line(held: &str) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(8.))
+        .h(px(theme::CELL_HEADER_H))
+        .px(px(theme::COMPOSER_PAD_X))
+        .text_size(px(theme::TEXT_TITLE))
+        .child(div().flex_shrink_0().text_color(rgb(INK_MUTED)).child("⏳"))
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .italic()
+                .text_color(rgb(INK_TERTIARY))
+                .child(SharedString::from(format!("queued — \"{held}\""))),
+        )
+        .child(div().flex_1())
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_size(px(theme::TEXT_CHIP))
+                .text_color(rgb(INK_MUTED))
+                .child("⌫ unqueue"),
+        )
+}
+
+/// The permission card, exactly as PromptBox state 04 draws it: warning
+/// glyph, the command with its subtitle, and the y/n/a keycaps riding the
+/// right edge. Kept free of focus and key wiring so it can be drawn — and
+/// smoke-rendered — on its own. The comp's warning-triangle SVG is stood in
+/// by the ⚠ glyph the wall already speaks; gpui here has no asset pipeline
+/// to load an icon from.
+fn decision_card(decision: &Decision) -> Div {
+    let command = decision_subject(decision);
+    let subtitle = decision_wants(decision, "wants to run this");
+    let mut card = div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(10.))
+        .mt(px(8.))
+        .mx(px(8.))
+        .px(px(10.))
+        .py(px(8.))
+        .bg(rgba(WAIT_WASH))
+        .border_1()
+        .border_color(rgba(WAIT_EDGE))
+        .rounded(px(theme::R_CARD))
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_size(px(theme::TEXT_CODE))
+                .text_color(rgb(WAIT))
+                .child("⚠"),
+        )
+        .child(
             div()
                 .flex()
-                .gap(px(4.))
+                .flex_col()
+                .min_w_0()
+                .gap(px(2.))
                 .child(
                     div()
-                        .text_color(rgb(DIFF_ADDED))
-                        .child(SharedString::from(format!("+{}", read.added))),
+                        .text_size(px(theme::TEXT_CODE))
+                        .text_color(rgb(INK))
+                        .truncate()
+                        .child(command),
                 )
                 .child(
                     div()
-                        .text_color(rgb(DIFF_REMOVED))
-                        .child(SharedString::from(format!("−{}", read.removed))),
-                )
-                .child(
-                    div()
-                        .text_color(rgb(TEXT_MUTED))
-                        .child(SharedString::from(format!(
-                            "{} file{}",
-                            read.files,
-                            if read.files == 1 { "" } else { "s" }
-                        ))),
+                        .font_family(theme::FONT_UI)
+                        .text_size(px(theme::TEXT_META))
+                        .text_color(rgb(INK_TERTIARY))
+                        .truncate()
+                        .child(subtitle),
                 ),
-        );
+        )
+        .child(div().flex_1())
+        .child(keycap("y allow", INK, EDGE_STRONG))
+        .child(keycap("n deny", INK_SECONDARY, EDGE_STRONG));
+    if decision.standing_answer().is_some() {
+        card = card.child(keycap("a always", INK_MUTED, EDGE));
     }
-    row
+    card
+}
+
+/// The Decision's subject — what it wants to do: the description, else the
+/// tool's name, else the honest unreadable fallback. Every surface that
+/// names a Decision (L1 card, L2 cell, wall alert) goes through here.
+fn decision_subject(decision: &Decision) -> SharedString {
+    if !decision.description.is_empty() {
+        SharedString::from(decision.description.clone())
+    } else if !decision.tool_name.is_empty() {
+        SharedString::from(decision.tool_name.clone())
+    } else {
+        SharedString::from("unreadable permission request")
+    }
+}
+
+/// A Decision card's subtitle — who wants it, in the caller's phrasing —
+/// or the unreadable fallback when the provider named no tool.
+fn decision_wants(decision: &Decision, wants: &'static str) -> SharedString {
+    if decision.tool_name.is_empty() {
+        SharedString::from("the provider sent a request Ferrite could not read")
+    } else {
+        SharedString::from(format!("{} {wants}", decision.tool_name))
+    }
+}
+
+/// One keyboard keycap as the comps draw it: mono 10 on RAISED, radius 4.
+/// `a always` is de-emphasized by ink and a fainter border, never removed.
+fn keycap(label: &'static str, ink: u32, edge: u32) -> Div {
+    div()
+        .flex_shrink_0()
+        .text_size(px(theme::TEXT_CHIP))
+        .text_color(rgb(ink))
+        .bg(rgb(RAISED))
+        .border_1()
+        .border_color(rgba(edge))
+        .rounded(px(theme::R_CHIP))
+        .px(px(6.))
+        .py(px(2.))
+        .child(label)
+}
+
+// ------------------------------------------------------------ shared bits
+
+fn led(size: gpui::Pixels, color: u32) -> Div {
+    div()
+        .flex_shrink_0()
+        .w(size)
+        .h(size)
+        .rounded_full()
+        .bg(rgb(color))
+}
+
+/// A parked LED: the ring without the fill — present, not running.
+fn hollow_dot(size: gpui::Pixels) -> Div {
+    div()
+        .flex_shrink_0()
+        .w(size)
+        .h(size)
+        .rounded_full()
+        .border_1()
+        .border_color(rgb(INK_FAINT))
+}
+
+/// A plan's progress as a bar fill, 0..=1 — the one rule every progress
+/// pill (wall and L2) shares.
+fn plan_fraction(todos: Todos) -> f32 {
+    (todos.done as f32 / todos.total.max(1) as f32).clamp(0.0, 1.0)
+}
+
+/// A progress pill: EDGE track, colored fill, radius 999.
+fn bar(height: gpui::Pixels, fraction: f32, fill: u32) -> Div {
+    div()
+        .h(height)
+        .w_full()
+        .rounded_full()
+        .bg(rgba(EDGE))
+        .overflow_hidden()
+        .child(
+            div()
+                .h_full()
+                .w(relative(fraction.clamp(0.0, 1.0)))
+                .rounded_full()
+                .bg(rgb(fill)),
+        )
+}
+
+/// A small status chip: 10px ink on a wash, radius 4.
+fn chip(label: &'static str, ink: u32, wash: u32) -> Div {
+    div()
+        .flex_shrink_0()
+        .text_size(px(theme::TEXT_CHIP))
+        .text_color(rgb(ink))
+        .bg(rgba(wash))
+        .rounded(px(theme::R_CHIP))
+        .px(px(6.))
+        .py(px(1.))
+        .child(label)
 }
 
 /// Which checkout a Thread works in — a worktree's own name, or "main" for
@@ -284,205 +1092,70 @@ pub fn binding_label(workspace: Option<&WorkspaceBinding>) -> SharedString {
     }
 }
 
-fn header(
-    thread: ThreadId,
-    transcript: Option<&Transcript>,
-    workspace: Option<&WorkspaceBinding>,
-) -> impl IntoElement {
-    let subtitle = match transcript.and_then(|t| Some((t.model()?, t.session_id()?))) {
-        Some((model, id)) => {
-            let short: String = id.chars().take(8).collect();
-            SharedString::from(format!("{model} · {short}"))
-        }
-        None => SharedString::from("connecting…"),
-    };
-    div()
-        .flex()
-        .flex_shrink_0()
-        .justify_between()
-        .items_center()
-        .px(px(8.))
-        .py(px(4.))
-        .border_b_1()
-        .border_color(rgb(HAIRLINE))
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(6.))
-                .child(
-                    div()
-                        .text_size(px(11.))
-                        .text_color(rgb(TEXT_PRIMARY))
-                        .child(SharedString::from(format!("thread-{thread:02}"))),
-                )
-                .child(
-                    div()
-                        .text_size(px(10.))
-                        .text_color(rgb(TEXT_MUTED))
-                        .child(binding_label(workspace)),
-                ),
-        )
-        .child(
-            div()
-                .text_size(px(10.))
-                .text_color(rgb(TEXT_MUTED))
-                .child(subtitle),
-        )
-}
+// ----------------------------------------------------------- Block render
 
-fn body(
-    view: &PaneView,
-    transcript: &Transcript,
-    visible: usize,
-    selected: Option<std::ops::RangeInclusive<usize>>,
-) -> impl IntoElement {
-    let mut body = div()
-        .id(("transcript", view.thread.get() as usize))
-        .flex()
-        .flex_col()
-        .flex_1()
-        .min_h_0()
-        .overflow_y_scroll()
-        .track_scroll(&view.scroll)
-        .gap(px(4.))
-        .px(px(8.))
-        .py(px(5.))
-        .text_size(px(12.));
-    let blocks = transcript.blocks();
-    let tail = blocks.len().saturating_sub(visible);
-    for (offset, block) in blocks[tail..].iter().enumerate() {
-        let picked = selected
-            .as_ref()
-            .is_some_and(|range| range.contains(&(tail + offset)));
-        body = body.child(render_block(block, picked));
-    }
-    body
-}
-
-fn status_line(transcript: &Transcript) -> impl IntoElement {
-    let (label, color) = match transcript.status() {
-        Status::Idle => ("idle", TEXT_MUTED),
-        Status::Streaming => ("streaming…", TEXT_SECONDARY),
-        Status::Blocked => ("decision needed", TEXT_NOTICE),
-        Status::Closed => ("closed", TEXT_NOTICE),
-    };
-    let mut spend = Vec::new();
-    if let Some(usage) = transcript.usage() {
-        spend.push(match usage.context_window {
-            Some(window) => format!("{}/{}", tokens(usage.total_tokens), tokens(window)),
-            None => tokens(usage.total_tokens),
-        });
-    }
-    if let Some(cost) = transcript.last_cost() {
-        spend.push(format!("${cost:.4}"));
-    }
-    div()
-        .flex()
-        .flex_shrink_0()
-        .justify_between()
-        .items_center()
-        .px(px(8.))
-        .py(px(2.))
-        .border_t_1()
-        .border_color(rgb(HAIRLINE))
-        .text_size(px(10.))
-        .hover(|line| line.bg(rgba(BG_HOVER)))
-        .child(div().text_color(rgb(color)).child(label))
-        .child(
-            div()
-                .text_color(rgb(TEXT_MUTED))
-                .child(SharedString::from(spend.join(" · "))),
-        )
-}
-
-fn composer_line(view: &PaneView, focused: bool) -> impl IntoElement {
-    div()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .gap(px(6.))
-        .px(px(8.))
-        .py(px(3.))
-        .border_t_1()
-        .border_color(rgb(HAIRLINE))
-        .text_size(px(12.))
-        .text_color(rgb(TEXT_PRIMARY))
-        .child(
-            div()
-                .text_color(rgb(if focused { TEXT_PRIMARY } else { TEXT_MUTED }))
-                .child("❯"),
-        )
-        .child(view.composer.clone())
-}
-
-/// A prompt written while the agent was still working.
-fn queued_line(held: &str) -> impl IntoElement {
-    div()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .gap(px(6.))
-        .px(px(8.))
-        .py(px(2.))
-        .text_size(px(10.))
-        .child(div().flex_shrink_0().text_color(rgb(TEXT_MUTED)).child("⋯"))
-        .child(
-            div()
-                .min_w_0()
-                .text_color(rgb(TEXT_SECONDARY))
-                .child(SharedString::from(held.to_string())),
-        )
-        .child(
-            div()
-                .flex_shrink_0()
-                .text_color(rgb(TEXT_MUTED))
-                .child("queued"),
-        )
-}
-
-/// One Block, drawn at terminal density: no card chrome anywhere it can be
-/// avoided, one hairline where structure genuinely needs a boundary.
+/// One Block at DirectionDense density: 14px glyph gutter for prompt and
+/// agent rows, 22px indent for the agent's long-form (headings, bullets,
+/// code) and for `⎿` continuations and bare diffs under tool rows.
 /// A selected Block carries the wash; whole Blocks are the selection unit
 /// because gpui 0.2.2 has no character-level selection over rendered text.
 fn render_block(block: &Block, selected: bool) -> AnyElement {
     let row = div()
         .w_full()
         .flex_shrink_0()
-        .when(selected, |row| row.bg(rgba(BG_SELECTED)));
+        .when(selected, |row| row.bg(rgba(SELECTION)));
     match &block.body {
-        Body::Prompt(line) => row
-            .text_color(rgb(TEXT_PRIMARY))
-            .child(SharedString::from(format!("❯ {line}")))
+        Body::Prompt(line) => gutter_row(row, "❯", ACCENT, true)
+            .child(
+                div()
+                    .min_w_0()
+                    .text_color(rgb(INK))
+                    .child(SharedString::from(line.clone())),
+            )
             .into_any_element(),
-        Body::Paragraph { spans } => row
-            .text_color(rgb(TEXT_SECONDARY))
-            .child(inline(spans))
+        Body::Paragraph { spans } => gutter_row(row, "⏺", INK_TERTIARY, false)
+            .child(
+                div()
+                    .min_w_0()
+                    .text_color(rgb(INK_SECONDARY))
+                    .child(inline(spans)),
+            )
             .into_any_element(),
-        Body::Heading { level, spans } => row
-            .text_color(rgb(TEXT_PRIMARY))
-            .text_size(px(if *level <= 2 { 13. } else { 12. }))
-            .child(inline(spans))
+        Body::Heading { spans, .. } => row
+            .flex()
+            .pl(px(theme::INDENT))
+            .child(
+                div()
+                    .text_size(px(theme::TEXT_HEADING))
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(rgb(INK))
+                    .border_b_1()
+                    .border_color(rgba(EDGE_STRONG))
+                    .pb(px(3.))
+                    .child(inline(spans)),
+            )
+            .child(div().flex_1())
             .into_any_element(),
         Body::Bullet { spans } => row
             .flex()
             .flex_row()
             .gap(px(6.))
-            .text_color(rgb(TEXT_SECONDARY))
-            .child(div().flex_shrink_0().text_color(rgb(TEXT_MUTED)).child("•"))
+            .pl(px(theme::INDENT))
+            .text_color(rgb(INK_SECONDARY))
+            .child(div().flex_shrink_0().text_color(rgb(ACCENT)).child("•"))
             .child(div().min_w_0().child(inline(spans)))
             .into_any_element(),
         Body::Thinking(thought) => row
-            .text_color(rgb(TEXT_THINKING))
+            .text_color(rgb(INK_FAINT))
             .child(SharedString::from(thought.clone()))
             .into_any_element(),
         Body::Notice(text) => row
-            .text_color(rgb(TEXT_NOTICE))
+            .text_color(rgb(WAIT))
             .child(SharedString::from(text.clone()))
             .into_any_element(),
         Body::Meta(text) => row
-            .text_size(px(11.))
-            .text_color(rgb(TEXT_MUTED))
+            .text_size(px(theme::TEXT_ROW))
+            .text_color(rgb(INK_MUTED))
             .child(SharedString::from(text.clone()))
             .into_any_element(),
         Body::Code {
@@ -490,65 +1163,110 @@ fn render_block(block: &Block, selected: bool) -> AnyElement {
             source,
             tokens,
         } => row
-            .flex()
-            .flex_col()
-            .bg(rgb(BG_CODE))
-            .border_l_2()
-            .border_color(rgb(BORDER))
-            .px(px(6.))
-            .py(px(3.))
-            .children(language.as_ref().map(|language| {
+            .pl(px(theme::INDENT))
+            .child(
                 div()
-                    .text_size(px(10.))
-                    .text_color(rgb(TEXT_MUTED))
-                    .child(SharedString::from(language.clone()))
-            }))
-            .child(code(source, tokens.as_deref()))
+                    .flex()
+                    .flex_col()
+                    .bg(rgb(INSET))
+                    .border_1()
+                    .border_color(rgba(EDGE))
+                    .rounded(px(theme::R_TIGHT))
+                    .overflow_hidden()
+                    .children(language.as_ref().map(|language| {
+                        div()
+                            .flex()
+                            .items_center()
+                            .h(px(20.))
+                            .px(px(8.))
+                            .border_b_1()
+                            .border_color(rgba(HAIRLINE))
+                            .text_size(px(theme::TEXT_CHIP))
+                            .text_color(rgb(INK_FAINT))
+                            .child(SharedString::from(language.clone()))
+                    }))
+                    .child(
+                        div()
+                            .px(px(8.))
+                            .py(px(6.))
+                            .text_size(px(theme::TEXT_CODE))
+                            .line_height(relative(theme::LINE_CODE))
+                            .child(code(source, tokens.as_deref())),
+                    ),
+            )
             .into_any_element(),
         Body::Tool(tool) => render_tool(row, tool),
     }
 }
 
-fn render_tool(row: Div, tool: &ToolBlock) -> AnyElement {
-    let (marker, marker_color) = match &tool.state {
-        ToolState::Running => ("◦", TEXT_MUTED),
-        ToolState::Ok => ("•", TEXT_MUTED),
-        ToolState::Failed(_) => ("×", TEXT_NOTICE),
-    };
-    let mut card = row.flex().flex_col().gap(px(2.)).child(
+/// A `.row` with the 14px glyph gutter — ❯ for the operator, ⏺ for the agent.
+fn gutter_row(row: Div, glyph: &'static str, color: u32, bold: bool) -> Div {
+    row.flex().flex_row().gap(px(8.)).child(
         div()
-            .flex()
-            .flex_row()
-            .gap(px(6.))
-            .text_size(px(11.))
-            // The row the pointer is on, findable in a dense transcript.
-            .hover(|row| row.bg(rgba(BG_HOVER)))
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .text_color(rgb(marker_color))
-                    .child(marker),
-            )
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .text_color(rgb(TEXT_SECONDARY))
-                    .child(SharedString::from(tool.name.clone())),
-            )
+            .flex_shrink_0()
+            .w(px(theme::GUTTER_W))
+            .text_color(rgb(color))
+            .when(bold, |glyph| glyph.font_weight(FontWeight::BOLD))
+            .child(glyph),
+    )
+}
+
+/// `⏺ Name(arg)` with its `⎿` continuation and bare diff, per DirectionDense:
+/// bold tool name, file args in accent, command args in prose ink.
+fn render_tool(row: Div, tool: &ToolBlock) -> AnyElement {
+    // Command runners' args read as prose; every other summary is a
+    // path-like subject and takes the accent (the comps' file links,
+    // rendered inert — opening files is not this pass).
+    let arg_color = match tool.name.as_str() {
+        "Bash" | "commandExecution" => INK_SECONDARY,
+        _ => ACCENT,
+    };
+    let mut call = div().flex().min_w_0().text_color(rgb(INK_SECONDARY)).child(
+        div()
+            .flex_shrink_0()
+            .font_weight(FontWeight::BOLD)
+            .text_color(rgb(INK))
+            .child(SharedString::from(tool.name.clone())),
+    );
+    if !tool.summary.is_empty() {
+        call = call
+            .child(div().flex_shrink_0().child("("))
             .child(
                 div()
                     .min_w_0()
-                    .text_color(rgb(TEXT_MUTED))
+                    .truncate()
+                    .text_color(rgb(arg_color))
                     .child(SharedString::from(tool.summary.clone())),
-            ),
+            )
+            .child(div().flex_shrink_0().child(")"));
+    }
+    let mut card = row.flex().flex_col().gap(px(theme::TRANSCRIPT_GAP)).child(
+        gutter_row(
+            div().hover(|row| row.bg(rgba(HOVER))),
+            "⏺",
+            INK_TERTIARY,
+            false,
+        )
+        .child(call),
     );
+    if let Some(line) = &tool.result_line {
+        card = card.child(
+            div()
+                .pl(px(theme::INDENT))
+                .min_w_0()
+                .truncate()
+                .text_color(rgb(INK_MUTED))
+                .child(SharedString::from(format!("⎿ {line}"))),
+        );
+    }
     if let ToolState::Failed(message) = &tool.state {
         card = card.child(
             div()
-                .pl(px(14.))
-                .text_size(px(11.))
-                .text_color(rgb(TEXT_NOTICE))
-                .child(SharedString::from(message.clone())),
+                .pl(px(theme::INDENT))
+                .min_w_0()
+                .truncate()
+                .text_color(rgb(FAIL))
+                .child(SharedString::from(format!("⎿ {message}"))),
         );
     }
     if let Some(diff) = &tool.diff {
@@ -557,110 +1275,61 @@ fn render_tool(row: Div, tool: &ToolBlock) -> AnyElement {
     card.into_any_element()
 }
 
-/// A diff card: the path, what it cost in lines, and the change itself.
+/// A bare diff, per DirectionDense: no card, no filename header — the tool
+/// row above already names the file. 22px indent, a 30px right-aligned
+/// number column, washes for added and removed rows.
 fn render_diff(diff: &Diff) -> impl IntoElement {
-    let mut lines = div().flex().flex_col().px(px(6.)).py(px(2.));
-    for line in diff.hunks.iter().flat_map(|hunk| hunk.lines.iter()) {
-        let color = match line.chars().next() {
-            Some('+') => DIFF_ADDED,
-            Some('-') => DIFF_REMOVED,
-            _ => TEXT_MUTED,
-        };
-        lines = lines.child(
-            div()
-                .w_full()
-                .text_color(rgb(color))
-                .child(SharedString::from(line.clone())),
-        );
-    }
-
-    div()
+    let mut lines = div()
         .flex()
         .flex_col()
-        .ml(px(14.))
-        .bg(rgb(BG_CODE))
-        .hover(|card| card.bg(rgb(BG_CODE_HOVER)))
-        .border_1()
-        .border_color(rgb(BORDER))
-        .rounded_sm()
-        .overflow_hidden()
-        .text_size(px(11.))
-        .child(
-            div()
-                .flex()
-                .justify_between()
-                .gap(px(8.))
-                .px(px(6.))
-                .py(px(2.))
-                .border_b_1()
-                .border_color(rgb(HAIRLINE))
+        .ml(px(theme::INDENT))
+        .text_size(px(theme::TEXT_CODE));
+    for hunk in &diff.hunks {
+        let mut old = hunk.old_start;
+        let mut new = hunk.new_start;
+        for line in &hunk.lines {
+            let (number, number_color, code_color, wash) = match line.chars().next() {
+                Some('+') => {
+                    let n = new;
+                    new += 1;
+                    (n, GOOD, INK, Some(GOOD_WASH))
+                }
+                Some('-') => {
+                    let n = old;
+                    old += 1;
+                    (n, FAIL, INK, Some(FAIL_WASH))
+                }
+                _ => {
+                    let n = new;
+                    old += 1;
+                    new += 1;
+                    (n, INK_FAINT, INK_TERTIARY, None)
+                }
+            };
+            let mut row = div().flex().gap(px(10.)).px(px(6.));
+            if let Some(wash) = wash {
+                row = row.bg(rgba(wash));
+            }
+            lines = lines.child(
+                row.child(
+                    div()
+                        .flex_shrink_0()
+                        .w(px(theme::DIFF_NUM_W))
+                        .text_right()
+                        .text_color(rgb(number_color))
+                        .child(SharedString::from(number.to_string())),
+                )
                 .child(
                     div()
                         .min_w_0()
-                        .text_color(rgb(TEXT_SECONDARY))
-                        .child(SharedString::from(diff.path.clone())),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_shrink_0()
-                        .gap(px(6.))
-                        .child(
-                            div()
-                                .text_color(rgb(DIFF_ADDED))
-                                .child(SharedString::from(format!("+{}", diff.added))),
-                        )
-                        .child(
-                            div()
-                                .text_color(rgb(DIFF_REMOVED))
-                                .child(SharedString::from(format!("−{}", diff.removed))),
-                        ),
+                        .truncate()
+                        .text_color(rgb(code_color))
+                        .child(SharedString::from(line.clone())),
                 ),
-        )
-        .child(lines)
-}
-
-/// What a blocked Thread shows above its Composer. Kept free of focus and
-/// key wiring so it can be drawn — and smoke-rendered — on its own.
-fn decision_card(decision: &Decision) -> Div {
-    let subject = if decision.tool_name.is_empty() {
-        SharedString::from("unreadable permission request")
-    } else if decision.description.is_empty() {
-        SharedString::from(decision.tool_name.clone())
-    } else {
-        SharedString::from(format!("{} · {}", decision.tool_name, decision.description))
-    };
-    div()
-        .flex()
-        .flex_col()
-        .flex_shrink_0()
-        .px(px(8.))
-        .py(px(4.))
-        .gap(px(2.))
-        .border_t_1()
-        .border_color(rgb(TEXT_NOTICE))
-        .bg(rgb(BG_DECISION))
-        .hover(|card| card.bg(rgb(BG_DECISION_HOVER)))
-        .child(
-            div()
-                .flex()
-                .gap(px(6.))
-                .text_size(px(12.))
-                .child(
-                    div()
-                        .flex_shrink_0()
-                        .text_color(rgb(TEXT_NOTICE))
-                        .child("◆"),
-                )
-                .child(div().min_w_0().text_color(rgb(TEXT_PRIMARY)).child(subject)),
-        )
-        .child(div().text_size(px(11.)).text_color(rgb(TEXT_MUTED)).child(
-            if decision.standing_answer().is_some() {
-                "y allow · n deny · a always"
-            } else {
-                "y allow · n deny"
-            },
-        ))
+            );
+        }
+    }
+    lines
 }
 
 /// A Block's text as the clipboard should carry it: what the row shows,
@@ -678,6 +1347,9 @@ pub fn block_text(block: &Block) -> String {
         Body::Code { source, .. } => source.clone(),
         Body::Tool(tool) => {
             let mut lines = vec![format!("{} {}", tool.name, tool.summary)];
+            if let Some(line) = &tool.result_line {
+                lines.push(format!("⎿ {line}"));
+            }
             if let ToolState::Failed(message) = &tool.state {
                 lines.push(message.clone());
             }
@@ -715,8 +1387,9 @@ fn inline(spans: &[Span]) -> StyledText {
             highlights.push((
                 start..text.len(),
                 HighlightStyle {
-                    color: Some(rgb(TEXT_CODE).into()),
-                    background_color: Some(rgba(BG_HOVER).into()),
+                    // The comps' inline-code chip: primary ink on RAISED.
+                    color: Some(rgb(INK).into()),
+                    background_color: Some(rgb(RAISED).into()),
                     ..Default::default()
                 },
             ));
@@ -741,11 +1414,11 @@ fn code(source: &str, tokens: Option<&[Token]>) -> StyledText {
             return plain();
         }
         let color = match token.class {
-            Class::Plain => TEXT_CODE,
+            Class::Plain => ACCENT,
             Class::Keyword => CODE_KEYWORD,
-            Class::Str => CODE_STRING,
-            Class::Comment => TEXT_THINKING,
-            Class::Number => CODE_NUMBER,
+            Class::Str => CODE_STR,
+            Class::Comment => INK_FAINT,
+            Class::Number => WAIT,
         };
         highlights.push((
             at..end,
@@ -762,7 +1435,7 @@ fn code(source: &str, tokens: Option<&[Token]>) -> StyledText {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ferrite_core::transcript::{Input, Lexer};
+    use ferrite_core::transcript::{Input, Lexer, Todos};
     use ferrite_core::{Hunk, SessionEvent, ToolResult, TurnOutcome};
     use gpui::{size, TestAppContext};
     use std::sync::Arc;
@@ -850,7 +1523,7 @@ mod tests {
                 .flex()
                 .flex_col()
                 .w(px(900.))
-                .font_family(crate::MONO_FONT)
+                .font_family(crate::theme::FONT_MONO)
                 .text_size(px(12.))
                 .children(self.blocks.iter().map(|block| render_block(block, false)))
                 // And once more selected, so the wash paints on every kind.
@@ -872,9 +1545,10 @@ mod tests {
                 .flex()
                 .flex_col()
                 .w(px(900.))
-                .font_family(crate::MONO_FONT)
+                .font_family(crate::theme::FONT_MONO)
                 .text_size(px(12.))
                 .children(self.decisions.iter().map(decision_card))
+                .children(self.decisions.iter().map(l2_decision_body))
         }
     }
 
@@ -968,6 +1642,8 @@ mod tests {
             all.contains("+delta") && all.contains("-bravo"),
             "a diff copies its lines: {all}"
         );
+        // The ⎿ continuation the fold keeps copies too.
+        assert!(all.contains("⎿ 42 passed"), "the result line: {all}");
     }
 
     #[gpui::test]
@@ -995,5 +1671,186 @@ mod tests {
         });
         cx.simulate_resize(size(px(900.), px(300.)));
         cx.run_until_parked();
+    }
+
+    /// glance.md §4's wall matrix, one assertion per row — the selection
+    /// logic the wall cell renders from.
+    #[test]
+    fn the_wall_state_matrix_reads_exactly_as_the_glance_spec() {
+        use WallState::*;
+        // Working, focused or not, is the streaming Thread.
+        assert_eq!(
+            wall_state(Some(Status::Streaming), false, false, false),
+            Working
+        );
+        // Failing tests stay a working Thread — red text, not a ring.
+        assert_eq!(
+            wall_state(Some(Status::Streaming), true, false, false),
+            Decision
+        );
+        assert_eq!(
+            wall_state(Some(Status::Streaming), false, true, false),
+            Failing
+        );
+        // A Decision waits: pending flag or Blocked status, either way.
+        assert_eq!(
+            wall_state(Some(Status::Blocked), false, false, false),
+            Decision
+        );
+        // A closed Session is the red hard-blocker.
+        assert_eq!(
+            wall_state(Some(Status::Closed), false, false, true),
+            Blocked
+        );
+        // Idle with a recorded turn cost is done; without one, idle.
+        assert_eq!(wall_state(Some(Status::Idle), false, false, true), Done);
+        assert_eq!(wall_state(Some(Status::Idle), false, false, false), Idle);
+        // No transcript at all — the cockpit could not open the Thread.
+        assert_eq!(wall_state(None, false, false, false), Parked);
+    }
+
+    /// The rollup rule: rings (Decision amber, blocker red) count; failing
+    /// tests do not. The strip and the nav both read this one function.
+    #[test]
+    fn needs_operator_counts_rings_and_never_failing_tests() {
+        assert!(needs_operator(true, Some(Status::Streaming)));
+        assert!(needs_operator(false, Some(Status::Blocked)));
+        assert!(needs_operator(false, Some(Status::Closed)));
+        assert!(!needs_operator(false, Some(Status::Streaming)));
+        assert!(!needs_operator(false, Some(Status::Idle)));
+        assert!(!needs_operator(false, None));
+    }
+
+    /// The wall card folds everything the L3 recipe needs that is not an
+    /// O(1) read — built on change, never per frame.
+    #[test]
+    fn the_wall_card_folds_progress_result_and_context_lines() {
+        // No transcript: an empty card.
+        let empty = wall_card(None, None);
+        assert!(!empty.tests_failing);
+        assert_eq!(empty.fraction, None);
+
+        let mut transcript = Transcript::default();
+        for subject in ["a", "b", "c", "d"] {
+            transcript.apply(Input::Event(SessionEvent::ToolStarted {
+                id: format!("t{subject}"),
+                name: "TaskCreate".into(),
+                input: serde_json::json!({ "subject": subject }),
+            }));
+        }
+        for task in ["1", "2", "3"] {
+            transcript.apply(Input::Event(SessionEvent::ToolStarted {
+                id: format!("u{task}"),
+                name: "TaskUpdate".into(),
+                input: serde_json::json!({ "taskId": task, "status": "completed" }),
+            }));
+        }
+        assert_eq!(transcript.todos(), Some(Todos { done: 3, total: 4 }));
+        let card = wall_card(Some(&transcript), None);
+        assert_eq!(card.fraction, Some(0.75));
+        assert_eq!(card.working.as_ref(), "3/4 · ◐ working");
+
+        // A red suite flips the folded flag.
+        transcript.apply(Input::Event(SessionEvent::ToolStarted {
+            id: "test1".into(),
+            name: "Bash".into(),
+            input: serde_json::json!({ "command": "cargo test" }),
+        }));
+        transcript.apply(Input::Event(SessionEvent::ToolCompleted {
+            id: "test1".into(),
+            output: String::new(),
+            is_error: true,
+            result: ToolResult::Opaque,
+        }));
+        assert!(wall_card(Some(&transcript), None).tests_failing);
+
+        // A finished turn's cost reaches the done line.
+        transcript.apply(Input::Event(SessionEvent::TurnEnded {
+            outcome: TurnOutcome::Completed,
+            cost_usd: Some(0.31),
+        }));
+        assert_eq!(
+            wall_card(Some(&transcript), None).done.as_ref(),
+            "✓ done · $0.31"
+        );
+
+        // A Decision's subject becomes the alert's second line.
+        let decision = Decision {
+            id: "perm".into(),
+            tool_use_id: "toolu".into(),
+            tool_name: "Bash".into(),
+            description: "gh issue close 212".into(),
+            input: serde_json::Value::Null,
+            suggestions: vec![],
+        };
+        assert_eq!(
+            wall_card(Some(&transcript), Some(&decision))
+                .context
+                .as_ref(),
+            "gh issue close 212"
+        );
+
+        // A closed Session's reason becomes the blocked context line.
+        let mut closed = Transcript::default();
+        closed.apply(Input::Event(SessionEvent::Closed {
+            reason: "claude CLI exited with code 1".into(),
+        }));
+        assert_eq!(
+            wall_card(Some(&closed), None).context.as_ref(),
+            "claude CLI exited with code 1"
+        );
+    }
+
+    /// One derivation for every surface that names a Decision (L1 card, L2
+    /// cell, wall alert) — and the unreadable-request fallback holds even
+    /// when the provider names no tool at all.
+    #[test]
+    fn every_decision_surface_shares_one_subject_derivation() {
+        let decision = |tool: &str, description: &str| Decision {
+            id: "perm".into(),
+            tool_use_id: "toolu".into(),
+            tool_name: tool.into(),
+            description: description.into(),
+            input: serde_json::Value::Null,
+            suggestions: vec![],
+        };
+        let full = decision("Bash", "gh issue close 212");
+        assert_eq!(decision_subject(&full).as_ref(), "gh issue close 212");
+        assert_eq!(
+            decision_wants(&full, "wants to run this").as_ref(),
+            "Bash wants to run this"
+        );
+        // No description: the tool's name is the subject.
+        let bare = decision("Write", "");
+        assert_eq!(decision_subject(&bare).as_ref(), "Write");
+        // No tool at all: the honest fallback, on both lines.
+        let unreadable = decision("", "");
+        assert_eq!(
+            decision_subject(&unreadable).as_ref(),
+            "unreadable permission request"
+        );
+        assert_eq!(
+            decision_wants(&unreadable, "wants approval to run").as_ref(),
+            "the provider sent a request Ferrite could not read"
+        );
+        // The wall's alert context runs through the same derivation.
+        let transcript = Transcript::default();
+        assert_eq!(
+            wall_card(Some(&transcript), Some(&unreadable))
+                .context
+                .as_ref(),
+            "unreadable permission request"
+        );
+    }
+
+    /// The Dense header's ▰▱ meter stays glanceable: glyphs for small plans,
+    /// the bare fraction for long ones, and done never overshoots.
+    #[test]
+    fn the_todo_meter_caps_its_glyph_run() {
+        assert_eq!(meter(3, 4).as_ref(), "▰▰▰▱ 3/4");
+        assert_eq!(meter(0, 2).as_ref(), "▱▱ 0/2");
+        assert_eq!(meter(9, 20).as_ref(), "9/20");
+        assert_eq!(meter(5, 4).as_ref(), "▰▰▰▰ 4/4");
+        assert_eq!(meter(0, 0).as_ref(), "");
     }
 }

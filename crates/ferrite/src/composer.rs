@@ -45,7 +45,19 @@ impl Composer {
         text
     }
 
+    /// Whether the line holds no text — what gives Backspace its
+    /// `⌫ unqueue` meaning up in the cockpit.
+    pub fn is_empty(&self) -> bool {
+        self.line.text().is_empty()
+    }
+
     fn backspace(&mut self, _: &Backspace, _: &mut Window, cx: &mut Context<Self>) {
+        // On an empty line the key means `⌫ unqueue` (PromptBox state 04):
+        // it bubbles to the cockpit, which owns the queue.
+        if self.line.text().is_empty() {
+            cx.propagate();
+            return;
+        }
         self.line.backspace();
         cx.notify();
     }
@@ -321,12 +333,13 @@ impl Element for LineElement {
             let x = line.x_for_index(cursor);
             (
                 None,
+                // The comps' block cursor: solid accent, 7px wide.
                 Some(fill(
                     Bounds::new(
                         point(bounds.left() + x, bounds.top()),
-                        gpui::size(px(7.), bounds.bottom() - bounds.top()),
+                        gpui::size(px(crate::theme::CURSOR_W), bounds.bottom() - bounds.top()),
                     ),
-                    rgba(0xf3f4f766),
+                    gpui::rgb(crate::theme::ACCENT),
                 )),
             )
         } else {
@@ -344,7 +357,7 @@ impl Element for LineElement {
                     ),
                     // The transcript's selection wash: one selection colour
                     // everywhere, whoever paints it.
-                    rgba(crate::pane::BG_SELECTED),
+                    rgba(crate::theme::SELECTION),
                 )),
                 None,
             )
