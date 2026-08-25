@@ -35,6 +35,17 @@ const CODE_KEYWORD: u32 = 0x8fa8f0;
 const CODE_STRING: u32 = 0x9ec78a;
 const CODE_NUMBER: u32 = 0xd0a26a;
 const BG_DECISION: u32 = 0x171310;
+/// The selection wash. The Composer paints the same value under its own
+/// selection (crate::composer reads this const), so selected text reads the
+/// same everywhere.
+pub const BG_SELECTED: u32 = 0x3f6ea830;
+/// One translucent step up whatever sits underneath: the inline-code wash,
+/// and the hover shade for rows that have no background of their own.
+const BG_HOVER: u32 = 0x2323234d;
+/// Hover on the two cards that already paint solid backgrounds — one step up
+/// each card's own colour, staying inside the pane's ramp.
+const BG_CODE_HOVER: u32 = 0x191919;
+const BG_DECISION_HOVER: u32 = 0x1e1813;
 
 /// One Pane's view state: what the window owns per Thread. Everything it
 /// shows lives in core; this is the keyboard and the scrollback position.
@@ -65,6 +76,9 @@ pub struct PaneState<'a> {
     pub workspace: Option<&'a WorkspaceBinding>,
     pub focused: bool,
     pub blocked: bool,
+    /// The Blocks a drag swept, as indices into the Thread's blocks. The
+    /// cockpit owns the drag; the Pane only paints the wash.
+    pub selected: Option<std::ops::RangeInclusive<usize>>,
 }
 
 /// One Pane. A Thread with no transcript is one the cockpit could not open;
@@ -77,6 +91,7 @@ pub fn render_pane(view: &PaneView, state: PaneState<'_>, level: Level) -> impl 
         workspace,
         focused,
         blocked,
+        selected,
     } = state;
     // One border rule for every level, so focus reads the same at arm's length
     // as it does across the room.
@@ -115,7 +130,7 @@ pub fn render_pane(view: &PaneView, state: PaneState<'_>, level: Level) -> impl 
     match transcript {
         Some(transcript) => {
             pane = pane
-                .child(body(view, transcript, level.visible_blocks()))
+                .child(body(view, transcript, level.visible_blocks(), selected))
                 .child(status_line(transcript));
         }
         None => {
@@ -315,7 +330,12 @@ fn header(
         )
 }
 
-fn body(view: &PaneView, transcript: &Transcript, visible: usize) -> impl IntoElement {
+fn body(
+    view: &PaneView,
+    transcript: &Transcript,
+    visible: usize,
+    selected: Option<std::ops::RangeInclusive<usize>>,
+) -> impl IntoElement {
     let mut body = div()
         .id(("transcript", view.thread.get() as usize))
         .flex()
@@ -330,8 +350,11 @@ fn body(view: &PaneView, transcript: &Transcript, visible: usize) -> impl IntoEl
         .text_size(px(12.));
     let blocks = transcript.blocks();
     let tail = blocks.len().saturating_sub(visible);
-    for block in &blocks[tail..] {
-        body = body.child(render_block(block));
+    for (offset, block) in blocks[tail..].iter().enumerate() {
+        let picked = selected
+            .as_ref()
+            .is_some_and(|range| range.contains(&(tail + offset)));
+        body = body.child(render_block(block, picked));
     }
     body
 }
@@ -363,6 +386,7 @@ fn status_line(transcript: &Transcript) -> impl IntoElement {
         .border_t_1()
         .border_color(rgb(HAIRLINE))
         .text_size(px(10.))
+        .hover(|line| line.bg(rgba(BG_HOVER)))
         .child(div().text_color(rgb(color)).child(label))
         .child(
             div()
@@ -418,8 +442,13 @@ fn queued_line(held: &str) -> impl IntoElement {
 
 /// One Block, drawn at terminal density: no card chrome anywhere it can be
 /// avoided, one hairline where structure genuinely needs a boundary.
-fn render_block(block: &Block) -> AnyElement {
-    let row = div().w_full().flex_shrink_0();
+/// A selected Block carries the wash; whole Blocks are the selection unit
+/// because gpui 0.2.2 has no character-level selection over rendered text.
+fn render_block(block: &Block, selected: bool) -> AnyElement {
+    let row = div()
+        .w_full()
+        .flex_shrink_0()
+        .when(selected, |row| row.bg(rgba(BG_SELECTED)));
     match &block.body {
         Body::Prompt(line) => row
             .text_color(rgb(TEXT_PRIMARY))
@@ -491,6 +520,8 @@ fn render_tool(row: Div, tool: &ToolBlock) -> AnyElement {
             .flex_row()
             .gap(px(6.))
             .text_size(px(11.))
+            // The row the pointer is on, findable in a dense transcript.
+            .hover(|row| row.bg(rgba(BG_HOVER)))
             .child(
                 div()
                     .flex_shrink_0()
@@ -547,6 +578,7 @@ fn render_diff(diff: &Diff) -> impl IntoElement {
         .flex_col()
         .ml(px(14.))
         .bg(rgb(BG_CODE))
+        .hover(|card| card.bg(rgb(BG_CODE_HOVER)))
         .border_1()
         .border_color(rgb(BORDER))
         .rounded_sm()
@@ -607,6 +639,7 @@ fn decision_card(decision: &Decision) -> Div {
         .border_t_1()
         .border_color(rgb(TEXT_NOTICE))
         .bg(rgb(BG_DECISION))
+        .hover(|card| card.bg(rgb(BG_DECISION_HOVER)))
         .child(
             div()
                 .flex()
@@ -627,6 +660,37 @@ fn decision_card(decision: &Decision) -> Div {
                 "y allow · n deny"
             },
         ))
+}
+
+/// A Block's text as the clipboard should carry it: what the row shows,
+/// without colour or state glyphs. Exhaustive on purpose — a new Body kind
+/// must decide what copying it means.
+pub fn block_text(block: &Block) -> String {
+    fn flat(spans: &[Span]) -> String {
+        spans.iter().map(|span| span.text.as_str()).collect()
+    }
+    match &block.body {
+        Body::Prompt(line) => format!("❯ {line}"),
+        Body::Paragraph { spans } | Body::Heading { spans, .. } => flat(spans),
+        Body::Bullet { spans } => format!("• {}", flat(spans)),
+        Body::Thinking(text) | Body::Notice(text) | Body::Meta(text) => text.clone(),
+        Body::Code { source, .. } => source.clone(),
+        Body::Tool(tool) => {
+            let mut lines = vec![format!("{} {}", tool.name, tool.summary)];
+            if let ToolState::Failed(message) = &tool.state {
+                lines.push(message.clone());
+            }
+            if let Some(diff) = &tool.diff {
+                lines.push(format!("{} +{} −{}", diff.path, diff.added, diff.removed));
+                lines.extend(
+                    diff.hunks
+                        .iter()
+                        .flat_map(|hunk| hunk.lines.iter().cloned()),
+                );
+            }
+            lines.join("\n")
+        }
+    }
 }
 
 /// Token counts read at a glance, not to the digit.
@@ -651,7 +715,7 @@ fn inline(spans: &[Span]) -> StyledText {
                 start..text.len(),
                 HighlightStyle {
                     color: Some(rgb(TEXT_CODE).into()),
-                    background_color: Some(rgba(0x2323234d).into()),
+                    background_color: Some(rgba(BG_HOVER).into()),
                     ..Default::default()
                 },
             ));
@@ -699,7 +763,7 @@ mod tests {
     use super::*;
     use ferrite_core::transcript::{Input, Lexer};
     use ferrite_core::{Hunk, SessionEvent, ToolResult, TurnOutcome};
-    use gpui::{point, size, TestAppContext};
+    use gpui::{size, TestAppContext};
     use std::sync::Arc;
 
     /// A transcript holding one of every Block kind the Pane can draw.
@@ -769,15 +833,47 @@ mod tests {
         transcript
     }
 
-    struct Blank;
+    /// Renders Blocks through a real view: hover styles look up the view
+    /// they are painting under, which a bare `cx.draw` does not have.
+    struct ShowsBlocks {
+        blocks: Vec<Block>,
+    }
 
-    impl Render for Blank {
+    impl Render for ShowsBlocks {
         fn render(
             &mut self,
             _window: &mut gpui::Window,
             _cx: &mut Context<Self>,
         ) -> impl IntoElement {
             div()
+                .flex()
+                .flex_col()
+                .w(px(900.))
+                .font_family(crate::MONO_FONT)
+                .text_size(px(12.))
+                .children(self.blocks.iter().map(|block| render_block(block, false)))
+                // And once more selected, so the wash paints on every kind.
+                .children(self.blocks.iter().map(|block| render_block(block, true)))
+        }
+    }
+
+    struct ShowsDecisions {
+        decisions: Vec<Decision>,
+    }
+
+    impl Render for ShowsDecisions {
+        fn render(
+            &mut self,
+            _window: &mut gpui::Window,
+            _cx: &mut Context<Self>,
+        ) -> impl IntoElement {
+            div()
+                .flex()
+                .flex_col()
+                .w(px(900.))
+                .font_family(crate::MONO_FONT)
+                .text_size(px(12.))
+                .children(self.decisions.iter().map(decision_card))
         }
     }
 
@@ -843,19 +939,33 @@ mod tests {
             assert!(kinds.contains(&wanted), "no {wanted} block in {kinds:?}");
         }
 
-        let (_, cx) = cx.add_window_view(|_, _| Blank);
-        cx.draw(
-            point(px(0.), px(0.)),
-            size(px(900.), px(600.)),
-            |_window, _cx| {
-                div()
-                    .flex()
-                    .flex_col()
-                    .w(px(900.))
-                    .font_family(crate::MONO_FONT)
-                    .text_size(px(12.))
-                    .children(blocks.iter().map(render_block))
-            },
+        let (_, cx) = cx.add_window_view(|_, _| ShowsBlocks { blocks });
+        // A resize forces a real layout-and-paint pass through the view.
+        cx.simulate_resize(size(px(900.), px(600.)));
+        cx.run_until_parked();
+    }
+
+    /// AC2's copy half needs every Block kind to say what it is as text —
+    /// an empty string here would copy as a silent hole.
+    #[test]
+    fn every_block_kind_has_clipboard_text() {
+        let transcript = every_kind();
+        for block in transcript.blocks() {
+            assert!(
+                !block_text(block).trim().is_empty(),
+                "no clipboard text for {block:?}"
+            );
+        }
+        let by_kind: Vec<String> = transcript.blocks().iter().map(block_text).collect();
+        let all = by_kind.join("\n");
+        assert!(all.contains("❯ run the tests"), "the prompt line: {all}");
+        assert!(
+            all.contains("fn main() {}"),
+            "code copies its source: {all}"
+        );
+        assert!(
+            all.contains("+delta") && all.contains("-bravo"),
+            "a diff copies its lines: {all}"
         );
     }
 
@@ -879,20 +989,10 @@ mod tests {
             ..decision.clone()
         };
 
-        let (_, cx) = cx.add_window_view(|_, _| Blank);
-        cx.draw(
-            point(px(0.), px(0.)),
-            size(px(900.), px(300.)),
-            |_window, _cx| {
-                div()
-                    .flex()
-                    .flex_col()
-                    .w(px(900.))
-                    .font_family(crate::MONO_FONT)
-                    .text_size(px(12.))
-                    .child(decision_card(&decision))
-                    .child(decision_card(&unreadable))
-            },
-        );
+        let (_, cx) = cx.add_window_view(|_, _| ShowsDecisions {
+            decisions: vec![decision, unreadable],
+        });
+        cx.simulate_resize(size(px(900.), px(300.)));
+        cx.run_until_parked();
     }
 }

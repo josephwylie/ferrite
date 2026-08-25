@@ -342,7 +342,9 @@ impl Element for LineElement {
                             bounds.bottom(),
                         ),
                     ),
-                    rgba(0x3f6ea830),
+                    // The transcript's selection wash: one selection colour
+                    // everywhere, whoever paints it.
+                    rgba(crate::pane::BG_SELECTED),
                 )),
                 None,
             )

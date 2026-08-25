@@ -41,6 +41,9 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
         ("home".into(), "composer::Home", None),
         ("end".into(), "composer::End", None),
         (with_primary("v"), "composer::Paste", None),
+        // Copy the transcript selection a drag made; with nothing selected
+        // the key does nothing (the Composer has no selection of its own).
+        (with_primary("c"), "cockpit::CopySelection", None),
         ("enter".into(), "cockpit::Submit", None),
         ("escape".into(), "cockpit::Interrupt", None),
         // Only while a Decision holds the keyboard: elsewhere these are
@@ -88,6 +91,7 @@ mod tests {
     fn primary_shortcuts_are_cmd_on_mac_and_ctrl_on_windows() {
         let expected = [
             ("composer::Paste", "v"),
+            ("cockpit::CopySelection", "c"),
             ("cockpit::NextPane", "]"),
             ("cockpit::PreviousPane", "["),
             ("cockpit::NextDecision", "d"),
