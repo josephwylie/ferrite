@@ -178,6 +178,11 @@ pub struct CodexCapabilities {
 /// A live Codex Session: one app-server process serving one Thread.
 pub struct CodexSession {
     child: Arc<Mutex<Child>>,
+    /// The Session's whole process tree. An npm `.cmd` install makes `child`
+    /// cmd.exe with the real CLI beneath it; the job is how kill reaches the
+    /// CLI and how the watchdog learns which pid to meter.
+    #[cfg(windows)]
+    job: super::job::SessionJob,
     /// Held open for the life of the Session: closing it ends the Session,
     /// so multi-turn depends on this staying alive.
     stdin: ChildStdin,
@@ -214,6 +219,16 @@ impl CodexSession {
             .spawn()
             .map_err(|e| spawn_error(&program, e))?;
 
+        // Into the job as CreateProcess returns — in practice before a
+        // `.cmd` shim's cmd.exe has executed a line, though nothing suspends
+        // the child, so a CLI it somehow started first would sit outside the
+        // job (accepted residual risk; airtight needs CREATE_SUSPENDED,
+        // which std does not expose). A Session whose kill cannot work is
+        // refused.
+        #[cfg(windows)]
+        let job =
+            super::job::SessionJob::assign_or_reap(&mut child).map_err(CodexSpawnError::Io)?;
+
         let stdin = child.stdin.take().expect("stdin was piped");
         let stdout = child.stdout.take().expect("stdout was piped");
         let stderr = child.stderr.take().expect("stderr was piped");
@@ -234,6 +249,8 @@ impl CodexSession {
 
         let mut session = Self {
             child,
+            #[cfg(windows)]
+            job,
             stdin,
             events,
             capabilities: CodexCapabilities::default(),
@@ -391,8 +408,18 @@ impl CodexSession {
     }
 
     /// The process this Session runs, for a watchdog counting its memory.
+    #[cfg(not(windows))]
     pub fn pid(&self) -> Option<u32> {
         self.child.lock().ok().map(|child| child.id())
+    }
+
+    /// The process the watchdog should meter. Under an npm `.cmd` shim the
+    /// child is a ~5MB cmd.exe and the CLI leaks beneath it, so the job
+    /// answers with the wrapper's child instead.
+    #[cfg(windows)]
+    pub fn pid(&self) -> Option<u32> {
+        let wrapper = self.child.lock().ok().map(|child| child.id())?;
+        Some(self.job.watchdog_pid(wrapper))
     }
 
     /// The bounded event stream. Poll with `try_recv`/`try_iter`; the UI
@@ -419,6 +446,12 @@ impl CodexSession {
 
 impl Drop for CodexSession {
     fn drop(&mut self) {
+        // A `.cmd` shim's Session is a tree; killing only the wrapper would
+        // orphan the CLI. The job takes all of it down, wrapper included.
+        // The handshake-failure path in `spawn` kills only the wrapper; the
+        // rest of its tree dies here when the failed Session is dropped.
+        #[cfg(windows)]
+        self.job.terminate();
         let mut child = lock(&self.child);
         let _ = child.kill();
         let _ = child.wait();

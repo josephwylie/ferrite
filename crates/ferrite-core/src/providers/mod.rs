@@ -11,6 +11,10 @@ use crate::{DecisionAnswer, SessionEvent};
 
 mod claude;
 mod codex;
+// The Win32 calls are cfg(windows); the pid-selection logic inside is pure
+// and part of the host suite, like `cmd_shim` below.
+#[cfg(any(windows, test))]
+mod job;
 
 /// The program `Command::new` should exec for a configured CLI name.
 ///
@@ -67,8 +71,11 @@ pub trait Session {
     fn interrupt(&mut self) -> io::Result<()>;
     fn respond_to_decision(&mut self, id: &str, answer: DecisionAnswer) -> io::Result<()>;
 
-    /// The Session's own process, for whoever is watching memory. `None` when
+    /// The process whoever is watching memory should meter. `None` when
     /// there is no process — a scripted Session in a test, for instance.
+    /// Providers answer the process worth metering: under a Windows `.cmd`
+    /// shim that is the CLI beneath the cmd.exe wrapper, not the ~5MB
+    /// wrapper itself.
     fn pid(&self) -> Option<u32> {
         None
     }

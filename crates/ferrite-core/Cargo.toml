@@ -9,5 +9,18 @@ description = "Ferrite headless core: providers, transcript, store, workspace. N
 serde = { workspace = true }
 serde_json = { workspace = true }
 
+# An npm-installed provider CLI on Windows is a `.cmd` shim: the Session's
+# child is cmd.exe with the real CLI beneath it, and only a Job Object can
+# kill or meter that whole tree. Threading is for the Windows CI tests that
+# prove the grandchild dies. ADR-0001 bars gpui from core, not windows-sys.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
+
 [dev-dependencies]
 serde_json = { workspace = true }
