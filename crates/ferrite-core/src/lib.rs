@@ -8,6 +8,7 @@ pub mod cockpit;
 pub mod providers;
 pub mod store;
 pub mod transcript;
+pub mod workspace;
 
 mod session_event;
 mod thread;

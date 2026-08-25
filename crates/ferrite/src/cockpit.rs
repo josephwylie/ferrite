@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use ferrite_core::cockpit::Cockpit;
 use ferrite_core::store::Provider;
+use ferrite_core::workspace::WorkspaceChoice;
 use ferrite_core::{DecisionAnswer, ThreadId};
 use gpui::prelude::*;
 use gpui::{actions, div, px, rgb, Context, Focusable, SharedString, Window};
@@ -247,7 +248,7 @@ impl CockpitView {
             .focused_thread()
             .and_then(|thread| self.cockpit.provider(thread))
             .unwrap_or(Provider::Claude);
-        match self.cockpit.open(provider) {
+        match self.cockpit.open(provider, main_here()) {
             Ok(thread) => {
                 self.panes.push(PaneView::new(thread, cx));
                 self.focused = self.panes.len() - 1;
@@ -416,6 +417,14 @@ impl CockpitView {
     }
 }
 
+/// Where a new Thread works. The main checkout until #10's New-Thread flow
+/// offers the operator the worktree choice.
+fn main_here() -> WorkspaceChoice {
+    WorkspaceChoice::Main {
+        checkout: std::env::current_dir().unwrap_or_else(|_| ".".into()),
+    }
+}
+
 /// This process's resident memory, for the perf print.
 fn rss_mb() -> f64 {
     crate::session::rss_bytes(std::process::id())
@@ -437,7 +446,7 @@ pub fn threads_for(cockpit: &mut Cockpit, wanted: usize, provider: Provider) -> 
         }
     }
     while shown.len() < wanted {
-        match cockpit.open(provider) {
+        match cockpit.open(provider, main_here()) {
             Ok(id) => shown.push(id),
             Err(e) => {
                 eprintln!("ferrite: could not open a thread: {e}");
@@ -494,6 +503,7 @@ mod tests {
             &mut self,
             _provider: Provider,
             _resume: Option<&str>,
+            _cwd: Option<&std::path::Path>,
         ) -> std::io::Result<Box<dyn Session>> {
             let (tx, rx) = mpsc::channel();
             self.streams.borrow_mut().push(tx);
@@ -512,7 +522,7 @@ mod tests {
         let store = Store::open(scratch(name)).unwrap();
         let mut cockpit = Cockpit::new(store, Box::new(fake.clone()));
         for _ in 0..panes {
-            cockpit.open(Provider::Claude).unwrap();
+            cockpit.open(Provider::Claude, main_here()).unwrap();
         }
         (cockpit, fake)
     }

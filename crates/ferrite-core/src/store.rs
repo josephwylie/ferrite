@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::workspace::{WorkspaceBinding, WorkspaceChoice};
 use crate::SessionEvent;
 use crate::{transcript::Input, ThreadId};
 
@@ -27,7 +28,10 @@ use crate::{transcript::Input, ThreadId};
 ///   the structured `result` on `tool_completed` (a diff card cannot be
 ///   redrawn from prose). A v1 log loads with no prompts and every result
 ///   `Opaque` — exactly what v1 recorded, nothing invented.
-const SCHEMA_VERSION: u32 = 2;
+/// - **3** — the workspace binding in the header (the checkout a Thread
+///   works in must survive a restart). A v1/v2 log loads with no binding —
+///   those Threads never recorded where they worked.
+const SCHEMA_VERSION: u32 = 3;
 
 /// Which agent backend serves this Thread — persisted so a restart knows
 /// which provider to revive the Thread on.
@@ -82,11 +86,52 @@ impl From<io::Error> for LoadError {
     }
 }
 
-/// The first line of every log: what wrote it, for what provider.
+/// The first line of every log: what wrote it, for what provider, working
+/// where.
 #[derive(Serialize, Deserialize)]
 struct Header {
     schema: u32,
     provider: Provider,
+    /// Schema 3+; a v1/v2 header loads as `None` — those Threads never
+    /// recorded a binding.
+    #[serde(default)]
+    workspace: Option<PersistedBinding>,
+}
+
+/// The persisted form of a Thread's workspace binding, mirroring
+/// `workspace::WorkspaceBinding` shape for shape — but the store's own type,
+/// so the live vocabulary can change without rewriting anyone's history.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum PersistedBinding {
+    Main { checkout: PathBuf },
+    Worktree { repo: PathBuf, path: PathBuf },
+}
+
+impl PersistedBinding {
+    fn from_live(binding: &WorkspaceBinding) -> Self {
+        match binding {
+            WorkspaceBinding::Main { checkout } => PersistedBinding::Main {
+                checkout: checkout.clone(),
+            },
+            WorkspaceBinding::Worktree { repo, path } => PersistedBinding::Worktree {
+                repo: repo.clone(),
+                path: path.clone(),
+            },
+        }
+    }
+
+    fn live(&self) -> WorkspaceBinding {
+        match self {
+            PersistedBinding::Main { checkout } => WorkspaceBinding::Main {
+                checkout: checkout.clone(),
+            },
+            PersistedBinding::Worktree { repo, path } => WorkspaceBinding::Worktree {
+                repo: repo.clone(),
+                path: path.clone(),
+            },
+        }
+    }
 }
 
 /// One line of the log body: the persisted schema, owned by the store.
@@ -426,9 +471,17 @@ impl Store {
         })
     }
 
-    /// Mint a new Thread and hand back its writer. The Thread is durable
-    /// before this returns: a crash immediately after still shows it.
-    pub fn create(&self, provider: Provider) -> io::Result<(ThreadId, ThreadWriter)> {
+    /// Mint a new Thread and hand back its writer and resolved workspace
+    /// binding. The Thread is durable before this returns: a crash
+    /// immediately after still shows it. For a worktree choice the store
+    /// names the path — inside the Thread's own directory, so the
+    /// worktree's lifecycle is visibly the Thread's — but runs no git: the
+    /// caller creates the tree.
+    pub fn create(
+        &self,
+        provider: Provider,
+        workspace: WorkspaceChoice,
+    ) -> io::Result<(ThreadId, ThreadWriter, WorkspaceBinding)> {
         let mut next = self.thread_ids()?.last().map_or(1, |id| id.get() + 1);
         loop {
             match fs::create_dir(self.dir.join(next.to_string())) {
@@ -438,6 +491,13 @@ impl Store {
             }
         }
         let id = ThreadId::new(next);
+        let binding = match workspace {
+            WorkspaceChoice::Main { checkout } => WorkspaceBinding::Main { checkout },
+            WorkspaceChoice::Worktree { repo } => WorkspaceBinding::Worktree {
+                repo,
+                path: self.worktree_path(id),
+            },
+        };
 
         let mut file = OpenOptions::new()
             .create_new(true)
@@ -446,6 +506,7 @@ impl Store {
         let header = Header {
             schema: SCHEMA_VERSION,
             provider,
+            workspace: Some(PersistedBinding::from_live(&binding)),
         };
         file.write_all(line(&header)?.as_bytes())?;
         file.sync_data()?;
@@ -457,7 +518,22 @@ impl Store {
                 flush_interval: self.flush_interval,
                 buffered_since: None,
             },
+            binding,
         ))
+    }
+
+    /// Where a Thread's dedicated worktree lives: inside the Thread's own
+    /// store directory, beside its log — created at Thread creation, removed
+    /// at Thread deletion, exactly like everything else in there.
+    fn worktree_path(&self, id: ThreadId) -> PathBuf {
+        self.dir.join(id.to_string()).join("worktree")
+    }
+
+    /// Remove one Thread entirely: its log, its directory, everything in it.
+    /// The caller settles the worktree's fate first — anything still under
+    /// the Thread's directory goes with it.
+    pub fn delete(&self, id: ThreadId) -> io::Result<()> {
+        fs::remove_dir_all(self.dir.join(id.to_string()))
     }
 
     /// Every Thread in the store, sorted by creation.
@@ -501,6 +577,7 @@ impl Store {
             id,
             provider: header.provider,
             schema: header.schema,
+            workspace: header.workspace,
             records,
         })
     }
@@ -539,6 +616,7 @@ impl Store {
         let mut contents = line(&Header {
             schema: SCHEMA_VERSION,
             provider: snapshot.provider,
+            workspace: snapshot.workspace.clone(),
         })?;
         for record in &snapshot.records {
             contents.push_str(&line(record)?);
@@ -562,12 +640,19 @@ pub struct ThreadSnapshot {
     /// The schema the log on disk declares — what tells `writer` an old log
     /// needs upgrading before anything lands after it.
     schema: u32,
+    workspace: Option<PersistedBinding>,
     records: Vec<Record>,
 }
 
 impl ThreadSnapshot {
     pub fn provider(&self) -> Provider {
         self.provider
+    }
+
+    /// The checkout this Thread works in. `None` for a log from before
+    /// schema 3, which never recorded one.
+    pub fn workspace(&self) -> Option<WorkspaceBinding> {
+        self.workspace.as_ref().map(PersistedBinding::live)
     }
 
     /// The provider-native id the next Session resumes with — the latest the
@@ -684,6 +769,118 @@ mod tests {
         dir
     }
 
+    /// The binding for tests that are not about bindings.
+    fn main_choice() -> WorkspaceChoice {
+        WorkspaceChoice::Main {
+            checkout: std::env::temp_dir(),
+        }
+    }
+
+    /// A Thread's workspace binding is part of what a restart restores:
+    /// both shapes round-trip, and the worktree's path is the store's own
+    /// placement — inside the Thread's directory.
+    #[test]
+    fn a_thread_s_workspace_binding_survives_reopening_the_store() {
+        let dir = scratch("binding");
+        let store = Store::open(&dir).unwrap();
+        let (main_id, _writer, main_binding) = store
+            .create(
+                Provider::Claude,
+                WorkspaceChoice::Main {
+                    checkout: "/repos/project".into(),
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            main_binding,
+            WorkspaceBinding::Main {
+                checkout: "/repos/project".into(),
+            }
+        );
+        let (wt_id, _writer, wt_binding) = store
+            .create(
+                Provider::Codex,
+                WorkspaceChoice::Worktree {
+                    repo: "/repos/project".into(),
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            wt_binding,
+            WorkspaceBinding::Worktree {
+                repo: "/repos/project".into(),
+                path: dir.join(wt_id.to_string()).join("worktree"),
+            }
+        );
+
+        // The fake restart: nothing survives but the directory.
+        let store = Store::open(&dir).unwrap();
+        assert_eq!(store.load(main_id).unwrap().workspace(), Some(main_binding));
+        assert_eq!(store.load(wt_id).unwrap().workspace(), Some(wt_binding));
+    }
+
+    /// Deletion is per-Thread and total: the log directory goes, the other
+    /// Threads stay.
+    #[test]
+    fn a_deleted_thread_is_gone_and_its_neighbours_are_not() {
+        let dir = scratch("delete");
+        let store = Store::open(&dir).unwrap();
+        let (first, _writer, _) = store.create(Provider::Claude, main_choice()).unwrap();
+        let (second, _writer, _) = store.create(Provider::Codex, main_choice()).unwrap();
+
+        store.delete(first).unwrap();
+
+        assert_eq!(store.thread_ids().unwrap(), vec![second]);
+        assert!(store.load(first).is_err(), "a deleted Thread must not load");
+        assert!(store.load(second).is_ok());
+    }
+
+    /// The frozen contract for schema 2, byte for byte what its writer
+    /// produced: prompts and structured results, but no workspace binding.
+    /// Logs like this exist on disks; they must load forever.
+    const V2_LOG: &str = concat!(
+        r#"{"schema":2,"provider":"claude"}"#,
+        "\n",
+        r#"{"type":"init","session_id":"v2-era-4f2a","model":"claude-haiku-4-5"}"#,
+        "\n",
+        r#"{"type":"prompt","text":"fix the typo"}"#,
+        "\n",
+        r#"{"type":"text","text":"done"}"#,
+        "\n",
+        r#"{"type":"turn_ended","outcome":"completed","cost_usd":null}"#,
+        "\n",
+    );
+
+    /// AC (schema story): loading a log written at schema v2 succeeds after
+    /// the bump to v3 — with no binding, exactly what v2 recorded.
+    #[test]
+    fn a_log_written_at_schema_v2_still_loads_after_the_bump() {
+        let dir = scratch("v2");
+        plant_log(&dir, "9", V2_LOG);
+
+        let thread = Store::open(&dir).unwrap().load(ThreadId::new(9)).unwrap();
+        assert_eq!(thread.provider(), Provider::Claude);
+        assert_eq!(thread.workspace(), None);
+        assert_eq!(thread.resume_target(), Some("v2-era-4f2a"));
+        assert_eq!(
+            thread.inputs(),
+            vec![
+                Input::Event(SessionEvent::Init {
+                    session_id: "v2-era-4f2a".into(),
+                    model: "claude-haiku-4-5".into(),
+                }),
+                Input::Prompt("fix the typo".into()),
+                Input::Event(SessionEvent::TextDelta {
+                    text: "done".into(),
+                }),
+                Input::Event(SessionEvent::TurnEnded {
+                    outcome: TurnOutcome::Completed,
+                    cost_usd: None,
+                }),
+            ]
+        );
+    }
+
     /// A realistic Claude-shaped turn: identity, thinking, markdown streamed
     /// in ragged deltas, a tool run, a paid ending.
     fn claude_turn() -> Vec<SessionEvent> {
@@ -787,7 +984,7 @@ mod tests {
     fn no_durable_write_ever_occurs_per_delta() {
         let dir = scratch("no-per-delta");
         let store = Store::open(&dir).unwrap();
-        let (id, mut writer) = store.create(Provider::Claude).unwrap();
+        let (id, mut writer, _) = store.create(Provider::Claude, main_choice()).unwrap();
         let log = dir.join(id.to_string()).join("log.jsonl");
 
         for seed in 0..32u64 {
@@ -821,7 +1018,7 @@ mod tests {
     fn a_long_turn_flushes_on_the_interval_not_per_delta() {
         let dir = scratch("interval");
         let store = Store::with_flush_interval(&dir, std::time::Duration::from_millis(50)).unwrap();
-        let (id, mut writer) = store.create(Provider::Claude).unwrap();
+        let (id, mut writer, _) = store.create(Provider::Claude, main_choice()).unwrap();
         let log = dir.join(id.to_string()).join("log.jsonl");
         let header_len = fs::metadata(&log).unwrap().len();
 
@@ -857,7 +1054,7 @@ mod tests {
     fn a_crash_torn_tail_never_loses_the_thread() {
         let dir = scratch("torn");
         let store = Store::open(&dir).unwrap();
-        let (id, mut writer) = store.create(Provider::Claude).unwrap();
+        let (id, mut writer, _) = store.create(Provider::Claude, main_choice()).unwrap();
         writer.record_prompt("try the café fix").unwrap();
         for event in claude_turn() {
             writer.record_event(&event).unwrap();
@@ -999,7 +1196,7 @@ mod tests {
             .unwrap()
             .to_string();
         assert!(
-            first_line.contains("\"schema\":2"),
+            first_line.contains("\"schema\":3"),
             "the log still declares the old schema: {first_line}"
         );
 
@@ -1084,7 +1281,7 @@ mod tests {
             &dir,
             "3",
             concat!(
-                r#"{"schema":3,"provider":"claude"}"#,
+                r#"{"schema":4,"provider":"claude"}"#,
                 "\n",
                 r#"{"type":"init","session_id":"from-the-future","model":"m"}"#,
                 "\n",
@@ -1094,7 +1291,7 @@ mod tests {
         let store = Store::open(&dir).unwrap();
         match store.load(ThreadId::new(3)) {
             Err(LoadError::FutureSchema { found, supported }) => {
-                assert_eq!(found, 3);
+                assert_eq!(found, 4);
                 assert_eq!(supported, SCHEMA_VERSION);
             }
             Ok(_) => panic!("a future schema must not load"),
@@ -1109,7 +1306,7 @@ mod tests {
     fn the_operator_prompt_and_the_diff_card_survive_the_round_trip() {
         let dir = scratch("prompt-diff");
         let store = Store::open(&dir).unwrap();
-        let (id, mut writer) = store.create(Provider::Claude).unwrap();
+        let (id, mut writer, _) = store.create(Provider::Claude, main_choice()).unwrap();
 
         let mut live = Transcript::default();
         writer.record_prompt("fix the typo").unwrap();
@@ -1167,7 +1364,7 @@ mod tests {
     fn a_codex_turn_keeps_its_reasoning_and_token_accounting() {
         let dir = scratch("codex");
         let store = Store::open(&dir).unwrap();
-        let (id, mut writer) = store.create(Provider::Codex).unwrap();
+        let (id, mut writer, _) = store.create(Provider::Codex, main_choice()).unwrap();
 
         let usage = SessionEvent::TokenUsage {
             total_tokens: 900,
@@ -1241,7 +1438,7 @@ mod tests {
     fn a_flushed_turn_replays_identically_after_reopening() {
         let dir = scratch("roundtrip");
         let store = Store::open(&dir).unwrap();
-        let (id, mut writer) = store.create(Provider::Claude).unwrap();
+        let (id, mut writer, _) = store.create(Provider::Claude, main_choice()).unwrap();
 
         let mut live = Transcript::default();
         for event in claude_turn() {
@@ -1267,7 +1464,7 @@ mod tests {
         let dir = scratch("reopen");
         {
             let store = Store::open(&dir).unwrap();
-            let (id, _writer) = store.create(Provider::Claude).unwrap();
+            let (id, _writer, _) = store.create(Provider::Claude, main_choice()).unwrap();
             assert_eq!(id.to_string(), "1");
         }
 

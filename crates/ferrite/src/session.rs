@@ -3,6 +3,7 @@
 //! exercises the real render path without spawning a CLI.
 
 use std::io;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
@@ -85,14 +86,23 @@ pub struct Spawn {
 }
 
 impl Spawner for Spawn {
-    fn spawn(&mut self, provider: Provider, resume: Option<&str>) -> io::Result<Box<dyn Session>> {
+    fn spawn(
+        &mut self,
+        provider: Provider,
+        resume: Option<&str>,
+        cwd: Option<&Path>,
+    ) -> io::Result<Box<dyn Session>> {
         if self.load {
             return Ok(Box::new(streaming()));
         }
         if self.demo {
             return Ok(Box::new(DemoSession::start()));
         }
-        let cwd = std::env::current_dir().ok();
+        // The Thread's workspace binding decides where the Session works; a
+        // Thread from before bindings falls back to where Ferrite started.
+        let cwd = cwd
+            .map(|dir| dir.to_path_buf())
+            .or_else(|| std::env::current_dir().ok());
         match provider {
             Provider::Claude => ClaudeSession::spawn(ClaudeConfig {
                 cwd,
