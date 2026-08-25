@@ -94,6 +94,11 @@ fn parse_user(value: &Value) -> Option<SessionEvent> {
 /// The control protocol runs both ways down the same pipes. The CLI's only
 /// request against 2.1.243 is `can_use_tool`; anything else it grows later is
 /// ignored, which leaves the turn hanging but never corrupts the stream.
+///
+/// TODO(#5): a `can_use_tool` missing `tool_use_id`/`tool_name` is also
+/// dropped by the `?` chain below — the CLI then waits forever on an answer
+/// Ferrite never knew to ask for. Never seen on 2.1.243; when #5 handles
+/// stale Decisions, surface this as a visible failure instead.
 fn parse_control_request(value: &Value) -> Option<SessionEvent> {
     let request = value.get("request")?;
     if request.get("subtype")?.as_str()? != "can_use_tool" {
