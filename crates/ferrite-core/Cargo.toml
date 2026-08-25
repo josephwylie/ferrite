@@ -8,3 +8,6 @@ description = "Ferrite headless core: providers, transcript, store, workspace. N
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
