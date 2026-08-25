@@ -1,0 +1,4 @@
+{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"clientInfo": {"name": "ferrite", "version": "0.1.0"}}}
+{"jsonrpc": "2.0", "method": "initialized"}
+{"jsonrpc": "2.0", "id": 2, "method": "thread/resume", "params": {"cwd": "/workspace", "model": "gpt-5.4-mini", "approvalPolicy": "never", "sandbox": "read-only", "threadId": "01a03762-b13e-7e51-8767-b0d1f268b016"}}
+{"jsonrpc": "2.0", "id": 3, "method": "turn/start", "params": {"threadId": "01a03762-b13e-7e51-8767-b0d1f268b016", "input": [{"type": "text", "text": "What is the codeword? Reply with the codeword only."}]}}

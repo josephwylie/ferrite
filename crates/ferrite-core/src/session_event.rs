@@ -61,6 +61,29 @@ pub enum SessionEvent {
         outcome: TurnOutcome,
         cost_usd: Option<f64>,
     },
+    /// A slice of a reasoning summary streamed in (Codex). Not a thinking
+    /// delta: Codex never streams raw chain-of-thought over app-server —
+    /// these are the model-authored summaries of hidden reasoning, arriving
+    /// part by part.
+    ReasoningSummaryDelta {
+        text: String,
+        /// Which summary part this delta extends; a new index starts a new
+        /// part, so a Pane can break paragraphs where the provider did.
+        summary_index: u64,
+    },
+    /// Cumulative token accounting for the Session (Codex). Codex reports
+    /// spend in tokens against a context window, never in dollars —
+    /// `TurnEnded::cost_usd` stays `None` for it, and this event is where its
+    /// cost and compaction risk actually live.
+    TokenUsage {
+        total_tokens: u64,
+        input_tokens: u64,
+        cached_input_tokens: u64,
+        output_tokens: u64,
+        reasoning_output_tokens: u64,
+        /// The model's context window, when the provider states it.
+        context_window: Option<u64>,
+    },
     /// The session process exited; no further events will arrive.
     Closed { reason: String },
 }

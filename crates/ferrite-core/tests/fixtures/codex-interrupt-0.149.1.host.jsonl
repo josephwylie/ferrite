@@ -1,0 +1,5 @@
+{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"clientInfo": {"name": "ferrite", "version": "0.1.0"}}}
+{"jsonrpc": "2.0", "method": "initialized"}
+{"jsonrpc": "2.0", "id": 2, "method": "thread/start", "params": {"cwd": "/workspace", "model": "gpt-5.4-mini", "approvalPolicy": "never", "sandbox": "read-only"}}
+{"jsonrpc": "2.0", "id": 3, "method": "turn/start", "params": {"threadId": "01a03762-9895-7a70-9473-868068cddd9d", "input": [{"type": "text", "text": "Count slowly from 1 to 200, one number per line. Do not stop early."}]}}
+{"jsonrpc": "2.0", "id": 4, "method": "turn/interrupt", "params": {"threadId": "01a03762-9895-7a70-9473-868068cddd9d", "turnId": "01a03762-9931-7363-8c9e-7fbca29b9548"}}

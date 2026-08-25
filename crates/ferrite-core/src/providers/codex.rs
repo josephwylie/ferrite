@@ -1,0 +1,748 @@
+//! Codex provider: the pinned `codex` CLI's app-server spoken over stdio
+//! JSON-RPC.
+//!
+//! Spawn checks the CLI version pin, then holds a two-request handshake —
+//! initialize, then thread/start (or thread/resume) — before any Session
+//! exists: a Codex Session without a thread id cannot say anything, so unlike
+//! Claude a failed handshake is a typed spawn error, not a half-alive
+//! Session. A reader thread parses stdout lines into SessionEvents on a
+//! bounded channel; backpressure is stated and simple: when the channel is
+//! full the reader blocks, the pipe fills, and the server stalls — nothing is
+//! dropped.
+
+mod wire;
+
+use std::io::{self, BufRead, BufReader, Write};
+use std::path::PathBuf;
+use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::thread;
+use std::time::{Duration, Instant};
+
+use crate::{DecisionAnswer, SessionEvent};
+
+use wire::ThreadHandshake;
+
+/// Minimum `codex` CLI version for the app-server wire the fixtures record.
+/// Vendor releases below this break loudly at spawn, not weirdly mid-turn.
+pub const CODEX_CLI_MIN_VERSION: [u64; 3] = [0, 149, 1];
+
+/// Exclusive ceiling: Ferrite is proven against the 0.x wire, and a new major
+/// is a new protocol until someone re-runs the fixture captures against it.
+pub const CODEX_CLI_MAX_VERSION_EXCLUSIVE: [u64; 3] = [1, 0, 0];
+
+/// The supported window as it is shown to operators.
+const MIN_VERSION_DISPLAY: &str = "0.149.1";
+const MAX_VERSION_DISPLAY: &str = "1.0.0";
+
+/// One frame of UI drains far less than this; the depth exists so a stalled
+/// frame throttles the server instead of losing its output.
+const EVENT_CHANNEL_CAPACITY: usize = 1024;
+
+/// Enough stderr to explain a crash, bounded so a chatty server cannot grow
+/// memory for the life of a Session.
+const STDERR_TAIL_LINES: usize = 20;
+
+/// How long spawn waits for each of its two handshake responses. Measured
+/// against `codex` 0.149.1, which answers both well under a second from a
+/// cold start; the budget is generous because overrunning it fails the spawn.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How to spawn a Codex Session.
+#[derive(Debug, Clone)]
+pub struct CodexConfig {
+    /// Program to exec. Tests point this at a stub binary.
+    pub program: String,
+    /// Working directory for the thread (the Thread's workspace binding),
+    /// passed in thread/start rather than inherited from the process.
+    pub cwd: Option<PathBuf>,
+    /// Model override passed through in thread/start.
+    pub model: Option<String>,
+    /// Approval posture for this Thread (`"untrusted"`, `"on-request"`,
+    /// `"never"`). `None` leaves the server's own configuration alone — which
+    /// on a machine configured to never ask means no Decision will ever
+    /// arrive. `capabilities().approval_policy` reports what took effect.
+    pub approval_policy: Option<String>,
+    /// Sandbox for tool runs (`"read-only"`, `"workspace-write"`,
+    /// `"danger-full-access"`). `None` keeps the server's configuration;
+    /// `capabilities().sandbox` reports what took effect.
+    pub sandbox: Option<String>,
+    /// Resume this provider-native thread id (from a previous Session's
+    /// `Init`) instead of starting a fresh thread: the server reloads the
+    /// conversation from its own rollout files.
+    pub resume: Option<String>,
+}
+
+impl Default for CodexConfig {
+    fn default() -> Self {
+        Self {
+            program: "codex".into(),
+            cwd: None,
+            model: None,
+            approval_policy: None,
+            sandbox: None,
+            resume: None,
+        }
+    }
+}
+
+/// Spawn failed before a Session existed.
+#[derive(Debug)]
+pub enum CodexSpawnError {
+    /// The CLI program was not found on this machine.
+    CliNotFound {
+        program: String,
+    },
+    /// The CLI is older than the pin. The operator upgrades the CLI.
+    CliVersionUnmet {
+        found: String,
+        required: &'static str,
+    },
+    /// The CLI is a major release beyond what Ferrite has been proven against.
+    /// The operator upgrades Ferrite — the CLI is fine.
+    CliVersionUnsupported {
+        found: String,
+        supported_below: &'static str,
+    },
+    /// `--version` ran but produced nothing parseable.
+    VersionCheckFailed {
+        detail: String,
+    },
+    /// The server did not complete the initialize/thread-start handshake: it
+    /// answered with an error, answered nonsense, exited, or timed out. A
+    /// Session with no thread cannot speak, so this fails spawn instead of
+    /// handing back something mute.
+    HandshakeFailed {
+        detail: String,
+    },
+    Io(io::Error),
+}
+
+impl std::fmt::Display for CodexSpawnError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CodexSpawnError::CliNotFound { program } => {
+                write!(f, "codex CLI not found: `{program}`")
+            }
+            CodexSpawnError::CliVersionUnmet { found, required } => {
+                write!(
+                    f,
+                    "codex CLI {found} is older than the pinned minimum {required}; \
+                     upgrade the CLI"
+                )
+            }
+            CodexSpawnError::CliVersionUnsupported {
+                found,
+                supported_below,
+            } => {
+                write!(
+                    f,
+                    "codex CLI {found} is a newer major release than Ferrite is proven \
+                     against (below {supported_below}); upgrade Ferrite"
+                )
+            }
+            CodexSpawnError::VersionCheckFailed { detail } => {
+                write!(f, "codex CLI version check failed: {detail}")
+            }
+            CodexSpawnError::HandshakeFailed { detail } => {
+                write!(f, "codex app-server handshake failed: {detail}")
+            }
+            CodexSpawnError::Io(e) => write!(f, "io error spawning codex CLI: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for CodexSpawnError {}
+
+/// What the thread/start response answered: feature detection, so a Pane
+/// never offers what this install cannot do. Every field is the server's own
+/// word — Codex has no dollar cost, no thinking stream, no input-editing on
+/// approvals, and nothing here pretends otherwise.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CodexCapabilities {
+    /// The model actually serving the thread.
+    pub model: String,
+    /// Which backend serves it (`"openai"`, or a configured alternative).
+    pub model_provider: String,
+    /// The approval policy in force. `"never"` means no Decision will ever
+    /// arrive; every other value means they can.
+    pub approval_policy: String,
+    /// The sandbox policy's own tag: `"readOnly"`, `"workspaceWrite"` or
+    /// `"dangerFullAccess"`.
+    pub sandbox: String,
+    /// The reasoning effort in force, when the server states one.
+    pub reasoning_effort: Option<String>,
+}
+
+/// A live Codex Session: one app-server process serving one Thread.
+pub struct CodexSession {
+    child: Arc<Mutex<Child>>,
+    /// Held open for the life of the Session: closing it ends the Session,
+    /// so multi-turn depends on this staying alive.
+    stdin: ChildStdin,
+    events: Receiver<SessionEvent>,
+    capabilities: CodexCapabilities,
+    thread_id: String,
+    /// The running turn's id, tracked by the reader from turn/started:
+    /// turn/interrupt must name the turn it stops.
+    current_turn: Arc<Mutex<Option<String>>>,
+    next_request_id: u64,
+}
+
+impl CodexSession {
+    /// Version-check the CLI, spawn its app-server, and hold the handshake:
+    /// initialize, initialized, then thread/start — or thread/resume when the
+    /// config names a thread to pick back up.
+    pub fn spawn(config: CodexConfig) -> Result<Self, CodexSpawnError> {
+        check_version(&config.program)?;
+
+        let mut command = Command::new(&config.program);
+        command.arg("app-server");
+        if let Some(cwd) = &config.cwd {
+            // The thread's cwd travels in thread/start; the process gets the
+            // same one so anything the server resolves against itself agrees.
+            command.current_dir(cwd);
+        }
+        let mut child = command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| spawn_error(&config.program, e))?;
+
+        let stdin = child.stdin.take().expect("stdin was piped");
+        let stdout = child.stdout.take().expect("stdout was piped");
+        let stderr = child.stderr.take().expect("stderr was piped");
+
+        let stderr_tail = Arc::new(Mutex::new(StderrTail::default()));
+        drain_stderr(stderr, Arc::clone(&stderr_tail));
+
+        let (sender, events) = sync_channel(EVENT_CHANNEL_CAPACITY);
+        let child = Arc::new(Mutex::new(child));
+        let current_turn = Arc::new(Mutex::new(None));
+        let handshake = read_stdout(
+            stdout,
+            sender,
+            Arc::clone(&child),
+            Arc::clone(&stderr_tail),
+            Arc::clone(&current_turn),
+        );
+
+        let mut session = Self {
+            child,
+            stdin,
+            events,
+            capabilities: CodexCapabilities::default(),
+            thread_id: String::new(),
+            current_turn,
+            next_request_id: 1,
+        };
+
+        // The handshake, in the server's required order. A failed one must
+        // not leak a live process: kill it and fold whatever it said on
+        // stderr into the explanation.
+        session.handshake(&config, &handshake).map_err(|detail| {
+            let mut child = lock(&session.child);
+            let _ = child.kill();
+            let _ = child.wait();
+            let stderr = settled_stderr(&stderr_tail);
+            CodexSpawnError::HandshakeFailed {
+                detail: if stderr.is_empty() {
+                    detail
+                } else {
+                    format!("{detail}\nstderr: {}", stderr.join("\n"))
+                },
+            }
+        })?;
+        Ok(session)
+    }
+
+    fn handshake(
+        &mut self,
+        config: &CodexConfig,
+        steps: &Receiver<Result<HandshakeStep, String>>,
+    ) -> Result<(), String> {
+        // Ids 1 and 2 by construction — the reader correlates exactly these,
+        // and the committed captures use the same sequence so replayed
+        // responses answer the session's own requests.
+        let id = self.take_request_id();
+        debug_assert_eq!(id, 1);
+        self.write_line(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "initialize",
+            "params": {"clientInfo": {"name": "ferrite", "version": env!("CARGO_PKG_VERSION")}},
+        }))
+        .map_err(|e| format!("could not write initialize: {e}"))?;
+        match await_step(steps, "initialize")? {
+            HandshakeStep::Initialized => {}
+            HandshakeStep::Thread(_) => return Err("thread answered before initialize".into()),
+        }
+        // Nothing in the initialize response is acted on — it names the
+        // server's home and user agent — but the protocol requires the
+        // acknowledgement before any thread traffic.
+        self.write_line(&serde_json::json!({"jsonrpc": "2.0", "method": "initialized"}))
+            .map_err(|e| format!("could not write initialized: {e}"))?;
+
+        let id = self.take_request_id();
+        let (method, mut params) = match &config.resume {
+            Some(thread_id) => ("thread/resume", serde_json::json!({"threadId": thread_id})),
+            None => ("thread/start", serde_json::json!({})),
+        };
+        if let Some(cwd) = &config.cwd {
+            params["cwd"] = serde_json::json!(cwd.display().to_string());
+        }
+        if let Some(model) = &config.model {
+            params["model"] = serde_json::json!(model);
+        }
+        if let Some(policy) = &config.approval_policy {
+            params["approvalPolicy"] = serde_json::json!(policy);
+        }
+        if let Some(sandbox) = &config.sandbox {
+            params["sandbox"] = serde_json::json!(sandbox);
+        }
+        self.write_line(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": method,
+            "params": params,
+        }))
+        .map_err(|e| format!("could not write {method}: {e}"))?;
+        match await_step(steps, method)? {
+            HandshakeStep::Thread(thread) => {
+                self.thread_id = thread.thread_id;
+                self.capabilities = thread.capabilities;
+                Ok(())
+            }
+            HandshakeStep::Initialized => Err("initialize answered twice".into()),
+        }
+    }
+
+    /// Send one user prompt; the server starts a turn on the Session's thread.
+    pub fn send(&mut self, text: &str) -> io::Result<()> {
+        let id = self.take_request_id();
+        self.write_line(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "turn/start",
+            "params": {
+                "threadId": self.thread_id,
+                "input": [{"type": "text", "text": text}],
+            },
+        }))
+    }
+
+    /// Interrupt the running turn. Codex addresses interrupts to a turn id,
+    /// so before the first turn/started has arrived there is nothing to name
+    /// and this is a no-op — the same harmless outcome as interrupting an
+    /// idle Claude Session.
+    pub fn interrupt(&mut self) -> io::Result<()> {
+        let Some(turn_id) = lock(&self.current_turn).clone() else {
+            return Ok(());
+        };
+        let id = self.take_request_id();
+        self.write_line(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "turn/interrupt",
+            "params": {"threadId": self.thread_id, "turnId": turn_id},
+        }))
+    }
+
+    /// What the thread/start response said this install can do, answered at
+    /// spawn — never assumed.
+    pub fn capabilities(&self) -> &CodexCapabilities {
+        &self.capabilities
+    }
+
+    /// Answer a `DecisionRequested`, quoting the id it arrived with.
+    ///
+    /// The server blocks the turn until this lands. Two Codex capability
+    /// gaps are surfaced here rather than papered over: an `Allow` cannot
+    /// edit the tool's input (the wire's answer is a bare "accept", so
+    /// `input` is ignored), and a `Deny` cannot carry the operator's message
+    /// to the model (the wire's "decline" takes no text — the model learns
+    /// only that the tool was rejected).
+    pub fn respond_to_decision(&mut self, id: &str, answer: DecisionAnswer) -> io::Result<()> {
+        let decision = match answer {
+            DecisionAnswer::Allow { .. } => "accept",
+            DecisionAnswer::Deny { .. } => "decline",
+        };
+        // The server's id space is its own: 0.149.1 numbers requests with
+        // integers, which `DecisionRequested` carried as text. Echo back the
+        // original type, not Ferrite's.
+        let id = match id.parse::<u64>() {
+            Ok(number) => serde_json::json!(number),
+            Err(_) => serde_json::json!(id),
+        };
+        self.write_line(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": {"decision": decision},
+        }))
+    }
+
+    /// The bounded event stream. Poll with `try_recv`/`try_iter`; the UI
+    /// drains this per frame.
+    pub fn events(&self) -> &Receiver<SessionEvent> {
+        &self.events
+    }
+
+    /// Ferrite numbers its own requests; the server's ids are its own and are
+    /// echoed back untouched (see `respond_to_decision`).
+    fn take_request_id(&mut self) -> u64 {
+        let id = self.next_request_id;
+        self.next_request_id += 1;
+        id
+    }
+
+    fn write_line(&mut self, value: &serde_json::Value) -> io::Result<()> {
+        let mut line = serde_json::to_string(value).map_err(io::Error::other)?;
+        line.push('\n');
+        self.stdin.write_all(line.as_bytes())?;
+        self.stdin.flush()
+    }
+}
+
+impl Drop for CodexSession {
+    fn drop(&mut self) {
+        let mut child = lock(&self.child);
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
+/// What the reader hands spawn while the handshake is open: the initialize
+/// acknowledgement, then the thread handshake itself.
+enum HandshakeStep {
+    Initialized,
+    Thread(Box<ThreadHandshake>),
+}
+
+/// One handshake response, or why there will not be one: the server's own
+/// error, its silence past the budget, or its death (the reader hangs up).
+fn await_step(
+    steps: &Receiver<Result<HandshakeStep, String>>,
+    waiting_on: &str,
+) -> Result<HandshakeStep, String> {
+    match steps.recv_timeout(HANDSHAKE_TIMEOUT) {
+        Ok(step) => step,
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(format!(
+            "no {waiting_on} response within {HANDSHAKE_TIMEOUT:?}"
+        )),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            Err(format!("server closed before answering {waiting_on}"))
+        }
+    }
+}
+
+/// Returns the channel the handshake steps arrive on. It is a channel rather
+/// than return values because only this thread ever reads stdout: letting
+/// spawn read it directly would race the reader for lines.
+fn read_stdout(
+    stdout: ChildStdout,
+    sender: SyncSender<SessionEvent>,
+    child: Arc<Mutex<Child>>,
+    stderr_tail: Arc<Mutex<StderrTail>>,
+    current_turn: Arc<Mutex<Option<String>>>,
+) -> Receiver<Result<HandshakeStep, String>> {
+    let (handshake, steps) = sync_channel(2);
+    thread::spawn(move || {
+        let mut reader = BufReader::new(stdout);
+        let mut line = Vec::new();
+        // Which handshake response is awaited: request 1, then request 2,
+        // then none.
+        let mut handshake = Some((handshake, 1u64));
+        loop {
+            line.clear();
+            match reader.read_until(b'\n', &mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+            // Lossy rather than strict: a byte the server mangles must not
+            // end a Session.
+            let text = String::from_utf8_lossy(&line);
+            let text = text.trim_end();
+            if let Some((steps, pending)) = handshake.take() {
+                match wire::parse_response(text, pending) {
+                    Some(Ok(_)) if pending == 1 => {
+                        let _ = steps.send(Ok(HandshakeStep::Initialized));
+                        handshake = Some((steps, 2));
+                        continue;
+                    }
+                    Some(Ok(result)) => match wire::parse_thread_response(&result) {
+                        Some(thread) => {
+                            // The Session announces itself the way every
+                            // provider does; the values are the wire's, only
+                            // the correlation is Ferrite's.
+                            let _ = sender.send(SessionEvent::Init {
+                                session_id: thread.thread_id.clone(),
+                                model: thread.model.clone(),
+                            });
+                            let _ = steps.send(Ok(HandshakeStep::Thread(Box::new(thread))));
+                            continue;
+                        }
+                        None => {
+                            let _ = steps
+                                .send(Err(format!("thread response carried no thread: {result}")));
+                            return;
+                        }
+                    },
+                    Some(Err(error)) => {
+                        let _ = steps.send(Err(error));
+                        return;
+                    }
+                    None => handshake = Some((steps, pending)),
+                }
+            }
+            if let Some(turn_id) = parse_turn_started(text) {
+                *lock(&current_turn) = Some(turn_id);
+            }
+            if let Some(event) = wire::parse_line(text) {
+                // A full channel parks this thread, the OS pipe fills, and the
+                // server blocks on its own write. Backpressure, never loss.
+                if sender.send(event).is_err() {
+                    return;
+                }
+            }
+        }
+        if let Some((steps, _)) = handshake {
+            let _ = steps.send(Err("server closed stdout before answering".into()));
+        }
+        let _ = sender.send(closed_event(&child, &stderr_tail));
+    });
+    steps
+}
+
+/// The turn id the reader tracks for `interrupt`, off the turn/started
+/// notification. Session state, not a SessionEvent: no Pane renders it.
+fn parse_turn_started(line: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(line).ok()?;
+    if value.get("method")?.as_str()? != "turn/started" {
+        return None;
+    }
+    Some(
+        value
+            .get("params")?
+            .get("turn")?
+            .get("id")?
+            .as_str()?
+            .to_string(),
+    )
+}
+
+/// The last of the server's stderr, and whether there is any more coming.
+#[derive(Default)]
+struct StderrTail {
+    lines: Vec<String>,
+    finished: bool,
+}
+
+fn drain_stderr(stderr: ChildStderr, tail: Arc<Mutex<StderrTail>>) {
+    thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            let mut tail = lock(&tail);
+            if tail.lines.len() == STDERR_TAIL_LINES {
+                tail.lines.remove(0);
+            }
+            tail.lines.push(line);
+        }
+        lock(&tail).finished = true;
+    });
+}
+
+fn closed_event(child: &Mutex<Child>, stderr_tail: &Mutex<StderrTail>) -> SessionEvent {
+    let status = reap(child);
+    let mut reason = match &status {
+        Ok(status) => format!("codex app-server exited: {status}"),
+        Err(e) => format!("codex app-server exit status unknown: {e}"),
+    };
+    if !matches!(&status, Ok(status) if status.success()) {
+        let lines = settled_stderr(stderr_tail);
+        if !lines.is_empty() {
+            reason.push_str("\nstderr: ");
+            reason.push_str(&lines.join("\n"));
+        }
+    }
+    SessionEvent::Closed { reason }
+}
+
+/// The drain thread reaches EOF just after the child exits; wait for it rather
+/// than explaining a crash with the reason cut off. Bounded, because a
+/// surviving grandchild can hold the inherited stderr open indefinitely.
+fn settled_stderr(stderr_tail: &Mutex<StderrTail>) -> Vec<String> {
+    let deadline = Instant::now() + Duration::from_millis(250);
+    loop {
+        let tail = lock(stderr_tail);
+        if tail.finished || Instant::now() >= deadline {
+            return tail.lines.clone();
+        }
+        drop(tail);
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Polled, never blocking, so `Drop` can always take this lock and kill a
+/// server that closed stdout without exiting.
+fn reap(child: &Mutex<Child>) -> io::Result<ExitStatus> {
+    loop {
+        if let Some(status) = lock(child).try_wait()? {
+            return Ok(status);
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// A panicking thread must not take the Session down with it: the data behind
+/// this lock is a process handle, a stderr tail or a turn id, all still
+/// usable.
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn spawn_error(program: &str, e: io::Error) -> CodexSpawnError {
+    if e.kind() == io::ErrorKind::NotFound {
+        CodexSpawnError::CliNotFound {
+            program: program.to_string(),
+        }
+    } else {
+        CodexSpawnError::Io(e)
+    }
+}
+
+fn check_version(program: &str) -> Result<(), CodexSpawnError> {
+    let output = Command::new(program)
+        .arg("--version")
+        .output()
+        .map_err(|e| spawn_error(program, e))?;
+    if !output.status.success() {
+        return Err(CodexSpawnError::VersionCheckFailed {
+            detail: format!("`{program} --version` {}", output.status),
+        });
+    }
+
+    let reported = String::from_utf8_lossy(&output.stdout);
+    let Some((found, version)) = parse_version(&reported) else {
+        return Err(CodexSpawnError::VersionCheckFailed {
+            detail: format!(
+                "unrecognised `{program} --version` output: {:?}",
+                reported.trim()
+            ),
+        });
+    };
+    if version < CODEX_CLI_MIN_VERSION {
+        return Err(CodexSpawnError::CliVersionUnmet {
+            found,
+            required: MIN_VERSION_DISPLAY,
+        });
+    }
+    if version >= CODEX_CLI_MAX_VERSION_EXCLUSIVE {
+        return Err(CodexSpawnError::CliVersionUnsupported {
+            found,
+            supported_below: MAX_VERSION_DISPLAY,
+        });
+    }
+    Ok(())
+}
+
+/// `--version` prints `codex-cli 0.149.1`: the semver is not the first token,
+/// so the first token that reads as one is taken, and a pre-release suffix on
+/// any component is ignored.
+fn parse_version(reported: &str) -> Option<(String, [u64; 3])> {
+    reported.split_whitespace().find_map(parse_version_token)
+}
+
+fn parse_version_token(token: &str) -> Option<(String, [u64; 3])> {
+    let mut components = token.split('.');
+    let mut version = [0u64; 3];
+    for component in version.iter_mut() {
+        let digits: String = components
+            .next()?
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect();
+        *component = digits.parse().ok()?;
+    }
+    Some((token.to_string(), version))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_displayed_window_matches_the_pins() {
+        assert_eq!(
+            parse_version(MIN_VERSION_DISPLAY).map(|(_, v)| v),
+            Some(CODEX_CLI_MIN_VERSION)
+        );
+        assert_eq!(
+            parse_version(MAX_VERSION_DISPLAY).map(|(_, v)| v),
+            Some(CODEX_CLI_MAX_VERSION_EXCLUSIVE)
+        );
+        assert!(CODEX_CLI_MIN_VERSION < CODEX_CLI_MAX_VERSION_EXCLUSIVE);
+    }
+
+    /// The window is closed at the bottom and open at the top.
+    #[test]
+    fn the_next_major_is_out_and_the_release_before_it_is_in() {
+        let last_supported = parse_version("0.999.999").unwrap().1;
+        let next_major = parse_version("1.0.0").unwrap().1;
+        assert!(last_supported < CODEX_CLI_MAX_VERSION_EXCLUSIVE);
+        assert!(next_major >= CODEX_CLI_MAX_VERSION_EXCLUSIVE);
+    }
+
+    /// The version Ferrite is developed against has to sit inside its own
+    /// pins.
+    #[test]
+    fn the_captured_fixture_version_is_supported() {
+        let captured = parse_version("codex-cli 0.149.1").unwrap().1;
+        assert!(captured >= CODEX_CLI_MIN_VERSION);
+        assert!(captured < CODEX_CLI_MAX_VERSION_EXCLUSIVE);
+    }
+
+    #[test]
+    fn parses_the_real_version_banner() {
+        assert_eq!(
+            parse_version("codex-cli 0.149.1\n"),
+            Some(("0.149.1".to_string(), [0, 149, 1]))
+        );
+    }
+
+    #[test]
+    fn the_pinned_boundary_is_met_and_one_below_is_not() {
+        let at_pin = parse_version("codex-cli 0.149.1").unwrap().1;
+        let below_pin = parse_version("codex-cli 0.149.0").unwrap().1;
+        assert!(at_pin >= CODEX_CLI_MIN_VERSION);
+        assert!(below_pin < CODEX_CLI_MIN_VERSION);
+    }
+
+    #[test]
+    fn older_minor_lines_are_below_the_pin() {
+        for older in ["codex-cli 0.99.999", "codex-cli 0.148.999"] {
+            assert!(parse_version(older).unwrap().1 < CODEX_CLI_MIN_VERSION);
+        }
+    }
+
+    #[test]
+    fn a_prerelease_suffix_still_parses() {
+        assert_eq!(
+            parse_version("codex-cli 0.150.0-alpha.1"),
+            Some(("0.150.0-alpha.1".to_string(), [0, 150, 0]))
+        );
+    }
+
+    #[test]
+    fn unparseable_banners_yield_nothing() {
+        for garbage in ["", "\n", "codex-cli", "codex-cli 0.149", "x.y.z", "..."] {
+            assert_eq!(
+                parse_version(garbage),
+                None,
+                "should not parse: {garbage:?}"
+            );
+        }
+    }
+}

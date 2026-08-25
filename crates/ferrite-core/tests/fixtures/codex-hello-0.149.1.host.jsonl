@@ -1,0 +1,4 @@
+{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"clientInfo": {"name": "ferrite", "version": "0.1.0"}}}
+{"jsonrpc": "2.0", "method": "initialized"}
+{"jsonrpc": "2.0", "id": 2, "method": "thread/start", "params": {"cwd": "/workspace", "model": "gpt-5.4-mini", "approvalPolicy": "never", "sandbox": "read-only"}}
+{"jsonrpc": "2.0", "id": 3, "method": "turn/start", "params": {"threadId": "01a03762-106d-7100-8451-10b78f278523", "input": [{"type": "text", "text": "Work out 17*23 in your head, then reply with exactly this and nothing else: hello ferrite"}]}}

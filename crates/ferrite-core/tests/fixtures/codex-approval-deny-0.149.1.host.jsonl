@@ -1,0 +1,5 @@
+{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"clientInfo": {"name": "ferrite", "version": "0.1.0"}}}
+{"jsonrpc": "2.0", "method": "initialized"}
+{"jsonrpc": "2.0", "id": 2, "method": "thread/start", "params": {"cwd": "/workspace", "model": "gpt-5.4-mini", "approvalPolicy": "on-request", "sandbox": "read-only"}}
+{"jsonrpc": "2.0", "id": 3, "method": "turn/start", "params": {"threadId": "01a03762-6f03-72e0-8c6e-5aec554d0bbe", "input": [{"type": "text", "text": "Create a file named ferrite-perm.txt containing exactly the word ok. Then say done."}]}}
+{"jsonrpc": "2.0", "id": 0, "result": {"decision": "decline"}}

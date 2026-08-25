@@ -1,0 +1,5 @@
+{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"clientInfo": {"name": "ferrite", "version": "0.1.0"}}}
+{"jsonrpc": "2.0", "method": "initialized"}
+{"jsonrpc": "2.0", "id": 2, "method": "thread/start", "params": {"cwd": "/workspace", "model": "gpt-5.4-mini", "approvalPolicy": "on-request", "sandbox": "read-only"}}
+{"jsonrpc": "2.0", "id": 3, "method": "turn/start", "params": {"threadId": "01a03765-9f6b-7e22-9e45-997ede15da33", "input": [{"type": "text", "text": "Use the apply_patch tool (not shell) to create a file named ferrite-patch.txt containing exactly the word ok. Then say done."}]}}
+{"jsonrpc": "2.0", "id": 0, "result": {"decision": "accept"}}

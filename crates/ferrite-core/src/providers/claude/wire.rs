@@ -318,6 +318,11 @@ mod tests {
             // the process exits, so no capture can contain it. Proved instead
             // by `stdout_eof_closes_the_session_with_the_exit_status`.
             SessionEvent::Closed { .. } => return None,
+            // Codex's own concepts (#9). The superset carries them; the Claude
+            // CLI never emits one, so they are proved by Codex's fixtures.
+            SessionEvent::ReasoningSummaryDelta { .. } | SessionEvent::TokenUsage { .. } => {
+                return None
+            }
         })
     }
 

@@ -1,0 +1,4 @@
+{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"clientInfo": {"name": "ferrite", "version": "0.1.0"}}}
+{"jsonrpc": "2.0", "method": "initialized"}
+{"jsonrpc": "2.0", "id": 2, "method": "thread/start", "params": {"cwd": "/workspace", "model": "gpt-5.4-mini", "approvalPolicy": "never", "sandbox": "workspace-write"}}
+{"jsonrpc": "2.0", "id": 3, "method": "turn/start", "params": {"threadId": "01a03762-2c8c-7d73-9dd4-4edc09186664", "input": [{"type": "text", "text": "Run the shell command `echo ferrite-tool-ok` and tell me its output."}]}}
