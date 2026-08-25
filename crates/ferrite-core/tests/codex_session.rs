@@ -75,8 +75,10 @@ fn drain(events: &Receiver<SessionEvent>) -> Vec<SessionEvent> {
 /// The whole path for one committed capture: real process, real pipes, real
 /// reader thread. The fixture's own recorded responses answer the session's
 /// handshake, because the capture driver numbers requests the way the
-/// session does. Every fixture earns its keep here, not only in the parser's
-/// own tests.
+/// session does. Every capture is driven through a real process in this file
+/// — the turnless `initialize` capture through the handshake test, every
+/// turn-bearing one through this replay — not only through the parser's own
+/// tests.
 fn replay(name: &str) -> Vec<SessionEvent> {
     replay_with(name, CodexConfig::default())
 }
@@ -327,15 +329,60 @@ fn an_approval_request_arrives_as_a_decision_naming_its_tool_call() {
     );
 }
 
+/// The other Decision shape, whole-path: a patch approval gates a fileChange
+/// item whose changes live on the tool card, not in the approval params.
+/// Replayed from the committed `approval-patch` capture.
+#[test]
+fn a_patch_approval_arrives_as_a_decision_on_the_file_change() {
+    let events = replay("approval-patch-0.149.1");
+
+    let SessionEvent::DecisionRequested {
+        tool_use_id,
+        tool_name,
+        ..
+    } = events
+        .iter()
+        .find(|e| matches!(e, SessionEvent::DecisionRequested { .. }))
+        .expect("a Decision")
+    else {
+        unreachable!()
+    };
+    assert_eq!(tool_name, "fileChange");
+
+    let SessionEvent::ToolStarted { input, .. } = events
+        .iter()
+        .find(|e| matches!(e, SessionEvent::ToolStarted { id, .. } if id == tool_use_id))
+        .expect("the gated fileChange item")
+    else {
+        unreachable!()
+    };
+    assert_eq!(input["changes"][0]["path"], "/workspace/ferrite-patch.txt");
+}
+
+/// An interrupted capture ends the way the server said it did, through the
+/// whole path. Replayed from the committed `interrupt` capture.
+#[test]
+fn an_interrupted_capture_replays_as_an_interrupted_turn() {
+    let events = replay("interrupt-0.149.1");
+    assert_eq!(
+        events.last(),
+        Some(&SessionEvent::TurnEnded {
+            outcome: TurnOutcome::Interrupted,
+            cost_usd: None,
+        })
+    );
+}
+
 /// Answering a Decision has to put the exact bytes on the wire that the real
 /// server accepted, so the assertion is the recorded host side of the capture
 /// itself: whatever `respond_to_decision` writes must match what the live
 /// capture proved works (accept → the tool ran; decline → the turn survived).
-fn answering(fixture_name: &str, answer: DecisionAnswer) -> Value {
-    let log = log_path(&format!("{fixture_name}-answer.log"));
+/// `tag` keeps each caller's stub and log its own — tests run in parallel.
+fn answering(fixture_name: &str, tag: &str, answer: DecisionAnswer) -> Value {
+    let log = log_path(&format!("{tag}-answer.log"));
     let _ = fs::remove_file(&log);
     let program = stub(
-        &format!("codex-decides-{fixture_name}"),
+        &format!("codex-decides-{tag}"),
         &format!(
             "{VERSION_CASE}\ncat '{}'\ncat >> '{}'",
             fixture(fixture_name).display(),
@@ -379,7 +426,24 @@ fn recorded_answer(fixture_name: &str) -> Value {
 fn allowing_a_decision_writes_what_the_server_accepted() {
     let sent = answering(
         "approval-allow-0.149.1",
+        "allow",
         DecisionAnswer::Allow { input: Value::Null },
+    );
+    assert_eq!(sent, recorded_answer("approval-allow-0.149.1"));
+}
+
+/// The documented capability gap, pinned: Codex cannot run a tool with
+/// edited input — its accept is bare — so an Allow carrying edits must put
+/// the same recorded bytes on the wire, not smuggle the edit into a shape
+/// the server never accepted.
+#[test]
+fn an_allow_with_edited_input_still_writes_the_bare_accept() {
+    let sent = answering(
+        "approval-allow-0.149.1",
+        "allow-edited",
+        DecisionAnswer::Allow {
+            input: serde_json::json!({"command": "echo edited-by-operator"}),
+        },
     );
     assert_eq!(sent, recorded_answer("approval-allow-0.149.1"));
 }
@@ -388,6 +452,7 @@ fn allowing_a_decision_writes_what_the_server_accepted() {
 fn denying_a_decision_writes_what_the_server_accepted() {
     let sent = answering(
         "approval-deny-0.149.1",
+        "deny",
         DecisionAnswer::Deny {
             // Dropped by design: the codex wire's decline carries no message.
             message: "Ferrite operator denied this tool".into(),
@@ -438,10 +503,10 @@ fn spawn_completes_the_capability_handshake() {
     );
 }
 
-/// Resume is spawn with history: the session asks for the recorded thread and
-/// announces itself with the resumed identity, and the model answers from a
-/// conversation this process never had. Replayed from the committed `resume`
-/// capture.
+/// Resume is spawn with history: the session *asks* for the recorded thread
+/// (the outbound thread/resume is asserted, not assumed), announces itself
+/// with the resumed identity, and the model answers from a conversation this
+/// process never had. Replayed from the committed `resume` capture.
 #[test]
 fn a_resumed_session_answers_from_the_previous_process_history() {
     let host = fs::read_to_string(
@@ -460,12 +525,34 @@ fn a_resumed_session_answers_from_the_previous_process_history() {
         })
         .expect("the capture resumed a thread");
 
-    let events = replay_with(
-        "resume-0.149.1",
-        CodexConfig {
-            resume: Some(resumed_thread.clone()),
-            ..Default::default()
-        },
+    let log = log_path("resume.log");
+    let _ = fs::remove_file(&log);
+    let program = stub(
+        "codex-replay-resume-logged",
+        &format!(
+            "{VERSION_CASE}\ncat '{}'\ncat >> '{}'",
+            fixture("resume-0.149.1").display(),
+            log.display()
+        ),
+    );
+    let session = CodexSession::spawn(CodexConfig {
+        program,
+        resume: Some(resumed_thread.clone()),
+        ..Default::default()
+    })
+    .unwrap();
+    let events = drain(session.events());
+
+    // What Ferrite wrote: the second request must be a resume of exactly the
+    // recorded thread — a session that quietly started a fresh thread would
+    // replay this fixture identically otherwise.
+    let recorded = read_lines(&log, 3);
+    drop(session);
+    let request: Value = serde_json::from_str(&recorded[2]).unwrap();
+    assert_eq!(request["method"], "thread/resume");
+    assert_eq!(
+        request["params"]["threadId"].as_str(),
+        Some(resumed_thread.as_str())
     );
 
     assert!(
@@ -637,6 +724,39 @@ fn nothing_is_passed_when_the_config_names_nothing() {
     assert_eq!(thread_start["params"], serde_json::json!({}));
 }
 
+/// A finished turn is no longer interruptible: once turn/completed has
+/// arrived there is nothing running to name, so a late interrupt is the same
+/// documented no-op as an idle one — never a request naming a dead turn.
+#[test]
+fn interrupting_after_the_turn_completed_writes_nothing() {
+    let log = log_path("interrupt-late.log");
+    let _ = fs::remove_file(&log);
+    let program = stub(
+        "codex-turn-done",
+        &format!(
+            "{VERSION_CASE}\n{}\n{}\n{}\n{}\ncat >> '{}'",
+            r#"echo '{"id":1,"result":{}}'"#,
+            // A whole turn passes before the handshake finishes, so by the
+            // time spawn returns the reader has both seen and outlived it.
+            r#"echo '{"method":"turn/started","params":{"threadId":"stub-thread","turn":{"id":"stub-turn","items":[],"status":"inProgress"}}}'"#,
+            r#"echo '{"method":"turn/completed","params":{"threadId":"stub-thread","turn":{"id":"stub-turn","items":[],"status":"completed"}}}'"#,
+            r#"echo '{"id":2,"result":{"thread":{"id":"stub-thread"},"model":"stub-model"}}'"#,
+            log.display()
+        ),
+    );
+    let mut session = CodexSession::spawn(config(program)).unwrap();
+    session.interrupt().unwrap();
+    session.send("hi").unwrap();
+
+    // The send proves the write path works; no interrupt line precedes it.
+    let recorded = read_lines(&log, 4);
+    drop(session);
+    assert!(
+        !recorded.iter().any(|line| line.contains("turn/interrupt")),
+        "an interrupt for a finished turn reached the wire: {recorded:?}"
+    );
+}
+
 /// Interrupting before any turn has started has nothing to name: a no-op,
 /// never a malformed request.
 #[test]
@@ -702,7 +822,10 @@ fn only_the_tail_of_a_noisy_stderr_is_kept() {
     let session = CodexSession::spawn(config(program)).unwrap();
     match drain(session.events()).as_slice() {
         [SessionEvent::Init { .. }, SessionEvent::Closed { reason }] => {
-            let tail = reason.split_once("stderr: ").expect("reason: {reason}").1;
+            let tail = reason
+                .split_once("stderr: ")
+                .unwrap_or_else(|| panic!("no stderr tail in reason: {reason}"))
+                .1;
             assert_eq!(tail.lines().count(), 20, "unbounded stderr: {tail}");
             assert!(tail.contains("noise 100"), "newest line missing: {tail}");
             assert!(tail.contains("noise 81"), "tail is the wrong 20: {tail}");

@@ -447,13 +447,13 @@ fn read_stdout(
     stderr_tail: Arc<Mutex<StderrTail>>,
     current_turn: Arc<Mutex<Option<String>>>,
 ) -> Receiver<Result<HandshakeStep, String>> {
-    let (handshake, steps) = sync_channel(2);
+    let (step_sender, steps) = sync_channel(2);
     thread::spawn(move || {
         let mut reader = BufReader::new(stdout);
         let mut line = Vec::new();
         // Which handshake response is awaited: request 1, then request 2,
         // then none.
-        let mut handshake = Some((handshake, 1u64));
+        let mut handshake = Some((step_sender, 1u64));
         loop {
             line.clear();
             match reader.read_until(b'\n', &mut line) {
@@ -464,11 +464,11 @@ fn read_stdout(
             // end a Session.
             let text = String::from_utf8_lossy(&line);
             let text = text.trim_end();
-            if let Some((steps, pending)) = handshake.take() {
+            if let Some((step_sender, pending)) = handshake.take() {
                 match wire::parse_response(text, pending) {
                     Some(Ok(_)) if pending == 1 => {
-                        let _ = steps.send(Ok(HandshakeStep::Initialized));
-                        handshake = Some((steps, 2));
+                        let _ = step_sender.send(Ok(HandshakeStep::Initialized));
+                        handshake = Some((step_sender, 2));
                         continue;
                     }
                     Some(Ok(result)) => match wire::parse_thread_response(&result) {
@@ -480,25 +480,23 @@ fn read_stdout(
                                 session_id: thread.thread_id.clone(),
                                 model: thread.model.clone(),
                             });
-                            let _ = steps.send(Ok(HandshakeStep::Thread(Box::new(thread))));
+                            let _ = step_sender.send(Ok(HandshakeStep::Thread(Box::new(thread))));
                             continue;
                         }
                         None => {
-                            let _ = steps
+                            let _ = step_sender
                                 .send(Err(format!("thread response carried no thread: {result}")));
                             return;
                         }
                     },
                     Some(Err(error)) => {
-                        let _ = steps.send(Err(error));
+                        let _ = step_sender.send(Err(error));
                         return;
                     }
-                    None => handshake = Some((steps, pending)),
+                    None => handshake = Some((step_sender, pending)),
                 }
             }
-            if let Some(turn_id) = parse_turn_started(text) {
-                *lock(&current_turn) = Some(turn_id);
-            }
+            track_turn(text, &current_turn);
             if let Some(event) = wire::parse_line(text) {
                 // A full channel parks this thread, the OS pipe fills, and the
                 // server blocks on its own write. Backpressure, never loss.
@@ -507,29 +505,36 @@ fn read_stdout(
                 }
             }
         }
-        if let Some((steps, _)) = handshake {
-            let _ = steps.send(Err("server closed stdout before answering".into()));
+        if let Some((step_sender, _)) = handshake {
+            let _ = step_sender.send(Err("server closed stdout before answering".into()));
         }
         let _ = sender.send(closed_event(&child, &stderr_tail));
     });
     steps
 }
 
-/// The turn id the reader tracks for `interrupt`, off the turn/started
-/// notification. Session state, not a SessionEvent: no Pane renders it.
-fn parse_turn_started(line: &str) -> Option<String> {
-    let value: serde_json::Value = serde_json::from_str(line).ok()?;
-    if value.get("method")?.as_str()? != "turn/started" {
-        return None;
+/// The running turn's id, tracked for `interrupt` off the turn lifecycle
+/// notifications: turn/started names it, turn/completed retires it, so a
+/// late interrupt is a no-op instead of a request naming a dead turn.
+/// Session state, not a SessionEvent: no Pane renders it.
+fn track_turn(line: &str, current_turn: &Mutex<Option<String>>) {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+        return;
+    };
+    match value.get("method").and_then(serde_json::Value::as_str) {
+        Some("turn/started") => {
+            let turn_id = value
+                .get("params")
+                .and_then(|p| p.get("turn"))
+                .and_then(|t| t.get("id"))
+                .and_then(serde_json::Value::as_str);
+            if let Some(turn_id) = turn_id {
+                *lock(current_turn) = Some(turn_id.to_string());
+            }
+        }
+        Some("turn/completed") => *lock(current_turn) = None,
+        _ => {}
     }
-    Some(
-        value
-            .get("params")?
-            .get("turn")?
-            .get("id")?
-            .as_str()?
-            .to_string(),
-    )
 }
 
 /// The last of the server's stderr, and whether there is any more coming.

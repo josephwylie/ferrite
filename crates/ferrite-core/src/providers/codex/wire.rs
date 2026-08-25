@@ -47,9 +47,10 @@ pub(super) fn parse_line(line: &str) -> Option<SessionEvent> {
         }),
         "item/started" => parse_item(params, false),
         "item/completed" => parse_item(params, true),
-        "item/commandExecution/requestApproval" | "item/fileChange/requestApproval" => {
-            parse_approval_request(&value, params)
+        "item/commandExecution/requestApproval" => {
+            parse_approval_request(&value, params, "commandExecution")
         }
+        "item/fileChange/requestApproval" => parse_approval_request(&value, params, "fileChange"),
         "thread/tokenUsage/updated" => parse_token_usage(params),
         "turn/completed" => parse_turn_completed(params),
         _ => None,
@@ -102,17 +103,14 @@ fn parse_item(params: &Value, completed: bool) -> Option<SessionEvent> {
 
 /// The server blocks the turn on a Decision: a JSON-RPC request whose answer
 /// is the operator's. `id` is the server's own request id, echoed back by
-/// `respond_to_decision`; `tool_use_id` names the item the gate is holding.
-fn parse_approval_request(value: &Value, params: &Value) -> Option<SessionEvent> {
+/// `respond_to_decision`; `tool_use_id` names the item the gate is holding;
+/// `tool_name` is the gated item's type, which the routing method carries
+/// and the params never repeat.
+fn parse_approval_request(value: &Value, params: &Value, tool_name: &str) -> Option<SessionEvent> {
     Some(SessionEvent::DecisionRequested {
         id: rpc_id_string(value.get("id")?)?,
         tool_use_id: params.get("itemId")?.as_str()?.to_string(),
-        // The method name carries the item type; the params never repeat it.
-        tool_name: match value.get("method").and_then(Value::as_str) {
-            Some("item/fileChange/requestApproval") => "fileChange",
-            _ => "commandExecution",
-        }
-        .to_string(),
+        tool_name: tool_name.to_string(),
         // The provider's own one-liner: an execution approval quotes the
         // command; a patch approval offers at most a reason (observed null),
         // its changes living on the tool card `tool_use_id` points at.

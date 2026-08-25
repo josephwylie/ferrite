@@ -584,7 +584,10 @@ fn only_the_tail_of_a_noisy_stderr_is_kept() {
     let session = ClaudeSession::spawn(config(program)).unwrap();
     match drain(session.events()).as_slice() {
         [SessionEvent::Closed { reason }] => {
-            let tail = reason.split_once("stderr: ").expect("reason: {reason}").1;
+            let tail = reason
+                .split_once("stderr: ")
+                .unwrap_or_else(|| panic!("no stderr tail in reason: {reason}"))
+                .1;
             assert_eq!(tail.lines().count(), 20, "unbounded stderr: {tail}");
             assert!(tail.contains("noise 100"), "newest line missing: {tail}");
             assert!(tail.contains("noise 81"), "tail is the wrong 20: {tail}");
