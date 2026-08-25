@@ -5,7 +5,7 @@
 mod claude;
 mod codex;
 pub use claude::{
-    Capabilities, ClaudeConfig, ClaudeSession, SpawnError, CLAUDE_CLI_MAX_VERSION_EXCLUSIVE,
+    ClaudeCapabilities, ClaudeConfig, ClaudeSession, ClaudeSpawnError, CLAUDE_CLI_MAX_VERSION_EXCLUSIVE,
     CLAUDE_CLI_MIN_VERSION,
 };
 pub use codex::{

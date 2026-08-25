@@ -80,7 +80,7 @@ impl Default for ClaudeConfig {
 
 /// Spawn failed before a Session existed.
 #[derive(Debug)]
-pub enum SpawnError {
+pub enum ClaudeSpawnError {
     /// The CLI program was not found on this machine.
     CliNotFound {
         program: String,
@@ -103,20 +103,20 @@ pub enum SpawnError {
     Io(io::Error),
 }
 
-impl std::fmt::Display for SpawnError {
+impl std::fmt::Display for ClaudeSpawnError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SpawnError::CliNotFound { program } => {
+            ClaudeSpawnError::CliNotFound { program } => {
                 write!(f, "claude CLI not found: `{program}`")
             }
-            SpawnError::CliVersionUnmet { found, required } => {
+            ClaudeSpawnError::CliVersionUnmet { found, required } => {
                 write!(
                     f,
                     "claude CLI {found} is older than the pinned minimum {required}; \
                      upgrade the CLI"
                 )
             }
-            SpawnError::CliVersionUnsupported {
+            ClaudeSpawnError::CliVersionUnsupported {
                 found,
                 supported_below,
             } => {
@@ -126,15 +126,15 @@ impl std::fmt::Display for SpawnError {
                      against (below {supported_below}); upgrade Ferrite"
                 )
             }
-            SpawnError::VersionCheckFailed { detail } => {
+            ClaudeSpawnError::VersionCheckFailed { detail } => {
                 write!(f, "claude CLI version check failed: {detail}")
             }
-            SpawnError::Io(e) => write!(f, "io error spawning claude CLI: {e}"),
+            ClaudeSpawnError::Io(e) => write!(f, "io error spawning claude CLI: {e}"),
         }
     }
 }
 
-impl std::error::Error for SpawnError {}
+impl std::error::Error for ClaudeSpawnError {}
 
 /// What the CLI answered at initialize: feature detection, so a Pane never
 /// offers what this install cannot do.
@@ -145,7 +145,7 @@ impl std::error::Error for SpawnError {}
 /// tokens is announced on the `system:init` line at the head of a turn, not in
 /// this handshake, so it cannot be known before the first prompt.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct Capabilities {
+pub struct ClaudeCapabilities {
     /// The permission mode the CLI started in. `"bypassPermissions"` means no
     /// Decision will ever arrive; every other mode means they can.
     pub permission_mode: String,
@@ -161,13 +161,13 @@ pub struct ClaudeSession {
     /// so multi-turn depends on this staying alive.
     stdin: ChildStdin,
     events: Receiver<SessionEvent>,
-    capabilities: Capabilities,
+    capabilities: ClaudeCapabilities,
     next_request_id: u64,
 }
 
 impl ClaudeSession {
     /// Version-check the CLI, then spawn it in stream-json mode.
-    pub fn spawn(config: ClaudeConfig) -> Result<Self, SpawnError> {
+    pub fn spawn(config: ClaudeConfig) -> Result<Self, ClaudeSpawnError> {
         check_version(&config.program)?;
 
         let mut command = Command::new(&config.program);
@@ -218,7 +218,7 @@ impl ClaudeSession {
             child,
             stdin,
             events,
-            capabilities: Capabilities::default(),
+            capabilities: ClaudeCapabilities::default(),
             next_request_id: 1,
         };
         // Before the operator is offered anything: ask the CLI what it can do.
@@ -261,7 +261,7 @@ impl ClaudeSession {
 
     /// What the CLI said it can do, answered at spawn. Empty when this install
     /// did not answer the handshake — unknown, never assumed.
-    pub fn capabilities(&self) -> &Capabilities {
+    pub fn capabilities(&self) -> &ClaudeCapabilities {
         &self.capabilities
     }
 
@@ -328,7 +328,7 @@ fn read_stdout(
     sender: SyncSender<SessionEvent>,
     child: Arc<Mutex<Child>>,
     stderr_tail: Arc<Mutex<StderrTail>>,
-) -> Receiver<Capabilities> {
+) -> Receiver<ClaudeCapabilities> {
     let (handshake, capabilities) = sync_channel(1);
     thread::spawn(move || {
         let mut reader = BufReader::new(stdout);
@@ -435,30 +435,30 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-fn spawn_error(program: &str, e: io::Error) -> SpawnError {
+fn spawn_error(program: &str, e: io::Error) -> ClaudeSpawnError {
     if e.kind() == io::ErrorKind::NotFound {
-        SpawnError::CliNotFound {
+        ClaudeSpawnError::CliNotFound {
             program: program.to_string(),
         }
     } else {
-        SpawnError::Io(e)
+        ClaudeSpawnError::Io(e)
     }
 }
 
-fn check_version(program: &str) -> Result<(), SpawnError> {
+fn check_version(program: &str) -> Result<(), ClaudeSpawnError> {
     let output = Command::new(program)
         .arg("--version")
         .output()
         .map_err(|e| spawn_error(program, e))?;
     if !output.status.success() {
-        return Err(SpawnError::VersionCheckFailed {
+        return Err(ClaudeSpawnError::VersionCheckFailed {
             detail: format!("`{program} --version` {}", output.status),
         });
     }
 
     let reported = String::from_utf8_lossy(&output.stdout);
     let Some((found, version)) = parse_version(&reported) else {
-        return Err(SpawnError::VersionCheckFailed {
+        return Err(ClaudeSpawnError::VersionCheckFailed {
             detail: format!(
                 "unrecognised `{program} --version` output: {:?}",
                 reported.trim()
@@ -466,13 +466,13 @@ fn check_version(program: &str) -> Result<(), SpawnError> {
         });
     };
     if version < CLAUDE_CLI_MIN_VERSION {
-        return Err(SpawnError::CliVersionUnmet {
+        return Err(ClaudeSpawnError::CliVersionUnmet {
             found,
             required: MIN_VERSION_DISPLAY,
         });
     }
     if version >= CLAUDE_CLI_MAX_VERSION_EXCLUSIVE {
-        return Err(SpawnError::CliVersionUnsupported {
+        return Err(ClaudeSpawnError::CliVersionUnsupported {
             found,
             supported_below: MAX_VERSION_DISPLAY,
         });

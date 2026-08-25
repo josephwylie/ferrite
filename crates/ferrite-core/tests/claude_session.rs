@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use ferrite_core::providers::{Capabilities, ClaudeConfig, ClaudeSession, SpawnError};
+use ferrite_core::providers::{ClaudeCapabilities, ClaudeConfig, ClaudeSession, ClaudeSpawnError};
 use ferrite_core::{DecisionAnswer, SessionEvent, TurnOutcome};
 
 const VERSION_CASE: &str = "case \"$1\" in --version) echo '2.1.243 (Claude Code)'; exit 0;; esac";
@@ -85,7 +85,7 @@ fn replay(name: &str) -> Vec<SessionEvent> {
     drain(session.events())
 }
 
-fn spawn_failure(program: String) -> SpawnError {
+fn spawn_failure(program: String) -> ClaudeSpawnError {
     match ClaudeSession::spawn(config(program)) {
         Err(e) => e,
         Ok(_) => panic!("expected spawn to fail"),
@@ -96,7 +96,7 @@ fn spawn_failure(program: String) -> SpawnError {
 fn a_missing_cli_is_named_in_the_error() {
     let program = "/nonexistent/ferrite/claude".to_string();
     match spawn_failure(program.clone()) {
-        SpawnError::CliNotFound { program: named } => assert_eq!(named, program),
+        ClaudeSpawnError::CliNotFound { program: named } => assert_eq!(named, program),
         other => panic!("expected CliNotFound, got {other:?}"),
     }
 }
@@ -104,7 +104,7 @@ fn a_missing_cli_is_named_in_the_error() {
 #[test]
 fn a_cli_below_the_pin_is_refused_before_any_session() {
     match spawn_failure(stub("claude-old", "echo '2.1.223 (Claude Code)'")) {
-        SpawnError::CliVersionUnmet { found, required } => {
+        ClaudeSpawnError::CliVersionUnmet { found, required } => {
             assert_eq!(found, "2.1.223");
             assert_eq!(required, "2.1.224");
         }
@@ -129,7 +129,7 @@ fn a_cli_exactly_at_the_pin_is_accepted() {
 #[test]
 fn a_cli_at_the_next_major_is_refused_rather_than_trusted() {
     match spawn_failure(stub("claude-future", "echo '3.0.0 (Claude Code)'")) {
-        SpawnError::CliVersionUnsupported {
+        ClaudeSpawnError::CliVersionUnsupported {
             found,
             supported_below,
         } => {
@@ -154,7 +154,7 @@ fn the_last_release_below_the_next_major_is_accepted() {
 #[test]
 fn an_unreadable_version_banner_is_its_own_error() {
     match spawn_failure(stub("claude-mute", "echo 'Claude Code'")) {
-        SpawnError::VersionCheckFailed { detail } => assert!(
+        ClaudeSpawnError::VersionCheckFailed { detail } => assert!(
             detail.contains("Claude Code"),
             "detail should quote what the CLI printed: {detail}"
         ),
@@ -165,7 +165,7 @@ fn an_unreadable_version_banner_is_its_own_error() {
 #[test]
 fn a_failing_version_check_is_not_mistaken_for_an_old_cli() {
     match spawn_failure(stub("claude-broken", "exit 7")) {
-        SpawnError::VersionCheckFailed { detail } => assert!(
+        ClaudeSpawnError::VersionCheckFailed { detail } => assert!(
             detail.contains("exit status: 7"),
             "detail should carry the status: {detail}"
         ),
@@ -423,7 +423,7 @@ fn a_silent_cli_leaves_its_capabilities_empty_rather_than_assumed() {
         &format!("{VERSION_CASE}\nexec cat > /dev/null"),
     );
     let session = ClaudeSession::spawn(config(program)).unwrap();
-    assert_eq!(session.capabilities(), &Capabilities::default());
+    assert_eq!(session.capabilities(), &ClaudeCapabilities::default());
 }
 
 #[test]

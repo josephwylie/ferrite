@@ -6,7 +6,7 @@
 
 use serde_json::Value;
 
-use super::Capabilities;
+use super::ClaudeCapabilities;
 use crate::{Hunk, SessionEvent, ToolResult, TurnOutcome};
 
 /// The answer to spawn's initialize control request, if this line is it.
@@ -15,7 +15,7 @@ use crate::{Hunk, SessionEvent, ToolResult, TurnOutcome};
 /// subagents, output styles, account; only the two fields Ferrite acts on are
 /// lifted out, and a response missing them yields defaults rather than an
 /// error, because an unknown capability must read as unknown.
-pub(super) fn parse_capabilities(line: &str, request_id: &str) -> Option<Capabilities> {
+pub(super) fn parse_capabilities(line: &str, request_id: &str) -> Option<ClaudeCapabilities> {
     let value: Value = serde_json::from_str(line).ok()?;
     if value.get("type")?.as_str()? != "control_response" {
         return None;
@@ -25,7 +25,7 @@ pub(super) fn parse_capabilities(line: &str, request_id: &str) -> Option<Capabil
         return None;
     }
     let body = response.get("response")?;
-    Some(Capabilities {
+    Some(ClaudeCapabilities {
         permission_mode: body
             .get("current_permission_mode")
             .and_then(Value::as_str)
@@ -487,8 +487,6 @@ mod tests {
         }));
     }
 
-    /// Denial is not failure: the CLI feeds the operator's reason back to the
-    /// model as a failed tool result and the turn runs to a normal end.
     /// A create has no hunks by definition, so only an edit proves the patch
     /// shape the diff cards are built from.
     #[test]
@@ -526,6 +524,8 @@ mod tests {
         assert_eq!(streams, ("ferrite-tool-ok".to_string(), String::new()));
     }
 
+    /// Denial is not failure: the CLI feeds the operator's reason back to the
+    /// model as a failed tool result and the turn runs to a normal end.
     #[test]
     fn a_denied_tool_fails_without_failing_the_turn() {
         let events = events_of("permission-deny");
@@ -603,7 +603,7 @@ mod tests {
                 r#"{"type":"control_response","response":{"request_id":"req_1","response":{}}}"#,
                 "req_1"
             ),
-            Some(Capabilities::default())
+            Some(ClaudeCapabilities::default())
         );
     }
 

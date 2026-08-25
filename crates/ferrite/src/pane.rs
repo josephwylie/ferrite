@@ -518,7 +518,7 @@ mod tests {
             text: "weighing it up".into(),
         }));
         transcript.apply(Input::Event(SessionEvent::TextDelta {
-            text: "## Plan\nI will run `cargo test` first.\n- one\n- two\n\n                   ```rust\nfn main() {}\n```\ndone.\n\n"
+            text: "## Plan\nI will run `cargo test` first.\n- one\n- two\n\n```rust\nfn main() {}\n```\ndone.\n\n"
                 .into(),
         }));
         transcript.apply(Input::Event(SessionEvent::ToolStarted {
