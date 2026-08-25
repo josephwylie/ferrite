@@ -33,3 +33,14 @@ Research docs (currently in `../swarmdeck/docs/research/`):
 ## Layout
 
 - `spikes/panes24/` — GPUI render spike: 24 synthetic streaming panes, FPS + RSS HUD.
+
+## Accessibility
+
+Ferrite draws its own pixels (GPUI); there is no screen-reader support today.
+This is a known limitation, revisited when the framework grows an
+accessibility bridge upstream.
+
+## License
+
+Dual-licensed under either of [Apache License 2.0](LICENSE-APACHE) or
+[MIT license](LICENSE-MIT) at your option.

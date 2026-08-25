@@ -72,3 +72,6 @@ would be a new concept, not a revival of this one.
 - Accessibility: no v1 story (GPUI limitation); one honest README note, topic
   closed until GPUI grows AccessKit-style support upstream.
 - Own repository at projects/ferrite (codingOS is an ignoring holder repo).
+- Sessions are operator-budgeted, never pooled: open Pane = live Session,
+  closed Pane = parked Thread. No hot-pool cap, no hidden eviction; memory is
+  shown, and a watchdog restarts leaking Sessions visibly.
