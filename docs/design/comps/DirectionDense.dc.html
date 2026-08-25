@@ -1,0 +1,100 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,500;0,700;1,400&amp;display=swap">
+  <style>
+    body { margin: 0; background: #050505; }
+    a { color: #c7ccd6; text-decoration: underline; text-decoration-color: rgba(199,204,214,0.40); text-underline-offset: 2px; }
+    a:hover { color: #d7dbe3; }
+    .mono { font-family: "JetBrains Mono", "SF Mono", Menlo, monospace; }
+    .row { display: flex; gap: 8px; }
+    .g { flex: none; width: 14px; }
+    .cont { padding-left: 22px; color: #7f8187; }
+    .code { color: #f3f4f7; background: #191919; border-radius: 3px; padding: 0 4px; }
+  </style>
+</helmet>
+<div class="mono" style="width: 900px; height: 760px; box-sizing: border-box; display: flex; flex-direction: column; background: #0e0e0e; border: 1px solid rgba(255,255,255,0.12); overflow: hidden; font-size: 12.5px; line-height: 1.45;">
+
+  <div style="height: 28px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 10px; border-bottom: 1px solid rgba(255,255,255,0.045); font-size: 11px;">
+    <span style="width: 6px; height: 6px; border-radius: 999px; background: #7fc99b; flex: none;"></span>
+    <span style="color: #f3f4f7; font-weight: 700;">font-ligatures</span>
+    <span style="color: #54575f;">·</span>
+    <span style="color: #8b8f97;">swarmdeck#214</span>
+    <div style="flex: 1;"></div>
+    <span style="color: #c7ccd6;">▰▰▰▱ 3/4</span>
+    <span style="color: #54575f;">·</span>
+    <span style="color: #7f8187;">ctx 62% · $0.84</span>
+  </div>
+
+  <div style="flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 4px; padding: 8px 12px; overflow: hidden;">
+
+    <div class="row"><span class="g" style="color: #c7ccd6; font-weight: 700;">❯</span><span style="color: #f3f4f7;">implement ligature rendering for the canvas renderer — <a href="#">swarmdeck#214</a>. registerCharacterJoiner is probably the seam; explain the pipeline when you're done.</span></div>
+
+    <div class="row"><span class="g" style="color: #8b8f97;">⏺</span><span style="color: #a7abb4;">The canvas renderer draws one glyph per cell from a rasterized atlas, so ligatures can't come from the font pipeline directly — the joiner API is the supported seam.</span></div>
+
+    <div class="row"><span class="g" style="color: #8b8f97;">⏺</span><span style="color: #a7abb4;"><span style="color: #f3f4f7; font-weight: 700;">Read</span>(<a href="#">src/lib/components/XtermPane.tsx</a>)</span></div>
+    <div class="cont">⎿ 1,449 lines · CanvasAddon load at 841, disposal-ordering guard at 1325</div>
+
+    <div class="row"><span class="g" style="color: #8b8f97;">⏺</span><span style="color: #a7abb4;"><span style="color: #f3f4f7; font-weight: 700;">Bash</span>(pnpm add @xterm/addon-ligatures)</span></div>
+    <div class="cont">⎿ <span style="color: #7fc99b;">exit 0</span> · 3.1s · + @xterm/addon-ligatures 0.10.0</div>
+
+    <div class="row"><span class="g" style="color: #8b8f97;">⏺</span><span style="color: #a7abb4;"><span style="color: #f3f4f7; font-weight: 700;">Edit</span>(<a href="#">src/lib/components/XtermPane.tsx</a>)</span></div>
+    <div style="display: flex; flex-direction: column; margin-left: 22px; font-size: 12px;">
+      <div style="display: flex; gap: 10px; padding: 0 6px;"><span style="flex: none; width: 30px; text-align: right; color: #54575f;">841</span><span style="color: #8b8f97;">  canvasAddon = new CanvasAddon()</span></div>
+      <div style="display: flex; gap: 10px; padding: 0 6px; background: rgba(224,140,132,0.13);"><span style="flex: none; width: 30px; text-align: right; color: #e08c84;">842</span><span style="color: #f3f4f7;">− term.loadAddon(canvasAddon)</span></div>
+      <div style="display: flex; gap: 10px; padding: 0 6px; background: rgba(127,201,155,0.13);"><span style="flex: none; width: 30px; text-align: right; color: #7fc99b;">842</span><span style="color: #f3f4f7;">+ term.loadAddon(canvasAddon)</span></div>
+      <div style="display: flex; gap: 10px; padding: 0 6px; background: rgba(127,201,155,0.13);"><span style="flex: none; width: 30px; text-align: right; color: #7fc99b;">843</span><span style="color: #f3f4f7;">+ ligatures = new LigaturesAddon()</span></div>
+      <div style="display: flex; gap: 10px; padding: 0 6px; background: rgba(127,201,155,0.13);"><span style="flex: none; width: 30px; text-align: right; color: #7fc99b;">844</span><span style="color: #f3f4f7;">+ term.loadAddon(ligatures)</span></div>
+    </div>
+
+    <div class="row"><span class="g" style="color: #8b8f97;">⏺</span><span style="color: #a7abb4;"><span style="color: #f3f4f7; font-weight: 700;">Bash</span>(pnpm check &amp;&amp; vitest run tests/unit)</span></div>
+    <div class="cont">⎿ tsc clean · <span style="color: #7fc99b;">✓ 41 passed</span> (0 failed) · 8.2s</div>
+
+    <div class="row" style="margin-top: 6px;"><span class="g" style="color: #8b8f97;">⏺</span><span style="color: #a7abb4;">Done — <span class="code">=&gt;</span> <span class="code">!==</span> <span class="code">-&gt;</span> join correctly in the canvas path. How it works:</span></div>
+
+    <div style="display: flex; flex-direction: column; gap: 5px; padding-left: 22px; margin-top: 2px;">
+      <span style="color: #f3f4f7; font-weight: 700; font-size: 13.5px; border-bottom: 1px solid rgba(255,255,255,0.12); padding-bottom: 3px; align-self: flex-start;">Ligature pipeline</span>
+
+      <div class="row" style="gap: 6px;"><span style="flex: none; color: #c7ccd6;">•</span><span style="color: #a7abb4;"><span style="color: #f3f4f7; font-weight: 700;">joiner</span> — registers cell ranges the renderer must draw as one unit instead of per-cell glyphs</span></div>
+      <div class="row" style="gap: 6px;"><span style="flex: none; color: #c7ccd6;">•</span><span style="color: #a7abb4;"><span style="color: #f3f4f7; font-weight: 700;">atlas</span> — joined runs rasterize once and cache; texture healing rides the same <span class="code">calt</span> table</span></div>
+      <div class="row" style="gap: 6px;"><span style="flex: none; color: #c7ccd6;">•</span><span style="color: #a7abb4;"><span style="color: #f3f4f7; font-weight: 700;">fallback</span> — fonts with no ligature tables (Menlo) skip the joiner entirely</span></div>
+
+      <div style="display: flex; flex-direction: column; background: #0a0a0a; border: 1px solid rgba(255,255,255,0.07); border-radius: 3px; overflow: hidden; margin-top: 3px;">
+        <div style="display: flex; align-items: center; height: 20px; padding: 0 8px; border-bottom: 1px solid rgba(255,255,255,0.045);">
+          <span style="font-size: 10px; color: #54575f;">XtermPane.tsx · ts</span>
+          <div style="flex: 1;"></div>
+          <span style="font-size: 10px; color: #54575f;">copy</span>
+        </div>
+        <div style="display: flex; flex-direction: column; padding: 6px 8px; font-size: 12px; line-height: 1.5;">
+          <span><span style="color: #8fb3d9;">const</span> <span style="color: #f3f4f7;">joiner</span> <span style="color: #a7abb4;">=</span> <span style="color: #f3f4f7;">term</span>.<span style="color: #d8c082;">registerCharacterJoiner</span>((<span style="color: #f3f4f7;">text</span>) <span style="color: #8fb3d9;">=&gt;</span> {</span>
+          <span style="color: #54575f;">  // ranges the atlas rasterizes as one glyph run</span>
+          <span>  <span style="color: #8fb3d9;">return</span> <span style="color: #d8c082;">findLigatureRanges</span>(<span style="color: #f3f4f7;">activeFont</span>, <span style="color: #f3f4f7;">text</span>)</span>
+          <span>})</span>
+        </div>
+      </div>
+
+      <div class="row" style="gap: 6px; margin-top: 3px;"><span style="flex: none; color: #c7ccd6; width: 14px;">1.</span><span style="color: #a7abb4;">key the run cache on font-id — a live font swap currently leaves stale joins</span></div>
+      <div class="row" style="gap: 6px;"><span style="flex: none; color: #c7ccd6; width: 14px;">2.</span><span style="color: #a7abb4;">ticket the Menlo fallback so table-less fonts never parse — see <a href="#">XtermPane.tsx:843</a></span></div>
+    </div>
+  </div>
+
+  <div style="flex: none; background: #161616; border-top: 1px solid rgba(255,255,255,0.12);">
+    <div style="display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 12px; font-size: 12.5px;">
+      <span style="flex: none; color: #c7ccd6; font-weight: 700;">❯</span>
+      <span style="color: #f3f4f7;">yes ticket both, and check ligatures survive a live font swap</span>
+      <span style="width: 7px; height: 15px; background: #c7ccd6; flex: none;"></span>
+      <div style="flex: 1;"></div>
+      <span style="font-size: 10px; color: #c7ccd6; background: rgba(199,204,214,0.14); border-radius: 4px; padding: 1px 6px;">⏵ auto-edit</span>
+      <span style="font-size: 10px; color: #7f8187;">fable-5 · max</span>
+    </div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>
