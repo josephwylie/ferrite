@@ -1,0 +1,13 @@
+# Rust (Cargo.lock is committed — this is an application)
+target/
+**/*.rs.bk
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Editor
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
