@@ -5,6 +5,7 @@
 //! transcript, store, cockpit — added as their tickets land.
 
 pub mod cockpit;
+pub mod import;
 pub mod providers;
 pub mod store;
 pub mod transcript;
