@@ -440,6 +440,73 @@ fn spawn_completes_the_capability_handshake() {
     );
 }
 
+/// Resume is spawn with history: the resume target rides argv (`--resume
+/// <session_id>`, asserted — a session that quietly started fresh would
+/// replay this fixture identically otherwise), the resumed CLI announces the
+/// *same* session id in its init line (probed on 2.1.243), and the model
+/// answers from a conversation this process never had. Replayed from the
+/// committed `resume` capture.
+#[test]
+fn a_resumed_session_answers_from_the_previous_process_history() {
+    let resumed = fs::read_to_string(fixture("resume-2.1.243"))
+        .unwrap()
+        .lines()
+        .find_map(|line| {
+            let value: Value = serde_json::from_str(line).ok()?;
+            if value.get("type")?.as_str()? != "system" || value.get("subtype")?.as_str()? != "init"
+            {
+                return None;
+            }
+            Some(value["session_id"].as_str()?.to_string())
+        })
+        .expect("the capture announces the resumed session");
+
+    let log = log_path("resume-argv.log");
+    let program = stub(
+        "claude-replay-resume",
+        &format!(
+            "{PRELUDE}\necho \"$@\" > '{}'\ncat '{}'\nexec cat > /dev/null",
+            log.display(),
+            fixture("resume-2.1.243").display()
+        ),
+    );
+    let session = ClaudeSession::spawn(ClaudeConfig {
+        program,
+        resume: Some(resumed.clone()),
+        ..Default::default()
+    })
+    .unwrap();
+    let events = drain(session.events());
+
+    // What Ferrite asked of the CLI: the pinned argv plus exactly the resume.
+    let recorded = read_lines(&log, 1);
+    assert_eq!(
+        recorded[0],
+        format!(
+            "-p --input-format stream-json --output-format stream-json \
+             --include-partial-messages --verbose --permission-prompt-tool stdio \
+             --resume {resumed}"
+        )
+    );
+
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            SessionEvent::Init { session_id, .. } if *session_id == resumed
+        )),
+        "the Session did not announce the resumed session: {events:?}"
+    );
+    let text: String = events
+        .iter()
+        .filter_map(|e| match e {
+            SessionEvent::TextDelta { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(text, "ferrite-resume-ok");
+    drop(session);
+}
+
 /// A CLI that answers nothing still yields a Session: an unknown capability is
 /// reported as unknown, never guessed, and never a failure to spawn.
 #[test]
@@ -498,6 +565,7 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
         cwd: Some(std::env::temp_dir()),
         model: Some("haiku".into()),
         permission_mode: Some("default".into()),
+        resume: None,
     })
     .unwrap();
     session.send("hi").unwrap();

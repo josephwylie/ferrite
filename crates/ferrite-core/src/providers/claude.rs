@@ -65,6 +65,12 @@ pub struct ClaudeConfig {
     /// on a machine configured to bypass permissions means no Decision will
     /// ever arrive. `capabilities().permission_mode` reports what took effect.
     pub permission_mode: Option<String>,
+    /// Resume this provider-native session id (from a previous Session's
+    /// `Init`) instead of starting fresh: the CLI reloads the conversation
+    /// from its own session files. Probed on 2.1.243: the resumed process
+    /// announces the *same* session id in its init line, so the target stays
+    /// stable across any number of resumes.
+    pub resume: Option<String>,
 }
 
 impl Default for ClaudeConfig {
@@ -74,6 +80,7 @@ impl Default for ClaudeConfig {
             cwd: None,
             model: None,
             permission_mode: None,
+            resume: None,
         }
     }
 }
@@ -187,6 +194,12 @@ impl ClaudeSession {
             "--permission-prompt-tool",
             "stdio",
         ]);
+        if let Some(session_id) = &config.resume {
+            // Continue the named conversation instead of starting one. The
+            // CLI reloads history from its own session files; probed on
+            // 2.1.243, the resumed process keeps the same session id.
+            command.args(["--resume", session_id.as_str()]);
+        }
         if let Some(model) = &config.model {
             command.args(["--model", model.as_str()]);
         }

@@ -69,7 +69,7 @@ want() {
     case " $WANTED " in *" $1 "*) return 0 ;; *) return 1 ;; esac
 }
 
-WANTED=${*:-tool edit permission-allow permission-always permission-deny error initialize}
+WANTED=${*:-tool edit permission-allow permission-always permission-deny error initialize resume}
 
 for scenario in $WANTED; do
     case $scenario in
@@ -122,6 +122,32 @@ for scenario in $WANTED; do
         capture permission-deny --answer deny \
             --prompt 'Create a file named ferrite-perm.txt containing exactly the word ok, using the Write tool. Then say done.' \
             -- --safe-mode --permission-mode default --permission-prompt-tool stdio
+        ;;
+    # (g) Resume across processes: a first Session plants a codeword and exits;
+    # a second process continues the same conversation via `--resume`. Only the
+    # resuming process's exchange is committed (mirroring the codex resume
+    # capture); the plant is scratch. Probed on 2.1.243: the resumed process
+    # announces the *same* session_id in its init line, and the model answers
+    # from history the new process never had. The resume target travels in
+    # argv, not stdin, so the host file records only the user turn.
+    resume)
+        CAPTURE_OUT="$WORK/plant" \
+        CAPTURE_BIN="$CLAUDE_BIN" \
+        CAPTURE_CWD="$WORK/cwd" \
+        CAPTURE_MODEL="$MODEL" \
+            python3 "$DIR/capture.py" \
+            --prompt 'Remember the codeword: ferrite-resume-ok. Reply with exactly: saved' \
+            -- --safe-mode
+        SID=$(python3 -c "
+import json
+for line in open('$WORK/plant.jsonl'):
+    value = json.loads(line)
+    if value.get('type') == 'system' and value.get('subtype') == 'init':
+        print(value['session_id'])
+        break")
+        capture resume \
+            --prompt 'What is the codeword? Reply with the codeword only.' \
+            -- --safe-mode --resume "$SID"
         ;;
     # (c) A failing turn. An empty CLAUDE_CONFIG_DIR has no credentials, so the
     # CLI ends the turn with terminal_reason "api_error" — reliable, offline,

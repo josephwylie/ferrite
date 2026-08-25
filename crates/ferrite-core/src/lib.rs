@@ -6,6 +6,7 @@
 
 pub mod cockpit;
 pub mod providers;
+pub mod store;
 pub mod transcript;
 
 mod session_event;

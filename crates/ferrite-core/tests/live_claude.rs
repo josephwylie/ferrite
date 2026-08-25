@@ -20,6 +20,7 @@ fn live_config() -> ClaudeConfig {
         cwd: Some(std::env::temp_dir()),
         model: Some("haiku".into()),
         permission_mode: None,
+        resume: None,
     }
 }
 
@@ -114,6 +115,51 @@ fn the_real_cli_answers_the_capability_handshake() {
         capabilities.models.iter().any(|model| model == "haiku"),
         "models: {:?}",
         capabilities.models
+    );
+}
+
+/// Resume across processes, for real: a Session plants a codeword and dies;
+/// a second Session resumes the same session id and the model answers from a
+/// conversation the new process never had. Probed on 2.1.243: the resumed
+/// process re-announces the *same* session id.
+#[test]
+#[ignore = "spawns the real claude CLI"]
+fn a_parked_thread_resumes_across_processes() {
+    let mut session = ClaudeSession::spawn(live_config()).unwrap();
+    session
+        .send("Remember the codeword: ferrite-live-resume. Reply with exactly: saved")
+        .unwrap();
+    let deadline = Instant::now() + TURN_TIMEOUT;
+    let mut session_id = None;
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match session.events().recv_timeout(left) {
+            Ok(SessionEvent::Init { session_id: id, .. }) => session_id = Some(id),
+            Ok(SessionEvent::TurnEnded { outcome, .. }) => {
+                assert_eq!(outcome, TurnOutcome::Completed);
+                break;
+            }
+            Ok(SessionEvent::Closed { reason }) => panic!("session closed mid-turn: {reason}"),
+            Ok(_) => {}
+            Err(e) => panic!("no turn end within {TURN_TIMEOUT:?}: {e}"),
+        }
+    }
+    let session_id = session_id.expect("the first Session announced itself");
+    drop(session);
+
+    let mut revived = ClaudeSession::spawn(ClaudeConfig {
+        resume: Some(session_id),
+        ..live_config()
+    })
+    .unwrap();
+    revived
+        .send("What is the codeword? Reply with the codeword only.")
+        .unwrap();
+    let (outcome, text) = await_turn_end(revived.events());
+    assert_eq!(outcome, TurnOutcome::Completed);
+    assert!(
+        text.contains("ferrite-live-resume"),
+        "the resumed session forgot: {text:?}"
     );
 }
 
