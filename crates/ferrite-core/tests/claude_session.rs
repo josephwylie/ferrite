@@ -10,13 +10,26 @@ use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
-use ferrite_core::providers::{ClaudeConfig, ClaudeSession, SpawnError};
-use ferrite_core::{SessionEvent, TurnOutcome};
+use serde_json::Value;
+
+use ferrite_core::providers::{Capabilities, ClaudeConfig, ClaudeSession, SpawnError};
+use ferrite_core::{DecisionAnswer, SessionEvent, TurnOutcome};
 
 const VERSION_CASE: &str = "case \"$1\" in --version) echo '2.1.243 (Claude Code)'; exit 0;; esac";
 
-fn fixture() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/claude-hello-2.1.243.jsonl")
+/// What every stub has to do before it can pretend to be the CLI: answer
+/// `--version`, then answer spawn's initialize control request the way a real
+/// CLI does. A stub that stayed silent would make its test wait out the
+/// handshake timeout — and would be lying about the protocol. Stubs that are
+/// *about* the handshake build on `VERSION_CASE` instead and answer it
+/// themselves.
+const PRELUDE: &str = concat!(
+    "case \"$1\" in --version) echo '2.1.243 (Claude Code)'; exit 0;; esac\n",
+    r#"echo '{"type":"control_response","response":{"subtype":"success","request_id":"req_1","response":{}}}'"#,
+);
+
+fn fixture(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/claude-{name}.jsonl"))
 }
 
 /// An executable stub `claude` in a per-process temp dir.
@@ -57,6 +70,21 @@ fn drain(events: &Receiver<SessionEvent>) -> Vec<SessionEvent> {
     }
 }
 
+/// The whole path for one committed capture: real process, real pipes, real
+/// reader thread. Every fixture earns its keep here, not only in the parser's
+/// own tests.
+fn replay(name: &str) -> Vec<SessionEvent> {
+    let program = stub(
+        &format!("claude-replay-{name}"),
+        &format!(
+            "{PRELUDE}\ncat '{}'\nexec cat > /dev/null",
+            fixture(name).display()
+        ),
+    );
+    let session = ClaudeSession::spawn(config(program)).unwrap();
+    drain(session.events())
+}
+
 fn spawn_failure(program: String) -> SpawnError {
     match ClaudeSession::spawn(config(program)) {
         Err(e) => e,
@@ -74,7 +102,7 @@ fn a_missing_cli_is_named_in_the_error() {
 }
 
 #[test]
-fn a_cli_below_the_pin_is_refused_before_any_conversation() {
+fn a_cli_below_the_pin_is_refused_before_any_session() {
     match spawn_failure(stub("claude-old", "echo '2.1.223 (Claude Code)'")) {
         SpawnError::CliVersionUnmet { found, required } => {
             assert_eq!(found, "2.1.223");
@@ -84,8 +112,8 @@ fn a_cli_below_the_pin_is_refused_before_any_conversation() {
     }
 }
 
-/// The pin is a minimum, not an exclusive bound: the exact pinned release is
-/// the one Ferrite is developed against and must spawn.
+/// The floor is inclusive: the exact pinned release is the one Ferrite is
+/// developed against and must spawn.
 #[test]
 fn a_cli_exactly_at_the_pin_is_accepted() {
     let program = stub(
@@ -93,6 +121,34 @@ fn a_cli_exactly_at_the_pin_is_accepted() {
         "case \"$1\" in --version) echo '2.1.224 (Claude Code)'; exit 0;; esac\nexit 0",
     );
     ClaudeSession::spawn(config(program)).expect("the pinned version must spawn");
+}
+
+/// A new major is a new protocol until someone proves otherwise. Refusing at
+/// spawn is the whole point: a 3.x CLI that silently changed the wire would
+/// otherwise fail somewhere deep in a turn, where the cause is invisible.
+#[test]
+fn a_cli_at_the_next_major_is_refused_rather_than_trusted() {
+    match spawn_failure(stub("claude-future", "echo '3.0.0 (Claude Code)'")) {
+        SpawnError::CliVersionUnsupported {
+            found,
+            supported_below,
+        } => {
+            assert_eq!(found, "3.0.0");
+            assert_eq!(supported_below, "3.0.0");
+        }
+        other => panic!("expected CliVersionUnsupported, got {other:?}"),
+    }
+}
+
+/// The ceiling is exclusive, so the whole 2.x line stays supported: only a
+/// major bump is treated as an unknown protocol.
+#[test]
+fn the_last_release_below_the_next_major_is_accepted() {
+    let program = stub(
+        "claude-late-two",
+        "case \"$1\" in --version) echo '2.99.99 (Claude Code)'; exit 0;; esac\nexit 0",
+    );
+    ClaudeSession::spawn(config(program)).expect("2.x must keep spawning");
 }
 
 #[test]
@@ -124,8 +180,8 @@ fn the_reader_thread_delivers_the_captured_stream() {
     let program = stub(
         "claude-stream",
         &format!(
-            "{VERSION_CASE}\ncat '{}'\nexec sleep 30",
-            fixture().display()
+            "{PRELUDE}\ncat '{}'\nexec sleep 30",
+            fixture("hello-2.1.243").display()
         ),
     );
     let session = ClaudeSession::spawn(config(program)).unwrap();
@@ -173,9 +229,202 @@ fn the_reader_thread_delivers_the_captured_stream() {
     );
 }
 
+/// A tool call, whole: the CLI settles the input, runs the tool, reports what
+/// it produced. Replayed from the committed `tool` capture.
+#[test]
+fn a_tool_call_arrives_as_a_start_and_a_completion() {
+    let events = replay("tool-2.1.243");
+
+    let started: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            SessionEvent::ToolStarted { id, name, input } => Some((id, name, input)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(started.len(), 1, "expected one tool start: {events:?}");
+    let (id, name, input) = started[0];
+    assert_eq!(name, "Bash");
+    assert_eq!(input["command"], "echo ferrite-tool-ok");
+
+    assert!(
+        events.contains(&SessionEvent::ToolCompleted {
+            id: id.clone(),
+            output: "ferrite-tool-ok".into(),
+            is_error: false,
+        }),
+        "no completion matching {id}: {events:?}"
+    );
+}
+
+/// A Decision: the CLI stops and asks whether a tool may run. Replayed from
+/// the committed `permission-allow` capture, which recorded the real
+/// `can_use_tool` control request.
+#[test]
+fn a_permission_request_arrives_as_a_decision_naming_its_tool_call() {
+    let events = replay("permission-allow-2.1.243");
+
+    let decisions: Vec<_> = events
+        .iter()
+        .filter(|e| matches!(e, SessionEvent::DecisionRequested { .. }))
+        .collect();
+    assert_eq!(decisions.len(), 1, "expected one Decision: {events:?}");
+    let SessionEvent::DecisionRequested {
+        id,
+        tool_use_id,
+        tool_name,
+        description,
+        input,
+        suggestions,
+    } = decisions[0]
+    else {
+        unreachable!()
+    };
+
+    assert!(!id.is_empty(), "a Decision must be answerable");
+    assert_eq!(tool_name, "Write");
+    assert_eq!(description, "ferrite-perm.txt");
+    assert_eq!(input["content"], "ok");
+    assert_eq!(suggestions[0]["mode"], "acceptEdits");
+
+    // The Decision names the tool card it blocks, so a Pane can render it in
+    // place instead of as a free-floating prompt.
+    assert!(
+        events.contains(&SessionEvent::ToolStarted {
+            id: tool_use_id.clone(),
+            name: "Write".into(),
+            input: input.clone(),
+        }),
+        "no ToolStarted for {tool_use_id}: {events:?}"
+    );
+}
+
+/// Answering a Decision has to put the exact bytes on the wire that the real
+/// CLI accepted, so the assertion is the recorded host side of the capture
+/// itself: whatever `respond_to_decision` writes must match what the live
+/// probe proved works (allow → the tool ran; deny → the turn survived).
+fn answering(fixture_name: &str, answer: impl Fn(&SessionEvent) -> DecisionAnswer) -> Value {
+    let log = log_path(&format!("{fixture_name}-answer.log"));
+    let _ = fs::remove_file(&log);
+    let program = stub(
+        &format!("claude-decides-{fixture_name}"),
+        &format!(
+            "{PRELUDE}\ncat '{}'\ncat >> '{}'",
+            fixture(fixture_name).display(),
+            log.display()
+        ),
+    );
+    let mut session = ClaudeSession::spawn(config(program)).unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match session.events().recv_timeout(left) {
+            Ok(event @ SessionEvent::DecisionRequested { .. }) => {
+                let SessionEvent::DecisionRequested { id, .. } = &event else {
+                    unreachable!()
+                };
+                session.respond_to_decision(id, answer(&event)).unwrap();
+                break;
+            }
+            Ok(_) => {}
+            Err(e) => panic!("no Decision arrived: {e}"),
+        }
+    }
+
+    // Line one is spawn's own initialize request; the answer follows it.
+    let written = read_lines(&log, 2);
+    drop(session);
+    serde_json::from_str(&written[1]).expect("one JSON object per line")
+}
+
+/// What the recording sent back for the same Decision.
+fn recorded_answer(fixture_name: &str) -> Value {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join(format!("tests/fixtures/claude-{fixture_name}.host.jsonl"));
+    fs::read_to_string(path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .find(|line| line["type"] == "control_response")
+        .expect("the capture answered a Decision")
+}
+
+#[test]
+fn allowing_a_decision_writes_what_the_cli_accepted() {
+    let sent = answering("permission-allow-2.1.243", |event| {
+        let SessionEvent::DecisionRequested { input, .. } = event else {
+            unreachable!()
+        };
+        DecisionAnswer::Allow {
+            input: input.clone(),
+        }
+    });
+    assert_eq!(sent, recorded_answer("permission-allow-2.1.243"));
+}
+
+#[test]
+fn denying_a_decision_carries_the_operator_s_reason_to_the_model() {
+    let sent = answering("permission-deny-2.1.243", |_| DecisionAnswer::Deny {
+        message: "Ferrite operator denied this tool".into(),
+    });
+    assert_eq!(sent, recorded_answer("permission-deny-2.1.243"));
+}
+
+/// A failed turn has to say what failed. Replayed from the committed `error`
+/// capture, where the CLI could not reach the API: `subtype` says "success"
+/// even so, and only `terminal_reason` classifies it.
+#[test]
+fn a_failed_turn_ends_with_the_reason_the_cli_gave() {
+    let events = replay("error-2.1.243");
+    assert_eq!(
+        events.last(),
+        Some(&SessionEvent::TurnEnded {
+            outcome: TurnOutcome::Error("api_error: Not logged in · Please run /login".into()),
+            cost_usd: Some(0.0),
+        }),
+        "stream: {events:?}"
+    );
+}
+
+/// Feature detection happens at initialize, so a Session knows what the CLI
+/// can do before the operator is offered anything. Replayed from the committed
+/// `initialize` capture — the real control response, verbatim.
+#[test]
+fn spawn_completes_the_capability_handshake() {
+    let program = stub(
+        "claude-handshakes",
+        &format!(
+            "{VERSION_CASE}\ncat '{}'\nexec cat > /dev/null",
+            fixture("initialize-2.1.243").display()
+        ),
+    );
+    let session = ClaudeSession::spawn(config(program)).unwrap();
+    let capabilities = session.capabilities();
+
+    assert_eq!(capabilities.permission_mode, "bypassPermissions");
+    assert!(
+        capabilities.models.iter().any(|model| model == "haiku"),
+        "models: {:?}",
+        capabilities.models
+    );
+}
+
+/// A CLI that answers nothing still yields a Session: an unknown capability is
+/// reported as unknown, never guessed, and never a failure to spawn.
+#[test]
+fn a_silent_cli_leaves_its_capabilities_empty_rather_than_assumed() {
+    let program = stub(
+        "claude-mum",
+        &format!("{VERSION_CASE}\nexec cat > /dev/null"),
+    );
+    let session = ClaudeSession::spawn(config(program)).unwrap();
+    assert_eq!(session.capabilities(), &Capabilities::default());
+}
+
 #[test]
 fn stdout_eof_closes_the_session_with_the_exit_status() {
-    let program = stub("claude-quits", &format!("{VERSION_CASE}\nexit 0"));
+    let program = stub("claude-quits", &format!("{PRELUDE}\nexit 0"));
     let session = ClaudeSession::spawn(config(program)).unwrap();
     match drain(session.events()).as_slice() {
         [SessionEvent::Closed { reason }] => {
@@ -189,7 +438,7 @@ fn stdout_eof_closes_the_session_with_the_exit_status() {
 fn an_abnormal_exit_explains_itself_with_stderr() {
     let program = stub(
         "claude-crashes",
-        &format!("{VERSION_CASE}\necho 'fatal: no auth token' >&2\nexit 3"),
+        &format!("{PRELUDE}\necho 'fatal: no auth token' >&2\nexit 3"),
     );
     let session = ClaudeSession::spawn(config(program)).unwrap();
     match drain(session.events()).as_slice() {
@@ -209,7 +458,7 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
     let program = stub(
         "claude-echoes",
         &format!(
-            "{VERSION_CASE}\necho \"$@\" > '{}'\ncat >> '{}'",
+            "{PRELUDE}\necho \"$@\" > '{}'\ncat >> '{}'",
             log.display(),
             log.display()
         ),
@@ -218,51 +467,65 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
         program,
         cwd: Some(std::env::temp_dir()),
         model: Some("haiku".into()),
+        permission_mode: Some("default".into()),
     })
     .unwrap();
     session.send("hi").unwrap();
     session.interrupt().unwrap();
     session.interrupt().unwrap();
 
-    let recorded = read_lines(&log, 4);
+    let recorded = read_lines(&log, 5);
     drop(session);
     let sent: Vec<serde_json::Value> = recorded[1..]
         .iter()
         .map(|line| serde_json::from_str(line).expect("every line is one JSON object"))
         .collect();
 
+    // `--permission-prompt-tool stdio` is what makes the CLI ask over the
+    // control protocol rather than deciding alone: without it a Decision never
+    // reaches the operator, so it is not optional for a cockpit.
     assert_eq!(
         recorded[0],
         "-p --input-format stream-json --output-format stream-json \
-         --include-partial-messages --verbose --model haiku"
+         --include-partial-messages --verbose --permission-prompt-tool stdio \
+         --model haiku --permission-mode default"
     );
+    // Feature detection comes first, before a word of the Thread.
     assert_eq!(
         sent[0],
+        serde_json::json!({
+            "type": "control_request",
+            "request_id": "req_1",
+            "request": {"subtype": "initialize"},
+        })
+    );
+    assert_eq!(
+        sent[1],
         serde_json::json!({
             "type": "user",
             "message": {"role": "user", "content": [{"type": "text", "text": "hi"}]},
         })
     );
     assert_eq!(
-        sent[1],
+        sent[2],
         serde_json::json!({
             "type": "control_request",
-            "request_id": "req_1",
+            "request_id": "req_2",
             "request": {"subtype": "interrupt"},
         })
     );
-    assert_eq!(sent[2]["request_id"], "req_2");
+    assert_eq!(sent[3]["request_id"], "req_3");
 }
 
-/// Ferrite must not smuggle in a model the operator did not choose: with no
-/// override the CLI is left to its own configured default.
+/// Ferrite must not smuggle in a model or a permission posture the operator
+/// did not choose: with no override the CLI keeps its own configuration.
 #[test]
-fn no_model_is_passed_when_the_config_names_none() {
+fn no_model_or_permission_mode_is_passed_when_the_config_names_none() {
     let log = log_path("argv-default.log");
     let program = stub(
         "claude-echoes-default",
         &format!(
-            "{VERSION_CASE}\necho \"$@\" > '{}'\nexec cat > /dev/null",
+            "{PRELUDE}\necho \"$@\" > '{}'\nexec cat > /dev/null",
             log.display()
         ),
     );
@@ -272,7 +535,7 @@ fn no_model_is_passed_when_the_config_names_none() {
     assert_eq!(
         recorded[0],
         "-p --input-format stream-json --output-format stream-json \
-         --include-partial-messages --verbose"
+         --include-partial-messages --verbose --permission-prompt-tool stdio"
     );
 }
 
@@ -286,14 +549,14 @@ fn the_cli_runs_in_the_configured_workspace() {
     let program = stub(
         "claude-pwd",
         &format!(
-            "{VERSION_CASE}\npwd -P > '{}'\nexec cat > /dev/null",
+            "{PRELUDE}\npwd -P > '{}'\nexec cat > /dev/null",
             log.display()
         ),
     );
     let session = ClaudeSession::spawn(ClaudeConfig {
         program,
         cwd: Some(workspace.clone()),
-        model: None,
+        ..Default::default()
     })
     .unwrap();
     let recorded = read_lines(&log, 1);
@@ -311,7 +574,7 @@ fn only_the_tail_of_a_noisy_stderr_is_kept() {
     let program = stub(
         "claude-noisy",
         &format!(
-            "{VERSION_CASE}\ni=1\nwhile [ $i -le 100 ]; do echo \"noise $i\" >&2; i=$((i+1)); done\nexit 3"
+            "{PRELUDE}\ni=1\nwhile [ $i -le 100 ]; do echo \"noise $i\" >&2; i=$((i+1)); done\nexit 3"
         ),
     );
     let session = ClaudeSession::spawn(config(program)).unwrap();
@@ -344,7 +607,7 @@ fn a_line_of_invalid_utf8_does_not_end_the_session() {
     let program = stub(
         "claude-mangles",
         &format!(
-            "{VERSION_CASE}\ncat '{}'\nexec cat > /dev/null",
+            "{PRELUDE}\ncat '{}'\nexec cat > /dev/null",
             payload.display()
         ),
     );
@@ -386,7 +649,7 @@ fn a_slow_consumer_stalls_the_cli_instead_of_losing_events() {
     let program = stub(
         "claude-floods",
         &format!(
-            "{VERSION_CASE}\ncat '{}'\nexec cat > /dev/null",
+            "{PRELUDE}\ncat '{}'\nexec cat > /dev/null",
             payload.display()
         ),
     );

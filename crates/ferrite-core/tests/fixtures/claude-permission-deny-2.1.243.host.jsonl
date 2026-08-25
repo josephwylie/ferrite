@@ -1,0 +1,2 @@
+{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "Create a file named ferrite-perm.txt containing exactly the word ok, using the Write tool. Then say done."}]}}
+{"type": "control_response", "response": {"subtype": "success", "request_id": "4bbfab0e-6d78-4bec-a6fd-da2c47334a0d", "response": {"behavior": "deny", "message": "Ferrite operator denied this tool"}}}

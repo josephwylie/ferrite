@@ -1,6 +1,6 @@
 //! Claude provider: the pinned `claude` CLI spoken over stdio stream-json.
 //!
-//! Spawn checks the CLI version pin before any process starts a conversation;
+//! Spawn checks the CLI version pin before any process serves a Thread;
 //! a reader thread parses stdout lines into SessionEvents on a bounded
 //! channel. Backpressure is stated and simple: when the channel is full the
 //! reader thread blocks, the pipe fills, and the CLI stalls — nothing is
@@ -16,15 +16,23 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::SessionEvent;
+use crate::{DecisionAnswer, SessionEvent};
 
 /// Minimum `claude` CLI version for stable stream-json + stdio control
 /// protocol. Vendor releases below this break loudly at spawn, not weirdly
-/// mid-conversation.
+/// mid-turn.
 pub const CLAUDE_CLI_MIN_VERSION: [u64; 3] = [2, 1, 224];
 
-/// `CLAUDE_CLI_MIN_VERSION` as it is shown to operators.
+/// Exclusive ceiling: Ferrite is proven against the 2.x wire, and a new major
+/// is a new protocol until someone re-runs the fixture captures against it. A
+/// 3.x CLI is refused at spawn rather than trusted into a Session, because a
+/// silently changed wire fails somewhere deep in a turn where the cause is
+/// invisible.
+pub const CLAUDE_CLI_MAX_VERSION_EXCLUSIVE: [u64; 3] = [3, 0, 0];
+
+/// The supported window as it is shown to operators.
 const MIN_VERSION_DISPLAY: &str = "2.1.224";
+const MAX_VERSION_DISPLAY: &str = "3.0.0";
 
 /// One frame of UI drains far less than this; the depth exists so a stalled
 /// frame throttles the CLI instead of losing its output.
@@ -33,6 +41,15 @@ const EVENT_CHANNEL_CAPACITY: usize = 1024;
 /// Enough stderr to explain a crash, bounded so a chatty CLI cannot grow
 /// memory for the life of a Session.
 const STDERR_TAIL_LINES: usize = 20;
+
+/// How long spawn waits for the initialize control response. Measured against
+/// `claude` 2.1.243, which answers in well under a second from a cold start;
+/// the budget is generous because overrunning it costs only unknown
+/// capabilities, never a failed spawn.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The request id spawn uses for the handshake, before any operator traffic.
+const HANDSHAKE_REQUEST_ID: &str = "req_1";
 
 /// How to spawn a Claude Session.
 #[derive(Debug, Clone)]
@@ -43,6 +60,11 @@ pub struct ClaudeConfig {
     pub cwd: Option<PathBuf>,
     /// Model override passed through to the CLI.
     pub model: Option<String>,
+    /// Permission posture for this Thread (`"default"`, `"acceptEdits"`,
+    /// `"plan"`, …). `None` leaves the CLI's own configuration alone — which
+    /// on a machine configured to bypass permissions means no Decision will
+    /// ever arrive. `capabilities().permission_mode` reports what took effect.
+    pub permission_mode: Option<String>,
 }
 
 impl Default for ClaudeConfig {
@@ -51,6 +73,7 @@ impl Default for ClaudeConfig {
             program: "claude".into(),
             cwd: None,
             model: None,
+            permission_mode: None,
         }
     }
 }
@@ -62,10 +85,16 @@ pub enum SpawnError {
     CliNotFound {
         program: String,
     },
-    /// The CLI is older than the pin.
+    /// The CLI is older than the pin. The operator upgrades the CLI.
     CliVersionUnmet {
         found: String,
         required: &'static str,
+    },
+    /// The CLI is a major release beyond what Ferrite has been proven against.
+    /// The operator upgrades Ferrite — the CLI is fine.
+    CliVersionUnsupported {
+        found: String,
+        supported_below: &'static str,
     },
     /// `--version` ran but produced nothing parseable.
     VersionCheckFailed {
@@ -83,7 +112,18 @@ impl std::fmt::Display for SpawnError {
             SpawnError::CliVersionUnmet { found, required } => {
                 write!(
                     f,
-                    "claude CLI {found} is older than the pinned minimum {required}"
+                    "claude CLI {found} is older than the pinned minimum {required}; \
+                     upgrade the CLI"
+                )
+            }
+            SpawnError::CliVersionUnsupported {
+                found,
+                supported_below,
+            } => {
+                write!(
+                    f,
+                    "claude CLI {found} is a newer major release than Ferrite is proven \
+                     against (below {supported_below}); upgrade Ferrite"
                 )
             }
             SpawnError::VersionCheckFailed { detail } => {
@@ -96,13 +136,32 @@ impl std::fmt::Display for SpawnError {
 
 impl std::error::Error for SpawnError {}
 
+/// What the CLI answered at initialize: feature detection, so a Pane never
+/// offers what this install cannot do.
+///
+/// Only what Ferrite acts on is kept; the response also carries the CLI's
+/// slash commands, subagents and output styles, which nothing reads yet.
+/// Note what is *not* here: the `interrupt_receipt_v1` family of capability
+/// tokens is announced on the `system:init` line at the head of a turn, not in
+/// this handshake, so it cannot be known before the first prompt.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Capabilities {
+    /// The permission mode the CLI started in. `"bypassPermissions"` means no
+    /// Decision will ever arrive; every other mode means they can.
+    pub permission_mode: String,
+    /// Model values this install offers (`"haiku"`, `"opus[1m]"`, …) — the
+    /// menu an operator may pick from, not what Ferrite hardcodes.
+    pub models: Vec<String>,
+}
+
 /// A live Claude Session: one CLI process serving one Thread.
 pub struct ClaudeSession {
     child: Arc<Mutex<Child>>,
-    /// Held open for the life of the Session: closing it ends the
-    /// conversation, so multi-turn depends on this staying alive.
+    /// Held open for the life of the Session: closing it ends the Session,
+    /// so multi-turn depends on this staying alive.
     stdin: ChildStdin,
     events: Receiver<SessionEvent>,
+    capabilities: Capabilities,
     next_request_id: u64,
 }
 
@@ -120,9 +179,19 @@ impl ClaudeSession {
             "stream-json",
             "--include-partial-messages",
             "--verbose",
+            // Route tool permissions to Ferrite over the control protocol
+            // instead of letting the CLI answer them alone. A cockpit whose
+            // whole job is surfacing Decisions cannot leave this to config.
+            // Undocumented in `--help` on 2.1.243; `stdio` is the magic value
+            // that means "ask the host on stdin", verified by capture.
+            "--permission-prompt-tool",
+            "stdio",
         ]);
         if let Some(model) = &config.model {
             command.args(["--model", model.as_str()]);
+        }
+        if let Some(mode) = &config.permission_mode {
+            command.args(["--permission-mode", mode.as_str()]);
         }
         if let Some(cwd) = &config.cwd {
             command.current_dir(cwd);
@@ -143,14 +212,30 @@ impl ClaudeSession {
 
         let (sender, events) = sync_channel(EVENT_CHANNEL_CAPACITY);
         let child = Arc::new(Mutex::new(child));
-        read_stdout(stdout, sender, Arc::clone(&child), stderr_tail);
+        let capabilities = read_stdout(stdout, sender, Arc::clone(&child), stderr_tail);
 
-        Ok(Self {
+        let mut session = Self {
             child,
             stdin,
             events,
+            capabilities: Capabilities::default(),
             next_request_id: 1,
-        })
+        };
+        // Before the operator is offered anything: ask the CLI what it can do.
+        // A write failure here is a CLI that died on startup, which the reader
+        // thread is already turning into a Closed event — spawn still hands
+        // back a Session so that reason reaches the Pane.
+        let id = session.take_request_id();
+        debug_assert_eq!(id, HANDSHAKE_REQUEST_ID);
+        let _ = session.write_line(&serde_json::json!({
+            "type": "control_request",
+            "request_id": id,
+            "request": {"subtype": "initialize"},
+        }));
+        session.capabilities = capabilities
+            .recv_timeout(HANDSHAKE_TIMEOUT)
+            .unwrap_or_default();
+        Ok(session)
     }
 
     /// Send one user prompt; the CLI starts (or queues) a turn.
@@ -166,8 +251,7 @@ impl ClaudeSession {
 
     /// Interrupt the running turn over the stdio control protocol.
     pub fn interrupt(&mut self) -> io::Result<()> {
-        let request_id = format!("req_{}", self.next_request_id);
-        self.next_request_id += 1;
+        let request_id = self.take_request_id();
         self.write_line(&serde_json::json!({
             "type": "control_request",
             "request_id": request_id,
@@ -175,10 +259,49 @@ impl ClaudeSession {
         }))
     }
 
+    /// What the CLI said it can do, answered at spawn. Empty when this install
+    /// did not answer the handshake — unknown, never assumed.
+    pub fn capabilities(&self) -> &Capabilities {
+        &self.capabilities
+    }
+
+    /// Answer a `DecisionRequested`, quoting the id it arrived with.
+    ///
+    /// The CLI blocks the turn until this lands: `Allow` runs the tool,
+    /// `Deny` feeds the message back as the tool's error and the turn carries
+    /// on. Unlike `interrupt`, the request id is the CLI's, not Ferrite's —
+    /// this is a response to its question, so it must not be renumbered.
+    pub fn respond_to_decision(&mut self, id: &str, answer: DecisionAnswer) -> io::Result<()> {
+        let body = match answer {
+            DecisionAnswer::Allow { input } => {
+                serde_json::json!({"behavior": "allow", "updatedInput": input})
+            }
+            DecisionAnswer::Deny { message } => {
+                serde_json::json!({"behavior": "deny", "message": message})
+            }
+        };
+        self.write_line(&serde_json::json!({
+            "type": "control_response",
+            "response": {
+                "subtype": "success",
+                "request_id": id,
+                "response": body,
+            },
+        }))
+    }
+
     /// The bounded event stream. Poll with `try_recv`/`try_iter`; the UI
     /// drains this per frame.
     pub fn events(&self) -> &Receiver<SessionEvent> {
         &self.events
+    }
+
+    /// Ferrite numbers its own control requests; the CLI's ids are its own and
+    /// are echoed back untouched (see `respond_to_decision`).
+    fn take_request_id(&mut self) -> String {
+        let id = format!("req_{}", self.next_request_id);
+        self.next_request_id += 1;
+        id
     }
 
     fn write_line(&mut self, value: &serde_json::Value) -> io::Result<()> {
@@ -197,15 +320,20 @@ impl Drop for ClaudeSession {
     }
 }
 
+/// Returns the channel the initialize answer will arrive on. It is a channel
+/// rather than a return value because only this thread ever reads stdout:
+/// letting spawn read it directly would race the reader for lines.
 fn read_stdout(
     stdout: ChildStdout,
     sender: SyncSender<SessionEvent>,
     child: Arc<Mutex<Child>>,
     stderr_tail: Arc<Mutex<StderrTail>>,
-) {
+) -> Receiver<Capabilities> {
+    let (handshake, capabilities) = sync_channel(1);
     thread::spawn(move || {
         let mut reader = BufReader::new(stdout);
         let mut line = Vec::new();
+        let mut handshake = Some(handshake);
         loop {
             line.clear();
             match reader.read_until(b'\n', &mut line) {
@@ -215,7 +343,16 @@ fn read_stdout(
             // Lossy rather than strict: a byte the CLI mangles must not end a
             // Session.
             let text = String::from_utf8_lossy(&line);
-            if let Some(event) = wire::parse_line(text.trim_end()) {
+            let text = text.trim_end();
+            if handshake.is_some() {
+                if let Some(capabilities) = wire::parse_capabilities(text, HANDSHAKE_REQUEST_ID) {
+                    // Unblocks spawn. Dropping the sender afterwards is what
+                    // stops a second control response being mistaken for it.
+                    let _ = handshake.take().expect("just checked").send(capabilities);
+                    continue;
+                }
+            }
+            if let Some(event) = wire::parse_line(text) {
                 // A full channel parks this thread, the OS pipe fills, and the
                 // CLI blocks on its own write. Backpressure, never loss.
                 if sender.send(event).is_err() {
@@ -225,6 +362,7 @@ fn read_stdout(
         }
         let _ = sender.send(closed_event(&child, &stderr_tail));
     });
+    capabilities
 }
 
 /// The last of the CLI's stderr, and whether there is any more coming.
@@ -333,6 +471,12 @@ fn check_version(program: &str) -> Result<(), SpawnError> {
             required: MIN_VERSION_DISPLAY,
         });
     }
+    if version >= CLAUDE_CLI_MAX_VERSION_EXCLUSIVE {
+        return Err(SpawnError::CliVersionUnsupported {
+            found,
+            supported_below: MAX_VERSION_DISPLAY,
+        });
+    }
     Ok(())
 }
 
@@ -358,11 +502,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_displayed_minimum_matches_the_pin() {
+    fn the_displayed_window_matches_the_pins() {
         assert_eq!(
             parse_version(MIN_VERSION_DISPLAY).map(|(_, v)| v),
             Some(CLAUDE_CLI_MIN_VERSION)
         );
+        assert_eq!(
+            parse_version(MAX_VERSION_DISPLAY).map(|(_, v)| v),
+            Some(CLAUDE_CLI_MAX_VERSION_EXCLUSIVE)
+        );
+        assert!(CLAUDE_CLI_MIN_VERSION < CLAUDE_CLI_MAX_VERSION_EXCLUSIVE);
+    }
+
+    /// The window is closed at the bottom and open at the top.
+    #[test]
+    fn the_next_major_is_out_and_the_release_before_it_is_in() {
+        let last_supported = parse_version("2.99.99").unwrap().1;
+        let next_major = parse_version("3.0.0").unwrap().1;
+        assert!(last_supported < CLAUDE_CLI_MAX_VERSION_EXCLUSIVE);
+        assert!(next_major >= CLAUDE_CLI_MAX_VERSION_EXCLUSIVE);
+    }
+
+    /// The version Ferrite is developed against has to sit inside its own pins.
+    #[test]
+    fn the_captured_fixture_version_is_supported() {
+        let captured = parse_version("2.1.243").unwrap().1;
+        assert!(captured >= CLAUDE_CLI_MIN_VERSION);
+        assert!(captured < CLAUDE_CLI_MAX_VERSION_EXCLUSIVE);
     }
 
     #[test]

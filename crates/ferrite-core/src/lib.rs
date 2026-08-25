@@ -7,4 +7,4 @@
 pub mod providers;
 
 mod session_event;
-pub use session_event::{SessionEvent, TurnOutcome};
+pub use session_event::{DecisionAnswer, SessionEvent, TurnOutcome};

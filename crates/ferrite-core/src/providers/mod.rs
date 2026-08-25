@@ -3,4 +3,7 @@
 //! real duplication demands one.
 
 mod claude;
-pub use claude::{ClaudeConfig, ClaudeSession, SpawnError, CLAUDE_CLI_MIN_VERSION};
+pub use claude::{
+    Capabilities, ClaudeConfig, ClaudeSession, SpawnError, CLAUDE_CLI_MAX_VERSION_EXCLUSIVE,
+    CLAUDE_CLI_MIN_VERSION,
+};

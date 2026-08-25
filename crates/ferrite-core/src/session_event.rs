@@ -13,6 +13,45 @@ pub enum SessionEvent {
     TextDelta { text: String },
     /// Extended thinking streamed in (Claude).
     ThinkingDelta { text: String },
+    /// A tool call the provider has settled and is about to run. `input` is
+    /// the tool's own schema, so it stays a `Value`: inventing a Ferrite type
+    /// per tool would be a guess that goes stale on the vendor's next release.
+    ToolStarted {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
+    /// A tool call finished. `output` is exactly what the provider fed back to
+    /// the model — text as text, anything else as its compact JSON.
+    ///
+    /// Claude also reports a *structured* result alongside it (a stdout/stderr
+    /// pair for Bash, a patch for an edit). Nothing renders that yet, so it is
+    /// not modelled here; the committed fixtures carry it under
+    /// `tool_use_result` for whoever builds diff cards.
+    ToolCompleted {
+        id: String,
+        output: String,
+        is_error: bool,
+    },
+    /// The Session is blocked on a Decision: only the operator can say whether
+    /// this tool may run. Answer it with the provider's respond-to-Decision
+    /// call, quoting `id`.
+    DecisionRequested {
+        /// The provider's handle for this Decision.
+        id: String,
+        /// The tool call being gated — the id of its `ToolStarted`, so a Pane
+        /// can put the Decision on the tool card it blocks.
+        tool_use_id: String,
+        tool_name: String,
+        /// The provider's own one-line summary, for a Pane too small to render
+        /// `input` (the wall answers Decisions without focusing).
+        description: String,
+        input: serde_json::Value,
+        /// Standing answers the provider offers ("allow edits for this
+        /// session"). Left raw: only one shape has been observed on the wire
+        /// and a Ferrite enum built from one sample would be a guess.
+        suggestions: Vec<serde_json::Value>,
+    },
     /// A turn finished.
     TurnEnded {
         outcome: TurnOutcome,
@@ -20,6 +59,17 @@ pub enum SessionEvent {
     },
     /// The session process exited; no further events will arrive.
     Closed { reason: String },
+}
+
+/// How the operator answered a `DecisionRequested`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DecisionAnswer {
+    /// Run the tool, with this input. Normally the input the Decision arrived
+    /// with, echoed back; a different value runs the tool with edits.
+    Allow { input: serde_json::Value },
+    /// Refuse. The message reaches the model as the tool's failed result, so
+    /// the turn continues with a refusal rather than dying.
+    Deny { message: String },
 }
 
 /// How a turn ended.

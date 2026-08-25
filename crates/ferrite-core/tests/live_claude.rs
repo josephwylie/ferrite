@@ -9,7 +9,7 @@ use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
 use ferrite_core::providers::{ClaudeConfig, ClaudeSession};
-use ferrite_core::{SessionEvent, TurnOutcome};
+use ferrite_core::{DecisionAnswer, SessionEvent, TurnOutcome};
 
 /// Generous: a real turn crosses the network and may be rate limited.
 const TURN_TIMEOUT: Duration = Duration::from_secs(180);
@@ -19,6 +19,16 @@ fn live_config() -> ClaudeConfig {
         program: std::env::var("FERRITE_CLAUDE_BIN").unwrap_or_else(|_| "claude".into()),
         cwd: Some(std::env::temp_dir()),
         model: Some("haiku".into()),
+        permission_mode: None,
+    }
+}
+
+/// A Session that will actually ask before it acts. Without pinning the mode
+/// these probes pass vacuously on a machine configured to bypass permissions.
+fn gated_config() -> ClaudeConfig {
+    ClaudeConfig {
+        permission_mode: Some("default".into()),
+        ..live_config()
     }
 }
 
@@ -85,4 +95,121 @@ fn an_interrupted_turn_ends_as_interrupted() {
 
     let (outcome, _) = await_turn_end(session.events());
     assert_eq!(outcome, TurnOutcome::Interrupted);
+}
+
+/// Feature detection has to work against the real CLI, not only against a
+/// replayed capture: this is what proves the handshake fits inside spawn.
+#[test]
+#[ignore = "spawns the real claude CLI"]
+fn the_real_cli_answers_the_capability_handshake() {
+    let session = ClaudeSession::spawn(live_config()).unwrap();
+    let capabilities = session.capabilities();
+    println!("{capabilities:?}");
+
+    assert!(
+        !capabilities.permission_mode.is_empty(),
+        "the handshake did not report a permission mode"
+    );
+    assert!(
+        capabilities.models.iter().any(|model| model == "haiku"),
+        "models: {:?}",
+        capabilities.models
+    );
+}
+
+/// Drive one turn, answering the first Decision it raises. Returns how the turn
+/// ended and every tool result it produced.
+fn turn_answering(
+    session: &mut ClaudeSession,
+    prompt: &str,
+    answer: fn(&SessionEvent) -> DecisionAnswer,
+) -> (TurnOutcome, Vec<(String, bool)>) {
+    session.send(prompt).unwrap();
+    let deadline = Instant::now() + TURN_TIMEOUT;
+    let mut tools = Vec::new();
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match session.events().recv_timeout(left) {
+            Ok(event @ SessionEvent::DecisionRequested { .. }) => {
+                println!("{event:?}");
+                let SessionEvent::DecisionRequested { id, .. } = &event else {
+                    unreachable!()
+                };
+                session
+                    .respond_to_decision(&id.clone(), answer(&event))
+                    .unwrap();
+            }
+            Ok(SessionEvent::ToolCompleted {
+                output, is_error, ..
+            }) => tools.push((output, is_error)),
+            Ok(SessionEvent::TurnEnded { outcome, .. }) => return (outcome, tools),
+            Ok(SessionEvent::Closed { reason }) => panic!("session closed mid-turn: {reason}"),
+            Ok(_) => {}
+            Err(e) => panic!("no turn end within {TURN_TIMEOUT:?}: {e}"),
+        }
+    }
+}
+
+const WRITE_PROMPT: &str =
+    "Create a file named ferrite-live-perm.txt containing exactly the word ok, \
+     using the Write tool. Then say done.";
+
+fn live_artifact() -> std::path::PathBuf {
+    std::env::temp_dir().join("ferrite-live-perm.txt")
+}
+
+/// The control response Ferrite sends for "allow" has to be the one the CLI
+/// acts on: after this, the tool has really run.
+#[test]
+#[ignore = "spawns the real claude CLI"]
+fn allowing_a_decision_runs_the_tool() {
+    let _ = std::fs::remove_file(live_artifact());
+    let mut session = ClaudeSession::spawn(gated_config()).unwrap();
+    assert_ne!(
+        session.capabilities().permission_mode,
+        "bypassPermissions",
+        "a Session that never asks cannot prove anything about Decisions"
+    );
+
+    let (outcome, tools) = turn_answering(&mut session, WRITE_PROMPT, |event| {
+        let SessionEvent::DecisionRequested { input, .. } = event else {
+            unreachable!()
+        };
+        DecisionAnswer::Allow {
+            input: input.clone(),
+        }
+    });
+
+    assert_eq!(outcome, TurnOutcome::Completed);
+    assert!(
+        tools.iter().any(|(_, is_error)| !is_error),
+        "no tool succeeded: {tools:?}"
+    );
+    assert!(
+        live_artifact().exists(),
+        "allow did not actually run the tool"
+    );
+    let _ = std::fs::remove_file(live_artifact());
+}
+
+/// Denying must refuse the tool without killing the Session: the model
+/// gets the operator's reason back and finishes the turn talking about it.
+#[test]
+#[ignore = "spawns the real claude CLI"]
+fn denying_a_decision_leaves_the_turn_running() {
+    let _ = std::fs::remove_file(live_artifact());
+    let mut session = ClaudeSession::spawn(gated_config()).unwrap();
+
+    let (outcome, tools) = turn_answering(&mut session, WRITE_PROMPT, |_| DecisionAnswer::Deny {
+        message: "Ferrite operator denied this tool".into(),
+    });
+
+    assert_eq!(outcome, TurnOutcome::Completed, "the turn should survive");
+    assert!(
+        tools
+            .iter()
+            .any(|(output, is_error)| *is_error && output.contains("Ferrite operator denied")),
+        "the denial did not reach the model: {tools:?}"
+    );
+    assert!(!live_artifact().exists(), "deny still let the tool run");
 }

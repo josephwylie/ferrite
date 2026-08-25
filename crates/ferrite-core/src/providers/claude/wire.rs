@@ -6,7 +6,43 @@
 
 use serde_json::Value;
 
+use super::Capabilities;
 use crate::{SessionEvent, TurnOutcome};
+
+/// The answer to spawn's initialize control request, if this line is it.
+///
+/// The response carries the CLI's whole configured surface — commands,
+/// subagents, output styles, account; only the two fields Ferrite acts on are
+/// lifted out, and a response missing them yields defaults rather than an
+/// error, because an unknown capability must read as unknown.
+pub(super) fn parse_capabilities(line: &str, request_id: &str) -> Option<Capabilities> {
+    let value: Value = serde_json::from_str(line).ok()?;
+    if value.get("type")?.as_str()? != "control_response" {
+        return None;
+    }
+    let response = value.get("response")?;
+    if response.get("request_id")?.as_str()? != request_id {
+        return None;
+    }
+    let body = response.get("response")?;
+    Some(Capabilities {
+        permission_mode: body
+            .get("current_permission_mode")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        models: body
+            .get("models")
+            .and_then(Value::as_array)
+            .map(|models| {
+                models
+                    .iter()
+                    .filter_map(|model| Some(model.get("value")?.as_str()?.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default(),
+    })
+}
 
 /// `None` means "nothing Ferrite models": hook chatter, status lines,
 /// assistant snapshots, rate limits, unparseable junk.
@@ -15,9 +51,79 @@ pub(super) fn parse_line(line: &str) -> Option<SessionEvent> {
     match value.get("type")?.as_str()? {
         "system" => parse_system(&value),
         "stream_event" => parse_stream_event(&value),
+        "assistant" => parse_assistant(&value),
+        "user" => parse_user(&value),
+        "control_request" => parse_control_request(&value),
         "result" => Some(parse_result(&value)),
         _ => None,
     }
+}
+
+/// The CLI emits one `assistant` line per completed content block, so a line
+/// carrying a `tool_use` carries exactly one — probed against 2.1.243 with two
+/// parallel Bash calls, which arrived as two separate lines. That is what lets
+/// one line mean at most one event.
+fn parse_assistant(value: &Value) -> Option<SessionEvent> {
+    let block = content_block(value, "tool_use")?;
+    Some(SessionEvent::ToolStarted {
+        id: block.get("id")?.as_str()?.to_string(),
+        name: block.get("name")?.as_str()?.to_string(),
+        input: block.get("input").cloned().unwrap_or(Value::Null),
+    })
+}
+
+/// Tool results come back dressed as a user message — the CLI replays what it
+/// fed the model.
+fn parse_user(value: &Value) -> Option<SessionEvent> {
+    let block = content_block(value, "tool_result")?;
+    Some(SessionEvent::ToolCompleted {
+        id: block.get("tool_use_id")?.as_str()?.to_string(),
+        output: match block.get("content") {
+            Some(Value::String(text)) => text.clone(),
+            Some(other) => other.to_string(),
+            None => String::new(),
+        },
+        // Absent on a successful result; only failures say so.
+        is_error: block
+            .get("is_error")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    })
+}
+
+/// The control protocol runs both ways down the same pipes. The CLI's only
+/// request against 2.1.243 is `can_use_tool`; anything else it grows later is
+/// ignored, which leaves the turn hanging but never corrupts the stream.
+fn parse_control_request(value: &Value) -> Option<SessionEvent> {
+    let request = value.get("request")?;
+    if request.get("subtype")?.as_str()? != "can_use_tool" {
+        return None;
+    }
+    Some(SessionEvent::DecisionRequested {
+        id: value.get("request_id")?.as_str()?.to_string(),
+        tool_use_id: request.get("tool_use_id")?.as_str()?.to_string(),
+        tool_name: request.get("tool_name")?.as_str()?.to_string(),
+        description: request
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        input: request.get("input").cloned().unwrap_or(Value::Null),
+        suggestions: request
+            .get("permission_suggestions")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default(),
+    })
+}
+
+fn content_block<'a>(value: &'a Value, kind: &str) -> Option<&'a Value> {
+    value
+        .get("message")?
+        .get("content")?
+        .as_array()?
+        .iter()
+        .find(|block| block.get("type").and_then(Value::as_str) == Some(kind))
 }
 
 /// The CLI re-announces init at the head of every turn, carrying the same
@@ -52,6 +158,10 @@ fn parse_stream_event(value: &Value) -> Option<SessionEvent> {
 /// A result line always ends a turn, even when its shape is unfamiliar: a
 /// missing cost is `None`, a missing verdict is a completed turn.
 fn parse_result(value: &Value) -> SessionEvent {
+    let reason = value
+        .get("terminal_reason")
+        .and_then(Value::as_str)
+        .unwrap_or("");
     let subtype = value.get("subtype").and_then(Value::as_str).unwrap_or("");
     let text = value.get("result").and_then(Value::as_str).unwrap_or("");
     let is_error = value
@@ -59,10 +169,15 @@ fn parse_result(value: &Value) -> SessionEvent {
         .and_then(Value::as_bool)
         .unwrap_or(false);
 
-    let outcome = if is_interrupt(value) {
+    let outcome = if is_interrupt(reason) {
         TurnOutcome::Interrupted
     } else if is_error {
-        TurnOutcome::Error(describe_error(subtype, text))
+        // `subtype` is worthless here: the committed error capture reads
+        // `"subtype": "success"` on a turn that never reached the API. Only
+        // `terminal_reason` classifies a failure, so it is preferred and
+        // `subtype` is the fallback for a line that omits it.
+        let classification = if reason.is_empty() { subtype } else { reason };
+        TurnOutcome::Error(describe_error(classification, text))
     } else {
         TurnOutcome::Completed
     };
@@ -79,11 +194,8 @@ fn parse_result(value: &Value) -> SessionEvent {
 /// "aborted_streaming"` — indistinguishable from a real failure without this
 /// field. Its siblings in the CLI's own reason list are `aborted_tools` and
 /// friends, so the whole `aborted*` family reads as an interrupt.
-fn is_interrupt(value: &Value) -> bool {
-    value
-        .get("terminal_reason")
-        .and_then(Value::as_str)
-        .is_some_and(|reason| reason.starts_with("aborted"))
+fn is_interrupt(terminal_reason: &str) -> bool {
+    terminal_reason.starts_with("aborted")
 }
 
 fn describe_error(subtype: &str, text: &str) -> String {
@@ -101,9 +213,58 @@ mod tests {
 
     const FIXTURE: &str = include_str!("../../../tests/fixtures/claude-hello-2.1.243.jsonl");
 
+    /// Every committed capture of `claude` 2.1.243. These are the protocol
+    /// contract: a vendor release that changes the wire changes these numbers,
+    /// which is the alarm working.
+    const FIXTURES: &[(&str, &str)] = &[
+        ("hello", FIXTURE),
+        (
+            "tool",
+            include_str!("../../../tests/fixtures/claude-tool-2.1.243.jsonl"),
+        ),
+        (
+            "permission-allow",
+            include_str!("../../../tests/fixtures/claude-permission-allow-2.1.243.jsonl"),
+        ),
+        (
+            "permission-deny",
+            include_str!("../../../tests/fixtures/claude-permission-deny-2.1.243.jsonl"),
+        ),
+        (
+            "error",
+            include_str!("../../../tests/fixtures/claude-error-2.1.243.jsonl"),
+        ),
+    ];
+
     /// Every event the committed capture of `claude` 2.1.243 yields, in order.
     fn fixture_events() -> Vec<SessionEvent> {
         FIXTURE.lines().filter_map(parse_line).collect()
+    }
+
+    fn events_of(name: &str) -> Vec<SessionEvent> {
+        let (_, text) = FIXTURES
+            .iter()
+            .find(|(fixture, _)| *fixture == name)
+            .expect("known fixture");
+        text.lines().filter_map(parse_line).collect()
+    }
+
+    /// Exhaustive by construction: a new SessionEvent variant fails to compile
+    /// here until someone decides which fixture proves it.
+    fn variant(event: &SessionEvent) -> Option<&'static str> {
+        Some(match event {
+            SessionEvent::Init { .. } => "Init",
+            SessionEvent::TextDelta { .. } => "TextDelta",
+            SessionEvent::ThinkingDelta { .. } => "ThinkingDelta",
+            SessionEvent::ToolStarted { .. } => "ToolStarted",
+            SessionEvent::ToolCompleted { .. } => "ToolCompleted",
+            SessionEvent::DecisionRequested { .. } => "DecisionRequested",
+            SessionEvent::TurnEnded { .. } => "TurnEnded",
+            // Not a wire line at all: the reader thread synthesises Closed when
+            // the process exits, so no capture can contain it. Proved instead
+            // by `stdout_eof_closes_the_session_with_the_exit_status`.
+            SessionEvent::Closed { .. } => return None,
+        })
     }
 
     #[test]
@@ -181,6 +342,168 @@ mod tests {
         assert_eq!(events.len(), 10);
     }
 
+    /// The whole point of the fixture harness: nothing in the typed surface is
+    /// aspirational — every variant a wire line can produce has a committed
+    /// capture behind it.
+    #[test]
+    fn every_session_event_variant_is_produced_by_a_fixture() {
+        let mut produced: Vec<&str> = FIXTURES
+            .iter()
+            .flat_map(|(_, text)| text.lines().filter_map(parse_line))
+            .filter_map(|event| variant(&event))
+            .collect();
+        produced.sort_unstable();
+        produced.dedup();
+        assert_eq!(
+            produced,
+            [
+                "DecisionRequested",
+                "Init",
+                "TextDelta",
+                "ThinkingDelta",
+                "ToolCompleted",
+                "ToolStarted",
+                "TurnEnded",
+            ]
+        );
+    }
+
+    /// Most of the stream is not Ferrite's business — hook chatter, token
+    /// counters, message envelopes, rate limits. Recording how much of each
+    /// capture is ignored is what proves an unknown line costs nothing.
+    #[test]
+    fn every_fixture_ignores_far_more_lines_than_it_models() {
+        let counted: Vec<(&str, usize, usize)> = FIXTURES
+            .iter()
+            .map(|(name, text)| {
+                (
+                    *name,
+                    text.lines().count(),
+                    text.lines().filter_map(parse_line).count(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            counted,
+            [
+                // 1 init, 7 thinking deltas, 1 text delta, 1 result.
+                ("hello", 32, 10),
+                // ... and 1 tool start with its completion.
+                ("tool", 51, 14),
+                // ... and the Decision that gated the tool.
+                ("permission-allow", 52, 15),
+                ("permission-deny", 60, 19),
+                // A turn that never reached the API: an init and a verdict.
+                ("error", 4, 2),
+            ]
+        );
+    }
+
+    /// A tool call, as `claude` 2.1.243 actually reports one: the settled input
+    /// arrives on the `assistant` line that closes the block, and the result
+    /// comes back dressed as a user message.
+    #[test]
+    fn the_tool_fixture_yields_a_start_and_a_completion_that_agree() {
+        let events = events_of("tool");
+        let SessionEvent::ToolStarted { id, name, input } = events
+            .iter()
+            .find(|e| matches!(e, SessionEvent::ToolStarted { .. }))
+            .expect("a tool start")
+        else {
+            unreachable!()
+        };
+        assert_eq!(name, "Bash");
+        assert_eq!(input["command"], "echo ferrite-tool-ok");
+        assert!(events.contains(&SessionEvent::ToolCompleted {
+            id: id.clone(),
+            output: "ferrite-tool-ok".into(),
+            is_error: false,
+        }));
+    }
+
+    /// Denial is not failure: the CLI feeds the operator's reason back to the
+    /// model as a failed tool result and the turn runs to a normal end.
+    #[test]
+    fn a_denied_tool_fails_without_failing_the_turn() {
+        let events = events_of("permission-deny");
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                SessionEvent::ToolCompleted { is_error: true, output, .. }
+                    if output == "Ferrite operator denied this tool"
+            )),
+            "no denied tool result: {events:?}"
+        );
+        assert!(matches!(
+            events.last(),
+            Some(SessionEvent::TurnEnded {
+                outcome: TurnOutcome::Completed,
+                ..
+            })
+        ));
+    }
+
+    /// An allowed tool result carries no `is_error` field at all — absence is
+    /// success, and reading it as anything else would paint every tool card red.
+    #[test]
+    fn a_result_without_an_error_flag_is_a_success() {
+        let events = events_of("permission-allow");
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                SessionEvent::ToolCompleted {
+                    is_error: false,
+                    output,
+                    ..
+                } if output.starts_with("File created successfully")
+            )),
+            "no successful tool result: {events:?}"
+        );
+    }
+
+    /// The initialize handshake, from the committed capture of the real
+    /// exchange.
+    #[test]
+    fn the_capability_response_is_read_for_what_ferrite_acts_on() {
+        let capabilities = parse_capabilities(
+            include_str!("../../../tests/fixtures/claude-initialize-2.1.243.jsonl").trim_end(),
+            "req_1",
+        )
+        .expect("the capture answers req_1");
+        assert_eq!(capabilities.permission_mode, "bypassPermissions");
+        assert!(capabilities.models.iter().any(|model| model == "haiku"));
+    }
+
+    /// The response to somebody else's request is not this Session's answer.
+    #[test]
+    fn a_capability_response_to_another_request_is_not_taken() {
+        for line in [
+            r#"{"type":"control_response","response":{"request_id":"req_9","response":{}}}"#,
+            r#"{"type":"control_response","response":{"subtype":"success"}}"#,
+            r#"{"type":"control_request","request_id":"req_1","request":{"subtype":"initialize"}}"#,
+            "not json",
+        ] {
+            assert_eq!(
+                parse_capabilities(line, "req_1"),
+                None,
+                "should not answer the handshake: {line}"
+            );
+        }
+    }
+
+    /// A handshake answer that says nothing leaves every capability unknown
+    /// rather than inventing one.
+    #[test]
+    fn an_empty_capability_response_claims_nothing() {
+        assert_eq!(
+            parse_capabilities(
+                r#"{"type":"control_response","response":{"request_id":"req_1","response":{}}}"#,
+                "req_1"
+            ),
+            Some(Capabilities::default())
+        );
+    }
+
     #[test]
     fn junk_lines_are_ignored_never_fatal() {
         for line in [
@@ -194,6 +517,18 @@ mod tests {
             r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":7}}}"#,
             r#"{"type":"control_response","response":{"subtype":"success"}}"#,
             r#"{"type":"brand_new_vendor_event","payload":{}}"#,
+            // Control traffic Ferrite does not answer: hooks, MCP relays, and
+            // whatever the vendor adds next. Ignoring one strands that request,
+            // but the stream keeps flowing.
+            r#"{"type":"control_request","request_id":"1","request":{"subtype":"hook_callback"}}"#,
+            r#"{"type":"control_request","request_id":"1","request":{"subtype":"can_use_tool"}}"#,
+            // An assistant turn is only interesting when it carries a tool
+            // call; text and thinking arrive as deltas, and the snapshot lines
+            // that repeat them must not double them up.
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash"}]}}"#,
+            r#"{"type":"user","message":{"content":[{"type":"text","text":"hi"}]}}"#,
+            r#"{"type":"user","message":{"content":"a plain string"}}"#,
         ] {
             assert_eq!(parse_line(line), None, "line should be ignored: {line}");
         }

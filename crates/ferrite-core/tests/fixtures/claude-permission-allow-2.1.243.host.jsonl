@@ -1,0 +1,2 @@
+{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "Create a file named ferrite-perm.txt containing exactly the word ok, using the Write tool. Then say done."}]}}
+{"type": "control_response", "response": {"subtype": "success", "request_id": "33175689-145c-4eb2-9288-45a39ec015a1", "response": {"behavior": "allow", "updatedInput": {"file_path": "/workspace/ferrite-perm.txt", "content": "ok"}}}}
