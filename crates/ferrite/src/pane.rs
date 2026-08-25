@@ -270,8 +270,9 @@ fn instruments(transcript: &Transcript) -> impl IntoElement {
 
 /// Which checkout a Thread works in — a worktree's own name, or "main" for
 /// the shared one. One line, because an operator running many Threads has to
-/// know which of them can trample the others.
-fn binding_label(workspace: Option<&WorkspaceBinding>) -> SharedString {
+/// know which of them can trample the others. Shared with the nav's rows
+/// (#21), so both surfaces name a binding the same way.
+pub fn binding_label(workspace: Option<&WorkspaceBinding>) -> SharedString {
     match workspace {
         Some(WorkspaceBinding::Worktree { path, .. }) => SharedString::from(
             path.file_name()

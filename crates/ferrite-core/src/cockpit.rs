@@ -499,6 +499,14 @@ impl Cockpit {
         Some(self.threads.get(&thread)?.provider)
     }
 
+    /// Header-only facts about a Thread the store holds — what a nav row
+    /// says about a parked Thread (#21). One header line off disk, never a
+    /// log replay; still I/O, so callers cache it rather than peek per
+    /// frame.
+    pub fn peek(&self, thread: ThreadId) -> Result<crate::store::ThreadMeta, LoadError> {
+        self.store.peek(thread)
+    }
+
     pub fn threads(&self) -> Vec<ThreadId> {
         self.threads.keys().copied().collect()
     }

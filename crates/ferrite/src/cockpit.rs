@@ -18,6 +18,7 @@ use gpui::{
     Window,
 };
 
+use crate::nav;
 use crate::pane::{self, PaneView};
 
 actions!(
@@ -37,6 +38,7 @@ actions!(
         ReopenThread,
         CopySelection,
         ToggleFullscreen,
+        ToggleNav,
     ]
 );
 
@@ -90,6 +92,12 @@ pub struct CockpitView {
     /// The one live selection. A plain click never makes one; only a drag
     /// does, and the next press anywhere clears it.
     selection: Option<Selection>,
+    /// cmd-b (#21): the nav folded to its 40px LED rail. In memory only —
+    /// a preference store is not this ticket.
+    nav_collapsed: bool,
+    /// The nav's parked rows, cached: each one cost a `Store::peek`, so the
+    /// cache is rebuilt on park and revive — never per frame.
+    parked_rows: Vec<nav::ParkedRow>,
 }
 
 /// Whole Blocks swept by a drag across one Pane's transcript — the unit v1
@@ -165,7 +173,7 @@ impl CockpitView {
             .into_iter()
             .map(|thread| PaneView::new(thread, cx))
             .collect();
-        Self {
+        let mut view = Self {
             cockpit,
             panes,
             focused: 0,
@@ -180,7 +188,11 @@ impl CockpitView {
             swept: std::time::Instant::now(),
             grip: None,
             selection: None,
-        }
+            nav_collapsed: false,
+            parked_rows: Vec::new(),
+        };
+        view.refresh_parked();
+        view
     }
 
     /// Count this frame and, once a second, say how it is going.
@@ -240,15 +252,27 @@ impl CockpitView {
     }
 
     /// One cell of the grid, as the window is right now. Size is the only
-    /// input semantic zoom takes — there is no mode to switch.
+    /// input semantic zoom takes — there is no mode to switch, and the nav
+    /// is simply part of the size: opening it can legitimately drop Panes a
+    /// Level (#21).
     fn cell(&self, window: &Window, columns: usize) -> Cell {
         let viewport = window.viewport_size();
         let rows = self.panes.len().div_ceil(columns).max(1);
-        // The strip, the grid's own padding, and the gaps between cells are
-        // not the Pane's to render in.
-        let width = (f32::from(viewport.width) - 12.0) / columns as f32 - 6.0;
+        // The nav, the strip, the grid's own padding, and the gaps between
+        // cells are not the Pane's to render in.
+        let width = (f32::from(viewport.width) - self.nav_width() - 12.0) / columns as f32 - 6.0;
         let height = (f32::from(viewport.height) - 34.0) / rows as f32 - 6.0;
         Cell::new(width.max(0.0), height.max(0.0))
+    }
+
+    /// How much of the window the nav holds right now: the 208px column, or
+    /// the 40px rail cmd-b folds it to.
+    fn nav_width(&self) -> f32 {
+        if self.nav_collapsed {
+            nav::RAIL_WIDTH
+        } else {
+            nav::WIDTH
+        }
     }
 
     /// The level this cockpit is rendering at right now — size, with one
@@ -382,6 +406,110 @@ impl CockpitView {
         cx.notify();
     }
 
+    /// cmd-b (#21): fold the nav to its 40px LED rail, or open it back to
+    /// the 208px column. The width change feeds `cell()`, so Panes may
+    /// legitimately change Level — size decides, no special case.
+    fn toggle_nav(&mut self, _: &ToggleNav, _window: &mut Window, cx: &mut Context<Self>) {
+        self.nav_collapsed = !self.nav_collapsed;
+        cx.notify();
+    }
+
+    /// Rebuild the nav's parked rows. Called on park and revive — never per
+    /// frame: each row costs a `Store::peek`, one header line off disk, and
+    /// the SharedStrings built here are what every frame after reuses.
+    fn refresh_parked(&mut self) {
+        let parked = self.cockpit.parked().unwrap_or_default();
+        // Stable, append-only order: Threads parked before this launch keep
+        // creation order, and this launch's parks append below in park
+        // order — a fresh park lands at the bottom of the section instead
+        // of re-sorting it.
+        let mut ordered: Vec<ThreadId> = parked
+            .iter()
+            .filter(|thread| !self.park_order.contains(thread))
+            .copied()
+            .collect();
+        ordered.extend(
+            self.park_order
+                .iter()
+                .filter(|thread| parked.contains(thread))
+                .copied(),
+        );
+        self.parked_rows = ordered
+            .into_iter()
+            .map(|thread| {
+                // An unreadable log still gets a row — the Thread exists,
+                // and a nav that hides it would hide the problem — it just
+                // claims nothing it cannot know.
+                let meta = self.cockpit.peek(thread).ok();
+                nav::ParkedRow {
+                    thread,
+                    name: SharedString::from(format!("thread-{thread:02}")),
+                    binding: pane::binding_label(
+                        meta.as_ref().and_then(|meta| meta.workspace.as_ref()),
+                    ),
+                    provider: nav::provider_tag(meta.map(|meta| meta.provider)),
+                }
+            })
+            .collect();
+    }
+
+    /// The nav's per-frame state, from O(1) reads only — `status()`,
+    /// `pending()`, `todos()` — plus small `format!`s, the strip's own
+    /// budget. The parked side is the cache; nothing here touches the
+    /// store. Render draws exactly this, so tests read it too.
+    fn nav_state(&self) -> nav::NavState {
+        let running: Vec<nav::RunningRow> = self
+            .panes
+            .iter()
+            .enumerate()
+            .map(|(index, pane)| {
+                let transcript = self.cockpit.transcript(pane.thread);
+                nav::RunningRow {
+                    thread: pane.thread,
+                    name: SharedString::from(format!("thread-{:02}", pane.thread)),
+                    binding: pane::binding_label(self.cockpit.workspace(pane.thread)),
+                    provider: nav::provider_tag(self.cockpit.provider(pane.thread)),
+                    status: transcript.map(|t| t.status()).unwrap_or_default(),
+                    needs_you: self.cockpit.pending(pane.thread).is_some(),
+                    todos: transcript.and_then(|t| t.todos()),
+                    focused: index == self.focused,
+                }
+            })
+            .collect();
+        let waiting = running.iter().filter(|row| row.needs_you).count();
+        nav::NavState {
+            running,
+            waiting,
+            collapsed: self.nav_collapsed,
+        }
+    }
+
+    /// A running nav row's click: land on that Thread's Pane — through
+    /// `focus_pane`, the one door, so a fullscreened cockpit re-aims to the
+    /// clicked Thread like every other deliberate move.
+    fn focus_thread(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+        if let Some(index) = self.pane_for(thread) {
+            self.focus_pane(index);
+            cx.notify();
+        }
+    }
+
+    /// Revive one parked Thread: a Pane, focus, and the park order and the
+    /// nav's cache both forgetting it — cmd-o must not revive it a second
+    /// time. The shared tail of cmd-o and a parked nav row's click (#21).
+    fn revive_thread(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+        match self.cockpit.revive(thread) {
+            Ok(()) => {
+                self.park_order.retain(|parked| *parked != thread);
+                self.panes.push(PaneView::new(thread, cx));
+                self.focus_pane(self.panes.len() - 1);
+                self.refresh_parked();
+                cx.notify();
+            }
+            Err(e) => eprintln!("ferrite: thread {thread} could not be reopened: {e:?}"),
+        }
+    }
+
     /// The one door to `focused`: every move — keys, clicks, and whatever
     /// #21's nav rows add — lands here, so fullscreen re-aims with focus.
     /// While fullscreen, the Thread the operator lands on is the Thread
@@ -457,14 +585,7 @@ impl CockpitView {
         else {
             return;
         };
-        match self.cockpit.revive(thread) {
-            Ok(()) => {
-                self.panes.push(PaneView::new(thread, cx));
-                self.focus_pane(self.panes.len() - 1);
-                cx.notify();
-            }
-            Err(e) => eprintln!("ferrite: thread {thread} could not be reopened: {e:?}"),
-        }
+        self.revive_thread(thread, cx);
     }
 
     /// Close a Pane: the Thread parks — its Session ends, its log stays, and
@@ -480,6 +601,8 @@ impl CockpitView {
         // cmd-o should still bring this Thread back first.
         self.park_order.push(thread);
         self.panes.retain(|pane| pane.thread != thread);
+        // The Thread's nav row moves down into the parked section (#21).
+        self.refresh_parked();
         // The clamped survivor takes focus — and, while fullscreen, the
         // screen (#20): closing a browser tab shows the next tab, not an
         // overview. Parking the last Thread leaves nothing to aim at, so
@@ -719,7 +842,7 @@ impl Render for CockpitView {
 
         div()
             .flex()
-            .flex_col()
+            .flex_row()
             .size_full()
             .bg(rgb(pane::BG_WINDOW))
             .font_family(crate::MONO_FONT)
@@ -742,6 +865,7 @@ impl Render for CockpitView {
             .on_action(cx.listener(Self::reopen_thread))
             .on_action(cx.listener(Self::copy_selection))
             .on_action(cx.listener(Self::toggle_fullscreen))
+            .on_action(cx.listener(Self::toggle_nav))
             // The root covers the window, so a release anywhere ends the
             // drag; the selection it made stays until the next press.
             .on_mouse_up(
@@ -756,8 +880,22 @@ impl Render for CockpitView {
             .capture_any_mouse_down(cx.listener(|view, _: &MouseDownEvent, _, _| {
                 view.grip = None;
             }))
-            .child(self.strip(blocked.len()))
-            .child(grid)
+            // The nav runs the window's full height on the left; the strip
+            // and the grid share the rest. Fullscreen keeps it visible — a
+            // deliberate override of sidebar-and-impl.md §3 ("the nav hides
+            // entirely"): the fullscreened Pane spans the area right of the
+            // nav, so the swarm stays one click away (#21).
+            .child(self.nav(cx))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_w_0()
+                    .min_h_0()
+                    .child(self.strip(blocked.len()))
+                    .child(grid),
+            )
     }
 }
 
@@ -813,6 +951,51 @@ impl CockpitView {
                 },
                 level,
             ))
+    }
+
+    /// The whole nav column for this frame, rows wired to their Threads
+    /// (#21). It paints inside the cockpit's own render — same entity, same
+    /// pump, no second timer — and every number it shows came from
+    /// `nav_state`'s O(1) reads or the parked cache.
+    fn nav(&self, cx: &mut Context<Self>) -> Div {
+        let state = self.nav_state();
+        let mut rows = div().flex().flex_col().flex_1().min_h_0();
+        for row in &state.running {
+            let thread = row.thread;
+            let drawn = if state.collapsed {
+                nav::running_dot(row)
+            } else {
+                nav::running_row(row)
+            };
+            rows = rows.child(drawn.on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |view, _: &MouseDownEvent, _, cx| view.focus_thread(thread, cx)),
+            ));
+        }
+        if !self.parked_rows.is_empty() {
+            rows = rows.child(nav::parked_header(self.parked_rows.len(), state.collapsed));
+            for row in &self.parked_rows {
+                let thread = row.thread;
+                let drawn = if state.collapsed {
+                    nav::parked_dot(row)
+                } else {
+                    nav::parked_row(row)
+                };
+                rows = rows.child(drawn.on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                        view.revive_thread(thread, cx)
+                    }),
+                ));
+            }
+        }
+        nav::shell(state.collapsed)
+            .child(nav::header(
+                state.running.len(),
+                state.waiting,
+                state.collapsed,
+            ))
+            .child(rows)
     }
 
     /// One line across the top: how many Threads, how many want answering.
@@ -1431,8 +1614,9 @@ mod tests {
     fn clicking_a_pane_focuses_it_and_the_keyboard_follows(cx: &mut TestAppContext) {
         let (core, _fake) = cockpit("click-focus", 2);
         let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
-        // Two Panes side by side, each big enough to hold a Composer.
-        cx.simulate_resize(gpui::size(px(1600.), px(600.)));
+        // Two Panes side by side, each big enough to hold a Composer even
+        // with the 208px nav (#21) taken off the left.
+        cx.simulate_resize(gpui::size(px(1800.), px(600.)));
         tick(cx);
         view.read_with(cx, |view, _| assert_eq!(view.focused, 0));
 
@@ -1830,11 +2014,11 @@ mod tests {
                 "cmd-f fullscreens the focused Pane"
             );
         });
-        // One Pane rendered, spanning the whole grid area — a 2-column cell
-        // would be under half this.
+        // One Pane rendered, spanning the whole area right of the nav —
+        // a 2-column cell would be under 400px here.
         let width = view.read_with(cx, |view, _| view.panes[0].scroll.bounds().size.width);
         assert!(
-            width > px(900.),
+            width > px(700.),
             "the fullscreened Pane takes the whole cockpit: {width:?}"
         );
         cx.simulate_input("hi");
@@ -2016,5 +2200,207 @@ mod tests {
             );
             assert_eq!(view.panes.len(), 1, "with the surviving Thread on it");
         });
+    }
+
+    /// #21 AC1: the nav lists every Thread — running first in grid order,
+    /// then parked below — with the binding and provider a glance needs.
+    #[gpui::test]
+    fn the_nav_lists_running_threads_in_grid_order_and_parked_below(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("nav-order", 3);
+        cx.update(|cx| {
+            cx.bind_keys([KeyBinding::new("cmd-w", CloseThread, None)]);
+        });
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        tick(cx);
+        let (grid_order, parked_thread) = view.read_with(cx, |view, _| {
+            (
+                view.panes
+                    .iter()
+                    .map(|pane| pane.thread)
+                    .collect::<Vec<_>>(),
+                view.panes[1].thread,
+            )
+        });
+
+        view.update(cx, |view, _| view.focused = 1);
+        cx.simulate_keystrokes("cmd-w");
+
+        view.read_with(cx, |view, _| {
+            let state = view.nav_state();
+            let running: Vec<ThreadId> = state.running.iter().map(|row| row.thread).collect();
+            let expected: Vec<ThreadId> = grid_order
+                .iter()
+                .copied()
+                .filter(|thread| *thread != parked_thread)
+                .collect();
+            assert_eq!(running, expected, "running rows follow the grid order");
+            assert_eq!(
+                state.running[0].name.as_ref(),
+                format!("thread-{:02}", expected[0]),
+                "rows say what the Pane header says"
+            );
+            assert_eq!(state.running[0].binding.as_ref(), "main");
+            assert_eq!(state.running[0].provider, "cl");
+            let parked: Vec<ThreadId> = view.parked_rows.iter().map(|row| row.thread).collect();
+            assert_eq!(parked, vec![parked_thread], "the parked Thread moved below");
+            assert_eq!(
+                view.parked_rows[0].binding.as_ref(),
+                "main",
+                "a parked row still names its binding — peeked, not loaded"
+            );
+            assert_eq!(view.parked_rows[0].provider, "cl");
+        });
+    }
+
+    /// #21 AC2: clicking a running nav row lands the operator on that Pane —
+    /// through `focus_pane`, so a fullscreened cockpit re-aims to the
+    /// clicked Thread instead of going stale on the one they left.
+    #[gpui::test]
+    fn clicking_a_running_nav_row_focuses_its_pane_and_reaims_fullscreen(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("nav-click", 2);
+        cx.update(|cx| {
+            cx.bind_keys([KeyBinding::new("cmd-f", ToggleFullscreen, None)]);
+        });
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        tick(cx);
+        view.read_with(cx, |view, _| assert_eq!(view.focused, 0));
+
+        // The second running row: 34px nav header, 28px rows.
+        cx.simulate_click(
+            gpui::point(px(104.), px(34. + 28. + 14.)),
+            gpui::Modifiers::none(),
+        );
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.focused, 1, "the click moved focus to the row's Pane");
+        });
+
+        cx.simulate_keystrokes("cmd-f");
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.fullscreen, Some(view.panes[1].thread));
+        });
+        cx.simulate_click(
+            gpui::point(px(104.), px(34. + 14.)),
+            gpui::Modifiers::none(),
+        );
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.focused, 0, "the nav still answers while fullscreen");
+            assert_eq!(
+                view.fullscreen,
+                Some(view.panes[0].thread),
+                "and the fullscreen re-aims with focus — the one door"
+            );
+        });
+    }
+
+    /// #21 AC2: clicking a parked nav row revives that Thread — a Pane,
+    /// focus, and the park order forgetting it so cmd-o cannot revive it a
+    /// second time.
+    #[gpui::test]
+    fn clicking_a_parked_nav_row_revives_that_thread(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("nav-revive", 2);
+        cx.update(|cx| {
+            cx.bind_keys([
+                KeyBinding::new("cmd-w", CloseThread, None),
+                KeyBinding::new("cmd-o", ReopenThread, None),
+            ]);
+        });
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        tick(cx);
+        let parked = view.read_with(cx, |view, _| view.panes[0].thread);
+        cx.simulate_keystrokes("cmd-w");
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.panes.len(), 1);
+            assert_eq!(view.parked_rows.len(), 1, "the parked Thread got a row");
+        });
+
+        // The parked row: 34px header + one running row + the 22px PARKED
+        // divider, then its own 28px row.
+        cx.simulate_click(
+            gpui::point(px(104.), px(34. + 28. + 22. + 14.)),
+            gpui::Modifiers::none(),
+        );
+
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.panes.len(), 2, "the revived Thread got a Pane");
+            assert_eq!(view.panes[1].thread, parked, "and it is the same Thread");
+            assert_eq!(view.focused, 1, "focus followed the revival");
+            assert!(view.parked_rows.is_empty(), "its nav row moved up");
+        });
+
+        // cmd-o must not bring back a Thread the nav already revived.
+        cx.simulate_keystrokes("cmd-o");
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.panes.len(), 2, "nothing was left parked to reopen");
+        });
+    }
+
+    /// #21 AC3: a pending Decision is visible in the nav — the blocked row
+    /// wears the amber, the header counts it, and the collapsed rail keeps
+    /// saying so.
+    #[gpui::test]
+    fn a_pending_decision_lights_the_nav_row_amber(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("nav-amber", 2);
+        cx.update(|cx| {
+            cx.bind_keys([KeyBinding::new("cmd-b", ToggleNav, None)]);
+        });
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        tick(cx);
+        view.read_with(cx, |view, _| {
+            let state = view.nav_state();
+            assert!(state.running.iter().all(|row| !row.needs_you));
+            assert_eq!(state.waiting, 0);
+        });
+
+        fake.streams.borrow()[1].send(decision("perm_02")).unwrap();
+        tick(cx);
+
+        view.read_with(cx, |view, _| {
+            let state = view.nav_state();
+            assert!(state.running[1].needs_you, "the blocked row wears amber");
+            assert!(!state.running[0].needs_you, "and nobody else does");
+            assert_eq!(state.waiting, 1, "the header counts the wait");
+        });
+
+        // Collapsed, the same state feeds the rail's halo — and the frame
+        // after the toggle actually paints it.
+        cx.simulate_keystrokes("cmd-b");
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            let state = view.nav_state();
+            assert!(state.collapsed);
+            assert!(state.running[1].needs_you);
+        });
+    }
+
+    /// #21: the nav's width is part of the zoom input — cmd-b folding it to
+    /// the 40px rail hands the cells 168px back, so a Pane that could not
+    /// hold a transcript beside the full nav can beside the rail. cmd-b
+    /// again takes the width back.
+    #[gpui::test]
+    fn cmd_b_collapses_the_nav_and_the_cells_grow_a_level(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("nav-toggle", 1);
+        cx.update(|cx| {
+            cx.bind_keys([KeyBinding::new("cmd-b", ToggleNav, None)]);
+        });
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        // Sized so the Transcript threshold sits between the two nav
+        // widths: Instruments beside the 208px column, Transcript beside
+        // the 40px rail.
+        cx.simulate_resize(gpui::size(px(800.), px(700.)));
+        tick(cx);
+        let expanded = cx.update(|window, cx| view.read(cx).level_now(window));
+        assert_eq!(
+            expanded,
+            Level::Instruments,
+            "the premise: the full nav costs this cell its transcript"
+        );
+
+        cx.simulate_keystrokes("cmd-b");
+        let collapsed = cx.update(|window, cx| view.read(cx).level_now(window));
+        assert_eq!(collapsed, Level::Transcript, "the rail hands width back");
+
+        cx.simulate_keystrokes("cmd-b");
+        let reopened = cx.update(|window, cx| view.read(cx).level_now(window));
+        assert_eq!(reopened, Level::Instruments, "cmd-b toggles back");
     }
 }

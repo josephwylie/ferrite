@@ -68,6 +68,9 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
         // restores the grid. Escape stays Interrupt (#20 design): stealing
         // the panic key for "exit fullscreen" would make it ambiguous.
         (with_primary("f"), "cockpit::ToggleFullscreen", None),
+        // #21: fold the nav to its LED rail and back — the VS Code sidebar
+        // muscle memory (cmd-t/w/f are spoken for by #20).
+        (with_primary("b"), "cockpit::ToggleNav", None),
         // Shift: the same new Thread, in its own worktree instead of the
         // checkout the operator is sitting in.
         (with_primary("shift-n"), "cockpit::NewWorktreeThread", None),
@@ -106,6 +109,8 @@ mod tests {
             // #20: cmd-t is the browser-tab spelling of the same new Thread.
             ("cockpit::NewThread", "t"),
             ("cockpit::ToggleFullscreen", "f"),
+            // #21: the nav collapses to its rail on both platforms.
+            ("cockpit::ToggleNav", "b"),
             ("cockpit::NewWorktreeThread", "shift-n"),
             ("cockpit::CloseThread", "w"),
             ("cockpit::ReopenThread", "o"),

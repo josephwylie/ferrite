@@ -3,6 +3,7 @@ mod cockpit;
 mod composer;
 mod keymap;
 mod line;
+mod nav;
 mod pane;
 mod session;
 

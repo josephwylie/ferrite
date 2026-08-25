@@ -1,0 +1,365 @@
+//! The left nav bar (#21): every Thread on one column of glance rows —
+//! running first in grid order, parked below — so the cockpit is navigable
+//! without memorizing keys. It is a view, never the only door: everything a
+//! row does (focus, revive) stays reachable from the keyboard.
+//!
+//! Drawing only, like `pane.rs`: the cockpit assembles a `NavState` per
+//! frame from O(1) reads (`status()`, `pending()`, `todos()`) plus the
+//! parked-row cache it rebuilds on park/revive — `Store::load` and
+//! `Instruments::of` are banned here, which is what keeps the 24-Pane wall
+//! smooth with the nav open. Click wiring stays in `cockpit.rs`, the same
+//! split `pane_cell` uses. Rows keep stable positions and never re-sort: a
+//! park or revive moves a row between sections — a real state change — and
+//! nothing else moves anything.
+
+use ferrite_core::store::Provider;
+use ferrite_core::transcript::{Status, Todos};
+use ferrite_core::ThreadId;
+use gpui::prelude::*;
+use gpui::{div, px, rgb, rgba, Div, FontWeight, Pixels, SharedString, Stateful};
+
+/// The nav's two widths: the 208px column, and the 40px LED rail cmd-b
+/// folds it to. `CockpitView::cell()` subtracts whichever is live, so the
+/// nav is part of the semantic-zoom input — no special case.
+pub const WIDTH: f32 = 208.0;
+pub const RAIL_WIDTH: f32 = 40.0;
+
+// Aperture tokens the nav draws with — §1–2 of docs/design/sidebar-and-impl.md,
+// values verbatim. They move to theme.rs when #22 lands the token module;
+// until then nothing outside this file may import them.
+/// One step below the Panes' surface, so the nav reads as chrome.
+const INSET: u32 = 0x0a0a0a;
+/// rgba(255,255,255,0.07): the right edge, and the focused row's ground.
+const EDGE: u32 = 0xffffff12;
+/// rgba(255,255,255,0.045): row hover (the one-step lift), and dividers.
+const HAIRLINE: u32 = 0xffffff0b;
+const INK: u32 = 0xf3f4f7;
+const INK_SECONDARY: u32 = 0xa7abb4;
+const INK_MUTED: u32 = 0x7f8187;
+const INK_FAINT: u32 = 0x54575f;
+/// The steel focus bar — the Pane focus ring translated to a row.
+const ACCENT: u32 = 0xc7ccd6;
+const GOOD: u32 = 0x7fc99b;
+const WAIT: u32 = 0xd8c082;
+/// rgba(216,192,130,0.13): the `needs you` chip ground and the rail halo.
+const WAIT_WASH: u32 = 0xd8c08221;
+const FAIL: u32 = 0xe08c84;
+const IDLE: u32 = 0x8b8f97;
+
+/// What the nav draws this frame. Running rows are rebuilt per frame from
+/// O(1) reads (small, like the strip's labels); parked rows live in the
+/// cockpit's cache because each one cost a `Store::peek`.
+pub struct NavState {
+    pub running: Vec<RunningRow>,
+    /// Threads waiting on a Decision — the header's amber fragment.
+    pub waiting: usize,
+    pub collapsed: bool,
+}
+
+/// One running Thread's row: a Wall cell flattened to one line.
+pub struct RunningRow {
+    pub thread: ThreadId,
+    pub name: SharedString,
+    pub binding: SharedString,
+    pub provider: &'static str,
+    pub status: Status,
+    /// A pending Decision: the amber `needs you` chip, and the rail halo.
+    pub needs_you: bool,
+    pub todos: Option<Todos>,
+    pub focused: bool,
+}
+
+/// One parked Thread's row, cached: its log is not in memory, so everything
+/// here came from one `Store::peek` header read at park/revive time.
+pub struct ParkedRow {
+    pub thread: ThreadId,
+    pub name: SharedString,
+    pub binding: SharedString,
+    pub provider: &'static str,
+}
+
+/// The provider tag a 208px row has room for — the full `claude · fable`
+/// chip belongs to the Pane header. Empty when the provider is unknowable
+/// (an unreadable parked log): honesty over decoration.
+pub fn provider_tag(provider: Option<Provider>) -> &'static str {
+    match provider {
+        Some(Provider::Claude) => "cl",
+        Some(Provider::Codex) => "cx",
+        None => "",
+    }
+}
+
+/// The nav column itself: full height, one step below the Pane surface,
+/// a 1px edge on the right. The rows are the caller's to append — clicks
+/// are wired where the view state lives.
+pub fn shell(collapsed: bool) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .flex_shrink_0()
+        .h_full()
+        .w(px(if collapsed { RAIL_WIDTH } else { WIDTH }))
+        .bg(rgb(INSET))
+        .border_r_1()
+        .border_color(rgba(EDGE))
+        // Rows past the window's height are clipped, not smeared over the
+        // grid; a scrolling nav is not v1.
+        .overflow_hidden()
+}
+
+/// The 34px header — aligned with the Cockpit strip. Expanded it says
+/// `THREADS` and counts (`7 · 2 waiting`, the fragment amber when nonzero);
+/// the rail keeps only the count. The spec's 0.10em tracking on these CAPS
+/// labels is dropped: gpui 0.2.2 has no letter-spacing.
+pub fn header(threads: usize, waiting: usize, collapsed: bool) -> Div {
+    let row = div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .h(px(34.))
+        .text_size(px(10.));
+    if collapsed {
+        return row
+            .justify_center()
+            .text_color(rgb(INK_MUTED))
+            .child(SharedString::from(threads.to_string()));
+    }
+    let mut count = div().flex().items_center().gap(px(4.)).child(
+        div()
+            .text_color(rgb(INK_MUTED))
+            .child(SharedString::from(threads.to_string())),
+    );
+    if waiting > 0 {
+        count = count.child(
+            div()
+                .text_color(rgb(WAIT))
+                .child(SharedString::from(format!("· {waiting} waiting"))),
+        );
+    }
+    row.justify_between()
+        .px(px(10.))
+        .child(div().text_color(rgb(INK_MUTED)).child("THREADS"))
+        .child(count)
+}
+
+/// One running Thread's 28px row: LED, name, binding, then provider and the
+/// signal slot on the right. Focus is the 2px steel bar plus the EDGE
+/// ground; urgency stays the chip's amber — position and urgency never
+/// share a colour.
+pub fn running_row(row: &RunningRow) -> Stateful<Div> {
+    let led = led_color(row.status);
+    // The name carries the Thread's temperature: INK running, a step down
+    // idle.
+    let ink = match row.status {
+        Status::Idle => INK_SECONDARY,
+        _ => INK,
+    };
+    let mut line = row_frame(("nav-run", row.thread.get() as usize), row.focused)
+        .child(dot(px(6.), led))
+        .child(
+            // `thread-NN` cannot outgrow a 208px row (display names are a
+            // deferred store feature — sidebar-and-impl §4.2 #8), so the
+            // binding hint is the first and only thing to truncate.
+            div()
+                .flex_shrink_0()
+                .text_size(px(11.5))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(ink))
+                .child(row.name.clone()),
+        )
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_size(px(10.))
+                .text_color(rgb(INK_MUTED))
+                .child(row.binding.clone()),
+        )
+        .child(div().flex_1())
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_size(px(9.5))
+                .text_color(rgb(INK_FAINT))
+                .child(row.provider),
+        );
+    if row.needs_you {
+        line = line.child(needs_you_chip());
+    } else if let Some(todos) = row.todos {
+        line = line.child(
+            div()
+                .flex_shrink_0()
+                .text_size(px(10.))
+                .text_color(rgb(INK_SECONDARY))
+                .child(SharedString::from(format!(
+                    "{}/{}",
+                    todos.done, todos.total
+                ))),
+        );
+    }
+    line
+}
+
+/// A running Thread on the 40px rail: an 8px LED on a 24px pitch — nothing
+/// to read, only to notice. A Decision dot keeps a 16px amber halo so
+/// urgency still carries across the room.
+pub fn running_dot(row: &RunningRow) -> Stateful<Div> {
+    let cell = rail_cell(("nav-run", row.thread.get() as usize));
+    let led = dot(px(8.), led_color(row.status));
+    if row.needs_you {
+        return cell.child(
+            div()
+                .flex()
+                .items_center()
+                .justify_center()
+                .w(px(16.))
+                .h(px(16.))
+                .rounded_full()
+                .bg(rgba(WAIT_WASH))
+                .child(led),
+        );
+    }
+    cell.child(led)
+}
+
+/// The divider between the sections: a hairline, and expanded a 22px CAPS
+/// label counting the parked Threads.
+pub fn parked_header(count: usize, collapsed: bool) -> Div {
+    if collapsed {
+        return div()
+            .flex_shrink_0()
+            .h(px(1.))
+            .mx(px(8.))
+            .my(px(4.))
+            .bg(rgba(HAIRLINE));
+    }
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .h(px(22.))
+        .px(px(10.))
+        .border_t_1()
+        .border_color(rgba(HAIRLINE))
+        .text_size(px(10.))
+        .text_color(rgb(INK_MUTED))
+        .child(SharedString::from(format!("PARKED — {count}")))
+}
+
+/// One parked Thread's row: hollow LED, muted ink, and no signal — its log
+/// is not in memory, and the row must not pretend otherwise.
+pub fn parked_row(row: &ParkedRow) -> Stateful<Div> {
+    row_frame(("nav-parked", row.thread.get() as usize), false)
+        .child(hollow_dot(px(6.)))
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_size(px(11.5))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(INK_MUTED))
+                .child(row.name.clone()),
+        )
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_size(px(10.))
+                .text_color(rgb(INK_FAINT))
+                .child(row.binding.clone()),
+        )
+        .child(div().flex_1())
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_size(px(9.5))
+                .text_color(rgb(INK_FAINT))
+                .child(row.provider),
+        )
+}
+
+/// A parked Thread on the rail: a smaller hollow dot below the divider.
+pub fn parked_dot(row: &ParkedRow) -> Stateful<Div> {
+    rail_cell(("nav-parked", row.thread.get() as usize)).child(hollow_dot(px(6.)))
+}
+
+/// The shared 28px row chrome: the 2px left slot the focus bar lives in
+/// (transparent otherwise, so nothing shifts), the hover lift, and the
+/// pressed shade. Focused rows skip hover — the dimmer hover wash must not
+/// downgrade the EDGE ground focus already painted.
+fn row_frame(id: (&'static str, usize), focused: bool) -> Stateful<Div> {
+    let line = div()
+        .id(id)
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .h(px(28.))
+        .gap(px(6.))
+        // 8px padding beside the 2px bar slot keeps the spec's 10px inset.
+        .pl(px(8.))
+        .pr(px(10.))
+        .border_l_2()
+        .border_color(rgba(0x00000000));
+    if focused {
+        return line.border_color(rgb(ACCENT)).bg(rgba(EDGE));
+    }
+    line.hover(|line| line.bg(rgba(HAIRLINE)))
+        .active(|line| line.bg(rgba(EDGE)))
+}
+
+/// One rail slot: 24px of vertical pitch with the dot centered, and the
+/// same hover/pressed language as a row — clicking it is clicking the row.
+fn rail_cell(id: (&'static str, usize)) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .justify_center()
+        .h(px(24.))
+        .w_full()
+        .hover(|cell| cell.bg(rgba(HAIRLINE)))
+        .active(|cell| cell.bg(rgba(EDGE)))
+}
+
+/// The amber `needs you` chip — the exact chip from the Cockpit board's
+/// issue-triage cell.
+fn needs_you_chip() -> Div {
+    div()
+        .flex_shrink_0()
+        .text_size(px(9.5))
+        .text_color(rgb(WAIT))
+        .bg(rgba(WAIT_WASH))
+        .rounded_sm()
+        .px(px(5.))
+        .py(px(1.))
+        .child("needs you")
+}
+
+fn led_color(status: Status) -> u32 {
+    match status {
+        Status::Streaming => GOOD,
+        Status::Blocked => WAIT,
+        Status::Closed => FAIL,
+        Status::Idle => IDLE,
+    }
+}
+
+fn dot(size: Pixels, color: u32) -> Div {
+    div()
+        .flex_shrink_0()
+        .w(size)
+        .h(size)
+        .rounded_full()
+        .bg(rgb(color))
+}
+
+/// A parked LED: the ring without the fill — present, not running.
+fn hollow_dot(size: Pixels) -> Div {
+    div()
+        .flex_shrink_0()
+        .w(size)
+        .h(size)
+        .rounded_full()
+        .border_1()
+        .border_color(rgb(INK_FAINT))
+}

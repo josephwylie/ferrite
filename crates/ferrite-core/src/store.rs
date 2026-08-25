@@ -559,6 +559,32 @@ impl Store {
         Ok(ids)
     }
 
+    /// Header-only read of one Thread: what wrote it, for what provider,
+    /// working where — without replaying its log. This exists for render
+    /// paths (#21's nav lists parked Threads): `read_until` pulls buffered
+    /// chunks only up to the first newline, so the records after the header
+    /// are never read off the disk, and a huge log peeks at the same cost
+    /// as an empty one.
+    pub fn peek(&self, id: ThreadId) -> Result<ThreadMeta, LoadError> {
+        use std::io::BufRead;
+        let mut first = Vec::new();
+        io::BufReader::new(File::open(self.log_path(id))?).read_until(b'\n', &mut first)?;
+        let header: Header = serde_json::from_slice(&first).map_err(|_| LoadError::Corrupt {
+            detail: format!("thread {id} has no readable header"),
+        })?;
+        if header.schema > SCHEMA_VERSION {
+            return Err(LoadError::FutureSchema {
+                found: header.schema,
+                supported: SCHEMA_VERSION,
+            });
+        }
+        Ok(ThreadMeta {
+            provider: header.provider,
+            workspace: header.workspace.as_ref().map(PersistedBinding::live),
+            session_project_root: header.session_project_root,
+        })
+    }
+
     /// Load one Thread's snapshot: its history and resume metadata.
     pub fn load(&self, id: ThreadId) -> Result<ThreadSnapshot, LoadError> {
         // Bytes, not a String: a crash can tear the tail mid-character, and
@@ -682,6 +708,18 @@ impl Store {
     fn log_path(&self, id: ThreadId) -> PathBuf {
         self.dir.join(id.to_string()).join("log.jsonl")
     }
+}
+
+/// One Thread's header facts, read without its history — what a nav row can
+/// say about a parked Thread (#21). Everything here is the log's first line.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ThreadMeta {
+    pub provider: Provider,
+    /// `None` for a log from before schema 3, which never recorded one.
+    pub workspace: Option<WorkspaceBinding>,
+    /// `None` — including every pre-v4 log — means work in the binding
+    /// itself.
+    pub session_project_root: Option<PathBuf>,
 }
 
 /// One Thread as loaded from disk: everything a restart needs.
@@ -892,6 +930,68 @@ mod tests {
         assert_eq!(store.thread_ids().unwrap(), vec![second]);
         assert!(store.load(first).is_err(), "a deleted Thread must not load");
         assert!(store.load(second).is_ok());
+    }
+
+    /// #21: the nav's parked rows come from `peek`, which must answer from
+    /// the header line alone. The body here is a megabyte of bytes that are
+    /// not records at all — a peek that read or parsed past the first line
+    /// would choke on them, and a `load` in a render path is exactly the
+    /// whole-log replay the nav exists to avoid.
+    #[test]
+    fn peek_reads_the_header_line_and_never_the_records() {
+        let dir = scratch("peek");
+        let store = Store::open(&dir).unwrap();
+        let (id, writer, binding) = store
+            .create(
+                Provider::Codex,
+                WorkspaceChoice::Main {
+                    checkout: "/repos/project".into(),
+                },
+            )
+            .unwrap();
+        drop(writer);
+        store
+            .set_session_project_root(id, Some("/repos/project/api".into()), None)
+            .unwrap();
+        let mut log = OpenOptions::new()
+            .append(true)
+            .open(dir.join(id.to_string()).join("log.jsonl"))
+            .unwrap();
+        writeln!(log, "{}", "x".repeat(1024 * 1024)).unwrap();
+
+        let meta = store.peek(id).unwrap();
+
+        assert_eq!(meta.provider, Provider::Codex);
+        assert_eq!(
+            meta.workspace,
+            Some(WorkspaceBinding::Main {
+                checkout: "/repos/project".into(),
+            })
+        );
+        assert_eq!(binding, meta.workspace.clone().unwrap());
+        assert_eq!(
+            meta.session_project_root,
+            Some(PathBuf::from("/repos/project/api"))
+        );
+    }
+
+    /// A log from Ferrite's future refuses a peek exactly as it refuses a
+    /// load: a nav row half-read from an unknown schema would claim a
+    /// Thread that cannot actually be revived.
+    #[test]
+    fn peek_refuses_a_future_schema_like_load_does() {
+        let dir = scratch("peek-future");
+        let store = Store::open(&dir).unwrap();
+        let (id, writer, _binding) = store.create(Provider::Claude, main_choice()).unwrap();
+        drop(writer);
+        let path = dir.join(id.to_string()).join("log.jsonl");
+        let log = fs::read_to_string(&path).unwrap();
+        fs::write(&path, log.replace("\"schema\":4", "\"schema\":99")).unwrap();
+
+        assert!(matches!(
+            store.peek(id),
+            Err(LoadError::FutureSchema { found: 99, .. })
+        ));
     }
 
     /// The frozen contract for schema 2, byte for byte what its writer
