@@ -3,7 +3,6 @@ mod composer;
 mod line;
 mod pane;
 mod session;
-mod transcript;
 
 use ferrite_core::providers::{ClaudeConfig, ClaudeSession};
 use gpui::*;

@@ -32,6 +32,10 @@ pub enum SessionEvent {
         id: String,
         output: String,
         is_error: bool,
+        /// The provider's own structured result, where Ferrite models the
+        /// shape — a diff card cannot be drawn from `output`, which is prose
+        /// written for the model.
+        result: ToolResult,
     },
     /// The Session is blocked on a Decision: only the operator can say whether
     /// this tool may run. Answer it with the provider's respond-to-Decision
@@ -59,6 +63,31 @@ pub enum SessionEvent {
     },
     /// The session process exited; no further events will arrive.
     Closed { reason: String },
+}
+
+/// The structured half of a tool result. Every shape here was read off a
+/// recorded capture; anything else stays `Opaque` rather than being guessed at.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum ToolResult {
+    /// No structured payload, or one Ferrite does not model.
+    #[default]
+    Opaque,
+    /// A command ran and wrote to the usual two streams.
+    Command { stdout: String, stderr: String },
+    /// A file was written. `hunks` is empty when the file was created, which
+    /// has nothing to diff against.
+    FileEdit { path: String, hunks: Vec<Hunk> },
+}
+
+/// One changed region of a file, in the provider's own unified-diff form.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Hunk {
+    pub old_start: u32,
+    pub old_lines: u32,
+    pub new_start: u32,
+    pub new_lines: u32,
+    /// Each line keeps its marker: ' ' context, '-' removed, '+' added.
+    pub lines: Vec<String>,
 }
 
 /// How the operator answered a `DecisionRequested`.

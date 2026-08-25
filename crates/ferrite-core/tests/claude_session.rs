@@ -252,6 +252,10 @@ fn a_tool_call_arrives_as_a_start_and_a_completion() {
             id: id.clone(),
             output: "ferrite-tool-ok".into(),
             is_error: false,
+            result: ferrite_core::ToolResult::Command {
+                stdout: "ferrite-tool-ok".into(),
+                stderr: String::new(),
+            },
         }),
         "no completion matching {id}: {events:?}"
     );

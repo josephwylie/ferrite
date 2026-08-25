@@ -14,3 +14,6 @@ gpui = "=0.2.2"
 # one in a test needs the type. The app itself never inspects them.
 [dev-dependencies]
 serde_json = { workspace = true }
+# The smoke render needs a window; gpui's own test harness provides a headless
+# one, so the app's rendering is exercised without a display.
+gpui = { version = "=0.2.2", features = ["test-support"] }

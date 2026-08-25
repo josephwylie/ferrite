@@ -115,7 +115,16 @@ const TURN_ONE: &str = "Ferrite renders whatever the provider streams: no harnes
     has to wrap inside the Pane and the tail keeps following the newest line as \
     deltas land. Each word arrives as its own TextDelta at roughly thirty \
     milliseconds, which is close enough to a real turn to see whether the layout \
-    holds still while text grows underneath it.";
+    holds still while text grows underneath it.\n\n\
+    ## What the fold produces\n\
+    - headings and bullets, each its own Block\n\
+    - inline `code` kept in the run of the sentence\n\
+    - fenced blocks handed to the injected highlighter\n\n\
+    ```rust\n\
+    fn apply(&mut self, input: Input) -> Update {\n\
+        // events in, Blocks out\n\
+    }\n\
+    ```\n\n";
 
 const TURN_TWO: &str = "Second turn, shorter, to prove the transcript keeps its \
     history and the status line drops back to idle with the turn cost beside it.";
@@ -171,11 +180,13 @@ fn turn(thinking: &[&str], text: &str, cost: f64) -> Vec<Step> {
             SessionEvent::ThinkingDelta { text: "\n".into() },
         ));
     }
-    for word in text.split_whitespace() {
+    // split_inclusive, not split_whitespace: the newlines are what the
+    // markdown fold reads, so a pacer that ate them would test nothing.
+    for chunk in text.split_inclusive(char::is_whitespace) {
         steps.push(Step::new(
             30,
             SessionEvent::TextDelta {
-                text: format!("{word} "),
+                text: chunk.to_string(),
             },
         ));
     }
@@ -192,31 +203,37 @@ fn turn(thinking: &[&str], text: &str, cost: f64) -> Vec<Step> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transcript::{Kind, Status, Transcript};
+    use ferrite_core::transcript::{Body, Input, Status, Transcript};
 
     #[test]
     fn replaying_the_demo_script_leaves_two_paid_turns_and_text_long_enough_to_wrap() {
         let mut transcript = Transcript::default();
         for step in script() {
-            transcript.apply(step.event);
+            transcript.apply(Input::Event(step.event));
         }
 
         assert_eq!(transcript.model(), Some("claude-sonnet-4-5"));
         assert_eq!(transcript.status(), Status::Idle);
 
         let costs: Vec<&str> = transcript
-            .segments()
+            .blocks()
             .iter()
-            .filter(|s| s.kind == Kind::Meta)
-            .map(|s| s.text.as_str())
+            .filter_map(|block| match &block.body {
+                Body::Meta(text) => Some(text.as_str()),
+                _ => None,
+            })
             .collect();
         assert_eq!(costs, ["$0.0380", "$0.0124"]);
 
         let longest = transcript
-            .segments()
+            .blocks()
             .iter()
-            .filter(|s| s.kind == Kind::Assistant)
-            .map(|s| s.text.chars().count())
+            .filter_map(|block| match &block.body {
+                Body::Paragraph { spans } => {
+                    Some(spans.iter().map(|s| s.text.chars().count()).sum::<usize>())
+                }
+                _ => None,
+            })
             .max()
             .unwrap();
         assert!(longest > 200, "demo text must wrap; longest was {longest}");

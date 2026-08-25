@@ -69,7 +69,7 @@ want() {
     case " $WANTED " in *" $1 "*) return 0 ;; *) return 1 ;; esac
 }
 
-WANTED=${*:-tool permission-allow permission-deny error initialize}
+WANTED=${*:-tool edit permission-allow permission-deny error initialize}
 
 for scenario in $WANTED; do
     case $scenario in
@@ -83,6 +83,17 @@ for scenario in $WANTED; do
         capture tool \
             --prompt 'Run the shell command `echo ferrite-tool-ok` with Bash and tell me its output.' \
             -- --safe-mode --allowedTools 'Bash(echo *)'
+        ;;
+    # (e) An edit to a file that already exists. The permission-allow fixture
+    # only proves a *create*, whose `structuredPatch` is empty by definition —
+    # so it is the one capture that carries real patch hunks, and diff cards
+    # are typed from them. Read is allowed alongside Edit because the CLI
+    # refuses to edit a file this session has not read.
+    edit)
+        printf 'alpha\nbravo\ncharlie\n' >"$WORK/cwd/ferrite-edit.txt"
+        capture edit \
+            --prompt 'Use the Edit tool to change the word bravo to delta in ferrite-edit.txt, then say done.' \
+            -- --safe-mode --allowedTools 'Read Edit'
         ;;
     # (b) A Decision. No --allowedTools, and --permission-prompt-tool stdio is
     # what makes the CLI ask over the control protocol instead of refusing

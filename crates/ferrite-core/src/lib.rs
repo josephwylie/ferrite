@@ -5,6 +5,7 @@
 //! transcript, store, workspace — added as their tickets land.
 
 pub mod providers;
+pub mod transcript;
 
 mod session_event;
-pub use session_event::{DecisionAnswer, SessionEvent, TurnOutcome};
+pub use session_event::{DecisionAnswer, Hunk, SessionEvent, ToolResult, TurnOutcome};

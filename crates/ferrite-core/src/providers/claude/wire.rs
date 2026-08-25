@@ -7,7 +7,7 @@
 use serde_json::Value;
 
 use super::Capabilities;
-use crate::{SessionEvent, TurnOutcome};
+use crate::{Hunk, SessionEvent, ToolResult, TurnOutcome};
 
 /// The answer to spawn's initialize control request, if this line is it.
 ///
@@ -88,6 +88,51 @@ fn parse_user(value: &Value) -> Option<SessionEvent> {
             .get("is_error")
             .and_then(Value::as_bool)
             .unwrap_or(false),
+        result: parse_tool_result(value.get("tool_use_result")),
+    })
+}
+
+/// The CLI hangs its structured result off the same line as the prose one.
+/// Each arm below matches a shape in the committed captures; a payload that
+/// fits none of them is Opaque rather than half-read.
+fn parse_tool_result(value: Option<&Value>) -> ToolResult {
+    let Some(value) = value else {
+        return ToolResult::Opaque;
+    };
+    if let Some(patch) = value.get("structuredPatch").and_then(Value::as_array) {
+        let Some(path) = value.get("filePath").and_then(Value::as_str) else {
+            return ToolResult::Opaque;
+        };
+        return ToolResult::FileEdit {
+            path: path.to_string(),
+            hunks: patch.iter().filter_map(parse_hunk).collect(),
+        };
+    }
+    if let Some(stdout) = value.get("stdout").and_then(Value::as_str) {
+        return ToolResult::Command {
+            stdout: stdout.to_string(),
+            stderr: value
+                .get("stderr")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        };
+    }
+    ToolResult::Opaque
+}
+
+fn parse_hunk(value: &Value) -> Option<Hunk> {
+    Some(Hunk {
+        old_start: value.get("oldStart")?.as_u64()? as u32,
+        old_lines: value.get("oldLines")?.as_u64()? as u32,
+        new_start: value.get("newStart")?.as_u64()? as u32,
+        new_lines: value.get("newLines")?.as_u64()? as u32,
+        lines: value
+            .get("lines")?
+            .as_array()?
+            .iter()
+            .filter_map(|line| Some(line.as_str()?.to_string()))
+            .collect(),
     })
 }
 
@@ -238,6 +283,10 @@ mod tests {
         (
             "error",
             include_str!("../../../tests/fixtures/claude-error-2.1.243.jsonl"),
+        ),
+        (
+            "edit",
+            include_str!("../../../tests/fixtures/claude-edit-2.1.243.jsonl"),
         ),
     ];
 
@@ -400,6 +449,9 @@ mod tests {
                 ("permission-deny", 60, 19),
                 // A turn that never reached the API: an init and a verdict.
                 ("error", 4, 2),
+                // Read then Edit: two tool calls, and the patch hunks the diff
+                // cards are built from.
+                ("edit", 70, 16),
             ]
         );
     }
@@ -423,11 +475,52 @@ mod tests {
             id: id.clone(),
             output: "ferrite-tool-ok".into(),
             is_error: false,
+            result: ToolResult::Command {
+                stdout: "ferrite-tool-ok".into(),
+                stderr: String::new(),
+            },
         }));
     }
 
     /// Denial is not failure: the CLI feeds the operator's reason back to the
     /// model as a failed tool result and the turn runs to a normal end.
+    /// A create has no hunks by definition, so only an edit proves the patch
+    /// shape the diff cards are built from.
+    #[test]
+    fn an_edit_carries_the_patch_hunks_it_applied() {
+        let hunks = events_of("edit")
+            .into_iter()
+            .find_map(|event| match event {
+                SessionEvent::ToolCompleted {
+                    result: ToolResult::FileEdit { path, hunks },
+                    ..
+                } if path.ends_with("ferrite-edit.txt") => Some(hunks),
+                _ => None,
+            })
+            .expect("the edit fixture patches a file");
+
+        assert_eq!(hunks.len(), 1);
+        assert_eq!(hunks[0].old_start, 1);
+        assert_eq!(hunks[0].new_start, 1);
+        assert_eq!(hunks[0].lines, [" alpha", "-bravo", "+delta", " charlie"]);
+    }
+
+    #[test]
+    fn a_command_carries_the_streams_it_wrote() {
+        let streams = events_of("tool")
+            .into_iter()
+            .find_map(|event| match event {
+                SessionEvent::ToolCompleted {
+                    result: ToolResult::Command { stdout, stderr },
+                    ..
+                } => Some((stdout, stderr)),
+                _ => None,
+            })
+            .expect("the tool fixture runs a command");
+
+        assert_eq!(streams, ("ferrite-tool-ok".to_string(), String::new()));
+    }
+
     #[test]
     fn a_denied_tool_fails_without_failing_the_turn() {
         let events = events_of("permission-deny");
