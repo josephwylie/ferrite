@@ -61,6 +61,13 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
         (with_primary("["), "cockpit::PreviousPane", None),
         (with_primary("d"), "cockpit::NextDecision", None),
         (with_primary("n"), "cockpit::NewThread", None),
+        // #20: browser-tab muscle memory — cmd-t is the same new Thread,
+        // and cmd-n stays as an alias beside it.
+        (with_primary("t"), "cockpit::NewThread", None),
+        // The focused Pane takes the whole cockpit at L1; cmd-f again
+        // restores the grid. Escape stays Interrupt (#20 design): stealing
+        // the panic key for "exit fullscreen" would make it ambiguous.
+        (with_primary("f"), "cockpit::ToggleFullscreen", None),
         // Shift: the same new Thread, in its own worktree instead of the
         // checkout the operator is sitting in.
         (with_primary("shift-n"), "cockpit::NewWorktreeThread", None),
@@ -96,6 +103,9 @@ mod tests {
             ("cockpit::PreviousPane", "["),
             ("cockpit::NextDecision", "d"),
             ("cockpit::NewThread", "n"),
+            // #20: cmd-t is the browser-tab spelling of the same new Thread.
+            ("cockpit::NewThread", "t"),
+            ("cockpit::ToggleFullscreen", "f"),
             ("cockpit::NewWorktreeThread", "shift-n"),
             ("cockpit::CloseThread", "w"),
             ("cockpit::ReopenThread", "o"),

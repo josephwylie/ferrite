@@ -13,7 +13,7 @@ use ferrite_core::workspace::WorkspaceChoice;
 use ferrite_core::{DecisionAnswer, ThreadId};
 use gpui::prelude::*;
 use gpui::{
-    actions, div, point, px, rgb, ClipboardItem, Context, FocusHandle, Focusable, MouseButton,
+    actions, div, point, px, rgb, ClipboardItem, Context, Div, FocusHandle, Focusable, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle, SharedString,
     Window,
 };
@@ -36,6 +36,7 @@ actions!(
         CloseThread,
         ReopenThread,
         CopySelection,
+        ToggleFullscreen,
     ]
 );
 
@@ -57,6 +58,16 @@ pub struct CockpitView {
     cockpit: Cockpit,
     panes: Vec<PaneView>,
     focused: usize,
+    /// The Thread cmd-f fullscreened, if any: it takes the whole grid area
+    /// at Level::Transcript while every other Session keeps streaming (#20).
+    /// Deliberate moves re-aim it through `focus_pane` — cmd-w's survivor
+    /// fills the screen like the next browser tab. The Thread is named —
+    /// not `fullscreen: bool` over `focused` — so one removed by a path
+    /// that never called `focus_pane` reads as *gone* and falls back to the
+    /// grid (render's self-heal), instead of a bool silently fullscreening
+    /// whichever Pane inherited its index, or an empty cockpit rendering
+    /// blank.
+    fullscreen: Option<ThreadId>,
     /// The repo a new Thread binds to — where Ferrite was started.
     repo: std::path::PathBuf,
     /// The cockpit's own place in the focus tree. Key dispatch walks from the
@@ -158,6 +169,7 @@ impl CockpitView {
             cockpit,
             panes,
             focused: 0,
+            fullscreen: None,
             repo: here(),
             focus: cx.focus_handle(),
             perf: std::env::var("FERRITE_PERF").is_ok().then(|| Perf {
@@ -239,8 +251,16 @@ impl CockpitView {
         Cell::new(width.max(0.0), height.max(0.0))
     }
 
-    /// The level this cockpit is rendering at right now — size, nothing else.
+    /// The level this cockpit is rendering at right now — size, with one
+    /// exception: fullscreen forces Transcript (#20). A whole-window cell
+    /// would pick L1 at any sane size anyway; the force is what keeps
+    /// "fullscreen = L1 regardless" true on a tiny window too. Routed here,
+    /// not in render, so the pointer math (`block_at`) reads the same level
+    /// the frame drew.
     fn level_now(&self, window: &Window) -> Level {
+        if self.fullscreen.is_some() {
+            return Level::Transcript;
+        }
         Level::for_cell(self.cell(window, columns(self.panes.len())))
     }
 
@@ -333,15 +353,46 @@ impl CockpitView {
 
     fn next_pane(&mut self, _: &NextPane, _window: &mut Window, cx: &mut Context<Self>) {
         if !self.panes.is_empty() {
-            self.focused = (self.focused + 1) % self.panes.len();
+            self.focus_pane((self.focused + 1) % self.panes.len());
             cx.notify();
         }
     }
 
     fn previous_pane(&mut self, _: &PreviousPane, _window: &mut Window, cx: &mut Context<Self>) {
         if !self.panes.is_empty() {
-            self.focused = (self.focused + self.panes.len() - 1) % self.panes.len();
+            self.focus_pane((self.focused + self.panes.len() - 1) % self.panes.len());
             cx.notify();
+        }
+    }
+
+    /// cmd-f (#20): the focused Pane takes the whole cockpit; cmd-f again
+    /// restores the grid. Escape is deliberately not an exit — it stays
+    /// Interrupt, and stealing the panic key would make it ambiguous.
+    fn toggle_fullscreen(
+        &mut self,
+        _: &ToggleFullscreen,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.fullscreen = match self.fullscreen {
+            Some(_) => None,
+            // An empty cockpit has no Pane to fill the screen with.
+            None => self.focused_thread(),
+        };
+        cx.notify();
+    }
+
+    /// The one door to `focused`: every move — keys, clicks, and whatever
+    /// #21's nav rows add — lands here, so fullscreen re-aims with focus.
+    /// While fullscreen, the Thread the operator lands on is the Thread
+    /// that fills the screen (browser-tab muscle memory). Never *enters*
+    /// fullscreen, only re-aims it — and with no Thread left to aim at,
+    /// falls back to the grid. A writer that bypasses this leaves
+    /// fullscreen showing a Thread the operator already left.
+    fn focus_pane(&mut self, index: usize) {
+        self.focused = index;
+        if self.fullscreen.is_some() {
+            self.fullscreen = self.focused_thread();
         }
     }
 
@@ -380,7 +431,7 @@ impl CockpitView {
         match self.cockpit.open(provider, workspace) {
             Ok(thread) => {
                 self.panes.push(PaneView::new(thread, cx));
-                self.focused = self.panes.len() - 1;
+                self.focus_pane(self.panes.len() - 1);
                 cx.notify();
             }
             // A worktree that git refuses is the operator's to fix; the
@@ -409,7 +460,7 @@ impl CockpitView {
         match self.cockpit.revive(thread) {
             Ok(()) => {
                 self.panes.push(PaneView::new(thread, cx));
-                self.focused = self.panes.len() - 1;
+                self.focus_pane(self.panes.len() - 1);
                 cx.notify();
             }
             Err(e) => eprintln!("ferrite: thread {thread} could not be reopened: {e:?}"),
@@ -429,7 +480,11 @@ impl CockpitView {
         // cmd-o should still bring this Thread back first.
         self.park_order.push(thread);
         self.panes.retain(|pane| pane.thread != thread);
-        self.focused = self.focused.min(self.panes.len().saturating_sub(1));
+        // The clamped survivor takes focus — and, while fullscreen, the
+        // screen (#20): closing a browser tab shows the next tab, not an
+        // overview. Parking the last Thread leaves nothing to aim at, so
+        // the setter falls back to the (empty) grid.
+        self.focus_pane(self.focused.min(self.panes.len().saturating_sub(1)));
         cx.notify();
     }
 
@@ -440,16 +495,18 @@ impl CockpitView {
             return;
         };
         if let Some(pane) = self.pane_for(next) {
-            self.focused = pane;
+            self.focus_pane(pane);
             cx.notify();
         }
     }
 
-    /// A left press lands the operator on this Pane. It only sets `focused`:
-    /// the per-frame snap in render then carries focus to whatever the Pane
-    /// holds (Composer or Decision card) — fighting the snap would regress
-    /// the dead-keyboard fixes it exists for. A press on the transcript also
-    /// grips a Block, ready to become a selection if the pointer moves.
+    /// A left press lands the operator on this Pane. It only moves focus —
+    /// through `focus_pane`, the door #21's nav clicks will share, so a
+    /// fullscreen re-aims here too: the per-frame snap in render then
+    /// carries focus to whatever the Pane holds (Composer or Decision card)
+    /// — fighting the snap would regress the dead-keyboard fixes it exists
+    /// for. A press on the transcript also grips a Block, ready to become a
+    /// selection if the pointer moves.
     fn pointer_down(
         &mut self,
         index: usize,
@@ -457,7 +514,7 @@ impl CockpitView {
         window: &Window,
         cx: &mut Context<Self>,
     ) {
-        self.focused = index;
+        self.focus_pane(index);
         // Any press clears the standing selection; only a new drag makes one.
         // The grip was already cleared by the root's capture handler.
         self.selection = None;
@@ -598,8 +655,17 @@ fn columns(count: usize) -> usize {
 impl Render for CockpitView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.measure();
+        // A fullscreened Thread whose Pane is gone — removed by a path that
+        // bypassed `focus_pane` — falls back to the grid, never a blank
+        // cockpit. Render is the one chokepoint every removal passes.
+        if self
+            .fullscreen
+            .is_some_and(|thread| self.pane_for(thread).is_none())
+        {
+            self.fullscreen = None;
+        }
+        let fullscreen = self.fullscreen.and_then(|thread| self.pane_for(thread));
         let blocked = self.cockpit.blocked();
-        let columns = columns(self.panes.len());
         let level = self.level_now(window);
 
         // Focus follows the operator, but only onto something this level
@@ -607,7 +673,9 @@ impl Render for CockpitView {
         // the keyboard pointing at nothing, and every global key stops working.
         // An empty cockpit still needs the keyboard: with nothing focused,
         // dispatch starts above these handlers and cmd-n could never make the
-        // first Thread.
+        // first Thread. Fullscreen changes none of this: the fullscreened
+        // Pane is the focused Pane (fullscreen follows focus), so the snap
+        // lands on the one Pane actually on screen.
         let wanted = self
             .panes
             .get(self.focused)
@@ -630,54 +698,23 @@ impl Render for CockpitView {
             .min_h_0()
             .gap(px(6.))
             .p(px(6.));
-        for (row_at, row) in self.panes.chunks(columns).enumerate() {
-            let mut line = div().flex().flex_row().flex_1().min_h_0().gap(px(6.));
-            for (column, pane) in row.iter().enumerate() {
-                let index = row_at * columns + column;
-                let focused = self
-                    .focused_thread()
-                    .is_some_and(|thread| thread == pane.thread);
-                let selected = self
-                    .selection
-                    .as_ref()
-                    .filter(|selection| selection.thread == pane.thread)
-                    .and_then(|selection| {
-                        selection.resolve(self.cockpit.transcript(pane.thread)?.blocks())
-                    });
-                line = line.child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .flex_1()
-                        .min_w_0()
-                        .min_h_0()
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |view, event: &MouseDownEvent, window, cx| {
-                                view.pointer_down(index, event.position, window, cx)
-                            }),
-                        )
-                        .on_mouse_move(cx.listener(
-                            move |view, event: &MouseMoveEvent, window, cx| {
-                                view.pointer_drag(index, event, window, cx)
-                            },
-                        ))
-                        .child(pane::render_pane(
-                            pane,
-                            pane::PaneState {
-                                transcript: self.cockpit.transcript(pane.thread),
-                                decision: self.cockpit.pending(pane.thread),
-                                queued: self.cockpit.queued(pane.thread),
-                                workspace: self.cockpit.workspace(pane.thread),
-                                focused,
-                                blocked: blocked.contains(&pane.thread),
-                                selected,
-                            },
-                            level,
-                        )),
-                );
+        if let Some(index) = fullscreen {
+            // The fullscreened Pane takes the whole content area; the strip
+            // above stays as the tether to the rest of the swarm. The other
+            // Panes are not laid out at all — hidden siblings would still
+            // cost layout — while their Sessions keep streaming through the
+            // pump regardless (#20).
+            grid = grid.child(self.pane_cell(index, level, &blocked, cx));
+        } else {
+            let columns = columns(self.panes.len());
+            for (row_at, row) in self.panes.chunks(columns).enumerate() {
+                let mut line = div().flex().flex_row().flex_1().min_h_0().gap(px(6.));
+                for column in 0..row.len() {
+                    line =
+                        line.child(self.pane_cell(row_at * columns + column, level, &blocked, cx));
+                }
+                grid = grid.child(line);
             }
-            grid = grid.child(line);
         }
 
         div()
@@ -704,6 +741,7 @@ impl Render for CockpitView {
             .on_action(cx.listener(Self::close_thread))
             .on_action(cx.listener(Self::reopen_thread))
             .on_action(cx.listener(Self::copy_selection))
+            .on_action(cx.listener(Self::toggle_fullscreen))
             // The root covers the window, so a release anywhere ends the
             // drag; the selection it made stays until the next press.
             .on_mouse_up(
@@ -724,6 +762,59 @@ impl Render for CockpitView {
 }
 
 impl CockpitView {
+    /// One Pane's cell — the click-to-focus and drag plumbing around
+    /// `render_pane`. The same cell serves a grid slot and the fullscreen
+    /// view; only who lays it out differs.
+    fn pane_cell(
+        &self,
+        index: usize,
+        level: Level,
+        blocked: &[ThreadId],
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let pane = &self.panes[index];
+        let focused = self
+            .focused_thread()
+            .is_some_and(|thread| thread == pane.thread);
+        let selected = self
+            .selection
+            .as_ref()
+            .filter(|selection| selection.thread == pane.thread)
+            .and_then(|selection| {
+                selection.resolve(self.cockpit.transcript(pane.thread)?.blocks())
+            });
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |view, event: &MouseDownEvent, window, cx| {
+                    view.pointer_down(index, event.position, window, cx)
+                }),
+            )
+            .on_mouse_move(
+                cx.listener(move |view, event: &MouseMoveEvent, window, cx| {
+                    view.pointer_drag(index, event, window, cx)
+                }),
+            )
+            .child(pane::render_pane(
+                pane,
+                pane::PaneState {
+                    transcript: self.cockpit.transcript(pane.thread),
+                    decision: self.cockpit.pending(pane.thread),
+                    queued: self.cockpit.queued(pane.thread),
+                    workspace: self.cockpit.workspace(pane.thread),
+                    focused,
+                    blocked: blocked.contains(&pane.thread),
+                    selected,
+                },
+                level,
+            ))
+    }
+
     /// One line across the top: how many Threads, how many want answering.
     fn strip(&self, blocked: usize) -> impl IntoElement {
         let threads = self.panes.len();
@@ -1680,5 +1771,250 @@ mod tests {
         // And plain cycling still walks the grid in order.
         cx.simulate_keystrokes("cmd-]");
         view.read_with(cx, |view, _| assert_eq!(view.focused, 3));
+    }
+
+    /// #20: cmd-t is the browser-tab spelling of a new Thread, and cmd-n —
+    /// the original — still works beside it. Both keys ride the same
+    /// cockpit::NewThread; the keymap table carries both rows.
+    #[gpui::test]
+    fn cmd_t_opens_a_new_thread_and_cmd_n_still_does(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("cmd-t", 1);
+        cx.update(|cx| {
+            cx.bind_keys([
+                KeyBinding::new("cmd-t", NewThread, None),
+                KeyBinding::new("cmd-n", NewThread, None),
+            ]);
+        });
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        tick(cx);
+
+        cx.simulate_keystrokes("cmd-t");
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.panes.len(), 2, "cmd-t opened a Thread");
+        });
+
+        cx.simulate_keystrokes("cmd-n");
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.panes.len(), 3, "and cmd-n still does");
+        });
+    }
+
+    /// #20: cmd-f gives the focused Pane the whole cockpit at L1, and cmd-f
+    /// again restores the grid. The proof of L1 is the keyboard: only a
+    /// Transcript-level Pane renders a Composer, so typing landing there is
+    /// the level made observable — and the focus snap holding in fullscreen.
+    #[gpui::test]
+    fn cmd_f_fullscreens_the_focused_pane_and_toggles_back(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("fullscreen", 4);
+        cx.update(|cx| {
+            cx.bind_keys([KeyBinding::new("cmd-f", ToggleFullscreen, None)]);
+        });
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        // Four Panes in this window sit at Instruments: no Composer anywhere.
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        tick(cx);
+        cx.simulate_input("lost");
+        let typed = view.update(cx, |view, cx| {
+            view.panes[0]
+                .composer
+                .update(cx, |composer, cx| composer.take(cx))
+        });
+        assert_eq!(typed, "", "the premise: no Composer at grid level");
+
+        cx.simulate_keystrokes("cmd-f");
+
+        view.read_with(cx, |view, _| {
+            assert_eq!(
+                view.fullscreen,
+                Some(view.panes[0].thread),
+                "cmd-f fullscreens the focused Pane"
+            );
+        });
+        // One Pane rendered, spanning the whole grid area — a 2-column cell
+        // would be under half this.
+        let width = view.read_with(cx, |view, _| view.panes[0].scroll.bounds().size.width);
+        assert!(
+            width > px(900.),
+            "the fullscreened Pane takes the whole cockpit: {width:?}"
+        );
+        cx.simulate_input("hi");
+        let typed = view.update(cx, |view, cx| {
+            view.panes[0]
+                .composer
+                .update(cx, |composer, cx| composer.take(cx))
+        });
+        assert_eq!(typed, "hi", "fullscreen renders at Transcript level");
+
+        cx.simulate_keystrokes("cmd-f");
+
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.fullscreen, None, "cmd-f again restores the grid");
+        });
+        cx.simulate_input("gone");
+        let typed = view.update(cx, |view, cx| {
+            view.panes[0]
+                .composer
+                .update(cx, |composer, cx| composer.take(cx))
+        });
+        assert_eq!(typed, "", "back on the grid, back at Instruments");
+    }
+
+    /// #20: fullscreen is L1 *regardless* — a window too small for any cell
+    /// to earn Transcript still renders the fullscreened Pane at Transcript,
+    /// Composer and all. Size stops deciding; the mode does.
+    #[gpui::test]
+    fn fullscreen_forces_transcript_level_even_in_a_tiny_window(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("fullscreen-tiny", 1);
+        cx.update(|cx| {
+            cx.bind_keys([KeyBinding::new("cmd-f", ToggleFullscreen, None)]);
+        });
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(240.), px(200.)));
+        tick(cx);
+        let natural = cx.update(|window, cx| view.read(cx).level_now(window));
+        assert!(
+            natural < Level::Transcript,
+            "the premise: this window cannot earn L1 by size ({natural:?})"
+        );
+
+        cx.simulate_keystrokes("cmd-f");
+        cx.simulate_input("hi");
+
+        let typed = view.update(cx, |view, cx| {
+            view.panes[0]
+                .composer
+                .update(cx, |composer, cx| composer.take(cx))
+        });
+        assert_eq!(typed, "hi", "forced L1: the Composer holds the keyboard");
+    }
+
+    /// #20: cmd-] while fullscreen pages the fullscreen to the next Thread —
+    /// browser-tab muscle memory — rather than exiting, or going stale on
+    /// the Thread the operator just left.
+    #[gpui::test]
+    fn paging_while_fullscreen_moves_the_fullscreen_to_the_next_thread(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("fullscreen-page", 3);
+        cx.update(|cx| {
+            cx.bind_keys([
+                KeyBinding::new("cmd-f", ToggleFullscreen, None),
+                KeyBinding::new("cmd-]", NextPane, None),
+            ]);
+        });
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        tick(cx);
+        cx.simulate_keystrokes("cmd-f");
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.fullscreen, Some(view.panes[0].thread));
+        });
+
+        cx.simulate_keystrokes("cmd-]");
+
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.focused, 1, "cmd-] still walks the Threads");
+            assert_eq!(
+                view.fullscreen,
+                Some(view.panes[1].thread),
+                "and the next Thread is the fullscreened one now"
+            );
+        });
+    }
+
+    /// #20: cmd-w while fullscreen parks the fullscreened Thread and the
+    /// survivor fills the screen — closing a browser tab shows the next
+    /// tab, not an overview.
+    #[gpui::test]
+    fn closing_the_fullscreened_thread_fullscreens_the_survivor(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("fullscreen-close", 2);
+        cx.update(|cx| {
+            cx.bind_keys([
+                KeyBinding::new("cmd-f", ToggleFullscreen, None),
+                KeyBinding::new("cmd-w", CloseThread, None),
+            ]);
+        });
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        tick(cx);
+        cx.simulate_keystrokes("cmd-f");
+        let closed = view.read_with(cx, |view, _| {
+            assert!(view.fullscreen.is_some(), "the premise: fullscreen is on");
+            view.panes[0].thread
+        });
+
+        cx.simulate_keystrokes("cmd-w");
+
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.panes.len(), 1, "the Pane is gone");
+            assert_eq!(
+                view.fullscreen,
+                Some(view.panes[0].thread),
+                "the surviving Thread fills the screen, like the next tab"
+            );
+            assert!(
+                view.cockpit.parked().unwrap().contains(&closed),
+                "and cmd-w still parks, exactly as before"
+            );
+        });
+    }
+
+    /// #20: parking the last Thread while fullscreen has nothing left to
+    /// fullscreen — the cockpit falls back to the (empty) grid rather than
+    /// rendering a blank fullscreen.
+    #[gpui::test]
+    fn parking_the_last_fullscreened_thread_falls_back_to_the_grid(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("fullscreen-last", 1);
+        cx.update(|cx| {
+            cx.bind_keys([
+                KeyBinding::new("cmd-f", ToggleFullscreen, None),
+                KeyBinding::new("cmd-w", CloseThread, None),
+            ]);
+        });
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        tick(cx);
+        cx.simulate_keystrokes("cmd-f");
+        view.read_with(cx, |view, _| {
+            assert!(view.fullscreen.is_some(), "the premise: fullscreen is on");
+        });
+
+        cx.simulate_keystrokes("cmd-w");
+
+        view.read_with(cx, |view, _| {
+            assert!(view.panes.is_empty(), "the last Pane is gone");
+            assert_eq!(view.fullscreen, None, "and so is the fullscreen");
+        });
+    }
+
+    /// #20 edge: the fullscreened Thread parked by a path that knows nothing
+    /// about fullscreen (a future nav click, the watchdog). The next frame
+    /// falls back to the grid — never a blank cockpit, never fullscreen on a
+    /// Thread the operator did not pick.
+    #[gpui::test]
+    fn a_fullscreened_thread_parked_externally_falls_back_to_the_grid(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("fullscreen-external", 2);
+        cx.update(|cx| {
+            cx.bind_keys([KeyBinding::new("cmd-f", ToggleFullscreen, None)]);
+        });
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        tick(cx);
+        cx.simulate_keystrokes("cmd-f");
+        let gone = view.read_with(cx, |view, _| {
+            assert!(view.fullscreen.is_some(), "the premise: fullscreen is on");
+            view.panes[0].thread
+        });
+
+        // Park it the way code that never heard of fullscreen would.
+        view.update(cx, |view, cx| {
+            view.cockpit.park(gone).unwrap();
+            view.panes.retain(|pane| pane.thread != gone);
+            view.focused = 0;
+            cx.notify();
+        });
+        cx.run_until_parked();
+
+        view.read_with(cx, |view, _| {
+            assert_eq!(
+                view.fullscreen, None,
+                "a fullscreened Thread that vanished falls back to the grid"
+            );
+            assert_eq!(view.panes.len(), 1, "with the surviving Thread on it");
+        });
     }
 }
