@@ -54,6 +54,11 @@ chosen at Thread creation. Nothing else in v1.
 Following and answering Decisions away from the desktop. Wanted soon;
 scope under discussion.
 
+**Not a harness, not an agent.** Ferrite never runs its own agent loop and
+never calls model APIs itself. It orchestrates official agent CLIs (each
+Provider's own harness) and renders what they stream. The agents' behavior,
+auth, and ToS posture belong to their vendors, not to Ferrite.
+
 **No Terminal.** Ferrite has no terminal, PTY, or shell concept. Agents run
 as headless processes streaming structured events. Any future "shell pane"
 would be a new concept, not a revival of this one.
