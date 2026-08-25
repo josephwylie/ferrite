@@ -89,10 +89,13 @@ impl Transcript {
     }
 
     /// Echo a prompt the operator just sent. The turn is under way from here,
-    /// not from the first delta — which can be seconds out.
+    /// not from the first delta — which can be seconds out. A Closed session
+    /// stays closed: nothing is coming, and "streaming…" would say otherwise.
     pub fn push_user(&mut self, text: String) {
         self.push(Kind::User, text);
-        self.status = Status::Streaming;
+        if self.status != Status::Closed {
+            self.status = Status::Streaming;
+        }
     }
 
     /// Something the app itself needs to say, not the provider.
@@ -270,6 +273,18 @@ mod tests {
         transcript.push_user("go".into());
 
         assert_eq!(transcript.status(), Status::Streaming);
+    }
+
+    #[test]
+    fn prompting_a_closed_session_never_shows_streaming() {
+        let mut transcript = Transcript::default();
+        transcript.apply(SessionEvent::Closed {
+            reason: "claude CLI exited".into(),
+        });
+
+        transcript.push_user("anyone there?".into());
+
+        assert_eq!(transcript.status(), Status::Closed);
     }
 
     #[test]
