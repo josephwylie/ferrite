@@ -2,6 +2,17 @@
 
 use ferrite_core::{SessionEvent, TurnOutcome};
 
+/// How much of a tool failure a Pane shows; the model got all of it.
+const ERROR_CHARS: usize = 200;
+
+/// Cut to `limit` characters, marking the cut.
+fn trim(text: String, limit: usize) -> String {
+    if text.chars().count() <= limit {
+        return text;
+    }
+    text.chars().take(limit).chain(['…']).collect()
+}
+
 #[derive(Default)]
 pub struct Transcript {
     model: Option<String>,
@@ -16,6 +27,8 @@ pub enum Status {
     #[default]
     Idle,
     Streaming,
+    /// Stopped on a Decision only the operator can answer.
+    Blocked,
     Closed,
 }
 
@@ -29,6 +42,7 @@ pub enum Kind {
     User,
     Assistant,
     Thinking,
+    Tool,
     Meta,
     Notice,
 }
@@ -68,6 +82,27 @@ impl Transcript {
                 self.status = Status::Streaming;
                 self.append(Kind::Thinking, &text);
             }
+            SessionEvent::ToolStarted { name, .. } => self.push(Kind::Tool, name),
+            // A tool that worked has nothing to add: its result went to the
+            // model, not the operator. A failure is the operator's business.
+            SessionEvent::ToolCompleted {
+                output, is_error, ..
+            } => {
+                if is_error {
+                    self.push(Kind::Notice, trim(output, ERROR_CHARS));
+                }
+            }
+            SessionEvent::DecisionRequested {
+                tool_name,
+                description,
+                ..
+            } => {
+                self.status = Status::Blocked;
+                self.push(
+                    Kind::Notice,
+                    format!("decision needed: {tool_name} — {description}"),
+                );
+            }
             SessionEvent::TurnEnded { outcome, cost_usd } => {
                 self.status = Status::Idle;
                 self.last_cost = cost_usd;
@@ -90,10 +125,11 @@ impl Transcript {
 
     /// Echo a prompt the operator just sent. The turn is under way from here,
     /// not from the first delta — which can be seconds out. A Closed session
-    /// stays closed: nothing is coming, and "streaming…" would say otherwise.
+    /// stays closed and a Blocked one stays blocked: nothing is streaming in
+    /// either, and the status line must not say otherwise.
     pub fn push_user(&mut self, text: String) {
         self.push(Kind::User, text);
-        if self.status != Status::Closed {
+        if let Status::Idle | Status::Streaming = self.status {
             self.status = Status::Streaming;
         }
     }
@@ -288,6 +324,24 @@ mod tests {
     }
 
     #[test]
+    fn prompting_a_blocked_session_never_shows_streaming() {
+        let mut transcript = Transcript::default();
+        transcript.apply(SessionEvent::DecisionRequested {
+            id: "perm_01".into(),
+            tool_use_id: "toolu_01".into(),
+            tool_name: "Write".into(),
+            description: "ferrite-perm.txt".into(),
+            input: serde_json::Value::Null,
+            suggestions: vec![],
+        });
+
+        transcript.push_user("go ahead".into());
+
+        // The Decision is still what the Session is waiting on, not this prompt.
+        assert_eq!(transcript.status(), Status::Blocked);
+    }
+
+    #[test]
     fn a_local_failure_is_shown_as_a_notice() {
         let mut transcript = Transcript::default();
 
@@ -296,5 +350,93 @@ mod tests {
         let last = transcript.segments().last().unwrap();
         assert_eq!(last.kind, Kind::Notice);
         assert_eq!(last.text, "send failed: broken pipe");
+    }
+
+    #[test]
+    fn a_tool_call_breaks_the_answer_and_names_the_tool() {
+        let mut transcript = Transcript::default();
+        transcript.apply(SessionEvent::TextDelta {
+            text: "let me look ".into(),
+        });
+
+        transcript.apply(SessionEvent::ToolStarted {
+            id: "toolu_01".into(),
+            name: "Read".into(),
+            input: serde_json::json!({ "file_path": "CONTEXT.md" }),
+        });
+        transcript.apply(SessionEvent::TextDelta {
+            text: "found it".into(),
+        });
+
+        let kinds: Vec<Kind> = transcript.segments().iter().map(|s| s.kind).collect();
+        assert_eq!(kinds, [Kind::Assistant, Kind::Tool, Kind::Assistant]);
+        assert_eq!(transcript.segments()[1].text, "Read");
+    }
+
+    #[test]
+    fn a_failed_tool_surfaces_its_error_and_a_working_one_stays_quiet() {
+        let mut transcript = Transcript::default();
+        transcript.apply(SessionEvent::ToolStarted {
+            id: "toolu_01".into(),
+            name: "Read".into(),
+            input: serde_json::Value::Null,
+        });
+
+        transcript.apply(SessionEvent::ToolCompleted {
+            id: "toolu_01".into(),
+            output: "the whole file, which the operator does not need".into(),
+            is_error: false,
+        });
+        assert_eq!(transcript.segments().len(), 1); // the tool line, nothing more
+
+        transcript.apply(SessionEvent::ToolCompleted {
+            id: "toolu_02".into(),
+            output: "No such file or directory".into(),
+            is_error: true,
+        });
+
+        let last = transcript.segments().last().unwrap();
+        assert_eq!(last.kind, Kind::Notice);
+        assert_eq!(last.text, "No such file or directory");
+    }
+
+    // A failed Bash can dump kilobytes; a Pane is one cell of a 24-pane wall.
+    #[test]
+    fn a_long_tool_error_is_trimmed_to_keep_the_pane_dense() {
+        let mut transcript = Transcript::default();
+
+        transcript.apply(SessionEvent::ToolCompleted {
+            id: "toolu_01".into(),
+            output: "x".repeat(500),
+            is_error: true,
+        });
+
+        let text = &transcript.segments().last().unwrap().text;
+        assert_eq!(text.chars().count(), 201);
+        assert!(text.ends_with('…'));
+    }
+
+    #[test]
+    fn a_decision_blocks_the_session_and_says_what_is_waiting() {
+        let mut transcript = Transcript::default();
+        transcript.apply(SessionEvent::TextDelta {
+            text: "writing the file ".into(),
+        });
+        assert_eq!(transcript.status(), Status::Streaming);
+
+        transcript.apply(SessionEvent::DecisionRequested {
+            id: "perm_01".into(),
+            tool_use_id: "toolu_01".into(),
+            tool_name: "Write".into(),
+            description: "ferrite-perm.txt".into(),
+            input: serde_json::Value::Null,
+            suggestions: vec![],
+        });
+
+        // Nothing is streaming: the Session is stopped until the operator answers.
+        assert_eq!(transcript.status(), Status::Blocked);
+        let last = transcript.segments().last().unwrap();
+        assert_eq!(last.kind, Kind::Notice);
+        assert_eq!(last.text, "decision needed: Write — ferrite-perm.txt");
     }
 }

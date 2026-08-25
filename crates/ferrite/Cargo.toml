@@ -9,3 +9,8 @@ description = "Ferrite: native multi-provider agent cockpit (GPUI app)"
 ferrite-core = { path = "../ferrite-core" }
 # Pinned published release (ADR-0001); upgrades are deliberate events.
 gpui = "=0.2.2"
+
+# Tests only: SessionEvent carries provider payloads as `Value`, so building
+# one in a test needs the type. The app itself never inspects them.
+[dev-dependencies]
+serde_json = { workspace = true }

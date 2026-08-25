@@ -194,6 +194,8 @@ impl Pane {
                 Kind::User => (TEXT_PRIMARY, format!("❯ {text}")),
                 Kind::Assistant => (TEXT_SECONDARY, text.to_string()),
                 Kind::Thinking => (TEXT_THINKING, text.to_string()),
+                // Placeholder until tool cards land (#4): name the tool, no more.
+                Kind::Tool => (TEXT_MUTED, format!("• {text}")),
                 Kind::Meta => (TEXT_MUTED, text.to_string()),
                 Kind::Notice => (TEXT_NOTICE, text.to_string()),
             };
@@ -213,6 +215,7 @@ impl Pane {
         let (label, color) = match self.transcript.status() {
             Status::Idle => ("idle", TEXT_MUTED),
             Status::Streaming => ("streaming…", TEXT_SECONDARY),
+            Status::Blocked => ("decision needed", TEXT_NOTICE),
             Status::Closed => ("closed", TEXT_NOTICE),
         };
         let cost = self
