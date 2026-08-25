@@ -7,12 +7,12 @@
 
 use std::collections::BTreeMap;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
 
 use crate::providers::Session;
 use crate::store::{LoadError, Provider, Store, ThreadWriter};
-use crate::transcript::{BlockId, Input, Lexer, Transcript};
+use crate::transcript::{BlockId, Input, Lexer, Transcript, Update};
 use crate::workspace::{self, WorkspaceBinding, WorkspaceChoice};
 use crate::{Decision, DecisionAnswer, SessionEvent, ThreadId};
 
@@ -121,6 +121,15 @@ struct Thread {
     /// what every replacement Session spawns into. `None` only for a Thread
     /// from before bindings were recorded.
     workspace: Option<WorkspaceBinding>,
+    /// The git repo inside the binding where work should happen (#24).
+    /// `None` — today's behavior — means work in the binding itself. Never
+    /// changes under a live Session: the setter ends the Session first.
+    session_project_root: Option<PathBuf>,
+    /// Armed whenever a Session is constructed or attached (open, revive,
+    /// send-respawn, sweep-respawn); taken by the first prompt that goes
+    /// out, which is the one that carries the hidden session-context
+    /// preface when a root is set.
+    preface_pending: bool,
 }
 
 impl Thread {
@@ -132,6 +141,7 @@ impl Thread {
         provider: Provider,
         resume: Option<String>,
         workspace: Option<WorkspaceBinding>,
+        session_project_root: Option<PathBuf>,
     ) -> Self {
         let (lexer, highlights) = Lexer::new();
         Self {
@@ -145,6 +155,8 @@ impl Thread {
             busy: false,
             resume,
             workspace,
+            session_project_root,
+            preface_pending: true,
         }
     }
 }
@@ -211,6 +223,9 @@ impl Cockpit {
             let note = match spawned {
                 Ok(session) => {
                     thread.session = Some(session);
+                    // A fresh Session knows nothing: its first prompt must
+                    // carry the session-context preface again.
+                    thread.preface_pending = true;
                     format!("restarted — the Session had grown to {}", megabytes(rss))
                 }
                 Err(e) => format!("restart failed after {}: {e}", megabytes(rss)),
@@ -234,7 +249,7 @@ impl Cockpit {
         let session = self.spawner.spawn(provider, None, Some(binding.cwd()))?;
         self.threads.insert(
             id,
-            Thread::fresh(session, writer, provider, None, Some(binding)),
+            Thread::fresh(session, writer, provider, None, Some(binding), None),
         );
         Ok(id)
     }
@@ -242,6 +257,66 @@ impl Cockpit {
     /// The checkout an open Thread works in — what the Pane's chrome shows.
     pub fn workspace(&self, thread: ThreadId) -> Option<&WorkspaceBinding> {
         self.threads.get(&thread)?.workspace.as_ref()
+    }
+
+    /// Where inside an open Thread's binding its work happens (#24). `None`
+    /// means the binding itself — today's behavior, and every Thread's
+    /// starting point.
+    pub fn session_project_root(&self, thread: ThreadId) -> Option<&Path> {
+        self.threads.get(&thread)?.session_project_root.as_deref()
+    }
+
+    /// Pick (or clear) the git repo inside the binding where this Thread's
+    /// work happens. Durable before anything in memory changes. On a Thread
+    /// with a live Session the Session ends here — the root is fixed for a
+    /// Session's lifetime, never mutated under one — and the next prompt
+    /// respawns through `send`'s resume path, which re-arms the preface. A
+    /// prompt queued behind the ended Session is that next prompt: it goes
+    /// out immediately as the new Session's first. Works on a parked Thread
+    /// too: only the store is touched. A root only means anything inside a
+    /// binding — a Thread from before bindings were recorded stores it but
+    /// never prefaces, having no workspace root to name.
+    pub fn set_session_project_root(
+        &mut self,
+        thread: ThreadId,
+        root: Option<PathBuf>,
+    ) -> Result<(), LoadError> {
+        match self.threads.get_mut(&thread) {
+            Some(state) => {
+                if state.session_project_root == root {
+                    return Ok(());
+                }
+                state.session = None;
+                // Session-scoped state dies with the Session: the process
+                // that would have resolved a pending Decision or ended the
+                // turn is gone. A queued prompt is the operator's own and
+                // is released below.
+                state.pending = None;
+                state.busy = false;
+                // The store flushes the writer, rewrites the log, and hands
+                // the writer back on the new file — or fails leaving it
+                // valid on the untouched old one.
+                self.store.set_session_project_root(
+                    thread,
+                    root.clone(),
+                    Some(&mut state.writer),
+                )?;
+                state.session_project_root = root;
+            }
+            None => self.store.set_session_project_root(thread, root, None)?,
+        }
+        // A prompt held behind the ended Session must not strand — no turn
+        // will ever end to release it. It goes out now through the
+        // send-respawn path, as the new Session's first prompt, wearing the
+        // new preface: exactly what the operator picked the root for.
+        if let Some(held) = self
+            .threads
+            .get_mut(&thread)
+            .and_then(|state| state.queued.take())
+        {
+            self.send(thread, held);
+        }
+        Ok(())
     }
 
     /// Delete a Thread for good: its log, its directory, and — when it was
@@ -304,7 +379,14 @@ impl Cockpit {
         let writer = self.store.writer(thread)?;
 
         let resume = snapshot.resume_target().map(|target| target.to_string());
-        let mut state = Thread::fresh(session, writer, provider, resume, workspace);
+        let mut state = Thread::fresh(
+            session,
+            writer,
+            provider,
+            resume,
+            workspace,
+            snapshot.session_project_root(),
+        );
         for input in snapshot.inputs() {
             state.transcript.apply(input);
         }
@@ -314,29 +396,44 @@ impl Cockpit {
         Ok(())
     }
 
-    /// Send a prompt now: on the wire, in the transcript, in the log.
+    /// Send a prompt now: on the wire, in the transcript, in the log. A
+    /// Thread whose Session was ended under it — a changed session project
+    /// root, a failed watchdog restart — respawns here through the same
+    /// resume path a revive uses, which re-arms the preface.
     pub fn send(&mut self, thread: ThreadId, text: String) {
         let Some(state) = self.threads.get_mut(&thread) else {
             return;
         };
-        match &mut state.session {
-            Some(session) => {
-                if let Err(e) = session.send(&text) {
+        // Guarded before anything spawns: a refused send must not leave a
+        // fresh provider process behind. `deliver` guards again for the
+        // sends that never pass through here.
+        if let Some(refusal) = vanished_root_refusal(state) {
+            state.transcript.apply(Input::Notice(refusal));
+            return;
+        }
+        if state.session.is_none() {
+            let resume = state.resume.clone();
+            let cwd = state
+                .workspace
+                .as_ref()
+                .map(|binding| binding.cwd().to_path_buf());
+            match self
+                .spawner
+                .spawn(state.provider, resume.as_deref(), cwd.as_deref())
+            {
+                Ok(session) => {
+                    state.session = Some(session);
+                    state.preface_pending = true;
+                }
+                Err(e) => {
                     state
                         .transcript
                         .apply(Input::Notice(format!("send failed: {e}")));
                     return;
                 }
-                let _ = state.writer.record_prompt(&text);
-                state.transcript.apply(Input::Prompt(text));
-            }
-            None => {
-                state.transcript.apply(Input::Prompt(text));
-                state
-                    .transcript
-                    .apply(Input::Notice("no session — this Thread is parked".into()));
             }
         }
+        deliver(state, text);
     }
 
     /// Stop the running turn.
@@ -438,11 +535,10 @@ impl Cockpit {
                 update.dirty.extend(thread.transcript.apply(answer).dirty);
             }
             if let Some(held) = release {
-                if let Some(session) = &mut thread.session {
-                    let _ = session.send(&held);
-                    let _ = thread.writer.record_prompt(&held);
-                    let applied = thread.transcript.apply(Input::Prompt(held));
-                    update.dirty.extend(applied.dirty);
+                if thread.session.is_some() {
+                    // Through `deliver`, like any prompt: the preface and
+                    // the vanished-root guard apply to held prompts too.
+                    update.dirty.extend(deliver(thread, held).dirty);
                 }
             }
             frame.push(update);
@@ -524,6 +620,59 @@ impl Cockpit {
 
 fn megabytes(bytes: u64) -> String {
     format!("{} MB", bytes / (1024 * 1024))
+}
+
+/// The #24 guard: a session project root that no longer exists on disk
+/// refuses the send — readably, naming the path and the remedy — never a
+/// silent fallback to working in the binding.
+fn vanished_root_refusal(state: &Thread) -> Option<String> {
+    let root = state.session_project_root.as_ref()?;
+    if root.exists() {
+        return None;
+    }
+    Some(format!(
+        "send refused: session project root {} no longer exists — re-pick it",
+        root.display()
+    ))
+}
+
+/// One operator prompt onto the wire, into the log, onto the Pane. The
+/// Session's first prompt is prefaced — on the wire only — with the hidden
+/// session-context block when a root is set: the transcript and the log
+/// carry the operator's raw text, displayed ≠ sent. Answers what the
+/// transcript changed.
+fn deliver(state: &mut Thread, text: String) -> Update {
+    if let Some(refusal) = vanished_root_refusal(state) {
+        return state.transcript.apply(Input::Notice(refusal));
+    }
+    let Some(session) = &mut state.session else {
+        return Update::default();
+    };
+    let prefaced = match (&state.session_project_root, &state.workspace) {
+        (Some(root), Some(binding)) if state.preface_pending => Some(format!(
+            "<ferrite-session-context>\n\
+             Agent workspace root: {}\n\
+             Session project root: {}\n\
+             Run edits, commands, tests, builds, and Git operations from the \
+             session project root. Use the agent workspace root only for \
+             broader workspace context.\n\
+             </ferrite-session-context>\n\
+             {}",
+            binding.cwd().display(),
+            root.display(),
+            text
+        )),
+        _ => None,
+    };
+    if let Err(e) = session.send(prefaced.as_deref().unwrap_or(&text)) {
+        return state
+            .transcript
+            .apply(Input::Notice(format!("send failed: {e}")));
+    }
+    // The Session's first prompt has gone out; every later one is bare.
+    state.preface_pending = false;
+    let _ = state.writer.record_prompt(&text);
+    state.transcript.apply(Input::Prompt(text))
 }
 
 /// The workspace a binding names, made real: a worktree is created (or
@@ -632,6 +781,10 @@ mod tests {
         sent: Rc<RefCell<Vec<String>>>,
         resumed: Rc<RefCell<Vec<Option<String>>>>,
         cwds: Rc<RefCell<Vec<Option<std::path::PathBuf>>>>,
+        /// Every spawn call, successes and refusals alike.
+        attempts: Rc<RefCell<usize>>,
+        /// While set, spawn refuses — how a test makes a restart fail.
+        fail: Rc<RefCell<bool>>,
     }
 
     impl Spawner for Fake {
@@ -641,6 +794,10 @@ mod tests {
             resume: Option<&str>,
             cwd: Option<&Path>,
         ) -> std::io::Result<Box<dyn crate::providers::Session>> {
+            *self.attempts.borrow_mut() += 1;
+            if *self.fail.borrow() {
+                return Err(std::io::Error::other("stub refused to spawn"));
+            }
             let (tx, rx) = mpsc::channel();
             self.streams.borrow_mut().push(tx);
             self.resumed
@@ -982,6 +1139,322 @@ mod tests {
             .blocks()
             .iter()
             .any(|block| matches!(&block.body, Body::Prompt(line) if line == "run the tests")));
+    }
+
+    /// The exact wire preface for one binding + root pair (#24) — what the
+    /// provider sees and nothing the operator ever does.
+    fn preface(binding: &Path, root: &Path) -> String {
+        format!(
+            "<ferrite-session-context>\n\
+             Agent workspace root: {}\n\
+             Session project root: {}\n\
+             Run edits, commands, tests, builds, and Git operations from the \
+             session project root. Use the agent workspace root only for \
+             broader workspace context.\n\
+             </ferrite-session-context>\n",
+            binding.display(),
+            root.display()
+        )
+    }
+
+    /// A directory that exists, for tests that pick it as the root.
+    fn existing_root(name: &str) -> std::path::PathBuf {
+        let root = scratch(name);
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    /// AC (#24): the first prompt after a Session start goes to the provider
+    /// wearing the hidden session-context block; the second carries nothing
+    /// extra. The transcript and the log keep the operator's raw text only —
+    /// displayed ≠ sent.
+    #[test]
+    fn the_first_prompt_of_a_session_carries_the_hidden_context_and_the_second_does_not() {
+        let dir = scratch("preface-store");
+        let fake = Fake::default();
+        let mut cockpit = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake.clone()));
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        assert_eq!(cockpit.session_project_root(thread), None);
+        let root = existing_root("preface-root");
+        cockpit
+            .set_session_project_root(thread, Some(root.clone()))
+            .unwrap();
+        assert_eq!(cockpit.session_project_root(thread), Some(root.as_path()));
+
+        cockpit.send(thread, "run the tests".into());
+        cockpit.send(thread, "and the lints".into());
+
+        let binding = std::env::temp_dir(); // main_choice()'s checkout
+        assert_eq!(
+            fake.sent.borrow().as_slice(),
+            [
+                format!("{}run the tests", preface(&binding, &root)),
+                "and the lints".to_string(),
+            ]
+        );
+        // Displayed ≠ sent: the Pane echoes the raw prompt...
+        let blocks = cockpit.transcript(thread).unwrap().blocks();
+        assert!(blocks
+            .iter()
+            .any(|b| matches!(&b.body, Body::Prompt(line) if line == "run the tests")));
+        assert!(
+            !format!("{blocks:?}").contains("ferrite-session-context"),
+            "the preface must never reach the transcript"
+        );
+        // ...and the log stores it raw: the preface exists only on the wire.
+        cockpit.park(thread).unwrap();
+        let inputs = Store::open(&dir).unwrap().load(thread).unwrap().inputs();
+        assert!(inputs.contains(&Input::Prompt("run the tests".into())));
+        assert!(
+            !format!("{inputs:?}").contains("ferrite-session-context"),
+            "the preface must never reach the log"
+        );
+    }
+
+    /// AC (#24): changing the selection on a live Thread ends its Session —
+    /// no mid-session mutation of the root — and the next prompt respawns
+    /// through the resume path with the preface re-armed, naming the new
+    /// root. The spawn cwd stays the binding, exactly as before.
+    #[test]
+    fn changing_the_root_ends_the_session_and_the_next_prompt_respawns_with_the_preface() {
+        let (mut cockpit, fake) = cockpit("root-change");
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        let first_root = existing_root("root-change-first");
+        let second_root = existing_root("root-change-second");
+        cockpit
+            .set_session_project_root(thread, Some(first_root.clone()))
+            .unwrap();
+        cockpit.send(thread, "one".into());
+        // The provider names the session; a later respawn must resume it.
+        fake.streams
+            .borrow()
+            .last()
+            .unwrap()
+            .send(SessionEvent::Init {
+                session_id: "sess-1".into(),
+                model: "claude-haiku-4-5".into(),
+            })
+            .unwrap();
+        cockpit.pump();
+        cockpit.send(thread, "two".into());
+        let spawns = fake.streams.borrow().len();
+
+        cockpit
+            .set_session_project_root(thread, Some(second_root.clone()))
+            .unwrap();
+        // The Session ended; nothing respawns until the operator speaks.
+        assert_eq!(fake.streams.borrow().len(), spawns);
+        cockpit.send(thread, "three".into());
+
+        assert_eq!(fake.streams.borrow().len(), spawns + 1);
+        assert_eq!(
+            fake.resumed.borrow().last().unwrap().as_deref(),
+            Some("sess-1"),
+            "the respawn goes through the resume path"
+        );
+        let binding = std::env::temp_dir();
+        assert_eq!(
+            fake.cwds.borrow().last().unwrap().as_deref(),
+            Some(binding.as_path()),
+            "the spawn cwd stays the binding — the root travels as text only"
+        );
+        assert_eq!(
+            fake.sent.borrow().as_slice(),
+            [
+                format!("{}one", preface(&binding, &first_root)),
+                "two".to_string(),
+                format!("{}three", preface(&binding, &second_root)),
+            ]
+        );
+    }
+
+    /// AC (#24): the root survives restart, and a revive is a Session start
+    /// like any other — its first prompt carries the preface again.
+    #[test]
+    fn a_revived_thread_keeps_its_root_and_prefaces_its_first_prompt_again() {
+        let (mut cockpit, fake) = cockpit("root-revive");
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        let root = existing_root("root-revive-root");
+        cockpit
+            .set_session_project_root(thread, Some(root.clone()))
+            .unwrap();
+        cockpit.send(thread, "before the park".into());
+
+        cockpit.park(thread).unwrap();
+        cockpit.revive(thread).unwrap();
+
+        assert_eq!(cockpit.session_project_root(thread), Some(root.as_path()));
+        cockpit.send(thread, "after the revive".into());
+        let binding = std::env::temp_dir();
+        assert_eq!(
+            fake.sent.borrow().last().unwrap(),
+            &format!("{}after the revive", preface(&binding, &root))
+        );
+    }
+
+    /// AC (#24): a watchdog respawn is a Session start too — the
+    /// replacement's first prompt carries the preface again.
+    #[test]
+    fn a_sweep_respawned_session_prefaces_its_next_prompt() {
+        let (mut cockpit, fake) = cockpit("root-sweep");
+        let rss = Rc::new(RefCell::new(4 * 1024 * 1024 * 1024));
+        cockpit.watch_memory(Box::new(Meter(rss)), 1024 * 1024 * 1024);
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        let root = existing_root("root-sweep-root");
+        cockpit
+            .set_session_project_root(thread, Some(root.clone()))
+            .unwrap();
+        cockpit.send(thread, "one".into()); // consumes the first preface
+
+        assert_eq!(cockpit.sweep().len(), 1, "the leak replaces the Session");
+        cockpit.send(thread, "two".into());
+
+        let binding = std::env::temp_dir();
+        assert_eq!(
+            fake.sent.borrow().last().unwrap(),
+            &format!("{}two", preface(&binding, &root))
+        );
+    }
+
+    /// AC (#24): a root gone from disk refuses the send, naming the path and
+    /// the remedy — never a silent fallback to working in the binding.
+    /// Nothing reaches the wire, the transcript's history, or the log.
+    #[test]
+    fn a_send_with_a_vanished_root_is_refused_naming_the_path_and_the_remedy() {
+        let (mut cockpit, fake) = cockpit("root-vanished");
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        let root = existing_root("root-vanished-root");
+        cockpit
+            .set_session_project_root(thread, Some(root.clone()))
+            .unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+
+        cockpit.send(thread, "into the void".into());
+
+        assert!(
+            fake.sent.borrow().is_empty(),
+            "nothing may reach the provider"
+        );
+        let blocks = cockpit.transcript(thread).unwrap().blocks();
+        let last = blocks.last().unwrap();
+        let Body::Notice(line) = &last.body else {
+            panic!("the refusal must be a readable notice: {:?}", last.body);
+        };
+        assert!(
+            line.contains(&root.display().to_string()),
+            "the path is named: {line}"
+        );
+        assert!(line.contains("re-pick"), "the remedy is named: {line}");
+        assert!(
+            !blocks.iter().any(|b| matches!(&b.body, Body::Prompt(_))),
+            "a refused prompt is not history"
+        );
+    }
+
+    /// A prompt queued behind a running turn must not strand when the
+    /// operator changes the root: no turn will ever end to release it, the
+    /// Session being gone. It goes out at once as the new Session's first
+    /// prompt, wearing the new preface — what the operator picked it for.
+    #[test]
+    fn changing_the_root_releases_a_queued_prompt_into_the_new_session() {
+        let (mut cockpit, fake) = cockpit("root-queued");
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        fake.streams.borrow()[0].send(text("working")).unwrap();
+        cockpit.pump();
+        assert!(cockpit.busy(thread));
+        cockpit.queue(thread, "and then the tests".into());
+        let root = existing_root("root-queued-root");
+
+        cockpit
+            .set_session_project_root(thread, Some(root.clone()))
+            .unwrap();
+
+        assert_eq!(cockpit.queued(thread), None, "the held prompt went out");
+        assert_eq!(fake.streams.borrow().len(), 2, "a fresh Session took it");
+        let binding = std::env::temp_dir();
+        assert_eq!(
+            fake.sent.borrow().as_slice(),
+            [format!("{}and then the tests", preface(&binding, &root))]
+        );
+        // Raw in the Pane: displayed ≠ sent.
+        let blocks = cockpit.transcript(thread).unwrap().blocks();
+        assert!(blocks
+            .iter()
+            .any(|b| matches!(&b.body, Body::Prompt(line) if line == "and then the tests")));
+    }
+
+    /// A held prompt released by a turn's end is a prompt like any other:
+    /// on a fresh Session (the watchdog replaced it mid-wait) its wire text
+    /// carries the preface — once — and the Pane keeps the raw text.
+    #[test]
+    fn a_queued_prompt_released_on_a_fresh_session_carries_the_preface_once() {
+        let (mut cockpit, fake) = cockpit("root-queued-release");
+        let rss = Rc::new(RefCell::new(0u64));
+        cockpit.watch_memory(Box::new(Meter(rss.clone())), 1024);
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        let root = existing_root("root-queued-release-root");
+        cockpit
+            .set_session_project_root(thread, Some(root.clone()))
+            .unwrap();
+        cockpit.send(thread, "one".into()); // consumes the first preface
+        fake.streams.borrow()[1].send(text("working")).unwrap();
+        cockpit.pump();
+        cockpit.queue(thread, "held".into());
+        *rss.borrow_mut() = 4096; // over the limit: the watchdog acts
+        assert_eq!(cockpit.sweep().len(), 1, "a fresh Session, preface armed");
+        fake.streams.borrow()[2].send(ended()).unwrap();
+
+        cockpit.pump(); // the turn ends; the held prompt is released
+
+        let binding = std::env::temp_dir();
+        assert_eq!(
+            fake.sent.borrow().last().unwrap(),
+            &format!("{}held", preface(&binding, &root))
+        );
+        cockpit.send(thread, "next".into());
+        assert_eq!(
+            fake.sent.borrow().last().unwrap(),
+            "next",
+            "the preface rides once per Session"
+        );
+        let blocks = cockpit.transcript(thread).unwrap().blocks();
+        assert!(
+            !format!("{blocks:?}").contains("ferrite-session-context"),
+            "the preface must never reach the transcript"
+        );
+    }
+
+    /// After a failed watchdog restart the Thread sits in the cockpit with
+    /// no Session. The next prompt makes exactly one spawn attempt; a
+    /// failure is one readable Notice on the send-failure surface — not a
+    /// loop, and not a prompt in the history that never went anywhere.
+    #[test]
+    fn a_send_after_a_failed_restart_attempts_one_spawn_and_reports_the_failure() {
+        let (mut cockpit, fake) = cockpit("respawn-fails");
+        let rss = Rc::new(RefCell::new(u64::MAX));
+        cockpit.watch_memory(Box::new(Meter(rss)), 1024);
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        *fake.fail.borrow_mut() = true;
+        assert_eq!(cockpit.sweep().len(), 1, "the restart fails; no Session");
+        let attempts = *fake.attempts.borrow();
+
+        cockpit.send(thread, "hello".into());
+
+        assert_eq!(
+            *fake.attempts.borrow(),
+            attempts + 1,
+            "exactly one spawn attempt per send"
+        );
+        assert!(fake.sent.borrow().is_empty());
+        let blocks = cockpit.transcript(thread).unwrap().blocks();
+        let Body::Notice(line) = &blocks.last().unwrap().body else {
+            panic!("the failure must be a Notice: {:?}", blocks.last());
+        };
+        assert!(line.starts_with("send failed:"), "{line}");
+        assert!(
+            !blocks.iter().any(|b| matches!(&b.body, Body::Prompt(_))),
+            "an unsent prompt is not history"
+        );
     }
 
     #[test]

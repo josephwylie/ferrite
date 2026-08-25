@@ -31,7 +31,11 @@ use crate::{transcript::Input, ThreadId};
 /// - **3** — the workspace binding in the header (the checkout a Thread
 ///   works in must survive a restart). A v1/v2 log loads with no binding —
 ///   those Threads never recorded where they worked.
-const SCHEMA_VERSION: u32 = 3;
+/// - **4** — the session project root in the header (#24): the git repo
+///   inside the binding where the Thread's work happens. A v1–v3 log loads
+///   with none — those Threads work in the binding itself, which is also
+///   what `None` means today.
+const SCHEMA_VERSION: u32 = 4;
 
 /// Which agent backend serves this Thread — persisted so a restart knows
 /// which provider to revive the Thread on.
@@ -96,6 +100,10 @@ struct Header {
     /// recorded a binding.
     #[serde(default)]
     workspace: Option<PersistedBinding>,
+    /// Schema 4+; the git repo inside the binding where work happens.
+    /// `None` — and every v1–v3 header — means work in the binding itself.
+    #[serde(default)]
+    session_project_root: Option<PathBuf>,
 }
 
 /// The persisted form of a Thread's workspace binding, mirroring
@@ -507,6 +515,8 @@ impl Store {
             schema: SCHEMA_VERSION,
             provider,
             workspace: Some(PersistedBinding::from_live(&binding)),
+            // Work starts in the binding itself; a root is picked later.
+            session_project_root: None,
         };
         file.write_all(line(&header)?.as_bytes())?;
         file.sync_data()?;
@@ -578,8 +588,41 @@ impl Store {
             provider: header.provider,
             schema: header.schema,
             workspace: header.workspace,
+            session_project_root: header.session_project_root,
             records,
         })
+    }
+
+    /// Record where inside the binding this Thread's work happens — or
+    /// `None` to work in the binding itself. The header is the log's first
+    /// line, so the change rewrites the log whole (written beside, renamed
+    /// over — the same crash safety as any upgrade). `writer` is the
+    /// Thread's open writer, if one exists: the rename would leave its
+    /// handle on the replaced inode, where appends vanish silently — so it
+    /// is flushed before the rewrite reads the log and swapped onto the new
+    /// file after. The swap happens only once the rename has succeeded: on
+    /// any error the caller's writer is untouched and still valid.
+    pub fn set_session_project_root(
+        &self,
+        id: ThreadId,
+        root: Option<PathBuf>,
+        mut writer: Option<&mut ThreadWriter>,
+    ) -> Result<(), LoadError> {
+        if let Some(w) = writer.as_mut() {
+            w.flush()?;
+        }
+        let mut snapshot = self.load(id)?;
+        snapshot.session_project_root = root;
+        let file = self.rewrite(&snapshot)?;
+        if let Some(w) = writer {
+            *w = ThreadWriter {
+                file,
+                buffer: Vec::new(),
+                flush_interval: self.flush_interval,
+                buffered_since: None,
+            };
+        }
+        Ok(())
     }
 
     /// Reopen one Thread's log for appending — how a revived Thread's next
@@ -596,10 +639,12 @@ impl Store {
     /// loader stops, hiding every turn after the crash.
     pub fn writer(&self, id: ThreadId) -> Result<ThreadWriter, LoadError> {
         let snapshot = self.load(id)?;
-        if snapshot.schema < SCHEMA_VERSION || has_torn_tail(&fs::read(self.log_path(id))?) {
-            self.rewrite(&snapshot)?;
-        }
-        let file = OpenOptions::new().append(true).open(self.log_path(id))?;
+        let file =
+            if snapshot.schema < SCHEMA_VERSION || has_torn_tail(&fs::read(self.log_path(id))?) {
+                self.rewrite(&snapshot)?
+            } else {
+                OpenOptions::new().append(true).open(self.log_path(id))?
+            };
         Ok(ThreadWriter {
             file,
             buffer: Vec::new(),
@@ -610,13 +655,17 @@ impl Store {
 
     /// Replace a Thread's log with the loaded snapshot at the current
     /// schema. Written beside and renamed over, so a crash mid-rewrite
-    /// leaves the original log untouched.
-    fn rewrite(&self, snapshot: &ThreadSnapshot) -> io::Result<()> {
+    /// leaves the original log untouched. Answers an append handle to the
+    /// new log — taken on the file before the rename and riding it, so any
+    /// failure here happens while the original log (and every handle on it)
+    /// is still the real one.
+    fn rewrite(&self, snapshot: &ThreadSnapshot) -> io::Result<File> {
         let path = self.log_path(snapshot.id);
         let mut contents = line(&Header {
             schema: SCHEMA_VERSION,
             provider: snapshot.provider,
             workspace: snapshot.workspace.clone(),
+            session_project_root: snapshot.session_project_root.clone(),
         })?;
         for record in &snapshot.records {
             contents.push_str(&line(record)?);
@@ -625,7 +674,9 @@ impl Store {
         let mut file = File::create(&tmp)?;
         file.write_all(contents.as_bytes())?;
         file.sync_data()?;
-        fs::rename(&tmp, &path)
+        let handle = OpenOptions::new().append(true).open(&tmp)?;
+        fs::rename(&tmp, &path)?;
+        Ok(handle)
     }
 
     fn log_path(&self, id: ThreadId) -> PathBuf {
@@ -641,6 +692,7 @@ pub struct ThreadSnapshot {
     /// needs upgrading before anything lands after it.
     schema: u32,
     workspace: Option<PersistedBinding>,
+    session_project_root: Option<PathBuf>,
     records: Vec<Record>,
 }
 
@@ -653,6 +705,13 @@ impl ThreadSnapshot {
     /// schema 3, which never recorded one.
     pub fn workspace(&self) -> Option<WorkspaceBinding> {
         self.workspace.as_ref().map(PersistedBinding::live)
+    }
+
+    /// The git repo inside the binding where this Thread's work happens.
+    /// `None` — including every log from before schema 4 — means work in
+    /// the binding itself.
+    pub fn session_project_root(&self) -> Option<PathBuf> {
+        self.session_project_root.clone()
     }
 
     /// The provider-native id the next Session resumes with — the latest the
@@ -879,6 +938,89 @@ mod tests {
                 }),
             ]
         );
+    }
+
+    /// The frozen contract for schema 3, byte for byte what its writer
+    /// produced: the workspace binding in the header, but no session project
+    /// root. Logs like this exist on disks; they must load forever.
+    const V3_LOG: &str = concat!(
+        r#"{"schema":3,"provider":"claude","workspace":{"kind":"main","checkout":"/repos/project"}}"#,
+        "\n",
+        r#"{"type":"init","session_id":"v3-era-4f2a","model":"claude-haiku-4-5"}"#,
+        "\n",
+        r#"{"type":"turn_ended","outcome":"completed","cost_usd":null}"#,
+        "\n",
+    );
+
+    /// AC (schema story): loading a log written at schema v3 succeeds after
+    /// the bump to v4 — binding intact, and no session project root, exactly
+    /// what v3 recorded: work happens in the binding itself.
+    #[test]
+    fn a_log_written_at_schema_v3_still_loads_after_the_bump() {
+        let dir = scratch("v3");
+        plant_log(&dir, "11", V3_LOG);
+
+        let thread = Store::open(&dir).unwrap().load(ThreadId::new(11)).unwrap();
+        assert_eq!(thread.provider(), Provider::Claude);
+        assert_eq!(
+            thread.workspace(),
+            Some(WorkspaceBinding::Main {
+                checkout: "/repos/project".into(),
+            })
+        );
+        assert_eq!(thread.session_project_root(), None);
+        assert_eq!(thread.resume_target(), Some("v3-era-4f2a"));
+    }
+
+    /// AC (#24): the session project root survives restart. Setting it
+    /// rewrites the header; the Thread's open writer is passed through and
+    /// comes back on the new log — the rename leaves the old handle on the
+    /// replaced inode, where appends would vanish. Clearing the root hands
+    /// back None, today's work-in-the-binding behavior.
+    #[test]
+    fn a_thread_s_session_project_root_survives_reopening_the_store() {
+        let dir = scratch("session-root");
+        let store = Store::open(&dir).unwrap();
+        let (id, mut writer, _) = store.create(Provider::Claude, main_choice()).unwrap();
+        assert_eq!(store.load(id).unwrap().session_project_root(), None);
+
+        store
+            .set_session_project_root(
+                id,
+                Some("/repos/project/apps/web".into()),
+                Some(&mut writer),
+            )
+            .unwrap();
+        // The writer rode the rewrite: this append must land where loads
+        // look, not on the renamed-over inode.
+        writer.record_prompt("after the pick").unwrap();
+        writer.flush().unwrap();
+
+        // The fake restart: nothing survives but the directory.
+        let reopened = Store::open(&dir).unwrap();
+        let thread = reopened.load(id).unwrap();
+        assert_eq!(
+            thread.session_project_root(),
+            Some("/repos/project/apps/web".into())
+        );
+        assert!(
+            thread
+                .inputs()
+                .contains(&Input::Prompt("after the pick".into())),
+            "the swapped writer's append is history: {:?}",
+            thread.inputs()
+        );
+        // The header declares the schema that wrote it.
+        let log = fs::read_to_string(dir.join(id.to_string()).join("log.jsonl")).unwrap();
+        assert!(
+            log.lines().next().unwrap().contains("\"schema\":4"),
+            "header: {log}"
+        );
+
+        // Cleared — no writer open this time — the Thread works in the
+        // binding again.
+        reopened.set_session_project_root(id, None, None).unwrap();
+        assert_eq!(reopened.load(id).unwrap().session_project_root(), None);
     }
 
     /// A realistic Claude-shaped turn: identity, thinking, markdown streamed
@@ -1196,7 +1338,7 @@ mod tests {
             .unwrap()
             .to_string();
         assert!(
-            first_line.contains("\"schema\":3"),
+            first_line.contains("\"schema\":4"),
             "the log still declares the old schema: {first_line}"
         );
 
@@ -1281,7 +1423,7 @@ mod tests {
             &dir,
             "3",
             concat!(
-                r#"{"schema":4,"provider":"claude"}"#,
+                r#"{"schema":5,"provider":"claude"}"#,
                 "\n",
                 r#"{"type":"init","session_id":"from-the-future","model":"m"}"#,
                 "\n",
@@ -1291,7 +1433,7 @@ mod tests {
         let store = Store::open(&dir).unwrap();
         match store.load(ThreadId::new(3)) {
             Err(LoadError::FutureSchema { found, supported }) => {
-                assert_eq!(found, 4);
+                assert_eq!(found, 5);
                 assert_eq!(supported, SCHEMA_VERSION);
             }
             Ok(_) => panic!("a future schema must not load"),

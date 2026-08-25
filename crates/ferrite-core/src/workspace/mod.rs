@@ -12,6 +12,7 @@
 //! until `git worktree prune` (which `ensure_worktree` runs before creating,
 //! so Ferrite's own paths self-heal). Documented, not built for.
 
+use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -45,6 +46,58 @@ impl WorkspaceBinding {
 pub enum WorkspaceChoice {
     Main { checkout: PathBuf },
     Worktree { repo: PathBuf },
+}
+
+/// Directory names the repository scan never enters or reports: dependency
+/// and build output trees, git's own metadata, and Ferrite worktree nests
+/// (mirrors SwarmDeck's discovery skip list, #24).
+const SCAN_SKIP: [&str; 6] = [
+    "node_modules",
+    ".git",
+    ".worktrees",
+    "dist",
+    "target",
+    "build",
+];
+
+/// How deep below the root the scan looks: a repo more than four directory
+/// levels down is not offered (SwarmDeck's depth, #24).
+const SCAN_DEPTH: usize = 4;
+
+/// Every directory up to four levels below `root` that is itself a git
+/// repository — holds a `.git` DIRECTORY; a `.git` file (a linked worktree)
+/// does not count. `root` itself is never listed: it is the binding, already
+/// on offer. Directories named in `SCAN_SKIP` are skipped wholesale, and the
+/// order is deterministic (sorted by path).
+pub fn nested_repositories(root: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    scan(root, 0, &mut found);
+    found.sort();
+    found
+}
+
+fn scan(dir: &Path, depth: usize, found: &mut Vec<PathBuf>) {
+    if depth > 0 && dir.join(".git").is_dir() {
+        found.push(dir.to_path_buf());
+    }
+    if depth == SCAN_DEPTH {
+        return;
+    }
+    // An unreadable directory hides only itself — the scan is a menu, not
+    // an audit.
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        // `file_type` over `path().is_dir()`: it does not follow symlinks,
+        // so a link cannot loop the walk or reach outside the root.
+        let is_dir = entry.file_type().is_ok_and(|kind| kind.is_dir());
+        let name = entry.file_name();
+        if !is_dir || SCAN_SKIP.iter().any(|skip| name == *skip) {
+            continue;
+        }
+        scan(&entry.path(), depth + 1, found);
+    }
 }
 
 /// A git operation failed, or could not be run at all.
@@ -358,6 +411,48 @@ mod tests {
             fs::read_to_string(tree.join("file.txt")).unwrap(),
             "committed by the thread\n",
             "the branch's commits must come back with it"
+        );
+    }
+
+    /// Discovery (#24): a repo is a directory holding a `.git` DIRECTORY —
+    /// found down to four levels below the root, in deterministic order,
+    /// with the noise directories skipped wholesale. The root itself is
+    /// never listed (it is the binding, already on offer), a `.git` FILE (a
+    /// linked worktree) does not count, and a repo may hold nested repos of
+    /// its own.
+    #[test]
+    fn nested_repositories_scans_four_levels_and_skips_the_noise() {
+        let root = scratch("discovery");
+        let plant = |relative: &str| {
+            fs::create_dir_all(root.join(relative).join(".git")).unwrap();
+        };
+        // The root is itself a repo — and still not listed.
+        fs::create_dir_all(root.join(".git")).unwrap();
+        plant("alpha"); // depth 1
+        plant("alpha/vendor/lib"); // depth 3, nested inside a found repo
+        plant("beta/c/d/deep"); // depth 4 — the last level scanned
+        plant("beta/c/d/deep/deeper"); // depth 5 — beyond the scan
+        for noise in [
+            "node_modules/x",
+            ".worktrees/y",
+            "dist/z",
+            "target/w",
+            "build/v",
+            ".git/modules/sub",
+        ] {
+            plant(noise);
+        }
+        // A linked worktree marks itself with a `.git` FILE: not a repo here.
+        fs::create_dir_all(root.join("linked")).unwrap();
+        fs::write(root.join("linked").join(".git"), "gitdir: elsewhere\n").unwrap();
+
+        assert_eq!(
+            nested_repositories(&root),
+            vec![
+                root.join("alpha"),
+                root.join("alpha/vendor/lib"),
+                root.join("beta/c/d/deep"),
+            ]
         );
     }
 
