@@ -14,5 +14,7 @@ pub mod workspace;
 
 mod session_event;
 mod thread;
-pub use session_event::{Decision, DecisionAnswer, Hunk, SessionEvent, ToolResult, TurnOutcome};
+pub use session_event::{
+    Decision, DecisionAnswer, Hunk, SessionCommand, SessionEvent, ToolResult, TurnOutcome,
+};
 pub use thread::ThreadId;

@@ -130,6 +130,14 @@ struct Thread {
     /// out, which is the one that carries the hidden session-context
     /// preface when a root is set.
     preface_pending: bool,
+    /// The live Session's command menu (#23) — what the Composer's `/`
+    /// popover lists. Announced by the Session itself at start; empty until
+    /// it speaks, and Session state only: a parked Thread keeps none.
+    commands: Vec<crate::SessionCommand>,
+    /// The live Session's permission mode (#23) — the meta row's mode chip,
+    /// in the provider's own word. Display-only, and Session state exactly
+    /// like the menu: None until announced, gone with the Session.
+    permission_mode: Option<String>,
 }
 
 impl Thread {
@@ -157,6 +165,8 @@ impl Thread {
             workspace,
             session_project_root,
             preface_pending: true,
+            commands: Vec::new(),
+            permission_mode: None,
         }
     }
 }
@@ -601,6 +611,22 @@ impl Cockpit {
         self.threads.get(&thread)?.pending.as_ref()
     }
 
+    /// The live Session's command menu (#23): what `/` offers in this
+    /// Thread's Composer. Empty until the Session announces one — never a
+    /// static list.
+    pub fn commands(&self, thread: ThreadId) -> &[crate::SessionCommand] {
+        self.threads
+            .get(&thread)
+            .map(|state| state.commands.as_slice())
+            .unwrap_or_default()
+    }
+
+    /// The live Session's permission mode (#23): the meta row's mode chip.
+    /// None until the Session announces one — a chip is never invented.
+    pub fn permission_mode(&self, thread: ThreadId) -> Option<&str> {
+        self.threads.get(&thread)?.permission_mode.as_deref()
+    }
+
     /// The next Thread waiting on the operator, after `from`, wrapping. One
     /// key held down walks every Decision in the cockpit and stops nowhere
     /// else.
@@ -722,6 +748,15 @@ fn fold(state: &mut Thread, event: &SessionEvent) -> Wake {
         }
         SessionEvent::DecisionRequested { decision } => {
             state.pending = Some(decision.clone());
+        }
+        // The Session announced its command menu; the Composer's `/` popover
+        // reads it from here.
+        SessionEvent::Commands { commands } => {
+            state.commands = commands.clone();
+        }
+        // And its permission mode — the meta row's chip.
+        SessionEvent::PermissionMode { mode } => {
+            state.permission_mode = Some(mode.clone());
         }
         // Kept for the watchdog: a replacement Session resumes from the newest
         // id the provider gave, even one it renamed mid-Thread.
@@ -1774,5 +1809,46 @@ mod tests {
         cockpit.pump();
 
         assert!(fake.sent.borrow().is_empty());
+    }
+
+    /// #23: the Session's announced command menu becomes the Thread's — the
+    /// `/` popover's source — without touching the transcript or the log; a
+    /// revived Thread starts with none until its own Session speaks.
+    #[test]
+    fn a_commands_event_becomes_the_thread_menu_and_never_the_history() {
+        let (mut cockpit, fake) = cockpit("commands");
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        assert!(cockpit.commands(thread).is_empty(), "nothing is static");
+
+        let menu = vec![crate::SessionCommand {
+            name: "compact".into(),
+            description: "summarize context".into(),
+            path: None,
+        }];
+        fake.streams.borrow()[0]
+            .send(SessionEvent::Commands {
+                commands: menu.clone(),
+            })
+            .unwrap();
+        fake.streams.borrow()[0]
+            .send(SessionEvent::PermissionMode {
+                mode: "acceptEdits".into(),
+            })
+            .unwrap();
+        cockpit.pump();
+
+        assert_eq!(cockpit.commands(thread), menu.as_slice());
+        assert_eq!(cockpit.permission_mode(thread), Some("acceptEdits"));
+        assert!(
+            cockpit.transcript(thread).unwrap().blocks().is_empty(),
+            "a menu is not conversation"
+        );
+
+        // Session state only: the log replays nothing, so a revived Thread
+        // waits for its own Session's announcement.
+        cockpit.park(thread).unwrap();
+        cockpit.revive(thread).unwrap();
+        assert!(cockpit.commands(thread).is_empty());
+        assert_eq!(cockpit.permission_mode(thread), None);
     }
 }

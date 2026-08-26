@@ -16,8 +16,8 @@ use ferrite_core::workspace::WorkspaceBinding;
 use ferrite_core::{Decision, ThreadId};
 use gpui::prelude::*;
 use gpui::{
-    div, point, px, relative, rgb, rgba, AnyElement, BoxShadow, Context, Div, Entity, FocusHandle,
-    FontWeight, HighlightStyle, ScrollHandle, SharedString, StyledText,
+    deferred, div, point, px, relative, rgb, rgba, AnyElement, BoxShadow, Context, Div, Entity,
+    FocusHandle, FontWeight, HighlightStyle, ScrollHandle, SharedString, StyledText,
 };
 use std::path::{Path, PathBuf};
 
@@ -75,6 +75,17 @@ pub struct PaneState<'a> {
     /// other pointer, exactly as the nav's rows are; None on a Thread with
     /// no binding, which has nothing for a root to be inside.
     pub root_chip: Option<AnyElement>,
+    /// The open `/` or `@` popover for this Pane's Composer, assembled in the
+    /// cockpit exactly like `root_chip` — rows wired to their picks there —
+    /// and hung above the input line here (#23). None when no menu is open.
+    pub menu: Option<AnyElement>,
+    /// Whether the Composer line is empty — what decides the idle
+    /// placeholder, read where the cockpit has a `cx` to read it with.
+    pub composer_empty: bool,
+    /// The Session's permission mode, in the provider's own word — the meta
+    /// row's mode chip (#23). None (no announcement, or a provider that
+    /// makes none) draws no chip; display-only either way.
+    pub permission_mode: Option<&'a str>,
     pub focused: bool,
     /// A turn in flight: the Composer's ❯ becomes ◐ and esc offers interrupt.
     pub running: bool,
@@ -203,6 +214,9 @@ pub fn render_pane(view: &PaneView, state: PaneState<'_>, level: Level) -> impl 
         queued,
         workspace,
         root_chip,
+        menu,
+        composer_empty,
+        permission_mode,
         focused,
         running,
         selected,
@@ -256,7 +270,18 @@ pub fn render_pane(view: &PaneView, state: PaneState<'_>, level: Level) -> impl 
         Some(transcript) => {
             pane = pane
                 .child(body(view, transcript, level.visible_blocks(), selected))
-                .child(composer_region(view, transcript, decision, queued, running));
+                .child(composer_region(
+                    view,
+                    transcript,
+                    ComposerStack {
+                        decision,
+                        queued,
+                        running,
+                        empty: composer_empty,
+                        menu,
+                        mode: permission_mode,
+                    },
+                ));
         }
         None => {
             pane = pane.child(parked_body());
@@ -825,32 +850,70 @@ fn parked_body() -> Div {
 
 // --------------------------------------------------------------- Composer
 
+/// The Composer stack's slice of `PaneState`, bundled so `composer_region`
+/// stays readable as the states grow.
+struct ComposerStack<'a> {
+    decision: Option<&'a Decision>,
+    queued: Option<&'a str>,
+    running: bool,
+    empty: bool,
+    menu: Option<AnyElement>,
+    mode: Option<&'a str>,
+}
+
 /// The PromptBox stack, top to bottom: permission card, queued row, the one
 /// growing input line, meta row. Everything stacks above the line and is
-/// driven by keys — no send button, no floating box.
-fn composer_region(
-    view: &PaneView,
-    transcript: &Transcript,
-    decision: Option<&Decision>,
-    queued: Option<&str>,
-    running: bool,
-) -> Div {
+/// driven by keys — no send button, no floating box. An open `/` or `@`
+/// popover hangs above the whole stack; while a Decision pends the region
+/// carries the `Decision` key context so y/n/a answer with the keyboard
+/// still in the Composer (#23).
+fn composer_region(view: &PaneView, transcript: &Transcript, stack: ComposerStack) -> Div {
+    let ComposerStack {
+        decision,
+        queued,
+        running,
+        empty,
+        menu,
+        mode,
+    } = stack;
     let mut region = div()
+        .relative()
         .flex()
         .flex_col()
         .flex_shrink_0()
         .bg(rgb(theme::COMPOSER))
         .border_t_1()
-        .border_color(rgba(EDGE_STRONG));
+        .border_color(rgba(EDGE_STRONG))
+        .when(decision.is_some(), |region| region.key_context("Decision"));
+    let stacked = decision.is_some() || queued.is_some();
     if let Some(decision) = decision {
-        region = region.child(
-            decision_card(decision)
-                .key_context("Decision")
-                .track_focus(&view.decision_focus),
-        );
+        region = region.child(decision_card(decision));
     }
     if let Some(held) = queued {
         region = region.child(queued_line(held));
+    }
+    // The one line that grows. The idle placeholder overlays it after the
+    // block cursor's slot (PromptBox state 01) and disappears the moment
+    // there is text or a running turn (§6: hints hide while running). The
+    // open menu's ComposerMenu key context lives on the Composer's own
+    // focused node — set by the cockpit — where the tie-break works.
+    let mut line = div()
+        .relative()
+        .flex_1()
+        .min_w_0()
+        .child(view.composer.clone());
+    if empty && !running {
+        line = line.child(
+            div()
+                .absolute()
+                .left(px(theme::CURSOR_W + 3.))
+                .top_0()
+                .bottom_0()
+                .flex()
+                .items_center()
+                .text_color(rgb(INK_MUTED))
+                .child(placeholder(&view.name)),
+        );
     }
     let mut input = div()
         .flex()
@@ -861,6 +924,11 @@ fn composer_region(
         .px(px(theme::COMPOSER_PAD_X))
         .text_size(px(theme::TEXT_INPUT))
         .text_color(rgb(INK))
+        // The hairline above the input row appears once something stacks
+        // over it (PromptBox state 04).
+        .when(stacked, |input| {
+            input.border_t_1().border_color(rgba(HAIRLINE))
+        })
         .child(if running {
             div().flex_shrink_0().text_color(rgb(ACCENT)).child("◐")
         } else {
@@ -870,7 +938,7 @@ fn composer_region(
                 .text_color(rgb(ACCENT))
                 .child("❯")
         })
-        .child(view.composer.clone());
+        .child(line);
     if running {
         input = input.child(
             div()
@@ -881,18 +949,47 @@ fn composer_region(
         );
     }
     region = region.child(input);
+    // The popover paints above the stack — deferred, so it escapes the
+    // Pane's clip and draws over the transcript (the root selector's own
+    // recipe, #24).
+    if let Some(menu) = menu {
+        region = region.child(deferred(
+            div()
+                .absolute()
+                .bottom(relative(1.))
+                .left_0()
+                .right_0()
+                .mb(px(6.))
+                .child(menu),
+        ));
+    }
 
-    // The meta row's right slot: the Session's model, where the comps put
-    // "fable-5 · max" (run durations wait on a clock core deliberately does
-    // not keep — sidebar-and-impl §4.2 #4).
+    // The meta row: the Session's mode chip on the left where the comp
+    // draws "⏵ auto-edit" — only when the Session actually announced a
+    // mode — and the model on the right where the comps put "fable-5 · max"
+    // (run durations wait on a clock core deliberately does not keep —
+    // sidebar-and-impl §4.2 #4).
     let mut meta = div()
         .flex()
         .flex_shrink_0()
         .items_center()
         .h(px(theme::COMPOSER_META_H))
         .px(px(theme::COMPOSER_PAD_X))
-        .pb(px(4.))
-        .child(div().flex_1());
+        .pb(px(4.));
+    if let Some(mode) = mode {
+        meta = meta.child(
+            div()
+                .flex_shrink_0()
+                .text_size(px(theme::TEXT_CHIP))
+                .text_color(rgb(ACCENT))
+                .bg(rgba(theme::ACCENT_WASH))
+                .rounded(px(theme::R_CHIP))
+                .px(px(6.))
+                .py(px(2.))
+                .child(mode_chip_label(mode)),
+        );
+    }
+    meta = meta.child(div().flex_1());
     if let Some(model) = transcript.model() {
         meta = meta.child(
             div()
@@ -902,6 +999,110 @@ fn composer_region(
         );
     }
     region.child(meta)
+}
+
+/// The idle line's ghost text, PromptBox state 01's pattern verbatim:
+/// `message ‹thread-name› — hints`. The hints it advertises are the ones
+/// this Composer actually answers.
+fn placeholder(name: &SharedString) -> SharedString {
+    SharedString::from(format!("message {name} — / commands · @ files · ↵ send"))
+}
+
+/// The meta row's mode chip text: the comp's own name for acceptEdits
+/// ("⏵ auto-edit"); every other mode wears the provider's word verbatim
+/// rather than a guessed translation.
+fn mode_chip_label(mode: &str) -> SharedString {
+    let label = match mode {
+        "acceptEdits" => "auto-edit",
+        other => other,
+    };
+    SharedString::from(format!("⏵ {label}"))
+}
+
+/// One row of the `/` or `@` popover, ready to draw: what a pick inserts,
+/// what the row shows, and where the fuzzy filter matched. Prepared by the
+/// cockpit when the menu changes — never per frame.
+pub struct MenuRow {
+    /// What lands in the line on ↵ — a command name, or a file's relative
+    /// path.
+    pub insert: SharedString,
+    /// The row's leading text: `/name`, or the file's name.
+    pub name: SharedString,
+    /// Matched byte ranges inside `name`, promoted to ACCENT per the comp.
+    pub matched: Vec<std::ops::Range<usize>>,
+    /// The dimmer text after it: a command's description, or the file's
+    /// directory. Empty draws nothing.
+    pub detail: SharedString,
+    /// Whether `detail` reads as prose (the comp's ui-face command
+    /// descriptions) or as a path (mono, like the rows of state 03).
+    pub prose_detail: bool,
+}
+
+/// The Composer menus' popover shell: the selector's exact surface at the
+/// composer's own width (the comps draw slash/@ popovers spanning the box).
+pub fn menu_popover() -> Div {
+    popover_shell().w_full()
+}
+
+/// One 26px menu row. Selection promotes the row exactly as the comp's
+/// states 02/03 draw it: EDGE wash, name to ACCENT, matched characters
+/// ACCENT (bold only while selected), detail ink one step up; the selected
+/// row carries the `↵` hint at its right edge.
+pub fn menu_row(row: &MenuRow, selected: bool) -> Div {
+    let name_ink = if selected { ACCENT } else { INK_SECONDARY };
+    let mut highlights: Vec<(std::ops::Range<usize>, HighlightStyle)> = Vec::new();
+    for range in &row.matched {
+        highlights.push((
+            range.clone(),
+            HighlightStyle {
+                color: Some(rgb(ACCENT).into()),
+                font_weight: selected.then_some(FontWeight::BOLD),
+                ..Default::default()
+            },
+        ));
+    }
+    let mut drawn = div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(10.))
+        .h(px(theme::MENU_ROW_H))
+        .px(px(8.))
+        .rounded(px(theme::R_CHIP))
+        .when(selected, |row| row.bg(rgba(EDGE)))
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_size(px(theme::TEXT_CODE))
+                .text_color(rgb(name_ink))
+                .child(StyledText::new(row.name.clone()).with_highlights(highlights)),
+        );
+    if !row.detail.is_empty() {
+        let detail_ink = if selected { INK_TERTIARY } else { INK_MUTED };
+        let mut detail = div()
+            .min_w_0()
+            .truncate()
+            .text_color(rgb(detail_ink))
+            .child(row.detail.clone());
+        detail = if row.prose_detail {
+            detail
+                .font_family(theme::FONT_UI)
+                .text_size(px(theme::TEXT_ROW))
+        } else {
+            detail.text_size(px(theme::TEXT_META))
+        };
+        drawn = drawn.child(detail);
+    }
+    if selected {
+        drawn = drawn.child(div().flex_1()).child(
+            div()
+                .flex_shrink_0()
+                .text_size(px(theme::TEXT_CHIP))
+                .text_color(rgb(INK_MUTED))
+                .child("↵"),
+        );
+    }
+    drawn
 }
 
 /// A prompt written while the agent was still working — the ⏳ queued row.
@@ -1168,15 +1369,15 @@ pub fn root_chip(label: SharedString, set: bool) -> Div {
         .child(label)
 }
 
-/// The selector popover's shell, in the slash-menu's popover language
-/// (PromptBox state 02): RAISED surface, EDGE_STRONG border, radius 4, 4px
-/// padding, and the comps' three-layer popover elevation. Rows and footer
-/// are the cockpit's to append — their clicks are wired there.
-pub fn selector_popover() -> Div {
+/// Every popover's shell, in the comps' one popover language (PromptBox
+/// state 02): RAISED surface, EDGE_STRONG border, radius 4, 4px padding,
+/// and the three-layer popover elevation. Width is the caller's — the root
+/// selector pins its own, the Composer menus span the composer. Rows and
+/// footer are the cockpit's to append — their clicks are wired there.
+fn popover_shell() -> Div {
     div()
         .flex()
         .flex_col()
-        .w(px(theme::POPOVER_W))
         .p(px(theme::POPOVER_PAD))
         .bg(rgb(RAISED))
         .border_1()
@@ -1202,6 +1403,12 @@ pub fn selector_popover() -> Div {
                 spread_radius: px(-4.),
             },
         ])
+}
+
+/// The session-project-root selector's popover (#24): the shared shell at
+/// its pinned width.
+pub fn selector_popover() -> Div {
+    popover_shell().w(px(theme::POPOVER_W))
 }
 
 /// One popover row: mono 12 name — ACCENT on the EDGE wash when the arrows
@@ -1234,9 +1441,9 @@ pub fn selector_row(option: &RootOption, selected: bool, active: bool) -> Div {
     row
 }
 
-/// The popover's key-hint footer — the PromptBox footer grammar with this
-/// menu's verbs.
-pub fn selector_footer() -> Div {
+/// The popover's key-hint footer — the PromptBox footer grammar, each
+/// menu supplying its own verbs.
+pub fn popover_footer(hints: &'static str) -> Div {
     div()
         .flex()
         .flex_shrink_0()
@@ -1248,7 +1455,7 @@ pub fn selector_footer() -> Div {
         .border_color(rgba(HAIRLINE))
         .text_size(px(theme::TEXT_META))
         .text_color(rgb(INK_MUTED))
-        .child("↑↓ move · ↵ pick · esc dismiss")
+        .child(hints)
 }
 
 // ----------------------------------------------------------- Block render
@@ -2019,6 +2226,19 @@ mod tests {
                 .as_ref(),
             "unreadable permission request"
         );
+    }
+
+    /// #23: the mode chip speaks the comp's name for acceptEdits and the
+    /// provider's own word for everything else — never an invented label.
+    #[test]
+    fn the_mode_chip_labels_accept_edits_the_comp_way_and_the_rest_verbatim() {
+        assert_eq!(mode_chip_label("acceptEdits").as_ref(), "⏵ auto-edit");
+        assert_eq!(
+            mode_chip_label("bypassPermissions").as_ref(),
+            "⏵ bypassPermissions"
+        );
+        assert_eq!(mode_chip_label("plan").as_ref(), "⏵ plan");
+        assert_eq!(mode_chip_label("default").as_ref(), "⏵ default");
     }
 
     /// The Dense header's ▰▱ meter stays glanceable: glyphs for small plans,

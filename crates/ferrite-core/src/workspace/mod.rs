@@ -98,6 +98,57 @@ fn scan(dir: &Path, depth: usize, found: &mut Vec<PathBuf>) {
     }
 }
 
+/// The files under `root` the Composer's `@` menu completes over (#23):
+/// relative paths with `/` separators, deterministic (each directory read in
+/// name order, depth-first), the noise directories of `SCAN_SKIP` skipped
+/// wholesale, symlinks never followed, and the whole answer capped at `cap`
+/// so a monorepo cannot stall a keystroke. A root that cannot be read is an
+/// empty menu, not an error — the walk is a menu, not an audit.
+pub fn mention_files(root: &Path, cap: usize) -> Vec<String> {
+    let mut found = Vec::new();
+    walk_files(root, "", cap, &mut found);
+    found
+}
+
+fn walk_files(dir: &Path, prefix: &str, cap: usize, found: &mut Vec<String>) {
+    if found.len() >= cap {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut entries: Vec<_> = entries.flatten().collect();
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        if found.len() >= cap {
+            return;
+        }
+        // `file_type` over `path().is_dir()`: it does not follow symlinks,
+        // so a link cannot loop the walk or reach outside the root.
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            // A path the menu could not insert as text is not offered.
+            continue;
+        };
+        let relative = if prefix.is_empty() {
+            name.to_string()
+        } else {
+            format!("{prefix}/{name}")
+        };
+        if kind.is_dir() {
+            if SCAN_SKIP.contains(&name) {
+                continue;
+            }
+            walk_files(&entry.path(), &relative, cap, found);
+        } else if kind.is_file() {
+            found.push(relative);
+        }
+    }
+}
+
 /// A git operation failed, or could not be run at all.
 #[derive(Debug)]
 pub enum GitError {
@@ -477,6 +528,39 @@ mod tests {
             nested_repositories(&root),
             vec![root.join(".worktrees/T3-code"), root.join("checkout")]
         );
+    }
+
+    /// The Composer's `@` menu source (#23): files relative with `/`, the
+    /// scan's skip list honoured, deterministic order, and the cap holding.
+    #[test]
+    fn mention_files_walks_with_the_scan_skip_list_and_caps_the_answer() {
+        let root = scratch("mention-files");
+        let file = |relative: &str| {
+            let path = root.join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, "x\n").unwrap();
+        };
+        file("README.md");
+        file("src/lib.rs");
+        file("src/nested/deep.rs");
+        for noise in [
+            "node_modules/pkg/index.js",
+            ".git/HEAD",
+            "dist/out.js",
+            "target/debug/bin",
+            "build/o.txt",
+        ] {
+            file(noise);
+        }
+
+        assert_eq!(
+            mention_files(&root, 100),
+            ["README.md", "src/lib.rs", "src/nested/deep.rs"]
+        );
+        // The cap bounds the walk — a monorepo cannot stall a keystroke.
+        assert_eq!(mention_files(&root, 2).len(), 2);
+        // An unreadable or missing root is an empty menu, not an error.
+        assert!(mention_files(&root.join("nowhere"), 100).is_empty());
     }
 
     #[test]

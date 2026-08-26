@@ -49,6 +49,11 @@ const STDERR_TAIL_LINES: usize = 20;
 /// cold start; the budget is generous because overrunning it fails the spawn.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// The request id spawn numbers its skills/list with — always the request
+/// after the two handshake steps, which is what lets the reader correlate
+/// the answer without a shared table (#23).
+const SKILLS_REQUEST_ID: u64 = 3;
+
 /// How to spawn a Codex Session.
 #[derive(Debug, Clone)]
 pub struct CodexConfig {
@@ -192,6 +197,12 @@ pub struct CodexSession {
     /// The running turn's id, tracked by the reader from turn/started:
     /// turn/interrupt must name the turn it stops.
     current_turn: Arc<Mutex<Option<String>>>,
+    /// The server's skills, filled by the reader from the skills/list answer
+    /// (#23). `send` translates a leading `/name` against this list into the
+    /// typed skill item — slash text is never intercepted server-side.
+    skills: Arc<Mutex<Vec<crate::SessionCommand>>>,
+    /// The thread's cwd, kept for resolving `@path` mention tokens.
+    cwd: Option<PathBuf>,
     next_request_id: u64,
 }
 
@@ -239,12 +250,14 @@ impl CodexSession {
         let (sender, events) = sync_channel(EVENT_CHANNEL_CAPACITY);
         let child = Arc::new(Mutex::new(child));
         let current_turn = Arc::new(Mutex::new(None));
+        let skills = Arc::new(Mutex::new(Vec::new()));
         let handshake = read_stdout(
             stdout,
             sender,
             Arc::clone(&child),
             Arc::clone(&stderr_tail),
             Arc::clone(&current_turn),
+            Arc::clone(&skills),
         );
 
         let mut session = Self {
@@ -256,6 +269,8 @@ impl CodexSession {
             capabilities: CodexCapabilities::default(),
             thread_id: String::new(),
             current_turn,
+            skills,
+            cwd: config.cwd.clone(),
             next_request_id: 1,
         };
 
@@ -275,6 +290,23 @@ impl CodexSession {
                 },
             }
         })?;
+        // Ask for the `/` menu (#23) — after the handshake, before the
+        // operator can speak. The answer arrives on the reader's own thread
+        // and is announced as `SessionEvent::Commands`; a write failure here
+        // is a server already dying, which the reader is turning into a
+        // Closed event, so the Session is still handed back.
+        let id = session.take_request_id();
+        debug_assert_eq!(id, SKILLS_REQUEST_ID);
+        let mut params = serde_json::json!({});
+        if let Some(cwd) = &session.cwd {
+            params["cwds"] = serde_json::json!([cwd.display().to_string()]);
+        }
+        let _ = session.write_line(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "skills/list",
+            "params": params,
+        }));
         Ok(session)
     }
 
@@ -340,7 +372,14 @@ impl CodexSession {
     }
 
     /// Send one user prompt; the server starts a turn on the Session's thread.
+    ///
+    /// The text is translated to typed input items first (#23): a leading
+    /// `/name` naming a listed skill rides as a `{"type":"skill"}` item and
+    /// `@path` tokens naming real files ride as `{"type":"mention"}` items —
+    /// the server never intercepts slash text, so this seam is where the
+    /// Composer's picks become real.
     pub fn send(&mut self, text: &str) -> io::Result<()> {
+        let input = wire::input_items(text, &lock(&self.skills), self.cwd.as_deref());
         let id = self.take_request_id();
         self.write_line(&serde_json::json!({
             "jsonrpc": "2.0",
@@ -348,7 +387,7 @@ impl CodexSession {
             "method": "turn/start",
             "params": {
                 "threadId": self.thread_id,
-                "input": [{"type": "text", "text": text}],
+                "input": input,
             },
         }))
     }
@@ -491,6 +530,7 @@ fn read_stdout(
     child: Arc<Mutex<Child>>,
     stderr_tail: Arc<Mutex<StderrTail>>,
     current_turn: Arc<Mutex<Option<String>>>,
+    skills: Arc<Mutex<Vec<crate::SessionCommand>>>,
 ) -> Receiver<Result<HandshakeStep, String>> {
     let (step_sender, steps) = sync_channel(2);
     thread::spawn(move || {
@@ -499,6 +539,10 @@ fn read_stdout(
         // Which handshake response is awaited: request 1, then request 2,
         // then none.
         let mut handshake = Some((step_sender, 1u64));
+        // Once the thread is up, the skills/list answer (request 3) is still
+        // owed; correlated here like the handshake, but never blocking —
+        // a server without the method just leaves the menu empty.
+        let mut menu_pending = false;
         loop {
             line.clear();
             match reader.read_until(b'\n', &mut line) {
@@ -526,6 +570,7 @@ fn read_stdout(
                                 model: thread.model.clone(),
                             });
                             let _ = step_sender.send(Ok(HandshakeStep::Thread(Box::new(thread))));
+                            menu_pending = true;
                             continue;
                         }
                         None => {
@@ -539,6 +584,24 @@ fn read_stdout(
                         return;
                     }
                     None => handshake = Some((step_sender, pending)),
+                }
+            }
+            if menu_pending {
+                if let Some(response) = wire::parse_response(text, SKILLS_REQUEST_ID) {
+                    menu_pending = false;
+                    if let Ok(result) = response {
+                        let commands = wire::parse_skills(&result);
+                        *lock(&skills) = commands.clone();
+                        // Announce the menu on the event stream so the
+                        // cockpit can fold it (#23); a server listing no
+                        // skills announces nothing.
+                        if !commands.is_empty()
+                            && sender.send(SessionEvent::Commands { commands }).is_err()
+                        {
+                            return;
+                        }
+                    }
+                    continue;
                 }
             }
             track_turn(text, &current_turn);

@@ -69,8 +69,30 @@ pub enum SessionEvent {
         /// The model's context window, when the provider states it.
         context_window: Option<u64>,
     },
+    /// The Session's own command menu, announced at Session start — what the
+    /// Composer's `/` popover lists (#23). Claude lifts it from the initialize
+    /// handshake's `commands[]`; Codex answers a `skills/list` request. Session
+    /// state like a Decision, not durable history: a replacement Session
+    /// announces its own.
+    Commands { commands: Vec<SessionCommand> },
+    /// The permission mode the Session started in, in the provider's own
+    /// word (`"acceptEdits"`, `"bypassPermissions"`, …) — the Composer's
+    /// meta-row mode chip (#23). Claude lifts it from the same initialize
+    /// handshake; display-only, and Session state like the menu above.
+    PermissionMode { mode: String },
     /// The session process exited; no further events will arrive.
     Closed { reason: String },
+}
+
+/// One entry of a Session's command menu, in the provider's own words.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionCommand {
+    /// What the operator types after `/`.
+    pub name: String,
+    pub description: String,
+    /// Codex only: the SKILL.md a typed `{"type":"skill"}` input item must
+    /// carry. Claude commands have none — the CLI dispatches on the text.
+    pub path: Option<String>,
 }
 
 /// The structured half of a tool result. Every shape here was read off a

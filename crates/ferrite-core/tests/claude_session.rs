@@ -440,6 +440,47 @@ fn spawn_completes_the_capability_handshake() {
     );
 }
 
+/// #23: the same handshake announces the CLI's slash menu on the event
+/// stream, so the cockpit can fold it for the Composer's `/` popover — the
+/// wire is the only source, never a static list.
+#[test]
+fn the_handshake_announces_the_command_menu_on_the_event_stream() {
+    let program = stub(
+        "claude-menu",
+        &format!(
+            "{VERSION_CASE}\ncat '{}'\nexec cat > /dev/null",
+            fixture("initialize-2.1.243").display()
+        ),
+    );
+    let session = ClaudeSession::spawn(config(program)).unwrap();
+
+    let announced = session
+        .events()
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the menu is announced");
+    let SessionEvent::Commands { commands } = announced else {
+        panic!("expected the command menu first, got {announced:?}");
+    };
+    assert_eq!(commands.len(), 47, "the capture's own count");
+    assert!(
+        commands.iter().any(|command| command.name == "compact"),
+        "the built-ins ride the same list"
+    );
+
+    // The permission mode rides the same handshake — the meta row's chip.
+    let announced = session
+        .events()
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the mode is announced");
+    assert_eq!(
+        announced,
+        SessionEvent::PermissionMode {
+            mode: "bypassPermissions".into(),
+        },
+        "the capture's own mode, verbatim"
+    );
+}
+
 /// Resume is spawn with history: the resume target rides argv (`--resume
 /// <session_id>`, asserted — a session that quietly started fresh would
 /// replay this fixture identically otherwise), the resumed CLI announces the

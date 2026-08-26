@@ -419,10 +419,11 @@ fn answering(fixture_name: &str, tag: &str, answer: impl Fn(&Decision) -> Decisi
         }
     }
 
-    // The first three lines are spawn's own handshake; the answer follows.
-    let written = read_lines(&log, 4);
+    // The first four lines are spawn's own handshake and its skills/list
+    // request (#23); the answer follows.
+    let written = read_lines(&log, 5);
     drop(session);
-    serde_json::from_str(&written[3]).expect("one JSON object per line")
+    serde_json::from_str(&written[4]).expect("one JSON object per line")
 }
 
 /// What the recording sent back for the same Decision.
@@ -526,6 +527,113 @@ fn spawn_completes_the_capability_handshake() {
             sandbox: "workspaceWrite".into(),
             reasoning_effort: Some("xhigh".into()),
         }
+    );
+}
+
+/// #23: spawn asks for the `/` menu (skills/list) and the reader announces
+/// the answer on the event stream — then a leading `/name` in a prompt rides
+/// the wire as the typed `{"type":"skill"}` item with the args as text,
+/// never as slash text the model would read as prose.
+#[test]
+fn a_listed_skill_is_sent_as_the_typed_item_never_as_slash_text() {
+    let log = log_path("skill-send.log");
+    let _ = fs::remove_file(&log);
+    // The PRELUDE answers the handshake; the committed skills fixture
+    // answers the menu request it provokes.
+    let program = stub(
+        "codex-skills",
+        &format!(
+            "{PRELUDE}\ncat '{}'\ncat >> '{}'",
+            fixture("skills-0.149.1").display(),
+            log.display()
+        ),
+    );
+    let mut session = CodexSession::spawn(config(program)).unwrap();
+
+    // The menu is announced before anything else can stream.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let commands = loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match session.events().recv_timeout(left) {
+            Ok(SessionEvent::Commands { commands }) => break commands,
+            Ok(SessionEvent::Init { .. }) => continue,
+            Ok(other) => panic!("unexpected event before the menu: {other:?}"),
+            Err(e) => panic!("no menu arrived: {e}"),
+        }
+    };
+    let names: Vec<&str> = commands.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "probe-codex-skill",
+            "probe-body",
+            "browser:control-in-app-browser"
+        ],
+        "enabled skills only, in the server's order"
+    );
+
+    session.send("/probe-body follow the skill").unwrap();
+
+    // Four handshake lines (initialize, initialized, thread/start,
+    // skills/list), then the turn.
+    let recorded = read_lines(&log, 5);
+    drop(session);
+    let skills_request: Value = serde_json::from_str(&recorded[3]).unwrap();
+    assert_eq!(skills_request["method"], "skills/list");
+    let turn: Value = serde_json::from_str(&recorded[4]).unwrap();
+    assert_eq!(turn["method"], "turn/start");
+    assert_eq!(
+        turn["params"]["input"],
+        serde_json::json!([
+            {
+                "type": "skill",
+                "name": "probe-body",
+                "path": "/workspace/.codex/skills/probe-body/SKILL.md",
+            },
+            {"type": "text", "text": "follow the skill"},
+        ])
+    );
+}
+
+/// #23: an `@path` token naming a real file under the thread's cwd rides as
+/// a `{"type":"mention"}` item beside the verbatim text.
+#[test]
+fn a_mentioned_file_rides_as_a_mention_item_beside_the_text() {
+    let workspace = log_path("mention-workspace");
+    let _ = fs::remove_dir_all(&workspace);
+    fs::create_dir_all(&workspace).unwrap();
+    fs::write(workspace.join("notes.txt"), "MAGIC-WORD: zanzibar77\n").unwrap();
+
+    let log = log_path("mention-send.log");
+    let _ = fs::remove_file(&log);
+    let program = stub(
+        "codex-mentions",
+        &format!("{PRELUDE}\ncat >> '{}'", log.display()),
+    );
+    let mut session = CodexSession::spawn(CodexConfig {
+        program,
+        cwd: Some(workspace.clone()),
+        ..Default::default()
+    })
+    .unwrap();
+
+    session
+        .send("what is the magic word in @notes.txt ?")
+        .unwrap();
+
+    let recorded = read_lines(&log, 5);
+    drop(session);
+    let turn: Value = serde_json::from_str(&recorded[4]).unwrap();
+    assert_eq!(
+        turn["params"]["input"],
+        serde_json::json!([
+            {
+                "type": "mention",
+                "name": "notes.txt",
+                "path": workspace.join("notes.txt").display().to_string(),
+            },
+            {"type": "text", "text": "what is the magic word in @notes.txt ?"},
+        ])
     );
 }
 
@@ -680,7 +788,7 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
     session.send("hi").unwrap();
     session.interrupt().unwrap();
 
-    let recorded = read_lines(&log, 6);
+    let recorded = read_lines(&log, 7);
     drop(session);
     assert_eq!(recorded[0], "app-server");
     let sent: Vec<Value> = recorded[1..]
@@ -709,11 +817,21 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
             },
         })
     );
+    // The `/` menu is asked for as soon as the thread is up (#23).
     assert_eq!(
         sent[3],
         serde_json::json!({
             "jsonrpc": "2.0",
             "id": 3,
+            "method": "skills/list",
+            "params": {"cwds": [std::env::temp_dir().display().to_string()]},
+        })
+    );
+    assert_eq!(
+        sent[4],
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 4,
             "method": "turn/start",
             "params": {
                 "threadId": "stub-thread",
@@ -723,10 +841,10 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
     );
     // The interrupt names the turn the stub announced.
     assert_eq!(
-        sent[4],
+        sent[5],
         serde_json::json!({
             "jsonrpc": "2.0",
-            "id": 4,
+            "id": 5,
             "method": "turn/interrupt",
             "params": {"threadId": "stub-thread", "turnId": "stub-turn"},
         })
@@ -775,7 +893,7 @@ fn interrupting_after_the_turn_completed_writes_nothing() {
     session.send("hi").unwrap();
 
     // The send proves the write path works; no interrupt line precedes it.
-    let recorded = read_lines(&log, 4);
+    let recorded = read_lines(&log, 5);
     drop(session);
     assert!(
         !recorded.iter().any(|line| line.contains("turn/interrupt")),
@@ -797,9 +915,9 @@ fn interrupting_before_any_turn_writes_nothing() {
     session.interrupt().unwrap();
     session.send("hi").unwrap();
 
-    // The send proves the write path works; only the handshake and the turn
-    // are in the log, no interrupt line.
-    let recorded = read_lines(&log, 4);
+    // The send proves the write path works; only the handshake, the menu
+    // request and the turn are in the log, no interrupt line.
+    let recorded = read_lines(&log, 5);
     drop(session);
     assert!(
         !recorded.iter().any(|line| line.contains("turn/interrupt")),

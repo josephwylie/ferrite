@@ -1,6 +1,7 @@
 // Ferrite: the cockpit window and the pump behind it.
 mod cockpit;
 mod composer;
+mod fuzzy;
 mod keymap;
 mod line;
 mod nav;

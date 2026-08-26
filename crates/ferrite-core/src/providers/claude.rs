@@ -159,6 +159,11 @@ pub struct ClaudeCapabilities {
     /// Model values this install offers (`"haiku"`, `"opus[1m]"`, …) — the
     /// menu an operator may pick from, not what Ferrite hardcodes.
     pub models: Vec<String>,
+    /// The CLI's effective slash-command menu — built-ins, skills, project
+    /// commands and plugins in one list, disabled overrides already honoured
+    /// (#23). The reader announces it as `SessionEvent::Commands`; submitting
+    /// `/name args` as plain prompt text is how one is invoked.
+    pub commands: Vec<crate::SessionCommand>,
 }
 
 /// A live Claude Session: one CLI process serving one Thread.
@@ -406,6 +411,27 @@ fn read_stdout(
             let text = text.trim_end();
             if handshake.is_some() {
                 if let Some(capabilities) = wire::parse_capabilities(text, HANDSHAKE_REQUEST_ID) {
+                    // The command menu rides the same handshake line; announce
+                    // it on the event stream so the cockpit can fold it (#23).
+                    // An install that lists none announces nothing.
+                    if !capabilities.commands.is_empty() {
+                        let announced = SessionEvent::Commands {
+                            commands: capabilities.commands.clone(),
+                        };
+                        if sender.send(announced).is_err() {
+                            return;
+                        }
+                    }
+                    // So does the permission mode — the meta row's chip.
+                    // Display-only; a CLI that named none shows none.
+                    if !capabilities.permission_mode.is_empty() {
+                        let announced = SessionEvent::PermissionMode {
+                            mode: capabilities.permission_mode.clone(),
+                        };
+                        if sender.send(announced).is_err() {
+                            return;
+                        }
+                    }
                     // Unblocks spawn. Dropping the sender afterwards is what
                     // stops a second control response being mistaken for it.
                     let _ = handshake.take().expect("just checked").send(capabilities);

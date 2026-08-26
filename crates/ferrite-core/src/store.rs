@@ -346,6 +346,11 @@ impl Record {
                 context_window: *context_window,
             },
             SessionEvent::DecisionRequested { .. } => return None,
+            // The command menu and the permission mode are the live
+            // Session's, like a Decision: a replay has no Session to serve
+            // them and the next one announces its own.
+            SessionEvent::Commands { .. } => return None,
+            SessionEvent::PermissionMode { .. } => return None,
         })
     }
 

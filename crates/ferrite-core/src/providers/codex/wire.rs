@@ -11,10 +11,12 @@
 //! [`parse_thread_response`]; every other response — turn/start
 //! acknowledgements, interrupt receipts — is ignored.
 
+use std::path::Path;
+
 use serde_json::Value;
 
 use super::CodexCapabilities;
-use crate::{Decision, SessionEvent, ToolResult, TurnOutcome};
+use crate::{Decision, SessionCommand, SessionEvent, ToolResult, TurnOutcome};
 
 /// The item types Ferrite reads as tool runs. Everything else the server
 /// wraps in an item — user messages, agent messages, reasoning — either
@@ -182,6 +184,108 @@ fn parse_turn_completed(params: &Value) -> Option<SessionEvent> {
     })
 }
 
+/// The skills/list result: per-cwd entries flattened into one menu (#23).
+/// Entry shape `{name, description, shortDescription?, path, scope, enabled,
+/// interface?}`. Only enabled skills are offered — the menu is what can be
+/// invoked — and an entry missing its name or path could never become the
+/// typed `{"type":"skill"}` item an invocation needs, so it is skipped.
+pub(super) fn parse_skills(result: &Value) -> Vec<SessionCommand> {
+    let mut commands = Vec::new();
+    let Some(data) = result.get("data").and_then(Value::as_array) else {
+        return commands;
+    };
+    for entry in data {
+        let Some(skills) = entry.get("skills").and_then(Value::as_array) else {
+            continue;
+        };
+        for skill in skills {
+            if skill.get("enabled").and_then(Value::as_bool) == Some(false) {
+                continue;
+            }
+            let Some(name) = skill.get("name").and_then(Value::as_str) else {
+                continue;
+            };
+            let Some(path) = skill.get("path").and_then(Value::as_str) else {
+                continue;
+            };
+            commands.push(SessionCommand {
+                name: name.to_string(),
+                description: ["description", "shortDescription"]
+                    .iter()
+                    .find_map(|key| skill.get(*key)?.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                path: Some(path.to_string()),
+            });
+        }
+    }
+    commands
+}
+
+/// One operator prompt as turn/start input items (#23). The server never
+/// intercepts slash text — the wire study proved `/name args` goes to the
+/// model as prose — so the translation is Ferrite's:
+///
+/// - a leading `/name` naming a listed skill becomes a typed
+///   `{"type":"skill","name","path"}` item (exact, case-sensitive match —
+///   mirroring the Claude CLI's own dispatch rules) and leaves the items;
+/// - every whitespace-delimited `@path` token that names a file under the
+///   Session's cwd rides as a `{"type":"mention","name","path"}` item —
+///   decoration and persistence; the model reads the file itself;
+/// - what remains is one `{"type":"text"}` item, kept verbatim (mention
+///   tokens included — plain `@path` text is proven harmless).
+pub(super) fn input_items(text: &str, skills: &[SessionCommand], cwd: Option<&Path>) -> Vec<Value> {
+    let mut items = Vec::new();
+    let mut rest = text;
+    if let Some(after) = text.strip_prefix('/') {
+        // The command token ends at the first whitespace; `"/ name"` names
+        // nothing.
+        let name = after.split(char::is_whitespace).next().unwrap_or("");
+        let listed = skills
+            .iter()
+            .find(|skill| skill.name == name && skill.path.is_some());
+        if let Some(skill) = listed {
+            items.push(serde_json::json!({
+                "type": "skill",
+                "name": skill.name,
+                "path": skill.path.as_deref().expect("filtered on is_some"),
+            }));
+            rest = after[name.len()..].trim_start();
+        }
+    }
+    if let Some(cwd) = cwd {
+        for token in rest.split_whitespace() {
+            let Some(candidate) = token.strip_prefix('@') else {
+                continue;
+            };
+            if candidate.is_empty() {
+                continue;
+            }
+            let path = cwd.join(candidate);
+            if !path.is_file() {
+                continue;
+            }
+            let path = path.display().to_string();
+            // The same file mentioned twice rides once.
+            if items
+                .iter()
+                .any(|item| item["type"] == "mention" && item["path"] == path.as_str())
+            {
+                continue;
+            }
+            items.push(serde_json::json!({
+                "type": "mention",
+                "name": candidate.rsplit('/').next().unwrap_or(candidate),
+                "path": path,
+            }));
+        }
+    }
+    if !rest.is_empty() || items.is_empty() {
+        items.push(serde_json::json!({"type": "text", "text": rest}));
+    }
+    items
+}
+
 /// Is this line the response to request `id`? `Some(Ok)` carries its result,
 /// `Some(Err)` the server's error message — a refused thread/start must fail
 /// spawn with the server's own words, not a timeout.
@@ -291,6 +395,21 @@ mod tests {
 
     const INITIALIZE: &str = include_str!("../../../tests/fixtures/codex-initialize-0.149.1.jsonl");
 
+    /// The skills/list response, in the shape the #23 wire study captured
+    /// (per-cwd entries; `{name, description, shortDescription?, path, scope,
+    /// enabled, interface?}`), paths neutralised like every other fixture.
+    const SKILLS: &str = include_str!("../../../tests/fixtures/codex-skills-0.149.1.jsonl");
+
+    /// The skills/list result as the reader correlates it: request id 3 is
+    /// the one the session numbers it with.
+    fn skills_result() -> Value {
+        SKILLS
+            .lines()
+            .find_map(|line| parse_response(line, 3))
+            .expect("the fixture answers request 3")
+            .expect("with a result, not an error")
+    }
+
     fn fixture_events() -> Vec<SessionEvent> {
         FIXTURE.lines().filter_map(parse_line).collect()
     }
@@ -327,6 +446,14 @@ mod tests {
             SessionEvent::DecisionRequested { .. } => "DecisionRequested",
             SessionEvent::TokenUsage { .. } => "TokenUsage",
             SessionEvent::TurnEnded { .. } => "TurnEnded",
+            // The skills menu: a correlated response like Init, read by the
+            // reader against its own request id, so it is chained into the
+            // produced list from the SKILLS fixture the same way.
+            SessionEvent::Commands { .. } => "Commands",
+            // Claude's concept (#23): the mode chip reads Claude's initialize
+            // handshake; Codex's approval policy lives in its capabilities
+            // and is deliberately not surfaced as this event.
+            SessionEvent::PermissionMode { .. } => return None,
             // Claude's concept: Codex never streams raw chain-of-thought, only
             // summaries of it, so no codex line may ever produce this — that
             // is the capability difference, stated rather than papered over.
@@ -414,10 +541,13 @@ mod tests {
             session_id: handshake.thread_id,
             model: handshake.model,
         };
+        let menu = SessionEvent::Commands {
+            commands: parse_skills(&skills_result()),
+        };
         let mut produced: Vec<&str> = FIXTURES
             .iter()
             .flat_map(|(_, text)| text.lines().filter_map(parse_line))
-            .chain([init])
+            .chain([init, menu])
             .filter_map(|event| variant(&event))
             .collect();
         produced.sort_unstable();
@@ -425,6 +555,7 @@ mod tests {
         assert_eq!(
             produced,
             [
+                "Commands",
                 "DecisionRequested",
                 "Init",
                 "ReasoningSummaryDelta",
@@ -791,6 +922,162 @@ mod tests {
                 outcome: TurnOutcome::Error("codex reported a failed turn with no detail".into()),
                 cost_usd: None,
             })
+        );
+    }
+
+    /// #23: the skills/list result flattens to the `/` menu — enabled skills
+    /// only, name + description + the path a typed invocation needs.
+    #[test]
+    fn the_skills_response_is_read_as_the_command_menu() {
+        let commands = parse_skills(&skills_result());
+        let names: Vec<&str> = commands.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "probe-codex-skill",
+                "probe-body",
+                "browser:control-in-app-browser"
+            ],
+            "disabled skills are not offered"
+        );
+        assert_eq!(
+            commands[0].description,
+            "Probe skill for wire test; reply MARKER-CODEX-SKILL when invoked"
+        );
+        assert_eq!(
+            commands[0].path.as_deref(),
+            Some("/workspace/.codex/skills/probe-codex-skill/SKILL.md"),
+            "the path is what the typed skill item carries"
+        );
+    }
+
+    /// A menu that says nothing offers nothing — junk shapes included.
+    #[test]
+    fn unreadable_skills_responses_offer_no_menu() {
+        for result in [
+            serde_json::json!({}),
+            serde_json::json!({"data": "not an array"}),
+            serde_json::json!({"data": [{"cwd": "/workspace"}]}),
+            // A skill without a path could never be invoked as a typed item.
+            serde_json::json!({"data": [{"skills": [{"name": "pathless"}]}]}),
+            serde_json::json!({"data": [{"skills": [{"path": "/nameless/SKILL.md"}]}]}),
+        ] {
+            assert_eq!(parse_skills(&result), [], "should offer nothing: {result}");
+        }
+    }
+
+    /// #23 wire law: a picked skill rides as the typed item, never as slash
+    /// text — the exact items the live probe proved end-to-end
+    /// (`[{"type":"skill",…},{"type":"text",…}]`, args only in the text).
+    #[test]
+    fn a_leading_listed_skill_becomes_the_typed_item_with_its_args_as_text() {
+        let skills = parse_skills(&skills_result());
+
+        assert_eq!(
+            input_items("/probe-body follow the skill", &skills, None),
+            [
+                serde_json::json!({
+                    "type": "skill",
+                    "name": "probe-body",
+                    "path": "/workspace/.codex/skills/probe-body/SKILL.md",
+                }),
+                serde_json::json!({"type": "text", "text": "follow the skill"}),
+            ]
+        );
+        // Bare invocation: the pointer item alone, no empty text item.
+        assert_eq!(
+            input_items("/probe-body", &skills, None),
+            [serde_json::json!({
+                "type": "skill",
+                "name": "probe-body",
+                "path": "/workspace/.codex/skills/probe-body/SKILL.md",
+            })]
+        );
+    }
+
+    /// Everything that is not a listed leading skill stays plain text — the
+    /// same rules the Claude CLI applies to its own dispatch (leading token
+    /// only, case-sensitive, whole name).
+    #[test]
+    fn unlisted_or_malformed_slash_text_stays_plain_text() {
+        let skills = parse_skills(&skills_result());
+        for text in [
+            "/definitely-not-a-command foo",
+            "/PROBE-BODY shout",        // case-sensitive
+            "/probe-bod short",         // whole-token match only
+            "/ probe-body spaced",      // `"/ name"` names nothing
+            "say ok about /probe-body", // leading token only
+        ] {
+            assert_eq!(
+                input_items(text, &skills, None),
+                [serde_json::json!({"type": "text", "text": text})],
+                "{text}"
+            );
+        }
+    }
+
+    /// #23 wire law: a picked file rides as a `{"type":"mention"}` item —
+    /// resolved against the Session's cwd, decoration beside the verbatim
+    /// text — and a token that names no file rides as nothing.
+    #[test]
+    fn at_tokens_naming_real_files_ride_as_mention_items() {
+        let dir = std::env::temp_dir().join(format!("ferrite-mention-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("docs")).unwrap();
+        std::fs::write(dir.join("docs/notes.txt"), "MAGIC\n").unwrap();
+
+        let mentioned = dir.join("docs/notes.txt").display().to_string();
+        assert_eq!(
+            input_items("what is in @docs/notes.txt ?", &[], Some(&dir)),
+            [
+                serde_json::json!({"type": "mention", "name": "notes.txt", "path": mentioned}),
+                serde_json::json!({"type": "text", "text": "what is in @docs/notes.txt ?"}),
+            ]
+        );
+        // A missing file, a bare @, an interior @ — plain text, no item.
+        for text in ["read @docs/absent.txt", "just an @", "mail a@b.example"] {
+            assert_eq!(
+                input_items(text, &[], Some(&dir)),
+                [serde_json::json!({"type": "text", "text": text})],
+                "{text}"
+            );
+        }
+        // With no cwd there is nothing to resolve against.
+        assert_eq!(
+            input_items("read @docs/notes.txt", &[], None),
+            [serde_json::json!({"type": "text", "text": "read @docs/notes.txt"})]
+        );
+    }
+
+    /// A skill and a mention compose: skill first, mentions, then the args
+    /// text with its tokens kept verbatim; the same file twice rides once.
+    #[test]
+    fn skills_and_mentions_compose_into_one_items_array() {
+        let dir = std::env::temp_dir().join(format!("ferrite-mention-mix-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("notes.txt"), "x\n").unwrap();
+        let skills = parse_skills(&skills_result());
+
+        let mentioned = dir.join("notes.txt").display().to_string();
+        assert_eq!(
+            input_items(
+                "/probe-body read @notes.txt then @notes.txt again",
+                &skills,
+                Some(&dir)
+            ),
+            [
+                serde_json::json!({
+                    "type": "skill",
+                    "name": "probe-body",
+                    "path": "/workspace/.codex/skills/probe-body/SKILL.md",
+                }),
+                serde_json::json!({"type": "mention", "name": "notes.txt", "path": mentioned}),
+                serde_json::json!({
+                    "type": "text",
+                    "text": "read @notes.txt then @notes.txt again",
+                }),
+            ]
         );
     }
 }

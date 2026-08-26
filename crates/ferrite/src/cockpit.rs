@@ -44,6 +44,10 @@ actions!(
         SelectorPrevious,
         SelectorPick,
         SelectorDismiss,
+        MenuNext,
+        MenuPrevious,
+        MenuPick,
+        MenuDismiss,
     ]
 );
 
@@ -112,6 +116,37 @@ pub struct CockpitView {
     /// The nav's parked rows, cached: each one cost a `Store::peek`, so the
     /// cache is rebuilt on park and revive — never per frame.
     parked_rows: Vec<nav::ParkedRow>,
+    /// The open Composer menu — `/` commands or `@` files — or None (#23).
+    /// At most one for the whole cockpit, always on the focused Pane's
+    /// Composer, and derived from that Composer's own text: every edit
+    /// re-syncs it, so backspacing past the trigger closes it by itself.
+    menu: Option<ComposerMenu>,
+    /// Escape (or a press elsewhere) dismissed the menu: stay shut until
+    /// the text moves again, or `sync_menu` would reopen it on the very
+    /// text the operator dismissed it over.
+    menu_muted: bool,
+}
+
+/// Which popover the Composer has open, and everything it shows — rebuilt
+/// on each edit of the line, never per frame.
+struct ComposerMenu {
+    thread: ThreadId,
+    kind: MenuKind,
+    rows: Vec<pane::MenuRow>,
+    selected: usize,
+}
+
+enum MenuKind {
+    /// `/` — the Session's own commands (Claude's initialize `commands[]`,
+    /// Codex's skills/list), straight from core. Nothing static.
+    Commands,
+    /// `@` — files under the Thread's workspace binding. The walk runs once
+    /// when the menu opens and is filtered per keystroke; `token_start` is
+    /// where the `@` sits, so a pick knows what to splice out.
+    Files {
+        files: std::rc::Rc<Vec<String>>,
+        token_start: usize,
+    },
 }
 
 /// Whole Blocks swept by a drag across one Pane's transcript — the unit v1
@@ -182,14 +217,9 @@ impl CockpitView {
         })
         .detach();
 
-        let panes = cockpit
-            .threads()
-            .into_iter()
-            .map(|thread| PaneView::new(thread, cx))
-            .collect();
         let mut view = Self {
             cockpit,
-            panes,
+            panes: Vec::new(),
             focused: 0,
             fullscreen: None,
             repo: here(),
@@ -206,7 +236,12 @@ impl CockpitView {
             selector: None,
             selector_focus: cx.focus_handle(),
             parked_rows: Vec::new(),
+            menu: None,
+            menu_muted: false,
         };
+        for thread in view.cockpit.threads() {
+            view.open_pane(thread, cx);
+        }
         view.refresh_parked();
         // The first frame's wall cards — every rebuild after rides a change.
         let threads: Vec<ThreadId> = view.panes.iter().map(|pane| pane.thread).collect();
@@ -214,6 +249,28 @@ impl CockpitView {
             view.refresh_wall(thread);
         }
         view
+    }
+
+    /// The one way a Pane joins the grid: built, and its Composer watched —
+    /// every edit of the line re-syncs the open `/`/`@` menu (#23).
+    fn open_pane(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+        let pane = PaneView::new(thread, cx);
+        cx.subscribe(&pane.composer, Self::composer_edited).detach();
+        self.panes.push(pane);
+    }
+
+    /// The focused Composer's line moved: unmute and re-derive the menu.
+    /// Menus follow the text — typing `/` or `@` opens, backspacing past
+    /// the trigger closes, and a pick's own splice closes through here too.
+    fn composer_edited(
+        &mut self,
+        _: gpui::Entity<crate::composer::Composer>,
+        _: &crate::composer::Edited,
+        cx: &mut Context<Self>,
+    ) {
+        self.menu_muted = false;
+        self.sync_menu(cx);
+        cx.notify();
     }
 
     /// Count this frame and, once a second, say how it is going.
@@ -399,16 +456,42 @@ impl CockpitView {
         cx.notify();
     }
 
-    fn allow(&mut self, _: &Allow, _window: &mut Window, cx: &mut Context<Self>) {
-        self.answer(Answer::Allow, cx);
+    fn allow(&mut self, _: &Allow, window: &mut Window, cx: &mut Context<Self>) {
+        self.answer_or_type(Answer::Allow, "y", window, cx);
     }
 
-    fn deny(&mut self, _: &Deny, _window: &mut Window, cx: &mut Context<Self>) {
-        self.answer(Answer::Deny, cx);
+    fn deny(&mut self, _: &Deny, window: &mut Window, cx: &mut Context<Self>) {
+        self.answer_or_type(Answer::Deny, "n", window, cx);
     }
 
-    fn always(&mut self, _: &Always, _window: &mut Window, cx: &mut Context<Self>) {
-        self.answer(Answer::Always, cx);
+    fn always(&mut self, _: &Always, window: &mut Window, cx: &mut Context<Self>) {
+        self.answer_or_type(Answer::Always, "a", window, cx);
+    }
+
+    /// The answer keys with the keyboard in the Composer (#23): on an empty
+    /// line they are the keycaps' answers; with text on the line they are
+    /// letters again — the ⌫-unqueue rule, applied to y/n/a — because an
+    /// operator half-way through "not yet…" must be able to finish typing
+    /// it. Only at L1, where a Composer is live; the wall and the L2 card
+    /// have no line to be typing into.
+    fn answer_or_type(
+        &mut self,
+        answer: Answer,
+        letter: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.level_now(window) == Level::Transcript {
+            if let Some(pane) = self.panes.get(self.focused) {
+                if !pane.composer.read(cx).is_empty() {
+                    pane.composer
+                        .clone()
+                        .update(cx, |composer, cx| composer.insert(letter, cx));
+                    return;
+                }
+            }
+        }
+        self.answer(answer, cx);
     }
 
     fn answer(&mut self, answer: Answer, cx: &mut Context<Self>) {
@@ -617,6 +700,173 @@ impl CockpitView {
         cx.notify();
     }
 
+    // --------------------------------------------------- Composer menus (#23)
+
+    /// Re-derive the open Composer menu from the focused line's own text.
+    /// Nothing else opens or closes a menu: `/` at the start opens commands,
+    /// an `@token` under the caret opens files, anything else closes.
+    fn sync_menu(&mut self, cx: &mut Context<Self>) {
+        self.menu = self.derive_menu(cx);
+    }
+
+    fn derive_menu(&mut self, cx: &mut Context<Self>) -> Option<ComposerMenu> {
+        // Muted until the text moves again; and never under the root
+        // selector, which holds the keyboard while it is up.
+        if self.menu_muted || self.selector.is_some() {
+            return None;
+        }
+        let thread = self.focused_thread()?;
+        let pane = self.panes.get(self.focused)?;
+        let (text, cursor) = {
+            let composer = pane.composer.read(cx);
+            (composer.text().to_string(), composer.cursor())
+        };
+        if let Some(filter) = slash_filter(&text) {
+            let rows = command_rows(self.cockpit.commands(thread), filter);
+            // No wire-backed match, no popover — there is nothing to pick.
+            if rows.is_empty() {
+                return None;
+            }
+            return Some(ComposerMenu {
+                thread,
+                kind: MenuKind::Commands,
+                rows,
+                selected: 0,
+            });
+        }
+        let (token_start, filter) = mention_token(&text, cursor)?;
+        // No binding → nothing to walk → no popover.
+        let binding = self.cockpit.workspace(thread)?;
+        // The walk runs once per open menu; keystrokes only re-filter it.
+        let walked = match &self.menu {
+            Some(open) if open.thread == thread => match &open.kind {
+                MenuKind::Files { files, .. } => Some(files.clone()),
+                MenuKind::Commands => None,
+            },
+            _ => None,
+        };
+        let files = walked.unwrap_or_else(|| {
+            std::rc::Rc::new(ferrite_core::workspace::mention_files(
+                binding.cwd(),
+                MENTION_FILE_CAP,
+            ))
+        });
+        let rows = mention_rows(&files, filter);
+        if rows.is_empty() {
+            return None;
+        }
+        Some(ComposerMenu {
+            thread,
+            kind: MenuKind::Files { files, token_start },
+            rows,
+            selected: 0,
+        })
+    }
+
+    fn menu_next(&mut self, _: &MenuNext, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(menu) = &mut self.menu {
+            if menu.selected + 1 < menu.rows.len() {
+                menu.selected += 1;
+                cx.notify();
+            }
+        }
+    }
+
+    fn menu_previous(&mut self, _: &MenuPrevious, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(menu) = &mut self.menu {
+            if menu.selected > 0 {
+                menu.selected -= 1;
+                cx.notify();
+            }
+        }
+    }
+
+    fn menu_pick(&mut self, _: &MenuPick, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(at) = self.menu.as_ref().map(|menu| menu.selected) {
+            self.pick_menu(at, cx);
+        }
+    }
+
+    /// Escape while a menu is up closes it and nothing else — the text
+    /// stays, and escape's Interrupt meaning waits for the next press.
+    fn menu_dismiss(&mut self, _: &MenuDismiss, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.menu.take().is_some() {
+            self.menu_muted = true;
+            cx.notify();
+        }
+    }
+
+    /// The shared tail of ↵ and a row click: splice the pick into the line.
+    /// A command replaces the whole `/filter` with `/name ` — sent later as
+    /// plain text on Claude and translated to the typed skill item inside
+    /// the Codex Session; a file replaces the `@token` with `@rel/path `
+    /// and stages the comp's pill over it, whichever the provider. The
+    /// splice's own edit event closes the menu.
+    fn pick_menu(&mut self, at: usize, cx: &mut Context<Self>) {
+        let Some(menu) = self.menu.take() else {
+            return;
+        };
+        let Some(row) = menu.rows.get(at) else {
+            return;
+        };
+        let Some(pane) = self.panes.iter().find(|pane| pane.thread == menu.thread) else {
+            return;
+        };
+        let composer = pane.composer.clone();
+        match &menu.kind {
+            MenuKind::Commands => {
+                let insert = format!("/{} ", row.insert);
+                composer.update(cx, |composer, cx| {
+                    let whole = 0..composer.text().len();
+                    composer.splice(whole, &insert, cx);
+                });
+            }
+            MenuKind::Files { token_start, .. } => {
+                let token = format!("@{}", row.insert);
+                let start = *token_start;
+                composer.update(cx, |composer, cx| {
+                    let cursor = composer.cursor();
+                    composer.splice(start..cursor, &format!("{token} "), cx);
+                    // The pill is the comp's, whoever the provider is: the
+                    // wire stays untouched — Claude's CLI reads the `@path`
+                    // text itself, Codex's send derives its mention item —
+                    // the pick just paints the standing token.
+                    composer.stage_mention(SharedString::from(token), cx);
+                });
+            }
+        }
+        cx.notify();
+    }
+
+    /// The open menu's popover for this Pane, rows wired to their picks —
+    /// assembled here so its clicks land beside every other pointer wire
+    /// (the root selector's precedent); the Pane hangs it above the line.
+    fn composer_menu(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let thread = self.panes[index].thread;
+        let menu = self.menu.as_ref().filter(|menu| menu.thread == thread)?;
+        // A press on the popover's own dead space is not a press outside
+        // it: swallowed, so the root's dismissal never sees it.
+        let mut popover = pane::menu_popover().on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
+        );
+        for (at, row) in menu.rows.iter().enumerate() {
+            popover = popover.child(pane::menu_row(row, at == menu.selected).on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    view.pick_menu(at, cx);
+                }),
+            ));
+        }
+        let hints = match menu.kind {
+            MenuKind::Commands => "↑↓ select · ↵ run · esc dismiss",
+            MenuKind::Files { .. } => "↑↓ select · ↵ insert · esc dismiss",
+        };
+        popover = popover.child(pane::popover_footer(hints));
+        Some(popover.into_any_element())
+    }
+
     /// Rebuild the nav's parked rows. Called on park and revive — never per
     /// frame: each row costs a `Store::peek`, one header line off disk, and
     /// the SharedStrings built here are what every frame after reuses.
@@ -709,7 +959,7 @@ impl CockpitView {
         match self.cockpit.revive(thread) {
             Ok(()) => {
                 self.park_order.retain(|parked| *parked != thread);
-                self.panes.push(PaneView::new(thread, cx));
+                self.open_pane(thread, cx);
                 self.focus_pane(self.panes.len() - 1);
                 self.refresh_parked();
                 self.refresh_wall(thread);
@@ -767,7 +1017,7 @@ impl CockpitView {
             .unwrap_or(Provider::Claude);
         match self.cockpit.open(provider, workspace) {
             Ok(thread) => {
-                self.panes.push(PaneView::new(thread, cx));
+                self.open_pane(thread, cx);
                 self.focus_pane(self.panes.len() - 1);
                 self.refresh_wall(thread);
                 cx.notify();
@@ -981,6 +1231,107 @@ enum Answer {
     Always,
 }
 
+/// How many rows a Composer menu shows — a dense keyboard menu, not a
+/// browser; the fuzzy filter is how the operator reaches the rest.
+const MENU_ROWS_MAX: usize = 8;
+
+/// How many files the `@` walk will offer. Bounds one open, not a frame:
+/// the walk runs when the menu opens and keystrokes only re-filter it.
+const MENTION_FILE_CAP: usize = 2000;
+
+/// The `/` menu's filter: the whole line after a leading `/`, while it is
+/// still one token — the first whitespace ends the command and the menu.
+fn slash_filter(text: &str) -> Option<&str> {
+    let after = text.strip_prefix('/')?;
+    (!after.contains(char::is_whitespace)).then_some(after)
+}
+
+/// The `@` token the caret sits in: the `@`'s byte offset and the filter
+/// typed after it. The `@` must open a token — start of line or after
+/// whitespace — so `a@b.example` stays prose, exactly as the wire reads it.
+fn mention_token(text: &str, cursor: usize) -> Option<(usize, &str)> {
+    let head = text.get(..cursor)?;
+    let at = head.rfind('@')?;
+    let filter = &head[at + 1..];
+    if filter.contains(char::is_whitespace) {
+        return None;
+    }
+    let opens_token = at == 0 || text[..at].ends_with(char::is_whitespace);
+    opens_token.then_some((at, filter))
+}
+
+/// The `/` menu's rows: the Session's own commands through the fuzzy
+/// filter, best first (ties keep the provider's order), capped.
+fn command_rows(commands: &[ferrite_core::SessionCommand], filter: &str) -> Vec<pane::MenuRow> {
+    let mut scored: Vec<(i64, pane::MenuRow)> = commands
+        .iter()
+        .filter_map(|command| {
+            let (score, matched) = crate::fuzzy::matches(filter, &command.name)?;
+            Some((
+                score,
+                pane::MenuRow {
+                    insert: SharedString::from(command.name.clone()),
+                    name: SharedString::from(format!("/{}", command.name)),
+                    // Shifted past the `/` the row draws in front.
+                    matched: matched
+                        .into_iter()
+                        .map(|range| range.start + 1..range.end + 1)
+                        .collect(),
+                    detail: SharedString::from(command.description.clone()),
+                    prose_detail: true,
+                },
+            ))
+        })
+        .collect();
+    scored.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
+    scored
+        .into_iter()
+        .take(MENU_ROWS_MAX)
+        .map(|(_, row)| row)
+        .collect()
+}
+
+/// The `@` menu's rows: the walked files through the fuzzy filter. The
+/// match runs over the whole relative path; the row shows name and
+/// directory apart (PromptBox state 03), so highlights are clamped into
+/// the name they decorate.
+fn mention_rows(files: &[String], filter: &str) -> Vec<pane::MenuRow> {
+    let mut scored: Vec<(i64, pane::MenuRow)> = files
+        .iter()
+        .filter_map(|file| {
+            let (score, matched) = crate::fuzzy::matches(filter, file)?;
+            let split = file.rfind('/').map(|at| at + 1).unwrap_or(0);
+            let matched = matched
+                .into_iter()
+                .filter_map(|range| {
+                    let start = range.start.max(split);
+                    (range.end > split).then(|| start - split..range.end - split)
+                })
+                .collect();
+            Some((
+                score,
+                pane::MenuRow {
+                    insert: SharedString::from(file.clone()),
+                    name: SharedString::from(file[split..].to_string()),
+                    matched,
+                    detail: SharedString::from(if split == 0 {
+                        String::new()
+                    } else {
+                        file[..split - 1].to_string()
+                    }),
+                    prose_detail: false,
+                },
+            ))
+        })
+        .collect();
+    scored.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
+    scored
+        .into_iter()
+        .take(MENU_ROWS_MAX)
+        .map(|(_, row)| row)
+        .collect()
+}
+
 /// Columns for `count` Panes: the boards' own grids are wide, not square —
 /// the Cockpit comp lays 6 cells 3×2 and the Wall lays 24 cells 6×4 — so
 /// the column count follows a 3:2 grid, never wider than the wall's six.
@@ -1018,6 +1369,25 @@ impl Render for CockpitView {
         }) {
             self.selector = None;
         }
+        // And the Composer menu the same way (#23): it belongs to the
+        // focused Pane's line at L1, and the root selector outranks it.
+        if self.menu.as_ref().is_some_and(|menu| {
+            self.focused_thread() != Some(menu.thread)
+                || level != Level::Transcript
+                || self.selector.is_some()
+        }) {
+            self.menu = None;
+        }
+        // The open menu widens its Composer's own key context to
+        // ComposerMenu — the focused node, where enter and escape can win
+        // their tie against Submit and Interrupt. Render is the one
+        // chokepoint every open, pick, dismissal and heal passes.
+        let menu_thread = self.menu.as_ref().map(|menu| menu.thread);
+        for pane in &self.panes {
+            let open = Some(pane.thread) == menu_thread;
+            pane.composer
+                .update(cx, |composer, cx| composer.set_menu_open(open, cx));
+        }
 
         // Focus follows the operator, but only onto something this level
         // actually renders: focusing a Composer a wall cell never drew leaves
@@ -1035,10 +1405,14 @@ impl Render for CockpitView {
                 // opened it, and its keys live in its own context (#24).
                 // The heal above already pinned it to this Pane at L1.
                 _ if self.selector.is_some() => Some(self.selector_focus.clone()),
+                // At L1 the Composer keeps the keyboard even while a
+                // Decision pends: the card is part of its stack and the
+                // input stays live (PromptBox state 04) — y/n/a answer
+                // through the region's own Decision key context (#23).
+                Level::Transcript => Some(pane.composer.focus_handle(cx)),
                 _ if self.cockpit.pending(pane.thread).is_some() && level != Level::Wall => {
                     Some(pane.decision_focus.clone())
                 }
-                Level::Transcript => Some(pane.composer.focus_handle(cx)),
                 _ => None,
             })
             .unwrap_or_else(|| self.focus.clone());
@@ -1108,22 +1482,33 @@ impl Render for CockpitView {
             .on_action(cx.listener(Self::selector_previous))
             .on_action(cx.listener(Self::selector_pick))
             .on_action(cx.listener(Self::selector_dismiss))
+            .on_action(cx.listener(Self::menu_next))
+            .on_action(cx.listener(Self::menu_previous))
+            .on_action(cx.listener(Self::menu_pick))
+            .on_action(cx.listener(Self::menu_dismiss))
             // The root covers the window, so a release anywhere ends the
             // drag; the selection it made stays until the next press.
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|view, _: &MouseUpEvent, _, _| view.grip = None),
             )
-            // A press anywhere the popover did not swallow dismisses the
-            // open selector — Pane bodies, nav rows that move no focus, the
-            // strip, all of it. Bubble phase, deliberately: the chip's
-            // toggle and a row's pick stop propagation first, so this can
-            // never close what a deeper handler just opened or eat a pick
-            // (#24 review).
+            // A press anywhere the popovers did not swallow dismisses the
+            // open selector and the open Composer menu — Pane bodies, nav
+            // rows that move no focus, the strip, all of it. Bubble phase,
+            // deliberately: the chip's toggle and the rows' picks stop
+            // propagation first, so this can never close what a deeper
+            // handler just opened or eat a pick (#24 review). The menu
+            // mutes until the text moves, or the very next frame would
+            // reopen it over the same trigger.
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|view, _: &MouseDownEvent, _, cx| {
-                    if view.selector.take().is_some() {
+                    let mut dismissed = view.selector.take().is_some();
+                    if view.menu.take().is_some() {
+                        view.menu_muted = true;
+                        dismissed = true;
+                    }
+                    if dismissed {
                         cx.notify();
                     }
                 }),
@@ -1203,6 +1588,17 @@ impl CockpitView {
                     root_chip: (level == Level::Transcript)
                         .then(|| self.root_chip(index, cx))
                         .flatten(),
+                    // The open `/`/`@` popover — only L1 draws a Composer
+                    // to hang it over (#23).
+                    menu: (level == Level::Transcript)
+                        .then(|| self.composer_menu(index, cx))
+                        .flatten(),
+                    composer_empty: pane.composer.read(cx).is_empty(),
+                    // The meta row's mode chip — only where the meta row
+                    // renders.
+                    permission_mode: (level == Level::Transcript)
+                        .then(|| self.cockpit.permission_mode(pane.thread))
+                        .flatten(),
                     focused,
                     running: self.cockpit.busy(pane.thread),
                     selected,
@@ -1263,7 +1659,7 @@ impl CockpitView {
                     ),
             );
         }
-        popover = popover.child(pane::selector_footer());
+        popover = popover.child(pane::popover_footer("↑↓ move · ↵ pick · esc dismiss"));
         Some(
             div()
                 .relative()
@@ -3104,6 +3500,482 @@ mod tests {
                 view.cockpit.peek(thread).unwrap().session_project_root,
                 None,
                 "cleared on disk too"
+            );
+        });
+    }
+
+    // ------------------------------------------------- Composer menus (#23)
+
+    /// The comp's own slash-menu rows (PromptBox state 02), as a Session
+    /// would announce them.
+    fn menu_commands() -> Vec<ferrite_core::SessionCommand> {
+        [
+            ("code-review", "review branch vs main"),
+            ("commit", "stage + commit this pane's diff"),
+            ("compact", "summarize context"),
+            ("to-tickets", "plan → GitHub issues"),
+        ]
+        .into_iter()
+        .map(|(name, description)| ferrite_core::SessionCommand {
+            name: name.into(),
+            description: description.into(),
+            path: None,
+        })
+        .collect()
+    }
+
+    /// A binding checkout holding a couple of plain files for the `@` menu.
+    fn checkout_with_files(base: &std::path::Path) -> std::path::PathBuf {
+        let checkout = base.join("checkout");
+        std::fs::create_dir_all(checkout.join("src")).unwrap();
+        std::fs::write(checkout.join("README.md"), "r\n").unwrap();
+        std::fs::write(checkout.join("src").join("lib.rs"), "l\n").unwrap();
+        checkout
+    }
+
+    /// One Thread of `provider` bound to a checkout with files to mention.
+    fn bound_cockpit(name: &str, provider: Provider) -> (Cockpit, Fake, std::path::PathBuf) {
+        let base = scratch(name);
+        let checkout = checkout_with_files(&base);
+        let fake = Fake::default();
+        let store = Store::open(base.join("threads")).unwrap();
+        let mut cockpit = Cockpit::new(store, Box::new(fake.clone()));
+        cockpit
+            .open(
+                provider,
+                WorkspaceChoice::Main {
+                    checkout: checkout.clone(),
+                },
+            )
+            .unwrap();
+        (cockpit, fake, checkout)
+    }
+
+    fn composer_text(view: &gpui::Entity<CockpitView>, cx: &mut gpui::VisualTestContext) -> String {
+        view.read_with(cx, |view, cx| {
+            view.panes[0].composer.read(cx).text().to_string()
+        })
+    }
+
+    /// The line's triggers, parsed exactly as the wire reads them: `/` only
+    /// as a leading single token, `@` only opening a token under the caret.
+    #[test]
+    fn the_slash_and_mention_triggers_parse_the_line() {
+        assert_eq!(slash_filter("/"), Some(""));
+        assert_eq!(slash_filter("/co"), Some("co"));
+        assert_eq!(
+            slash_filter("/compact now"),
+            None,
+            "a space ends the command"
+        );
+        assert_eq!(slash_filter("say /compact"), None, "leading token only");
+
+        assert_eq!(mention_token("@", 1), Some((0, "")));
+        assert_eq!(mention_token("fix @Xte", 8), Some((4, "Xte")));
+        assert_eq!(
+            mention_token("fix @Xte now", 12),
+            None,
+            "the caret left the token"
+        );
+        assert_eq!(
+            mention_token("mail a@b.example", 16),
+            None,
+            "interior @ is prose"
+        );
+        assert_eq!(mention_token("no token here", 13), None);
+    }
+
+    /// The `/` rows: fuzzy-filtered, best first, highlights shifted past the
+    /// drawn `/`, the description riding as prose detail.
+    #[test]
+    #[allow(clippy::single_range_in_vec_init)] // assertions compare literal ranges
+    fn command_rows_filter_and_highlight_by_fuzzy_match() {
+        let commands = menu_commands();
+        let all = command_rows(&commands, "");
+        assert_eq!(all.len(), 4, "an empty filter lists everything");
+
+        let rows = command_rows(&commands, "co");
+        let names: Vec<&str> = rows.iter().map(|row| row.name.as_ref()).collect();
+        assert_eq!(
+            names,
+            ["/code-review", "/commit", "/compact"],
+            "to-tickets has no `co` subsequence"
+        );
+        assert_eq!(rows[0].matched, [1..3], "highlights sit past the drawn /");
+        assert_eq!(rows[0].insert.as_ref(), "code-review");
+        assert!(rows[0].prose_detail);
+        assert!(command_rows(&commands, "zzz").is_empty());
+    }
+
+    /// The `@` rows: name and directory split apart, the path the pick
+    /// inserts kept whole.
+    #[test]
+    #[allow(clippy::single_range_in_vec_init)]
+    fn mention_rows_split_name_from_directory() {
+        let files = vec!["README.md".to_string(), "src/lib.rs".to_string()];
+        let rows = mention_rows(&files, "");
+        assert_eq!(rows[0].name.as_ref(), "README.md");
+        assert_eq!(rows[0].detail.as_ref(), "");
+        assert_eq!(rows[1].name.as_ref(), "lib.rs");
+        assert_eq!(rows[1].detail.as_ref(), "src");
+        assert!(!rows[1].prose_detail);
+
+        let rows = mention_rows(&files, "lib");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].insert.as_ref(), "src/lib.rs");
+        assert_eq!(rows[0].matched, [0..3], "highlights land inside the name");
+    }
+
+    /// #23: `/` at the line's start opens the Session's own menu, typing
+    /// filters it, ↓/↵ pick — and the pick lands as `/name ` ready for args.
+    #[gpui::test]
+    fn typing_slash_opens_the_command_menu_and_enter_inserts_the_pick(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("slash-menu", 1);
+        bind_selector_keys(cx);
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        tick(cx);
+        // The Session announces its menu — the popover's only source.
+        fake.streams.borrow()[0]
+            .send(SessionEvent::Commands {
+                commands: menu_commands(),
+            })
+            .unwrap();
+        tick(cx);
+        view.read_with(cx, |view, _| {
+            assert!(
+                view.menu.is_none(),
+                "nothing opens until the operator types"
+            );
+        });
+
+        cx.simulate_input("/");
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            let menu = view.menu.as_ref().expect("/ opens the menu");
+            assert_eq!(menu.rows.len(), 4, "everything the Session listed");
+            assert_eq!(menu.selected, 0);
+        });
+
+        cx.simulate_input("co");
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            let menu = view.menu.as_ref().expect("still open while filtering");
+            let names: Vec<&str> = menu.rows.iter().map(|row| row.name.as_ref()).collect();
+            assert_eq!(names, ["/code-review", "/commit", "/compact"]);
+        });
+
+        cx.simulate_keystrokes("down");
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.menu.as_ref().expect("open").selected, 1);
+        });
+
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(composer_text(&view, cx), "/commit ");
+        view.read_with(cx, |view, _| {
+            assert!(view.menu.is_none(), "the pick closed the menu");
+        });
+    }
+
+    /// Escape closes the menu and only the menu: the text stays, escape's
+    /// Interrupt meaning waits for the next press, and more typing reopens.
+    #[gpui::test]
+    fn escape_dismisses_the_menu_keeps_the_text_and_typing_reopens(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("slash-escape", 1);
+        bind_selector_keys(cx);
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        tick(cx);
+        fake.streams.borrow()[0]
+            .send(SessionEvent::Commands {
+                commands: menu_commands(),
+            })
+            .unwrap();
+        tick(cx);
+
+        cx.simulate_input("/c");
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| assert!(view.menu.is_some()));
+
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert!(view.menu.is_none(), "escape dismissed the popover");
+        });
+        assert_eq!(composer_text(&view, cx), "/c", "and kept the text");
+
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert!(
+                view.menu.is_none(),
+                "a second escape is Interrupt, not a reopen"
+            );
+        });
+
+        cx.simulate_input("o");
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert!(view.menu.is_some(), "typing again reopens the menu");
+        });
+    }
+
+    /// #23: `@` opens the file menu over the Thread's workspace binding;
+    /// the pick lands as `@relative/path ` in the line.
+    #[gpui::test]
+    fn typing_at_completes_files_from_the_workspace_binding(cx: &mut TestAppContext) {
+        let (core, _fake, _checkout) = bound_cockpit("mention-menu", Provider::Claude);
+        bind_selector_keys(cx);
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        tick(cx);
+
+        cx.simulate_input("read ");
+        cx.simulate_input("@");
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            let menu = view.menu.as_ref().expect("@ opens the file menu");
+            let names: Vec<&str> = menu.rows.iter().map(|row| row.name.as_ref()).collect();
+            assert_eq!(names, ["README.md", "lib.rs"], "the walk, in order");
+        });
+
+        cx.simulate_input("li");
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            let menu = view.menu.as_ref().expect("open");
+            assert_eq!(menu.rows.len(), 1, "the fuzzy filter narrowed it");
+            assert_eq!(menu.rows[0].insert.as_ref(), "src/lib.rs");
+        });
+
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(composer_text(&view, cx), "read @src/lib.rs ");
+        view.read_with(cx, |view, cx| {
+            assert!(view.menu.is_none());
+            // The pill is provider-agnostic: a Claude pick paints it too —
+            // the wire stays plain `@path` text the CLI itself reads.
+            assert_eq!(
+                view.panes[0].composer.read(cx).mentions(),
+                [SharedString::from("@src/lib.rs")],
+                "the picked token is staged as the comp's pill"
+            );
+        });
+    }
+
+    /// A Thread with no binding has nothing to walk: `@` opens nothing and
+    /// typing carries on.
+    #[gpui::test]
+    fn a_thread_without_a_binding_opens_no_file_menu(cx: &mut TestAppContext) {
+        let dir = scratch("mention-unbound");
+        let thread_dir = dir.join("9");
+        std::fs::create_dir_all(&thread_dir).unwrap();
+        std::fs::write(
+            thread_dir.join("log.jsonl"),
+            concat!(
+                r#"{"schema":2,"provider":"claude"}"#,
+                "\n",
+                r#"{"type":"prompt","text":"hello"}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+        let fake = Fake::default();
+        let store = Store::open(&dir).unwrap();
+        let mut core = Cockpit::new(store, Box::new(fake));
+        core.revive(ThreadId::new(9)).unwrap();
+        bind_selector_keys(cx);
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        tick(cx);
+
+        cx.simulate_input("@");
+        cx.run_until_parked();
+
+        view.read_with(cx, |view, _| {
+            assert!(view.menu.is_none(), "no binding, no popover");
+        });
+        assert_eq!(composer_text(&view, cx), "@", "typing was not eaten");
+    }
+
+    /// #24's dismissal law holds for the menus: a press the popover did not
+    /// swallow closes it, and it stays shut until the text moves.
+    #[gpui::test]
+    fn a_press_on_the_transcript_dismisses_the_open_menu(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("menu-press-dismiss", 1);
+        bind_selector_keys(cx);
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        tick(cx);
+        fake.streams.borrow()[0]
+            .send(SessionEvent::Commands {
+                commands: menu_commands(),
+            })
+            .unwrap();
+        tick(cx);
+        cx.simulate_input("/");
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| assert!(view.menu.is_some()));
+
+        // The middle of the Pane's transcript — nowhere near the popover.
+        cx.simulate_mouse_down(
+            gpui::point(px(600.), px(200.)),
+            gpui::MouseButton::Left,
+            gpui::Modifiers::none(),
+        );
+        cx.run_until_parked();
+
+        view.read_with(cx, |view, _| {
+            assert!(view.menu.is_none(), "the press dismissed the popover");
+        });
+        assert_eq!(composer_text(&view, cx), "/", "the text survived the press");
+    }
+
+    /// #23: while a Decision pends at L1 the keyboard stays in the Composer
+    /// — the input is live (typing queues, since the turn is running) and
+    /// the empty line makes y the keycap's answer.
+    #[gpui::test]
+    fn a_pending_decision_keeps_the_composer_live_and_an_empty_line_answers(
+        cx: &mut TestAppContext,
+    ) {
+        let (core, fake) = cockpit("decision-live", 1);
+        bind_selector_keys(cx);
+        cx.update(|cx| {
+            cx.bind_keys([KeyBinding::new("y", Allow, Some("Decision"))]);
+        });
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        tick(cx);
+        let thread = view.read_with(cx, |view, _| view.panes[0].thread);
+        fake.streams.borrow()[0]
+            .send(SessionEvent::ToolStarted {
+                id: "toolu_1".into(),
+                name: "Write".into(),
+                input: serde_json::json!({ "file_path": "ferrite-perm.txt" }),
+            })
+            .unwrap();
+        fake.streams.borrow()[0]
+            .send(decision("perm_live"))
+            .unwrap();
+        tick(cx);
+        view.read_with(cx, |view, _| {
+            assert!(view.cockpit.pending(thread).is_some(), "the card is up");
+            assert!(view.cockpit.busy(thread), "the turn is running");
+        });
+
+        // The input is still live: typing lands, enter queues behind the
+        // turn. (The first key of an empty line is where y/n/a mean their
+        // keycaps, so the sentence starts past them.)
+        cx.simulate_input("fix the tests too");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.cockpit.queued(thread), Some("fix the tests too"));
+            assert!(
+                view.cockpit.pending(thread).is_some(),
+                "typing answered nothing"
+            );
+        });
+
+        // Emptied, y is the keycap's answer.
+        cx.simulate_keystrokes("y");
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert!(
+                view.cockpit.pending(thread).is_none(),
+                "y on the empty line answered the Decision"
+            );
+        });
+    }
+
+    /// The other half of the y/n/a rule: with text on the line they are
+    /// letters — an operator half-way through a word keeps typing it.
+    #[gpui::test]
+    fn the_answer_keys_stay_letters_while_the_line_holds_text(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("decision-letters", 1);
+        bind_selector_keys(cx);
+        cx.update(|cx| {
+            cx.bind_keys([KeyBinding::new("y", Allow, Some("Decision"))]);
+        });
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        tick(cx);
+        let thread = view.read_with(cx, |view, _| view.panes[0].thread);
+        fake.streams.borrow()[0]
+            .send(decision("perm_type"))
+            .unwrap();
+        tick(cx);
+
+        cx.simulate_input("wait");
+        cx.simulate_keystrokes("y");
+        cx.run_until_parked();
+
+        assert_eq!(
+            composer_text(&view, cx),
+            "waity",
+            "y typed instead of answering"
+        );
+        view.read_with(cx, |view, _| {
+            assert!(
+                view.cockpit.pending(thread).is_some(),
+                "the Decision is still waiting"
+            );
+        });
+    }
+
+    /// #23: the Session's announced permission mode becomes the meta row's
+    /// chip state — display-only, absent until announced, and rendered
+    /// through the same frame the assertions ride.
+    #[gpui::test]
+    fn the_announced_permission_mode_reaches_the_meta_row_state(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("mode-chip", 1);
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        tick(cx);
+        let thread = view.read_with(cx, |view, _| view.panes[0].thread);
+        view.read_with(cx, |view, _| {
+            assert_eq!(
+                view.cockpit.permission_mode(thread),
+                None,
+                "no chip is invented before the Session speaks"
+            );
+        });
+
+        fake.streams.borrow()[0]
+            .send(SessionEvent::PermissionMode {
+                mode: "acceptEdits".into(),
+            })
+            .unwrap();
+        tick(cx);
+
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.cockpit.permission_mode(thread), Some("acceptEdits"));
+        });
+    }
+
+    /// #23: on a Codex Thread a picked file also stages the @-pill — the
+    /// send will carry the typed mention item, and the input paints the
+    /// token as the comp draws it.
+    #[gpui::test]
+    fn picking_a_mention_on_a_codex_thread_stages_the_pill(cx: &mut TestAppContext) {
+        let (core, _fake, _checkout) = bound_cockpit("mention-codex", Provider::Codex);
+        bind_selector_keys(cx);
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        tick(cx);
+
+        cx.simulate_input("@li");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+
+        assert_eq!(composer_text(&view, cx), "@src/lib.rs ");
+        view.read_with(cx, |view, cx| {
+            assert_eq!(
+                view.panes[0].composer.read(cx).mentions(),
+                [SharedString::from("@src/lib.rs")],
+                "the pill token is staged for the paint"
             );
         });
     }

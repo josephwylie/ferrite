@@ -41,6 +41,31 @@ pub(super) fn parse_capabilities(line: &str, request_id: &str) -> Option<ClaudeC
                     .collect()
             })
             .unwrap_or_default(),
+        // The CLI's effective menu — one list mixing built-ins, skills,
+        // project commands and plugins, `skillOverrides` already applied
+        // (#23 wire study §1). Entry shape `{name, description, argumentHint,
+        // aliases?}`; only what the `/` menu shows is lifted, and an entry
+        // with no name could never be typed, so it is skipped.
+        commands: body
+            .get("commands")
+            .and_then(Value::as_array)
+            .map(|commands| {
+                commands
+                    .iter()
+                    .filter_map(|command| {
+                        Some(crate::SessionCommand {
+                            name: command.get("name")?.as_str()?.to_string(),
+                            description: command
+                                .get("description")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_string(),
+                            path: None,
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
     })
 }
 
@@ -334,6 +359,12 @@ mod tests {
             // the process exits, so no capture can contain it. Proved instead
             // by `stdout_eof_closes_the_session_with_the_exit_status`.
             SessionEvent::Closed { .. } => return None,
+            // Not turn lines either: the menu and the permission mode ride
+            // the initialize handshake the reader correlates itself. Proved
+            // by `the_capability_response_carries_the_command_menu` below and
+            // the session test that watches the reader announce them.
+            SessionEvent::Commands { .. } => return None,
+            SessionEvent::PermissionMode { .. } => return None,
             // Codex's own concepts (#9). The superset carries them; the Claude
             // CLI never emits one, so they are proved by Codex's fixtures.
             SessionEvent::ReasoningSummaryDelta { .. } | SessionEvent::TokenUsage { .. } => {
@@ -597,6 +628,32 @@ mod tests {
         .expect("the capture answers req_1");
         assert_eq!(capabilities.permission_mode, "bypassPermissions");
         assert!(capabilities.models.iter().any(|model| model == "haiku"));
+    }
+
+    /// #23: the same handshake line carries the CLI's whole effective slash
+    /// menu — the `/` popover's one source, never a static list. The counts
+    /// and entries are the committed capture's own.
+    #[test]
+    fn the_capability_response_carries_the_command_menu() {
+        let capabilities = parse_capabilities(
+            include_str!("../../../tests/fixtures/claude-initialize-2.1.243.jsonl").trim_end(),
+            "req_1",
+        )
+        .expect("the capture answers req_1");
+
+        assert_eq!(capabilities.commands.len(), 47, "the capture's own count");
+        let compact = capabilities
+            .commands
+            .iter()
+            .find(|command| command.name == "compact")
+            .expect("the built-ins are in the one list");
+        assert_eq!(
+            compact.description,
+            "Free up context by summarizing the conversation so far"
+        );
+        // Claude commands are invoked as plain `/name args` text — there is
+        // no path for a typed item to carry.
+        assert!(capabilities.commands.iter().all(|c| c.path.is_none()));
     }
 
     /// The response to somebody else's request is not this Session's answer.

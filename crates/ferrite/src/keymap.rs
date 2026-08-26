@@ -103,6 +103,20 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
             "cockpit::SelectorDismiss",
             Some("RootSelector"),
         ),
+        // #23: the Composer's `/` and `@` popovers. Same tie-break law as
+        // the RootSelector rows above: these sit BELOW the bare enter and
+        // escape rows so gpui's same-depth precedence hands the keys to the
+        // open menu — enter picks instead of submitting, escape dismisses
+        // instead of interrupting — and escape with no popover keeps its
+        // existing meaning.
+        ("up".into(), "cockpit::MenuPrevious", Some("ComposerMenu")),
+        ("down".into(), "cockpit::MenuNext", Some("ComposerMenu")),
+        ("enter".into(), "cockpit::MenuPick", Some("ComposerMenu")),
+        (
+            "escape".into(),
+            "cockpit::MenuDismiss",
+            Some("ComposerMenu"),
+        ),
     ]
 }
 
@@ -197,6 +211,44 @@ mod tests {
             for (bare, scoped) in [
                 ("cockpit::Submit", "cockpit::SelectorPick"),
                 ("cockpit::Interrupt", "cockpit::SelectorDismiss"),
+            ] {
+                let at = |wanted: &str| {
+                    table
+                        .iter()
+                        .position(|(_, action, _)| *action == wanted)
+                        .unwrap_or_else(|| panic!("{wanted} is not in the table"))
+                };
+                assert!(
+                    at(bare) < at(scoped),
+                    "{scoped} must be bound after {bare} ({platform:?})"
+                );
+            }
+        }
+    }
+
+    /// #23: the Composer menus' keys exist on both platforms, only inside
+    /// the ComposerMenu key context — a bare arrow key must never steal
+    /// from anything else — and their enter/escape rows sit after the bare
+    /// Submit/Interrupt rows so gpui's same-depth tie-break picks them
+    /// while a popover is up. Escape with no popover keeps its meaning.
+    #[test]
+    fn the_composer_menu_keys_are_scoped_to_its_context_on_both_platforms() {
+        for platform in [Platform::Mac, Platform::Windows] {
+            let table = bindings(platform);
+            for (key, action) in [
+                ("up", "cockpit::MenuPrevious"),
+                ("down", "cockpit::MenuNext"),
+                ("enter", "cockpit::MenuPick"),
+                ("escape", "cockpit::MenuDismiss"),
+            ] {
+                assert!(
+                    table.contains(&(key.into(), action, Some("ComposerMenu"))),
+                    "{platform:?} is missing {key} for {action} in ComposerMenu"
+                );
+            }
+            for (bare, scoped) in [
+                ("cockpit::Submit", "cockpit::MenuPick"),
+                ("cockpit::Interrupt", "cockpit::MenuDismiss"),
             ] {
                 let at = |wanted: &str| {
                     table
