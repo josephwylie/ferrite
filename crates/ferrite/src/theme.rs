@@ -1,8 +1,8 @@
 //! The Aperture visual system — every token the comps define, named once.
 //!
-//! Values are transcribed from `docs/design/concept.md` §1 (itself extracted
-//! verbatim from the canon artboards) with the role names of
-//! `docs/design/sidebar-and-impl.md` §1. Render code (`pane.rs`,
+//! Values are transcribed from the design canon on issue #22 (§1 of the
+//! Concept-page spec, extracted verbatim from the canon artboards) with the
+//! role names of the sidebar/impl spec, also on #22. Render code (`pane.rs`,
 //! `cockpit.rs`, `composer.rs`, `nav.rs`) imports from here and holds no
 //! color literal of its own; core stays color-blind.
 //!
