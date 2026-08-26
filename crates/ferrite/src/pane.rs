@@ -912,7 +912,7 @@ fn composer_region(view: &PaneView, transcript: &Transcript, stack: ComposerStac
                 .flex()
                 .items_center()
                 .text_color(rgb(INK_MUTED))
-                .child(placeholder(&view.name)),
+                .child(placeholder(&view.name, offers_import(Some(transcript)))),
         );
     }
     let mut input = div()
@@ -1003,9 +1003,32 @@ fn composer_region(view: &PaneView, transcript: &Transcript, stack: ComposerStac
 
 /// The idle line's ghost text, PromptBox state 01's pattern verbatim:
 /// `message ‹thread-name› — hints`. The hints it advertises are the ones
-/// this Composer actually answers.
-fn placeholder(name: &SharedString) -> SharedString {
-    SharedString::from(format!("message {name} — / commands · @ files · ↵ send"))
+/// this Composer actually answers — which is why the import hint only
+/// appears while the Thread still offers adoption (#11).
+fn placeholder(name: &SharedString, offers_import: bool) -> SharedString {
+    let import = if offers_import {
+        " · /import adopt a CLI session"
+    } else {
+        ""
+    };
+    SharedString::from(format!(
+        "message {name} — / commands · @ files · ↵ send{import}"
+    ))
+}
+
+/// #11: whether this Thread still offers adopting a CLI session — no
+/// conversation yet (nothing in the transcript beyond Ferrite's own notices
+/// and bookkeeping) and at rest. One predicate for every surface that opens
+/// the door — the placeholder hint, the `/` menu's local entry, and the
+/// pick that closes the blank Thread — so no two can disagree.
+pub fn offers_import(transcript: Option<&Transcript>) -> bool {
+    transcript.is_some_and(|transcript| {
+        transcript.status() == Status::Idle
+            && transcript
+                .blocks()
+                .iter()
+                .all(|block| matches!(block.body, Body::Notice(_) | Body::Meta(_)))
+    })
 }
 
 /// The meta row's mode chip text: the comp's own name for acceptEdits
@@ -2250,5 +2273,47 @@ mod tests {
         assert_eq!(meter(9, 20).as_ref(), "9/20");
         assert_eq!(meter(5, 4).as_ref(), "▰▰▰▰ 4/4");
         assert_eq!(meter(0, 0).as_ref(), "");
+    }
+
+    /// #11: import is offered exactly while a Thread has no conversation —
+    /// at rest, with nothing in its transcript but Ferrite's own notices
+    /// and bookkeeping. The first prompt retires the offer; a refused pick
+    /// (a Notice) does not.
+    #[test]
+    fn import_is_offered_only_while_the_thread_has_no_conversation() {
+        assert!(!offers_import(None), "a parked Pane offers nothing");
+
+        let mut fresh = Transcript::default();
+        assert!(offers_import(Some(&fresh)));
+        fresh.apply(Input::Notice("cannot import x: not a session file".into()));
+        fresh.apply(Input::Revived);
+        assert!(
+            offers_import(Some(&fresh)),
+            "Ferrite's own out-of-band lines keep the door open"
+        );
+        fresh.apply(Input::Prompt("hello".into()));
+        assert!(
+            !offers_import(Some(&fresh)),
+            "the first prompt is a conversation"
+        );
+
+        let mut streaming = Transcript::default();
+        streaming.apply(Input::Event(SessionEvent::TextDelta { text: "x".into() }));
+        assert!(!offers_import(Some(&streaming)), "not at rest");
+    }
+
+    /// #11: the idle line's second hint — only where the door is open, and
+    /// never displacing the hints every Composer answers.
+    #[test]
+    fn the_placeholder_advertises_import_only_on_a_fresh_thread() {
+        let name = SharedString::from("thread-01");
+        let plain = placeholder(&name, false);
+        let offering = placeholder(&name, true);
+        assert!(!plain.contains("/import"), "{plain}");
+        assert!(offering.contains("/import"), "{offering}");
+        for hints in [&plain, &offering] {
+            assert!(hints.contains("/ commands"), "{hints}");
+            assert!(hints.contains("↵ send"), "{hints}");
+        }
     }
 }

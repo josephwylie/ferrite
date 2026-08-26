@@ -406,6 +406,16 @@ impl Cockpit {
         Ok(())
     }
 
+    /// Adopt a CLI session file as a Thread of this cockpit (#11) — the
+    /// import module's work, against this cockpit's own store. The Thread
+    /// is durable and parked when this returns; `revive` opens it like any
+    /// other, history replayed and the Session resuming the file's own
+    /// session id. A refusal is the import module's, unchanged: readable,
+    /// and no Thread was created.
+    pub fn import(&self, path: &Path) -> Result<ThreadId, crate::import::ImportError> {
+        crate::import::import(&self.store, path)
+    }
+
     /// Send a prompt now: on the wire, in the transcript, in the log. A
     /// Thread whose Session was ended under it — a changed session project
     /// root, a failed watchdog restart — respawns here through the same
@@ -1712,6 +1722,73 @@ mod tests {
             fake.resumed.borrow().last().unwrap().as_deref(),
             Some("sess-1")
         );
+    }
+
+    /// #11: the running cockpit's own import door. The session file is
+    /// adopted into this cockpit's store — durable and parked when the call
+    /// returns — and `revive` opens it like any parked Thread, history
+    /// replayed and the new Session told where to resume.
+    #[test]
+    fn a_session_file_imports_through_the_cockpits_own_door() {
+        let (mut cockpit, fake) = cockpit("import-door");
+        let dir = scratch("import-door-file");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("adopted.jsonl");
+        std::fs::write(
+            &path,
+            concat!(
+                r#"{"type":"user","sessionId":"door-9c1d","cwd":"/workspace","message":{"role":"user","content":"first question"}}"#,
+                "\n",
+                r#"{"type":"assistant","sessionId":"door-9c1d","message":{"model":"claude-haiku-4-5","content":[{"type":"text","text":"first answer"}]}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+
+        let thread = cockpit.import(&path).unwrap();
+
+        assert!(
+            cockpit.parked().unwrap().contains(&thread),
+            "the imported Thread is durable and parked, ready to revive"
+        );
+        cockpit.revive(thread).unwrap();
+        let transcript = cockpit.transcript(thread).unwrap();
+        assert_eq!(transcript.session_id(), Some("door-9c1d"));
+        assert!(
+            transcript
+                .blocks()
+                .iter()
+                .any(|block| matches!(&block.body, Body::Prompt(text) if text == "first question")),
+            "the conversation replays: {:?}",
+            transcript.blocks()
+        );
+        // The whole point of adoption: the new Session resumes the file's
+        // own session id.
+        assert_eq!(
+            fake.resumed.borrow().last().unwrap().as_deref(),
+            Some("door-9c1d")
+        );
+    }
+
+    /// A file that is not a session file is refused by the import module —
+    /// through this door, with the same readable error and no Thread.
+    #[test]
+    fn the_import_door_passes_a_refusal_through_unchanged() {
+        let (cockpit, _fake) = cockpit("import-door-refused");
+        let dir = scratch("import-door-refused-file");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("junk.jsonl");
+        std::fs::write(&path, "not a session file\n").unwrap();
+
+        let refused = cockpit.import(&path);
+        assert!(
+            matches!(
+                refused,
+                Err(crate::import::ImportError::Unrecognized { .. })
+            ),
+            "got {refused:?}"
+        );
+        assert!(cockpit.parked().unwrap().is_empty(), "no Thread was left");
     }
 
     #[test]
