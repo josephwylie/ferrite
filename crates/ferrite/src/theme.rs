@@ -31,10 +31,9 @@ pub const HAIRLINE: u32 = 0xffffff0b;
 /// layer of the popover elevation recipe (the root selector, #24; #23's
 /// slash / @ menus will share it).
 pub const RING_FAINT: u32 = 0xffffff0d;
-/// `rgba(255,255,255,0.07)` — Pane/card borders AND the progress-bar track.
+/// `rgba(255,255,255,0.07)` — Pane/card borders.
 pub const EDGE: u32 = 0xffffff12;
-/// `rgba(255,255,255,0.12)` — strong borders: Composer top, keycaps,
-/// markdown-heading underline.
+/// `rgba(255,255,255,0.12)` — strong borders: Composer top, keycaps.
 pub const EDGE_STRONG: u32 = 0xffffff1f;
 
 // -------------------------------------------------------------------- ink
@@ -52,7 +51,7 @@ pub const INK_FAINT: u32 = 0x54575f;
 
 // -------------------------------------------------------- accent + signals
 
-/// `#c7ccd6` — THE accent: ❯ glyph, links, cursor, progress fill, focus ring.
+/// `#c7ccd6` — THE accent: ❯ glyph, links, cursor, ▰▱ meters, focus ring.
 pub const ACCENT: u32 = 0xc7ccd6;
 /// `#d7dbe3` — link hover, the only hover state the comps draw. Reserved:
 /// v1 renders paths inert (sidebar-and-impl §4.3 — real links are a later
@@ -63,9 +62,7 @@ pub const ACCENT_HOVER: u32 = 0xd7dbe3;
 /// pill (both arrive with #23's Composer behaviors); today it grounds the
 /// selection wash (`SELECTION`).
 pub const ACCENT_WASH: u32 = 0xc7ccd624;
-/// `rgba(199,204,214,0.40)` — link underline color. Reserved with
-/// `ACCENT_HOVER`.
-#[allow(dead_code)]
+/// `rgba(199,204,214,0.40)` — link underline color (inert links, #22 C13).
 pub const ACCENT_UNDERLINE: u32 = 0xc7ccd666;
 /// `#7fc99b` — green: running LED, pass badge, diff `+`.
 pub const GOOD: u32 = 0x7fc99b;
@@ -145,6 +142,8 @@ pub const TEXT_BODY: f32 = 12.5;
 pub const TEXT_INPUT: f32 = 13.0;
 /// 13.5px — Dense markdown section heading (weight 700).
 pub const TEXT_HEADING: f32 = 13.5;
+/// 16px — the permission card's ⚠, sized to span both text lines (#22 D19).
+pub const TEXT_ALERT_GLYPH: f32 = 16.0;
 
 /// 1.45 — Dense transcript line height (canonical).
 pub const LINE_TRANSCRIPT: f32 = 1.45;
@@ -159,8 +158,17 @@ pub const LINE_CODE: f32 = 1.5;
 /// grid draws gap 8 / padding 10 — a 2px deviation accepted for totality.)
 pub const GRID_GAP: f32 = 6.0;
 pub const GRID_PAD: f32 = 8.0;
-/// 34px — the Cockpit strip (wall header).
+/// 34px — the Cockpit strip (wall header). With the titlebar blended into
+/// the app (#22 D24) the strip owns the traffic-light band: its left inset
+/// clears the buttons on macOS, and the buttons center in its height.
 pub const STRIP_H: f32 = 34.0;
+#[cfg(target_os = "macos")]
+pub const STRIP_PAD_L: f32 = 76.0;
+#[cfg(not(target_os = "macos"))]
+pub const STRIP_PAD_L: f32 = 12.0;
+/// Where the macOS traffic lights sit inside the strip's band.
+pub const TRAFFIC_X: f32 = 12.0;
+pub const TRAFFIC_Y: f32 = 11.0;
 /// 30px — the wall's pinned legend.
 pub const LEGEND_H: f32 = 30.0;
 /// 28px — the Dense single-row Pane header.
@@ -188,15 +196,22 @@ pub const COMPOSER_PAD_X: f32 = 14.0;
 /// 6px LED dot (Dense header, Cockpit cells) / 5px on the wall.
 pub const LED: f32 = 6.0;
 pub const LED_WALL: f32 = 5.0;
-/// 6px progress pill (L2/L1) / 5px on the wall; track `EDGE`, fill `ACCENT`.
-pub const BAR_H: f32 = 6.0;
-pub const BAR_H_WALL: f32 = 5.0;
 /// Radii: 3 inline code/code blocks · 4 chips/keycaps/badges · 5 cards.
 pub const R_TIGHT: f32 = 3.0;
 pub const R_CHIP: f32 = 4.0;
 pub const R_CARD: f32 = 5.0;
+/// 13px — the header's context ring (the donut showing window fill).
+pub const USAGE_RING_D: f32 = 13.0;
+/// 2px — the context ring's stroke.
+pub const USAGE_RING_W: f32 = 2.0;
+/// 23px — the pane header's – / ✕ window controls (the Main comp's icon
+/// buttons).
+pub const CONTROL_BTN: f32 = 23.0;
 /// 1.5px — the inset focus/Decision/blocker ring.
 pub const RING_W: f32 = 1.5;
+/// 3px — the state ring's inset when it nests inside the focus ring
+/// (#22 D16): the outer ring's width plus an equal gap.
+pub const RING_INSET: f32 = 3.0;
 /// 14px — the transcript glyph gutter (❯ / ⏺ / list numbers).
 pub const GUTTER_W: f32 = 14.0;
 /// 22px — indent under a tool row (⎿ continuations, bare diffs, markdown).

@@ -113,11 +113,15 @@ pub fn header(threads: usize, waiting: usize, collapsed: bool) -> Div {
             .child(SharedString::from(threads.to_string())),
     );
     if waiting > 0 {
-        count = count.child(
-            div()
-                .text_color(rgb(WAIT))
-                .child(SharedString::from(format!("· {waiting} waiting"))),
-        );
+        // The `·` is the seam between the two counts, not part of the amber
+        // fragment (#22 A5).
+        count = count
+            .child(div().text_color(rgb(INK_FAINT)).child("·"))
+            .child(
+                div()
+                    .text_color(rgb(WAIT))
+                    .child(SharedString::from(format!("{waiting} waiting"))),
+            );
     }
     row.justify_between()
         .px(px(10.))
@@ -149,23 +153,31 @@ pub fn running_row(row: &RunningRow) -> Stateful<Div> {
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(rgb(ink))
                 .child(row.name.clone()),
-        )
-        .child(
-            div()
-                .min_w_0()
-                .truncate()
-                .text_size(px(10.))
-                .text_color(rgb(INK_MUTED))
-                .child(row.binding.clone()),
-        )
-        .child(div().flex_1())
-        .child(
-            div()
-                .flex_shrink_0()
-                .text_size(px(9.5))
-                .text_color(rgb(INK_FAINT))
-                .child(row.provider),
         );
+    // The chip carries the whole signal: a row wearing it drops the binding
+    // and provider hints rather than squeezing all three to fragments
+    // (#22 A3).
+    if !row.needs_you {
+        line = line
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(10.))
+                    .text_color(rgb(INK_MUTED))
+                    .child(row.binding.clone()),
+            )
+            .child(div().flex_1())
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .text_size(px(9.5))
+                    .text_color(rgb(INK_FAINT))
+                    .child(row.provider),
+            );
+    } else {
+        line = line.child(div().flex_1());
+    }
     if row.needs_you {
         line = line.child(needs_you_chip());
     } else if let Some(todos) = row.todos {

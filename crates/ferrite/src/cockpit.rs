@@ -104,6 +104,10 @@ pub struct CockpitView {
     /// cmd-b (#21): the nav folded to its 40px LED rail. In memory only —
     /// a preference store is not this ticket.
     nav_collapsed: bool,
+    /// The Thread whose context ring the pointer is on — its hover card
+    /// shows while this is set (#22 C12). Render state only, healed by the
+    /// ring not rendering.
+    hovered_usage: Option<ThreadId>,
     /// The open session-project-root selector, or None (#24). At most one
     /// for the whole cockpit, always on the focused Pane; render self-heals
     /// it shut when the operator leaves that Pane or the header that
@@ -254,6 +258,7 @@ impl CockpitView {
             grip: None,
             selection: None,
             nav_collapsed: false,
+            hovered_usage: None,
             selector: None,
             selector_focus: cx.focus_handle(),
             parked_rows: Vec::new(),
@@ -1265,6 +1270,12 @@ impl CockpitView {
         let Some(thread) = self.focused_thread() else {
             return;
         };
+        self.park_thread(thread, cx);
+    }
+
+    /// Park one Thread — cmd-w's whole body, shared with the header's ✕
+    /// control so the pointer and the keyboard close through one door.
+    fn park_thread(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
         if let Err(e) = self.cockpit.park(thread) {
             eprintln!("ferrite: thread {thread} did not park cleanly: {e}");
         }
@@ -1796,7 +1807,7 @@ impl Render for CockpitView {
 
         div()
             .flex()
-            .flex_row()
+            .flex_col()
             .size_full()
             .bg(rgb(crate::theme::GROUND))
             .font_family(crate::theme::FONT_MONO)
@@ -1868,24 +1879,36 @@ impl Render for CockpitView {
             .capture_any_mouse_down(cx.listener(|view, _: &MouseDownEvent, _, _| {
                 view.grip = None;
             }))
-            // The nav runs the window's full height on the left; the strip
-            // and the grid share the rest. Fullscreen keeps it visible — a
-            // deliberate override of sidebar-and-impl.md §3 ("the nav hides
-            // entirely"): the fullscreened Pane spans the area right of the
-            // nav, so the swarm stays one click away (#21).
-            .child(self.nav(cx))
+            // The strip spans the window and owns the blended titlebar band
+            // (#22 D24); below it the nav runs the remaining height on the
+            // left and the grid takes the rest. Fullscreen keeps the nav
+            // visible — a deliberate override of sidebar-and-impl.md §3
+            // ("the nav hides entirely"): the fullscreened Pane spans the
+            // area right of the nav, so the swarm stays one click away
+            // (#21).
+            .child(self.strip(attention))
             .child(
                 div()
                     .flex()
-                    .flex_col()
+                    .flex_row()
                     .flex_1()
-                    .min_w_0()
                     .min_h_0()
-                    .child(self.strip(attention))
-                    .child(grid)
-                    // The wall's pinned legend teaches the encoding; the
-                    // nearer levels have words and do not need it.
-                    .children((level == Level::Wall && fullscreen.is_none()).then(legend)),
+                    .child(self.nav(cx))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_w_0()
+                            .min_h_0()
+                            .child(grid)
+                            // The pinned legend teaches the encoding at the
+                            // instrument levels; L1 has words and does not
+                            // need it (#22 D18).
+                            .children(
+                                (level != Level::Transcript && fullscreen.is_none()).then(legend),
+                            ),
+                    ),
             )
     }
 }
@@ -1949,9 +1972,83 @@ impl CockpitView {
                     focused,
                     running: self.cockpit.busy(pane.thread),
                     selected,
+                    timings: self.cockpit.tool_timings(pane.thread),
+                    // The ring and the window controls live on the L1
+                    // header only, like the root chip.
+                    usage_ring: (level == Level::Transcript)
+                        .then(|| self.usage_ring(index, cx))
+                        .flatten(),
+                    controls: (level == Level::Transcript).then(|| self.pane_controls(index, cx)),
                 },
                 level,
             ))
+    }
+
+    /// The header's context ring with its hover card (#22 C12) — assembled
+    /// here so the hover state lives beside every other pointer wire; the
+    /// Pane only places it. None until the provider reports a window.
+    fn usage_ring(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let thread = self.panes[index].thread;
+        let usage = self.cockpit.transcript(thread)?.usage()?;
+        let window = usage.context_window.filter(|window| *window > 0)?;
+        let fraction = usage.total_tokens as f32 / window as f32;
+        let mut ring = div()
+            .id(("usage-ring", thread.get() as usize))
+            .relative()
+            .flex_shrink_0()
+            .on_hover(cx.listener(move |view, hovered: &bool, _, cx| {
+                view.hovered_usage = hovered.then_some(thread);
+                cx.notify();
+            }))
+            .child(pane::usage_ring(fraction));
+        if self.hovered_usage == Some(thread) {
+            // Deferred like every popover, so the card escapes the Pane's
+            // clip and draws over whatever is beside the header.
+            ring = ring.child(deferred(
+                div()
+                    .absolute()
+                    .top(relative(1.))
+                    .right_0()
+                    .mt(px(4.))
+                    .child(pane::usage_card(usage)),
+            ));
+        }
+        Some(ring.into_any_element())
+    }
+
+    /// The header's – / ✕ window controls (#22 amendment), wired to verbs
+    /// the keyboard already has: ✕ parks the Thread exactly like cmd-w;
+    /// – zooms a fullscreened Pane back to the grid and is quiet otherwise.
+    /// Presses stop propagation so the Pane's own press handler cannot
+    /// re-focus what was just closed.
+    fn pane_controls(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+        let thread = self.panes[index].thread;
+        div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(px(2.))
+            .child(
+                pane::control_button(("pane-zoom", thread.get() as usize), "–").on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        if view.fullscreen.take().is_some() {
+                            cx.notify();
+                        }
+                    }),
+                ),
+            )
+            .child(
+                pane::control_button(("pane-close", thread.get() as usize), "✕").on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        view.park_thread(thread, cx);
+                    }),
+                ),
+            )
+            .into_any_element()
     }
 
     /// The header chip naming this Thread's session project root — and,
@@ -2086,45 +2183,74 @@ impl CockpitView {
             .child(rows)
     }
 
-    /// The wall header strip: the product label left, `N panes · M need
-    /// you` right — the amber fragment appears only when someone actually
-    /// needs the operator, exactly as the Cockpit and Wall boards draw it.
+    /// The wall header strip: the workspace's own name left — the swarm is
+    /// flying a repo, not the product (#22 C15) — and `N panes · M need
+    /// you` right, the amber fragment only when someone actually needs the
+    /// operator, exactly as the Cockpit and Wall boards draw it.
     fn strip(&self, attention: usize) -> impl IntoElement {
         let panes = self.panes.len();
+        let title = self
+            .repo
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_else(|| "workspace".into());
         let mut strip = div()
             .flex()
             .flex_shrink_0()
             .items_center()
             .gap(px(10.))
             .h(px(crate::theme::STRIP_H))
-            .px(px(12.))
+            .pl(px(crate::theme::STRIP_PAD_L))
+            .pr(px(12.))
             .border_b_1()
             .border_color(rgba(crate::theme::HAIRLINE))
+            // The strip is the window's visible titlebar now — it drags
+            // the window (#22 D24).
+            .window_control_area(gpui::WindowControlArea::Drag)
             .child(
                 div()
                     .font_family(crate::theme::FONT_UI)
                     .text_size(px(crate::theme::TEXT_CODE))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(rgb(crate::theme::INK_SECONDARY))
-                    .child("ferrite"),
+                    .child(SharedString::from(title)),
             )
             .child(div().flex_1())
             .child(
                 div()
                     .text_size(px(crate::theme::TEXT_ROW))
                     .text_color(rgb(crate::theme::INK_MUTED))
-                    .child(SharedString::from(format!("{panes} panes"))),
+                    .child(SharedString::from(pane_count(panes))),
             );
         if attention > 0 {
             let verb = if attention == 1 { "needs" } else { "need" };
-            strip = strip.child(
-                div()
-                    .text_size(px(crate::theme::TEXT_ROW))
-                    .text_color(rgb(crate::theme::WAIT))
-                    .child(SharedString::from(format!("· {attention} {verb} you"))),
-            );
+            // The `·` is the seam between the counts, not part of the amber
+            // fragment (#22 A5).
+            strip = strip
+                .child(
+                    div()
+                        .text_size(px(crate::theme::TEXT_ROW))
+                        .text_color(rgb(crate::theme::INK_FAINT))
+                        .child("·"),
+                )
+                .child(
+                    div()
+                        .text_size(px(crate::theme::TEXT_ROW))
+                        .text_color(rgb(crate::theme::WAIT))
+                        .child(SharedString::from(format!("{attention} {verb} you"))),
+                );
         }
         strip
+    }
+}
+
+/// The strip's Pane census, in grammatical English — `1 pane`, `24 panes`
+/// (#22 A5).
+fn pane_count(panes: usize) -> String {
+    if panes == 1 {
+        "1 pane".into()
+    } else {
+        format!("{panes} panes")
     }
 }
 
@@ -2308,6 +2434,55 @@ mod tests {
                 suggestions: vec![],
             },
         }
+    }
+
+    /// #22 C12: pointing at the context ring opens its hover card; leaving
+    /// closes it. The sweep covers the header's right side so the test does
+    /// not encode the ring's exact x.
+    #[gpui::test]
+    fn hovering_the_context_ring_opens_the_token_card(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("usage-hover", 1);
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let thread = view.read_with(cx, |view, _| view.panes[0].thread);
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TokenUsage {
+                total_tokens: 124_000,
+                input_tokens: 124_000,
+                cached_input_tokens: 0,
+                output_tokens: 0,
+                reasoning_output_tokens: 0,
+                context_window: Some(200_000),
+            })
+            .unwrap();
+        cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+        tick(cx);
+
+        // Sweep the header band right to left until the ring answers.
+        let mut hovered = false;
+        for at in (0..40).map(|step| 1440. - 20. - step as f32 * 4.) {
+            cx.simulate_mouse_move(
+                gpui::point(px(at), px(34. + 8. + 14.)),
+                None,
+                gpui::Modifiers::none(),
+            );
+            cx.run_until_parked();
+            if view.read_with(cx, |view, _| view.hovered_usage == Some(thread)) {
+                hovered = true;
+                break;
+            }
+        }
+        assert!(hovered, "the sweep never found the ring");
+
+        // Leaving the ring closes the card.
+        cx.simulate_mouse_move(
+            gpui::point(px(700.), px(450.)),
+            None,
+            gpui::Modifiers::none(),
+        );
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.hovered_usage, None, "the card must close on leave");
+        });
     }
 
     /// The whole keystroke path in a real window: a blocked Pane, one key, and
@@ -3474,9 +3649,10 @@ mod tests {
         tick(cx);
         view.read_with(cx, |view, _| assert_eq!(view.focused, 0));
 
-        // The second running row: 34px nav header, 28px rows.
+        // The second running row: 34px strip above the nav, 34px nav
+        // header, 28px rows.
         cx.simulate_click(
-            gpui::point(px(104.), px(34. + 28. + 14.)),
+            gpui::point(px(104.), px(34. + 34. + 28. + 14.)),
             gpui::Modifiers::none(),
         );
         view.read_with(cx, |view, _| {
@@ -3488,7 +3664,7 @@ mod tests {
             assert_eq!(view.fullscreen, Some(view.panes[1].thread));
         });
         cx.simulate_click(
-            gpui::point(px(104.), px(34. + 14.)),
+            gpui::point(px(104.), px(34. + 34. + 14.)),
             gpui::Modifiers::none(),
         );
         view.read_with(cx, |view, _| {
@@ -3522,10 +3698,10 @@ mod tests {
             assert_eq!(view.parked_rows.len(), 1, "the parked Thread got a row");
         });
 
-        // The parked row: 34px header + one running row + the 22px PARKED
-        // divider, then its own 28px row.
+        // The parked row: 34px strip + 34px nav header + one running row +
+        // the 22px PARKED divider, then its own 28px row.
         cx.simulate_click(
-            gpui::point(px(104.), px(34. + 28. + 22. + 14.)),
+            gpui::point(px(104.), px(34. + 34. + 28. + 22. + 14.)),
             gpui::Modifiers::none(),
         );
 
@@ -4834,6 +5010,13 @@ mod tests {
 
         let missing = session_roots(&base.join("nowhere"));
         assert!(session_file_candidates(&missing, 8).is_empty());
+    }
+
+    /// The strip counts in grammatical English — never "1 panes" (#22 A5).
+    #[test]
+    fn the_strip_census_is_singular_for_one_pane() {
+        assert_eq!(pane_count(1), "1 pane");
+        assert_eq!(pane_count(24), "24 panes");
     }
 
     /// The row meta's age, spelled the way an operator scans it.

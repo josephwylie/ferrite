@@ -113,6 +113,11 @@ pub enum Style {
     Plain,
     /// Backticked inline code.
     Code,
+    /// `**emphasized**` prose.
+    Bold,
+    /// A markdown link's text. The target is dropped at the fold: v1
+    /// renders links inert, and a URL nobody can follow is noise.
+    Link,
 }
 
 /// A highlighted run of code.
@@ -460,11 +465,10 @@ impl Transcript {
                 self.last_cost = cost_usd;
                 let mut dirty = Vec::new();
                 match outcome {
-                    crate::TurnOutcome::Completed => {
-                        if let Some(cost) = cost_usd {
-                            dirty.push(self.push(Body::Meta(format!("${cost:.4}"))));
-                        }
-                    }
+                    // The cost is kept (`last_cost`) but never rendered —
+                    // no dollar value appears anywhere (#22 operator
+                    // amendment); a completed turn ends without a row.
+                    crate::TurnOutcome::Completed => {}
                     crate::TurnOutcome::Interrupted => {
                         dirty.push(self.push(Body::Meta("interrupted".into())))
                     }
@@ -802,23 +806,71 @@ fn heading(line: &str) -> Option<(u8, &str)> {
     Some((hashes as u8, trimmed.trim()))
 }
 
-/// Split a line on backticks: the odd runs are inline code.
+/// Split a line on backticks: the odd runs are inline code. The plain runs
+/// then split again on `**bold**` and `[text](url)` — the other two inline
+/// styles the comps draw.
 fn spans(text: &str) -> Vec<Span> {
     let mut spans = Vec::new();
     for (i, run) in text.split('`').enumerate() {
         if run.is_empty() {
             continue;
         }
-        spans.push(Span {
-            text: run.to_string(),
-            style: if i % 2 == 1 {
-                Style::Code
-            } else {
-                Style::Plain
-            },
-        });
+        if i % 2 == 1 {
+            spans.push(Span {
+                text: run.to_string(),
+                style: Style::Code,
+            });
+        } else {
+            styled(run, &mut spans);
+        }
     }
     spans
+}
+
+/// Fold one plain run into Plain/Bold/Link spans. An unclosed marker stays
+/// literal text — prose is never eaten on a guess.
+fn styled(text: &str, spans: &mut Vec<Span>) {
+    fn push(spans: &mut Vec<Span>, text: &str, style: Style) {
+        if !text.is_empty() {
+            spans.push(Span {
+                text: text.to_string(),
+                style,
+            });
+        }
+    }
+    let mut plain = 0;
+    let mut at = 0;
+    while at < text.len() {
+        let rest = &text[at..];
+        let styled = bold_at(rest)
+            .map(|(body, used)| (body, used, Style::Bold))
+            .or_else(|| link_at(rest).map(|(body, used)| (body, used, Style::Link)));
+        if let Some((body, used, style)) = styled {
+            push(spans, &text[plain..at], Style::Plain);
+            push(spans, body, style);
+            at += used;
+            plain = at;
+            continue;
+        }
+        at += rest.chars().next().map_or(1, char::len_utf8);
+    }
+    push(spans, &text[plain..], Style::Plain);
+}
+
+/// `**bold** …` → ("bold", bytes consumed).
+fn bold_at(rest: &str) -> Option<(&str, usize)> {
+    let body = rest.strip_prefix("**")?;
+    let end = body.find("**")?;
+    (end > 0).then_some((&body[..end], end + 4))
+}
+
+/// `[text](url) …` → ("text", bytes consumed). Only the text survives.
+fn link_at(rest: &str) -> Option<(&str, usize)> {
+    let body = rest.strip_prefix('[')?;
+    let close = body.find("](")?;
+    let target = &body[close + 2..];
+    let end = target.find(')')?;
+    (close > 0).then_some((&body[..close], 1 + close + 2 + end + 1))
 }
 
 #[cfg(test)]
@@ -976,6 +1028,46 @@ mod tests {
         }
     }
 
+    /// #22 C13: `**bold**` and `[text](url)` fold to their own styles; a
+    /// link keeps only its text, and an unclosed marker stays literal.
+    #[test]
+    fn bold_and_links_are_their_own_spans() {
+        let mut transcript = Transcript::default();
+        transcript.apply(text(
+            "keep **stable identities** per [the fold](https://example.com) — a ** stray stays",
+        ));
+        match &transcript.blocks()[0].body {
+            Body::Paragraph { spans } => {
+                assert_eq!(
+                    spans,
+                    &[
+                        Span {
+                            text: "keep ".into(),
+                            style: Style::Plain
+                        },
+                        Span {
+                            text: "stable identities".into(),
+                            style: Style::Bold
+                        },
+                        Span {
+                            text: " per ".into(),
+                            style: Style::Plain
+                        },
+                        Span {
+                            text: "the fold".into(),
+                            style: Style::Link
+                        },
+                        Span {
+                            text: " — a ** stray stays".into(),
+                            style: Style::Plain
+                        },
+                    ]
+                );
+            }
+            other => panic!("expected a paragraph, got {other:?}"),
+        }
+    }
+
     #[test]
     fn a_tool_call_becomes_a_row_naming_what_it_touched() {
         let mut transcript = Transcript::default();
@@ -1071,10 +1163,13 @@ mod tests {
         assert_eq!(body_text(last), "claude CLI exited with code 1");
     }
 
+    /// The cost is data, never a row: `last_cost` records it and no dollar
+    /// value reaches the transcript (#22 operator amendment).
     #[test]
-    fn a_paid_turn_leaves_its_cost_in_the_transcript() {
+    fn a_paid_turn_records_its_cost_without_rendering_it() {
         let mut transcript = Transcript::default();
         transcript.apply(text("done"));
+        let before = transcript.blocks().len();
 
         transcript.apply(Input::Event(SessionEvent::TurnEnded {
             outcome: crate::TurnOutcome::Completed,
@@ -1082,9 +1177,11 @@ mod tests {
         }));
 
         assert_eq!(transcript.last_cost(), Some(0.038));
-        let last = transcript.blocks().last().unwrap();
-        assert!(matches!(last.body, Body::Meta(_)));
-        assert_eq!(body_text(last), "$0.0380");
+        assert_eq!(
+            transcript.blocks().len(),
+            before,
+            "a completed turn ends without a row"
+        );
     }
 
     #[test]

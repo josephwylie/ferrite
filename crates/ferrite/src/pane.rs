@@ -8,18 +8,22 @@
 //! Cockpit board (instrument cell), L3 per the Wall board (dot · slug ·
 //! bar · status line, inset attention rings).
 
-use ferrite_core::docview::{Instruments, Level, Tests};
+use ferrite_core::cockpit::ToolTiming;
+use ferrite_core::docview::{is_test_run, passed_count, Instruments, Level, Tests};
 use ferrite_core::transcript::{
-    Block, Body, Class, Diff, Span, Status, Style, Todos, Token, ToolBlock, ToolState, Transcript,
+    Block, Body, Class, Diff, Span, Status, Style, Token, ToolBlock, ToolState, Transcript, Usage,
 };
 use ferrite_core::workspace::WorkspaceBinding;
 use ferrite_core::{Decision, ThreadId};
 use gpui::prelude::*;
 use gpui::{
-    deferred, div, point, px, relative, rgb, rgba, AnyElement, BoxShadow, Context, Div, Entity,
-    FocusHandle, FontWeight, HighlightStyle, ScrollHandle, SharedString, StyledText,
+    canvas, deferred, div, point, px, relative, rgb, rgba, AnyElement, BoxShadow, Context, Div,
+    Entity, FocusHandle, FontWeight, HighlightStyle, Pixels, ScrollHandle, SharedString, Stateful,
+    StyledText,
 };
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use crate::composer::Composer;
 // Every color and metric here is an Aperture token (crate::theme) — no
@@ -92,6 +96,17 @@ pub struct PaneState<'a> {
     /// The Blocks a drag swept, as indices into the Thread's blocks. The
     /// cockpit owns the drag; the Pane only paints the wash.
     pub selected: Option<std::ops::RangeInclusive<usize>>,
+    /// The wall clocks of this Thread's tool calls (`Cockpit::tool_timings`)
+    /// — what tool rows and activity lines read their durations from. None
+    /// on a Pane whose cockpit kept no clock (tests, parked replays).
+    pub timings: Option<&'a HashMap<String, ToolTiming>>,
+    /// The context ring plus its hover card, assembled in the cockpit where
+    /// the hover state lives — the Pane only places it (#22 C12). None when
+    /// the provider reported no window, or below L1.
+    pub usage_ring: Option<AnyElement>,
+    /// The header's – / ✕ window controls, wired in the cockpit to the
+    /// existing park and zoom-back verbs. None below L1.
+    pub controls: Option<AnyElement>,
 }
 
 /// The wall's state matrix (glance.md §4), selected from O(1) reads plus the
@@ -113,8 +128,9 @@ pub enum WallState {
 }
 
 /// glance.md's matrix, one row per state. `finished` is the honest v1 test
-/// for "done": an idle Thread that has a recorded turn cost (the Cockpit
-/// board's own done cell reads "turn complete · $0.31").
+/// for "done": an idle Thread whose last turn recorded a cost. The cost is
+/// data only — no surface renders a dollar figure; the done cell reads a
+/// plain "turn complete".
 pub fn wall_state(
     status: Option<Status>,
     pending: bool,
@@ -152,14 +168,17 @@ pub struct WallCard {
     /// The latest test run failed (from `Instruments`, the one O(blocks)
     /// read the wall needs).
     pub tests_failing: bool,
-    /// Plan progress, 0..=1, when the Thread has a plan.
-    pub fraction: Option<f32>,
+    /// The failing line, with the run's own count where it reported one:
+    /// `✗ 2 failing`, else `✗ failing`.
+    pub failing: SharedString,
+    /// The plan meter's ▰▱ glyph run, empty without a plan (or past the
+    /// glyph cap — the status line already carries the fraction).
+    pub meter: SharedString,
     /// The working status line: `3/4 · ◐ working` or `◐ working`.
     pub working: SharedString,
-    /// The done line: `✓ done · $0.31`, or `✓ done` before any cost.
-    pub done: SharedString,
-    /// An alert cell's second line: the Decision's subject, or the close
-    /// reason. Empty when neither applies.
+    /// An alert cell's context: the Decision's subject on line two, or the
+    /// close reason promoted to the red first line (`✗ reason`). Empty when
+    /// neither applies.
     pub context: SharedString,
 }
 
@@ -172,35 +191,40 @@ pub fn wall_card(transcript: Option<&Transcript>, decision: Option<&Decision>) -
         return WallCard::default();
     };
     let todos = transcript.todos();
-    let fraction = todos.map(plan_fraction);
+    let meter = todos
+        .map(|todos| SharedString::from(meter_run(todos.done, todos.total)))
+        .unwrap_or_default();
     let working = match todos {
         Some(todos) => SharedString::from(format!("{}/{} · ◐ working", todos.done, todos.total)),
         None => SharedString::from("◐ working"),
     };
-    let done = match transcript.last_cost() {
-        Some(cost) => SharedString::from(format!("✓ done · ${cost:.2}")),
-        None => SharedString::from("✓ done"),
-    };
     let context = match decision {
         Some(decision) => decision_subject(decision),
         // A closed Thread's context is the reason it closed — the last
-        // Notice the fold pushed.
+        // Notice the fold pushed — promoted to the alert line (#22 C14).
         None if transcript.status() == Status::Closed => transcript
             .blocks()
             .iter()
             .rev()
             .find_map(|block| match &block.body {
-                Body::Notice(reason) => Some(SharedString::from(reason.clone())),
+                Body::Notice(reason) => Some(SharedString::from(format!("✗ {reason}"))),
                 _ => None,
             })
-            .unwrap_or_default(),
+            .unwrap_or_else(|| SharedString::from("✗ closed")),
         None => SharedString::default(),
     };
+    let tests = Instruments::of(transcript).tests;
+    let failing = match tests {
+        Some(Tests::Failed { count: Some(count) }) => {
+            SharedString::from(format!("✗ {count} failing"))
+        }
+        _ => SharedString::from("✗ failing"),
+    };
     WallCard {
-        tests_failing: Instruments::of(transcript).tests == Some(Tests::Failed),
-        fraction,
+        tests_failing: matches!(tests, Some(Tests::Failed { .. })),
+        failing,
+        meter,
         working,
-        done,
         context,
     }
 }
@@ -220,6 +244,9 @@ pub fn render_pane(view: &PaneView, state: PaneState<'_>, level: Level) -> impl 
         focused,
         running,
         selected,
+        timings,
+        usage_ring,
+        controls,
     } = state;
     let status = transcript.map(|t| t.status());
     let state = wall_state(
@@ -228,17 +255,24 @@ pub fn render_pane(view: &PaneView, state: PaneState<'_>, level: Level) -> impl 
         view.wall.tests_failing,
         transcript.and_then(|t| t.last_cost()).is_some(),
     );
-    // The attention ring: a Decision's amber overrides focus everywhere; the
-    // red blocker ring is the wall's language (glance.md §4 — L2/L1 blocked
-    // renderings are undrawn, so red stays at L3 and the LED carries it up).
-    let ring = if decision.is_some() {
+    // Attention and focus are separate channels (#22 D16): the state ring
+    // (a Decision's amber everywhere; the wall's red blocker — glance.md §4,
+    // L2/L1 blocked renderings are undrawn so red stays at L3) and the
+    // ACCENT focus ring coexist, the state ring nesting just inside so a
+    // focused amber Pane shows both.
+    let state_ring = if decision.is_some() {
         Some(WAIT)
     } else if level == Level::Wall && state == WallState::Blocked {
         Some(FAIL)
-    } else if focused {
-        Some(ACCENT)
     } else {
         None
+    };
+    let focus_ring = focused.then_some(ACCENT);
+    let (outer_ring, inner_ring) = match (focus_ring, state_ring) {
+        (Some(focus), Some(state)) => (Some(ring_overlay(focus)), Some(inner_ring_overlay(state))),
+        (Some(focus), None) => (Some(ring_overlay(focus)), None),
+        (None, Some(state)) => (Some(ring_overlay(state)), None),
+        (None, None) => (None, None),
     };
     let shell = div()
         .relative()
@@ -256,38 +290,59 @@ pub fn render_pane(view: &PaneView, state: PaneState<'_>, level: Level) -> impl 
     if level == Level::Wall {
         return shell
             .child(wall_cell(view, state, focused))
-            .children(ring.map(ring_overlay));
+            .children(outer_ring)
+            .children(inner_ring);
     }
 
     if level == Level::Instruments {
         return shell
-            .child(l2_cell(view, transcript, decision, workspace, state))
-            .children(ring.map(ring_overlay));
+            .child(l2_cell(
+                view, transcript, decision, workspace, state, timings,
+            ))
+            .children(outer_ring)
+            .children(inner_ring);
     }
 
-    let mut pane = shell.child(dense_header(view, transcript, workspace, status, root_chip));
+    let mut pane = shell.child(dense_header(
+        view, transcript, workspace, status, root_chip, usage_ring, controls,
+    ));
     match transcript {
         Some(transcript) => {
-            pane = pane
-                .child(body(view, transcript, level.visible_blocks(), selected))
-                .child(composer_region(
-                    view,
-                    transcript,
-                    ComposerStack {
-                        decision,
-                        queued,
-                        running,
-                        empty: composer_empty,
-                        menu,
-                        mode: permission_mode,
-                    },
-                ));
+            pane = pane.child(body(
+                view,
+                transcript,
+                level.visible_blocks(),
+                selected,
+                timings,
+            ));
+            // The CHANGED strip rides above the Composer whenever the
+            // Thread has touched files (#22 C11). `Instruments::of` walks
+            // every Block, per frame — the same price every L2 cell already
+            // pays, and a window shows few L1 Panes; if a wall of L1 Panes
+            // ever dips, the fix is the incremental fold docview.rs already
+            // names, not a render-side cache.
+            let changed = Instruments::of(transcript).changed;
+            if !changed.is_empty() {
+                pane = pane.child(changed_strip(&changed));
+            }
+            pane = pane.child(composer_region(
+                view,
+                transcript,
+                ComposerStack {
+                    decision,
+                    queued,
+                    running,
+                    empty: composer_empty,
+                    menu,
+                    mode: permission_mode,
+                },
+            ));
         }
         None => {
             pane = pane.child(parked_body());
         }
     }
-    pane.children(ring.map(ring_overlay))
+    pane.children(outer_ring).children(inner_ring)
 }
 
 /// The 1.5px inset attention ring — gpui has no inset box-shadow, so the
@@ -296,6 +351,16 @@ fn ring_overlay(color: u32) -> Div {
     div()
         .absolute()
         .inset_0()
+        .border(px(theme::RING_W))
+        .border_color(rgb(color))
+}
+
+/// The state ring nested just inside the focus ring, so both stay visible
+/// when a focused Pane also demands attention (#22 D16).
+fn inner_ring_overlay(color: u32) -> Div {
+    div()
+        .absolute()
+        .inset(px(theme::RING_INSET))
         .border(px(theme::RING_W))
         .border_color(rgb(color))
 }
@@ -344,17 +409,26 @@ fn wall_cell(view: &PaneView, state: WallState, focused: bool) -> Div {
                         .child(view.name.clone()),
                 ),
         );
-    // The bar survives on working cells only; alert cells trade it for the
-    // colored first line (glance.md §3.4).
-    if matches!(state, WallState::Working | WallState::Failing) {
-        if let Some(fraction) = card.fraction {
-            cell = cell.child(bar(px(theme::BAR_H_WALL), fraction, ACCENT));
-        }
+    // The meter survives on working cells only; alert cells trade it for
+    // the colored first line (glance.md §3.4). Glyphs, not a bar fill: the
+    // slanted ▰▱ run is the one meter language (#22 operator ruling).
+    if matches!(state, WallState::Working | WallState::Failing) && !card.meter.is_empty() {
+        cell = cell.child(
+            div()
+                .flex_shrink_0()
+                .w_full()
+                .truncate()
+                .text_size(px(theme::TEXT_WALL_STATUS))
+                .text_color(rgb(ACCENT))
+                .child(card.meter.clone()),
+        );
     }
+    // `w_full`, not `min_w_0`: a flex-col child measured at its own width
+    // truncates everything to an ellipsis smear (#22 A1).
     let status_line = |text: SharedString, size: f32, color: u32| {
         div()
             .flex_shrink_0()
-            .min_w_0()
+            .w_full()
             .truncate()
             .text_size(px(size))
             .text_color(rgb(color))
@@ -370,7 +444,7 @@ fn wall_cell(view: &PaneView, state: WallState, focused: bool) -> Div {
         }
         WallState::Failing => {
             cell = cell.child(status_line(
-                SharedString::from("✗ failing"),
+                card.failing.clone(),
                 theme::TEXT_WALL_STATUS,
                 FAIL,
             ));
@@ -390,23 +464,19 @@ fn wall_cell(view: &PaneView, state: WallState, focused: bool) -> Div {
             }
         }
         WallState::Blocked => {
+            // The close reason is the alert; the disposition is the
+            // context (#22 C14).
+            cell = cell.child(status_line(card.context.clone(), theme::TEXT_CHIP, FAIL));
             cell = cell.child(status_line(
-                SharedString::from("✗ closed"),
-                theme::TEXT_CHIP,
-                FAIL,
+                SharedString::from("blocked"),
+                theme::TEXT_WALL_STATUS,
+                INK_MUTED,
             ));
-            if !card.context.is_empty() {
-                cell = cell.child(status_line(
-                    card.context.clone(),
-                    theme::TEXT_WALL_STATUS,
-                    INK_MUTED,
-                ));
-            }
         }
         WallState::Done => {
             cell = cell
                 .child(status_line(
-                    card.done.clone(),
+                    SharedString::from("✓ done"),
                     theme::TEXT_WALL_STATUS,
                     GOOD,
                 ))
@@ -442,6 +512,7 @@ fn l2_cell(
     decision: Option<&Decision>,
     workspace: Option<&WorkspaceBinding>,
     state: WallState,
+    timings: Option<&HashMap<String, ToolTiming>>,
 ) -> Div {
     let hot = matches!(
         state,
@@ -475,8 +546,9 @@ fn l2_cell(
                 .child(view.name.clone()),
         )
         .child(div().flex_1());
+    // The amber ring is the chip (#22 D17): a Decision cell's right meta
+    // keeps the binding like every other cell.
     header = match state {
-        WallState::Decision => header.child(needs_you_badge()),
         WallState::Done => header.child(
             div()
                 .flex_shrink_0()
@@ -534,80 +606,62 @@ fn l2_cell(
     }
 
     if state == WallState::Done {
-        let line = match transcript.last_cost() {
-            Some(cost) => SharedString::from(format!("turn complete · ${cost:.2}")),
-            None => SharedString::from("turn complete"),
-        };
         body = body.child(
             div()
                 .text_size(px(theme::TEXT_CHIP))
                 .text_color(rgb(INK_TERTIARY))
-                .child(line),
+                .child("turn complete"),
         );
     }
 
     if let Some(todos) = read.todos {
-        // Progress fill follows health: accent while green, secondary while
-        // the suite is red (the Cockpit board's two data points).
+        // Meter fill follows health: accent while green, secondary while
+        // the suite is red (the Cockpit board's two data points). Glyphs,
+        // not a bar fill — the ▰▱ run is the one meter language.
         let fill = if state == WallState::Failing {
             INK_SECONDARY
         } else {
             ACCENT
         };
-        let fraction = plan_fraction(todos);
         body = body.child(
             div()
-                .flex()
-                .items_center()
-                .gap(px(8.))
-                .child(div().flex_1().child(bar(px(theme::BAR_H), fraction, fill)))
-                .child(
-                    div()
-                        .flex_shrink_0()
-                        .text_size(px(theme::TEXT_META))
-                        .text_color(rgb(fill))
-                        .child(SharedString::from(format!(
-                            "{}/{}",
-                            todos.done, todos.total
-                        ))),
-                ),
+                .w_full()
+                .truncate()
+                .text_size(px(theme::TEXT_META))
+                .text_color(rgb(fill))
+                .child(meter(todos.done, todos.total)),
         );
     }
 
     let mut badges = div().flex().items_center().gap(px(6.));
     let mut any_badge = false;
     match read.tests {
-        Some(Tests::Passed) => {
-            badges = badges.child(chip("✓ tests pass", GOOD, GOOD_WASH));
+        Some(Tests::Passed { count }) => {
+            let label = match count {
+                Some(count) => SharedString::from(format!("✓ {count}")),
+                None => SharedString::from("✓ tests pass"),
+            };
+            badges = badges.child(chip(label, GOOD, GOOD_WASH));
             any_badge = true;
         }
-        Some(Tests::Failed) => {
-            badges = badges.child(chip("✗ failing", FAIL, FAIL_WASH));
+        Some(Tests::Failed { count }) => {
+            let label = match count {
+                Some(count) => SharedString::from(format!("✗ {count} failing")),
+                None => SharedString::from("✗ failing"),
+            };
+            badges = badges.child(chip(label, FAIL, FAIL_WASH));
             any_badge = true;
         }
         None => {}
     }
     if read.added > 0 || read.removed > 0 {
         badges = badges.child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(4.))
+            diff_stat(read.added, read.removed)
                 .text_size(px(theme::TEXT_CHIP))
                 .bg(rgb(RAISED))
                 .rounded(px(theme::R_CHIP))
                 .px(px(6.))
-                .py(px(1.))
-                .child(
-                    div()
-                        .text_color(rgb(GOOD))
-                        .child(SharedString::from(format!("+{}", read.added))),
-                )
-                .child(
-                    div()
-                        .text_color(rgb(FAIL))
-                        .child(SharedString::from(format!("−{}", read.removed))),
-                ),
+                .py(px(1.)),
         );
         any_badge = true;
     }
@@ -624,13 +678,21 @@ fn l2_cell(
                 .child("❯ idle"),
         );
     } else if let Some(activity) = read.activity {
+        // The running call's clock rides the line — "◐ Bash cargo check
+        // — 8s" — where the cockpit stamped one (#22 amendment).
+        let clocked = read
+            .running_call
+            .as_deref()
+            .and_then(|call| timings?.get(call))
+            .map(|timing| format!("◐ {activity} — {}", duration_label(timing.elapsed())))
+            .unwrap_or_else(|| format!("◐ {activity}"));
         body = body.child(
             div()
-                .min_w_0()
+                .w_full()
                 .truncate()
                 .text_size(px(theme::TEXT_CHIP))
                 .text_color(rgb(INK_TERTIARY))
-                .child(SharedString::from(format!("◐ {activity}"))),
+                .child(SharedString::from(clocked)),
         );
     }
 
@@ -642,10 +704,12 @@ fn l2_cell(
 }
 
 /// The Cockpit board's Decision cell body: the command, who wants it, and
-/// the y/n keycaps — no `a always` at L2.
+/// the y/n keycaps — no `a always` at L2. The whole group hangs directly
+/// under the header; a spacer here would strand the keycaps on the cell
+/// floor with dead black between (#22 A2).
 fn l2_decision_body(decision: &Decision) -> Div {
     let command = decision_subject(decision);
-    let wants = decision_wants(decision, "wants approval to run");
+    let wants = decision_wants(decision);
     div()
         .flex()
         .flex_col()
@@ -655,7 +719,7 @@ fn l2_decision_body(decision: &Decision) -> Div {
         .gap(px(6.))
         .child(
             div()
-                .min_w_0()
+                .w_full()
                 .truncate()
                 .text_size(px(theme::TEXT_META))
                 .text_color(rgb(INK))
@@ -663,14 +727,13 @@ fn l2_decision_body(decision: &Decision) -> Div {
         )
         .child(
             div()
-                .min_w_0()
+                .w_full()
                 .truncate()
                 .font_family(theme::FONT_UI)
                 .text_size(px(theme::TEXT_CHIP))
                 .text_color(rgb(INK_TERTIARY))
                 .child(wants),
         )
-        .child(div().flex_1())
         .child(
             div()
                 .flex()
@@ -680,31 +743,21 @@ fn l2_decision_body(decision: &Decision) -> Div {
         )
 }
 
-/// The amber `needs you` chip, exactly as the Cockpit board's issue-triage
-/// cell draws it.
-fn needs_you_badge() -> Div {
-    div()
-        .flex_shrink_0()
-        .text_size(px(theme::TEXT_CHIP_SM))
-        .text_color(rgb(WAIT))
-        .bg(rgba(WAIT_WASH))
-        .rounded(px(theme::R_CHIP))
-        .px(px(5.))
-        .py(px(1.))
-        .child("needs you")
-}
-
 // ---------------------------------------------------------------- L1 pane
 
-/// DirectionDense's single 28px header: LED · name · binding · spacer ·
-/// todo meter · ctx and cost as text. The todo strip, ctx bar and cost of
-/// the Main board fold into this one line at dense L1.
+/// DirectionDense's single 28px header: LED · name · binding · provider
+/// chip · spacer · todo meter · context ring · window controls. The Main
+/// board's todo strip and context indicator fold into this one line at
+/// dense L1.
+#[allow(clippy::too_many_arguments)]
 fn dense_header(
     view: &PaneView,
     transcript: Option<&Transcript>,
     workspace: Option<&WorkspaceBinding>,
     status: Option<Status>,
     root_chip: Option<AnyElement>,
+    usage_ring: Option<AnyElement>,
+    controls: Option<AnyElement>,
 ) -> Div {
     let led_color = match status {
         Some(Status::Streaming) => GOOD,
@@ -748,6 +801,22 @@ fn dense_header(
                     .child(binding),
             );
     }
+    // The provider chip — `claude · sonnet-4-5` on the accent wash, the
+    // comps' one accent-tinted chip (#22 C12). The raw id no longer crams
+    // the composer's bottom-right.
+    if let Some(model) = transcript.and_then(|t| t.model()) {
+        header = header.child(
+            div()
+                .flex_shrink_0()
+                .text_size(px(theme::TEXT_META))
+                .text_color(rgb(ACCENT))
+                .bg(rgba(theme::ACCENT_WASH))
+                .rounded(px(theme::R_CHIP))
+                .px(px(6.))
+                .py(px(1.))
+                .child(model_chip_label(model)),
+        );
+    }
     header = header.child(div().flex_1());
     if let Some(todos) = transcript.and_then(|t| t.todos()) {
         header = header.child(
@@ -757,16 +826,13 @@ fn dense_header(
                 .child(meter(todos.done, todos.total)),
         );
     }
-    let spend = transcript.map(spend_label).unwrap_or_default();
-    if !spend.is_empty() {
-        header = header
-            .child(div().flex_shrink_0().text_color(rgb(INK_FAINT)).child("·"))
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .text_color(rgb(INK_MUTED))
-                    .child(spend),
-            );
+    // The context ring, then the window controls at the far edge (#22
+    // amendments) — no cost text and no context label anywhere.
+    if let Some(ring) = usage_ring {
+        header = header.child(ring);
+    }
+    if let Some(controls) = controls {
+        header = header.child(controls);
     }
     header
 }
@@ -774,36 +840,46 @@ fn dense_header(
 /// `▰▰▰▱ 3/4` while the glyph run stays glanceable; a long plan keeps the
 /// fraction alone (an unbounded ▰ run would eat the header).
 fn meter(done: usize, total: usize) -> SharedString {
-    const GLYPH_CAP: usize = 8;
     if total == 0 {
         return SharedString::default();
     }
-    if total <= GLYPH_CAP {
-        let done = done.min(total);
-        let mut run = String::new();
-        run.extend(std::iter::repeat_n('▰', done));
-        run.extend(std::iter::repeat_n('▱', total - done));
-        return SharedString::from(format!("{run} {done}/{total}"));
+    let run = meter_run(done, total);
+    let done = done.min(total);
+    if run.is_empty() {
+        return SharedString::from(format!("{done}/{total}"));
     }
-    SharedString::from(format!("{done}/{total}"))
+    SharedString::from(format!("{run} {done}/{total}"))
 }
 
-/// `ctx 62% · $0.84` — the Dense header's textual instruments. Context
-/// falls back to a token count when the provider reports no window.
-fn spend_label(transcript: &Transcript) -> SharedString {
-    let mut parts = Vec::new();
-    if let Some(usage) = transcript.usage() {
-        parts.push(match usage.context_window {
-            Some(window) if window > 0 => {
-                format!("ctx {}%", (usage.total_tokens * 100 / window).min(999))
+/// The ▰▱ glyph run alone — the wall's meter, whose status line already
+/// carries the fraction. Empty past the cap or without a plan.
+fn meter_run(done: usize, total: usize) -> String {
+    const GLYPH_CAP: usize = 8;
+    if total == 0 || total > GLYPH_CAP {
+        return String::new();
+    }
+    let done = done.min(total);
+    let mut run = String::new();
+    run.extend(std::iter::repeat_n('▰', done));
+    run.extend(std::iter::repeat_n('▱', total - done));
+    run
+}
+
+/// The provider chip's text: the model id groomed to the comps' grammar —
+/// `claude-sonnet-4-5` → `claude · sonnet-4-5`. An id with no known
+/// provider prefix stands verbatim rather than being guessed apart.
+fn model_chip_label(model: &str) -> SharedString {
+    for provider in ["claude", "codex"] {
+        if let Some(rest) = model
+            .strip_prefix(provider)
+            .and_then(|rest| rest.strip_prefix('-'))
+        {
+            if !rest.is_empty() {
+                return SharedString::from(format!("{provider} · {rest}"));
             }
-            _ => format!("ctx {}", tokens(usage.total_tokens)),
-        });
+        }
     }
-    if let Some(cost) = transcript.last_cost() {
-        parts.push(format!("${cost:.2}"));
-    }
-    SharedString::from(parts.join(" · "))
+    SharedString::from(model.to_string())
 }
 
 fn body(
@@ -811,6 +887,7 @@ fn body(
     transcript: &Transcript,
     visible: usize,
     selected: Option<std::ops::RangeInclusive<usize>>,
+    timings: Option<&HashMap<String, ToolTiming>>,
 ) -> impl IntoElement {
     let mut body = div()
         .id(("transcript", view.thread.get() as usize))
@@ -831,7 +908,7 @@ fn body(
         let picked = selected
             .as_ref()
             .is_some_and(|range| range.contains(&(tail + offset)));
-        body = body.child(render_block(block, picked));
+        body = body.child(render_block(block, picked, timings));
     }
     body
 }
@@ -930,7 +1007,11 @@ fn composer_region(view: &PaneView, transcript: &Transcript, stack: ComposerStac
             input.border_t_1().border_color(rgba(HAIRLINE))
         })
         .child(if running {
-            div().flex_shrink_0().text_color(rgb(ACCENT)).child("◐")
+            div()
+                .flex_shrink_0()
+                .font_weight(FontWeight::BOLD)
+                .text_color(rgb(ACCENT))
+                .child("◐")
         } else {
             div()
                 .flex_shrink_0()
@@ -944,7 +1025,7 @@ fn composer_region(view: &PaneView, transcript: &Transcript, stack: ComposerStac
             div()
                 .flex_shrink_0()
                 .text_size(px(theme::TEXT_CHIP))
-                .text_color(rgb(WAIT))
+                .text_color(rgb(INK_MUTED))
                 .child("esc interrupt"),
         );
     }
@@ -966,9 +1047,10 @@ fn composer_region(view: &PaneView, transcript: &Transcript, stack: ComposerStac
 
     // The meta row: the Session's mode chip on the left where the comp
     // draws "⏵ auto-edit" — only when the Session actually announced a
-    // mode — and the model on the right where the comps put "fable-5 · max"
-    // (run durations wait on a clock core deliberately does not keep —
-    // sidebar-and-impl §4.2 #4).
+    // mode. The model moved to the header's provider chip (#22 C12). Tool
+    // durations live on the rows themselves: the transcript's folds stay
+    // clockless, and the Cockpit — which already owns IO — stamps each
+    // call at ingestion, which is why a replayed log carries none.
     let mut meta = div()
         .flex()
         .flex_shrink_0()
@@ -989,16 +1071,7 @@ fn composer_region(view: &PaneView, transcript: &Transcript, stack: ComposerStac
                 .child(mode_chip_label(mode)),
         );
     }
-    meta = meta.child(div().flex_1());
-    if let Some(model) = transcript.model() {
-        meta = meta.child(
-            div()
-                .text_size(px(theme::TEXT_CHIP))
-                .text_color(rgb(INK_MUTED))
-                .child(SharedString::from(model.to_string())),
-        );
-    }
-    region.child(meta)
+    region.child(meta.child(div().flex_1()))
 }
 
 /// The idle line's ghost text, PromptBox state 01's pattern verbatim:
@@ -1165,7 +1238,7 @@ fn queued_line(held: &str) -> impl IntoElement {
 /// to load an icon from.
 fn decision_card(decision: &Decision) -> Div {
     let command = decision_subject(decision);
-    let subtitle = decision_wants(decision, "wants to run this");
+    let subtitle = decision_wants(decision);
     let mut card = div()
         .flex()
         .flex_shrink_0()
@@ -1182,7 +1255,7 @@ fn decision_card(decision: &Decision) -> Div {
         .child(
             div()
                 .flex_shrink_0()
-                .text_size(px(theme::TEXT_CODE))
+                .text_size(px(theme::TEXT_ALERT_GLYPH))
                 .text_color(rgb(WAIT))
                 .child("⚠"),
         )
@@ -1217,26 +1290,34 @@ fn decision_card(decision: &Decision) -> Div {
     card
 }
 
-/// The Decision's subject — what it wants to do: the description, else the
-/// tool's name, else the honest unreadable fallback. Every surface that
+/// The Decision's subject — what it wants to do, tool-prefixed the comps'
+/// way: `Bash: gh issue close 212`; the tool's name alone without a
+/// description, else the honest unreadable fallback. Every surface that
 /// names a Decision (L1 card, L2 cell, wall alert) goes through here.
 fn decision_subject(decision: &Decision) -> SharedString {
-    if !decision.description.is_empty() {
-        SharedString::from(decision.description.clone())
-    } else if !decision.tool_name.is_empty() {
-        SharedString::from(decision.tool_name.clone())
-    } else {
-        SharedString::from("unreadable permission request")
+    match (
+        decision.tool_name.is_empty(),
+        decision.description.is_empty(),
+    ) {
+        (false, false) => {
+            SharedString::from(format!("{}: {}", decision.tool_name, decision.description))
+        }
+        (true, false) => SharedString::from(decision.description.clone()),
+        (false, true) => SharedString::from(decision.tool_name.clone()),
+        (true, true) => SharedString::from("unreadable permission request"),
     }
 }
 
-/// A Decision card's subtitle — who wants it, in the caller's phrasing —
-/// or the unreadable fallback when the provider named no tool.
-fn decision_wants(decision: &Decision, wants: &'static str) -> SharedString {
+/// A Decision card's subtitle — `Write · wants approval`, carrying the
+/// request's cwd when it names one — or the unreadable fallback when the
+/// provider named no tool.
+fn decision_wants(decision: &Decision) -> SharedString {
     if decision.tool_name.is_empty() {
-        SharedString::from("the provider sent a request Ferrite could not read")
-    } else {
-        SharedString::from(format!("{} {wants}", decision.tool_name))
+        return SharedString::from("the provider sent a request Ferrite could not read");
+    }
+    match decision.input.get("cwd").and_then(|cwd| cwd.as_str()) {
+        Some(cwd) => SharedString::from(format!("{} · wants approval · {cwd}", decision.tool_name)),
+        None => SharedString::from(format!("{} · wants approval", decision.tool_name)),
     }
 }
 
@@ -1278,31 +1359,74 @@ fn hollow_dot(size: gpui::Pixels) -> Div {
         .border_color(rgb(INK_FAINT))
 }
 
-/// A plan's progress as a bar fill, 0..=1 — the one rule every progress
-/// pill (wall and L2) shares.
-fn plan_fraction(todos: Todos) -> f32 {
-    (todos.done as f32 / todos.total.max(1) as f32).clamp(0.0, 1.0)
-}
-
-/// A progress pill: EDGE track, colored fill, radius 999.
-fn bar(height: gpui::Pixels, fraction: f32, fill: u32) -> Div {
-    div()
-        .h(height)
-        .w_full()
-        .rounded_full()
-        .bg(rgba(EDGE))
+/// The CHANGED strip riding above the Composer: every file this Thread's
+/// edits touched, rolled up as bordered chips — `pane.rs +2 −1` (#22 C11).
+fn changed_strip(changed: &[ferrite_core::docview::FileChange]) -> Div {
+    let mut strip = div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(6.))
+        .px(px(theme::TRANSCRIPT_PAD_X))
+        .py(px(5.))
+        .border_t_1()
+        .border_color(rgba(HAIRLINE))
         .overflow_hidden()
         .child(
             div()
-                .h_full()
-                .w(relative(fraction.clamp(0.0, 1.0)))
-                .rounded_full()
-                .bg(rgb(fill)),
+                .flex_shrink_0()
+                .text_size(px(theme::TEXT_CHIP))
+                .text_color(rgb(INK_MUTED))
+                .child("CHANGED"),
+        );
+    for file in changed {
+        let name = Path::new(&file.path)
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_else(|| file.path.clone());
+        strip = strip.child(
+            div()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .gap(px(6.))
+                .text_size(px(theme::TEXT_META))
+                .text_color(rgb(INK_SECONDARY))
+                .bg(rgb(RAISED))
+                .border_1()
+                .border_color(rgba(EDGE))
+                .rounded(px(theme::R_CHIP))
+                .px(px(7.))
+                .py(px(2.))
+                .child(SharedString::from(name))
+                .child(diff_stat(file.added, file.removed)),
+        );
+    }
+    strip
+}
+
+/// `+N −N`, green beside red — the one diff-stat pair every surface (tool
+/// rows, L2 badges, CHANGED chips) draws. Text size is the caller's.
+fn diff_stat(added: usize, removed: usize) -> Div {
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(4.))
+        .child(
+            div()
+                .text_color(rgb(GOOD))
+                .child(SharedString::from(format!("+{added}"))),
+        )
+        .child(
+            div()
+                .text_color(rgb(FAIL))
+                .child(SharedString::from(format!("−{removed}"))),
         )
 }
 
 /// A small status chip: 10px ink on a wash, radius 4.
-fn chip(label: &'static str, ink: u32, wash: u32) -> Div {
+fn chip(label: impl Into<SharedString>, ink: u32, wash: u32) -> Div {
     div()
         .flex_shrink_0()
         .text_size(px(theme::TEXT_CHIP))
@@ -1311,7 +1435,143 @@ fn chip(label: &'static str, ink: u32, wash: u32) -> Div {
         .rounded(px(theme::R_CHIP))
         .px(px(6.))
         .py(px(1.))
-        .child(label)
+        .child(label.into())
+}
+
+/// `8.2s` under ten seconds, `42s` under a minute, `2m14s` beyond — the
+/// comps' duration grammar, shared by tool rows and activity lines.
+fn duration_label(elapsed: Duration) -> SharedString {
+    let secs = elapsed.as_secs_f64();
+    if secs < 10.0 {
+        SharedString::from(format!("{secs:.1}s"))
+    } else if secs < 60.0 {
+        SharedString::from(format!("{}s", secs as u64))
+    } else {
+        let whole = secs as u64;
+        SharedString::from(format!("{}m{:02}s", whole / 60, whole % 60))
+    }
+}
+
+/// The context ring (#22 C12 amended): a small donut whose ACCENT arc fills
+/// clockwise from 12 o'clock with the used fraction of the window, over an
+/// EDGE track. The track is a bordered circle; the arc is a sampled annular
+/// sector — gpui has no arc primitive, and at this size a 5°-step polygon
+/// is indistinguishable from a true arc at 1x and 2x.
+pub fn usage_ring(fraction: f32) -> Div {
+    // A full ring's seam would degenerate the polygon; one part in a
+    // thousand is invisible at 13px.
+    let fraction = fraction.clamp(0.0, 1.0).min(0.999);
+    div()
+        .relative()
+        .flex_shrink_0()
+        .w(px(theme::USAGE_RING_D))
+        .h(px(theme::USAGE_RING_D))
+        .child(
+            div()
+                .absolute()
+                .inset_0()
+                .rounded_full()
+                .border(px(theme::USAGE_RING_W))
+                .border_color(rgba(EDGE)),
+        )
+        .child(
+            canvas(
+                |_, _, _| (),
+                move |bounds, _, window, _| {
+                    if fraction <= 0.0 {
+                        return;
+                    }
+                    let outer = bounds.size.width.min(bounds.size.height) * 0.5;
+                    let inner = outer - px(theme::USAGE_RING_W);
+                    window.paint_path(
+                        arc_path(bounds.center(), inner, outer, fraction),
+                        rgb(ACCENT),
+                    );
+                },
+            )
+            .absolute()
+            .inset_0(),
+        )
+}
+
+/// The annular sector from 12 o'clock through `fraction` of the circle,
+/// sampled clockwise — one quad contour per step. gpui fills a contour as
+/// a fan from its start with no winding rule, so a single outer-then-inner
+/// outline would fill the hole; per-segment quads pave exactly the band.
+fn arc_path(
+    center: gpui::Point<Pixels>,
+    inner: Pixels,
+    outer: Pixels,
+    fraction: f32,
+) -> gpui::Path<Pixels> {
+    const STEPS_FULL: usize = 72;
+    let steps = ((fraction * STEPS_FULL as f32).ceil() as usize).max(2);
+    let sweep = fraction * std::f32::consts::TAU;
+    let start = -std::f32::consts::FRAC_PI_2;
+    let at = |radius: Pixels, angle: f32| {
+        point(
+            center.x + radius * angle.cos(),
+            center.y + radius * angle.sin(),
+        )
+    };
+    let angle = |step: usize| start + sweep * step as f32 / steps as f32;
+    let mut path = gpui::Path::new(at(outer, start));
+    for step in 0..steps {
+        path.move_to(at(outer, angle(step)));
+        path.line_to(at(outer, angle(step + 1)));
+        path.line_to(at(inner, angle(step + 1)));
+        path.line_to(at(inner, angle(step)));
+    }
+    path
+}
+
+/// The ring's hover card (#22 C12): the full detail — current / maximum
+/// tokens — on the popover surface every other overlay uses. The cockpit
+/// hangs it under the ring while the pointer is on it.
+pub fn usage_card(usage: Usage) -> Div {
+    let detail = match usage.context_window {
+        Some(window) if window > 0 => {
+            format!("{} / {}", tokens(usage.total_tokens), tokens(window))
+        }
+        _ => tokens(usage.total_tokens),
+    };
+    popover_shell().child(
+        div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(px(6.))
+            .h(px(theme::MENU_ROW_H))
+            .px(px(8.))
+            .text_size(px(theme::TEXT_META))
+            .text_color(rgb(INK_SECONDARY))
+            .child(SharedString::from(detail))
+            .child(
+                div()
+                    .font_family(theme::FONT_UI)
+                    .text_color(rgb(INK_MUTED))
+                    .child("tokens"),
+            ),
+    )
+}
+
+/// One 23px pane-header window control (#22 amendment): a quiet INK_MUTED
+/// glyph on nothing, lifted a step on hover. Wiring is the cockpit's — the
+/// verbs are the existing park and zoom-back moves, never new semantics.
+pub fn control_button(id: (&'static str, usize), glyph: &'static str) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .justify_center()
+        .w(px(theme::CONTROL_BTN))
+        .h(px(theme::CONTROL_BTN))
+        .rounded(px(theme::R_CHIP))
+        .text_size(px(theme::TEXT_CODE))
+        .text_color(rgb(INK_MUTED))
+        .hover(|button| button.bg(rgba(EDGE)))
+        .child(glyph)
 }
 
 /// Which checkout a Thread works in — a worktree's own name, or "main" for
@@ -1488,7 +1748,11 @@ pub fn popover_footer(hints: &'static str) -> Div {
 /// code) and for `⎿` continuations and bare diffs under tool rows.
 /// A selected Block carries the wash; whole Blocks are the selection unit
 /// because gpui 0.2.2 has no character-level selection over rendered text.
-fn render_block(block: &Block, selected: bool) -> AnyElement {
+fn render_block(
+    block: &Block,
+    selected: bool,
+    timings: Option<&HashMap<String, ToolTiming>>,
+) -> AnyElement {
     let row = div()
         .w_full()
         .flex_shrink_0()
@@ -1518,9 +1782,6 @@ fn render_block(block: &Block, selected: bool) -> AnyElement {
                     .text_size(px(theme::TEXT_HEADING))
                     .font_weight(FontWeight::BOLD)
                     .text_color(rgb(INK))
-                    .border_b_1()
-                    .border_color(rgba(EDGE_STRONG))
-                    .pb(px(3.))
                     .child(inline(spans)),
             )
             .child(div().flex_1())
@@ -1534,15 +1795,20 @@ fn render_block(block: &Block, selected: bool) -> AnyElement {
             .child(div().flex_shrink_0().text_color(rgb(ACCENT)).child("•"))
             .child(div().min_w_0().child(inline(spans)))
             .into_any_element(),
+        // Out-of-band lines share the text column, not the gutter — one
+        // left edge for everything that reads as prose (#22 D22).
         Body::Thinking(thought) => row
+            .pl(px(theme::INDENT))
             .text_color(rgb(INK_FAINT))
             .child(SharedString::from(thought.clone()))
             .into_any_element(),
         Body::Notice(text) => row
+            .pl(px(theme::INDENT))
             .text_color(rgb(WAIT))
             .child(SharedString::from(text.clone()))
             .into_any_element(),
         Body::Meta(text) => row
+            .pl(px(theme::INDENT))
             .text_size(px(theme::TEXT_ROW))
             .text_color(rgb(INK_MUTED))
             .child(SharedString::from(text.clone()))
@@ -1584,7 +1850,7 @@ fn render_block(block: &Block, selected: bool) -> AnyElement {
                     ),
             )
             .into_any_element(),
-        Body::Tool(tool) => render_tool(row, tool),
+        Body::Tool(tool) => render_tool(row, tool, timings),
     }
 }
 
@@ -1601,14 +1867,23 @@ fn gutter_row(row: Div, glyph: &'static str, color: u32, bold: bool) -> Div {
 }
 
 /// `⏺ Name(arg)` with its `⎿` continuation and bare diff, per DirectionDense:
-/// bold tool name, file args in accent, command args in prose ink.
-fn render_tool(row: Div, tool: &ToolBlock) -> AnyElement {
+/// bold tool name, file args in accent, command args in prose ink. The row's
+/// right edge carries its verdict — the diff stat for an edit, the pass/exit
+/// chip for a command that succeeded (#22 C9/C10) — and the call's measured
+/// duration where the cockpit clocked it.
+fn render_tool(
+    row: Div,
+    tool: &ToolBlock,
+    timings: Option<&HashMap<String, ToolTiming>>,
+) -> AnyElement {
     // Command runners' args read as prose; every other summary is a
     // path-like subject and takes the accent (the comps' file links,
     // rendered inert — opening files is not this pass).
-    let arg_color = match tool.name.as_str() {
-        "Bash" | "commandExecution" => INK_SECONDARY,
-        _ => ACCENT,
+    let command_runner = matches!(tool.name.as_str(), "Bash" | "commandExecution");
+    let arg_color = if command_runner {
+        INK_SECONDARY
+    } else {
+        ACCENT
     };
     let mut call = div().flex().min_w_0().text_color(rgb(INK_SECONDARY)).child(
         div()
@@ -1629,30 +1904,83 @@ fn render_tool(row: Div, tool: &ToolBlock) -> AnyElement {
             )
             .child(div().flex_shrink_0().child(")"));
     }
-    let mut card = row.flex().flex_col().gap(px(theme::TRANSCRIPT_GAP)).child(
-        gutter_row(
-            div().hover(|row| row.bg(rgba(HOVER))),
-            "⏺",
-            INK_TERTIARY,
-            false,
-        )
-        .child(call),
-    );
-    if let Some(line) = &tool.result_line {
-        card = card.child(
+    let mut line = gutter_row(
+        div().hover(|row| row.bg(rgba(HOVER))),
+        "⏺",
+        INK_TERTIARY,
+        false,
+    )
+    .child(call);
+    // A settled call's clock, where the cockpit stamped one; running calls
+    // tick on the activity line instead. Sub-tenth blips render nothing —
+    // a column of 0.0s is noise, not an instrument.
+    let settled_clock = timings
+        .and_then(|map| map.get(&tool.call))
+        .and_then(|timing| match timing {
+            ToolTiming::Done(total) => Some(*total),
+            ToolTiming::Running(_) => None,
+        })
+        .filter(|total| *total >= Duration::from_millis(100));
+    // A pass chip that carries the run's own count subsumes the ⎿ line it
+    // was promoted from; a countless chip keeps the line, which still says
+    // more than the chip does.
+    let mut promoted = false;
+    let verdict = if let Some(diff) = &tool.diff {
+        Some(diff_stat(diff.added, diff.removed).text_size(px(theme::TEXT_META)))
+    } else if command_runner && matches!(tool.state, ToolState::Ok) {
+        // A command runner that settled without an error exited 0 — that
+        // is exactly what `is_error` carries for one; a test run reads its
+        // count off its own result line, or stays honestly countless.
+        let label = if is_test_run(tool) {
+            match tool.result_line.as_deref().and_then(passed_count) {
+                Some(count) => {
+                    promoted = true;
+                    SharedString::from(format!("✓ {count} passed"))
+                }
+                None => SharedString::from("✓ passed"),
+            }
+        } else {
+            SharedString::from("exit 0")
+        };
+        Some(chip(label, GOOD, GOOD_WASH))
+    } else {
+        None
+    };
+    if verdict.is_some() || settled_clock.is_some() {
+        line = line.child(div().flex_1());
+    }
+    line = line.children(verdict);
+    if let Some(total) = settled_clock {
+        line = line.child(
             div()
-                .pl(px(theme::INDENT))
-                .min_w_0()
-                .truncate()
+                .flex_shrink_0()
+                .text_size(px(theme::TEXT_META))
                 .text_color(rgb(INK_MUTED))
-                .child(SharedString::from(format!("⎿ {line}"))),
+                .child(duration_label(total)),
         );
+    }
+    let mut card = row
+        .flex()
+        .flex_col()
+        .gap(px(theme::TRANSCRIPT_GAP))
+        .child(line);
+    if !promoted {
+        if let Some(line) = &tool.result_line {
+            card = card.child(
+                div()
+                    .pl(px(theme::INDENT))
+                    .w_full()
+                    .truncate()
+                    .text_color(rgb(INK_MUTED))
+                    .child(SharedString::from(format!("⎿ {line}"))),
+            );
+        }
     }
     if let ToolState::Failed(message) = &tool.state {
         card = card.child(
             div()
                 .pl(px(theme::INDENT))
-                .min_w_0()
+                .w_full()
                 .truncate()
                 .text_color(rgb(FAIL))
                 .child(SharedString::from(format!("⎿ {message}"))),
@@ -1755,33 +2083,56 @@ pub fn block_text(block: &Block) -> String {
     }
 }
 
-/// Token counts read at a glance, not to the digit.
+/// Token counts read at a glance, not to the digit — `412k`, `1M`, `1.5M`.
 fn tokens(count: u64) -> String {
+    fn scaled(value: f64, suffix: &str) -> String {
+        if (value - value.round()).abs() < 0.05 {
+            format!("{}{suffix}", value.round() as u64)
+        } else {
+            format!("{value:.1}{suffix}")
+        }
+    }
     match count {
         0..=999 => count.to_string(),
-        1_000..=999_999 => format!("{:.1}k", count as f64 / 1_000.0),
-        _ => format!("{:.1}m", count as f64 / 1_000_000.0),
+        1_000..=999_999 => scaled(count as f64 / 1_000.0, "k"),
+        _ => scaled(count as f64 / 1_000_000.0, "M"),
     }
 }
 
 /// Markdown spans in one wrapping run, so inline code keeps its place in the
-/// sentence instead of becoming its own box.
+/// sentence instead of becoming its own box. Bold and links carry their own
+/// styles (#22 C13); links stay inert — paths render, nothing opens.
 fn inline(spans: &[Span]) -> StyledText {
     let mut text = String::new();
     let mut highlights = Vec::new();
     for span in spans {
         let start = text.len();
         text.push_str(&span.text);
-        if span.style == Style::Code {
-            highlights.push((
-                start..text.len(),
-                HighlightStyle {
-                    // The comps' inline-code chip: primary ink on RAISED.
-                    color: Some(rgb(INK).into()),
-                    background_color: Some(rgb(RAISED).into()),
-                    ..Default::default()
-                },
-            ));
+        let style = match span.style {
+            Style::Plain => None,
+            Style::Code => Some(HighlightStyle {
+                // The comps' inline-code chip: primary ink on RAISED.
+                color: Some(rgb(INK).into()),
+                background_color: Some(rgb(RAISED).into()),
+                ..Default::default()
+            }),
+            Style::Bold => Some(HighlightStyle {
+                color: Some(rgb(INK).into()),
+                font_weight: Some(FontWeight::BOLD),
+                ..Default::default()
+            }),
+            Style::Link => Some(HighlightStyle {
+                color: Some(rgb(ACCENT).into()),
+                underline: Some(gpui::UnderlineStyle {
+                    thickness: px(1.),
+                    color: Some(rgba(theme::ACCENT_UNDERLINE).into()),
+                    wavy: false,
+                }),
+                ..Default::default()
+            }),
+        };
+        if let Some(style) = style {
+            highlights.push((start..text.len(), style));
         }
     }
     StyledText::new(text).with_highlights(highlights)
@@ -1914,9 +2265,17 @@ mod tests {
                 .w(px(900.))
                 .font_family(crate::theme::FONT_MONO)
                 .text_size(px(12.))
-                .children(self.blocks.iter().map(|block| render_block(block, false)))
+                .children(
+                    self.blocks
+                        .iter()
+                        .map(|block| render_block(block, false, None)),
+                )
                 // And once more selected, so the wash paints on every kind.
-                .children(self.blocks.iter().map(|block| render_block(block, true)))
+                .children(
+                    self.blocks
+                        .iter()
+                        .map(|block| render_block(block, true, None)),
+                )
         }
     }
 
@@ -2136,7 +2495,7 @@ mod tests {
         // No transcript: an empty card.
         let empty = wall_card(None, None);
         assert!(!empty.tests_failing);
-        assert_eq!(empty.fraction, None);
+        assert!(empty.meter.is_empty());
 
         let mut transcript = Transcript::default();
         for subject in ["a", "b", "c", "d"] {
@@ -2155,10 +2514,11 @@ mod tests {
         }
         assert_eq!(transcript.todos(), Some(Todos { done: 3, total: 4 }));
         let card = wall_card(Some(&transcript), None);
-        assert_eq!(card.fraction, Some(0.75));
+        assert_eq!(card.meter.as_ref(), "▰▰▰▱");
         assert_eq!(card.working.as_ref(), "3/4 · ◐ working");
 
-        // A red suite flips the folded flag.
+        // A red suite flips the folded flag and folds the failing line —
+        // with the run's own count when its output reported one.
         transcript.apply(Input::Event(SessionEvent::ToolStarted {
             id: "test1".into(),
             name: "Bash".into(),
@@ -2166,23 +2526,16 @@ mod tests {
         }));
         transcript.apply(Input::Event(SessionEvent::ToolCompleted {
             id: "test1".into(),
-            output: String::new(),
+            output: "test result: FAILED. 357 passed; 2 failed".into(),
             is_error: true,
             result: ToolResult::Opaque,
         }));
-        assert!(wall_card(Some(&transcript), None).tests_failing);
+        let red = wall_card(Some(&transcript), None);
+        assert!(red.tests_failing);
+        assert_eq!(red.failing.as_ref(), "✗ 2 failing");
 
-        // A finished turn's cost reaches the done line.
-        transcript.apply(Input::Event(SessionEvent::TurnEnded {
-            outcome: TurnOutcome::Completed,
-            cost_usd: Some(0.31),
-        }));
-        assert_eq!(
-            wall_card(Some(&transcript), None).done.as_ref(),
-            "✓ done · $0.31"
-        );
-
-        // A Decision's subject becomes the alert's second line.
+        // A Decision's subject becomes the alert's second line, wearing the
+        // tool prefix every Decision surface shares (#22 C7).
         let decision = Decision {
             id: "perm".into(),
             tool_use_id: "toolu".into(),
@@ -2195,17 +2548,18 @@ mod tests {
             wall_card(Some(&transcript), Some(&decision))
                 .context
                 .as_ref(),
-            "gh issue close 212"
+            "Bash: gh issue close 212"
         );
 
-        // A closed Session's reason becomes the blocked context line.
+        // A closed Session's reason is promoted into the alert line itself
+        // (#22 C14).
         let mut closed = Transcript::default();
         closed.apply(Input::Event(SessionEvent::Closed {
             reason: "claude CLI exited with code 1".into(),
         }));
         assert_eq!(
             wall_card(Some(&closed), None).context.as_ref(),
-            "claude CLI exited with code 1"
+            "✗ claude CLI exited with code 1"
         );
     }
 
@@ -2223,10 +2577,14 @@ mod tests {
             suggestions: vec![],
         };
         let full = decision("Bash", "gh issue close 212");
-        assert_eq!(decision_subject(&full).as_ref(), "gh issue close 212");
+        assert_eq!(decision_subject(&full).as_ref(), "Bash: gh issue close 212");
+        assert_eq!(decision_wants(&full).as_ref(), "Bash · wants approval");
+        // A request naming its cwd carries it on the wants line (#22 C7).
+        let mut placed = decision("Bash", "gh issue close 212");
+        placed.input = serde_json::json!({ "command": "gh issue close 212", "cwd": "/work/api" });
         assert_eq!(
-            decision_wants(&full, "wants to run this").as_ref(),
-            "Bash wants to run this"
+            decision_wants(&placed).as_ref(),
+            "Bash · wants approval · /work/api"
         );
         // No description: the tool's name is the subject.
         let bare = decision("Write", "");
@@ -2238,7 +2596,7 @@ mod tests {
             "unreadable permission request"
         );
         assert_eq!(
-            decision_wants(&unreadable, "wants approval to run").as_ref(),
+            decision_wants(&unreadable).as_ref(),
             "the provider sent a request Ferrite could not read"
         );
         // The wall's alert context runs through the same derivation.
@@ -2264,6 +2622,29 @@ mod tests {
         assert_eq!(mode_chip_label("default").as_ref(), "⏵ default");
     }
 
+    /// #22 amendment: durations read in the comps' grammar at every scale.
+    #[test]
+    fn durations_read_at_the_comps_grammar() {
+        assert_eq!(duration_label(Duration::from_millis(340)).as_ref(), "0.3s");
+        assert_eq!(
+            duration_label(Duration::from_millis(8_200)).as_ref(),
+            "8.2s"
+        );
+        assert_eq!(duration_label(Duration::from_secs(42)).as_ref(), "42s");
+        assert_eq!(duration_label(Duration::from_secs(134)).as_ref(), "2m14s");
+    }
+
+    /// The hover card's numbers read at a glance — `412k / 1M`, never a
+    /// trailing `.0`.
+    #[test]
+    fn token_counts_read_at_a_glance() {
+        assert_eq!(tokens(412), "412");
+        assert_eq!(tokens(124_000), "124k");
+        assert_eq!(tokens(412_000), "412k");
+        assert_eq!(tokens(1_000_000), "1M");
+        assert_eq!(tokens(1_530_000), "1.5M");
+    }
+
     /// The Dense header's ▰▱ meter stays glanceable: glyphs for small plans,
     /// the bare fraction for long ones, and done never overshoots.
     #[test]
@@ -2273,6 +2654,11 @@ mod tests {
         assert_eq!(meter(9, 20).as_ref(), "9/20");
         assert_eq!(meter(5, 4).as_ref(), "▰▰▰▰ 4/4");
         assert_eq!(meter(0, 0).as_ref(), "");
+        // The wall's bare run: glyphs only, and nothing past the cap — its
+        // status line already carries the fraction.
+        assert_eq!(meter_run(3, 4), "▰▰▰▱");
+        assert_eq!(meter_run(9, 20), "");
+        assert_eq!(meter_run(0, 0), "");
     }
 
     /// #11: import is offered exactly while a Thread has no conversation —

@@ -73,7 +73,7 @@ fn main() {
             eprintln!("ferrite: {refusal}");
         }
 
-        let mut core = Cockpit::new(store, Box::new(Spawn { demo, load }));
+        let mut core = Cockpit::new(store, Box::new(Spawn::new(demo, load)));
         core.watch_memory(Box::new(ProcessRss), RSS_LIMIT);
         for thread in adopted {
             if let Err(e) = core.revive(thread) {
@@ -89,9 +89,18 @@ fn main() {
             .open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    // The titlebar band blends into the app: the strip is
+                    // the visible titlebar, and the traffic lights sit in
+                    // its band (#22 D24). macOS only — hiding the system
+                    // titlebar elsewhere would take the window controls
+                    // with it.
                     titlebar: Some(TitlebarOptions {
                         title: Some("ferrite".into()),
-                        ..Default::default()
+                        appears_transparent: cfg!(target_os = "macos"),
+                        traffic_light_position: Some(point(
+                            px(theme::TRAFFIC_X),
+                            px(theme::TRAFFIC_Y),
+                        )),
                     }),
                     ..Default::default()
                 },

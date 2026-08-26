@@ -5,10 +5,11 @@
 //! back while a turn runs. No process and no window — a Thread's events are
 //! fed in, and what the operator must answer comes out.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
+use std::time::{Duration, Instant};
 
 use crate::providers::Session;
 use crate::store::{LoadError, Provider, Store, ThreadWriter};
@@ -138,6 +139,11 @@ struct Thread {
     /// in the provider's own word. Display-only, and Session state exactly
     /// like the menu: None until announced, gone with the Session.
     permission_mode: Option<String>,
+    /// Each tool call's wall clock, stamped when THIS cockpit ingested its
+    /// events — the transcript's folds stay clockless, so a replayed log
+    /// has no durations, honestly. Keyed by the provider's call id, the
+    /// `ToolBlock.call` a row renders from.
+    timings: HashMap<String, ToolTiming>,
 }
 
 impl Thread {
@@ -167,6 +173,26 @@ impl Thread {
             preface_pending: true,
             commands: Vec::new(),
             permission_mode: None,
+            timings: HashMap::new(),
+        }
+    }
+}
+
+/// One tool call's clock reading, stamped at ingestion.
+#[derive(Debug, Clone, Copy)]
+pub enum ToolTiming {
+    /// Still in flight — the clock is ticking from here.
+    Running(Instant),
+    /// Settled, with the whole run measured.
+    Done(Duration),
+}
+
+impl ToolTiming {
+    /// Time on the clock — still growing for a running call.
+    pub fn elapsed(&self) -> Duration {
+        match self {
+            ToolTiming::Running(since) => since.elapsed(),
+            ToolTiming::Done(total) => *total,
         }
     }
 }
@@ -621,6 +647,13 @@ impl Cockpit {
         self.threads.get(&thread)?.pending.as_ref()
     }
 
+    /// The wall clocks of this Thread's tool calls, keyed by call id — only
+    /// the calls this cockpit ingested live. A replayed history has no
+    /// clock, and pretending otherwise would print made-up durations.
+    pub fn tool_timings(&self, thread: ThreadId) -> Option<&HashMap<String, ToolTiming>> {
+        Some(&self.threads.get(&thread)?.timings)
+    }
+
     /// The live Session's command menu (#23): what `/` offers in this
     /// Thread's Composer. Empty until the Session announces one — never a
     /// static list.
@@ -744,8 +777,21 @@ fn fold(state: &mut Thread, event: &SessionEvent) -> Wake {
     match event {
         SessionEvent::TextDelta { .. }
         | SessionEvent::ThinkingDelta { .. }
-        | SessionEvent::ReasoningSummaryDelta { .. }
-        | SessionEvent::ToolStarted { .. } => state.busy = true,
+        | SessionEvent::ReasoningSummaryDelta { .. } => state.busy = true,
+        // The call's clock starts and stops at ingestion — the only clock
+        // durations ever get (transcript folds keep none).
+        SessionEvent::ToolStarted { id, .. } => {
+            state.busy = true;
+            state
+                .timings
+                .insert(id.clone(), ToolTiming::Running(Instant::now()));
+        }
+        SessionEvent::ToolCompleted { id, .. } => {
+            if let Some(ToolTiming::Running(since)) = state.timings.get(id) {
+                let total = since.elapsed();
+                state.timings.insert(id.clone(), ToolTiming::Done(total));
+            }
+        }
         // A turn that ends takes its Decision with it: the provider is no
         // longer waiting, so an answer would go nowhere. Anything the operator
         // wrote behind the turn goes out now.
@@ -1140,6 +1186,63 @@ mod tests {
         assert_eq!(updates[0].dirty.len(), 1);
         assert_eq!(cockpit.transcript(one).unwrap().blocks().len(), 1);
         assert!(cockpit.transcript(two).unwrap().blocks().is_empty());
+    }
+
+    /// #22: durations are stamped at ingestion — a call runs on a live
+    /// clock until its completion fixes the total, and a call the cockpit
+    /// never saw live has none. No sleeps: monotonic clocks never run
+    /// backwards, so the invariants hold without waiting on a scheduler.
+    #[test]
+    fn tool_calls_are_clocked_at_ingestion() {
+        let (mut cockpit, fake) = cockpit("timings");
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+
+        fake.streams.borrow()[0]
+            .send(SessionEvent::ToolStarted {
+                id: "t1".into(),
+                name: "Bash".into(),
+                input: serde_json::json!({ "command": "cargo check" }),
+            })
+            .unwrap();
+        cockpit.pump();
+        let running = cockpit.tool_timings(thread).unwrap()["t1"];
+        assert!(matches!(running, ToolTiming::Running(_)));
+        let first = running.elapsed();
+        assert!(
+            running.elapsed() >= first,
+            "a running call's clock never runs backwards"
+        );
+
+        fake.streams.borrow()[0]
+            .send(SessionEvent::ToolCompleted {
+                id: "t1".into(),
+                output: String::new(),
+                is_error: false,
+                result: crate::ToolResult::Opaque,
+            })
+            .unwrap();
+        cockpit.pump();
+        let done = cockpit.tool_timings(thread).unwrap()["t1"];
+        let ToolTiming::Done(total) = done else {
+            panic!("a settled call fixes its total: {done:?}");
+        };
+        assert!(
+            total >= first,
+            "the total covers at least what had already elapsed"
+        );
+        assert_eq!(done.elapsed(), done.elapsed(), "a settled call is fixed");
+
+        // A completion the cockpit never saw start has no clock to read.
+        fake.streams.borrow()[0]
+            .send(SessionEvent::ToolCompleted {
+                id: "ghost".into(),
+                output: String::new(),
+                is_error: false,
+                result: crate::ToolResult::Opaque,
+            })
+            .unwrap();
+        cockpit.pump();
+        assert!(!cockpit.tool_timings(thread).unwrap().contains_key("ghost"));
     }
 
     fn decision(id: &str, tool: &str) -> SessionEvent {

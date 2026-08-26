@@ -11,8 +11,10 @@ use crate::transcript::{Body, Todos, ToolBlock, ToolState, Transcript};
 pub struct Instruments {
     pub added: usize,
     pub removed: usize,
-    /// How many distinct files this Thread has touched.
-    pub files: usize,
+    /// Every file this Thread's edits touched, rolled up — the CHANGED
+    /// strip's chips, in first-touch order. `added`/`removed` above are the
+    /// same numbers summed.
+    pub changed: Vec<FileChange>,
     /// How the most recent test run ended, if one has run at all.
     pub tests: Option<Tests>,
     /// Tool calls still in flight — what the Thread is doing right now.
@@ -23,20 +25,40 @@ pub struct Instruments {
     /// trimmed line for L2's `◐` activity row. L3 never pays for this
     /// (`Instruments::of` walks every Block); the wall shows status words.
     pub activity: Option<String>,
+    /// The call id behind `activity`, for looking up the running call's
+    /// clock in the cockpit's timings.
+    pub running_call: Option<String>,
 }
 
+/// One touched file's rolled-up diff stat.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileChange {
+    pub path: String,
+    pub added: usize,
+    pub removed: usize,
+}
+
+/// How the latest test run ended — with the run's own count where its
+/// result line reported one, so a chip can say `✓ 41` rather than only
+/// pass/fail. `None` is the honest fallback: a line with no number keeps
+/// the countless chip.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tests {
-    Passed,
-    Failed,
+    Passed { count: Option<usize> },
+    Failed { count: Option<usize> },
 }
 
 impl Instruments {
     /// Read the Blocks a Pane already holds. Nothing here asks the provider
     /// for anything it did not already say.
+    ///
+    /// Cost: O(blocks), paid per frame by every L2 cell and by L1's CHANGED
+    /// strip — never by the wall, whose 24-cell frame budget is why L3 reads
+    /// status words instead. If a grid of near Panes ever dips, the deepening
+    /// is instruments folded incrementally on `apply` — its own ticket, not a
+    /// render-side cache.
     pub fn of(transcript: &Transcript) -> Self {
         let mut instruments = Instruments::default();
-        let mut files: Vec<&str> = Vec::new();
         for block in transcript.blocks() {
             let Body::Tool(tool) = &block.body else {
                 continue;
@@ -44,31 +66,78 @@ impl Instruments {
             if let Some(diff) = &tool.diff {
                 instruments.added += diff.added;
                 instruments.removed += diff.removed;
-                if !files.contains(&diff.path.as_str()) {
-                    files.push(&diff.path);
+                match instruments
+                    .changed
+                    .iter_mut()
+                    .find(|file| file.path == diff.path)
+                {
+                    Some(file) => {
+                        file.added += diff.added;
+                        file.removed += diff.removed;
+                    }
+                    None => instruments.changed.push(FileChange {
+                        path: diff.path.clone(),
+                        added: diff.added,
+                        removed: diff.removed,
+                    }),
                 }
             }
             match &tool.state {
                 ToolState::Running => {
                     instruments.running += 1;
-                    // The newest still-running call wins the activity line.
+                    // The newest still-running call wins the activity line —
+                    // and names its call id, so the activity row can look up
+                    // the call's clock.
                     instruments.activity = Some(activity_line(tool));
+                    instruments.running_call = Some(tool.call.clone());
                 }
                 // The newest run wins: a Pane flying a stale red flag is
                 // worse than one flying none.
                 state if is_test_run(tool) => {
                     instruments.tests = Some(match state {
-                        ToolState::Failed(_) => Tests::Failed,
-                        _ => Tests::Passed,
+                        ToolState::Failed(message) => Tests::Failed {
+                            count: test_count(message, &["failed", "failing"]),
+                        },
+                        _ => Tests::Passed {
+                            count: tool.result_line.as_deref().and_then(passed_count),
+                        },
                     })
                 }
                 _ => {}
             }
         }
-        instruments.files = files.len();
         instruments.todos = transcript.todos();
         instruments
     }
+
+    /// How many distinct files this Thread has touched.
+    pub fn files(&self) -> usize {
+        self.changed.len()
+    }
+}
+
+/// `41 passed (41)` → 41 — the pass count a runner's own result line
+/// reports. Shared with the tool-row badge, so the row and the L2 chip can
+/// never read the same line differently.
+pub fn passed_count(line: &str) -> Option<usize> {
+    test_count(line, &["passed", "pass"])
+}
+
+/// The number standing directly before one of `words` — `357 passed; 2
+/// failed` asked for "failed" is 2. No number, no count: a chip that
+/// guessed one would lie, so callers fall back to the countless label.
+fn test_count(line: &str, words: &[&str]) -> Option<usize> {
+    let line = line.to_lowercase();
+    let tokens: Vec<&str> = line
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .collect();
+    tokens.windows(2).find_map(|pair| {
+        words
+            .contains(&pair[1])
+            .then(|| pair[0].parse().ok())
+            .flatten()
+    })
 }
 
 /// How much of a running tool's name+argument the activity line keeps —
@@ -94,8 +163,9 @@ const COMMAND_RUNNERS: [&str; 2] = ["Bash", "commandExecution"];
 
 /// A tool row that ran a test suite. Gated on the tool actually being a
 /// command run: an Edit of `tests/foo.rs` or a Read under `tests/` would
-/// otherwise clear a red suite that nobody had rerun.
-fn is_test_run(tool: &ToolBlock) -> bool {
+/// otherwise clear a red suite that nobody had rerun. Public because the
+/// tool row's pass badge asks the same question the instruments do.
+pub fn is_test_run(tool: &ToolBlock) -> bool {
     if !COMMAND_RUNNERS.contains(&tool.name.as_str()) {
         return false;
     }
@@ -222,8 +292,23 @@ mod tests {
         let instruments = Instruments::of(&transcript);
 
         assert_eq!((instruments.added, instruments.removed), (3, 1));
-        assert_eq!(instruments.files, 2);
-        assert_eq!(instruments.tests, Some(Tests::Failed));
+        assert_eq!(instruments.files(), 2);
+        assert_eq!(
+            instruments.changed,
+            vec![
+                FileChange {
+                    path: "a.rs".into(),
+                    added: 2,
+                    removed: 1,
+                },
+                FileChange {
+                    path: "b.rs".into(),
+                    added: 1,
+                    removed: 0,
+                },
+            ]
+        );
+        assert_eq!(instruments.tests, Some(Tests::Failed { count: None }));
         assert_eq!(instruments.todos, None, "this Thread never planned");
     }
 
@@ -250,7 +335,10 @@ mod tests {
         let mut transcript = Transcript::default();
         transcript.apply(tool("t1", "Bash", "cargo test --workspace"));
         transcript.apply(finished("t1", true, ToolResult::Opaque));
-        assert_eq!(Instruments::of(&transcript).tests, Some(Tests::Failed));
+        assert_eq!(
+            Instruments::of(&transcript).tests,
+            Some(Tests::Failed { count: None })
+        );
 
         // An Edit whose path merely contains "test".
         transcript.apply(Input::Event(SessionEvent::ToolStarted {
@@ -261,14 +349,17 @@ mod tests {
         transcript.apply(finished("t2", false, edit("tests/foo.rs", &["+ok"])));
         assert_eq!(
             Instruments::of(&transcript).tests,
-            Some(Tests::Failed),
+            Some(Tests::Failed { count: None }),
             "an edit under tests/ must not clear a red suite"
         );
 
         // And a command that merely contains "spec".
         transcript.apply(tool("t3", "Bash", "git inspect-nothing"));
         transcript.apply(finished("t3", false, ToolResult::Opaque));
-        assert_eq!(Instruments::of(&transcript).tests, Some(Tests::Failed));
+        assert_eq!(
+            Instruments::of(&transcript).tests,
+            Some(Tests::Failed { count: None })
+        );
     }
 
     #[test]
@@ -282,12 +373,71 @@ mod tests {
         transcript.apply(finished("t2", false, ToolResult::Opaque));
 
         // Green after red is green: the wall must not keep flying an old flag.
-        assert_eq!(Instruments::of(&transcript).tests, Some(Tests::Passed));
+        assert_eq!(
+            Instruments::of(&transcript).tests,
+            Some(Tests::Passed { count: None })
+        );
 
         // A command that is not a test run says nothing about tests.
         transcript.apply(tool("t3", "Bash", "git status"));
         transcript.apply(finished("t3", true, ToolResult::Opaque));
-        assert_eq!(Instruments::of(&transcript).tests, Some(Tests::Passed));
+        assert_eq!(
+            Instruments::of(&transcript).tests,
+            Some(Tests::Passed { count: None })
+        );
+    }
+
+    /// #22 C8: a runner's own result line gives the chip its count — `✓ 41`
+    /// instead of a bare pass flag — and a line with no number falls back
+    /// honestly to `None`, which renders the countless chip.
+    #[test]
+    fn test_counts_fold_from_the_runners_own_lines() {
+        let mut transcript = Transcript::default();
+        transcript.apply(tool("t1", "Bash", "vitest run tests/unit"));
+        transcript.apply(Input::Event(SessionEvent::ToolCompleted {
+            id: "t1".into(),
+            output: "41 passed (41)".into(),
+            is_error: false,
+            result: ToolResult::Opaque,
+        }));
+        assert_eq!(
+            Instruments::of(&transcript).tests,
+            Some(Tests::Passed { count: Some(41) })
+        );
+
+        transcript.apply(tool("t2", "Bash", "cargo test --workspace"));
+        transcript.apply(Input::Event(SessionEvent::ToolCompleted {
+            id: "t2".into(),
+            output: "test result: FAILED. 357 passed; 2 failed".into(),
+            is_error: true,
+            result: ToolResult::Opaque,
+        }));
+        assert_eq!(
+            Instruments::of(&transcript).tests,
+            Some(Tests::Failed { count: Some(2) })
+        );
+
+        // A run whose line carries no number stays countless — never a
+        // guessed digit.
+        transcript.apply(tool("t3", "Bash", "cargo test --workspace"));
+        transcript.apply(Input::Event(SessionEvent::ToolCompleted {
+            id: "t3".into(),
+            output: "all suites green".into(),
+            is_error: false,
+            result: ToolResult::Opaque,
+        }));
+        assert_eq!(
+            Instruments::of(&transcript).tests,
+            Some(Tests::Passed { count: None })
+        );
+
+        // Whole tokens only, and both failure words.
+        assert_eq!(passed_count("41 passed (41)"), Some(41));
+        assert_eq!(passed_count("ok. 359 passed; 0 failed"), Some(359));
+        assert_eq!(passed_count("compassed nothing"), None);
+        assert_eq!(passed_count("all passed"), None);
+        assert_eq!(test_count("2 FAILING checks", &["failing"]), Some(2));
+        assert_eq!(test_count("it failed", &["failed", "failing"]), None);
     }
 
     #[test]

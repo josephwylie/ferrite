@@ -83,6 +83,19 @@ pub struct Spawn {
     pub demo: bool,
     /// Every Session streams forever — the perf load, not a demo to read.
     pub load: bool,
+    /// How many demo Sessions this spawner has dealt — each one takes the
+    /// next seed of the wall mix, so a grid shows every state at once.
+    seeds: usize,
+}
+
+impl Spawn {
+    pub fn new(demo: bool, load: bool) -> Self {
+        Self {
+            demo,
+            load,
+            seeds: 0,
+        }
+    }
 }
 
 impl Spawner for Spawn {
@@ -96,7 +109,14 @@ impl Spawner for Spawn {
             return Ok(Box::new(streaming()));
         }
         if self.demo {
-            return Ok(Box::new(DemoSession::start()));
+            // A revived Thread already replayed its history from the log; a
+            // seed that played again would draw the same turn twice.
+            if resume.is_some() {
+                return Ok(Box::new(DemoSession::quiet()));
+            }
+            let variant = self.seeds;
+            self.seeds += 1;
+            return Ok(Box::new(DemoSession::seeded(variant)));
         }
         // The Thread's workspace binding decides where the Session works; a
         // Thread from before bindings falls back to where Ferrite started.
@@ -169,10 +189,21 @@ fn tasklist_rss(row: &str) -> Option<u64> {
 }
 
 impl DemoSession {
-    pub fn start() -> Self {
+    /// A Session playing one seed of the wall mix — seed 0 is the
+    /// interactive script, the rest each land in one of the states the
+    /// Wall board draws and stay there.
+    pub fn seeded(variant: usize) -> Self {
         let (tx, rx) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
-        play(tx.clone(), cancel.clone(), script());
+        play(tx.clone(), cancel.clone(), seed(variant));
+        Self { rx, tx, cancel }
+    }
+
+    /// A Session that says nothing until spoken to — what a revived demo
+    /// Thread gets, because its history already replayed from the log.
+    pub fn quiet() -> Self {
+        let (tx, rx) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
         Self { rx, tx, cancel }
     }
 
@@ -198,7 +229,16 @@ impl DemoSession {
                         is_error: false,
                         result: ferrite_core::ToolResult::FileEdit {
                             path: "ferrite-perm.txt".into(),
-                            hunks: Vec::new(),
+                            hunks: vec![ferrite_core::Hunk {
+                                old_start: 1,
+                                old_lines: 0,
+                                new_start: 1,
+                                new_lines: 2,
+                                lines: vec![
+                                    "+permission granted by the operator".into(),
+                                    "+the demo writes one honest line".into(),
+                                ],
+                            }],
                         },
                     },
                 )];
@@ -262,6 +302,7 @@ const TURN_ONE: &str = "Ferrite renders whatever the provider streams: no harnes
     ## What the fold produces\n\
     - headings and bullets, each its own Block\n\
     - inline `code` kept in the run of the sentence\n\
+    - **bold runs** and [inert links](https://example.com) in their own styles\n\
     - fenced blocks handed to the injected highlighter\n\n\
     ```rust\n\
     fn apply(&mut self, input: Input) -> Update {\n\
@@ -284,16 +325,469 @@ const THINKING: &[&str] = &[
     "everything durable belongs to core",
 ];
 
-/// Startup: init, thinking, a long turn, a pause, a shorter turn, then idle.
-pub fn script() -> Vec<Step> {
-    let mut steps = vec![Step::new(
-        250,
+// ------------------------------------------------------------------ seeds
+
+/// How many distinct seeds `--demo` deals before cycling — the Wall board's
+/// census: working with and without plans, failing tests, done with a cost,
+/// blocked, idle, and Decisions with real subjects.
+const SEEDS: usize = 12;
+
+/// One spawned demo Session's script, by deal order. Seed 0 is the
+/// interactive script a single Pane opens on; the rest each land in one of
+/// the states the Wall board draws and stay there.
+fn seed(variant: usize) -> Vec<Step> {
+    match variant % SEEDS {
+        0 => script(),
+        1 => seed_working_planned(),
+        2 => seed_failing(),
+        3 => seed_done(0.22),
+        4 => seed_reading(),
+        5 => seed_blocked(),
+        // Two idle seeds on purpose: the Wall census keeps a pair of
+        // quiet cells.
+        6 | 11 => seed_idle(),
+        7 => seed_editing(),
+        8 => seed_done(0.31),
+        9 => seed_checking(),
+        10 => seed_decision(),
+        // `variant % SEEDS` is 0..SEEDS; the compiler just cannot see it.
+        _ => unreachable!("seed variants cycle modulo SEEDS"),
+    }
+}
+
+fn boot(session_id: &str) -> Vec<Step> {
+    vec![Step::new(
+        120,
         SessionEvent::Init {
-            session_id: "4f2a1c9e-7b30-4d18-9c62-1ea55d0b7742".into(),
+            session_id: session_id.into(),
             model: "claude-sonnet-4-5".into(),
         },
-    )];
-    steps.extend(turn(THINKING, TURN_ONE, 0.0380));
+    )]
+}
+
+fn usage(steps: &mut Vec<Step>, total_tokens: u64) {
+    steps.push(Step::new(
+        20,
+        SessionEvent::TokenUsage {
+            total_tokens,
+            input_tokens: total_tokens,
+            cached_input_tokens: 0,
+            output_tokens: 0,
+            reasoning_output_tokens: 0,
+            context_window: Some(200_000),
+        },
+    ));
+}
+
+/// Thinking lines, word-paced like a real turn's.
+fn think(steps: &mut Vec<Step>, lines: &[&str]) {
+    for line in lines {
+        for word in line.split_whitespace() {
+            steps.push(Step::new(
+                18,
+                SessionEvent::ThinkingDelta {
+                    text: format!("{word} "),
+                },
+            ));
+        }
+        steps.push(Step::new(
+            18,
+            SessionEvent::ThinkingDelta { text: "\n".into() },
+        ));
+    }
+}
+
+/// Word-paced prose. split_inclusive, not split_whitespace: the newlines
+/// are what the markdown fold reads, so a pacer that ate them would test
+/// nothing.
+fn prose(steps: &mut Vec<Step>, text: &str) {
+    for chunk in text.split_inclusive(char::is_whitespace) {
+        steps.push(Step::new(
+            14,
+            SessionEvent::TextDelta {
+                text: chunk.to_string(),
+            },
+        ));
+    }
+}
+
+/// The Thread plans with the provider's own tools, so `todos()` counts it.
+/// Every call settles — a planning call left running would wear the ◐
+/// activity line forever.
+fn plan(steps: &mut Vec<Step>, subjects: &[&str], done: usize) {
+    for (at, subject) in subjects.iter().enumerate() {
+        steps.push(Step::new(
+            20,
+            SessionEvent::ToolStarted {
+                id: format!("task_{at}"),
+                name: "TaskCreate".into(),
+                input: serde_json::json!({ "subject": subject }),
+            },
+        ));
+        steps.push(Step::new(
+            10,
+            SessionEvent::ToolCompleted {
+                id: format!("task_{at}"),
+                output: String::new(),
+                is_error: false,
+                result: ferrite_core::ToolResult::Opaque,
+            },
+        ));
+    }
+    for at in 0..done.min(subjects.len()) {
+        steps.push(Step::new(
+            20,
+            SessionEvent::ToolStarted {
+                id: format!("tick_{at}"),
+                name: "TaskUpdate".into(),
+                input: serde_json::json!({ "taskId": format!("{at}"), "status": "completed" }),
+            },
+        ));
+        steps.push(Step::new(
+            10,
+            SessionEvent::ToolCompleted {
+                id: format!("tick_{at}"),
+                output: String::new(),
+                is_error: false,
+                result: ferrite_core::ToolResult::Opaque,
+            },
+        ));
+    }
+}
+
+fn tool(steps: &mut Vec<Step>, id: &str, name: &str, input: serde_json::Value) {
+    steps.push(Step::new(
+        60,
+        SessionEvent::ToolStarted {
+            id: id.into(),
+            name: name.into(),
+            input,
+        },
+    ));
+}
+
+fn settled(steps: &mut Vec<Step>, id: &str, output: &str) {
+    steps.push(Step::new(
+        140,
+        SessionEvent::ToolCompleted {
+            id: id.into(),
+            output: output.into(),
+            is_error: false,
+            result: ferrite_core::ToolResult::Opaque,
+        },
+    ));
+}
+
+/// A real edit with real hunks — what diff cards, `+N −N` stats and the
+/// CHANGED strip render from.
+fn edit(steps: &mut Vec<Step>, id: &str, path: &str) {
+    tool(steps, id, "Edit", serde_json::json!({ "file_path": path }));
+    steps.push(Step::new(
+        140,
+        SessionEvent::ToolCompleted {
+            id: id.into(),
+            output: "applied".into(),
+            is_error: false,
+            result: ferrite_core::ToolResult::FileEdit {
+                path: path.into(),
+                hunks: vec![ferrite_core::Hunk {
+                    old_start: 341,
+                    old_lines: 3,
+                    new_start: 341,
+                    new_lines: 4,
+                    lines: vec![
+                        "     let fraction = plan_fraction(todos);".into(),
+                        "-    cell.child(bar(fraction));".into(),
+                        "+    cell.child(meter_run(todos.done, todos.total));".into(),
+                        "+    cell.child(fraction_label(todos));".into(),
+                        "     cell".into(),
+                    ],
+                }],
+            },
+        },
+    ));
+}
+
+fn seed_working_planned() -> Vec<Step> {
+    let mut steps = boot("demo-seed-work");
+    usage(&mut steps, 118_000);
+    plan(
+        &mut steps,
+        &[
+            "wire the joiner",
+            "fold the counts",
+            "retune the meter",
+            "rerun the suite",
+        ],
+        3,
+    );
+    prose(
+        &mut steps,
+        "Wiring the joiner into the canvas path so the atlas stays per-cell; \
+         the fold keeps the tail following the newest line while the suite \
+         stays green.\n\n",
+    );
+    tool(
+        &mut steps,
+        "t_pass",
+        "Bash",
+        serde_json::json!({ "command": "vitest run tests/unit" }),
+    );
+    settled(&mut steps, "t_pass", "41 passed (41)");
+    tool(
+        &mut steps,
+        "t_watch",
+        "Bash",
+        serde_json::json!({ "command": "vitest run tests/unit --watch" }),
+    );
+    prose(
+        &mut steps,
+        "Holding the watcher open for the next hunk.\n\n",
+    );
+    steps
+}
+
+fn seed_failing() -> Vec<Step> {
+    let mut steps = boot("demo-seed-fail");
+    usage(&mut steps, 74_000);
+    plan(
+        &mut steps,
+        &[
+            "reproduce the flake",
+            "pin the frame",
+            "fix the fold",
+            "rerun",
+            "land",
+        ],
+        2,
+    );
+    prose(
+        &mut steps,
+        "Two cases regressed after the retune; pinning the exact frame the \
+         layout goes wrong before touching the fold.\n\n",
+    );
+    tool(
+        &mut steps,
+        "t_fail",
+        "Bash",
+        serde_json::json!({ "command": "cargo test --workspace" }),
+    );
+    steps.push(Step::new(
+        140,
+        SessionEvent::ToolCompleted {
+            id: "t_fail".into(),
+            output: "test result: FAILED. 357 passed; 2 failed".into(),
+            is_error: true,
+            result: ferrite_core::ToolResult::Opaque,
+        },
+    ));
+    prose(
+        &mut steps,
+        "Rerunning the pair with the fold instrumented.\n\n",
+    );
+    steps
+}
+
+fn seed_done(cost: f64) -> Vec<Step> {
+    let mut steps = boot("demo-seed-done");
+    usage(&mut steps, 96_000);
+    prose(
+        &mut steps,
+        "Landed the retune behind the theme tokens; the suite is green and \
+         the diff is small enough to review at a glance.\n\n",
+    );
+    edit(&mut steps, "t_edit", "crates/ferrite/src/pane.rs");
+    tool(
+        &mut steps,
+        "t_pass",
+        "Bash",
+        serde_json::json!({ "command": "cargo test --workspace" }),
+    );
+    settled(&mut steps, "t_pass", "359 passed");
+    steps.push(Step::new(
+        60,
+        SessionEvent::TurnEnded {
+            outcome: TurnOutcome::Completed,
+            cost_usd: Some(cost),
+        },
+    ));
+    steps
+}
+
+fn seed_reading() -> Vec<Step> {
+    let mut steps = boot("demo-seed-read");
+    plan(
+        &mut steps,
+        &[
+            "map the recipes",
+            "compare the boards",
+            "note the gaps",
+            "draft the fix",
+            "land it",
+        ],
+        1,
+    );
+    prose(
+        &mut steps,
+        "Reading the board recipes side by side before touching anything; \
+         the gaps are instruments, not palette.\n\n",
+    );
+    tool(
+        &mut steps,
+        "t_read",
+        "Read",
+        serde_json::json!({ "file_path": "crates/ferrite/src/pane.rs" }),
+    );
+    steps
+}
+
+fn seed_blocked() -> Vec<Step> {
+    let mut steps = boot("demo-seed-block");
+    prose(&mut steps, "Pushing the preview build to the edge.\n\n");
+    steps.push(Step::new(
+        400,
+        SessionEvent::Closed {
+            reason: "wrangler 403 — deploy refused".into(),
+        },
+    ));
+    steps
+}
+
+fn seed_idle() -> Vec<Step> {
+    boot("demo-seed-idle")
+}
+
+fn seed_editing() -> Vec<Step> {
+    let mut steps = boot("demo-seed-edit");
+    usage(&mut steps, 142_000);
+    prose(
+        &mut steps,
+        "Folding the diff stats into the badge row; the hunks carry their \
+         own counts so the render never re-walks the patch.\n\n",
+    );
+    edit(&mut steps, "t_edit", "crates/ferrite/src/pane.rs");
+    tool(
+        &mut steps,
+        "t_check",
+        "Bash",
+        serde_json::json!({ "command": "cargo check --workspace" }),
+    );
+    steps
+}
+
+fn seed_checking() -> Vec<Step> {
+    let mut steps = boot("demo-seed-check");
+    usage(&mut steps, 88_000);
+    plan(
+        &mut steps,
+        &["retune", "fold", "render", "verify", "land"],
+        4,
+    );
+    prose(
+        &mut steps,
+        "Verification pass: the wall census, the badges, and the meters \
+         against the boards, one cell at a time.\n\n",
+    );
+    tool(
+        &mut steps,
+        "t_check",
+        "Bash",
+        serde_json::json!({ "command": "cargo check --workspace" }),
+    );
+    steps
+}
+
+fn seed_decision() -> Vec<Step> {
+    let mut steps = boot("demo-seed-close");
+    prose(
+        &mut steps,
+        "The stale issue is superseded by the tracking one; closing it \
+         needs a ruling only the operator can give.\n\n",
+    );
+    tool(
+        &mut steps,
+        "t_close",
+        "Bash",
+        serde_json::json!({ "command": "gh issue close 212" }),
+    );
+    steps.push(Step::new(
+        200,
+        SessionEvent::DecisionRequested {
+            decision: Decision {
+                id: "perm_close".into(),
+                tool_use_id: "t_close".into(),
+                tool_name: "Bash".into(),
+                description: "gh issue close 212".into(),
+                input: serde_json::json!({
+                    "command": "gh issue close 212",
+                    "cwd": "/work/ferrite",
+                }),
+                suggestions: vec![],
+            },
+        },
+    ));
+    steps
+}
+
+/// Startup: init, thinking, a long streamed turn with real tools, a paid
+/// stop, then a permission wait — the interactive seed a single Pane opens
+/// on.
+pub fn script() -> Vec<Step> {
+    let mut steps = boot("4f2a1c9e-7b30-4d18-9c62-1ea55d0b7742");
+    steps.push(Step::new(
+        40,
+        SessionEvent::PermissionMode {
+            mode: "acceptEdits".into(),
+        },
+    ));
+    usage(&mut steps, 124_000);
+    think(&mut steps, THINKING);
+    plan(
+        &mut steps,
+        &[
+            "read the pane recipe",
+            "run the suite",
+            "retune the meter",
+            "land the diff",
+        ],
+        3,
+    );
+    prose(&mut steps, TURN_ONE);
+    tool(
+        &mut steps,
+        "toolu_read",
+        "Read",
+        serde_json::json!({ "file_path": "crates/ferrite/src/pane.rs" }),
+    );
+    settled(
+        &mut steps,
+        "toolu_read",
+        "2,320 lines — the Pane recipes, all three levels",
+    );
+    tool(
+        &mut steps,
+        "toolu_test",
+        "Bash",
+        serde_json::json!({ "command": "vitest run tests/unit" }),
+    );
+    // A real run takes real seconds — what the row's duration reads.
+    steps.push(Step::new(
+        2400,
+        SessionEvent::ToolCompleted {
+            id: "toolu_test".into(),
+            output: "41 passed (41)".into(),
+            is_error: false,
+            result: ferrite_core::ToolResult::Opaque,
+        },
+    ));
+    edit(&mut steps, "toolu_edit", "crates/ferrite/src/pane.rs");
+    steps.push(Step::new(
+        30,
+        SessionEvent::TurnEnded {
+            outcome: TurnOutcome::Completed,
+            cost_usd: Some(0.0380),
+        },
+    ));
 
     // The second turn opens by asking permission, and stops there: nothing
     // else plays until the operator answers the card.
@@ -333,30 +827,8 @@ pub fn reply() -> Vec<Step> {
 /// One turn: thinking lines, then word-by-word text, then TurnEnded.
 fn turn(thinking: &[&str], text: &str, cost: f64) -> Vec<Step> {
     let mut steps = Vec::new();
-    for line in thinking {
-        for word in line.split_whitespace() {
-            steps.push(Step::new(
-                18,
-                SessionEvent::ThinkingDelta {
-                    text: format!("{word} "),
-                },
-            ));
-        }
-        steps.push(Step::new(
-            18,
-            SessionEvent::ThinkingDelta { text: "\n".into() },
-        ));
-    }
-    // split_inclusive, not split_whitespace: the newlines are what the
-    // markdown fold reads, so a pacer that ate them would test nothing.
-    for chunk in text.split_inclusive(char::is_whitespace) {
-        steps.push(Step::new(
-            30,
-            SessionEvent::TextDelta {
-                text: chunk.to_string(),
-            },
-        ));
-    }
+    think(&mut steps, thinking);
+    prose(&mut steps, text);
     steps.push(Step::new(
         30,
         SessionEvent::TurnEnded {
@@ -403,15 +875,13 @@ mod tests {
         // The demo ends where a real Thread ends: waiting on a person.
         assert_eq!(transcript.status(), Status::Blocked);
 
-        let costs: Vec<&str> = transcript
-            .blocks()
-            .iter()
-            .filter_map(|block| match &block.body {
-                Body::Meta(text) => Some(text.as_str()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(costs, ["$0.0380"]);
+        // No dollar value reaches the transcript (#22 operator amendment)
+        // — the cost is recorded, never rendered.
+        assert_eq!(transcript.last_cost(), Some(0.0380));
+        assert!(transcript.blocks().iter().all(|block| match &block.body {
+            Body::Meta(text) => !text.contains('$'),
+            _ => true,
+        }));
 
         let longest = transcript
             .blocks()
@@ -429,7 +899,7 @@ mod tests {
 
     #[test]
     fn answering_the_demo_decision_plays_the_rest_of_the_turn() {
-        let mut demo = DemoSession::start();
+        let mut demo = DemoSession::seeded(0);
 
         demo.respond(DecisionAnswer::Allow {
             input: serde_json::Value::Null,
@@ -489,6 +959,55 @@ mod tests {
                 outcome: TurnOutcome::Interrupted,
                 cost_usd: None,
             }]
+        );
+    }
+
+    /// #22 B: the seeds deal the Wall board's census — every state the wall
+    /// can draw appears somewhere in one cycle, instead of N identical
+    /// permission-waits.
+    #[test]
+    fn the_demo_seeds_deal_the_wall_census() {
+        use crate::pane::{wall_card, wall_state, WallState};
+        let mut census = Vec::new();
+        for variant in 0..SEEDS {
+            let mut transcript = Transcript::default();
+            let mut pending = false;
+            for step in seed(variant) {
+                if matches!(step.event, SessionEvent::DecisionRequested { .. }) {
+                    pending = true;
+                }
+                transcript.apply(Input::Event(step.event));
+            }
+            let card = wall_card(Some(&transcript), None);
+            census.push(wall_state(
+                Some(transcript.status()),
+                pending,
+                card.tests_failing,
+                transcript.last_cost().is_some(),
+            ));
+        }
+        use WallState::*;
+        for wanted in [Working, Failing, Decision, Blocked, Done, Idle] {
+            assert!(census.contains(&wanted), "no {wanted:?} in {census:?}");
+        }
+    }
+
+    /// #22 B: a revived demo Thread already replayed its history from the
+    /// log — the fresh Session must not play the same turn over it again.
+    #[test]
+    fn a_revived_demo_thread_replays_nothing() {
+        use ferrite_core::cockpit::Spawner;
+        use ferrite_core::store::Provider;
+        let mut spawn = Spawn::new(true, false);
+        let revived = spawn
+            .spawn(Provider::Claude, Some("4f2a"), None)
+            .expect("demo spawns never fail");
+        assert!(
+            revived
+                .events()
+                .recv_timeout(Duration::from_millis(200))
+                .is_err(),
+            "a resumed demo Session must stay quiet"
         );
     }
 
