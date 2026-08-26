@@ -411,47 +411,63 @@ fn prose(steps: &mut Vec<Step>, text: &str) {
     }
 }
 
-/// The Thread plans with the provider's own tools, so `todos()` counts it.
-/// Every call settles — a planning call left running would wear the ◐
-/// activity line forever.
+/// One planned step, made with the provider's own tool so `todos()` and
+/// the tasks strip count it. Every call settles — a planning call left
+/// running would wear the ◐ activity line forever.
+fn task(steps: &mut Vec<Step>, at: usize, subject: &str) {
+    steps.push(Step::new(
+        20,
+        SessionEvent::ToolStarted {
+            id: format!("task_{at}"),
+            name: "TaskCreate".into(),
+            input: serde_json::json!({ "subject": subject }),
+        },
+    ));
+    steps.push(Step::new(
+        10,
+        SessionEvent::ToolCompleted {
+            id: format!("task_{at}"),
+            output: String::new(),
+            is_error: false,
+            result: ferrite_core::ToolResult::Opaque,
+        },
+    ));
+}
+
+/// One planned step marked finished — the update names its step's subject
+/// so the row reads like every other tool call.
+fn tick(steps: &mut Vec<Step>, at: usize, subject: &str) {
+    steps.push(Step::new(
+        20,
+        SessionEvent::ToolStarted {
+            id: format!("tick_{at}"),
+            name: "TaskUpdate".into(),
+            input: serde_json::json!({
+                "taskId": format!("{at}"),
+                "status": "completed",
+                "subject": subject,
+            }),
+        },
+    ));
+    steps.push(Step::new(
+        10,
+        SessionEvent::ToolCompleted {
+            id: format!("tick_{at}"),
+            output: String::new(),
+            is_error: false,
+            result: ferrite_core::ToolResult::Opaque,
+        },
+    ));
+}
+
+/// A whole plan at once — the far seeds' shorthand; the interactive script
+/// spreads its steps through the turn instead, the way a real agent plans.
 fn plan(steps: &mut Vec<Step>, subjects: &[&str], done: usize) {
     for (at, subject) in subjects.iter().enumerate() {
-        steps.push(Step::new(
-            20,
-            SessionEvent::ToolStarted {
-                id: format!("task_{at}"),
-                name: "TaskCreate".into(),
-                input: serde_json::json!({ "subject": subject }),
-            },
-        ));
-        steps.push(Step::new(
-            10,
-            SessionEvent::ToolCompleted {
-                id: format!("task_{at}"),
-                output: String::new(),
-                is_error: false,
-                result: ferrite_core::ToolResult::Opaque,
-            },
-        ));
+        task(steps, at, subject);
     }
-    for at in 0..done.min(subjects.len()) {
-        steps.push(Step::new(
-            20,
-            SessionEvent::ToolStarted {
-                id: format!("tick_{at}"),
-                name: "TaskUpdate".into(),
-                input: serde_json::json!({ "taskId": format!("{at}"), "status": "completed" }),
-            },
-        ));
-        steps.push(Step::new(
-            10,
-            SessionEvent::ToolCompleted {
-                id: format!("tick_{at}"),
-                output: String::new(),
-                is_error: false,
-                result: ferrite_core::ToolResult::Opaque,
-            },
-        ));
+    for (at, subject) in subjects.iter().enumerate().take(done) {
+        tick(steps, at, subject);
     }
 }
 
@@ -742,17 +758,10 @@ pub fn script() -> Vec<Step> {
     ));
     usage(&mut steps, 124_000);
     think(&mut steps, THINKING);
-    plan(
-        &mut steps,
-        &[
-            "read the pane recipe",
-            "run the suite",
-            "retune the meter",
-            "land the diff",
-        ],
-        3,
-    );
     prose(&mut steps, TURN_ONE);
+    // The plan grows as the work does — one step made, worked, ticked —
+    // never a front-loaded block of planning rows no comp draws.
+    task(&mut steps, 0, "read the pane recipe");
     tool(
         &mut steps,
         "toolu_read",
@@ -764,6 +773,8 @@ pub fn script() -> Vec<Step> {
         "toolu_read",
         "2,320 lines — the Pane recipes, all three levels",
     );
+    tick(&mut steps, 0, "read the pane recipe");
+    task(&mut steps, 1, "run the suite");
     tool(
         &mut steps,
         "toolu_test",
@@ -780,7 +791,12 @@ pub fn script() -> Vec<Step> {
             result: ferrite_core::ToolResult::Opaque,
         },
     ));
+    tick(&mut steps, 1, "run the suite");
+    task(&mut steps, 2, "retune the meter");
     edit(&mut steps, "toolu_edit", "crates/ferrite/src/pane.rs");
+    tick(&mut steps, 2, "retune the meter");
+    // The step still being worked — what the tasks strip names.
+    task(&mut steps, 3, "land the diff");
     steps.push(Step::new(
         30,
         SessionEvent::TurnEnded {

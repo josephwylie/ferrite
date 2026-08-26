@@ -249,9 +249,10 @@ pub struct Transcript {
     usage: Option<Usage>,
     /// Which reasoning summary part the tail Block belongs to.
     summary_index: Option<u64>,
-    /// The Thread's plan: how many steps it made, and which it has finished.
-    /// Ids rather than a count, because a step can be completed twice.
-    planned: usize,
+    /// The Thread's plan: every step's subject in creation order, and which
+    /// steps it has finished. Ids in a set rather than a count, because a
+    /// step can be completed twice.
+    subjects: Vec<String>,
     completed: std::collections::BTreeSet<String>,
 }
 
@@ -285,7 +286,7 @@ impl Transcript {
             last_cost: None,
             usage: None,
             summary_index: None,
-            planned: 0,
+            subjects: Vec::new(),
             completed: std::collections::BTreeSet::new(),
         }
     }
@@ -312,13 +313,26 @@ impl Transcript {
 
     /// The Thread's plan, once it has made one.
     pub fn todos(&self) -> Option<Todos> {
-        (self.planned > 0).then_some(Todos {
+        (!self.subjects.is_empty()).then_some(Todos {
             // The CLI assigns task ids and TaskCreate never echoes them, so a
             // completion cannot be matched to the step it finished. Clamping
             // is the honest bound: a Pane may under-report, never overshoot.
-            done: self.completed.len().min(self.planned),
-            total: self.planned,
+            done: self.completed.len().min(self.subjects.len()),
+            total: self.subjects.len(),
         })
+    }
+
+    /// The step the Thread works now, by the tasks strip's reading: the
+    /// first not-yet-finished subject in creation order. The same
+    /// compromise `todos()` documents — completions cannot be matched to
+    /// their steps, so order stands in — and a step created without a
+    /// subject names nothing.
+    pub fn current_task(&self) -> Option<&str> {
+        let done = self.completed.len().min(self.subjects.len());
+        self.subjects
+            .get(done)
+            .map(String::as_str)
+            .filter(|subject| !subject.is_empty())
     }
 
     pub fn blocks(&self) -> &[Block] {
@@ -540,7 +554,13 @@ impl Transcript {
     /// the counts: the plan's prose is already in the tool rows.
     fn plan(&mut self, name: &str, input: &serde_json::Value) {
         match name {
-            "TaskCreate" => self.planned += 1,
+            "TaskCreate" => self.subjects.push(
+                input
+                    .get("subject")
+                    .and_then(|subject| subject.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+            ),
             "TaskUpdate" if input.get("status").and_then(|s| s.as_str()) == Some("completed") => {
                 if let Some(task) = input.get("taskId").and_then(|id| id.as_str()) {
                     self.completed.insert(task.to_string());
@@ -697,7 +717,7 @@ fn result_line(output: &str) -> Option<String> {
 /// schema, so this reads the few keys that name a subject and gives up
 /// quietly on anything else rather than guessing.
 fn tool_summary(input: &serde_json::Value) -> String {
-    for key in ["command", "file_path", "path", "pattern", "url"] {
+    for key in ["command", "file_path", "path", "pattern", "url", "subject"] {
         if let Some(value) = input.get(key).and_then(|v| v.as_str()) {
             return value.to_string();
         }
@@ -1086,6 +1106,18 @@ mod tests {
             }
             other => panic!("expected a tool row, got {other:?}"),
         }
+
+        // A planning call's subject is a subject too — TaskCreate(land the
+        // diff) reads like every other row, never a bare bold name.
+        transcript.apply(started(
+            "toolu_2",
+            "TaskCreate",
+            serde_json::json!({ "subject": "land the diff" }),
+        ));
+        match &transcript.blocks()[1].body {
+            Body::Tool(tool) => assert_eq!(tool.summary, "land the diff"),
+            other => panic!("expected a tool row, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1342,6 +1374,47 @@ mod tests {
             serde_json::json!({ "taskId": "1", "status": "completed" }),
         ));
         assert_eq!(transcript.todos(), Some(Todos { done: 1, total: 3 }));
+    }
+
+    /// #22: the tasks strip names the step being worked — the first
+    /// unfinished subject in creation order, the same stand-in `todos()`
+    /// documents. A finished plan names nothing, and neither does a step
+    /// created without a subject.
+    #[test]
+    fn the_current_task_is_the_first_unfinished_subject() {
+        let mut transcript = Transcript::default();
+        assert_eq!(transcript.current_task(), None, "no plan, no task");
+
+        for subject in ["read the recipe", "run the suite", "land the diff"] {
+            transcript.apply(started(
+                &format!("t{subject}"),
+                "TaskCreate",
+                serde_json::json!({ "subject": subject }),
+            ));
+        }
+        assert_eq!(transcript.current_task(), Some("read the recipe"));
+
+        transcript.apply(started(
+            "u1",
+            "TaskUpdate",
+            serde_json::json!({ "taskId": "1", "status": "completed" }),
+        ));
+        assert_eq!(transcript.current_task(), Some("run the suite"));
+
+        for task in ["2", "3"] {
+            transcript.apply(started(
+                &format!("u{task}"),
+                "TaskUpdate",
+                serde_json::json!({ "taskId": task, "status": "completed" }),
+            ));
+        }
+        assert_eq!(transcript.current_task(), None, "a finished plan is quiet");
+
+        // A subjectless step names nothing rather than an empty strip line.
+        let mut bare = Transcript::default();
+        bare.apply(started("b1", "TaskCreate", serde_json::json!({})));
+        assert_eq!(bare.todos(), Some(Todos { done: 0, total: 1 }));
+        assert_eq!(bare.current_task(), None);
     }
 
     /// The CLI assigns task ids and never echoes them back on TaskCreate, so

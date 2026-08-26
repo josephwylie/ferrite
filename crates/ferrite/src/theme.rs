@@ -173,6 +173,9 @@ pub const TRAFFIC_Y: f32 = 11.0;
 pub const LEGEND_H: f32 = 30.0;
 /// 28px — the Dense single-row Pane header.
 pub const HEADER_DENSE_H: f32 = 28.0;
+/// 28px — the tasks strip under the Dense header (the Main comp's todo
+/// strip).
+pub const TASKS_STRIP_H: f32 = 28.0;
 /// 24px — Cockpit cell header; queued row.
 pub const CELL_HEADER_H: f32 = 24.0;
 /// 40px — Composer input row (min-height; the line grows).

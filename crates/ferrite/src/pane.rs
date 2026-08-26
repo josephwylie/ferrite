@@ -11,7 +11,8 @@
 use ferrite_core::cockpit::ToolTiming;
 use ferrite_core::docview::{is_test_run, passed_count, Instruments, Level, Tests};
 use ferrite_core::transcript::{
-    Block, Body, Class, Diff, Span, Status, Style, Token, ToolBlock, ToolState, Transcript, Usage,
+    Block, Body, Class, Diff, Span, Status, Style, Todos, Token, ToolBlock, ToolState, Transcript,
+    Usage,
 };
 use ferrite_core::workspace::WorkspaceBinding;
 use ferrite_core::{Decision, ThreadId};
@@ -308,6 +309,12 @@ pub fn render_pane(view: &PaneView, state: PaneState<'_>, level: Level) -> impl 
     ));
     match transcript {
         Some(transcript) => {
+            // The tasks strip sits directly under the header, full width,
+            // exactly where the Main comp draws it — meter, the step being
+            // worked, and the muted tag (#22 eyeball round).
+            if let Some(todos) = transcript.todos() {
+                pane = pane.child(tasks_strip(todos, transcript.current_task()));
+            }
             pane = pane.child(body(
                 view,
                 transcript,
@@ -818,16 +825,9 @@ fn dense_header(
         );
     }
     header = header.child(div().flex_1());
-    if let Some(todos) = transcript.and_then(|t| t.todos()) {
-        header = header.child(
-            div()
-                .flex_shrink_0()
-                .text_color(rgb(ACCENT))
-                .child(meter(todos.done, todos.total)),
-        );
-    }
     // The context ring, then the window controls at the far edge (#22
-    // amendments) — no cost text and no context label anywhere.
+    // amendments) — no cost text and no context label anywhere. The tasks
+    // meter lives on its own strip below, per the Main comp.
     if let Some(ring) = usage_ring {
         header = header.child(ring);
     }
@@ -835,6 +835,47 @@ fn dense_header(
         header = header.child(controls);
     }
     header
+}
+
+/// The tasks strip, the Main comp's own recipe: 28px on the sunken ground
+/// under the header — `▰▰▰▱ 3/4` in accent, the step being worked in UI
+/// prose, and the muted `todo` tag riding the right edge.
+fn tasks_strip(todos: Todos, current: Option<&str>) -> Div {
+    let mut strip = div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(10.))
+        .h(px(theme::TASKS_STRIP_H))
+        .px(px(theme::COMPOSER_PAD_X))
+        .bg(rgb(INSET))
+        .border_b_1()
+        .border_color(rgba(HAIRLINE))
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_size(px(theme::TEXT_META))
+                .text_color(rgb(ACCENT))
+                .child(meter(todos.done, todos.total)),
+        );
+    if let Some(current) = current {
+        strip = strip.child(
+            div()
+                .min_w_0()
+                .truncate()
+                .font_family(theme::FONT_UI)
+                .text_size(px(theme::TEXT_ROW))
+                .text_color(rgb(INK_SECONDARY))
+                .child(SharedString::from(current.to_string())),
+        );
+    }
+    strip.child(div().flex_1()).child(
+        div()
+            .flex_shrink_0()
+            .text_size(px(theme::TEXT_CHIP))
+            .text_color(rgb(INK_MUTED))
+            .child("todo"),
+    )
 }
 
 /// `▰▰▰▱ 3/4` while the glyph run stays glanceable; a long plan keeps the
@@ -1055,6 +1096,7 @@ fn composer_region(view: &PaneView, transcript: &Transcript, stack: ComposerStac
         .flex()
         .flex_shrink_0()
         .items_center()
+        .gap(px(10.))
         .h(px(theme::COMPOSER_META_H))
         .px(px(theme::COMPOSER_PAD_X))
         .pb(px(4.));
@@ -1071,7 +1113,28 @@ fn composer_region(view: &PaneView, transcript: &Transcript, stack: ComposerStac
                 .child(mode_chip_label(mode)),
         );
     }
-    region.child(meta.child(div().flex_1()))
+    meta = meta.child(div().flex_1());
+    // The footer's right side, per the Main comp: the hints this Composer
+    // actually answers (#23's menus — no ↑ history exists yet), then the
+    // model beside them. The header's provider chip stays; the comp draws
+    // both, and #25's selector will grow out of this label.
+    meta = meta.child(
+        div()
+            .flex_shrink_0()
+            .text_size(px(theme::TEXT_CHIP))
+            .text_color(rgb(INK_MUTED))
+            .child("@ files · / commands"),
+    );
+    if let Some(model) = transcript.model() {
+        meta = meta.child(
+            div()
+                .flex_shrink_0()
+                .text_size(px(theme::TEXT_CHIP))
+                .text_color(rgb(INK_MUTED))
+                .child(model_chip_label(model)),
+        );
+    }
+    region.child(meta)
 }
 
 /// The idle line's ghost text, PromptBox state 01's pattern verbatim:
