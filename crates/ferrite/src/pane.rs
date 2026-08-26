@@ -16,9 +16,10 @@ use ferrite_core::workspace::WorkspaceBinding;
 use ferrite_core::{Decision, ThreadId};
 use gpui::prelude::*;
 use gpui::{
-    div, px, relative, rgb, rgba, AnyElement, Context, Div, Entity, FocusHandle, FontWeight,
-    HighlightStyle, ScrollHandle, SharedString, StyledText,
+    div, point, px, relative, rgb, rgba, AnyElement, BoxShadow, Context, Div, Entity, FocusHandle,
+    FontWeight, HighlightStyle, ScrollHandle, SharedString, StyledText,
 };
+use std::path::{Path, PathBuf};
 
 use crate::composer::Composer;
 // Every color and metric here is an Aperture token (crate::theme) — no
@@ -68,6 +69,12 @@ pub struct PaneState<'a> {
     pub decision: Option<&'a Decision>,
     pub queued: Option<&'a str>,
     pub workspace: Option<&'a WorkspaceBinding>,
+    /// The session-project-root chip for the L1 header — and, while the
+    /// selector is open on this Pane, the popover hanging under it (#24).
+    /// Assembled in the cockpit, where its clicks are wired beside every
+    /// other pointer, exactly as the nav's rows are; None on a Thread with
+    /// no binding, which has nothing for a root to be inside.
+    pub root_chip: Option<AnyElement>,
     pub focused: bool,
     /// A turn in flight: the Composer's ❯ becomes ◐ and esc offers interrupt.
     pub running: bool,
@@ -195,6 +202,7 @@ pub fn render_pane(view: &PaneView, state: PaneState<'_>, level: Level) -> impl 
         decision,
         queued,
         workspace,
+        root_chip,
         focused,
         running,
         selected,
@@ -243,7 +251,7 @@ pub fn render_pane(view: &PaneView, state: PaneState<'_>, level: Level) -> impl 
             .children(ring.map(ring_overlay));
     }
 
-    let mut pane = shell.child(dense_header(view, transcript, workspace, status));
+    let mut pane = shell.child(dense_header(view, transcript, workspace, status, root_chip));
     match transcript {
         Some(transcript) => {
             pane = pane
@@ -671,6 +679,7 @@ fn dense_header(
     transcript: Option<&Transcript>,
     workspace: Option<&WorkspaceBinding>,
     status: Option<Status>,
+    root_chip: Option<AnyElement>,
 ) -> Div {
     let led_color = match status {
         Some(Status::Streaming) => GOOD,
@@ -698,6 +707,11 @@ fn dense_header(
                 .text_color(rgb(INK))
                 .child(view.name.clone()),
         );
+    // The root chip sits right after the title (#24's pinned design); the
+    // binding meta keeps its place behind it.
+    if let Some(chip) = root_chip {
+        header = header.child(chip);
+    }
     if !binding.is_empty() {
         header = header
             .child(div().flex_shrink_0().text_color(rgb(INK_FAINT)).child("·"))
@@ -1090,6 +1104,151 @@ pub fn binding_label(workspace: Option<&WorkspaceBinding>) -> SharedString {
         Some(WorkspaceBinding::Main { .. }) => SharedString::from("main"),
         None => SharedString::from(""),
     }
+}
+
+// ------------------------------------------------- session project root (#24)
+
+/// The open session-project-root selector: everything its popover draws,
+/// discovered once when it opened — never per frame. The cockpit owns the
+/// one live selector and its keys; the Pane only paints it.
+pub struct RootSelector {
+    pub thread: ThreadId,
+    /// Row 0 is always the binding itself ("workspace root", clears the
+    /// override); the rest are the discovered nested repositories, in
+    /// `workspace::nested_repositories` order.
+    pub options: Vec<RootOption>,
+    /// The row the arrow keys are on.
+    pub selected: usize,
+    /// The row that was the Thread's root when the popover opened — the ✓.
+    pub active: usize,
+}
+
+/// One pickable root. `None` is the binding itself: picking it clears the
+/// override back to "work in the binding".
+pub struct RootOption {
+    pub root: Option<PathBuf>,
+    pub label: SharedString,
+}
+
+/// A root as the operator reads it: relative to the binding wherever
+/// possible; one from outside the binding (a hand-edited store) in full
+/// rather than pretending. The chip and the popover's rows share this one
+/// rule, so the two can never spell the same root differently.
+pub fn root_display(binding_cwd: &Path, root: &Path) -> String {
+    root.strip_prefix(binding_cwd)
+        .unwrap_or(root)
+        .display()
+        .to_string()
+}
+
+/// The header chip naming where inside the binding this Thread's work
+/// happens: `⌵ apps/web` under an override, `⌵ workspace` without one.
+pub fn root_chip_label(binding: &WorkspaceBinding, root: Option<&Path>) -> SharedString {
+    match root {
+        Some(root) => SharedString::from(format!("⌵ {}", root_display(binding.cwd(), root))),
+        None => SharedString::from("⌵ workspace"),
+    }
+}
+
+/// The chip itself, per issue #24's pinned design: mono 10.5 in a quiet 1px
+/// EDGE box — the accent tint stays on the provider chip, and two accent
+/// chips in one header would fight. An override promotes the ink one step
+/// so it reads at a glance; the hover wash says the chip answers clicks.
+pub fn root_chip(label: SharedString, set: bool) -> Div {
+    div()
+        .flex_shrink_0()
+        .text_size(px(theme::TEXT_META))
+        .text_color(rgb(if set { INK_TERTIARY } else { INK_FAINT }))
+        .border_1()
+        .border_color(rgba(EDGE))
+        .rounded(px(theme::R_CHIP))
+        .px(px(6.))
+        .py(px(1.))
+        .hover(|chip| chip.bg(rgba(EDGE)))
+        .child(label)
+}
+
+/// The selector popover's shell, in the slash-menu's popover language
+/// (PromptBox state 02): RAISED surface, EDGE_STRONG border, radius 4, 4px
+/// padding, and the comps' three-layer popover elevation. Rows and footer
+/// are the cockpit's to append — their clicks are wired there.
+pub fn selector_popover() -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .w(px(theme::POPOVER_W))
+        .p(px(theme::POPOVER_PAD))
+        .bg(rgb(RAISED))
+        .border_1()
+        .border_color(rgba(EDGE_STRONG))
+        .rounded(px(theme::R_CHIP))
+        .shadow(vec![
+            BoxShadow {
+                color: rgba(theme::RING_FAINT).into(),
+                offset: point(px(0.), px(0.)),
+                blur_radius: px(0.),
+                spread_radius: px(1.),
+            },
+            BoxShadow {
+                color: rgba(theme::SHADOW_NEAR).into(),
+                offset: point(px(0.), px(2.)),
+                blur_radius: px(4.),
+                spread_radius: px(0.),
+            },
+            BoxShadow {
+                color: rgba(theme::SHADOW_FAR).into(),
+                offset: point(px(0.), px(6.)),
+                blur_radius: px(16.),
+                spread_radius: px(-4.),
+            },
+        ])
+}
+
+/// One popover row: mono 12 name — ACCENT on the EDGE wash when the arrows
+/// are on it, INK_SECONDARY otherwise — and the ✓ marking the root the
+/// Thread is on right now, whichever row the arrows have moved to.
+pub fn selector_row(option: &RootOption, selected: bool, active: bool) -> Div {
+    let mut row = div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(10.))
+        .h(px(theme::MENU_ROW_H))
+        .px(px(8.))
+        .rounded(px(theme::R_CHIP))
+        .text_size(px(theme::TEXT_CODE))
+        .text_color(rgb(if selected { ACCENT } else { INK_SECONDARY }))
+        .child(div().min_w_0().truncate().child(option.label.clone()));
+    if selected {
+        row = row.bg(rgba(EDGE));
+    }
+    if active {
+        row = row.child(div().flex_1()).child(
+            div()
+                .flex_shrink_0()
+                .text_size(px(theme::TEXT_META))
+                .text_color(rgb(ACCENT))
+                .child("✓"),
+        );
+    }
+    row
+}
+
+/// The popover's key-hint footer — the PromptBox footer grammar with this
+/// menu's verbs.
+pub fn selector_footer() -> Div {
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .h(px(theme::POPOVER_FOOTER_H))
+        .px(px(8.))
+        .mt(px(2.))
+        .border_t_1()
+        .border_color(rgba(HAIRLINE))
+        .text_size(px(theme::TEXT_META))
+        .text_color(rgb(INK_MUTED))
+        .child("↑↓ move · ↵ pick · esc dismiss")
 }
 
 // ----------------------------------------------------------- Block render
@@ -1571,6 +1730,25 @@ mod tests {
         );
         // A Thread from before bindings existed claims nothing.
         assert_eq!(binding_label(None), "");
+    }
+
+    /// #24: the chip names the root relative to the binding — `⌵ apps/web`
+    /// — and `⌵ workspace` when no override is set. A root from outside the
+    /// binding (a hand-edited store) shows in full rather than pretending.
+    #[test]
+    fn the_root_chip_names_the_root_relative_to_the_binding() {
+        let binding = WorkspaceBinding::Main {
+            checkout: "/repo".into(),
+        };
+        assert_eq!(root_chip_label(&binding, None).as_ref(), "⌵ workspace");
+        assert_eq!(
+            root_chip_label(&binding, Some(Path::new("/repo/apps/web"))).as_ref(),
+            "⌵ apps/web"
+        );
+        assert_eq!(
+            root_chip_label(&binding, Some(Path::new("/elsewhere/api"))).as_ref(),
+            "⌵ /elsewhere/api"
+        );
     }
 
     /// The app is thin by design, so its render test is that every Block kind

@@ -27,9 +27,9 @@ pub const COMPOSER: u32 = 0x161616;
 
 /// `rgba(255,255,255,0.045)` — internal hairline dividers.
 pub const HAIRLINE: u32 = 0xffffff0b;
-/// `rgba(255,255,255,0.05)` — the popover's faint outer ring. Reserved:
-/// popovers (slash / @ menus) are #23's Composer behaviors.
-#[allow(dead_code)]
+/// `rgba(255,255,255,0.05)` — the popover's faint outer ring, the first
+/// layer of the popover elevation recipe (the root selector, #24; #23's
+/// slash / @ menus will share it).
 pub const RING_FAINT: u32 = 0xffffff0d;
 /// `rgba(255,255,255,0.07)` — Pane/card borders AND the progress-bar track.
 pub const EDGE: u32 = 0xffffff12;
@@ -92,14 +92,11 @@ pub const IDLE: u32 = INK_TERTIARY;
 
 // ---------------------------------------------------------------- shadows
 
-/// `rgba(0,0,0,0.30)` — the `0 2px 4px` elevation layer. Unused in v1
-/// render (Dense pane and Cockpit cells are border-only; the Main board's
-/// floating-pane shadow is open question concept.md §9.15) — the token is
-/// kept so a later ruling is a render change, not a palette change.
-#[allow(dead_code)]
+/// `rgba(0,0,0,0.30)` — the `0 2px 4px` elevation layer. Panes and Cockpit
+/// cells stay border-only (the Main board's floating-pane shadow is open
+/// question concept.md §9.15); popovers carry it (#24's root selector).
 pub const SHADOW_NEAR: u32 = 0x0000004d;
 /// `rgba(0,0,0,0.40)` — the `0 6px 16px -4px` elevation layer. Same status.
-#[allow(dead_code)]
 pub const SHADOW_FAR: u32 = 0x00000066;
 
 // ----------------------------------------------------------------- syntax
@@ -174,6 +171,18 @@ pub const CELL_HEADER_H: f32 = 24.0;
 pub const COMPOSER_H: f32 = 40.0;
 /// 22px — Composer meta row.
 pub const COMPOSER_META_H: f32 = 22.0;
+/// 26px — popover menu rows (the comps' slash/@ menus; the root selector's
+/// rows per issue #24's pinned design).
+pub const MENU_ROW_H: f32 = 26.0;
+/// 22px — the popover's key-hint footer, the same scale step as the
+/// Composer meta row.
+pub const POPOVER_FOOTER_H: f32 = 22.0;
+/// 4px — the popover's own padding around its rows.
+pub const POPOVER_PAD: f32 = 4.0;
+/// 260px — the root-selector popover's width (issue #24's pinned design;
+/// the comps draw their popovers at the composer's width, which a header
+/// anchor does not have).
+pub const POPOVER_W: f32 = 260.0;
 /// 14px — the Composer stack's horizontal padding (input, queued, meta).
 pub const COMPOSER_PAD_X: f32 = 14.0;
 /// 6px LED dot (Dense header, Cockpit cells) / 5px on the wall.

@@ -49,26 +49,23 @@ pub enum WorkspaceChoice {
 }
 
 /// Directory names the repository scan never enters or reports: dependency
-/// and build output trees, git's own metadata, and Ferrite worktree nests
-/// (mirrors SwarmDeck's discovery skip list, #24).
-const SCAN_SKIP: [&str; 6] = [
-    "node_modules",
-    ".git",
-    ".worktrees",
-    "dist",
-    "target",
-    "build",
-];
+/// and build output trees, and git's own metadata (SwarmDeck's discovery
+/// skip list, #24 — minus `.worktrees`, which its review restored to the
+/// scan: worktree nests are exactly where linked worktrees live, and the
+/// operator's ask was a worktree selector).
+const SCAN_SKIP: [&str; 5] = ["node_modules", ".git", "dist", "target", "build"];
 
 /// How deep below the root the scan looks: a repo more than four directory
 /// levels down is not offered (SwarmDeck's depth, #24).
 const SCAN_DEPTH: usize = 4;
 
 /// Every directory up to four levels below `root` that is itself a git
-/// repository — holds a `.git` DIRECTORY; a `.git` file (a linked worktree)
-/// does not count. `root` itself is never listed: it is the binding, already
-/// on offer. Directories named in `SCAN_SKIP` are skipped wholesale, and the
-/// order is deterministic (sorted by path).
+/// checkout — holds a `.git` DIRECTORY (a repository) or a `.git` FILE (a
+/// linked worktree; #24 review — the operator's worktrees are roots work
+/// lands in). `root` itself is never listed: it is the binding, already on
+/// offer. Directories named in `SCAN_SKIP` are skipped wholesale, and the
+/// order is deterministic (sorted by path). The scan never leaves `root`,
+/// so only checkouts INSIDE the binding can ever be offered.
 pub fn nested_repositories(root: &Path) -> Vec<PathBuf> {
     let mut found = Vec::new();
     scan(root, 0, &mut found);
@@ -77,7 +74,8 @@ pub fn nested_repositories(root: &Path) -> Vec<PathBuf> {
 }
 
 fn scan(dir: &Path, depth: usize, found: &mut Vec<PathBuf>) {
-    if depth > 0 && dir.join(".git").is_dir() {
+    let git = dir.join(".git");
+    if depth > 0 && (git.is_dir() || git.is_file()) {
         found.push(dir.to_path_buf());
     }
     if depth == SCAN_DEPTH {
@@ -414,12 +412,11 @@ mod tests {
         );
     }
 
-    /// Discovery (#24): a repo is a directory holding a `.git` DIRECTORY —
-    /// found down to four levels below the root, in deterministic order,
-    /// with the noise directories skipped wholesale. The root itself is
-    /// never listed (it is the binding, already on offer), a `.git` FILE (a
-    /// linked worktree) does not count, and a repo may hold nested repos of
-    /// its own.
+    /// Discovery (#24): a repo is a directory holding a `.git` DIRECTORY or
+    /// a `.git` FILE (a linked worktree) — found down to four levels below
+    /// the root, in deterministic order, with the noise directories skipped
+    /// wholesale. The root itself is never listed (it is the binding,
+    /// already on offer), and a repo may hold nested repos of its own.
     #[test]
     fn nested_repositories_scans_four_levels_and_skips_the_noise() {
         let root = scratch("discovery");
@@ -434,7 +431,6 @@ mod tests {
         plant("beta/c/d/deep/deeper"); // depth 5 — beyond the scan
         for noise in [
             "node_modules/x",
-            ".worktrees/y",
             "dist/z",
             "target/w",
             "build/v",
@@ -442,7 +438,8 @@ mod tests {
         ] {
             plant(noise);
         }
-        // A linked worktree marks itself with a `.git` FILE: not a repo here.
+        // A linked worktree marks itself with a `.git` FILE: a root work
+        // can land in, exactly like a full repo (#24 review).
         fs::create_dir_all(root.join("linked")).unwrap();
         fs::write(root.join("linked").join(".git"), "gitdir: elsewhere\n").unwrap();
 
@@ -452,7 +449,33 @@ mod tests {
                 root.join("alpha"),
                 root.join("alpha/vendor/lib"),
                 root.join("beta/c/d/deep"),
+                root.join("linked"),
             ]
+        );
+    }
+
+    /// Discovery (#24 review): linked git worktrees — directories holding a
+    /// `.git` FILE — are what the operator's "worktree selector" is for.
+    /// They are found bare at depth 1 and inside a `.worktrees/` nest alike
+    /// (`.worktrees` is deliberately NOT on the skip list: it is exactly
+    /// where worktree nests live). Only worktrees INSIDE the binding can
+    /// ever appear — the scan never leaves `root`, so Ferrite's own
+    /// store-placed worktrees, siblings of the binding, stay correctly
+    /// impossible.
+    #[test]
+    fn linked_worktrees_inside_the_binding_are_discovered() {
+        let root = scratch("discovery-worktrees");
+        let link = |relative: &str| {
+            let dir = root.join(relative);
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join(".git"), "gitdir: elsewhere\n").unwrap();
+        };
+        link("checkout"); // depth 1, bare
+        link(".worktrees/T3-code"); // the worktree-nest convention
+
+        assert_eq!(
+            nested_repositories(&root),
+            vec![root.join(".worktrees/T3-code"), root.join("checkout")]
         );
     }
 

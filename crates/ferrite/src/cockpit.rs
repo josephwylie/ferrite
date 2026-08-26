@@ -13,9 +13,9 @@ use ferrite_core::workspace::WorkspaceChoice;
 use ferrite_core::{DecisionAnswer, ThreadId};
 use gpui::prelude::*;
 use gpui::{
-    actions, div, point, px, rgb, rgba, ClipboardItem, Context, Div, FocusHandle, Focusable,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle,
-    SharedString, Window,
+    actions, deferred, div, point, px, relative, rgb, rgba, AnyElement, ClipboardItem, Context,
+    Div, FocusHandle, Focusable, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
+    Point, ScrollHandle, SharedString, Window,
 };
 
 use crate::nav;
@@ -39,6 +39,11 @@ actions!(
         CopySelection,
         ToggleFullscreen,
         ToggleNav,
+        ToggleRootSelector,
+        SelectorNext,
+        SelectorPrevious,
+        SelectorPick,
+        SelectorDismiss,
     ]
 );
 
@@ -95,6 +100,15 @@ pub struct CockpitView {
     /// cmd-b (#21): the nav folded to its 40px LED rail. In memory only —
     /// a preference store is not this ticket.
     nav_collapsed: bool,
+    /// The open session-project-root selector, or None (#24). At most one
+    /// for the whole cockpit, always on the focused Pane; render self-heals
+    /// it shut when the operator leaves that Pane or the header that
+    /// anchors it stops rendering.
+    selector: Option<pane::RootSelector>,
+    /// The popover's place in the focus tree while it is open: its menu
+    /// keys bind in the RootSelector key context, exactly as a Decision's
+    /// card holds y/n.
+    selector_focus: FocusHandle,
     /// The nav's parked rows, cached: each one cost a `Store::peek`, so the
     /// cache is rebuilt on park and revive — never per frame.
     parked_rows: Vec<nav::ParkedRow>,
@@ -189,6 +203,8 @@ impl CockpitView {
             grip: None,
             selection: None,
             nav_collapsed: false,
+            selector: None,
+            selector_focus: cx.focus_handle(),
             parked_rows: Vec::new(),
         };
         view.refresh_parked();
@@ -470,6 +486,137 @@ impl CockpitView {
         cx.notify();
     }
 
+    /// cmd-p (#24): the session-project-root selector on the focused Pane.
+    fn toggle_root_selector(
+        &mut self,
+        _: &ToggleRootSelector,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.toggle_selector(window, cx);
+    }
+
+    /// Open the selector on the focused Pane, or close an open one — the
+    /// shared tail of cmd-p and a click on the header chip. Discovery runs
+    /// here, once per open, never per frame. A Thread with no binding has
+    /// nothing for a root to be inside (the core stores but never prefaces
+    /// one), so the selector does not open there; below L1 the header that
+    /// anchors the popover is not drawn, so it does not open there either —
+    /// focus on an element no frame renders would kill the keyboard.
+    fn toggle_selector(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if let Some(open) = self.selector.take() {
+            // Toggling the Pane it was on closes it; the chip of another
+            // Pane (which just took focus) falls through and reopens it
+            // there instead of dead-ending on a bare close.
+            if Some(open.thread) == self.focused_thread() {
+                cx.notify();
+                return;
+            }
+        }
+        if self.level_now(window) != Level::Transcript {
+            return;
+        }
+        let Some(thread) = self.focused_thread() else {
+            return;
+        };
+        let Some(binding) = self.cockpit.workspace(thread) else {
+            return;
+        };
+        let checkout = binding.cwd().to_path_buf();
+        let mut options = vec![pane::RootOption {
+            root: None,
+            label: SharedString::from("workspace root"),
+        }];
+        options.extend(
+            ferrite_core::workspace::nested_repositories(&checkout)
+                .into_iter()
+                .map(|repo| pane::RootOption {
+                    label: SharedString::from(pane::root_display(&checkout, &repo)),
+                    root: Some(repo),
+                }),
+        );
+        // The arrows start on the Thread's current root — also the ✓ row.
+        let current = self.cockpit.session_project_root(thread);
+        let active = options
+            .iter()
+            .position(|option| option.root.as_deref() == current)
+            .unwrap_or(0);
+        self.selector = Some(pane::RootSelector {
+            thread,
+            options,
+            selected: active,
+            active,
+        });
+        cx.notify();
+    }
+
+    fn selector_next(&mut self, _: &SelectorNext, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(selector) = &mut self.selector {
+            if selector.selected + 1 < selector.options.len() {
+                selector.selected += 1;
+                cx.notify();
+            }
+        }
+    }
+
+    fn selector_previous(
+        &mut self,
+        _: &SelectorPrevious,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(selector) = &mut self.selector {
+            if selector.selected > 0 {
+                selector.selected -= 1;
+                cx.notify();
+            }
+        }
+    }
+
+    fn selector_pick(&mut self, _: &SelectorPick, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(at) = self.selector.as_ref().map(|selector| selector.selected) {
+            self.pick_root(at, cx);
+        }
+    }
+
+    fn selector_dismiss(
+        &mut self,
+        _: &SelectorDismiss,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.selector.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    /// The shared tail of ↵ and a row click: the picked root goes through
+    /// the core setter — which ends the Session by design; the next prompt
+    /// respawns through `send` wearing the new preface — and the popover
+    /// closes. The chip re-reads the core getter next frame, so the chrome
+    /// changes with the pick; the store was already durable when the setter
+    /// returned.
+    fn pick_root(&mut self, at: usize, cx: &mut Context<Self>) {
+        let Some(selector) = self.selector.take() else {
+            return;
+        };
+        if let Some(option) = selector.options.get(at) {
+            if let Err(e) = self
+                .cockpit
+                .set_session_project_root(selector.thread, option.root.clone())
+            {
+                // The store refused; the Thread keeps the root it had, and
+                // the chip keeps saying so.
+                eprintln!(
+                    "ferrite: thread {} kept its project root: {e:?}",
+                    selector.thread
+                );
+            }
+            self.refresh_wall(selector.thread);
+        }
+        cx.notify();
+    }
+
     /// Rebuild the nav's parked rows. Called on park and revive — never per
     /// frame: each row costs a `Store::peek`, one header line off disk, and
     /// the SharedStrings built here are what every frame after reuses.
@@ -701,8 +848,10 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         self.focus_pane(index);
-        // Any press clears the standing selection; only a new drag makes one.
-        // The grip was already cleared by the root's capture handler.
+        // Any press clears the standing selection; only a new drag makes
+        // one. The grip was already cleared by the root's capture handler,
+        // and the root's bubble handler dismisses any open selector — this
+        // Pane included.
         self.selection = None;
         self.grip = self.panes.get(index).and_then(|pane| {
             let at = self.block_at(index, position, window)?;
@@ -860,6 +1009,16 @@ impl Render for CockpitView {
         let attention = self.attention();
         let level = self.level_now(window);
 
+        // A selector for a Pane the operator has left — refocused away,
+        // parked, or zoomed below the L1 header that anchors it — closes
+        // here rather than hanging over the wrong Pane, or holding focus
+        // on an element no frame draws (#24).
+        if self.selector.as_ref().is_some_and(|selector| {
+            self.focused_thread() != Some(selector.thread) || level != Level::Transcript
+        }) {
+            self.selector = None;
+        }
+
         // Focus follows the operator, but only onto something this level
         // actually renders: focusing a Composer a wall cell never drew leaves
         // the keyboard pointing at nothing, and every global key stops working.
@@ -872,6 +1031,10 @@ impl Render for CockpitView {
             .panes
             .get(self.focused)
             .and_then(|pane| match level {
+                // The open selector holds the keyboard first: the operator
+                // opened it, and its keys live in its own context (#24).
+                // The heal above already pinned it to this Pane at L1.
+                _ if self.selector.is_some() => Some(self.selector_focus.clone()),
                 _ if self.cockpit.pending(pane.thread).is_some() && level != Level::Wall => {
                     Some(pane.decision_focus.clone())
                 }
@@ -940,11 +1103,30 @@ impl Render for CockpitView {
             .on_action(cx.listener(Self::copy_selection))
             .on_action(cx.listener(Self::toggle_fullscreen))
             .on_action(cx.listener(Self::toggle_nav))
+            .on_action(cx.listener(Self::toggle_root_selector))
+            .on_action(cx.listener(Self::selector_next))
+            .on_action(cx.listener(Self::selector_previous))
+            .on_action(cx.listener(Self::selector_pick))
+            .on_action(cx.listener(Self::selector_dismiss))
             // The root covers the window, so a release anywhere ends the
             // drag; the selection it made stays until the next press.
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|view, _: &MouseUpEvent, _, _| view.grip = None),
+            )
+            // A press anywhere the popover did not swallow dismisses the
+            // open selector — Pane bodies, nav rows that move no focus, the
+            // strip, all of it. Bubble phase, deliberately: the chip's
+            // toggle and a row's pick stop propagation first, so this can
+            // never close what a deeper handler just opened or eat a pick
+            // (#24 review).
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|view, _: &MouseDownEvent, _, cx| {
+                    if view.selector.take().is_some() {
+                        cx.notify();
+                    }
+                }),
             )
             // And EVERY press kills any grip left over from a drag whose
             // release the window never saw — capture phase, so it runs
@@ -1016,12 +1198,89 @@ impl CockpitView {
                     decision: self.cockpit.pending(pane.thread),
                     queued: self.cockpit.queued(pane.thread),
                     workspace: self.cockpit.workspace(pane.thread),
+                    // Only the L1 header draws the chip; the lower levels
+                    // must not pay its per-frame strings.
+                    root_chip: (level == Level::Transcript)
+                        .then(|| self.root_chip(index, cx))
+                        .flatten(),
                     focused,
                     running: self.cockpit.busy(pane.thread),
                     selected,
                 },
                 level,
             ))
+    }
+
+    /// The header chip naming this Thread's session project root — and,
+    /// while the selector is open on it, the popover hanging under the chip
+    /// (#24). Assembled here so its clicks land beside every other pointer
+    /// wire; the Pane draws whatever it is handed. A Thread with no binding
+    /// gets no chip: a root only means anything inside one.
+    fn root_chip(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let thread = self.panes[index].thread;
+        let binding = self.cockpit.workspace(thread)?;
+        let root = self.cockpit.session_project_root(thread);
+        let chip = pane::root_chip(pane::root_chip_label(binding, root), root.is_some())
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |view, _: &MouseDownEvent, window, cx| {
+                    // The chip is this Pane's: land on it first, then
+                    // toggle — and stop the press so the Pane's own handler
+                    // cannot immediately close what this just opened.
+                    cx.stop_propagation();
+                    if let Some(index) = view.pane_for(thread) {
+                        view.focus_pane(index);
+                    }
+                    view.toggle_selector(window, cx);
+                }),
+            );
+        let Some(selector) = self
+            .selector
+            .as_ref()
+            .filter(|selector| selector.thread == thread)
+        else {
+            return Some(div().relative().child(chip).into_any_element());
+        };
+        let mut popover = pane::selector_popover()
+            .key_context("RootSelector")
+            .track_focus(&self.selector_focus)
+            // A press on the popover's own dead space (padding, footer) is
+            // not a press outside it: swallowed, so the root's dismissal
+            // handler never sees it. Rows stop the event themselves first.
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
+            );
+        for (at, option) in selector.options.iter().enumerate() {
+            popover = popover.child(
+                pane::selector_row(option, at == selector.selected, at == selector.active)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            view.pick_root(at, cx);
+                        }),
+                    ),
+            );
+        }
+        popover = popover.child(pane::selector_footer());
+        Some(
+            div()
+                .relative()
+                .child(chip)
+                // Anchored under the chip, right edges aligned (#24's
+                // pinned design). Deferred so it paints over the transcript
+                // and escapes the Pane's own clip.
+                .child(deferred(
+                    div()
+                        .absolute()
+                        .top(relative(1.))
+                        .right_0()
+                        .mt(px(6.))
+                        .child(popover),
+                ))
+                .into_any_element(),
+        )
     }
 
     /// How many Threads hold the operator up right now — the strip's amber
@@ -2608,5 +2867,296 @@ mod tests {
         cx.simulate_keystrokes("cmd-b");
         let reopened = cx.update(|window, cx| view.read(cx).level_now(window));
         assert_eq!(reopened, Level::Instruments, "cmd-b toggles back");
+    }
+
+    // ------------------------------------------------- root selector (#24)
+
+    /// A binding checkout holding two nested repositories — `.git`
+    /// DIRECTORIES, which is what discovery counts — in a scratched base.
+    fn checkout_with_nested(base: &std::path::Path) -> std::path::PathBuf {
+        let checkout = base.join("checkout");
+        for nested in ["apps/web/.git", "libs/core/.git"] {
+            std::fs::create_dir_all(checkout.join(nested)).unwrap();
+        }
+        // And one linked worktree — a `.git` FILE — in a `.worktrees/`
+        // nest: the operator's literal ask (#24).
+        let worktree = checkout.join(".worktrees/T3-code");
+        std::fs::create_dir_all(&worktree).unwrap();
+        std::fs::write(worktree.join(".git"), "gitdir: elsewhere\n").unwrap();
+        checkout
+    }
+
+    /// The production key table, loaded whole in the mac spelling — so the
+    /// popover's same-depth tie-breaks are tested against exactly the order
+    /// launch binds.
+    fn bind_selector_keys(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let bindings = crate::load_bindings(crate::keymap::Platform::Mac, cx);
+            cx.bind_keys(bindings);
+        });
+    }
+
+    /// One Thread bound to a checkout with two nested repos and a linked
+    /// worktree to discover.
+    fn selector_cockpit(name: &str) -> (Cockpit, Fake, std::path::PathBuf) {
+        let base = scratch(name);
+        let checkout = checkout_with_nested(&base);
+        let fake = Fake::default();
+        let store = Store::open(base.join("threads")).unwrap();
+        let mut cockpit = Cockpit::new(store, Box::new(fake.clone()));
+        cockpit
+            .open(
+                Provider::Claude,
+                WorkspaceChoice::Main {
+                    checkout: checkout.clone(),
+                },
+            )
+            .unwrap();
+        (cockpit, fake, checkout)
+    }
+
+    /// #24: cmd-p opens the selector on the focused Pane — row 0 the
+    /// binding itself, then the discovered nested repositories — cmd-p
+    /// again closes it, and escape closes it with the keyboard back in the
+    /// Composer (the focus-snap invariant).
+    #[gpui::test]
+    fn cmd_p_opens_the_root_selector_and_escape_returns_the_keyboard(cx: &mut TestAppContext) {
+        let (core, _fake, _checkout) = selector_cockpit("selector-open");
+        bind_selector_keys(cx);
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        tick(cx);
+
+        cx.simulate_keystrokes("cmd-p");
+        view.read_with(cx, |view, _| {
+            let selector = view.selector.as_ref().expect("cmd-p opens the selector");
+            let labels: Vec<&str> = selector
+                .options
+                .iter()
+                .map(|option| option.label.as_ref())
+                .collect();
+            assert_eq!(
+                labels,
+                [
+                    "workspace root",
+                    ".worktrees/T3-code",
+                    "apps/web",
+                    "libs/core"
+                ],
+                "the binding first, then worktrees and repos alike"
+            );
+            assert_eq!(selector.selected, 0, "the arrows start on the current root");
+        });
+
+        cx.simulate_keystrokes("cmd-p");
+        view.read_with(cx, |view, _| {
+            assert!(view.selector.is_none(), "cmd-p again closes it");
+        });
+
+        cx.simulate_keystrokes("cmd-p");
+        cx.simulate_keystrokes("escape");
+        view.read_with(cx, |view, _| {
+            assert!(view.selector.is_none(), "escape dismisses the popover");
+        });
+        cx.simulate_input("hi");
+        let typed = view.update(cx, |view, cx| {
+            view.panes[0]
+                .composer
+                .update(cx, |composer, cx| composer.take(cx))
+        });
+        assert_eq!(typed, "hi", "the keyboard is the Composer's again");
+    }
+
+    /// #24 review: a press on chrome that moves no focus — the focused
+    /// Thread's own nav row here — still dismisses the popover. Dismissal
+    /// rides the root's bubble handler, so it runs for every press the
+    /// popover's own surface did not swallow.
+    #[gpui::test]
+    fn a_press_on_nav_chrome_dismisses_the_selector(cx: &mut TestAppContext) {
+        let (core, _fake, _checkout) = selector_cockpit("selector-nav-dismiss");
+        bind_selector_keys(cx);
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        tick(cx);
+        cx.simulate_keystrokes("cmd-p");
+        view.read_with(cx, |view, _| {
+            assert!(view.selector.is_some(), "the premise: the popover is open");
+        });
+
+        // The focused Thread's own nav row: 34px nav header, first 28px row.
+        cx.simulate_click(
+            gpui::point(px(104.), px(34. + 14.)),
+            gpui::Modifiers::none(),
+        );
+
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.focused, 0, "the row was the focused Thread's own");
+            assert!(
+                view.selector.is_none(),
+                "the press still dismissed the popover"
+            );
+        });
+    }
+
+    /// #24: ↓ then ↵ picks a linked worktree through the core setter — the
+    /// operator's literal "worktree selector" — observable through the
+    /// getter, in the chrome's own label, and in the store header a
+    /// relaunch loads. The pick ends the Session by design: the next prompt
+    /// respawns a fresh one.
+    #[gpui::test]
+    fn arrows_and_enter_pick_a_worktree_and_the_chrome_follows(cx: &mut TestAppContext) {
+        let (core, fake, checkout) = selector_cockpit("selector-pick");
+        bind_selector_keys(cx);
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        tick(cx);
+        let thread = view.read_with(cx, |view, _| view.panes[0].thread);
+        assert_eq!(fake.streams.borrow().len(), 1, "the premise: one Session");
+
+        cx.simulate_keystrokes("cmd-p");
+        cx.simulate_keystrokes("down");
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.selector.as_ref().expect("open").selected, 1);
+        });
+        cx.simulate_keystrokes("enter");
+
+        let expected = checkout.join(".worktrees/T3-code");
+        view.read_with(cx, |view, _| {
+            assert!(view.selector.is_none(), "picking closes the popover");
+            let root = view.cockpit.session_project_root(thread);
+            assert_eq!(root, Some(expected.as_path()), "the core setter ran");
+            let binding = view.cockpit.workspace(thread).expect("a binding");
+            assert_eq!(
+                pane::root_chip_label(binding, root).as_ref(),
+                "⌵ .worktrees/T3-code",
+                "the chrome names the new root at once"
+            );
+            assert_eq!(
+                view.cockpit.peek(thread).unwrap().session_project_root,
+                Some(expected.clone()),
+                "the store header a relaunch loads already carries it"
+            );
+        });
+
+        // The pick ended the Session (the designed behavior); the next
+        // prompt respawns a fresh one and lands raw in the transcript.
+        cx.simulate_input("go");
+        cx.simulate_keystrokes("enter");
+        view.read_with(cx, |view, _| {
+            let blocks = view
+                .cockpit
+                .transcript(thread)
+                .expect("a transcript")
+                .blocks();
+            assert!(
+                blocks.iter().any(|block| matches!(
+                    &block.body,
+                    ferrite_core::transcript::Body::Prompt(line) if line == "go"
+                )),
+                "the prompt went out after the pick: {blocks:?}"
+            );
+        });
+        assert_eq!(
+            fake.streams.borrow().len(),
+            2,
+            "a fresh Session replaced the one the pick ended"
+        );
+    }
+
+    /// #24: reopened, the selector stands on the active root — and picking
+    /// "workspace root" clears the override back to the binding itself.
+    #[gpui::test]
+    fn picking_workspace_root_clears_the_override(cx: &mut TestAppContext) {
+        let (core, _fake, _checkout) = selector_cockpit("selector-clear");
+        bind_selector_keys(cx);
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        tick(cx);
+        let thread = view.read_with(cx, |view, _| view.panes[0].thread);
+        cx.simulate_keystrokes("cmd-p");
+        cx.simulate_keystrokes("down");
+        cx.simulate_keystrokes("enter");
+        view.read_with(cx, |view, _| {
+            assert!(
+                view.cockpit.session_project_root(thread).is_some(),
+                "the premise: an override is set"
+            );
+        });
+
+        cx.simulate_keystrokes("cmd-p");
+        view.read_with(cx, |view, _| {
+            let selector = view.selector.as_ref().expect("open again");
+            assert_eq!(selector.active, 1, "the ✓ sits on the active root");
+            assert_eq!(selector.selected, 1, "and the arrows start there");
+        });
+        cx.simulate_keystrokes("up");
+        cx.simulate_keystrokes("enter");
+
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.cockpit.session_project_root(thread), None);
+            let binding = view.cockpit.workspace(thread).expect("a binding");
+            assert_eq!(
+                pane::root_chip_label(binding, None).as_ref(),
+                "⌵ workspace",
+                "the chrome says the override is gone"
+            );
+            assert_eq!(
+                view.cockpit.peek(thread).unwrap().session_project_root,
+                None,
+                "cleared on disk too"
+            );
+        });
+    }
+
+    /// #24: a Thread from before bindings were recorded has nothing for a
+    /// root to be inside — cmd-p opens nothing, and the keyboard stays with
+    /// the Composer.
+    #[gpui::test]
+    fn a_thread_without_a_binding_ignores_the_selector_key(cx: &mut TestAppContext) {
+        let dir = scratch("selector-unbound");
+        let thread_dir = dir.join("9");
+        std::fs::create_dir_all(&thread_dir).unwrap();
+        // A frozen v2-era log: no workspace binding, exactly what old
+        // stores still hold (the store's own frozen-contract fixtures).
+        std::fs::write(
+            thread_dir.join("log.jsonl"),
+            concat!(
+                r#"{"schema":2,"provider":"claude"}"#,
+                "\n",
+                r#"{"type":"prompt","text":"hello"}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+        let fake = Fake::default();
+        let store = Store::open(&dir).unwrap();
+        let mut core = Cockpit::new(store, Box::new(fake));
+        core.revive(ThreadId::new(9)).unwrap();
+        bind_selector_keys(cx);
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        tick(cx);
+        view.read_with(cx, |view, _| {
+            assert!(
+                view.cockpit.workspace(view.panes[0].thread).is_none(),
+                "the premise: no binding"
+            );
+        });
+
+        cx.simulate_keystrokes("cmd-p");
+
+        view.read_with(cx, |view, _| {
+            assert!(view.selector.is_none(), "no binding, no selector");
+        });
+        cx.simulate_input("still typing");
+        let typed = view.update(cx, |view, cx| {
+            view.panes[0]
+                .composer
+                .update(cx, |composer, cx| composer.take(cx))
+        });
+        assert_eq!(
+            typed, "still typing",
+            "the keyboard never left the Composer"
+        );
     }
 }
