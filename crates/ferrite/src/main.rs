@@ -6,6 +6,7 @@ mod keymap;
 mod line;
 mod nav;
 mod pane;
+mod pointer;
 mod session;
 mod theme;
 

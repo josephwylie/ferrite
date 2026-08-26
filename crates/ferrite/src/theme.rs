@@ -20,6 +20,15 @@ pub const SURFACE: u32 = 0x0e0e0e;
 pub const INSET: u32 = 0x0a0a0a;
 /// `#191919` — chips, keycaps, menus, inline-code pills.
 pub const RAISED: u32 = 0x191919;
+/// `#292929` — EDGE's 7% white lift precomposed over RAISED: the hover
+/// face of a control resting on the opaque chip ground (keycaps). gpui's
+/// hover refinement replaces the background, so a translucent EDGE there
+/// would let the ground behind the chip bleed through — amber on a
+/// Decision card, exactly where y/n matters most (#26 review).
+pub const RAISED_HOVER: u32 = 0x292929;
+/// `#353535` — EDGE_STRONG's 12% shade precomposed over RAISED: the same
+/// control's pressed face, one step past hover.
+pub const RAISED_PRESSED: u32 = 0x353535;
 /// `#161616` — the Composer's own ground.
 pub const COMPOSER: u32 = 0x161616;
 
@@ -111,10 +120,15 @@ pub const CODE_STR: u32 = 0x9ec78a;
 /// instead of keeping the shipped blue (`#3f6ea830`; no blue survives the
 /// retune).
 pub const SELECTION: u32 = ACCENT_WASH;
-/// Row hover for rows with no ground of their own — the comps draw hover on
-/// links only (concept.md §9.7), so this stays at the hairline tone the nav
-/// already uses rather than inventing a stronger one.
-pub const HOVER: u32 = HAIRLINE;
+/// `rgba(255,255,255,0.06)` — the pointer's lift on rows with no ground of
+/// their own. Its own value, not a HAIRLINE alias: at the hairline's 4.5%
+/// hover was invisible on the nav (#26), and one step above it reads
+/// without approaching the EDGE wash selection sits on.
+pub const HOVER: u32 = 0xffffff0f;
+/// The pressed shade — EDGE's tone in a press role, named so a press is
+/// not spelled "border" (#26). An alias like `IDLE`: a future retune can
+/// split them without a rename.
+pub const PRESSED: u32 = EDGE;
 /// Fully transparent — the reserved slot a focus bar or ring occupies when
 /// off, so nothing shifts when it turns on.
 pub const TRANSPARENT: u32 = 0x00000000;

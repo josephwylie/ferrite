@@ -15,7 +15,7 @@ use gpui::prelude::*;
 use gpui::{
     actions, deferred, div, point, px, relative, rgb, rgba, AnyElement, ClipboardItem, Context,
     Div, FocusHandle, Focusable, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
-    Point, ScrollHandle, SharedString, Window,
+    Point, ScrollHandle, SharedString, Stateful, Window,
 };
 
 use crate::nav;
@@ -1641,6 +1641,7 @@ impl CockpitView {
     }
 }
 
+#[derive(Clone, Copy)]
 enum Answer {
     Allow,
     Deny,
@@ -2193,9 +2194,51 @@ impl CockpitView {
                         .then(|| self.usage_ring(index, cx))
                         .flatten(),
                     controls: (level == Level::Transcript).then(|| self.pane_controls(index, cx)),
+                    // The Decision keycaps, wired where a card can draw
+                    // them — the wall answers with keys alone.
+                    decide: (level != Level::Wall)
+                        .then(|| self.decide_keycaps(index, level, cx))
+                        .flatten(),
                 },
                 level,
             ))
+    }
+
+    /// The pending Decision's keycaps (#26), each press wired to the exact
+    /// decide verb its key runs — no new semantics, the mouse presses the
+    /// keycap it depicts. Assembled here like `pane_controls`; presses land
+    /// on the clicked Pane first (the keyboard may be elsewhere) and stop
+    /// propagation so the Pane's own press handler cannot re-target them.
+    /// L1 draws y/n and, where the request offered a standing answer, a;
+    /// the L2 card keeps y/n alone.
+    fn decide_keycaps(
+        &self,
+        index: usize,
+        level: Level,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let thread = self.panes[index].thread;
+        let decision = self.cockpit.pending(thread)?;
+        let offers_always = level == Level::Transcript && decision.standing_answer().is_some();
+        let wire = |keycap: Stateful<Div>, answer: Answer, cx: &mut Context<Self>| {
+            keycap.on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    if let Some(index) = view.pane_for(thread) {
+                        view.focus_pane(index);
+                    }
+                    view.answer(answer, cx);
+                }),
+            )
+        };
+        let mut cluster = pane::decide_row(level)
+            .child(wire(pane::keycap_allow(), Answer::Allow, cx))
+            .child(wire(pane::keycap_deny(), Answer::Deny, cx));
+        if offers_always {
+            cluster = cluster.child(wire(pane::keycap_always(), Answer::Always, cx));
+        }
+        Some(cluster.into_any_element())
     }
 
     /// The header's context ring with its hover card (#22 C12) — assembled
@@ -2776,6 +2819,73 @@ mod tests {
             assert!(
                 view.cockpit.pending(thread).is_none(),
                 "y must answer the Decision, not type a letter"
+            );
+        });
+    }
+
+    /// #26: the mouse presses the keycap it depicts — a real click on the
+    /// card's rightmost keycap runs its exact decide verb (`n deny`), even
+    /// with text on the Composer line, where the n KEY would type instead.
+    /// The sweep hunts the card band so the test does not encode the
+    /// keycap's exact position, and the first click that answers must have
+    /// denied — allow sits further left.
+    #[gpui::test]
+    fn clicking_a_keycap_runs_its_own_decide_verb(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("keycap-click", 1);
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let thread = view.read_with(cx, |view, _| view.panes[0].thread);
+        fake.streams.borrow()[0].send(decision("perm_01")).unwrap();
+        cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+        tick(cx);
+        cx.simulate_input("not yet");
+        view.read_with(cx, |view, cx| {
+            assert!(
+                view.cockpit.pending(thread).is_some(),
+                "the premise: a card up"
+            );
+            assert!(
+                !view.panes[0].composer.read(cx).is_empty(),
+                "the premise: half-typed text on the line"
+            );
+        });
+
+        // Sweep the card band right to left until a click answers; misses
+        // land on the card's own dead space and change nothing.
+        let mut answered = false;
+        'sweep: for row in 0..12 {
+            let y = 838. - row as f32 * 4.;
+            for step in 0..45 {
+                let x = 1430. - step as f32 * 6.;
+                cx.simulate_click(gpui::point(px(x), px(y)), gpui::Modifiers::none());
+                cx.run_until_parked();
+                if view.read_with(cx, |view, _| view.cockpit.pending(thread).is_none()) {
+                    answered = true;
+                    break 'sweep;
+                }
+            }
+        }
+        assert!(answered, "the sweep never found a keycap");
+        view.read_with(cx, |view, cx| {
+            let answered_as = view
+                .cockpit
+                .transcript(thread)
+                .unwrap()
+                .blocks()
+                .iter()
+                .rev()
+                .find_map(|block| match &block.body {
+                    Body::Meta(text) => Some(text.clone()),
+                    _ => None,
+                });
+            assert_eq!(
+                answered_as.as_deref(),
+                Some("denied Write"),
+                "the rightmost keycap is `n deny`, and its press runs deny"
+            );
+            assert_eq!(
+                view.panes[0].composer.read(cx).text(),
+                "not yet",
+                "the press answered the card; it never typed"
             );
         });
     }

@@ -27,6 +27,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::composer::Composer;
+use crate::pointer::{Pointer, PointerPressed};
 // Every color and metric here is an Aperture token (crate::theme) — no
 // literal survives in render code, which is #22's grep-able law.
 use crate::theme;
@@ -113,6 +114,11 @@ pub struct PaneState<'a> {
     /// The header's – / ✕ window controls, wired in the cockpit to the
     /// existing park and zoom-back verbs. None below L1.
     pub controls: Option<AnyElement>,
+    /// The pending Decision's keycaps, wired in the cockpit to the exact
+    /// decide verbs the keys run (#26) — assembled there like `controls`,
+    /// laid into the L1 card or the L2 body here. None while nothing
+    /// pends, and at the wall, which draws no keycaps.
+    pub decide: Option<AnyElement>,
 }
 
 /// The wall's state matrix (glance.md §4), selected from O(1) reads plus the
@@ -254,6 +260,7 @@ pub fn render_pane(view: &PaneView, state: PaneState<'_>, level: Level) -> impl 
         timings,
         usage_ring,
         controls,
+        decide,
     } = state;
     let status = transcript.map(|t| t.status());
     let state = wall_state(
@@ -290,7 +297,13 @@ pub fn render_pane(view: &PaneView, state: PaneState<'_>, level: Level) -> impl 
         .bg(rgb(SURFACE))
         .border_1()
         .border_color(rgba(EDGE))
-        .overflow_hidden();
+        .overflow_hidden()
+        // At the instrument levels the whole cell is a click-to-focus
+        // button, and says so (#26): the Cell hover lifts the border it
+        // already has — never a wash over the state canvas, and rings keep
+        // color to themselves. At L1 the Pane is a workspace surface, not
+        // a button, and its cursor stays unset for #27's I-beam.
+        .when(level != Level::Transcript, |shell| shell.hover_cell());
 
     // Far enough away, a Pane is one signal: no header, no transcript,
     // nothing that stops reading at a glance.
@@ -304,7 +317,7 @@ pub fn render_pane(view: &PaneView, state: PaneState<'_>, level: Level) -> impl 
     if level == Level::Instruments {
         return shell
             .child(l2_cell(
-                view, transcript, decision, workspace, state, timings,
+                view, transcript, decision, workspace, state, timings, decide,
             ))
             .children(outer_ring)
             .children(inner_ring);
@@ -343,6 +356,7 @@ pub fn render_pane(view: &PaneView, state: PaneState<'_>, level: Level) -> impl 
                 transcript,
                 ComposerStack {
                     decision,
+                    decide,
                     queued,
                     running,
                     empty: composer_empty,
@@ -520,6 +534,7 @@ fn wall_cell(view: &PaneView, state: WallState, focused: bool) -> Div {
 /// then instruments — progress row, badge row, and the bottom-pinned
 /// activity line. A pending Decision swaps the body for the y/n card and an
 /// idle Thread centers `❯ idle`.
+#[allow(clippy::too_many_arguments)]
 fn l2_cell(
     view: &PaneView,
     transcript: Option<&Transcript>,
@@ -527,6 +542,7 @@ fn l2_cell(
     workspace: Option<&WorkspaceBinding>,
     state: WallState,
     timings: Option<&HashMap<String, ToolTiming>>,
+    decide: Option<AnyElement>,
 ) -> Div {
     let hot = matches!(
         state,
@@ -590,7 +606,7 @@ fn l2_cell(
     // A Decision's cell body is the card, keyed like the in-Pane card.
     if let Some(decision) = decision {
         return cell.child(header).child(
-            l2_decision_body(decision)
+            l2_decision_body(decision, decide)
                 .key_context("Decision")
                 .track_focus(&view.decision_focus),
         );
@@ -720,8 +736,9 @@ fn l2_cell(
 /// The Cockpit board's Decision cell body: the command, who wants it, and
 /// the y/n keycaps — no `a always` at L2. The whole group hangs directly
 /// under the header; a spacer here would strand the keycaps on the cell
-/// floor with dead black between (#22 A2).
-fn l2_decision_body(decision: &Decision) -> Div {
+/// floor with dead black between (#22 A2). The keycaps arrive wired from
+/// the cockpit (#26), like every other pointer.
+fn l2_decision_body(decision: &Decision, decide: Option<AnyElement>) -> Div {
     let command = decision_subject(decision);
     let wants = decision_wants(decision);
     div()
@@ -748,13 +765,7 @@ fn l2_decision_body(decision: &Decision) -> Div {
                 .text_color(rgb(INK_TERTIARY))
                 .child(wants),
         )
-        .child(
-            div()
-                .flex()
-                .gap(px(6.))
-                .child(keycap("y allow", INK, EDGE_STRONG))
-                .child(keycap("n deny", INK_SECONDARY, EDGE_STRONG)),
-        )
+        .children(decide)
 }
 
 // ---------------------------------------------------------------- L1 pane
@@ -946,7 +957,9 @@ pub fn provider_chip_label(provider: &str, model: Option<&str>) -> SharedString 
 /// The control itself (#25): the meta row's accent chip — the same accent
 /// tint as the header's provider chip, which is what marks it as the
 /// provider's spot — at the meta row's own scale. Render-only; the
-/// cockpit wires the click.
+/// cockpit wires the click. Carried hover (#26): its accent wash is a
+/// stronger ground the achromatic lift would downgrade — the selected-row
+/// skip rule, applied to a chip.
 pub fn provider_chip(label: SharedString) -> Div {
     div()
         .flex_shrink_0()
@@ -956,6 +969,7 @@ pub fn provider_chip(label: SharedString) -> Div {
         .rounded(px(theme::R_CHIP))
         .px(px(6.))
         .py(px(1.))
+        .hover_carried()
         .child(label)
 }
 
@@ -1008,6 +1022,8 @@ fn parked_body() -> Div {
 /// stays readable as the states grow.
 struct ComposerStack<'a> {
     decision: Option<&'a Decision>,
+    /// The Decision's keycaps, wired in the cockpit (#26).
+    decide: Option<AnyElement>,
     queued: Option<&'a str>,
     running: bool,
     empty: bool,
@@ -1026,6 +1042,7 @@ struct ComposerStack<'a> {
 fn composer_region(view: &PaneView, transcript: &Transcript, stack: ComposerStack) -> Div {
     let ComposerStack {
         decision,
+        decide,
         queued,
         running,
         empty,
@@ -1044,7 +1061,7 @@ fn composer_region(view: &PaneView, transcript: &Transcript, stack: ComposerStac
         .when(decision.is_some(), |region| region.key_context("Decision"));
     let stacked = decision.is_some() || queued.is_some();
     if let Some(decision) = decision {
-        region = region.child(decision_card(decision));
+        region = region.child(decision_card(decision, decide));
     }
     if let Some(held) = queued {
         region = region.child(queued_line(held));
@@ -1289,6 +1306,14 @@ pub fn menu_row(row: &MenuRow, selected: bool) -> Div {
                 .text_color(rgb(name_ink))
                 .child(StyledText::new(row.name.clone()).with_highlights(highlights)),
         );
+    // The Row role (#26): the selected row skips the wash — hover would
+    // downgrade its EDGE ground — but keeps the cursor; an inert row gets
+    // neither, for the same reason it carries no ↵ hint.
+    drawn = match (row.inert, selected) {
+        (true, _) => drawn,
+        (false, true) => drawn.hover_carried(),
+        (false, false) => drawn.hover_row(),
+    };
     if !row.detail.is_empty() {
         let detail_ink = if selected { INK_TERTIARY } else { INK_MUTED };
         let mut detail = div()
@@ -1351,13 +1376,14 @@ fn queued_line(held: &str) -> impl IntoElement {
 /// The permission card, exactly as PromptBox state 04 draws it: warning
 /// glyph, the command with its subtitle, and the y/n/a keycaps riding the
 /// right edge. Kept free of focus and key wiring so it can be drawn — and
-/// smoke-rendered — on its own. The comp's warning-triangle SVG is stood in
-/// by the ⚠ glyph the wall already speaks; gpui here has no asset pipeline
-/// to load an icon from.
-fn decision_card(decision: &Decision) -> Div {
+/// smoke-rendered — on its own; the keycaps arrive wired from the cockpit
+/// (#26). The comp's warning-triangle SVG is stood in by the ⚠ glyph the
+/// wall already speaks; gpui here has no asset pipeline to load an icon
+/// from.
+fn decision_card(decision: &Decision, decide: Option<AnyElement>) -> Div {
     let command = decision_subject(decision);
     let subtitle = decision_wants(decision);
-    let mut card = div()
+    let card = div()
         .flex()
         .flex_shrink_0()
         .items_center()
@@ -1399,13 +1425,8 @@ fn decision_card(decision: &Decision) -> Div {
                         .child(subtitle),
                 ),
         )
-        .child(div().flex_1())
-        .child(keycap("y allow", INK, EDGE_STRONG))
-        .child(keycap("n deny", INK_SECONDARY, EDGE_STRONG));
-    if decision.standing_answer().is_some() {
-        card = card.child(keycap("a always", INK_MUTED, EDGE));
-    }
-    card
+        .child(div().flex_1());
+    card.children(decide)
 }
 
 /// The Decision's subject — what it wants to do, tool-prefixed the comps'
@@ -1439,10 +1460,14 @@ fn decision_wants(decision: &Decision) -> SharedString {
     }
 }
 
-/// One keyboard keycap as the comps draw it: mono 10 on RAISED, radius 4.
-/// `a always` is de-emphasized by ink and a fainter border, never removed.
-fn keycap(label: &'static str, ink: u32, edge: u32) -> Div {
+/// One keyboard keycap as the comps draw it: mono 10 on RAISED, radius 4,
+/// wearing the RAISED-ground hover and press — the mouse presses the key
+/// it depicts (#26). The label doubles as the element id the pressed
+/// shade tracks; two keycaps never share one in a card. `a always` is
+/// de-emphasized by ink and a fainter border, never removed.
+fn keycap(label: &'static str, ink: u32, edge: u32) -> Stateful<Div> {
     div()
+        .id(label)
         .flex_shrink_0()
         .text_size(px(theme::TEXT_CHIP))
         .text_color(rgb(ink))
@@ -1452,7 +1477,31 @@ fn keycap(label: &'static str, ink: u32, edge: u32) -> Div {
         .rounded(px(theme::R_CHIP))
         .px(px(6.))
         .py(px(2.))
+        .hover_raised()
+        .press_raised()
         .child(label)
+}
+
+/// The decide keycaps, one constructor per verb, so the cockpit can wire
+/// each press without respelling the keycap grammar (#26).
+pub fn keycap_allow() -> Stateful<Div> {
+    keycap("y allow", INK, EDGE_STRONG)
+}
+pub fn keycap_deny() -> Stateful<Div> {
+    keycap("n deny", INK_SECONDARY, EDGE_STRONG)
+}
+pub fn keycap_always() -> Stateful<Div> {
+    keycap("a always", INK_MUTED, EDGE)
+}
+
+/// The keycaps' cluster: the L1 card seats them on its own 10px pitch, the
+/// L2 body packs them at 6 — the two comps' spacings, unchanged.
+pub fn decide_row(level: Level) -> Div {
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(if level == Level::Transcript { 10. } else { 6. }))
 }
 
 // ------------------------------------------------------------ shared bits
@@ -1688,7 +1737,8 @@ pub fn control_button(id: (&'static str, usize), glyph: &'static str) -> Statefu
         .rounded(px(theme::R_CHIP))
         .text_size(px(theme::TEXT_CODE))
         .text_color(rgb(INK_MUTED))
-        .hover(|button| button.bg(rgba(EDGE)))
+        .hover_control()
+        .press_control()
         .child(glyph)
 }
 
@@ -1755,9 +1805,11 @@ pub fn root_chip_label(binding: &WorkspaceBinding, root: Option<&Path>) -> Share
 /// The chip itself, per issue #24's pinned design: mono 10.5 in a quiet 1px
 /// EDGE box — the accent tint stays on the provider chip, and two accent
 /// chips in one header would fight. An override promotes the ink one step
-/// so it reads at a glance; the hover wash says the chip answers clicks.
-pub fn root_chip(label: SharedString, set: bool) -> Div {
+/// so it reads at a glance; the Control hover says the chip answers clicks,
+/// and the id is what the pressed shade tracks (#26).
+pub fn root_chip(label: SharedString, set: bool) -> Stateful<Div> {
     div()
+        .id("root-chip")
         .flex_shrink_0()
         .text_size(px(theme::TEXT_META))
         .text_color(rgb(if set { INK_TERTIARY } else { INK_FAINT }))
@@ -1766,7 +1818,8 @@ pub fn root_chip(label: SharedString, set: bool) -> Div {
         .rounded(px(theme::R_CHIP))
         .px(px(6.))
         .py(px(1.))
-        .hover(|chip| chip.bg(rgba(EDGE)))
+        .hover_control()
+        .press_control()
         .child(label)
 }
 
@@ -1841,9 +1894,13 @@ pub fn picker_row(label: SharedString, detail: SharedString, selected: bool, act
         .text_color(rgb(if selected { ACCENT } else { INK_SECONDARY }))
         .child(div().min_w_0().truncate().child(label))
         .child(div().flex_1());
-    if selected {
-        row = row.bg(rgba(EDGE));
-    }
+    // The Row role (#26), the menu rows' skip rule: the selected row's
+    // EDGE ground outranks the wash, so it keeps only the cursor.
+    row = if selected {
+        row.bg(rgba(EDGE)).hover_carried()
+    } else {
+        row.hover_row()
+    };
     if !detail.is_empty() {
         row = row.child(
             div()
@@ -2450,8 +2507,29 @@ mod tests {
                 .w(px(900.))
                 .font_family(crate::theme::FONT_MONO)
                 .text_size(px(12.))
-                .children(self.decisions.iter().map(decision_card))
-                .children(self.decisions.iter().map(l2_decision_body))
+                .children(self.decisions.iter().map(|decision| {
+                    decision_card(
+                        decision,
+                        Some(
+                            decide_row(Level::Transcript)
+                                .child(keycap_allow())
+                                .child(keycap_deny())
+                                .child(keycap_always())
+                                .into_any_element(),
+                        ),
+                    )
+                }))
+                .children(self.decisions.iter().map(|decision| {
+                    l2_decision_body(
+                        decision,
+                        Some(
+                            decide_row(Level::Instruments)
+                                .child(keycap_allow())
+                                .child(keycap_deny())
+                                .into_any_element(),
+                        ),
+                    )
+                }))
         }
     }
 
@@ -2490,6 +2568,56 @@ mod tests {
             provider_chip_label("codex", Some("gpt-5.4-mini")).as_ref(),
             "gpt-5.4-mini ⌵"
         );
+    }
+
+    /// #26, the Row rule from the pointer's side: rows that answer clicks
+    /// advertise it with the cursor — the selected row keeps it while
+    /// skipping the wash — and an inert row promises nothing, for the same
+    /// reason it draws no ↵ hint. Keycaps are Controls and say so too.
+    #[test]
+    fn rows_advertise_their_click_with_the_cursor_and_inert_rows_do_not() {
+        use gpui::CursorStyle;
+        fn cursor(mut drawn: impl Styled) -> Option<CursorStyle> {
+            drawn.style().mouse_cursor
+        }
+        let offer = MenuRow {
+            insert: "/import".into(),
+            name: "/import".into(),
+            matched: vec![],
+            detail: "adopt a CLI session".into(),
+            prose_detail: true,
+            inert: false,
+        };
+        assert_eq!(
+            cursor(menu_row(&offer, false)),
+            Some(CursorStyle::PointingHand)
+        );
+        assert_eq!(
+            cursor(menu_row(&offer, true)),
+            Some(CursorStyle::PointingHand),
+            "the selected row skips the wash, never the cursor"
+        );
+        let inert = MenuRow {
+            inert: true,
+            ..offer
+        };
+        assert_eq!(cursor(menu_row(&inert, false)), None);
+        assert_eq!(cursor(menu_row(&inert, true)), None);
+
+        // The ✓-row both selectors share follows the same rule.
+        assert_eq!(
+            cursor(picker_row("workspace root".into(), "".into(), false, false)),
+            Some(CursorStyle::PointingHand)
+        );
+        assert_eq!(
+            cursor(picker_row("workspace root".into(), "".into(), true, true)),
+            Some(CursorStyle::PointingHand)
+        );
+
+        // The decide keycaps answer the mouse (#26) and say so.
+        assert_eq!(cursor(keycap_allow()), Some(CursorStyle::PointingHand));
+        assert_eq!(cursor(keycap_deny()), Some(CursorStyle::PointingHand));
+        assert_eq!(cursor(keycap_always()), Some(CursorStyle::PointingHand));
     }
 
     /// #24: the chip names the root relative to the binding — `⌵ apps/web`

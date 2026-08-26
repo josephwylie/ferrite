@@ -18,6 +18,7 @@ use ferrite_core::ThreadId;
 use gpui::prelude::*;
 use gpui::{div, px, rgb, rgba, Div, FontWeight, Pixels, SharedString, Stateful};
 
+use crate::pointer::{Pointer, PointerPressed};
 use crate::theme::{
     ACCENT, EDGE, FAIL, GOOD, HAIRLINE, IDLE, INK, INK_FAINT, INK_MUTED, INK_SECONDARY, INSET,
     TRANSPARENT, WAIT, WAIT_WASH,
@@ -278,9 +279,10 @@ pub fn parked_dot(row: &ParkedRow) -> Stateful<Div> {
 }
 
 /// The shared 28px row chrome: the 2px left slot the focus bar lives in
-/// (transparent otherwise, so nothing shifts), the hover lift, and the
-/// pressed shade. Focused rows skip hover — the dimmer hover wash must not
-/// downgrade the EDGE ground focus already painted.
+/// (transparent otherwise, so nothing shifts), the Row hover, and the
+/// pressed shade. Focused rows skip the wash but keep the cursor — the
+/// dimmer hover wash must not downgrade the EDGE ground focus already
+/// painted (#26's one skip rule, law for every row).
 fn row_frame(id: (&'static str, usize), focused: bool) -> Stateful<Div> {
     let line = div()
         .id(id)
@@ -295,10 +297,12 @@ fn row_frame(id: (&'static str, usize), focused: bool) -> Stateful<Div> {
         .border_l_2()
         .border_color(rgba(TRANSPARENT));
     if focused {
-        return line.border_color(rgb(ACCENT)).bg(rgba(EDGE));
+        return line
+            .border_color(rgb(ACCENT))
+            .bg(rgba(EDGE))
+            .hover_carried();
     }
-    line.hover(|line| line.bg(rgba(HAIRLINE)))
-        .active(|line| line.bg(rgba(EDGE)))
+    line.hover_row().press_row()
 }
 
 /// One rail slot: 24px of vertical pitch with the dot centered, and the
@@ -312,8 +316,8 @@ fn rail_cell(id: (&'static str, usize)) -> Stateful<Div> {
         .justify_center()
         .h(px(24.))
         .w_full()
-        .hover(|cell| cell.bg(rgba(HAIRLINE)))
-        .active(|cell| cell.bg(rgba(EDGE)))
+        .hover_row()
+        .press_row()
 }
 
 /// The amber `needs you` chip — the exact chip from the Cockpit board's
@@ -357,4 +361,53 @@ fn hollow_dot(size: Pixels) -> Div {
         .rounded_full()
         .border_1()
         .border_color(rgb(INK_FAINT))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ferrite_core::ThreadId;
+    use gpui::CursorStyle;
+
+    fn row(focused: bool) -> RunningRow {
+        RunningRow {
+            thread: ThreadId::new(1),
+            name: "thread-01".into(),
+            binding: "main".into(),
+            provider: "cl",
+            status: Status::Streaming,
+            needs_you: false,
+            todos: None,
+            focused,
+        }
+    }
+
+    /// #26: every nav row and rail dot advertises its click with the
+    /// pointer cursor — the focused row too, which skips only the wash
+    /// (its EDGE ground outranks the hover lift).
+    #[test]
+    fn nav_rows_carry_the_pointer_cursor_focused_or_not() {
+        let cursor = |mut drawn: Stateful<Div>| drawn.style().mouse_cursor;
+        assert_eq!(
+            cursor(running_row(&row(false))),
+            Some(CursorStyle::PointingHand)
+        );
+        assert_eq!(
+            cursor(running_row(&row(true))),
+            Some(CursorStyle::PointingHand),
+            "the focused row skips the wash, never the cursor"
+        );
+        assert_eq!(
+            cursor(running_dot(&row(false))),
+            Some(CursorStyle::PointingHand)
+        );
+        let parked = ParkedRow {
+            thread: ThreadId::new(2),
+            name: "thread-02".into(),
+            binding: "main".into(),
+            provider: "cl",
+        };
+        assert_eq!(cursor(parked_row(&parked)), Some(CursorStyle::PointingHand));
+        assert_eq!(cursor(parked_dot(&parked)), Some(CursorStyle::PointingHand));
+    }
 }
