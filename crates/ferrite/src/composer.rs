@@ -12,6 +12,7 @@ use gpui::{
 };
 
 use crate::line::Line;
+use crate::pointer::Pointer;
 
 actions!(composer, [Backspace, Delete, Left, Right, Home, End, Paste]);
 
@@ -285,6 +286,10 @@ impl Render for Composer {
             .flex()
             .flex_1()
             .min_w_0()
+            // Editable text speaks the I-beam like the transcript's runs do
+            // (#26's text role, #27) — an arrow over the one line the
+            // operator types into would say the opposite of the truth.
+            .hover_text()
             .key_context(if self.menu_open {
                 "Composer ComposerMenu"
             } else {

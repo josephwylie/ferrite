@@ -11,8 +11,8 @@
 use ferrite_core::cockpit::ToolTiming;
 use ferrite_core::docview::{is_test_run, passed_count, Instruments, Level, Tests};
 use ferrite_core::transcript::{
-    Block, Body, Class, Diff, Span, Status, Style, Todos, Token, ToolBlock, ToolState, Transcript,
-    Usage,
+    Block, BlockId, Body, Class, Diff, Span, Status, Style, Todos, Token, ToolBlock, ToolState,
+    Transcript, Usage,
 };
 use ferrite_core::workspace::WorkspaceBinding;
 use ferrite_core::{Decision, ThreadId};
@@ -28,13 +28,14 @@ use std::time::Duration;
 
 use crate::composer::Composer;
 use crate::pointer::{Pointer, PointerPressed};
+use crate::select::SelectionOverlay;
 // Every color and metric here is an Aperture token (crate::theme) — no
 // literal survives in render code, which is #22's grep-able law.
 use crate::theme;
 use crate::theme::{
     ACCENT, CODE_KEYWORD, CODE_STR, EDGE, EDGE_STRONG, FAIL, FAIL_WASH, GOOD, GOOD_WASH, HAIRLINE,
-    HOVER, IDLE, INK, INK_FAINT, INK_MUTED, INK_SECONDARY, INK_TERTIARY, INSET, RAISED, SELECTION,
-    SURFACE, WAIT, WAIT_EDGE, WAIT_WASH,
+    IDLE, INK, INK_FAINT, INK_MUTED, INK_SECONDARY, INK_TERTIARY, INSET, RAISED, SURFACE, WAIT,
+    WAIT_EDGE, WAIT_WASH,
 };
 
 /// One Pane's view state: what the window owns per Thread. Everything it
@@ -100,9 +101,11 @@ pub struct PaneState<'a> {
     pub focused: bool,
     /// A turn in flight: the Composer's ❯ becomes ◐ and esc offers interrupt.
     pub running: bool,
-    /// The Blocks a drag swept, as indices into the Thread's blocks. The
-    /// cockpit owns the drag; the Pane only paints the wash.
-    pub selected: Option<std::ops::RangeInclusive<usize>>,
+    /// This frame's selection seam (#27): every text run the transcript
+    /// draws goes through it — registered for hit-testing and copy, and
+    /// washed where the selection covers it. The cockpit owns the drag;
+    /// the Pane only routes its runs.
+    pub selection: SelectionOverlay,
     /// The wall clocks of this Thread's tool calls (`Cockpit::tool_timings`)
     /// — what tool rows and activity lines read their durations from. None
     /// on a Pane whose cockpit kept no clock (tests, parked replays).
@@ -256,7 +259,7 @@ pub fn render_pane(view: &PaneView, state: PaneState<'_>, level: Level) -> impl 
         provider_chip,
         focused,
         running,
-        selected,
+        selection,
         timings,
         usage_ring,
         controls,
@@ -334,13 +337,7 @@ pub fn render_pane(view: &PaneView, state: PaneState<'_>, level: Level) -> impl 
             if let Some(todos) = transcript.todos() {
                 pane = pane.child(tasks_strip(todos, transcript.current_task()));
             }
-            pane = pane.child(body(
-                view,
-                transcript,
-                level.visible_blocks(),
-                selected,
-                timings,
-            ));
+            pane = pane.child(body(view, transcript, level, &selection, timings));
             // The CHANGED strip rides above the Composer whenever the
             // Thread has touched files (#22 C11). `Instruments::of` walks
             // every Block, per frame — the same price every L2 cell already
@@ -973,11 +970,20 @@ pub fn provider_chip(label: SharedString) -> Div {
         .child(label)
 }
 
+/// The rendered tail of a transcript at one level — the window `body`
+/// draws and the selection overlay resolves against (#27). One function,
+/// two callers, so the wash can never resolve against a different window
+/// than is drawn.
+pub fn rendered_window(blocks: &[Block], level: Level) -> &[Block] {
+    let tail = blocks.len().saturating_sub(level.visible_blocks());
+    &blocks[tail..]
+}
+
 fn body(
     view: &PaneView,
     transcript: &Transcript,
-    visible: usize,
-    selected: Option<std::ops::RangeInclusive<usize>>,
+    level: Level,
+    selection: &SelectionOverlay,
     timings: Option<&HashMap<String, ToolTiming>>,
 ) -> impl IntoElement {
     let mut body = div()
@@ -992,14 +998,13 @@ fn body(
         .px(px(theme::TRANSCRIPT_PAD_X))
         .py(px(theme::TRANSCRIPT_PAD_Y))
         .text_size(px(theme::TEXT_BODY))
-        .line_height(relative(theme::LINE_TRANSCRIPT));
-    let blocks = transcript.blocks();
-    let tail = blocks.len().saturating_sub(visible);
-    for (offset, block) in blocks[tail..].iter().enumerate() {
-        let picked = selected
-            .as_ref()
-            .is_some_and(|range| range.contains(&(tail + offset)));
-        body = body.child(render_block(block, picked, timings));
+        .line_height(relative(theme::LINE_TRANSCRIPT))
+        // Characters here are grabbable (#27): the I-beam says so over the
+        // whole scrollback, gutters and gaps included, because a press
+        // anywhere in it anchors at the nearest character.
+        .hover_text();
+    for block in rendered_window(transcript.blocks(), level) {
+        body = body.child(render_block(block, selection, timings));
     }
     body
 }
@@ -1958,72 +1963,80 @@ pub fn popover_footer(hints: &'static str) -> Div {
 /// One Block at DirectionDense density: 14px glyph gutter for prompt and
 /// agent rows, 22px indent for the agent's long-form (headings, bullets,
 /// code) and for `⎿` continuations and bare diffs under tool rows.
-/// A selected Block carries the wash; whole Blocks are the selection unit
-/// because gpui 0.2.2 has no character-level selection over rendered text.
+/// Every text run routes through the selection overlay (#27) — that is
+/// what makes it selectable and copyable; the gutter glyphs, chips and
+/// diff line numbers around the runs are chrome, and stay plain.
 fn render_block(
     block: &Block,
-    selected: bool,
+    selection: &SelectionOverlay,
     timings: Option<&HashMap<String, ToolTiming>>,
 ) -> AnyElement {
-    let row = div()
-        .w_full()
-        .flex_shrink_0()
-        .when(selected, |row| row.bg(rgba(SELECTION)));
+    let row = div().w_full().flex_shrink_0();
     match &block.body {
         Body::Prompt(line) => gutter_row(row, "❯", ACCENT, true)
-            .child(
-                div()
-                    .min_w_0()
-                    .text_color(rgb(INK))
-                    .child(SharedString::from(line.clone())),
-            )
+            .child(div().min_w_0().text_color(rgb(INK)).child(selection.line(
+                block.id,
+                line.clone(),
+                Vec::new(),
+            )))
             .into_any_element(),
-        Body::Paragraph { spans } => gutter_row(row, "⏺", INK_TERTIARY, false)
-            .child(
-                div()
-                    .min_w_0()
-                    .text_color(rgb(INK_SECONDARY))
-                    .child(inline(spans)),
-            )
-            .into_any_element(),
-        Body::Heading { spans, .. } => row
-            .flex()
-            .pl(px(theme::INDENT))
-            .child(
-                div()
-                    .text_size(px(theme::TEXT_HEADING))
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(rgb(INK))
-                    .child(inline(spans)),
-            )
-            .child(div().flex_1())
-            .into_any_element(),
-        Body::Bullet { spans } => row
-            .flex()
-            .flex_row()
-            .gap(px(6.))
-            .pl(px(theme::INDENT))
-            .text_color(rgb(INK_SECONDARY))
-            .child(div().flex_shrink_0().text_color(rgb(ACCENT)).child("•"))
-            .child(div().min_w_0().child(inline(spans)))
-            .into_any_element(),
+        Body::Paragraph { spans } => {
+            let (text, highlights) = inline(spans);
+            gutter_row(row, "⏺", INK_TERTIARY, false)
+                .child(
+                    div()
+                        .min_w_0()
+                        .text_color(rgb(INK_SECONDARY))
+                        .child(selection.line(block.id, text, highlights)),
+                )
+                .into_any_element()
+        }
+        Body::Heading { spans, .. } => {
+            let (text, highlights) = inline(spans);
+            row.flex()
+                .pl(px(theme::INDENT))
+                .child(
+                    div()
+                        .text_size(px(theme::TEXT_HEADING))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(rgb(INK))
+                        .child(selection.line(block.id, text, highlights)),
+                )
+                .child(div().flex_1())
+                .into_any_element()
+        }
+        Body::Bullet { spans } => {
+            let (text, highlights) = inline(spans);
+            row.flex()
+                .flex_row()
+                .gap(px(6.))
+                .pl(px(theme::INDENT))
+                .text_color(rgb(INK_SECONDARY))
+                .child(div().flex_shrink_0().text_color(rgb(ACCENT)).child("•"))
+                .child(
+                    div()
+                        .min_w_0()
+                        .child(selection.line(block.id, text, highlights)),
+                )
+                .into_any_element()
+        }
         // Out-of-band lines share the text column, not the gutter — one
         // left edge for everything that reads as prose (#22 D22).
         Body::Thinking(thought) => row
             .pl(px(theme::INDENT))
             .text_color(rgb(INK_FAINT))
-            .child(SharedString::from(thought.clone()))
+            .child(selection.line(block.id, thought.clone(), Vec::new()))
             .into_any_element(),
         Body::Notice(text) => row
             .pl(px(theme::INDENT))
             .text_color(rgb(WAIT))
-            .child(SharedString::from(text.clone()))
+            .child(selection.line(block.id, text.clone(), Vec::new()))
             .into_any_element(),
         Body::Meta(text) => row
             .pl(px(theme::INDENT))
             .text_size(px(theme::TEXT_ROW))
             .text_color(rgb(INK_MUTED))
-            .child(SharedString::from(text.clone()))
+            .child(selection.line(block.id, text.clone(), Vec::new()))
             .into_any_element(),
         Body::Code {
             language,
@@ -2058,11 +2071,15 @@ fn render_block(
                             .py(px(6.))
                             .text_size(px(theme::TEXT_CODE))
                             .line_height(relative(theme::LINE_CODE))
-                            .child(code(source, tokens.as_deref())),
+                            .child(selection.line(
+                                block.id,
+                                source.clone(),
+                                code(source, tokens.as_deref()),
+                            )),
                     ),
             )
             .into_any_element(),
-        Body::Tool(tool) => render_tool(row, tool, timings),
+        Body::Tool(tool) => render_tool(row, block.id, tool, selection, timings),
     }
 }
 
@@ -2082,10 +2099,15 @@ fn gutter_row(row: Div, glyph: &'static str, color: u32, bold: bool) -> Div {
 /// bold tool name, file args in accent, command args in prose ink. The row's
 /// right edge carries its verdict — the diff stat for an edit, the pass/exit
 /// chip for a command that succeeded (#22 C9/C10) — and the call's measured
-/// duration where the cockpit clocked it.
+/// duration where the cockpit clocked it. The call composes name, `(`,
+/// summary, `)` as overlay pieces of one copied line (#27): flex pieces keep
+/// the summary-only truncation, and copy joins them with nothing. The chip,
+/// the duration and the ⏺ are chrome and never register.
 fn render_tool(
     row: Div,
+    block: BlockId,
     tool: &ToolBlock,
+    selection: &SelectionOverlay,
     timings: Option<&HashMap<String, ToolTiming>>,
 ) -> AnyElement {
     // Command runners' args read as prose; every other summary is a
@@ -2102,27 +2124,29 @@ fn render_tool(
             .flex_shrink_0()
             .font_weight(FontWeight::BOLD)
             .text_color(rgb(INK))
-            .child(SharedString::from(tool.name.clone())),
+            .child(selection.line(block, tool.name.clone(), Vec::new())),
     );
     if !tool.summary.is_empty() {
         call = call
-            .child(div().flex_shrink_0().child("("))
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .child(selection.piece(block, "(", Vec::new())),
+            )
             .child(
                 div()
                     .min_w_0()
                     .truncate()
                     .text_color(rgb(arg_color))
-                    .child(SharedString::from(tool.summary.clone())),
+                    .child(selection.piece(block, tool.summary.clone(), Vec::new())),
             )
-            .child(div().flex_shrink_0().child(")"));
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .child(selection.piece(block, ")", Vec::new())),
+            );
     }
-    let mut line = gutter_row(
-        div().hover(|row| row.bg(rgba(HOVER))),
-        "⏺",
-        INK_TERTIARY,
-        false,
-    )
-    .child(call);
+    let mut line = gutter_row(div(), "⏺", INK_TERTIARY, false).child(call);
     // A settled call's clock, where the cockpit stamped one; running calls
     // tick on the activity line instead. Sub-tenth blips render nothing —
     // a column of 0.0s is noise, not an instrument.
@@ -2184,7 +2208,7 @@ fn render_tool(
                     .w_full()
                     .truncate()
                     .text_color(rgb(INK_MUTED))
-                    .child(SharedString::from(format!("⎿ {line}"))),
+                    .child(selection.line(block, format!("⎿ {line}"), Vec::new())),
             );
         }
     }
@@ -2195,19 +2219,21 @@ fn render_tool(
                 .w_full()
                 .truncate()
                 .text_color(rgb(FAIL))
-                .child(SharedString::from(format!("⎿ {message}"))),
+                .child(selection.line(block, format!("⎿ {message}"), Vec::new())),
         );
     }
     if let Some(diff) = &tool.diff {
-        card = card.child(render_diff(diff));
+        card = card.child(render_diff(block, diff, selection));
     }
     card.into_any_element()
 }
 
 /// A bare diff, per DirectionDense: no card, no filename header — the tool
 /// row above already names the file. 22px indent, a 30px right-aligned
-/// number column, washes for added and removed rows.
-fn render_diff(diff: &Diff) -> impl IntoElement {
+/// number column, washes for added and removed rows. The code cells route
+/// through the overlay — their `+`/`-` signs are text and copy honestly;
+/// the number column is chrome and never does (#27).
+fn render_diff(block: BlockId, diff: &Diff, selection: &SelectionOverlay) -> impl IntoElement {
     let mut lines = div()
         .flex()
         .flex_col()
@@ -2253,46 +2279,12 @@ fn render_diff(diff: &Diff) -> impl IntoElement {
                         .min_w_0()
                         .truncate()
                         .text_color(rgb(code_color))
-                        .child(SharedString::from(line.clone())),
+                        .child(selection.line(block, line.clone(), Vec::new())),
                 ),
             );
         }
     }
     lines
-}
-
-/// A Block's text as the clipboard should carry it: what the row shows,
-/// without colour or state glyphs. Exhaustive on purpose — a new Body kind
-/// must decide what copying it means.
-pub fn block_text(block: &Block) -> String {
-    fn flat(spans: &[Span]) -> String {
-        spans.iter().map(|span| span.text.as_str()).collect()
-    }
-    match &block.body {
-        Body::Prompt(line) => format!("❯ {line}"),
-        Body::Paragraph { spans } | Body::Heading { spans, .. } => flat(spans),
-        Body::Bullet { spans } => format!("• {}", flat(spans)),
-        Body::Thinking(text) | Body::Notice(text) | Body::Meta(text) => text.clone(),
-        Body::Code { source, .. } => source.clone(),
-        Body::Tool(tool) => {
-            let mut lines = vec![format!("{} {}", tool.name, tool.summary)];
-            if let Some(line) = &tool.result_line {
-                lines.push(format!("⎿ {line}"));
-            }
-            if let ToolState::Failed(message) = &tool.state {
-                lines.push(message.clone());
-            }
-            if let Some(diff) = &tool.diff {
-                lines.push(format!("{} +{} −{}", diff.path, diff.added, diff.removed));
-                lines.extend(
-                    diff.hunks
-                        .iter()
-                        .flat_map(|hunk| hunk.lines.iter().cloned()),
-                );
-            }
-            lines.join("\n")
-        }
-    }
 }
 
 /// Token counts read at a glance, not to the digit — `412k`, `1M`, `1.5M`.
@@ -2311,10 +2303,12 @@ fn tokens(count: u64) -> String {
     }
 }
 
-/// Markdown spans in one wrapping run, so inline code keeps its place in the
-/// sentence instead of becoming its own box. Bold and links carry their own
-/// styles (#22 C13); links stay inert — paths render, nothing opens.
-fn inline(spans: &[Span]) -> StyledText {
+/// Markdown spans flattened to one wrapping run — its text and highlight
+/// runs, for the selection overlay to wash and register (#27) — so inline
+/// code keeps its place in the sentence instead of becoming its own box.
+/// Bold and links carry their own styles (#22 C13); links stay inert —
+/// paths render, nothing opens.
+fn inline(spans: &[Span]) -> (String, Vec<(std::ops::Range<usize>, HighlightStyle)>) {
     let mut text = String::new();
     let mut highlights = Vec::new();
     for span in spans {
@@ -2347,14 +2341,14 @@ fn inline(spans: &[Span]) -> StyledText {
             highlights.push((start..text.len(), style));
         }
     }
-    StyledText::new(text).with_highlights(highlights)
+    (text, highlights)
 }
 
-/// Highlighted code, or plain code while the highlighter is still thinking.
-fn code(source: &str, tokens: Option<&[Token]>) -> StyledText {
-    let plain = || StyledText::new(SharedString::from(source.to_string()));
+/// Syntax highlight runs for a code Block, or none while the highlighter is
+/// still thinking.
+fn code(source: &str, tokens: Option<&[Token]>) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
     let Some(tokens) = tokens else {
-        return plain();
+        return Vec::new();
     };
     let mut highlights = Vec::new();
     let mut at = 0;
@@ -2363,7 +2357,7 @@ fn code(source: &str, tokens: Option<&[Token]>) -> StyledText {
         // A highlighter that disagrees with the source is ignored, not trusted
         // into a panic.
         if end > source.len() {
-            return plain();
+            return Vec::new();
         }
         let color = match token.class {
             Class::Plain => ACCENT,
@@ -2381,7 +2375,7 @@ fn code(source: &str, tokens: Option<&[Token]>) -> StyledText {
         ));
         at = end;
     }
-    plain().with_highlights(highlights)
+    highlights
 }
 
 #[cfg(test)]
@@ -2460,8 +2454,12 @@ mod tests {
     }
 
     /// Renders Blocks through a real view: hover styles look up the view
-    /// they are painting under, which a bare `cx.draw` does not have.
+    /// they are painting under, which a bare `cx.draw` does not have. Owns
+    /// the selection whose overlay every run routes through (#27), so tests
+    /// can read what registered and aim carets at it.
     struct ShowsBlocks {
+        thread: ThreadId,
+        selection: crate::select::TranscriptSelection,
         blocks: Vec<Block>,
     }
 
@@ -2471,6 +2469,7 @@ mod tests {
             _window: &mut gpui::Window,
             _cx: &mut Context<Self>,
         ) -> impl IntoElement {
+            let overlay = self.selection.overlay(self.thread, &self.blocks);
             div()
                 .flex()
                 .flex_col()
@@ -2480,14 +2479,16 @@ mod tests {
                 .children(
                     self.blocks
                         .iter()
-                        .map(|block| render_block(block, false, None)),
+                        .map(|block| render_block(block, &overlay, None)),
                 )
-                // And once more selected, so the wash paints on every kind.
-                .children(
-                    self.blocks
-                        .iter()
-                        .map(|block| render_block(block, true, None)),
-                )
+        }
+    }
+
+    fn shows_blocks(blocks: Vec<Block>) -> ShowsBlocks {
+        ShowsBlocks {
+            thread: ThreadId::new(1),
+            selection: crate::select::TranscriptSelection::default(),
+            blocks,
         }
     }
 
@@ -2680,36 +2681,107 @@ mod tests {
             assert!(kinds.contains(&wanted), "no {wanted} block in {kinds:?}");
         }
 
-        let (_, cx) = cx.add_window_view(|_, _| ShowsBlocks { blocks });
+        let thread = ThreadId::new(1);
+        let (view, cx) = cx.add_window_view(|_, _| shows_blocks(blocks));
         // A resize forces a real layout-and-paint pass through the view.
         cx.simulate_resize(size(px(900.), px(600.)));
         cx.run_until_parked();
+
+        // And once more with everything selected, so the SELECTION wash
+        // paints on every kind (#27): anchor on the first registered
+        // character, head past the last.
+        view.update(cx, |view, cx| {
+            let runs = view.selection.registered(thread);
+            let (first, first_ordinal, _, _) = runs.first().expect("registered runs").clone();
+            let (last, last_ordinal, _, text) = runs.last().expect("registered runs").clone();
+            let from = view
+                .selection
+                .caret_position(thread, first, first_ordinal, 0)
+                .expect("a caret on the first run");
+            let mut to = view
+                .selection
+                .caret_position(thread, last, last_ordinal, text.len())
+                .expect("a caret on the last run");
+            // Past the right edge: the nearest-index clamp takes the rest.
+            to.x += px(40.);
+            let everywhere = gpui::Bounds::new(point(px(0.), px(0.)), size(px(900.), px(600.)));
+            view.selection.begin(thread, from, 1, everywhere);
+            assert!(
+                view.selection.extend(thread, to, everywhere),
+                "the sweep must take"
+            );
+            cx.notify();
+        });
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert!(
+                view.selection.copied_text().is_some(),
+                "the sweep holds text across every kind"
+            );
+        });
     }
 
-    /// AC2's copy half needs every Block kind to say what it is as text —
-    /// an empty string here would copy as a silent hole.
-    #[test]
-    fn every_block_kind_has_clipboard_text() {
+    /// AC2's copy half, relocated from `block_text` (#27): every Block kind
+    /// must register its text with the selection overlay when it renders —
+    /// a kind that registers nothing would select and copy as a silent
+    /// hole. Chrome — gutter glyphs, bullets, verdict chips, the diff
+    /// number column — never registers, so it can never be copied.
+    #[gpui::test]
+    fn every_block_kind_registers_its_selectable_text(cx: &mut TestAppContext) {
         let transcript = every_kind();
-        for block in transcript.blocks() {
+        let blocks: Vec<Block> = transcript.blocks().to_vec();
+        let ids: Vec<ferrite_core::transcript::BlockId> =
+            blocks.iter().map(|block| block.id).collect();
+        let thread = ThreadId::new(1);
+        let (view, cx) = cx.add_window_view(|_, _| shows_blocks(blocks));
+        cx.simulate_resize(size(px(900.), px(600.)));
+        cx.run_until_parked();
+
+        let runs = view.read_with(cx, |view, _| view.selection.registered(thread));
+        for id in &ids {
             assert!(
-                !block_text(block).trim().is_empty(),
-                "no clipboard text for {block:?}"
+                runs.iter()
+                    .any(|(block, _, _, text)| block == id && !text.trim().is_empty()),
+                "no selectable text registered for Block {id:?}"
             );
         }
-        let by_kind: Vec<String> = transcript.blocks().iter().map(block_text).collect();
-        let all = by_kind.join("\n");
-        assert!(all.contains("❯ run the tests"), "the prompt line: {all}");
+        // What a whole-transcript copy would assemble: pieces of one visual
+        // row join with nothing, rows join with newlines.
+        let mut all = String::new();
+        for (_, _, starts_line, text) in &runs {
+            if *starts_line && !all.is_empty() {
+                all.push('\n');
+            }
+            all.push_str(text);
+        }
+        assert!(all.contains("run the tests"), "the prompt line: {all}");
         assert!(
             all.contains("fn main() {}"),
-            "code copies its source: {all}"
+            "code registers its source: {all}"
+        );
+        assert!(
+            all.contains("Bash(cargo test)"),
+            "tool pieces compose the call: {all}"
         );
         assert!(
             all.contains("+delta") && all.contains("-bravo"),
-            "a diff copies its lines: {all}"
+            "a diff registers its lines: {all}"
         );
-        // The ⎿ continuation the fold keeps copies too.
-        assert!(all.contains("⎿ 42 passed"), "the result line: {all}");
+        // The ⎿ continuation registers where it renders (Edit's result);
+        // Bash's was promoted into its chip, which is chrome — so its count
+        // never registers.
+        assert!(all.contains("⎿ applied"), "the result line: {all}");
+        assert!(
+            !all.contains("42 passed"),
+            "a promoted chip is chrome: {all}"
+        );
+        for chrome in ['❯', '⏺', '•', '✓'] {
+            assert!(!all.contains(chrome), "{chrome} is chrome: {all}");
+        }
+        assert!(
+            runs.iter().any(|(_, _, _, text)| text == "+delta"),
+            "a diff cell is its bare line — no number column: {runs:?}"
+        );
     }
 
     #[gpui::test]

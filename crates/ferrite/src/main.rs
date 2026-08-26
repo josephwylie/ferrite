@@ -7,6 +7,7 @@ mod line;
 mod nav;
 mod pane;
 mod pointer;
+mod select;
 mod session;
 mod theme;
 

@@ -8,18 +8,18 @@ use std::time::Duration;
 use ferrite_core::cockpit::{Cockpit, ProviderChoice};
 use ferrite_core::docview::{Cell, Level};
 use ferrite_core::store::Provider;
-use ferrite_core::transcript::{Block, BlockId};
 use ferrite_core::workspace::WorkspaceChoice;
 use ferrite_core::{DecisionAnswer, ThreadId};
 use gpui::prelude::*;
 use gpui::{
-    actions, deferred, div, point, px, relative, rgb, rgba, AnyElement, ClipboardItem, Context,
-    Div, FocusHandle, Focusable, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
-    Point, ScrollHandle, SharedString, Stateful, Window,
+    actions, deferred, div, px, relative, rgb, rgba, AnyElement, ClipboardItem, Context, Div,
+    FocusHandle, Focusable, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
+    ScrollHandle, SharedString, Stateful, Window,
 };
 
 use crate::nav;
 use crate::pane::{self, PaneView};
+use crate::select::TranscriptSelection;
 
 actions!(
     cockpit,
@@ -95,12 +95,11 @@ pub struct CockpitView {
     /// When the watchdog last swept. Sweeping costs a `ps`/`tasklist` per
     /// live Session, so it runs on its own slow cadence, never per frame.
     swept: std::time::Instant,
-    /// A left press on a transcript, holding the Block it landed on while
-    /// the button stays down — the anchor a drag turns into a selection.
-    grip: Option<(ThreadId, BlockId)>,
-    /// The one live selection. A plain click never makes one; only a drag
-    /// does, and the next press anywhere clears it.
-    selection: Option<Selection>,
+    /// The one live text selection, at character grain (#27). The cockpit
+    /// speaks raw positions — begin on press, extend on drag, copied_text
+    /// on cmd-c — and select.rs owns every offset behind that seam. A plain
+    /// click selects nothing; the next press anywhere clears it.
+    selection: TranscriptSelection,
     /// cmd-b (#21): the nav folded to its 40px LED rail. In memory only —
     /// a preference store is not this ticket.
     nav_collapsed: bool,
@@ -204,38 +203,6 @@ enum MenuKind {
     },
 }
 
-/// Whole Blocks swept by a drag across one Pane's transcript — the unit v1
-/// selection copies. gpui 0.2.2 has no selection over rendered text (that
-/// lives in Zed's own editor element), so character-level selection would
-/// need an editor-grade element; Blocks are the honest unit this transcript
-/// has. `anchor` and `head` are BlockIds, in drag order, not sorted — never
-/// positions: eviction drains old Blocks off the front of the transcript,
-/// and a stored position would quietly slide onto Blocks the operator never
-/// touched.
-#[derive(PartialEq)]
-struct Selection {
-    thread: ThreadId,
-    anchor: BlockId,
-    head: BlockId,
-}
-
-impl Selection {
-    /// Where the selection sits in this transcript now. An endpoint whose
-    /// Block was evicted clamps to the window start — eviction eats the
-    /// oldest end first, so everything up to the surviving endpoint was
-    /// swept too. With both ends gone the selection is gone, rather than
-    /// resurrecting on unrelated Blocks.
-    fn resolve(&self, blocks: &[Block]) -> Option<std::ops::RangeInclusive<usize>> {
-        let anchor = blocks.iter().position(|block| block.id == self.anchor);
-        let head = blocks.iter().position(|block| block.id == self.head);
-        match (anchor, head) {
-            (Some(anchor), Some(head)) => Some(anchor.min(head)..=anchor.max(head)),
-            (Some(kept), None) | (None, Some(kept)) => Some(0..=kept),
-            (None, None) => None,
-        }
-    }
-}
-
 /// How near the tail still counts as riding it. It must swallow the
 /// transcript's own padding — gpui reports a not-yet-overflowing scroll as
 /// having exactly that much room, the Dense 8px above and below the rows in
@@ -285,8 +252,7 @@ impl CockpitView {
             }),
             park_order: Vec::new(),
             swept: std::time::Instant::now(),
-            grip: None,
-            selection: None,
+            selection: TranscriptSelection::default(),
             nav_collapsed: false,
             hovered_usage: None,
             selector: None,
@@ -1504,140 +1470,54 @@ impl CockpitView {
     /// fullscreen re-aims here too: the per-frame snap in render then
     /// carries focus to whatever the Pane holds (Composer or Decision card)
     /// — fighting the snap would regress the dead-keyboard fixes it exists
-    /// for. A press on the transcript also grips a Block, ready to become a
-    /// selection if the pointer moves.
-    fn pointer_down(
-        &mut self,
-        index: usize,
-        position: Point<Pixels>,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) {
+    /// for. A press inside the transcript body also anchors a selection at
+    /// the character under the pointer, at the grain the click count names
+    /// (#27) — one on the Pane's chrome (header, Composer) anchors nothing;
+    /// the standing selection was already cleared by the root's capture
+    /// handler, and the root's bubble handler dismisses any open selector —
+    /// this Pane included.
+    fn pointer_down(&mut self, index: usize, event: &MouseDownEvent, cx: &mut Context<Self>) {
         self.focus_pane(index);
-        // Any press clears the standing selection; only a new drag makes
-        // one. The grip was already cleared by the root's capture handler,
-        // and the root's bubble handler dismisses any open selector — this
-        // Pane included.
-        self.selection = None;
-        self.grip = self.panes.get(index).and_then(|pane| {
-            let at = self.block_at(index, position, window)?;
-            let block = self.cockpit.transcript(pane.thread)?.blocks().get(at)?;
-            Some((pane.thread, block.id))
-        });
+        if let Some(pane) = self.panes.get(index) {
+            self.selection.begin(
+                pane.thread,
+                event.position,
+                event.click_count,
+                pane.scroll.bounds(),
+            );
+        }
         cx.notify();
     }
 
-    /// Dragging with the button held sweeps whole Blocks into the selection.
-    /// A drag stays in the Pane it started in; sweeping across a neighbour
-    /// freezes it rather than selecting someone else's transcript.
-    fn pointer_drag(
-        &mut self,
-        index: usize,
-        event: &MouseMoveEvent,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) {
+    /// Dragging with the button held sweeps characters into the selection.
+    /// Wired on the root, not the Pane, so the sweep keeps following a
+    /// pointer that has left the Pane div — and it aims only at the
+    /// gripped Thread's own transcript body, whose rect `extend` clamps
+    /// into: leaving through the Composer or the Pane's edge selects to
+    /// the boundary, never into chrome or a neighbour.
+    fn pointer_drag(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
         if event.pressed_button != Some(MouseButton::Left) {
             return;
         }
-        let Some((thread, anchor)) = self.grip else {
+        let Some(thread) = self.selection.gripping_thread() else {
             return;
         };
-        let Some(pane) = self.panes.get(index) else {
+        let Some(index) = self.pane_for(thread) else {
             return;
         };
-        if pane.thread != thread {
-            return;
-        }
-        // Clamp into the transcript so a drag past its edge still reaches
-        // the first or last visible Block instead of going dead.
-        let bounds = pane.scroll.bounds();
-        if bounds.size.width < px(2.) || bounds.size.height < px(2.) {
-            return;
-        }
-        let position = point(
-            event
-                .position
-                .x
-                .clamp(bounds.left(), bounds.right() - px(1.)),
-            event
-                .position
-                .y
-                .clamp(bounds.top(), bounds.bottom() - px(1.)),
-        );
-        let Some(head) = self.block_at(index, position, window).and_then(|at| {
-            let blocks = self.cockpit.transcript(thread)?.blocks();
-            Some(blocks.get(at)?.id)
-        }) else {
-            return;
-        };
-        let next = Some(Selection {
-            thread,
-            anchor,
-            head,
-        });
-        if self.selection != next {
-            self.selection = next;
+        let body = self.panes[index].scroll.bounds();
+        if self.selection.extend(thread, event.position, body) {
             cx.notify();
         }
     }
 
-    /// The Block under a window position in one Pane's transcript, as an
-    /// index into the Thread's blocks — None outside the transcript, and
-    /// None at wall range, where a Pane draws no text to select.
-    fn block_at(&self, index: usize, position: Point<Pixels>, window: &Window) -> Option<usize> {
-        let visible = self.level_now(window).visible_blocks();
-        if visible == 0 {
-            return None;
-        }
-        let pane = self.panes.get(index)?;
-        let bounds = pane.scroll.bounds();
-        if !bounds.contains(&position) {
-            return None;
-        }
-        let blocks = self.cockpit.transcript(pane.thread)?.blocks().len();
-        if blocks == 0 {
-            return None;
-        }
-        let tail = blocks.saturating_sub(visible);
-        // Rows are recorded unscrolled: the offset moves the content under a
-        // fixed viewport, so the position maps back by subtracting it.
-        let y = position.y - pane.scroll.offset().y;
-        let shown = blocks - tail;
-        let mut child = shown - 1;
-        for row in 0..shown {
-            match pane.scroll.bounds_for_item(row) {
-                // The first row whose bottom edge is below the pointer is the
-                // row it is on — a position in a gap belongs to the row after.
-                Some(item) if y < item.bottom() => {
-                    child = row;
-                    break;
-                }
-                Some(_) => {}
-                // Rows the frame has not painted yet: the pointer is past
-                // everything drawn, which is the newest Block.
-                None => break,
-            }
-        }
-        Some(tail + child)
-    }
-
-    /// The selected Blocks' text, one Block per line, to the clipboard. With
-    /// nothing selected — or a selection eviction has entirely swept away —
-    /// the clipboard is left alone.
+    /// Exactly the highlighted text to the clipboard. With nothing visibly
+    /// selected — cleared, or every selected row gone from the rendered
+    /// window — the clipboard is left alone.
     fn copy_selection(&mut self, _: &CopySelection, _window: &mut Window, cx: &mut Context<Self>) {
-        let Some(selection) = &self.selection else {
-            return;
-        };
-        let Some(transcript) = self.cockpit.transcript(selection.thread) else {
-            return;
-        };
-        let blocks = transcript.blocks();
-        let Some(range) = selection.resolve(blocks) else {
-            return;
-        };
-        let text: Vec<String> = blocks[range].iter().map(pane::block_text).collect();
-        cx.write_to_clipboard(ClipboardItem::new_string(text.join("\n")));
+        if let Some(text) = self.selection.copied_text() {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+        }
     }
 }
 
@@ -1904,6 +1784,21 @@ impl Render for CockpitView {
         let attention = self.attention();
         let level = self.level_now(window);
 
+        // A selection is only real while its rows draw (#27): zooming below
+        // L1, parking the Pane, or fullscreening another Thread clears it
+        // here rather than leaving invisible clipboard state behind cmd-c.
+        // The registries of Threads without a Pane go with it.
+        if self.selection.active_thread().is_some_and(|thread| {
+            level != Level::Transcript
+                || self.pane_for(thread).is_none()
+                || self.fullscreen.is_some_and(|shown| shown != thread)
+        }) {
+            self.selection.clear();
+        }
+        let panes = &self.panes;
+        self.selection
+            .retain_threads(|thread| panes.iter().any(|pane| pane.thread == thread));
+
         // A selector for a Pane the operator has left — refocused away,
         // parked, or zoomed below the L1 header that anchors it — closes
         // here rather than hanging over the wrong Pane, or holding focus
@@ -2052,10 +1947,15 @@ impl Render for CockpitView {
             .on_action(cx.listener(Self::menu_pick))
             .on_action(cx.listener(Self::menu_dismiss))
             // The root covers the window, so a release anywhere ends the
-            // drag; the selection it made stays until the next press.
+            // drag; the selection it made stays until the next press. Moves
+            // ride the root too (#27): a sweep keeps extending after the
+            // pointer leaves the Pane div, clamped to the origin transcript.
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|view, _: &MouseUpEvent, _, _| view.grip = None),
+                cx.listener(|view, _: &MouseUpEvent, _, _| view.selection.release()),
+            )
+            .on_mouse_move(
+                cx.listener(|view, event: &MouseMoveEvent, _, cx| view.pointer_drag(event, cx)),
             )
             // A press anywhere the popovers did not swallow dismisses the
             // open selector and the open Composer menu — Pane bodies, nav
@@ -2081,13 +1981,15 @@ impl Render for CockpitView {
                     }
                 }),
             )
-            // And EVERY press kills any grip left over from a drag whose
-            // release the window never saw — capture phase, so it runs
-            // before a Pane's own press sets a fresh one. Without this, a
-            // press outside every transcript would leave a dead anchor a
-            // later drag could resume.
-            .capture_any_mouse_down(cx.listener(|view, _: &MouseDownEvent, _, _| {
-                view.grip = None;
+            // And EVERY press clears the standing selection — and any grip
+            // left from a drag whose release the window never saw — capture
+            // phase, so it runs before a Pane's own press anchors a fresh
+            // one. A press on the nav or the strip deselects exactly like
+            // one on a transcript (#27).
+            .capture_any_mouse_down(cx.listener(|view, _: &MouseDownEvent, _, cx| {
+                if view.selection.clear() {
+                    cx.notify();
+                }
             }))
             // The strip spans the window and owns the blended titlebar band
             // (#22 D24); below it the nav runs the remaining height on the
@@ -2132,13 +2034,18 @@ impl CockpitView {
         let focused = self
             .focused_thread()
             .is_some_and(|thread| thread == pane.thread);
-        let selected = self
-            .selection
-            .as_ref()
-            .filter(|selection| selection.thread == pane.thread)
-            .and_then(|selection| {
-                selection.resolve(self.cockpit.transcript(pane.thread)?.blocks())
-            });
+        // The frame's selection seam for this Pane (#27), resolved against
+        // exactly the rows the body will draw — the shared rendered window,
+        // because copy is what you see.
+        let selection = {
+            let blocks = self
+                .cockpit
+                .transcript(pane.thread)
+                .map(|transcript| transcript.blocks())
+                .unwrap_or(&[]);
+            self.selection
+                .overlay(pane.thread, pane::rendered_window(blocks, level))
+        };
         div()
             .flex()
             .flex_col()
@@ -2147,13 +2054,8 @@ impl CockpitView {
             .min_h_0()
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |view, event: &MouseDownEvent, window, cx| {
-                    view.pointer_down(index, event.position, window, cx)
-                }),
-            )
-            .on_mouse_move(
-                cx.listener(move |view, event: &MouseMoveEvent, window, cx| {
-                    view.pointer_drag(index, event, window, cx)
+                cx.listener(move |view, event: &MouseDownEvent, _, cx| {
+                    view.pointer_down(index, event, cx)
                 }),
             )
             .child(pane::render_pane(
@@ -2186,7 +2088,7 @@ impl CockpitView {
                         .flatten(),
                     focused,
                     running: self.cockpit.busy(pane.thread),
-                    selected,
+                    selection,
                     timings: self.cockpit.tool_timings(pane.thread),
                     // The ring and the window controls live on the L1
                     // header only, like the root chip.
@@ -3470,11 +3372,13 @@ mod tests {
         });
     }
 
-    /// #15 AC2, at Block grain: a drag sweeps whole Blocks into a selection
-    /// and cmd-c puts their text on the clipboard. A plain click selects
-    /// nothing and leaves the clipboard alone.
+    /// #15 AC2 at character grain (#27): a mid-word press sweeps exact
+    /// characters across Blocks, and cmd-c puts exactly the highlighted
+    /// text on the clipboard — endpoint rows cut at their characters, the
+    /// middle row whole, rows joined with honest newlines. A plain click
+    /// selects nothing and leaves the clipboard alone.
     #[gpui::test]
-    fn a_drag_selects_blocks_and_the_copy_key_takes_their_text(cx: &mut TestAppContext) {
+    fn a_drag_selects_characters_and_the_copy_key_takes_exactly_them(cx: &mut TestAppContext) {
         let (core, fake) = cockpit("select-copy", 1);
         cx.update(|cx| {
             cx.bind_keys([KeyBinding::new("cmd-c", CopySelection, None)]);
@@ -3487,46 +3391,43 @@ mod tests {
             })
             .unwrap();
         tick(cx);
-        let (first, last) = view.read_with(cx, |view, _| {
-            let scroll = &view.panes[0].scroll;
-            (
-                scroll.bounds_for_item(0).expect("a first row").center(),
-                scroll.bounds_for_item(2).expect("a third row").center(),
-            )
-        });
+        // "al|pha" down to "char|lie".
+        let from = caret(&view, cx, 0, 2);
+        let to = caret(&view, cx, 2, 4);
 
-        cx.simulate_mouse_down(first, gpui::MouseButton::Left, gpui::Modifiers::none());
-        cx.simulate_mouse_move(last, gpui::MouseButton::Left, gpui::Modifiers::none());
-        cx.simulate_mouse_up(last, gpui::MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_mouse_down(from, gpui::MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_mouse_move(to, gpui::MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_mouse_up(to, gpui::MouseButton::Left, gpui::Modifiers::none());
         cx.simulate_keystrokes("cmd-c");
-
-        let copied = cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
-        assert_eq!(copied.as_deref(), Some("alpha\nbravo\ncharlie"));
+        assert_eq!(clipboard(cx).as_deref(), Some("pha\nbravo\nchar"));
 
         // A plain click clears the selection; copying then changes nothing.
         cx.update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string("kept".into())));
-        cx.simulate_click(first, gpui::Modifiers::none());
+        cx.simulate_click(from, gpui::Modifiers::none());
         cx.simulate_keystrokes("cmd-c");
-        let kept = cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
-        assert_eq!(kept.as_deref(), Some("kept"));
+        assert_eq!(clipboard(cx).as_deref(), Some("kept"));
     }
 
-    /// The on-screen center of a rendered transcript row in the first Pane:
-    /// row bounds are recorded unscrolled, so the live offset puts them back
-    /// on screen.
-    fn screen_row(
+    /// The on-screen position of a byte in one Block's first text run in
+    /// the first Pane — where a test aims the mouse (#27). TextLayout
+    /// records screen-space geometry, so no scroll math is needed.
+    fn caret(
         view: &gpui::Entity<CockpitView>,
         cx: &mut gpui::VisualTestContext,
-        row: usize,
+        block: usize,
+        byte: usize,
     ) -> gpui::Point<gpui::Pixels> {
         view.read_with(cx, |view, _| {
-            let scroll = &view.panes[0].scroll;
-            let mut center = scroll
-                .bounds_for_item(row)
-                .expect("a rendered row")
-                .center();
-            center.y += scroll.offset().y;
-            center
+            let thread = view.panes[0].thread;
+            let id = view
+                .cockpit
+                .transcript(thread)
+                .expect("a transcript")
+                .blocks()[block]
+                .id;
+            view.selection
+                .caret_position(thread, id, 0, byte)
+                .expect("a rendered caret")
         })
     }
 
@@ -3534,11 +3435,166 @@ mod tests {
         cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()))
     }
 
-    /// #15 review: the transcript drops its oldest Blocks past capacity,
-    /// shifting every position — a selection stored as positions would
-    /// quietly slide onto Blocks the operator never touched. Ids pin it; an
-    /// evicted anchor clamps to the window start; a fully evicted selection
-    /// dies instead of resurrecting elsewhere.
+    /// A repeated press at the same spot, as the platform reports it: the
+    /// second or third press of a multi-click carries its count.
+    fn press(cx: &mut gpui::VisualTestContext, position: gpui::Point<Pixels>, count: usize) {
+        cx.simulate_event(MouseDownEvent {
+            button: MouseButton::Left,
+            position,
+            modifiers: gpui::Modifiers::none(),
+            click_count: count,
+            first_mouse: false,
+        });
+    }
+
+    /// #27: double-click takes the word under the pointer, and dragging on
+    /// extends word-wise; triple-click takes the whole rendered run.
+    #[gpui::test]
+    fn double_click_selects_the_word_and_triple_click_the_line(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("select-clicks", 1);
+        cx.update(|cx| {
+            cx.bind_keys([KeyBinding::new("cmd-c", CopySelection, None)]);
+        });
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TextDelta {
+                text: "make it fast\n\nkeep it honest\n\n".into(),
+            })
+            .unwrap();
+        tick(cx);
+
+        // Double-click lands mid "make" and takes the whole word.
+        let on_make = caret(&view, cx, 0, 2);
+        cx.simulate_click(on_make, gpui::Modifiers::none());
+        press(cx, on_make, 2);
+        cx.simulate_mouse_up(on_make, gpui::MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_keystrokes("cmd-c");
+        assert_eq!(clipboard(cx).as_deref(), Some("make"));
+
+        // Held down, the drag extends word-wise: mid "honest" sweeps both
+        // whole words and everything between.
+        cx.simulate_click(on_make, gpui::Modifiers::none());
+        press(cx, on_make, 2);
+        let on_honest = caret(&view, cx, 1, 10);
+        cx.simulate_mouse_move(on_honest, gpui::MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_mouse_up(on_honest, gpui::MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_keystrokes("cmd-c");
+        assert_eq!(
+            clipboard(cx).as_deref(),
+            Some("make it fast\nkeep it honest")
+        );
+
+        // Triple-click takes the rendered run whole.
+        press(cx, on_honest, 3);
+        cx.simulate_mouse_up(on_honest, gpui::MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_keystrokes("cmd-c");
+        assert_eq!(clipboard(cx).as_deref(), Some("keep it honest"));
+    }
+
+    /// #27 fix round: chrome is not selectable ground. A double-click in
+    /// the Composer region selects nothing — a press anchors only inside
+    /// the transcript body — and a drag that leaves through the bottom
+    /// edge clamps into the body, selecting to the last row instead of
+    /// freezing short or grabbing chrome.
+    #[gpui::test]
+    fn presses_on_chrome_select_nothing_and_a_drag_out_the_bottom_clamps(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("select-chrome", 1);
+        cx.update(|cx| {
+            cx.bind_keys([KeyBinding::new("cmd-c", CopySelection, None)]);
+        });
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TextDelta {
+                text: "alpha\n\nbravo\n\ncharlie\n\n".into(),
+            })
+            .unwrap();
+        tick(cx);
+        let body = view.read_with(cx, |view, _| view.panes[0].scroll.bounds());
+
+        // A double-click below the body — the Composer region — must not
+        // light up a word in the nearest transcript row.
+        cx.update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string("kept".into())));
+        let on_chrome = gpui::point(body.center().x, body.bottom() + px(20.));
+        cx.simulate_click(on_chrome, gpui::Modifiers::none());
+        press(cx, on_chrome, 2);
+        cx.simulate_mouse_up(on_chrome, gpui::MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_keystrokes("cmd-c");
+        assert_eq!(clipboard(cx).as_deref(), Some("kept"));
+
+        // A drag that exits through the bottom edge keeps extending —
+        // moves ride the root — and clamps to the body's boundary: the
+        // sweep reaches the end of the last row, never the Composer.
+        let from = caret(&view, cx, 0, 2);
+        let out = gpui::point(body.right() - px(10.), body.bottom() + px(60.));
+        cx.simulate_mouse_down(from, gpui::MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_mouse_move(out, gpui::MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_mouse_up(out, gpui::MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_keystrokes("cmd-c");
+        assert_eq!(clipboard(cx).as_deref(), Some("pha\nbravo\ncharlie"));
+    }
+
+    /// #27: copy is what you see. A sweep across a tool row takes its
+    /// composed call pieces joined with nothing and its ⎿ continuation on
+    /// its own line — never the ⏺ gutter, the verdict chip, or a duration.
+    #[gpui::test]
+    fn a_sweep_across_a_tool_row_copies_its_text_and_never_its_chrome(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("select-tool-row", 1);
+        cx.update(|cx| {
+            cx.bind_keys([KeyBinding::new("cmd-c", CopySelection, None)]);
+        });
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        let stream = fake.streams.borrow();
+        stream[0]
+            .send(SessionEvent::TextDelta {
+                text: "before\n\n".into(),
+            })
+            .unwrap();
+        stream[0]
+            .send(SessionEvent::ToolStarted {
+                id: "toolu_9".into(),
+                name: "Bash".into(),
+                input: serde_json::json!({ "command": "echo hi" }),
+            })
+            .unwrap();
+        stream[0]
+            .send(SessionEvent::ToolCompleted {
+                id: "toolu_9".into(),
+                output: "done".into(),
+                is_error: false,
+                result: ferrite_core::ToolResult::Opaque,
+            })
+            .unwrap();
+        stream[0]
+            .send(SessionEvent::TextDelta {
+                text: "after\n\n".into(),
+            })
+            .unwrap();
+        drop(stream);
+        tick(cx);
+
+        let from = caret(&view, cx, 0, 0);
+        let mut to = caret(&view, cx, 2, "after".len() - 1);
+        to.x += px(40.);
+        cx.simulate_mouse_down(from, gpui::MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_mouse_move(to, gpui::MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_mouse_up(to, gpui::MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_keystrokes("cmd-c");
+        assert_eq!(
+            clipboard(cx).as_deref(),
+            Some("before\nBash(echo hi)\n⎿ done\nafter"),
+            "the exit-0 chip and the ⏺ are chrome and must not copy"
+        );
+    }
+
+    /// #15 review, at the rendered window (#27): streaming slides the
+    /// window of Blocks a Pane draws, shifting every rendered position — a
+    /// selection stored as positions would quietly slide onto rows the
+    /// operator never touched. Ids pin it; an endpoint that leaves the
+    /// window clamps the copy to the window start; with both ends gone the
+    /// selection dies instead of resurrecting elsewhere.
     #[gpui::test]
     fn a_selection_survives_eviction_instead_of_sliding_onto_later_blocks(cx: &mut TestAppContext) {
         let (core, fake) = cockpit("select-evict", 1);
@@ -3556,8 +3612,8 @@ mod tests {
                     .unwrap();
             }
         };
-        // The counts below straddle the transcript's DEFAULT_CAPACITY of
-        // 2000 Blocks (ferrite-core transcript.rs).
+        // The counts below straddle Level::Transcript's 200-Block rendered
+        // window: past 200 total, the window's start slides.
         say(0, 60);
         tick(cx);
         // Wheel to the very top, where Blocks 5..=7 are on screen.
@@ -3567,38 +3623,33 @@ mod tests {
             modifiers: gpui::Modifiers::none(),
             touch_phase: gpui::TouchPhase::default(),
         });
-        let texts = view.read_with(cx, |view, _| {
-            let blocks = view
-                .cockpit
-                .transcript(view.panes[0].thread)
-                .expect("a transcript")
-                .blocks();
-            blocks[5..=7]
-                .iter()
-                .map(pane::block_text)
-                .collect::<Vec<_>>()
-        });
-        let from = screen_row(&view, cx, 5);
-        let to = screen_row(&view, cx, 7);
+        cx.run_until_parked();
+        let texts: Vec<String> = (5..=7).map(|line| format!("filler {line:04}")).collect();
+        let from = caret(&view, cx, 5, 0);
+        let mut to = caret(&view, cx, 7, texts[2].len() - 1);
+        // Past the line's right edge: the nearest-index clamp takes the
+        // last character too.
+        to.x += px(40.);
         cx.simulate_mouse_down(from, gpui::MouseButton::Left, gpui::Modifiers::none());
         cx.simulate_mouse_move(to, gpui::MouseButton::Left, gpui::Modifiers::none());
         cx.simulate_mouse_up(to, gpui::MouseButton::Left, gpui::Modifiers::none());
         cx.simulate_keystrokes("cmd-c");
         assert_eq!(clipboard(cx).as_deref(), Some(texts.join("\n").as_str()));
 
-        // 2003 total: three Blocks evicted, every position shifts by three.
-        say(60, 2003);
+        // 203 total: the window is Blocks 3.., every rendered position
+        // shifts by three.
+        say(60, 203);
         tick(cx);
         cx.simulate_keystrokes("cmd-c");
         assert_eq!(
             clipboard(cx).as_deref(),
             Some(texts.join("\n").as_str()),
-            "eviction shifted positions; the selection must not slide"
+            "the window slid positions; the selection must not slide"
         );
 
-        // 2006 total: the anchor (Block 5) is evicted, the head (7) lives —
-        // the selection clamps to the window start, which is now Block 6.
-        say(2003, 2006);
+        // 206 total: the anchor (Block 5) left the window, the head (7)
+        // lives — the selection clamps to the window start, now Block 6.
+        say(203, 206);
         tick(cx);
         cx.simulate_keystrokes("cmd-c");
         assert_eq!(
@@ -3607,10 +3658,10 @@ mod tests {
             "an evicted anchor clamps to the surviving remainder"
         );
 
-        // 2008 total: both endpoints gone — the selection dies, and the
+        // 208 total: both endpoints gone — the selection dies, and the
         // clipboard is left alone.
         cx.update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string("kept".into())));
-        say(2006, 2008);
+        say(206, 208);
         tick(cx);
         cx.simulate_keystrokes("cmd-c");
         assert_eq!(
@@ -3620,10 +3671,11 @@ mod tests {
         );
     }
 
-    /// #15 review: rows are recorded in unscrolled coordinates, so a drag in
-    /// a scrolled-back transcript must map the pointer through the offset —
-    /// selecting the Blocks under the pointer, not the Blocks at those
-    /// coordinates in the unscrolled layout.
+    /// #15 review: a drag in a scrolled-back transcript selects the
+    /// characters under the pointer — TextLayout records screen-space
+    /// geometry each frame, so the hit test needs no offset math of its
+    /// own (#27), and must not land on the rows at those coordinates in
+    /// the unscrolled layout.
     #[gpui::test]
     fn a_drag_in_a_scrolled_back_transcript_selects_the_rows_under_the_pointer(
         cx: &mut TestAppContext,
@@ -3650,6 +3702,7 @@ mod tests {
             modifiers: gpui::Modifiers::none(),
             touch_phase: gpui::TouchPhase::default(),
         });
+        cx.run_until_parked();
         // The first row fully inside the viewport — nonzero, or the wheel
         // did not actually scroll anything back.
         let row = view.read_with(cx, |view, _| {
@@ -3665,28 +3718,20 @@ mod tests {
             }
         });
         assert!(row > 0, "the wheel put earlier rows above the viewport");
-        let expected = view.read_with(cx, |view, _| {
-            let blocks = view
-                .cockpit
-                .transcript(view.panes[0].thread)
-                .expect("a transcript")
-                .blocks();
-            // All 60 Blocks render, so row indices are block indices here.
-            blocks[row..=row + 2]
-                .iter()
-                .map(pane::block_text)
-                .collect::<Vec<_>>()
-                .join("\n")
-        });
-        let from = screen_row(&view, cx, row);
-        let to = screen_row(&view, cx, row + 2);
+        // All 60 Blocks render, so row indices are block indices here.
+        let expected: Vec<String> = (row..=row + 2)
+            .map(|line| format!("history line {line:02}"))
+            .collect();
+        let from = caret(&view, cx, row, 0);
+        let mut to = caret(&view, cx, row + 2, expected[2].len() - 1);
+        to.x += px(40.);
 
         cx.simulate_mouse_down(from, gpui::MouseButton::Left, gpui::Modifiers::none());
         cx.simulate_mouse_move(to, gpui::MouseButton::Left, gpui::Modifiers::none());
         cx.simulate_mouse_up(to, gpui::MouseButton::Left, gpui::Modifiers::none());
         cx.simulate_keystrokes("cmd-c");
 
-        assert_eq!(clipboard(cx).as_deref(), Some(expected.as_str()));
+        assert_eq!(clipboard(cx).as_deref(), Some(expected.join("\n").as_str()));
     }
 
     /// AC3: one key walks to whoever is waiting, wherever they are in the grid.

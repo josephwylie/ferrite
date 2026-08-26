@@ -7,9 +7,9 @@
 //! Only widget constructors call these (`menu_row`, `keycap`, nav's row
 //! frames, the cell shell …) — render sites never write `.hover()`, and
 //! gpui's own `debug_assert!(hover_style.is_none())` keeps an element from
-//! carrying a second, hand-rolled hover. One sanctioned exception: the
-//! transcript tool row keeps its own `HOVER` wash (pane.rs) — a selection
-//! affordance, not a click promise, until #27 makes text pointers real.
+//! carrying a second, hand-rolled hover. The transcript body wears the
+//! text role (#27): the I-beam and no wash — the wash there is the
+//! selection itself, painted per character by select.rs.
 //! Constructors keep the state-dependent part (a selected row skips the
 //! wash but keeps the cursor, because gpui's hover refinement would
 //! *replace* its stronger ground — that skip is `hover_carried`).
@@ -57,6 +57,13 @@ pub trait Pointer: Styled + InteractiveElement + Sized {
     /// nothing the ground doesn't already say, so only the cursor speaks.
     fn hover_carried(self) -> Self {
         self.cursor_pointer()
+    }
+
+    /// Selectable transcript text (#27): the I-beam says characters are
+    /// grabbable, and nothing washes — the SELECTION wash is painted per
+    /// character by the overlay, not by hover.
+    fn hover_text(self) -> Self {
+        self.cursor_text()
     }
 }
 
@@ -178,5 +185,10 @@ mod tests {
                 "every role advertises the click with the pointer cursor"
             );
         }
+
+        // The text role speaks the I-beam, not the pointer: characters are
+        // grabbable, nothing is a button (#27).
+        let mut text = div().hover_text();
+        assert_eq!(text.style().mouse_cursor, Some(CursorStyle::IBeam));
     }
 }
