@@ -35,7 +35,11 @@ use crate::{transcript::Input, ThreadId};
 ///   inside the binding where the Thread's work happens. A v1–v3 log loads
 ///   with none — those Threads work in the binding itself, which is also
 ///   what `None` means today.
-const SCHEMA_VERSION: u32 = 4;
+/// - **5** — the chosen model in the header (#25): what a pre-first-prompt
+///   pick recorded, verbatim as the provider announced it. A v1–v4 log
+///   loads with none — the provider's default, which is also what absent
+///   means.
+const SCHEMA_VERSION: u32 = 5;
 
 /// Which agent backend serves this Thread — persisted so a restart knows
 /// which provider to revive the Thread on.
@@ -104,6 +108,10 @@ struct Header {
     /// `None` — and every v1–v3 header — means work in the binding itself.
     #[serde(default)]
     session_project_root: Option<PathBuf>,
+    /// Schema 5+; the model this Thread chose before its first prompt.
+    /// `None` — and every v1–v4 header — means the provider's default.
+    #[serde(default)]
+    model: Option<String>,
 }
 
 /// The persisted form of a Thread's workspace binding, mirroring
@@ -346,11 +354,12 @@ impl Record {
                 context_window: *context_window,
             },
             SessionEvent::DecisionRequested { .. } => return None,
-            // The command menu and the permission mode are the live
-            // Session's, like a Decision: a replay has no Session to serve
-            // them and the next one announces its own.
+            // The command menu, the permission mode and the model menu are
+            // the live Session's, like a Decision: a replay has no Session
+            // to serve them and the next one announces its own.
             SessionEvent::Commands { .. } => return None,
             SessionEvent::PermissionMode { .. } => return None,
+            SessionEvent::Models { .. } => return None,
         })
     }
 
@@ -522,6 +531,8 @@ impl Store {
             workspace: Some(PersistedBinding::from_live(&binding)),
             // Work starts in the binding itself; a root is picked later.
             session_project_root: None,
+            // And on the provider's default model; a choice is picked later.
+            model: None,
         };
         file.write_all(line(&header)?.as_bytes())?;
         file.sync_data()?;
@@ -587,6 +598,7 @@ impl Store {
             provider: header.provider,
             workspace: header.workspace.as_ref().map(PersistedBinding::live),
             session_project_root: header.session_project_root,
+            model: header.model,
         })
     }
 
@@ -620,6 +632,7 @@ impl Store {
             schema: header.schema,
             workspace: header.workspace,
             session_project_root: header.session_project_root,
+            model: header.model,
             records,
         })
     }
@@ -644,6 +657,37 @@ impl Store {
         }
         let mut snapshot = self.load(id)?;
         snapshot.session_project_root = root;
+        let file = self.rewrite(&snapshot)?;
+        if let Some(w) = writer {
+            *w = ThreadWriter {
+                file,
+                buffer: Vec::new(),
+                flush_interval: self.flush_interval,
+                buffered_since: None,
+            };
+        }
+        Ok(())
+    }
+
+    /// Record which provider serves this Thread, and the model it chose —
+    /// or `None` for the provider's default (#25). The same header rewrite
+    /// as `set_session_project_root`, with the same writer contract: the
+    /// Thread's open writer, if one exists, is flushed before and swapped
+    /// onto the new file after, and on any error it is untouched and still
+    /// valid on the old one.
+    pub fn set_provider(
+        &self,
+        id: ThreadId,
+        provider: Provider,
+        model: Option<String>,
+        mut writer: Option<&mut ThreadWriter>,
+    ) -> Result<(), LoadError> {
+        if let Some(w) = writer.as_mut() {
+            w.flush()?;
+        }
+        let mut snapshot = self.load(id)?;
+        snapshot.provider = provider;
+        snapshot.model = model;
         let file = self.rewrite(&snapshot)?;
         if let Some(w) = writer {
             *w = ThreadWriter {
@@ -697,6 +741,7 @@ impl Store {
             provider: snapshot.provider,
             workspace: snapshot.workspace.clone(),
             session_project_root: snapshot.session_project_root.clone(),
+            model: snapshot.model.clone(),
         })?;
         for record in &snapshot.records {
             contents.push_str(&line(record)?);
@@ -725,6 +770,9 @@ pub struct ThreadMeta {
     /// `None` — including every pre-v4 log — means work in the binding
     /// itself.
     pub session_project_root: Option<PathBuf>,
+    /// `None` — including every pre-v5 log — means the provider's default
+    /// model.
+    pub model: Option<String>,
 }
 
 /// One Thread as loaded from disk: everything a restart needs.
@@ -736,6 +784,7 @@ pub struct ThreadSnapshot {
     schema: u32,
     workspace: Option<PersistedBinding>,
     session_project_root: Option<PathBuf>,
+    model: Option<String>,
     records: Vec<Record>,
 }
 
@@ -755,6 +804,13 @@ impl ThreadSnapshot {
     /// the binding itself.
     pub fn session_project_root(&self) -> Option<PathBuf> {
         self.session_project_root.clone()
+    }
+
+    /// The model this Thread chose before its first prompt. `None` —
+    /// including every log from before schema 5 — means the provider's
+    /// default.
+    pub fn model(&self) -> Option<String> {
+        self.model.clone()
     }
 
     /// The provider-native id the next Session resumes with — the latest the
@@ -991,7 +1047,11 @@ mod tests {
         drop(writer);
         let path = dir.join(id.to_string()).join("log.jsonl");
         let log = fs::read_to_string(&path).unwrap();
-        fs::write(&path, log.replace("\"schema\":4", "\"schema\":99")).unwrap();
+        fs::write(
+            &path,
+            log.replace(&format!("\"schema\":{SCHEMA_VERSION}"), "\"schema\":99"),
+        )
+        .unwrap();
 
         assert!(matches!(
             store.peek(id),
@@ -1118,7 +1178,10 @@ mod tests {
         // The header declares the schema that wrote it.
         let log = fs::read_to_string(dir.join(id.to_string()).join("log.jsonl")).unwrap();
         assert!(
-            log.lines().next().unwrap().contains("\"schema\":4"),
+            log.lines()
+                .next()
+                .unwrap()
+                .contains(&format!("\"schema\":{SCHEMA_VERSION}")),
             "header: {log}"
         );
 
@@ -1126,6 +1189,83 @@ mod tests {
         // binding again.
         reopened.set_session_project_root(id, None, None).unwrap();
         assert_eq!(reopened.load(id).unwrap().session_project_root(), None);
+    }
+
+    /// The frozen contract for schema 4, byte for byte what its writer
+    /// produced: the session project root in the header, but no model.
+    /// Logs like this exist on disks; they must load forever.
+    const V4_LOG: &str = concat!(
+        r#"{"schema":4,"provider":"claude","workspace":{"kind":"main","checkout":"/repos/project"},"session_project_root":"/repos/project/api"}"#,
+        "\n",
+        r#"{"type":"init","session_id":"v4-era-4f2a","model":"claude-haiku-4-5"}"#,
+        "\n",
+        r#"{"type":"turn_ended","outcome":"completed","cost_usd":null}"#,
+        "\n",
+    );
+
+    /// AC (schema story): loading a log written at schema v4 succeeds after
+    /// the bump to v5 — root intact, and no model, exactly what v4
+    /// recorded: the provider's default.
+    #[test]
+    fn a_log_written_at_schema_v4_still_loads_after_the_bump() {
+        let dir = scratch("v4");
+        plant_log(&dir, "13", V4_LOG);
+
+        let thread = Store::open(&dir).unwrap().load(ThreadId::new(13)).unwrap();
+        assert_eq!(thread.provider(), Provider::Claude);
+        assert_eq!(
+            thread.session_project_root(),
+            Some("/repos/project/api".into())
+        );
+        assert_eq!(thread.model(), None);
+        assert_eq!(thread.resume_target(), Some("v4-era-4f2a"));
+    }
+
+    /// AC (#25): the provider and model choice survives restart. Setting it
+    /// rewrites the header; the Thread's open writer rides the rewrite the
+    /// same way the root setter's does. Clearing the model hands back None,
+    /// the provider's default.
+    #[test]
+    fn a_thread_s_provider_and_model_survive_reopening_the_store() {
+        let dir = scratch("provider-model");
+        let store = Store::open(&dir).unwrap();
+        let (id, mut writer, _) = store.create(Provider::Claude, main_choice()).unwrap();
+        assert_eq!(store.load(id).unwrap().model(), None);
+
+        store
+            .set_provider(
+                id,
+                Provider::Codex,
+                Some("gpt-5.4-mini".into()),
+                Some(&mut writer),
+            )
+            .unwrap();
+        // The writer rode the rewrite: this append must land where loads
+        // look, not on the renamed-over inode.
+        writer.record_prompt("after the pick").unwrap();
+        writer.flush().unwrap();
+
+        // The fake restart: nothing survives but the directory.
+        let reopened = Store::open(&dir).unwrap();
+        let thread = reopened.load(id).unwrap();
+        assert_eq!(thread.provider(), Provider::Codex);
+        assert_eq!(thread.model(), Some("gpt-5.4-mini".into()));
+        assert!(
+            thread
+                .inputs()
+                .contains(&Input::Prompt("after the pick".into())),
+            "the swapped writer's append is history: {:?}",
+            thread.inputs()
+        );
+        let meta = reopened.peek(id).unwrap();
+        assert_eq!(meta.provider, Provider::Codex);
+        assert_eq!(meta.model, Some("gpt-5.4-mini".into()));
+
+        // Back on the provider's default — no writer open this time.
+        reopened
+            .set_provider(id, Provider::Codex, None, None)
+            .unwrap();
+        assert_eq!(reopened.load(id).unwrap().model(), None);
     }
 
     /// A realistic Claude-shaped turn: identity, thinking, markdown streamed
@@ -1443,7 +1583,7 @@ mod tests {
             .unwrap()
             .to_string();
         assert!(
-            first_line.contains("\"schema\":4"),
+            first_line.contains(&format!("\"schema\":{SCHEMA_VERSION}")),
             "the log still declares the old schema: {first_line}"
         );
 
@@ -1528,7 +1668,7 @@ mod tests {
             &dir,
             "3",
             concat!(
-                r#"{"schema":5,"provider":"claude"}"#,
+                r#"{"schema":6,"provider":"claude"}"#,
                 "\n",
                 r#"{"type":"init","session_id":"from-the-future","model":"m"}"#,
                 "\n",
@@ -1538,7 +1678,7 @@ mod tests {
         let store = Store::open(&dir).unwrap();
         match store.load(ThreadId::new(3)) {
             Err(LoadError::FutureSchema { found, supported }) => {
-                assert_eq!(found, 5);
+                assert_eq!(found, 6);
                 assert_eq!(supported, SCHEMA_VERSION);
             }
             Ok(_) => panic!("a future schema must not load"),

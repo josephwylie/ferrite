@@ -479,6 +479,19 @@ fn the_handshake_announces_the_command_menu_on_the_event_stream() {
         },
         "the capture's own mode, verbatim"
     );
+
+    // And so does the model list — the provider picker's rows (#25).
+    let announced = session
+        .events()
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the models are announced");
+    let SessionEvent::Models { models } = announced else {
+        panic!("expected the model list third, got {announced:?}");
+    };
+    assert!(
+        models.iter().any(|model| model == "haiku"),
+        "the capture's own values ride the list: {models:?}"
+    );
 }
 
 /// Resume is spawn with history: the resume target rides argv (`--resume

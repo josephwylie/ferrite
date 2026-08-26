@@ -506,11 +506,12 @@ impl Transcript {
                     ..Update::default()
                 }
             }
-            // The Session's command menu and permission mode are cockpit
-            // state for the Composer's chrome, not conversation: no Block,
-            // nothing dirty.
+            // The Session's command menu, permission mode and model menu are
+            // cockpit state for the Composer's chrome, not conversation: no
+            // Block, nothing dirty.
             Input::Event(SessionEvent::Commands { .. }) => Update::default(),
             Input::Event(SessionEvent::PermissionMode { .. }) => Update::default(),
+            Input::Event(SessionEvent::Models { .. }) => Update::default(),
             Input::Event(SessionEvent::Closed { reason }) => {
                 self.status = Status::Closed;
                 Update {

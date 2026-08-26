@@ -80,6 +80,12 @@ pub enum SessionEvent {
     /// meta-row mode chip (#23). Claude lifts it from the same initialize
     /// handshake; display-only, and Session state like the menu above.
     PermissionMode { mode: String },
+    /// The models this install offers, in the provider's own values — the
+    /// provider picker's model rows (#25). Claude lifts the list from the
+    /// same initialize handshake; Codex announces no list, so its picker
+    /// offers no model rows. Session state exactly like the command menu:
+    /// never a static list, gone with the Session.
+    Models { models: Vec<String> },
     /// The session process exited; no further events will arrive.
     Closed { reason: String },
 }

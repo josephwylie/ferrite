@@ -3,14 +3,13 @@
 //! exercises the real render path without spawning a CLI.
 
 use std::io;
-use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use ferrite_core::cockpit::{RssSampler, Spawner};
+use ferrite_core::cockpit::{RssSampler, SpawnRequest, Spawner};
 use ferrite_core::providers::{ClaudeConfig, ClaudeSession, CodexConfig, CodexSession, Session};
 use ferrite_core::store::Provider;
 use ferrite_core::{Decision, DecisionAnswer, SessionEvent, ThreadId, TurnOutcome};
@@ -99,19 +98,14 @@ impl Spawn {
 }
 
 impl Spawner for Spawn {
-    fn spawn(
-        &mut self,
-        provider: Provider,
-        resume: Option<&str>,
-        cwd: Option<&Path>,
-    ) -> io::Result<Box<dyn Session>> {
+    fn spawn(&mut self, request: SpawnRequest) -> io::Result<Box<dyn Session>> {
         if self.load {
             return Ok(Box::new(streaming()));
         }
         if self.demo {
             // A revived Thread already replayed its history from the log; a
             // seed that played again would draw the same turn twice.
-            if resume.is_some() {
+            if request.resume.is_some() {
                 return Ok(Box::new(DemoSession::quiet()));
             }
             let variant = self.seeds;
@@ -120,13 +114,17 @@ impl Spawner for Spawn {
         }
         // The Thread's workspace binding decides where the Session works; a
         // Thread from before bindings falls back to where Ferrite started.
-        let cwd = cwd
+        let cwd = request
+            .cwd
             .map(|dir| dir.to_path_buf())
             .or_else(|| std::env::current_dir().ok());
-        match provider {
+        let model = request.model.map(|model| model.to_string());
+        let resume = request.resume.map(|target| target.to_string());
+        match request.provider {
             Provider::Claude => ClaudeSession::spawn(ClaudeConfig {
                 cwd,
-                resume: resume.map(|target| target.to_string()),
+                model,
+                resume,
                 ..Default::default()
             })
             .map(|session| Box::new(session) as Box<dyn Session>)
@@ -135,8 +133,9 @@ impl Spawner for Spawn {
             .map_err(|e| io::Error::other(e.to_string())),
             Provider::Codex => CodexSession::spawn(CodexConfig {
                 cwd,
+                model,
                 approval_policy: Some("on-request".into()),
-                resume: resume.map(|target| target.to_string()),
+                resume,
                 ..Default::default()
             })
             .map(|session| Box::new(session) as Box<dyn Session>)
@@ -356,13 +355,28 @@ fn seed(variant: usize) -> Vec<Step> {
 }
 
 fn boot(session_id: &str) -> Vec<Step> {
-    vec![Step::new(
-        120,
-        SessionEvent::Init {
-            session_id: session_id.into(),
-            model: "claude-sonnet-4-5".into(),
-        },
-    )]
+    vec![
+        Step::new(
+            120,
+            SessionEvent::Init {
+                session_id: session_id.into(),
+                model: "claude-sonnet-4-5".into(),
+            },
+        ),
+        // The handshake's model list (#25) — what the provider picker's
+        // model rows read. Full ids, matching what Init announces, so the
+        // ✓ can land on the model actually serving.
+        Step::new(
+            10,
+            SessionEvent::Models {
+                models: vec![
+                    "claude-sonnet-4-5".into(),
+                    "claude-opus-4-1".into(),
+                    "claude-haiku-4-5".into(),
+                ],
+            },
+        ),
+    ]
 }
 
 fn usage(steps: &mut Vec<Step>, total_tokens: u64) {
@@ -1016,7 +1030,12 @@ mod tests {
         use ferrite_core::store::Provider;
         let mut spawn = Spawn::new(true, false);
         let revived = spawn
-            .spawn(Provider::Claude, Some("4f2a"), None)
+            .spawn(SpawnRequest {
+                provider: Provider::Claude,
+                model: None,
+                resume: Some("4f2a"),
+                cwd: None,
+            })
             .expect("demo spawns never fail");
         assert!(
             revived

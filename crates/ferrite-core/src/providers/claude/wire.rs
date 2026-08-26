@@ -359,12 +359,13 @@ mod tests {
             // the process exits, so no capture can contain it. Proved instead
             // by `stdout_eof_closes_the_session_with_the_exit_status`.
             SessionEvent::Closed { .. } => return None,
-            // Not turn lines either: the menu and the permission mode ride
-            // the initialize handshake the reader correlates itself. Proved
-            // by `the_capability_response_carries_the_command_menu` below and
-            // the session test that watches the reader announce them.
+            // Not turn lines either: the menu, the permission mode and the
+            // model list ride the initialize handshake the reader correlates
+            // itself. Proved by `the_capability_response_carries_the_command_menu`
+            // below and the session test that watches the reader announce them.
             SessionEvent::Commands { .. } => return None,
             SessionEvent::PermissionMode { .. } => return None,
+            SessionEvent::Models { .. } => return None,
             // Codex's own concepts (#9). The superset carries them; the Claude
             // CLI never emits one, so they are proved by Codex's fixtures.
             SessionEvent::ReasoningSummaryDelta { .. } | SessionEvent::TokenUsage { .. } => {

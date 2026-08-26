@@ -432,6 +432,16 @@ fn read_stdout(
                             return;
                         }
                     }
+                    // And the model menu — the provider picker's rows (#25).
+                    // An install that lists none announces nothing.
+                    if !capabilities.models.is_empty() {
+                        let announced = SessionEvent::Models {
+                            models: capabilities.models.clone(),
+                        };
+                        if sender.send(announced).is_err() {
+                            return;
+                        }
+                    }
                     // Unblocks spawn. Dropping the sender afterwards is what
                     // stops a second control response being mistaken for it.
                     let _ = handshake.take().expect("just checked").send(capabilities);

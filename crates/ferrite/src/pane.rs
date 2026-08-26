@@ -91,6 +91,11 @@ pub struct PaneState<'a> {
     /// row's mode chip (#23). None (no announcement, or a provider that
     /// makes none) draws no chip; display-only either way.
     pub permission_mode: Option<&'a str>,
+    /// The meta row's provider control, assembled in the cockpit exactly
+    /// like `root_chip` — the click wired there (#25). Some only before
+    /// the Thread's first prompt: after the lock the Pane draws today's
+    /// plain muted model label instead.
+    pub provider_chip: Option<AnyElement>,
     pub focused: bool,
     /// A turn in flight: the Composer's ❯ becomes ◐ and esc offers interrupt.
     pub running: bool,
@@ -242,6 +247,7 @@ pub fn render_pane(view: &PaneView, state: PaneState<'_>, level: Level) -> impl 
         menu,
         composer_empty,
         permission_mode,
+        provider_chip,
         focused,
         running,
         selected,
@@ -342,6 +348,7 @@ pub fn render_pane(view: &PaneView, state: PaneState<'_>, level: Level) -> impl 
                     empty: composer_empty,
                     menu,
                     mode: permission_mode,
+                    provider_chip,
                 },
             ));
         }
@@ -908,8 +915,10 @@ fn meter_run(done: usize, total: usize) -> String {
 
 /// The provider chip's text: the model id groomed to the comps' grammar —
 /// `claude-sonnet-4-5` → `claude · sonnet-4-5`. An id with no known
-/// provider prefix stands verbatim rather than being guessed apart.
-fn model_chip_label(model: &str) -> SharedString {
+/// provider prefix stands verbatim rather than being guessed apart. Public
+/// because the picker's model rows must spell a model exactly as the chip
+/// does (#25) — one grooming, never two.
+pub fn model_chip_label(model: &str) -> SharedString {
     for provider in ["claude", "codex"] {
         if let Some(rest) = model
             .strip_prefix(provider)
@@ -921,6 +930,33 @@ fn model_chip_label(model: &str) -> SharedString {
         }
     }
     SharedString::from(model.to_string())
+}
+
+/// The pre-lock provider control's text (#25): the groomed model with the
+/// ⌵ that says the label answers clicks — and the provider name alone
+/// until the Session's Init announces what is actually serving, never an
+/// invented model.
+pub fn provider_chip_label(provider: &str, model: Option<&str>) -> SharedString {
+    match model {
+        Some(model) => SharedString::from(format!("{} ⌵", model_chip_label(model))),
+        None => SharedString::from(format!("{provider} ⌵")),
+    }
+}
+
+/// The control itself (#25): the meta row's accent chip — the same accent
+/// tint as the header's provider chip, which is what marks it as the
+/// provider's spot — at the meta row's own scale. Render-only; the
+/// cockpit wires the click.
+pub fn provider_chip(label: SharedString) -> Div {
+    div()
+        .flex_shrink_0()
+        .text_size(px(theme::TEXT_CHIP))
+        .text_color(rgb(ACCENT))
+        .bg(rgba(theme::ACCENT_WASH))
+        .rounded(px(theme::R_CHIP))
+        .px(px(6.))
+        .py(px(1.))
+        .child(label)
 }
 
 fn body(
@@ -977,6 +1013,8 @@ struct ComposerStack<'a> {
     empty: bool,
     menu: Option<AnyElement>,
     mode: Option<&'a str>,
+    /// The meta row's provider control (#25) — Some pre-lock only.
+    provider_chip: Option<AnyElement>,
 }
 
 /// The PromptBox stack, top to bottom: permission card, queued row, the one
@@ -993,6 +1031,7 @@ fn composer_region(view: &PaneView, transcript: &Transcript, stack: ComposerStac
         empty,
         menu,
         mode,
+        provider_chip,
     } = stack;
     let mut region = div()
         .relative()
@@ -1116,8 +1155,9 @@ fn composer_region(view: &PaneView, transcript: &Transcript, stack: ComposerStac
     meta = meta.child(div().flex_1());
     // The footer's right side, per the Main comp: the hints this Composer
     // actually answers (#23's menus — no ↑ history exists yet), then the
-    // model beside them. The header's provider chip stays; the comp draws
-    // both, and #25's selector will grow out of this label.
+    // provider's spot beside them. Before the first prompt that spot is
+    // the selector's chip control (#25); after the lock it reverts to
+    // today's plain muted label. The header's provider chip stays.
     meta = meta.child(
         div()
             .flex_shrink_0()
@@ -1125,7 +1165,9 @@ fn composer_region(view: &PaneView, transcript: &Transcript, stack: ComposerStac
             .text_color(rgb(INK_MUTED))
             .child("@ files · / commands"),
     );
-    if let Some(model) = transcript.model() {
+    if let Some(chip) = provider_chip {
+        meta = meta.child(chip);
+    } else if let Some(model) = transcript.model() {
         meta = meta.child(
             div()
                 .flex_shrink_0()
@@ -1195,6 +1237,9 @@ pub struct MenuRow {
     /// Whether `detail` reads as prose (the comp's ui-face command
     /// descriptions) or as a path (mono, like the rows of state 03).
     pub prose_detail: bool,
+    /// A row kept visible but dead (#25's locked provider door): muted ink,
+    /// no match highlights, and its pick does nothing but dismiss.
+    pub inert: bool,
 }
 
 /// The Composer menus' popover shell: the selector's exact surface at the
@@ -1208,17 +1253,25 @@ pub fn menu_popover() -> Div {
 /// ACCENT (bold only while selected), detail ink one step up; the selected
 /// row carries the `↵` hint at its right edge.
 pub fn menu_row(row: &MenuRow, selected: bool) -> Div {
-    let name_ink = if selected { ACCENT } else { INK_SECONDARY };
+    // An inert row never promotes: muted whatever the arrows do, and its
+    // matches stay unpainted — the row is an explanation, not an offer.
+    let name_ink = match (row.inert, selected) {
+        (true, _) => INK_MUTED,
+        (false, true) => ACCENT,
+        (false, false) => INK_SECONDARY,
+    };
     let mut highlights: Vec<(std::ops::Range<usize>, HighlightStyle)> = Vec::new();
-    for range in &row.matched {
-        highlights.push((
-            range.clone(),
-            HighlightStyle {
-                color: Some(rgb(ACCENT).into()),
-                font_weight: selected.then_some(FontWeight::BOLD),
-                ..Default::default()
-            },
-        ));
+    if !row.inert {
+        for range in &row.matched {
+            highlights.push((
+                range.clone(),
+                HighlightStyle {
+                    color: Some(rgb(ACCENT).into()),
+                    font_weight: selected.then_some(FontWeight::BOLD),
+                    ..Default::default()
+                },
+            ));
+        }
     }
     let mut drawn = div()
         .flex()
@@ -1252,7 +1305,9 @@ pub fn menu_row(row: &MenuRow, selected: bool) -> Div {
         };
         drawn = drawn.child(detail);
     }
-    if selected {
+    // No ↵ hint on an inert row: enter only dismisses there, and a keycap
+    // would advertise an offer the row does not make.
+    if selected && !row.inert {
         drawn = drawn.child(div().flex_1()).child(
             div()
                 .flex_shrink_0()
@@ -1761,6 +1816,19 @@ pub fn selector_popover() -> Div {
 /// are on it, INK_SECONDARY otherwise — and the ✓ marking the root the
 /// Thread is on right now, whichever row the arrows have moved to.
 pub fn selector_row(option: &RootOption, selected: bool, active: bool) -> Div {
+    picker_row(
+        option.label.clone(),
+        SharedString::default(),
+        selected,
+        active,
+    )
+}
+
+/// The ✓-row recipe both selectors share — the root selector above and
+/// the provider picker (#25) — so "what the Thread is on right now" can
+/// never be spelled two ways. `detail` is the muted section tag riding the
+/// right edge ("provider", "claude model"); empty draws nothing.
+pub fn picker_row(label: SharedString, detail: SharedString, selected: bool, active: bool) -> Div {
     let mut row = div()
         .flex()
         .flex_shrink_0()
@@ -1771,12 +1839,22 @@ pub fn selector_row(option: &RootOption, selected: bool, active: bool) -> Div {
         .rounded(px(theme::R_CHIP))
         .text_size(px(theme::TEXT_CODE))
         .text_color(rgb(if selected { ACCENT } else { INK_SECONDARY }))
-        .child(div().min_w_0().truncate().child(option.label.clone()));
+        .child(div().min_w_0().truncate().child(label))
+        .child(div().flex_1());
     if selected {
         row = row.bg(rgba(EDGE));
     }
+    if !detail.is_empty() {
+        row = row.child(
+            div()
+                .flex_shrink_0()
+                .text_size(px(theme::TEXT_META))
+                .text_color(rgb(INK_MUTED))
+                .child(detail),
+        );
+    }
     if active {
-        row = row.child(div().flex_1()).child(
+        row = row.child(
             div()
                 .flex_shrink_0()
                 .text_size(px(theme::TEXT_META))
@@ -1785,6 +1863,20 @@ pub fn selector_row(option: &RootOption, selected: bool, active: bool) -> Div {
         );
     }
     row
+}
+
+/// A muted, non-interactive picker line — why a section is short, said out
+/// loud (#25: the other rows only arrive with the Session's handshake).
+pub fn picker_hint(text: &'static str) -> Div {
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .h(px(theme::MENU_ROW_H))
+        .px(px(8.))
+        .text_size(px(theme::TEXT_META))
+        .text_color(rgb(INK_MUTED))
+        .child(text)
 }
 
 /// The popover's key-hint footer — the PromptBox footer grammar, each
@@ -2382,6 +2474,22 @@ mod tests {
         );
         // A Thread from before bindings existed claims nothing.
         assert_eq!(binding_label(None), "");
+    }
+
+    /// #25: the pre-lock control reuses the model grooming with the ⌵ that
+    /// says it answers clicks — and carries the provider name alone until
+    /// the Session's Init names what is serving.
+    #[test]
+    fn the_provider_chip_label_grooms_the_model_or_names_the_provider_alone() {
+        assert_eq!(provider_chip_label("claude", None).as_ref(), "claude ⌵");
+        assert_eq!(
+            provider_chip_label("claude", Some("claude-sonnet-4-5")).as_ref(),
+            "claude · sonnet-4-5 ⌵"
+        );
+        assert_eq!(
+            provider_chip_label("codex", Some("gpt-5.4-mini")).as_ref(),
+            "gpt-5.4-mini ⌵"
+        );
     }
 
     /// #24: the chip names the root relative to the binding — `⌵ apps/web`

@@ -17,19 +17,27 @@ use crate::transcript::{BlockId, Input, Lexer, Transcript, Update};
 use crate::workspace::{self, WorkspaceBinding, WorkspaceChoice};
 use crate::{Decision, DecisionAnswer, SessionEvent, ThreadId};
 
+/// Everything one spawn needs, in one struct: every path that starts a
+/// Session (open, revive, send-respawn, sweep) reads the Thread's stored
+/// choice through it, so a new fact travels to all of them at once (#25).
+pub struct SpawnRequest<'a> {
+    pub provider: Provider,
+    /// The Thread's chosen model, verbatim as the provider announced it.
+    /// `None` is the provider's own default.
+    pub model: Option<&'a str>,
+    /// The provider-native id of a Thread being revived, which the provider
+    /// reloads its own history from.
+    pub resume: Option<&'a str>,
+    /// The Thread's workspace binding resolved to the directory the Session
+    /// works in; `None` only for a Thread from before bindings were
+    /// recorded.
+    pub cwd: Option<&'a Path>,
+}
+
 /// How a Session is started. Injected so the cockpit can be driven with
 /// scripted Sessions in tests — nothing below this line spawns a process.
 pub trait Spawner {
-    /// `resume` is the provider-native id of a Thread being revived, which the
-    /// provider reloads its own history from. `cwd` is the Thread's workspace
-    /// binding resolved to the directory the Session works in; `None` only
-    /// for a Thread from before bindings were recorded.
-    fn spawn(
-        &mut self,
-        provider: Provider,
-        resume: Option<&str>,
-        cwd: Option<&Path>,
-    ) -> io::Result<Box<dyn Session>>;
+    fn spawn(&mut self, request: SpawnRequest) -> io::Result<Box<dyn Session>>;
 }
 
 /// Resident memory per Session, injected. The cockpit never shells out for
@@ -66,6 +74,42 @@ pub enum Wake {
     /// The turn ended and a prompt was waiting behind it — send this now.
     Send(String),
 }
+
+/// A provider and the model to serve it with — what the #25 picker picks,
+/// whole. `None` is the provider's own default, which is also what every
+/// Thread starts on.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProviderChoice {
+    pub provider: Provider,
+    pub model: Option<String>,
+}
+
+/// Re-aiming a Thread's provider failed — and changed nothing: the old
+/// Session keeps serving and the header on disk is untouched.
+#[derive(Debug)]
+pub enum ProvisionError {
+    /// The first prompt has gone out; nothing re-aims after it (#25, #29).
+    Locked,
+    /// The new provider's CLI would not spawn. The words are the
+    /// provider's own.
+    Spawn(io::Error),
+    /// The durable header rewrite failed.
+    Store(LoadError),
+}
+
+impl std::fmt::Display for ProvisionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProvisionError::Locked => {
+                write!(f, "the first prompt was sent; the provider is fixed")
+            }
+            ProvisionError::Spawn(e) => write!(f, "{e}"),
+            ProvisionError::Store(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for ProvisionError {}
 
 /// Deleting a Thread failed — and destroyed nothing.
 #[derive(Debug)]
@@ -110,6 +154,11 @@ struct Thread {
     session: Option<Box<dyn Session>>,
     writer: ThreadWriter,
     provider: Provider,
+    /// The model this Thread chose before its first prompt (#25), verbatim
+    /// as the provider announced it. `None` — most Threads — is the
+    /// provider's default. Every respawn reads it, so the choice holds for
+    /// the Thread's whole life.
+    model: Option<String>,
     pending: Option<Decision>,
     /// A prompt the operator wrote while the turn was still running.
     queued: Option<String>,
@@ -135,6 +184,16 @@ struct Thread {
     /// popover lists. Announced by the Session itself at start; empty until
     /// it speaks, and Session state only: a parked Thread keeps none.
     commands: Vec<crate::SessionCommand>,
+    /// The models the live Session's install offers (#25) — the provider
+    /// picker's model rows. Announced like the command menu, empty until
+    /// the Session speaks, and Session state exactly like it: never a
+    /// static list, gone with the Session.
+    models: Vec<String>,
+    /// The lock every pre-prompt control reads (#25, #29): armed by the
+    /// first operator prompt that goes out, and on revive when the replayed
+    /// history holds one. Never disarmed — nothing re-aims a Thread the
+    /// operator has spoken in.
+    first_prompt_sent: bool,
     /// The live Session's permission mode (#23) — the meta row's mode chip,
     /// in the provider's own word. Display-only, and Session state exactly
     /// like the menu: None until announced, gone with the Session.
@@ -153,6 +212,7 @@ impl Thread {
         session: Box<dyn Session>,
         writer: ThreadWriter,
         provider: Provider,
+        model: Option<String>,
         resume: Option<String>,
         workspace: Option<WorkspaceBinding>,
         session_project_root: Option<PathBuf>,
@@ -164,6 +224,7 @@ impl Thread {
             session: Some(session),
             writer,
             provider,
+            model,
             pending: None,
             queued: None,
             busy: false,
@@ -172,6 +233,8 @@ impl Thread {
             session_project_root,
             preface_pending: true,
             commands: Vec::new(),
+            models: Vec::new(),
+            first_prompt_sent: false,
             permission_mode: None,
             timings: HashMap::new(),
         }
@@ -253,9 +316,12 @@ impl Cockpit {
             // Drop the old Session before asking for a new one: the leaking
             // process must not outlive its replacement.
             thread.session = None;
-            let spawned = self
-                .spawner
-                .spawn(thread.provider, resume.as_deref(), cwd.as_deref());
+            let spawned = self.spawner.spawn(SpawnRequest {
+                provider: thread.provider,
+                model: thread.model.as_deref(),
+                resume: resume.as_deref(),
+                cwd: cwd.as_deref(),
+            });
             let note = match spawned {
                 Ok(session) => {
                     thread.session = Some(session);
@@ -282,10 +348,15 @@ impl Cockpit {
             let _ = self.store.delete(id);
             return Err(io::Error::other(e));
         }
-        let session = self.spawner.spawn(provider, None, Some(binding.cwd()))?;
+        let session = self.spawner.spawn(SpawnRequest {
+            provider,
+            model: None,
+            resume: None,
+            cwd: Some(binding.cwd()),
+        })?;
         self.threads.insert(
             id,
-            Thread::fresh(session, writer, provider, None, Some(binding), None),
+            Thread::fresh(session, writer, provider, None, None, Some(binding), None),
         );
         Ok(id)
     }
@@ -355,6 +426,96 @@ impl Cockpit {
         Ok(())
     }
 
+    /// Re-aim a Thread onto a provider (and optionally a model) before its
+    /// first prompt (#25). Refused whole once `first_prompt_sent` — nothing
+    /// re-aims a Thread the operator has spoken in. Spawn-new-first, swap
+    /// second: a CLI that fails to spawn leaves the old Session serving and
+    /// the header untouched, and the error carries the provider's words.
+    /// The swap is a fresh Transcript — nothing operator-authored exists
+    /// pre-lock, so the old Init and model must not linger — and an eager
+    /// respawn: the new Provider's commands and models arrive while the
+    /// operator is still choosing. Durable before anything in memory
+    /// changes, so a parked-never-prompted Thread revives onto its choice.
+    /// Works on a parked Thread too: only the store is touched.
+    pub fn set_provider(
+        &mut self,
+        thread: ThreadId,
+        choice: ProviderChoice,
+    ) -> Result<(), ProvisionError> {
+        let Some(state) = self.threads.get(&thread) else {
+            // Parked: the lock reads the log the way a revive would.
+            let snapshot = self.store.load(thread).map_err(ProvisionError::Store)?;
+            if history_locks(&snapshot.inputs()) {
+                return Err(ProvisionError::Locked);
+            }
+            return self
+                .store
+                .set_provider(thread, choice.provider, choice.model, None)
+                .map_err(ProvisionError::Store);
+        };
+        if state.first_prompt_sent {
+            return Err(ProvisionError::Locked);
+        }
+        if state.provider == choice.provider && state.model == choice.model {
+            return Ok(());
+        }
+        let cwd = state
+            .workspace
+            .as_ref()
+            .map(|binding| binding.cwd().to_path_buf());
+        // No resume: pre-lock there is no conversation for the new
+        // provider to reload, and the old provider's id means nothing to it.
+        let session = self
+            .spawner
+            .spawn(SpawnRequest {
+                provider: choice.provider,
+                model: choice.model.as_deref(),
+                resume: None,
+                cwd: cwd.as_deref(),
+            })
+            .map_err(ProvisionError::Spawn)?;
+        let state = self.threads.get_mut(&thread).expect("checked above");
+        // Durable before the swap: on a refused rewrite the new Session is
+        // dropped and the old one keeps serving under the old header.
+        self.store
+            .set_provider(
+                thread,
+                choice.provider,
+                choice.model.clone(),
+                Some(&mut state.writer),
+            )
+            .map_err(ProvisionError::Store)?;
+        // The swap. Session-scoped state dies with the old Session; the
+        // fresh Transcript drops its Init, so the footer relabels only when
+        // the new Provider speaks. A queued prompt is the operator's own
+        // and stays held.
+        let (lexer, highlights) = Lexer::new();
+        state.transcript = Transcript::new(std::sync::Arc::new(lexer));
+        state.highlights = highlights;
+        state.session = Some(session);
+        state.provider = choice.provider;
+        state.model = choice.model;
+        state.pending = None;
+        state.busy = false;
+        state.resume = None;
+        state.preface_pending = true;
+        state.commands.clear();
+        state.models.clear();
+        state.permission_mode = None;
+        state.timings.clear();
+        Ok(())
+    }
+
+    /// Whether this Thread's first operator prompt has gone out — the one
+    /// lock every pre-prompt control reads (#25, #29). Armed by `send`, and
+    /// on revive or import when the replayed history contains an operator
+    /// prompt. False for a Thread no Pane holds open.
+    pub fn first_prompt_sent(&self, thread: ThreadId) -> bool {
+        self.threads
+            .get(&thread)
+            .is_some_and(|state| state.first_prompt_sent)
+    }
+
     /// Delete a Thread for good: its log, its directory, and — when it was
     /// bound to a worktree — the worktree itself, but only a clean one
     /// ("clean" exactly as `git status` defines it). A dirty worktree
@@ -408,9 +569,15 @@ impl Cockpit {
         let cwd = workspace
             .as_ref()
             .map(|binding| binding.cwd().to_path_buf());
+        let model = snapshot.model();
         let session = self
             .spawner
-            .spawn(provider, snapshot.resume_target(), cwd.as_deref())
+            .spawn(SpawnRequest {
+                provider,
+                model: model.as_deref(),
+                resume: snapshot.resume_target(),
+                cwd: cwd.as_deref(),
+            })
             .map_err(LoadError::Io)?;
         let writer = self.store.writer(thread)?;
 
@@ -419,11 +586,16 @@ impl Cockpit {
             session,
             writer,
             provider,
+            model,
             resume,
             workspace,
             snapshot.session_project_root(),
         );
-        for input in snapshot.inputs() {
+        let inputs = snapshot.inputs();
+        // The lock arms with the history (#25): a replayed operator prompt
+        // is a first prompt already sent.
+        state.first_prompt_sent = history_locks(&inputs);
+        for input in inputs {
             state.transcript.apply(input);
         }
         state.transcript.apply(Input::Revived);
@@ -463,10 +635,12 @@ impl Cockpit {
                 .workspace
                 .as_ref()
                 .map(|binding| binding.cwd().to_path_buf());
-            match self
-                .spawner
-                .spawn(state.provider, resume.as_deref(), cwd.as_deref())
-            {
+            match self.spawner.spawn(SpawnRequest {
+                provider: state.provider,
+                model: state.model.as_deref(),
+                resume: resume.as_deref(),
+                cwd: cwd.as_deref(),
+            }) {
                 Ok(session) => {
                     state.session = Some(session);
                     state.preface_pending = true;
@@ -664,6 +838,22 @@ impl Cockpit {
             .unwrap_or_default()
     }
 
+    /// The models the live Session's install offers (#25): the provider
+    /// picker's model rows. Empty until the Session announces a list —
+    /// never a static one.
+    pub fn models(&self, thread: ThreadId) -> &[String] {
+        self.threads
+            .get(&thread)
+            .map(|state| state.models.as_slice())
+            .unwrap_or_default()
+    }
+
+    /// The model this Thread chose before its first prompt (#25) — the ✓ in
+    /// the provider picker. `None` is the provider's default.
+    pub fn model(&self, thread: ThreadId) -> Option<&str> {
+        self.threads.get(&thread)?.model.as_deref()
+    }
+
     /// The live Session's permission mode (#23): the meta row's mode chip.
     /// None until the Session announces one — a chip is never invented.
     pub fn permission_mode(&self, thread: ThreadId) -> Option<&str> {
@@ -697,6 +887,14 @@ impl Cockpit {
 
 fn megabytes(bytes: u64) -> String {
     format!("{} MB", bytes / (1024 * 1024))
+}
+
+/// The first-prompt lock, read off a replayed history (#25, #29): an
+/// operator prompt in the log is a first prompt already sent. The one rule
+/// for every Thread that is not live — a revive arming its state, and a
+/// parked `set_provider` judging the log directly.
+fn history_locks(inputs: &[Input]) -> bool {
+    inputs.iter().any(|input| matches!(input, Input::Prompt(_)))
 }
 
 /// The #24 guard: a session project root that no longer exists on disk
@@ -748,6 +946,8 @@ fn deliver(state: &mut Thread, text: String) -> Update {
     }
     // The Session's first prompt has gone out; every later one is bare.
     state.preface_pending = false;
+    // And the Thread's first locks its provider for good (#25, #29).
+    state.first_prompt_sent = true;
     let _ = state.writer.record_prompt(&text);
     state.transcript.apply(Input::Prompt(text))
 }
@@ -809,6 +1009,10 @@ fn fold(state: &mut Thread, event: &SessionEvent) -> Wake {
         // reads it from here.
         SessionEvent::Commands { commands } => {
             state.commands = commands.clone();
+        }
+        // And its model menu — the provider picker's rows (#25).
+        SessionEvent::Models { models } => {
+            state.models = models.clone();
         }
         // And its permission mode — the meta row's chip.
         SessionEvent::PermissionMode { mode } => {
@@ -878,6 +1082,8 @@ mod tests {
     struct Fake {
         streams: Rc<RefCell<Vec<Sender<SessionEvent>>>>,
         sent: Rc<RefCell<Vec<String>>>,
+        providers: Rc<RefCell<Vec<Provider>>>,
+        models: Rc<RefCell<Vec<Option<String>>>>,
         resumed: Rc<RefCell<Vec<Option<String>>>>,
         cwds: Rc<RefCell<Vec<Option<std::path::PathBuf>>>>,
         /// Every spawn call, successes and refusals alike.
@@ -886,12 +1092,25 @@ mod tests {
         fail: Rc<RefCell<bool>>,
     }
 
+    impl Fake {
+        /// Every spawn's choice, in call order.
+        fn spawn_pairs(&self) -> Vec<ProviderChoice> {
+            self.providers
+                .borrow()
+                .iter()
+                .zip(self.models.borrow().iter())
+                .map(|(provider, model)| ProviderChoice {
+                    provider: *provider,
+                    model: model.clone(),
+                })
+                .collect()
+        }
+    }
+
     impl Spawner for Fake {
         fn spawn(
             &mut self,
-            _provider: Provider,
-            resume: Option<&str>,
-            cwd: Option<&Path>,
+            request: SpawnRequest,
         ) -> std::io::Result<Box<dyn crate::providers::Session>> {
             *self.attempts.borrow_mut() += 1;
             if *self.fail.borrow() {
@@ -899,12 +1118,16 @@ mod tests {
             }
             let (tx, rx) = mpsc::channel();
             self.streams.borrow_mut().push(tx);
+            self.providers.borrow_mut().push(request.provider);
+            self.models
+                .borrow_mut()
+                .push(request.model.map(|model| model.to_string()));
             self.resumed
                 .borrow_mut()
-                .push(resume.map(|target| target.to_string()));
+                .push(request.resume.map(|target| target.to_string()));
             self.cwds
                 .borrow_mut()
-                .push(cwd.map(|path| path.to_path_buf()));
+                .push(request.cwd.map(|path| path.to_path_buf()));
             Ok(Box::new(Scripted {
                 rx,
                 sent: self.sent.clone(),
@@ -2030,5 +2253,245 @@ mod tests {
         cockpit.revive(thread).unwrap();
         assert!(cockpit.commands(thread).is_empty());
         assert_eq!(cockpit.permission_mode(thread), None);
+    }
+
+    /// #25: the Session's announced model list becomes the Thread's — the
+    /// provider picker's rows — on the same lane as the command menu:
+    /// never the history, never the log, gone with the Session.
+    #[test]
+    fn a_models_event_becomes_the_thread_menu_and_never_the_history() {
+        let (mut cockpit, fake) = cockpit("models");
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        assert!(cockpit.models(thread).is_empty(), "nothing is static");
+
+        fake.streams.borrow()[0]
+            .send(SessionEvent::Models {
+                models: vec!["sonnet".into(), "opus".into(), "haiku".into()],
+            })
+            .unwrap();
+        cockpit.pump();
+
+        assert_eq!(cockpit.models(thread), ["sonnet", "opus", "haiku"]);
+        assert!(
+            cockpit.transcript(thread).unwrap().blocks().is_empty(),
+            "a model list is not conversation"
+        );
+
+        cockpit.park(thread).unwrap();
+        cockpit.revive(thread).unwrap();
+        assert!(cockpit.models(thread).is_empty());
+    }
+
+    /// AC (#25): choosing a provider before the first prompt replaces the
+    /// Session on the spot — eager, so the new provider's menus arrive
+    /// while the operator is still choosing — on a fresh Transcript, with
+    /// the choice durable in the header. The first send goes to that live
+    /// Session; nothing respawns for it.
+    #[test]
+    fn choosing_a_provider_pre_lock_respawns_eagerly_and_the_first_send_uses_it() {
+        let (mut cockpit, fake) = cockpit("provider-pick");
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        // The old Session had already spoken; none of it may linger.
+        fake.streams.borrow()[0]
+            .send(SessionEvent::Init {
+                session_id: "sess-old".into(),
+                model: "claude-haiku-4-5".into(),
+            })
+            .unwrap();
+        fake.streams.borrow()[0].send(text("old provider")).unwrap();
+        cockpit.pump();
+
+        cockpit
+            .set_provider(
+                thread,
+                ProviderChoice {
+                    provider: Provider::Codex,
+                    model: Some("gpt-5.4-mini".into()),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(fake.streams.borrow().len(), 2, "the respawn is eager");
+        assert_eq!(
+            fake.spawn_pairs().last().unwrap(),
+            &ProviderChoice {
+                provider: Provider::Codex,
+                model: Some("gpt-5.4-mini".into()),
+            }
+        );
+        assert_eq!(
+            fake.resumed.borrow().last().unwrap(),
+            &None,
+            "the old provider's id means nothing to the new one"
+        );
+        assert_eq!(cockpit.provider(thread), Some(Provider::Codex));
+        assert_eq!(cockpit.model(thread), Some("gpt-5.4-mini"));
+        assert!(
+            cockpit.transcript(thread).unwrap().blocks().is_empty(),
+            "the old Init and prose must not linger"
+        );
+        // Durable: a crash right now still revives onto the choice.
+        let meta = cockpit.peek(thread).unwrap();
+        assert_eq!(meta.provider, Provider::Codex);
+        assert_eq!(meta.model, Some("gpt-5.4-mini".into()));
+
+        cockpit.send(thread, "first prompt".into());
+        assert_eq!(fake.streams.borrow().len(), 2, "no respawn for the send");
+        assert_eq!(fake.sent.borrow().as_slice(), ["first prompt"]);
+    }
+
+    /// AC (#25): the first prompt locks the Thread. `send` arms the one
+    /// predicate, and the setter refuses whole — no spawn attempt, no
+    /// header rewrite.
+    #[test]
+    fn the_first_prompt_locks_the_provider_for_good() {
+        let (mut cockpit, fake) = cockpit("provider-lock");
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        assert!(!cockpit.first_prompt_sent(thread));
+
+        cockpit.send(thread, "hello".into());
+        assert!(cockpit.first_prompt_sent(thread));
+        let attempts = *fake.attempts.borrow();
+
+        let refused = cockpit.set_provider(
+            thread,
+            ProviderChoice {
+                provider: Provider::Codex,
+                model: None,
+            },
+        );
+        assert!(
+            matches!(refused, Err(ProvisionError::Locked)),
+            "{refused:?}"
+        );
+        assert_eq!(*fake.attempts.borrow(), attempts, "no spawn was tried");
+        assert_eq!(cockpit.provider(thread), Some(Provider::Claude));
+        assert_eq!(cockpit.peek(thread).unwrap().provider, Provider::Claude);
+    }
+
+    /// The lock arms from replayed history too: a revived Thread whose log
+    /// holds an operator prompt is as locked as the live one was — and so
+    /// is a parked Thread, judged straight off its log.
+    #[test]
+    fn a_thread_with_a_prompt_in_its_history_is_locked_on_revive_and_parked() {
+        let (mut cockpit, _fake) = cockpit("provider-lock-history");
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        cockpit.send(thread, "hello".into());
+        cockpit.park(thread).unwrap();
+
+        // Parked: the store-only path reads the log for the lock.
+        assert!(matches!(
+            cockpit.set_provider(
+                thread,
+                ProviderChoice {
+                    provider: Provider::Codex,
+                    model: None,
+                },
+            ),
+            Err(ProvisionError::Locked)
+        ));
+
+        cockpit.revive(thread).unwrap();
+        assert!(cockpit.first_prompt_sent(thread), "history armed the lock");
+        assert!(matches!(
+            cockpit.set_provider(
+                thread,
+                ProviderChoice {
+                    provider: Provider::Codex,
+                    model: None,
+                },
+            ),
+            Err(ProvisionError::Locked)
+        ));
+    }
+
+    /// AC (#25): a parked-never-prompted Thread revives onto its chosen
+    /// provider and model — the durable header is what every later spawn
+    /// reads.
+    #[test]
+    fn a_park_then_revive_keeps_the_chosen_provider_and_model() {
+        let (mut cockpit, fake) = cockpit("provider-revive");
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        cockpit
+            .set_provider(
+                thread,
+                ProviderChoice {
+                    provider: Provider::Codex,
+                    model: Some("gpt-5.4-mini".into()),
+                },
+            )
+            .unwrap();
+
+        cockpit.park(thread).unwrap();
+        cockpit.revive(thread).unwrap();
+
+        assert_eq!(
+            fake.spawn_pairs().last().unwrap(),
+            &ProviderChoice {
+                provider: Provider::Codex,
+                model: Some("gpt-5.4-mini".into()),
+            }
+        );
+        assert_eq!(cockpit.provider(thread), Some(Provider::Codex));
+        assert_eq!(cockpit.model(thread), Some("gpt-5.4-mini"));
+        assert!(!cockpit.first_prompt_sent(thread), "still unlocked");
+    }
+
+    /// AC (#25): a CLI that fails to spawn refuses the whole switch — the
+    /// old Session keeps serving, the header is untouched, and the error
+    /// carries the provider's words.
+    #[test]
+    fn a_failed_provider_spawn_leaves_the_old_session_serving() {
+        let (mut cockpit, fake) = cockpit("provider-spawn-fails");
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        *fake.fail.borrow_mut() = true;
+
+        let refused = cockpit.set_provider(
+            thread,
+            ProviderChoice {
+                provider: Provider::Codex,
+                model: None,
+            },
+        );
+
+        let Err(ProvisionError::Spawn(e)) = refused else {
+            panic!("expected the spawn refusal: {refused:?}");
+        };
+        assert!(e.to_string().contains("stub refused to spawn"));
+        assert_eq!(cockpit.provider(thread), Some(Provider::Claude));
+        assert_eq!(cockpit.peek(thread).unwrap().provider, Provider::Claude);
+        // The old Session still serves: the next send spawns nothing new.
+        *fake.fail.borrow_mut() = false;
+        cockpit.send(thread, "still here".into());
+        assert_eq!(fake.sent.borrow().as_slice(), ["still here"]);
+        assert_eq!(fake.streams.borrow().len(), 1);
+    }
+
+    /// Re-picking what the Thread already is changes nothing: no teardown,
+    /// no respawn, no rewrite — the common path must stay friction-free.
+    #[test]
+    fn re_picking_the_current_provider_and_model_is_a_no_op() {
+        let (mut cockpit, fake) = cockpit("provider-noop");
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        fake.streams.borrow()[0]
+            .send(text("still serving"))
+            .unwrap();
+        cockpit.pump();
+
+        cockpit
+            .set_provider(
+                thread,
+                ProviderChoice {
+                    provider: Provider::Claude,
+                    model: None,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(fake.streams.borrow().len(), 1, "nothing respawned");
+        assert!(
+            !cockpit.transcript(thread).unwrap().blocks().is_empty(),
+            "and nothing was torn down"
+        );
     }
 }
