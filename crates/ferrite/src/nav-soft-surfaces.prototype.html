@@ -1,0 +1,625 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ferrite Soft Surfaces Prototype</title>
+  <style>
+    :root {
+      color-scheme: dark;
+
+      /* Semantic roles shared by both comparisons. Soft is the default. */
+      --color-ground: oklch(0.165 0.004 270);
+      --color-sidebar: oklch(0.225 0.004 270);
+      --color-pane: oklch(0.198 0.004 270);
+      --color-pane-subtle: oklch(0.215 0.004 270);
+      --color-control: oklch(0.265 0.004 270);
+      --color-control-hover: oklch(0.305 0.004 270);
+      --color-control-pressed: oklch(0.34 0.004 270);
+      --color-composer: oklch(0.235 0.004 270);
+      --color-selected: oklch(0.34 0.005 270);
+      --color-selected-hover: oklch(0.37 0.005 270);
+      --color-line: oklch(1 0 0 / 0.055);
+      --color-line-strong: oklch(1 0 0 / 0.1);
+      --color-text-primary: oklch(0.95 0.004 270);
+      --color-text-secondary: oklch(0.79 0.005 270);
+      --color-text-muted: oklch(0.65 0.005 270);
+      --color-text-faint: oklch(0.51 0.005 270);
+      --color-focus: oklch(0.8 0.012 260);
+      --color-focus-wash: oklch(0.8 0.012 260 / 0.12);
+      --color-status-running: oklch(0.74 0.08 153);
+      --color-status-running-wash: oklch(0.74 0.08 153 / 0.12);
+      --color-status-attention: oklch(0.78 0.075 83);
+      --color-status-attention-wash: oklch(0.78 0.075 83 / 0.12);
+      --color-status-blocked: oklch(0.7 0.09 26);
+      --color-status-blocked-wash: oklch(0.7 0.09 26 / 0.12);
+      --color-macos-close: #ff5f57;
+      --color-macos-minimize: #febc2e;
+      --color-macos-zoom: #28c840;
+      --shadow-menu: 0 8px 24px -8px oklch(0 0 0 / 0.58), 0 1px 2px oklch(0 0 0 / 0.28);
+      --shadow-pane: none;
+      --radius-control: 8px;
+      --radius-pane: 10px;
+      --radius-chip: 6px;
+      --radius-menu: 14px;
+      --font-ui: ui-rounded, "SF Pro Rounded", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --font-data: "SFMono-Regular", Menlo, Consolas, monospace;
+      --nav-width: 286px;
+      --nav-rail-width: 52px;
+      --row-inset: 10px;
+      --grid-gap: 8px;
+      --grid-pad: 10px;
+    }
+
+    :root[data-mode="aperture"] {
+      --color-ground: #050505;
+      --color-sidebar: #0a0a0a;
+      --color-pane: #0e0e0e;
+      --color-pane-subtle: #0a0a0a;
+      --color-control: #191919;
+      --color-control-hover: #292929;
+      --color-control-pressed: #353535;
+      --color-composer: #161616;
+      --color-selected: rgba(199, 204, 214, 0.14);
+      --color-selected-hover: rgba(199, 204, 214, 0.18);
+      --color-line: rgba(255, 255, 255, 0.045);
+      --color-line-strong: rgba(255, 255, 255, 0.12);
+      --color-text-primary: #f3f4f7;
+      --color-text-secondary: #a7abb4;
+      --color-text-muted: #7f8187;
+      --color-text-faint: #54575f;
+      --color-focus: #c7ccd6;
+      --color-focus-wash: rgba(199, 204, 214, 0.14);
+      --color-status-running: #7fc99b;
+      --color-status-running-wash: rgba(127, 201, 155, 0.13);
+      --color-status-attention: #d8c082;
+      --color-status-attention-wash: rgba(216, 192, 130, 0.13);
+      --color-status-blocked: #e08c84;
+      --color-status-blocked-wash: rgba(224, 140, 132, 0.13);
+      --shadow-menu: 0 6px 16px -4px rgba(0, 0, 0, 0.4), 0 2px 4px rgba(0, 0, 0, 0.3);
+      --shadow-pane: inset 0 0 0 1px rgba(255, 255, 255, 0.07);
+      --radius-control: 4px;
+      --radius-pane: 5px;
+      --radius-chip: 4px;
+      --radius-menu: 7px;
+      --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-width: 1080px; min-height: 720px; background: var(--color-ground); }
+    body { min-height: 100vh; overflow: hidden; color: var(--color-text-secondary); font: 12px/1.4 var(--font-ui); }
+    button { color: inherit; font: inherit; }
+    button:focus-visible, [draggable="true"]:focus-visible {
+      outline: 2px solid var(--color-focus);
+      outline-offset: 2px;
+    }
+    svg { display: block; }
+
+    .app { display: flex; flex-direction: column; block-size: 100vh; min-block-size: 720px; background: var(--color-ground); }
+    .workspace { display: flex; flex: 1; min-block-size: 0; }
+
+    .top-strip {
+      display: flex; align-items: center; flex: 0 0 42px; block-size: 42px; gap: 10px;
+      padding-inline: 13px 15px; background: var(--color-ground); border-block-end: 1px solid var(--color-line);
+    }
+    .traffic { display: flex; gap: 7px; margin-inline-end: 3px; }
+    .traffic span { inline-size: 12px; block-size: 12px; border-radius: 50%; }
+    .traffic span:nth-child(1) { background: var(--color-macos-close); }
+    .traffic span:nth-child(2) { background: var(--color-macos-minimize); }
+    .traffic span:nth-child(3) { background: var(--color-macos-zoom); }
+    .product-name { color: var(--color-text-primary); font-size: 12px; font-weight: 650; }
+    .scope-path { display: flex; align-items: center; min-inline-size: 0; gap: 7px; color: var(--color-text-muted); }
+    .scope-path strong { min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text-secondary); font-weight: 580; }
+    .scope-path .sep { color: var(--color-text-faint); }
+    .census { display: flex; align-items: center; gap: 6px; margin-inline-start: auto; color: var(--color-text-muted); font: 10px var(--font-data); }
+    .pending-label {
+      display: flex; align-items: center; gap: 6px; min-inline-size: 0; max-inline-size: 310px;
+      color: var(--color-status-attention); font-size: 10px; white-space: nowrap;
+    }
+    .pending-label span:last-child { overflow: hidden; text-overflow: ellipsis; }
+
+    .icon-button {
+      display: grid; place-items: center; inline-size: 30px; block-size: 30px; flex: 0 0 auto;
+      border: 0; border-radius: var(--radius-control); background: transparent; color: var(--color-text-muted); cursor: pointer;
+      transition-property: background-color, color, scale; transition-duration: 120ms; transition-timing-function: ease-out;
+    }
+    .icon-button:hover { background: var(--color-control-hover); color: var(--color-text-primary); }
+    .icon-button:active { background: var(--color-control-pressed); scale: 0.96; }
+    .icon-button svg { inline-size: 16px; block-size: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+
+    .nav-shell {
+      position: relative; display: flex; flex: 0 0 var(--nav-width); inline-size: var(--nav-width); min-block-size: 0;
+      background: var(--color-sidebar); border-inline-end: 1px solid var(--color-line);
+      transition-property: inline-size, flex-basis; transition-duration: 160ms; transition-timing-function: cubic-bezier(.2, 0, 0, 1);
+    }
+    .nav-shell.collapsed { flex-basis: var(--nav-rail-width); inline-size: var(--nav-rail-width); }
+    .nav-shell.collapsed .nav-expanded { display: none; }
+    .nav-shell:not(.collapsed) .nav-rail { display: none; }
+    .nav-expanded { display: flex; flex: 1; flex-direction: column; min-inline-size: 0; min-block-size: 0; }
+
+    .nav-heading {
+      display: flex; align-items: center; flex: 0 0 42px; gap: 8px; block-size: 42px; padding-inline: 11px 8px;
+    }
+    .nav-heading-copy { min-inline-size: 0; flex: 1; }
+    .nav-heading-copy strong { display: block; color: var(--color-text-primary); font-size: 13px; font-weight: 650; }
+    .nav-heading-copy span { display: block; color: var(--color-text-muted); font-size: 9.5px; }
+
+    .project-filter { padding: 7px var(--row-inset) 10px; }
+    .filter-label { display: flex; align-items: center; justify-content: space-between; margin-block-end: 7px; color: var(--color-text-muted); font-size: 10px; }
+    .filter-label output { color: var(--color-text-faint); font: 9px var(--font-data); }
+    .filter-options { display: flex; gap: 5px; min-inline-size: 0; }
+    .filter-button {
+      min-inline-size: 0; block-size: 29px; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      padding-inline: 9px; border: 0; border-radius: var(--radius-control); background: transparent;
+      color: var(--color-text-muted); font-size: 10px; cursor: pointer;
+      transition-property: background-color, color, scale; transition-duration: 120ms; transition-timing-function: ease-out;
+    }
+    .filter-button:hover { background: var(--color-control-hover); color: var(--color-text-primary); }
+    .filter-button[aria-pressed="true"] { background: var(--color-selected); color: var(--color-text-primary); font-weight: 620; }
+    .filter-button[aria-pressed="true"]:hover { background: var(--color-selected-hover); }
+    .filter-button:active { scale: 0.96; }
+
+    .nav-tree { flex: 1; min-block-size: 0; overflow-y: auto; padding: 8px 7px 74px; scrollbar-width: thin; scrollbar-color: var(--color-control) transparent; }
+    .list-label {
+      display: flex; align-items: center; justify-content: space-between; block-size: 27px;
+      padding-inline: 8px; color: var(--color-text-faint); font-size: 9px; font-weight: 600;
+    }
+    .list-label span:last-child { font: 9px var(--font-data); font-weight: 400; }
+    .list-label.solo { margin-block-start: 11px; }
+    .empty-filter { margin: 10px 8px; color: var(--color-text-muted); font-size: 11px; }
+
+    .group-block { margin-block-end: 6px; }
+    .nav-row {
+      position: relative; display: flex; align-items: center; min-inline-size: 0; min-block-size: 46px;
+      padding: 6px 7px; border: 0; border-radius: var(--radius-control); color: var(--color-text-secondary);
+      cursor: grab; user-select: none;
+      transition-property: background-color, color, scale, box-shadow; transition-duration: 120ms; transition-timing-function: ease-out;
+    }
+    .nav-row:hover { background: var(--color-control-hover); color: var(--color-text-primary); }
+    .nav-row:active { cursor: grabbing; scale: 0.995; }
+    .nav-row.selected { background: var(--color-selected); color: var(--color-text-primary); }
+    .nav-row.selected:hover { background: var(--color-selected-hover); }
+    .nav-row.scope-active { background: var(--color-control); color: var(--color-text-primary); }
+    .nav-row.scope-active:hover { background: var(--color-control-hover); }
+    .nav-row.member { margin-inline-start: 22px; }
+    .nav-row.member::before {
+      content: ""; position: absolute; inset-inline-start: -12px; inset-block: 9px; inline-size: 1px;
+      background: var(--color-line-strong);
+    }
+    .row-leading { display: grid; place-items: center; inline-size: 22px; flex: 0 0 22px; color: var(--color-text-muted); }
+    .row-leading .chevron { inline-size: 14px; block-size: 14px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+    .row-content { min-inline-size: 0; flex: 1; }
+    .row-title-line, .row-meta-line { display: flex; align-items: center; min-inline-size: 0; gap: 6px; }
+    .row-title { min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: currentColor; font-size: 11px; font-weight: 620; }
+    .group-row .row-title { font-size: 11.5px; }
+    .row-meta-line { margin-block-start: 2px; color: var(--color-text-muted); font: 9px var(--font-data); }
+    .branch { min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .provider { flex: 0 0 auto; color: var(--color-text-faint); }
+    .row-project { flex: 0 0 auto; max-inline-size: 86px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text-muted); font: 9px var(--font-ui); }
+    .row-project::before { content: "·"; margin-inline-end: 5px; color: var(--color-text-faint); }
+    .member .row-project { max-inline-size: 72px; }
+    .count { flex: 0 0 auto; color: var(--color-text-faint); font: 9px var(--font-data); }
+
+    .status-dot { inline-size: 7px; block-size: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--color-text-faint); }
+    .status-dot.running { background: var(--color-status-running); }
+    .status-dot.attention { background: var(--color-status-attention); }
+    .status-dot.blocked { background: var(--color-status-blocked); }
+    .status-dot.parked { background: transparent; box-shadow: inset 0 0 0 1px var(--color-text-faint); }
+    .status-chip { flex: 0 0 auto; padding: 1px 5px; border-radius: var(--radius-chip); font-size: 8.5px; font-weight: 550; }
+    .status-chip.attention { color: var(--color-status-attention); background: var(--color-status-attention-wash); }
+    .status-chip.blocked { color: var(--color-status-blocked); background: var(--color-status-blocked-wash); }
+
+    .drag-message {
+      position: absolute; inset-inline: 9px; inset-block-end: 9px; min-block-size: 50px; padding: 8px 9px;
+      border-radius: var(--radius-control); background: var(--color-control); box-shadow: var(--shadow-menu);
+      color: var(--color-text-muted); font-size: 9.5px;
+    }
+    .drag-message strong { display: block; margin-block-end: 2px; color: var(--color-text-secondary); font-weight: 600; }
+    .drop-valid { background: var(--color-status-running-wash) !important; box-shadow: inset 0 0 0 1px var(--color-status-running); }
+    .drop-refused { background: var(--color-status-blocked-wash) !important; box-shadow: inset 0 0 0 1px var(--color-status-blocked); cursor: not-allowed; }
+    .dragging { opacity: .45; }
+
+    .nav-rail { display: flex; flex-direction: column; align-items: center; inline-size: var(--nav-rail-width); min-block-size: 0; padding-block: 6px; }
+    .rail-filter { display: flex; flex-direction: column; gap: 5px; margin-block: 5px 10px; }
+    .rail-filter button {
+      display: grid; place-items: center; inline-size: 32px; block-size: 28px; border: 0; border-radius: var(--radius-control);
+      background: transparent; color: var(--color-text-muted); font-size: 9px; cursor: pointer;
+    }
+    .rail-filter button:hover { background: var(--color-control-hover); color: var(--color-text-primary); }
+    .rail-filter button[aria-pressed="true"] { background: var(--color-selected); color: var(--color-text-primary); font-weight: 650; }
+    .rail-divider { inline-size: 24px; block-size: 1px; margin-block: 2px 9px; background: var(--color-line-strong); }
+    .rail-statuses { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+    .rail-status { display: grid; place-items: center; inline-size: 28px; block-size: 24px; border-radius: var(--radius-control); }
+    .rail-status.selected { background: var(--color-selected); }
+    .rail-status.attention { background: var(--color-status-attention-wash); }
+
+    .cockpit { min-inline-size: 0; flex: 1; display: flex; flex-direction: column; background: var(--color-ground); }
+    .cockpit-strip {
+      display: flex; align-items: center; flex: 0 0 38px; gap: 8px; block-size: 38px; padding-inline: 13px;
+      color: var(--color-text-muted); font-size: 10px;
+    }
+    .cockpit-strip strong { color: var(--color-text-secondary); font-size: 11px; font-weight: 600; }
+    .cockpit-strip .scope { color: var(--color-text-muted); }
+    .cockpit-strip .spacer { flex: 1; }
+    .cockpit-strip .attention { color: var(--color-status-attention); }
+    .interaction-note { min-inline-size: 0; max-inline-size: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text-faint); }
+
+    .pane-grid {
+      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr));
+      flex: 1; min-block-size: 0; gap: var(--grid-gap); padding: var(--grid-pad); padding-block-end: 56px;
+    }
+    .pane {
+      position: relative; display: flex; flex-direction: column; min-inline-size: 0; min-block-size: 0;
+      overflow: hidden; border: 1px solid transparent; border-radius: var(--radius-pane); background: var(--color-pane); box-shadow: var(--shadow-pane);
+    }
+    :root[data-mode="aperture"] .pane { border-color: var(--color-line-strong); }
+    .pane.focused { box-shadow: inset 0 0 0 1.5px var(--color-focus), var(--shadow-pane); }
+    .pane.attention { box-shadow: inset 0 0 0 1.5px var(--color-status-attention), var(--shadow-pane); }
+    .pane.blocked { box-shadow: inset 0 0 0 1.5px var(--color-status-blocked), var(--shadow-pane); }
+    .pane-head {
+      display: flex; align-items: center; flex: 0 0 34px; gap: 7px; min-inline-size: 0; block-size: 34px;
+      padding-inline: 11px; color: var(--color-text-muted);
+    }
+    :root[data-mode="aperture"] .pane-head { border-block-end: 1px solid var(--color-line); }
+    .pane-head strong { flex: 0 0 auto; color: var(--color-text-primary); font-size: 11px; font-weight: 650; }
+    .pane-branch { display: flex; align-items: center; min-inline-size: 0; gap: 4px; font: 9px var(--font-data); }
+    .pane-branch svg { inline-size: 12px; block-size: 12px; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+    .pane-branch span { min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .provider-chip { margin-inline-start: auto; flex: 0 0 auto; padding: 2px 6px; border-radius: var(--radius-chip); background: var(--color-control); color: var(--color-text-secondary); font: 9px var(--font-data); }
+    .pane-body { flex: 1; min-block-size: 0; overflow: hidden; padding: 10px 12px; color: var(--color-text-secondary); font: 10.5px/1.48 var(--font-data); }
+    :root:not([data-mode="aperture"]) .pane-body { font-family: var(--font-ui); font-size: 11px; line-height: 1.47; }
+    .pane-body p { max-inline-size: 72ch; margin: 0 0 8px; }
+    .pane-body .muted { color: var(--color-text-muted); }
+    .pane-body .faint { color: var(--color-text-faint); }
+    .pane-signal { display: flex; align-items: center; gap: 6px; margin-block-end: 9px; color: var(--color-text-muted); font-weight: 570; }
+    .pane-signal.running { color: var(--color-status-running); }
+    .pane-signal.attention { color: var(--color-status-attention); }
+    .pane-signal.blocked { color: var(--color-status-blocked); }
+    .task-strip { display: flex; align-items: center; gap: 9px; margin: 9px 0 11px; color: var(--color-text-muted); }
+    .task-meter { display: flex; gap: 3px; flex: 0 0 auto; }
+    .task-meter i { inline-size: 11px; block-size: 5px; background: var(--color-control); transform: skewX(-16deg); }
+    .task-meter i.done { background: var(--color-focus); }
+    .task-strip em { font: normal 9px var(--font-data); color: var(--color-text-faint); }
+    .tool-row { display: flex; align-items: baseline; gap: 7px; min-inline-size: 0; padding-block: 3px; color: var(--color-text-muted); }
+    .tool-row b { flex: 0 0 auto; color: var(--color-text-primary); font-weight: 650; }
+    .tool-row span { min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .tool-row time { margin-inline-start: auto; flex: 0 0 auto; color: var(--color-text-faint); }
+    .permission-card { margin-block: 9px; padding: 9px 10px; border-radius: var(--radius-control); background: var(--color-status-attention-wash); color: var(--color-text-secondary); }
+    .permission-card strong { display: block; margin-block-end: 3px; color: var(--color-text-primary); }
+    .permission-actions { display: flex; gap: 6px; margin-block-start: 8px; }
+    .keycap { padding: 3px 7px; border: 0; border-radius: var(--radius-chip); background: var(--color-control); color: var(--color-text-secondary); font: 9px var(--font-data); }
+    .changed-strip { display: flex; align-items: center; gap: 7px; min-block-size: 27px; padding-inline: 11px; background: var(--color-pane-subtle); color: var(--color-text-muted); font: 8.5px var(--font-data); }
+    :root[data-mode="aperture"] .changed-strip { border-block-start: 1px solid var(--color-line); }
+    .changed-strip b { color: var(--color-text-faint); font: 8px var(--font-ui); }
+    .file-chip { padding: 2px 5px; border-radius: var(--radius-chip); background: var(--color-control); }
+    .composer { display: flex; align-items: center; flex: 0 0 38px; gap: 8px; min-inline-size: 0; block-size: 38px; padding-inline: 11px; background: var(--color-composer); color: var(--color-text-muted); font: 9px var(--font-data); }
+    :root[data-mode="aperture"] .composer { border-block-start: 1px solid var(--color-line-strong); }
+    .prompt-mark { color: var(--color-focus); font-size: 13px; }
+    .composer .hint { margin-inline-start: auto; color: var(--color-text-faint); white-space: nowrap; }
+
+    .mode-switcher {
+      position: fixed; z-index: 10; inset-inline-start: 50%; inset-block-end: 13px; translate: -50% 0;
+      display: flex; align-items: center; gap: 4px; padding: 5px; border-radius: var(--radius-menu);
+      background: var(--color-control); box-shadow: var(--shadow-menu);
+    }
+    .mode-switcher button {
+      min-inline-size: 132px; block-size: 31px; border: 0; border-radius: calc(var(--radius-menu) - 5px);
+      background: transparent; color: var(--color-text-muted); cursor: pointer;
+      transition-property: background-color, color, scale; transition-duration: 120ms; transition-timing-function: ease-out;
+    }
+    .mode-switcher button:hover { background: var(--color-control-hover); color: var(--color-text-primary); }
+    .mode-switcher button[aria-pressed="true"] { background: var(--color-selected); color: var(--color-text-primary); font-weight: 620; }
+    .mode-switcher button:active { scale: 0.96; }
+
+    @media (max-width: 1240px) {
+      :root { --nav-width: 266px; }
+      .pending-label { max-inline-size: 220px; }
+      .interaction-note { max-inline-size: 240px; }
+      .pane-body { font-size: 9.5px; }
+    }
+  </style>
+</head>
+<body>
+  <!--
+    THROWAWAY UI PROTOTYPE — issue #32; never production code.
+    THESIS: soften Ferrite's dark layers and remove its border cage without changing its left-nav + 2×2 Cockpit shell.
+    OWN-WORLD: restrained neutral dark fields, filled selection, rounded controls, humanist chrome, data-only mono, status color used only for status.
+    STORY: the operator filters the nav by Project while Groups remain parents, members remain nested, and every row names its Project.
+    FIRST VIEWPORT: Project filter at nav top; mixed-project Groups and solo Threads beneath; the unchanged dense four-Pane Cockpit at right.
+    FORM: one DOM and one dataset; ?mode=soft|aperture swaps tokens and surface treatment only.
+  -->
+  <div class="app">
+    <header class="top-strip">
+      <span class="traffic" aria-hidden="true"><span></span><span></span><span></span></span>
+      <span class="product-name">Ferrite</span>
+      <span class="scope-path"><span class="sep">/</span><strong>Project-scoped navigation</strong><span class="sep">·</span><span>Group view</span></span>
+      <span class="census"><span>12 panes</span><span>·</span><span>3 need you</span></span>
+      <span class="pending-label" title="Unresolved: keep the Global Wall, or persist every multi-Pane view as a Group">
+        <span class="status-dot attention"></span><span>Pending · Global Wall ↔ every multi-Pane view is a Group</span>
+      </span>
+    </header>
+
+    <div class="workspace">
+      <aside class="nav-shell" id="navShell" aria-label="Threads and Groups">
+        <div class="nav-expanded">
+          <div class="nav-heading">
+            <div class="nav-heading-copy"><strong>Threads</strong><span>Groups first · solos at root</span></div>
+            <button class="icon-button" id="collapseButton" aria-label="Collapse navigation" aria-expanded="true"></button>
+          </div>
+          <nav class="project-filter" aria-label="Project filter">
+            <div class="filter-label"><span>Project</span><output id="filterSummary">All Projects</output></div>
+            <div class="filter-options" id="filterOptions"></div>
+          </nav>
+          <div class="nav-tree" id="navTree"></div>
+          <div class="drag-message" aria-live="polite"><strong>Drag preview</strong><span id="dragMessage">Within-Project moves are valid. Cross-Project moves refuse.</span></div>
+        </div>
+        <div class="nav-rail">
+          <button class="icon-button" id="expandButton" aria-label="Expand navigation"></button>
+          <div class="rail-filter" id="railFilter" aria-label="Project filter"></div>
+          <div class="rail-divider"></div>
+          <div class="rail-statuses" aria-label="Collapsed Thread states">
+            <span class="rail-status selected"><span class="status-dot running"></span></span>
+            <span class="rail-status attention"><span class="status-dot attention"></span></span>
+            <span class="rail-status"><span class="status-dot running"></span></span>
+            <span class="rail-status"><span class="status-dot blocked"></span></span>
+            <span class="rail-status"><span class="status-dot parked"></span></span>
+          </div>
+        </div>
+      </aside>
+
+      <main class="cockpit">
+        <div class="cockpit-strip">
+          <strong>ferrite</strong><span class="scope">› Project-scoped navigation prototype</span>
+          <span class="spacer"></span><span class="interaction-note" id="interactionNote">Nav filter only · Cockpit scope and membership stay unchanged</span>
+          <span>4 panes</span><span>·</span><span class="attention">1 needs you</span>
+        </div>
+
+        <section class="pane-grid" aria-label="Four Pane Cockpit">
+          <article class="pane focused">
+            <header class="pane-head"><span class="status-dot running"></span><strong>thread-08</strong><span class="pane-branch" title="codex/prototype-32"></span><span class="provider-chip">codex · gpt-5.6</span></header>
+            <div class="pane-body">
+              <div class="pane-signal running"><span class="status-dot running"></span>working · visual prototype</div>
+              <p>Redesigning Ferrite's tokens and flat surfaces while preserving its Cockpit, Groups, and Project truth.</p>
+              <div class="task-strip"><span class="task-meter"><i class="done"></i><i class="done"></i><i class="done"></i><i></i></span><span>verify filter and collapse states</span><em>3/4</em></div>
+              <div class="tool-row"><b>Read</b><span>nav.rs · groups.rs · workspace/registry.rs</span><time>0.4s</time></div>
+              <div class="tool-row"><b>Render</b><span>soft surface comparison</span><time>1.1s</time></div>
+              <p class="muted">Project ownership remains derived, never persisted as a second nav tree.</p>
+            </div>
+            <div class="changed-strip"><b>CHANGED</b><span class="file-chip">nav-soft-surfaces.prototype.html +1</span></div>
+            <div class="composer"><span class="prompt-mark">›</span><span>Steer this Thread…</span><span class="hint">@ files · / commands</span></div>
+          </article>
+
+          <article class="pane attention">
+            <header class="pane-head"><span class="status-dot attention"></span><strong>thread-12</strong><span class="pane-branch" title="main"></span><span class="provider-chip">claude · sonnet-4-5</span></header>
+            <div class="pane-body">
+              <div class="pane-signal attention"><span class="status-dot attention"></span>needs you · product decision</div>
+              <p>Keep a Global Wall, or persist every multi-Pane view as a Group?</p>
+              <div class="permission-card"><strong>Decision remains pending</strong><span class="muted">This prototype labels the question; it does not answer it.</span><div class="permission-actions"><span class="keycap">y allow</span><span class="keycap">n deny</span><span class="keycap">a always</span></div></div>
+              <div class="tool-row"><b>Review</b><span>issue #32 operator ruling</span></div>
+            </div>
+            <div class="composer"><span class="prompt-mark">›</span><span>Reply to the Decision…</span><span class="hint">esc dismiss</span></div>
+          </article>
+
+          <article class="pane">
+            <header class="pane-head"><span class="status-dot running"></span><strong>thread-29</strong><span class="pane-branch" title="replay/durable-provider-event-normalization-and-windows-recovery"></span><span class="provider-chip">codex · gpt-5.6</span></header>
+            <div class="pane-body">
+              <div class="pane-signal running"><span class="status-dot running"></span>working · replay normalization</div>
+              <p>Comparing Claude and Codex event streams against the durable transcript fold.</p>
+              <div class="task-strip"><span class="task-meter"><i class="done"></i><i class="done"></i><i></i><i></i><i></i></span><span>replay provider fixtures</span><em>2/5</em></div>
+              <div class="tool-row"><b>Run</b><span>cargo test provider_replay</span><time>8s</time></div>
+              <div class="tool-row"><b>Read</b><span>claude_stream.rs · codex_app_server.rs</span><time>0.8s</time></div>
+              <p class="muted">✓ 41 tests pass · +38 −4</p>
+            </div>
+            <div class="composer"><span class="prompt-mark">›</span><span>Steer this Thread…</span><span class="hint">@ files · / commands</span></div>
+          </article>
+
+          <article class="pane blocked">
+            <header class="pane-head"><span class="status-dot blocked"></span><strong>thread-30</strong><span class="pane-branch" title="main"></span><span class="provider-chip">claude · sonnet-4-5</span></header>
+            <div class="pane-body">
+              <div class="pane-signal blocked"><span class="status-dot blocked"></span>blocked · Session closed</div>
+              <p>The Provider process exited before the final turn record arrived.</p>
+              <div class="tool-row"><b>Notice</b><span>stream ended unexpectedly</span></div>
+              <p class="muted">The durable Thread remains. Revive starts a disposable Session in the same locked checkout.</p>
+              <p class="faint">Project: Agent Observatory</p>
+            </div>
+            <div class="composer"><span class="prompt-mark">›</span><span>Revive and continue…</span><span class="hint">Thread preserved</span></div>
+          </article>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <nav class="mode-switcher" aria-label="Visual comparison">
+    <button data-mode-button="aperture" aria-pressed="false">Current · Aperture</button>
+    <button data-mode-button="soft" aria-pressed="true">Proposed · Soft</button>
+  </nav>
+
+  <script>
+    const icons = {
+      sidebar: `<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3" width="15" height="14" rx="2.5"></rect><path d="M7 3v14"></path></svg>`,
+      chevron: `<svg class="chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m6 3.5 4.5 4.5L6 12.5"></path></svg>`,
+      branch: `<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="4" cy="4" r="1.5"></circle><circle cx="12" cy="4" r="1.5"></circle><circle cx="4" cy="12" r="1.5"></circle><path d="M4 5.5v5M5.5 4H8a4 4 0 0 1 4 4v2.5"></path></svg>`,
+    };
+
+    const projects = [
+      {
+        id: "ferrite", filterLabel: "Ferrite", rowLabel: "ferrite", railLabel: "Fe",
+        title: "ferrite",
+        groups: [
+          {
+            id: "nav-prototype", title: "Project-scoped navigation prototype", active: true,
+            threads: [
+              { id: "thread-08", branch: "codex/prototype-32", provider: "cx", state: "running", selected: true },
+              { id: "thread-12", branch: "main", provider: "cl", state: "attention", chip: "needs you" },
+              { id: "thread-14", branch: "ferrite/feature/project-registry-migration-with-self-healing", provider: "cx", state: "running" },
+              { id: "thread-22", branch: "ferrite/feature/cross-platform-gpui-rendering", provider: "cx", state: "parked" },
+            ],
+          },
+        ],
+        solos: [
+          { id: "thread-17", branch: "ferrite/fix/provider-stream-recovery", provider: "cl", state: "running" },
+          { id: "thread-24", branch: "main", provider: "cx", state: "parked" },
+        ],
+      },
+      {
+        id: "observatory", filterLabel: "Observatory", rowLabel: "Agent Observatory", railLabel: "Ao",
+        title: "Agent Observatory",
+        groups: [
+          {
+            id: "provider-replay", title: "Durable provider stream hardening & replay", active: false,
+            threads: [
+              { id: "thread-29", branch: "replay/durable-provider-event-normalization-and-windows-recovery", provider: "cx", state: "running" },
+              { id: "thread-30", branch: "main", provider: "cl", state: "blocked", chip: "blocked" },
+              { id: "thread-34", branch: "replay/claude-fixture-parity", provider: "cl", state: "parked" },
+            ],
+          },
+        ],
+        solos: [
+          { id: "thread-31", branch: "feature/windows-directx11-device-recovery", provider: "cx", state: "attention", chip: "needs you" },
+          { id: "thread-33", branch: "main", provider: "cl", state: "parked" },
+        ],
+      },
+    ];
+
+    let selectedProject = "all";
+    let collapsed = false;
+    let dragState = null;
+
+    function modeFromUrl() {
+      const candidate = new URLSearchParams(location.search).get("mode");
+      return candidate === "aperture" ? "aperture" : "soft";
+    }
+
+    function setMode(mode) {
+      document.documentElement.dataset.mode = mode;
+      document.querySelectorAll("[data-mode-button]").forEach(button => {
+        button.setAttribute("aria-pressed", String(button.dataset.modeButton === mode));
+      });
+      const params = new URLSearchParams();
+      params.set("mode", mode);
+      history.replaceState({}, "", `${location.pathname}?${params}`);
+    }
+
+    function filterButtons(compact = false) {
+      const options = [{ id: "all", filterLabel: "All", railLabel: "All", title: "All Projects" }, ...projects];
+      return options.map(project => `<button type="button" class="${compact ? "" : "filter-button"}" data-project-filter="${project.id}" aria-pressed="${selectedProject === project.id}" title="${project.title || "All Projects"}">${compact ? project.railLabel : project.filterLabel}</button>`).join("");
+    }
+
+    function threadRow(thread, project, member = false) {
+      const chip = thread.chip ? `<span class="status-chip ${thread.state}">${thread.chip}</span>` : "";
+      return `<div class="nav-row thread-row ${member ? "member" : ""} ${thread.selected ? "selected" : ""}" tabindex="0" draggable="true" data-drag-kind="thread" data-project="${project.id}" data-thread="${thread.id}" data-drop-project="${project.id}" title="${thread.id} · ${thread.branch} · ${project.title}">
+        <span class="row-leading"><span class="status-dot ${thread.state}"></span></span>
+        <span class="row-content">
+          <span class="row-title-line"><span class="row-title">${thread.id}</span>${chip}<span class="count"></span></span>
+          <span class="row-meta-line"><span class="branch">${thread.branch}</span><span class="provider">${thread.provider}</span><span class="row-project">${project.rowLabel}</span></span>
+        </span>
+      </div>`;
+    }
+
+    function groupBlock(group, project) {
+      return `<section class="group-block" data-project="${project.id}">
+        <div class="nav-row group-row ${group.active ? "scope-active" : ""}" tabindex="0" draggable="true" data-drag-kind="group" data-group="${group.id}" data-project="${project.id}" data-drop-project="${project.id}" title="${group.title} · ${project.title}">
+          <span class="row-leading">${icons.chevron}</span>
+          <span class="row-content">
+            <span class="row-title-line"><span class="row-title">${group.title}</span><span class="count">${group.threads.length}</span></span>
+            <span class="row-meta-line"><span>${group.threads.length} Threads</span><span class="row-project">${project.rowLabel}</span></span>
+          </span>
+        </div>
+        ${group.threads.map(thread => threadRow(thread, project, true)).join("")}
+      </section>`;
+    }
+
+    function renderFilters() {
+      document.getElementById("filterOptions").innerHTML = filterButtons(false);
+      document.getElementById("railFilter").innerHTML = filterButtons(true);
+      const selected = projects.find(project => project.id === selectedProject);
+      document.getElementById("filterSummary").textContent = selected ? selected.filterLabel : "All Projects";
+      document.querySelectorAll("[data-project-filter]").forEach(button => {
+        button.addEventListener("click", () => {
+          selectedProject = button.dataset.projectFilter;
+          renderFilters();
+          renderTree();
+          const label = selectedProject === "all" ? "All Projects" : projects.find(project => project.id === selectedProject).title;
+          document.getElementById("interactionNote").textContent = `${label} in nav · Cockpit scope and membership unchanged`;
+        });
+      });
+    }
+
+    function renderTree() {
+      const visible = selectedProject === "all" ? projects : projects.filter(project => project.id === selectedProject);
+      const groups = visible.flatMap(project => project.groups.map(group => ({ group, project })));
+      const solos = visible.flatMap(project => project.solos.map(thread => ({ thread, project })));
+      document.getElementById("navTree").innerHTML = `
+        <div class="list-label"><span>Groups</span><span>${groups.length}</span></div>
+        ${groups.map(({ group, project }) => groupBlock(group, project)).join("")}
+        <div class="list-label solo"><span>Solo Threads</span><span>${solos.length}</span></div>
+        ${solos.map(({ thread, project }) => threadRow(thread, project, false)).join("")}
+        ${groups.length || solos.length ? "" : `<p class="empty-filter">No Groups or solo Threads in this Project.</p>`}`;
+      wireDrag();
+    }
+
+    function clearDropStates() {
+      document.querySelectorAll(".drop-valid, .drop-refused, .dragging").forEach(element => element.classList.remove("drop-valid", "drop-refused", "dragging"));
+    }
+
+    function wireDrag() {
+      document.querySelectorAll("[draggable='true']").forEach(row => {
+        row.addEventListener("dragstart", event => {
+          dragState = { project: row.dataset.project, label: row.dataset.thread || row.dataset.group, source: row };
+          row.classList.add("dragging");
+          event.dataTransfer.effectAllowed = "move";
+          event.dataTransfer.setData("text/plain", dragState.label);
+        });
+        row.addEventListener("dragend", () => { clearDropStates(); dragState = null; });
+        row.addEventListener("dragover", event => {
+          if (!dragState || dragState.source === row) return;
+          event.preventDefault();
+          const valid = row.dataset.dropProject === dragState.project;
+          row.classList.toggle("drop-valid", valid);
+          row.classList.toggle("drop-refused", !valid);
+          event.dataTransfer.dropEffect = valid ? "move" : "none";
+        });
+        row.addEventListener("dragleave", () => row.classList.remove("drop-valid", "drop-refused"));
+        row.addEventListener("drop", event => {
+          event.preventDefault();
+          const valid = row.dataset.dropProject === dragState?.project;
+          document.getElementById("dragMessage").textContent = valid
+            ? `${dragState.label}: valid within-Project preview · nothing saved`
+            : `${dragState?.label || "Item"}: refused across Projects · unchanged`;
+          clearDropStates();
+          dragState = null;
+        });
+      });
+    }
+
+    function setCollapsed(value) {
+      collapsed = value;
+      document.getElementById("navShell").classList.toggle("collapsed", collapsed);
+      document.getElementById("collapseButton").setAttribute("aria-expanded", String(!collapsed));
+    }
+
+    document.getElementById("collapseButton").innerHTML = icons.sidebar;
+    document.getElementById("expandButton").innerHTML = icons.sidebar;
+    document.querySelectorAll(".pane-branch").forEach(branch => {
+      const label = branch.getAttribute("title");
+      branch.innerHTML = `${icons.branch}<span>${label}</span>`;
+    });
+    document.getElementById("collapseButton").addEventListener("click", () => setCollapsed(true));
+    document.getElementById("expandButton").addEventListener("click", () => setCollapsed(false));
+    document.querySelectorAll("[data-mode-button]").forEach(button => button.addEventListener("click", () => setMode(button.dataset.modeButton)));
+    addEventListener("keydown", event => {
+      if (event.target.matches("input, textarea, [contenteditable='true']")) return;
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "b") {
+        event.preventDefault();
+        setCollapsed(!collapsed);
+      }
+      if (event.key === "ArrowLeft") setMode("aperture");
+      if (event.key === "ArrowRight") setMode("soft");
+    });
+
+    setMode(modeFromUrl());
+    renderFilters();
+    renderTree();
+  </script>
+</body>
+</html>
