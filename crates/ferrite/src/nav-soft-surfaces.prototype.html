@@ -128,6 +128,8 @@
     .title-scope { display: flex; align-items: center; min-inline-size: 0; flex: 1; padding-inline: 13px; }
     :root[data-mode="aperture"] .title-bar { border-block-end: 1px solid var(--line); }
     .traffic { display: flex; gap: 8px; flex: 0 0 auto; }
+    :root[data-shell="host"] .traffic { display: none; }
+    :root[data-shell="host"] .title-chrome { padding-inline-start: 6px; }
     .traffic span { inline-size: 12px; block-size: 12px; border-radius: 50%; }
     .traffic span:nth-child(1) { background: var(--macos-close); }
     .traffic span:nth-child(2) { background: var(--macos-minimize); }
@@ -240,7 +242,12 @@
       font-size: var(--fs-sm); line-height: 1.25;
     }
     .row-project { color: var(--text-2); }
-    .row-branch { color: var(--text-muted); font-family: var(--font-data); font-size: var(--fs-mono); }
+    .row-branch {
+      display: flex; align-items: center; gap: 5px;
+      color: var(--text-muted); font-family: var(--font-data); font-size: var(--fs-mono);
+    }
+    .row-branch svg { inline-size: 12px; block-size: 12px; flex: 0 0 auto; stroke-width: 1.65; }
+    .row-branch span { min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .selected .row-branch { color: var(--text-on-fill); }
 
     .thread-row { grid-template-columns: minmax(0, 1fr) 14px; column-gap: 8px; }
@@ -581,8 +588,11 @@
 
     const $ = id => document.getElementById(id);
 
+    const params = new URLSearchParams(location.search);
+    if (params.get("shell") === "host") document.documentElement.dataset.shell = "host";
+
     function modeFromUrl() {
-      return new URLSearchParams(location.search).get("mode") === "aperture" ? "aperture" : "soft";
+      return params.get("mode") === "aperture" ? "aperture" : "soft";
     }
 
     function setMode(mode) {
@@ -590,7 +600,8 @@
       document.querySelectorAll("[data-mode-button]").forEach(button => {
         button.setAttribute("aria-pressed", String(button.dataset.modeButton === mode));
       });
-      history.replaceState({}, "", `${location.pathname}?mode=${mode}`);
+      params.set("mode", mode);
+      history.replaceState({}, "", `${location.pathname}?${params}`);
     }
 
     const selectedChoice = () => projectChoices.find(choice => choice.id === selectedProject) || projectChoices[0];
@@ -648,7 +659,7 @@
         <span class="row-title">${thread.id}</span>
         <span class="provider-mark ${thread.provider}" role="img" aria-label="${provider.name}" title="${provider.name}">${provider.icon}</span>
         <span class="row-project">${project.rowLabel}</span>
-        <span class="row-branch">${thread.branch}</span>
+        <span class="row-branch">${icons.branch}<span>${thread.branch}</span></span>
       </div>`;
     }
 
