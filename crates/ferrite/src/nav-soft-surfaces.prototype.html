@@ -18,7 +18,7 @@
       --hover: #2c2c2c;
       --fill: #343434;
       --fill-hover: #3b3b3b;
-      --meter-off: #303030;
+      --meter-off: rgba(255, 255, 255, 0.13);
 
       --line: rgba(255, 255, 255, 0.06);
       --line-strong: rgba(255, 255, 255, 0.09);
@@ -75,7 +75,7 @@
       --hover: #1d1d1d;
       --fill: rgba(199, 204, 214, 0.14);
       --fill-hover: rgba(199, 204, 214, 0.18);
-      --meter-off: #232323;
+      --meter-off: rgba(255, 255, 255, 0.11);
       --line: rgba(255, 255, 255, 0.05);
       --line-strong: rgba(255, 255, 255, 0.12);
       --text-strong: #f3f4f7;
@@ -371,6 +371,10 @@
     .composer .hint { margin-inline-start: auto; flex: 0 0 auto; color: var(--text-muted); white-space: nowrap; font-family: var(--font-data); font-size: var(--fs-mono); }
 
     .composer-controls { display: flex; align-items: center; gap: 8px; min-inline-size: 0; }
+    .context-ring { display: grid; place-items: center; inline-size: 14px; block-size: 14px; flex: 0 0 auto; margin-inline-start: auto; }
+    .context-ring svg { inline-size: 14px; block-size: 14px; fill: none; }
+    .context-ring .track { stroke: var(--meter-off); }
+    .context-ring .used { stroke: var(--text-2); stroke-linecap: round; }
     .checkout {
       display: flex; align-items: center; min-inline-size: 0; gap: 5px;
       color: var(--text-muted); font-family: var(--font-data); font-size: var(--fs-mono);
@@ -378,7 +382,7 @@
     .checkout svg { inline-size: 12px; block-size: 12px; flex: 0 0 auto; stroke-width: 1.65; }
     .checkout span { min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .model-picker {
-      display: flex; align-items: center; flex: 0 0 auto; gap: 5px; margin-inline-start: auto;
+      display: flex; align-items: center; flex: 0 0 auto; gap: 5px;
       block-size: 20px; padding-inline: 6px 4px; border: 0; border-radius: var(--radius-chip);
       background: transparent; color: var(--text-2); font-size: var(--fs-sm); cursor: pointer;
       transition-property: background-color, color; transition-duration: 120ms; transition-timing-function: ease-out;
@@ -472,6 +476,7 @@
               <div class="composer-prompt"><span class="mark">›</span><span>Steer this Thread…</span><span class="hint">@ files · / commands</span></div>
               <div class="composer-controls">
                 <span class="checkout" data-branch="codex/prototype-32"></span>
+                <span class="context-ring" data-context="42" role="img"></span>
                 <button class="model-picker" type="button" data-provider="codex">gpt-5.6</button>
               </div>
             </div>
@@ -493,6 +498,7 @@
               <div class="composer-prompt"><span class="mark">›</span><span>Reply to the Decision…</span><span class="hint">esc dismiss</span></div>
               <div class="composer-controls">
                 <span class="checkout" data-branch="main"></span>
+                <span class="context-ring" data-context="68" role="img"></span>
                 <button class="model-picker" type="button" data-provider="claude">sonnet-4-5</button>
               </div>
             </div>
@@ -515,6 +521,7 @@
               <div class="composer-prompt"><span class="mark">›</span><span>Steer this Thread…</span><span class="hint">@ files · / commands</span></div>
               <div class="composer-controls">
                 <span class="checkout" data-branch="replay/durable-provider-event-normalization-and-windows-recovery"></span>
+                <span class="context-ring" data-context="31" role="img"></span>
                 <button class="model-picker" type="button" data-provider="codex">gpt-5.6</button>
               </div>
             </div>
@@ -532,6 +539,7 @@
               <div class="composer-prompt"><span class="mark">›</span><span>Revive and continue…</span></div>
               <div class="composer-controls">
                 <span class="checkout" data-branch="main"></span>
+                <span class="context-ring" data-context="55" role="img"></span>
                 <button class="model-picker" type="button" data-provider="claude">sonnet-4-5</button>
               </div>
             </div>
@@ -791,6 +799,19 @@
       const label = checkout.dataset.branch;
       checkout.title = label;
       checkout.innerHTML = `${icons.branch}<span>${label}</span>`;
+    });
+    document.querySelectorAll(".context-ring").forEach(ring => {
+      const used = Number(ring.dataset.context);
+      const circumference = 2 * Math.PI * 5.4;
+      const label = `Context ${used}% used`;
+      ring.title = label;
+      ring.setAttribute("aria-label", label);
+      ring.innerHTML = `<svg viewBox="0 0 14 14" aria-hidden="true">
+        <circle class="track" cx="7" cy="7" r="5.4" stroke-width="2"></circle>
+        <circle class="used" cx="7" cy="7" r="5.4" stroke-width="2"
+          stroke-dasharray="${(circumference * used / 100).toFixed(2)} ${circumference.toFixed(2)}"
+          transform="rotate(-90 7 7)"></circle>
+      </svg>`;
     });
     document.querySelectorAll(".model-picker").forEach(picker => {
       const provider = providers[picker.dataset.provider];
