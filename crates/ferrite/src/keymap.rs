@@ -82,11 +82,6 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
         (with_primary("w"), "cockpit::CloseThread", None),
         // And back again: the most recently parked Thread, revived.
         (with_primary("o"), "cockpit::ReopenThread", None),
-        (with_primary("g"), "cockpit::ToggleGroup", None),
-        (with_primary("shift-g"), "cockpit::MoveToGroup", None),
-        (with_primary("r"), "cockpit::RenameGroup", None),
-        (with_primary("alt-up"), "cockpit::MoveGroupUp", None),
-        (with_primary("alt-down"), "cockpit::MoveGroupDown", None),
         // cmd-q is the macOS convention; Windows has no cmd, so ctrl-q there
         // (alt-f4 comes free from the OS).
         (with_primary("q"), "ferrite::Quit", None),
@@ -153,11 +148,6 @@ mod tests {
             ("cockpit::NewWorktreeThread", "shift-n"),
             ("cockpit::CloseThread", "w"),
             ("cockpit::ReopenThread", "o"),
-            ("cockpit::ToggleGroup", "g"),
-            ("cockpit::MoveToGroup", "shift-g"),
-            ("cockpit::RenameGroup", "r"),
-            ("cockpit::MoveGroupUp", "alt-up"),
-            ("cockpit::MoveGroupDown", "alt-down"),
             ("ferrite::Quit", "q"),
         ];
         let strokes = |platform: Platform| -> Vec<(String, &'static str)> {
@@ -191,6 +181,25 @@ mod tests {
                 .collect()
         };
         assert_eq!(shape(Platform::Mac), shape(Platform::Windows));
+    }
+
+    #[test]
+    fn close_remains_and_the_invented_group_shortcuts_are_absent() {
+        let removed = [
+            "cockpit::ToggleGroup",
+            "cockpit::MoveToGroup",
+            "cockpit::RenameGroup",
+            "cockpit::MoveGroupUp",
+            "cockpit::MoveGroupDown",
+        ];
+        for platform in [Platform::Mac, Platform::Windows] {
+            let actions: Vec<_> = bindings(platform)
+                .into_iter()
+                .map(|(_, action, _)| action)
+                .collect();
+            assert!(actions.contains(&"cockpit::CloseThread"));
+            assert!(removed.iter().all(|action| !actions.contains(action)));
+        }
     }
 
     /// Tab stays the draft band's chip walk and doubles as the forward L1

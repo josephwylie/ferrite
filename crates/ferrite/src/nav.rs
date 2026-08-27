@@ -131,13 +131,18 @@ pub fn header(threads: usize, waiting: usize, collapsed: bool) -> Div {
         .child(count)
 }
 
-pub fn group_header(id: GroupId, title: SharedString, count: usize, active: bool) -> Stateful<Div> {
+pub fn group_header_with_title(
+    id: GroupId,
+    title: impl IntoElement,
+    count: usize,
+    active: bool,
+) -> Stateful<Div> {
     row_frame(("nav-group", id.get() as usize), active)
         .font_weight(FontWeight::SEMIBOLD)
         .text_size(px(TEXT_ROW))
         .text_color(rgb(INK_SECONDARY))
         .child("▸")
-        .child(div().min_w_0().truncate().child(title))
+        .child(title)
         .child(div().flex_1())
         .child(
             div()
@@ -145,10 +150,6 @@ pub fn group_header(id: GroupId, title: SharedString, count: usize, active: bool
                 .text_color(rgb(INK_FAINT))
                 .child(count.to_string()),
         )
-}
-
-pub fn group_editor(id: GroupId) -> Stateful<Div> {
-    row_frame(("nav-group", id.get() as usize), true).child("▸")
 }
 
 pub fn drag_badge(label: SharedString) -> Div {
@@ -168,27 +169,20 @@ pub fn drag_badge(label: SharedString) -> Div {
 /// signal slot on the right. Focus is the 2px steel bar plus the EDGE
 /// ground; urgency stays the chip's amber — position and urgency never
 /// share a colour.
+#[cfg(test)]
 pub fn running_row(row: &RunningRow) -> Stateful<Div> {
-    let led = led_color(row.status);
-    // The name carries the Thread's temperature: INK running, a step down
-    // idle.
     let ink = match row.status {
         Status::Idle => INK_SECONDARY,
         _ => INK,
     };
+    running_row_with_title(row, thread_title_text(row.name.clone(), ink))
+}
+
+pub fn running_row_with_title(row: &RunningRow, title: impl IntoElement) -> Stateful<Div> {
+    let led = led_color(row.status);
     let mut line = row_frame(("nav-run", row.thread.get() as usize), row.focused)
         .child(dot(px(6.), led))
-        .child(
-            // `thread-NN` cannot outgrow a 208px row (display names are a
-            // deferred store feature — sidebar-and-impl §4.2 #8), so the
-            // binding hint is the first and only thing to truncate.
-            div()
-                .flex_shrink_0()
-                .text_size(px(11.5))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(ink))
-                .child(row.name.clone()),
-        );
+        .child(title);
     // The chip carries the whole signal: a row wearing it drops the binding
     // and provider hints rather than squeezing all three to fragments
     // (#22 A3).
@@ -278,17 +272,15 @@ pub fn parked_header(count: usize, collapsed: bool) -> Div {
 
 /// One parked Thread's row: hollow LED, muted ink, and no signal — its log
 /// is not in memory, and the row must not pretend otherwise.
+#[cfg(test)]
 pub fn parked_row(row: &ParkedRow) -> Stateful<Div> {
+    parked_row_with_title(row, thread_title_text(row.name.clone(), INK_MUTED))
+}
+
+pub fn parked_row_with_title(row: &ParkedRow, title: impl IntoElement) -> Stateful<Div> {
     row_frame(("nav-parked", row.thread.get() as usize), false)
         .child(hollow_dot(px(6.)))
-        .child(
-            div()
-                .flex_shrink_0()
-                .text_size(px(11.5))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(INK_MUTED))
-                .child(row.name.clone()),
-        )
+        .child(title)
         .child(
             div()
                 .min_w_0()
@@ -305,6 +297,42 @@ pub fn parked_row(row: &ParkedRow) -> Stateful<Div> {
                 .text_color(rgb(INK_FAINT))
                 .child(row.provider),
         )
+}
+
+#[cfg(test)]
+pub fn thread_title_text(title: SharedString, color: u32) -> Div {
+    div()
+        .min_w_0()
+        .truncate()
+        .text_size(px(11.5))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(rgb(color))
+        .child(title)
+}
+
+pub fn editable_group_title(id: GroupId, title: SharedString) -> Stateful<Div> {
+    div()
+        .id(("rename-group", id.get() as usize))
+        .min_w_0()
+        .truncate()
+        .rounded_sm()
+        .px(px(2.))
+        .child(title)
+        .hover_control()
+}
+
+pub fn editable_thread_title(thread: ThreadId, title: SharedString, color: u32) -> Stateful<Div> {
+    div()
+        .id(("rename-thread", thread.get() as usize))
+        .min_w_0()
+        .truncate()
+        .rounded_sm()
+        .px(px(2.))
+        .text_size(px(11.5))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(rgb(color))
+        .child(title)
+        .hover_control()
 }
 
 /// A parked Thread on the rail: a smaller hollow dot below the divider.
