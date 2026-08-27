@@ -370,6 +370,7 @@
     :root[data-mode="aperture"] .pane-body { font-family: var(--font-data); font-size: 10.5px; line-height: 1.48; }
     .pane-body p { max-inline-size: 68ch; margin: 0 0 10px; text-wrap: pretty; }
     .pane-body .muted { color: var(--text-muted); }
+    .pane-body .note { color: var(--text-muted); font-family: var(--font-ui); }
     .pane-body h4 { margin: 12px 0 6px; color: var(--text-strong); font-size: var(--fs-md); font-weight: 600; }
     .pane-body ul { margin: 0 0 10px; padding-inline-start: 16px; }
     .pane-body li { margin-block-end: 3px; }
@@ -377,7 +378,7 @@
     .pane-body strong { color: var(--text-strong); font-weight: 600; }
     .pane-body a { color: var(--text); text-decoration: underline; text-underline-offset: 2px; text-decoration-color: var(--sep); text-decoration-thickness: 1px; }
 
-    .signal { margin-block-end: 10px; color: var(--text-muted); font-weight: 600; }
+    .signal { margin-block-end: 10px; color: var(--text-muted); font-family: var(--font-ui); font-weight: 600; }
     .signal .sep { color: var(--sep); font-weight: 400; }
     .signal.running { color: var(--running); }
     .signal.attention { color: var(--attention); }
@@ -657,7 +658,7 @@
               <div class="signal blocked">blocked <span class="sep">·</span> Session closed</div>
               <p>The Provider process exited before the final turn record arrived.</p>
               <div class="event"><span class="glyph">▸</span><b>Notice</b><span class="args">(stream ended unexpectedly)</span></div>
-              <p class="muted">The durable Thread remains. Revive starts a disposable Session in the same locked checkout.</p>
+              <p class="note">The durable Thread remains. Revive starts a disposable Session in the same locked checkout.</p>
             </div>
             <div class="composer">
               <div class="composer-prompt"><span class="mark">›</span><span>Revive and continue…</span><span class="hint">@ files · / commands</span></div>
