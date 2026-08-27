@@ -8,12 +8,13 @@
 //! Cockpit board (instrument cell), L3 per the Wall board (dot · slug ·
 //! bar · status line, inset attention rings).
 
-use ferrite_core::cockpit::ToolTiming;
+use ferrite_core::cockpit::{ProviderChoice, ToolTiming};
 use ferrite_core::docview::{is_test_run, passed_count, Instruments, Level, Tests};
 use ferrite_core::transcript::{
     Block, BlockId, Body, Class, Diff, Span, Status, Style, Todos, Token, ToolBlock, ToolState,
     Transcript, Usage,
 };
+use ferrite_core::workspace::registry::ProjectId;
 use ferrite_core::workspace::WorkspaceBinding;
 use ferrite_core::{Decision, ThreadId};
 use gpui::prelude::*;
@@ -23,7 +24,7 @@ use gpui::{
     StyledText,
 };
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 use crate::composer::Composer;
@@ -38,14 +39,16 @@ use crate::theme::{
     WAIT_EDGE, WAIT_WASH,
 };
 
-/// One Pane's view state: what the window owns per Thread. Everything it
+/// One Pane's view state: what the window owns per Pane. Everything it
 /// shows lives in core; this is the keyboard, the scrollback position, and
 /// the wall cell's cached strings.
 pub struct PaneView {
-    pub thread: ThreadId,
+    /// What the Pane holds (#29): a live Thread, or a draft still choosing
+    /// its provider and CWD — no Thread, no Session, nothing durable.
+    pub content: PaneContent,
     /// The Thread's slug name — `thread-NN` until display names exist
-    /// (sidebar-and-impl §4.2 #8). Built once; the wall must not format
-    /// names per frame.
+    /// (sidebar-and-impl §4.2 #8) — or the draft's placeholder title.
+    /// Built once; the wall must not format names per frame.
     pub name: SharedString,
     pub composer: Entity<Composer>,
     pub scroll: ScrollHandle,
@@ -57,16 +60,109 @@ pub struct PaneView {
     pub wall: WallCard,
 }
 
+/// A Thread, or the draft that becomes one at first send (#29).
+pub enum PaneContent {
+    Thread(ThreadId),
+    Draft(DraftBinding),
+}
+
+/// A draft Pane's whole choice, ids only — the band renders from this and
+/// the first send resolves it through the registry.
+pub struct DraftBinding {
+    pub provider: ProviderChoice,
+    pub project: ProjectId,
+    pub target: DraftTarget,
+    /// The band chip tab has parked on; None with the keyboard in the
+    /// prompt line — the zero-keystroke default path.
+    pub band_focus: Option<BandChip>,
+    /// A failed bootstrap's words, shown where the band is. The Pane stays
+    /// draft and the prompt stays in the Composer.
+    pub error: Option<SharedString>,
+}
+
+/// The band's three chips, in tab order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BandChip {
+    Provider,
+    Project,
+    Workspace,
+}
+
+impl BandChip {
+    /// Where tab goes next: across the band, then back to the prompt.
+    pub fn next(current: Option<BandChip>) -> Option<BandChip> {
+        match current {
+            None => Some(BandChip::Provider),
+            Some(BandChip::Provider) => Some(BandChip::Project),
+            Some(BandChip::Project) => Some(BandChip::Workspace),
+            Some(BandChip::Workspace) => None,
+        }
+    }
+}
+
+/// The workspace chip's choice, scoped to the draft's project.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DraftTarget {
+    /// The project checkout itself.
+    Main,
+    /// A registered worktree of the project, named by its branch.
+    Existing { branch: SharedString },
+    /// A fresh worktree, created at first send.
+    New,
+}
+
 impl PaneView {
     pub fn new<T: 'static>(thread: ThreadId, cx: &mut Context<T>) -> Self {
         Self {
-            thread,
+            content: PaneContent::Thread(thread),
             name: SharedString::from(format!("thread-{thread:02}")),
             composer: cx.new(Composer::new),
             scroll: ScrollHandle::new(),
             decision_focus: cx.focus_handle(),
             wall: WallCard::default(),
         }
+    }
+
+    /// A draft Pane (#29): cmd-t's answer — a Composer and the pre-prompt
+    /// band, and nothing else until the first send bootstraps a Thread.
+    pub fn new_draft<T: 'static>(binding: DraftBinding, cx: &mut Context<T>) -> Self {
+        Self {
+            content: PaneContent::Draft(binding),
+            name: SharedString::from("new thread"),
+            composer: cx.new(Composer::new),
+            scroll: ScrollHandle::new(),
+            decision_focus: cx.focus_handle(),
+            wall: WallCard::default(),
+        }
+    }
+
+    /// The Thread this Pane shows, or None while it is still a draft.
+    pub fn thread(&self) -> Option<ThreadId> {
+        match &self.content {
+            PaneContent::Thread(thread) => Some(*thread),
+            PaneContent::Draft(_) => None,
+        }
+    }
+
+    pub fn draft(&self) -> Option<&DraftBinding> {
+        match &self.content {
+            PaneContent::Draft(binding) => Some(binding),
+            PaneContent::Thread(_) => None,
+        }
+    }
+
+    pub fn draft_mut(&mut self) -> Option<&mut DraftBinding> {
+        match &mut self.content {
+            PaneContent::Draft(binding) => Some(binding),
+            PaneContent::Thread(_) => None,
+        }
+    }
+
+    /// The lock's visible half (#29): the first send made a Thread of this
+    /// draft, and the band disappears with the Pane's next frame.
+    pub fn adopt_thread(&mut self, thread: ThreadId) {
+        self.content = PaneContent::Thread(thread);
+        self.name = SharedString::from(format!("thread-{thread:02}"));
     }
 }
 
@@ -76,12 +172,11 @@ pub struct PaneState<'a> {
     pub decision: Option<&'a Decision>,
     pub queued: Option<&'a str>,
     pub workspace: Option<&'a WorkspaceBinding>,
-    /// The session-project-root chip for the L1 header — and, while the
-    /// selector is open on this Pane, the popover hanging under it (#24).
-    /// Assembled in the cockpit, where its clicks are wired beside every
-    /// other pointer, exactly as the nav's rows are; None on a Thread with
-    /// no binding, which has nothing for a root to be inside.
-    pub root_chip: Option<AnyElement>,
+    /// The actual git checkout of the Thread's cwd (#29), cached by the
+    /// cockpit and refreshed on turn end and the watchdog cadence — the L1
+    /// header's binding slot. Display-only, never a control: post-lock the
+    /// CWD is immutable, and nothing may look otherwise.
+    pub branch: Option<SharedString>,
     /// The open `/` or `@` popover for this Pane's Composer, assembled in the
     /// cockpit exactly like `root_chip` — rows wired to their picks there —
     /// and hung above the input line here (#23). None when no menu is open.
@@ -252,7 +347,7 @@ pub fn render_pane(view: &PaneView, state: PaneState<'_>, level: Level) -> impl 
         decision,
         queued,
         workspace,
-        root_chip,
+        branch,
         menu,
         composer_empty,
         permission_mode,
@@ -327,7 +422,12 @@ pub fn render_pane(view: &PaneView, state: PaneState<'_>, level: Level) -> impl 
     }
 
     let mut pane = shell.child(dense_header(
-        view, transcript, workspace, status, root_chip, usage_ring, controls,
+        view,
+        transcript,
+        branch.as_ref(),
+        status,
+        usage_ring,
+        controls,
     ));
     match transcript {
         Some(transcript) => {
@@ -350,7 +450,7 @@ pub fn render_pane(view: &PaneView, state: PaneState<'_>, level: Level) -> impl 
             }
             pane = pane.child(composer_region(
                 view,
-                transcript,
+                Some(transcript),
                 ComposerStack {
                     decision,
                     decide,
@@ -360,6 +460,7 @@ pub fn render_pane(view: &PaneView, state: PaneState<'_>, level: Level) -> impl 
                     menu,
                     mode: permission_mode,
                     provider_chip,
+                    band: None,
                 },
             ));
         }
@@ -395,6 +496,155 @@ fn inner_ring_overlay(color: u32) -> Div {
 /// The Wall board's cell recipe: 8px padding, 6px gaps, top-anchored —
 /// dot · slug name · 5px bar · one 9px status line; alert states carry a
 /// 10px colored first line instead of the bar.
+/// Everything a draft Pane draws (#29), assembled in the cockpit where the
+/// clicks are wired — the Pane only lays it out.
+pub struct DraftState<'a> {
+    /// The pre-prompt band: the [provider][project][workspace] chip row.
+    pub band: AnyElement,
+    /// The open band popover, hung above the Composer like every menu.
+    pub menu: Option<AnyElement>,
+    pub composer_empty: bool,
+    pub focused: bool,
+    /// The header's – / ✕ controls, wired in the cockpit; ✕ discards the
+    /// draft — there is nothing to park.
+    pub controls: Option<AnyElement>,
+    /// A failed bootstrap's words, shown where the band is.
+    pub error: Option<&'a SharedString>,
+}
+
+/// A draft Pane (#29): an empty transcript area and the Composer wearing
+/// the pre-prompt band. Below L1 a draft is a quiet placeholder cell — the
+/// band only exists where a Composer does, and nothing is running that the
+/// instruments could show.
+pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> impl IntoElement {
+    let DraftState {
+        band,
+        menu,
+        composer_empty,
+        focused,
+        controls,
+        error,
+    } = state;
+    let shell = div()
+        .relative()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_h_0()
+        .bg(rgb(SURFACE))
+        .border_1()
+        .border_color(rgba(EDGE))
+        .overflow_hidden()
+        .when(level != Level::Transcript, |shell| shell.hover_cell());
+    let ring = focused.then(|| ring_overlay(ACCENT));
+
+    if level != Level::Transcript {
+        return shell
+            .child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .min_h_0()
+                    .items_center()
+                    .justify_center()
+                    .text_size(px(theme::TEXT_ROW))
+                    .text_color(rgb(INK_MUTED))
+                    .child("draft"),
+            )
+            .children(ring);
+    }
+
+    let mut wrapped = div().flex().flex_col().flex_shrink_0();
+    wrapped = wrapped.child(band);
+    if let Some(error) = error {
+        wrapped = wrapped.child(
+            div()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .px(px(theme::COMPOSER_PAD_X))
+                .pb(px(4.))
+                .text_size(px(theme::TEXT_META))
+                .text_color(rgb(FAIL))
+                .child(div().min_w_0().whitespace_normal().child(error.clone())),
+        );
+    }
+    shell
+        .child(dense_header(view, None, None, None, None, controls))
+        .child(div().flex().flex_1().min_h_0())
+        .child(composer_region(
+            view,
+            None,
+            ComposerStack {
+                decision: None,
+                decide: None,
+                queued: None,
+                running: false,
+                empty: composer_empty,
+                menu,
+                mode: None,
+                provider_chip: None,
+                band: Some(wrapped.into_any_element()),
+            },
+        ))
+        .children(ring)
+}
+
+/// The pre-prompt band's own row (#29): chips left, the key path's hint at
+/// the right edge — the Composer meta row's grammar, one step above the
+/// prompt line.
+pub fn draft_band() -> Div {
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(6.))
+        .h(px(theme::TASKS_STRIP_H))
+        .px(px(theme::COMPOSER_PAD_X))
+        .border_b_1()
+        .border_color(rgba(HAIRLINE))
+}
+
+/// The band's key-path hint, riding the row's right edge.
+pub fn band_hint() -> Div {
+    div()
+        .flex_shrink_0()
+        .text_size(px(theme::TEXT_CHIP))
+        .text_color(rgb(INK_MUTED))
+        .child("⇥ chips · ↵ send")
+}
+
+/// One band chip: the quiet EDGE box of the header chips, the provider's
+/// keeping #25's accent tint as the mark of the provider's spot. Tab's
+/// focus promotes the border to ACCENT — the popover opens on ↵, so the
+/// chip must say where ↵ will land.
+pub fn band_chip(slot: usize, label: SharedString, accent: bool, focused: bool) -> Stateful<Div> {
+    let edge: gpui::Hsla = if focused {
+        rgb(ACCENT).into()
+    } else {
+        rgba(EDGE).into()
+    };
+    div()
+        .id(("band-chip", slot))
+        .flex_shrink_0()
+        .text_size(px(theme::TEXT_META))
+        .text_color(rgb(if accent { ACCENT } else { INK_TERTIARY }))
+        .when(accent, |chip| chip.bg(rgba(theme::ACCENT_WASH)))
+        .border_1()
+        .border_color(edge)
+        .rounded(px(theme::R_CHIP))
+        .px(px(6.))
+        .py(px(1.))
+        .hover_control()
+        .press_control()
+        .child(label)
+}
+
+/// A band chip's text: the choice plus the ⌵ that says it answers clicks.
+pub fn band_chip_label(choice: &str) -> SharedString {
+    SharedString::from(format!("{choice} ⌵"))
+}
+
 fn wall_cell(view: &PaneView, state: WallState, focused: bool) -> Div {
     let card = &view.wall;
     let (dot_color, hollow) = match state {
@@ -775,9 +1025,8 @@ fn l2_decision_body(decision: &Decision, decide: Option<AnyElement>) -> Div {
 fn dense_header(
     view: &PaneView,
     transcript: Option<&Transcript>,
-    workspace: Option<&WorkspaceBinding>,
+    branch: Option<&SharedString>,
     status: Option<Status>,
-    root_chip: Option<AnyElement>,
     usage_ring: Option<AnyElement>,
     controls: Option<AnyElement>,
 ) -> Div {
@@ -788,7 +1037,6 @@ fn dense_header(
         Some(Status::Idle) => IDLE,
         None => INK_FAINT,
     };
-    let binding = binding_label(workspace);
     let mut header = div()
         .flex()
         .flex_shrink_0()
@@ -807,20 +1055,27 @@ fn dense_header(
                 .text_color(rgb(INK))
                 .child(view.name.clone()),
         );
-    // The root chip sits right after the title (#24's pinned design); the
-    // binding meta keeps its place behind it.
-    if let Some(chip) = root_chip {
-        header = header.child(chip);
-    }
-    if !binding.is_empty() {
+    // The binding slot (#29): the actual git checkout of the Thread's cwd
+    // — a small branch glyph and the cached branch name. Pure text: no
+    // hover, no click target, no re-aim anywhere — the CWD is immutable
+    // once the chat runs, and the header must never look otherwise.
+    if let Some(branch) = branch {
         header = header
             .child(div().flex_shrink_0().text_color(rgb(INK_FAINT)).child("·"))
             .child(
                 div()
+                    .flex()
                     .min_w_0()
-                    .truncate()
-                    .text_color(rgb(INK_TERTIARY))
-                    .child(binding),
+                    .items_center()
+                    .gap(px(4.))
+                    .child(branch_icon(INK_TERTIARY))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(rgb(INK_TERTIARY))
+                            .child(branch.clone()),
+                    ),
             );
     }
     // The provider chip — `claude · sonnet-4-5` on the accent wash, the
@@ -850,6 +1105,52 @@ fn dense_header(
         header = header.child(controls);
     }
     header
+}
+
+/// The header's branch glyph (#29): the bundled fonts carry no git-branch
+/// codepoint, so the slot draws its own small two-dot fork — a rail with a
+/// dot at each end and a third dot branched off the top, joined by a short
+/// arm. Pure chrome: no id, no hover, no events, and it never registers
+/// with the selection overlay.
+fn branch_icon(color: u32) -> Div {
+    let dot = |x: f32, y: f32| {
+        div()
+            .absolute()
+            .left(px(x))
+            .top(px(y))
+            .w(px(3.))
+            .h(px(3.))
+            .rounded_full()
+            .bg(rgb(color))
+    };
+    div()
+        .relative()
+        .flex_shrink_0()
+        .w(px(11.))
+        .h(px(11.))
+        // The rail between the two left dots.
+        .child(
+            div()
+                .absolute()
+                .left(px(2.))
+                .top(px(2.5))
+                .w(px(1.))
+                .h(px(6.))
+                .bg(rgb(color)),
+        )
+        // The arm from the rail out to the branched dot.
+        .child(
+            div()
+                .absolute()
+                .left(px(2.5))
+                .top(px(2.))
+                .w(px(6.))
+                .h(px(1.))
+                .bg(rgb(color)),
+        )
+        .child(dot(1., 1.))
+        .child(dot(1., 7.))
+        .child(dot(7., 1.))
 }
 
 /// The tasks strip, the Main comp's own recipe: 28px on the sunken ground
@@ -946,7 +1247,15 @@ pub fn model_chip_label(model: &str) -> SharedString {
 /// invented model.
 pub fn provider_chip_label(provider: &str, model: Option<&str>) -> SharedString {
     match model {
-        Some(model) => SharedString::from(format!("{} ⌵", model_chip_label(model))),
+        Some(model) => {
+            let groomed = model_chip_label(model);
+            let label = if groomed.starts_with(&format!("{provider} · ")) {
+                groomed.to_string()
+            } else {
+                format!("{provider} · {groomed}")
+            };
+            SharedString::from(format!("{label} ⌵"))
+        }
         None => SharedString::from(format!("{provider} ⌵")),
     }
 }
@@ -986,8 +1295,10 @@ fn body(
     selection: &SelectionOverlay,
     timings: Option<&HashMap<String, ToolTiming>>,
 ) -> impl IntoElement {
+    // Only Thread Panes have a transcript body; a draft never lands here.
+    let thread = view.thread().map(|thread| thread.get()).unwrap_or(0);
     let mut body = div()
-        .id(("transcript", view.thread.get() as usize))
+        .id(("transcript", thread as usize))
         .flex()
         .flex_col()
         .flex_1()
@@ -1036,15 +1347,18 @@ struct ComposerStack<'a> {
     mode: Option<&'a str>,
     /// The meta row's provider control (#25) — Some pre-lock only.
     provider_chip: Option<AnyElement>,
+    /// The draft Pane's pre-prompt band (#29) — Some on drafts only, and
+    /// gone with the first send.
+    band: Option<AnyElement>,
 }
 
-/// The PromptBox stack, top to bottom: permission card, queued row, the one
-/// growing input line, meta row. Everything stacks above the line and is
-/// driven by keys — no send button, no floating box. An open `/` or `@`
-/// popover hangs above the whole stack; while a Decision pends the region
-/// carries the `Decision` key context so y/n/a answer with the keyboard
-/// still in the Composer (#23).
-fn composer_region(view: &PaneView, transcript: &Transcript, stack: ComposerStack) -> Div {
+/// The PromptBox stack, top to bottom: pre-prompt band (drafts, #29),
+/// permission card, queued row, the one growing input line, meta row.
+/// Everything stacks above the line and is driven by keys — no send button,
+/// no floating box. An open `/` or `@` popover hangs above the whole stack;
+/// while a Decision pends the region carries the `Decision` key context so
+/// y/n/a answer with the keyboard still in the Composer (#23).
+fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: ComposerStack) -> Div {
     let ComposerStack {
         decision,
         decide,
@@ -1054,7 +1368,9 @@ fn composer_region(view: &PaneView, transcript: &Transcript, stack: ComposerStac
         menu,
         mode,
         provider_chip,
+        band,
     } = stack;
+    let is_draft = band.is_some();
     let mut region = div()
         .relative()
         .flex()
@@ -1065,6 +1381,9 @@ fn composer_region(view: &PaneView, transcript: &Transcript, stack: ComposerStac
         .border_color(rgba(EDGE_STRONG))
         .when(decision.is_some(), |region| region.key_context("Decision"));
     let stacked = decision.is_some() || queued.is_some();
+    if let Some(band) = band {
+        region = region.child(band);
+    }
     if let Some(decision) = decision {
         region = region.child(decision_card(decision, decide));
     }
@@ -1091,7 +1410,7 @@ fn composer_region(view: &PaneView, transcript: &Transcript, stack: ComposerStac
                 .flex()
                 .items_center()
                 .text_color(rgb(INK_MUTED))
-                .child(placeholder(&view.name, offers_import(Some(transcript)))),
+                .child(placeholder(&view.name, offers_import(transcript))),
         );
     }
     let mut input = div()
@@ -1185,11 +1504,15 @@ fn composer_region(view: &PaneView, transcript: &Transcript, stack: ComposerStac
             .flex_shrink_0()
             .text_size(px(theme::TEXT_CHIP))
             .text_color(rgb(INK_MUTED))
-            .child("@ files · / commands"),
+            .child(if is_draft {
+                "@ project files · /import"
+            } else {
+                "@ files · / commands"
+            }),
     );
     if let Some(chip) = provider_chip {
         meta = meta.child(chip);
-    } else if let Some(model) = transcript.model() {
+    } else if let Some(model) = transcript.and_then(Transcript::model) {
         meta = meta.child(
             div()
                 .flex_shrink_0()
@@ -1206,6 +1529,11 @@ fn composer_region(view: &PaneView, transcript: &Transcript, stack: ComposerStac
 /// this Composer actually answers — which is why the import hint only
 /// appears while the Thread still offers adoption (#11).
 fn placeholder(name: &SharedString, offers_import: bool) -> SharedString {
+    if name.as_ref() == "new thread" {
+        return SharedString::from(
+            "message new thread — /import adopt · @ project files · ↵ start",
+        );
+    }
     let import = if offers_import {
         " · /import adopt a CLI session"
     } else {
@@ -1763,76 +2091,17 @@ pub fn binding_label(workspace: Option<&WorkspaceBinding>) -> SharedString {
     }
 }
 
-// ------------------------------------------------- session project root (#24)
-
-/// The open session-project-root selector: everything its popover draws,
-/// discovered once when it opened — never per frame. The cockpit owns the
-/// one live selector and its keys; the Pane only paints it.
-pub struct RootSelector {
-    pub thread: ThreadId,
-    /// Row 0 is always the binding itself ("workspace root", clears the
-    /// override); the rest are the discovered nested repositories, in
-    /// `workspace::nested_repositories` order.
-    pub options: Vec<RootOption>,
-    /// The row the arrow keys are on.
-    pub selected: usize,
-    /// The row that was the Thread's root when the popover opened — the ✓.
-    pub active: usize,
-}
-
-/// One pickable root. `None` is the binding itself: picking it clears the
-/// override back to "work in the binding".
-pub struct RootOption {
-    pub root: Option<PathBuf>,
-    pub label: SharedString,
-}
-
-/// A root as the operator reads it: relative to the binding wherever
-/// possible; one from outside the binding (a hand-edited store) in full
-/// rather than pretending. The chip and the popover's rows share this one
-/// rule, so the two can never spell the same root differently.
-pub fn root_display(binding_cwd: &Path, root: &Path) -> String {
-    root.strip_prefix(binding_cwd)
-        .unwrap_or(root)
-        .display()
-        .to_string()
-}
-
-/// The header chip naming where inside the binding this Thread's work
-/// happens: `⌵ apps/web` under an override, `⌵ workspace` without one.
-pub fn root_chip_label(binding: &WorkspaceBinding, root: Option<&Path>) -> SharedString {
-    match root {
-        Some(root) => SharedString::from(format!("⌵ {}", root_display(binding.cwd(), root))),
-        None => SharedString::from("⌵ workspace"),
-    }
-}
-
-/// The chip itself, per issue #24's pinned design: mono 10.5 in a quiet 1px
-/// EDGE box — the accent tint stays on the provider chip, and two accent
-/// chips in one header would fight. An override promotes the ink one step
-/// so it reads at a glance; the Control hover says the chip answers clicks,
-/// and the id is what the pressed shade tracks (#26).
-pub fn root_chip(label: SharedString, set: bool) -> Stateful<Div> {
-    div()
-        .id("root-chip")
-        .flex_shrink_0()
-        .text_size(px(theme::TEXT_META))
-        .text_color(rgb(if set { INK_TERTIARY } else { INK_FAINT }))
-        .border_1()
-        .border_color(rgba(EDGE))
-        .rounded(px(theme::R_CHIP))
-        .px(px(6.))
-        .py(px(1.))
-        .hover_control()
-        .press_control()
-        .child(label)
-}
+// The interactive session-project-root selector (#24) is deleted, not
+// dormant (#29): an interactive path to change where a Thread works
+// post-lock is exactly what must not exist. `binding_label` above survives
+// for the nav's rows; the header's binding slot is the display-only branch
+// text now.
 
 /// Every popover's shell, in the comps' one popover language (PromptBox
 /// state 02): RAISED surface, EDGE_STRONG border, radius 4, 4px padding,
-/// and the three-layer popover elevation. Width is the caller's — the root
-/// selector pins its own, the Composer menus span the composer. Rows and
-/// footer are the cockpit's to append — their clicks are wired there.
+/// and the three-layer popover elevation. Width is the caller's — the
+/// Composer menus span the composer. Rows and footer are the cockpit's to
+/// append — their clicks are wired there.
 fn popover_shell() -> Div {
     div()
         .flex()
@@ -1864,28 +2133,10 @@ fn popover_shell() -> Div {
         ])
 }
 
-/// The session-project-root selector's popover (#24): the shared shell at
-/// its pinned width.
-pub fn selector_popover() -> Div {
-    popover_shell().w(px(theme::POPOVER_W))
-}
-
-/// One popover row: mono 12 name — ACCENT on the EDGE wash when the arrows
-/// are on it, INK_SECONDARY otherwise — and the ✓ marking the root the
-/// Thread is on right now, whichever row the arrows have moved to.
-pub fn selector_row(option: &RootOption, selected: bool, active: bool) -> Div {
-    picker_row(
-        option.label.clone(),
-        SharedString::default(),
-        selected,
-        active,
-    )
-}
-
-/// The ✓-row recipe both selectors share — the root selector above and
-/// the provider picker (#25) — so "what the Thread is on right now" can
-/// never be spelled two ways. `detail` is the muted section tag riding the
-/// right edge ("provider", "claude model"); empty draws nothing.
+/// The ✓-row recipe the pickers share — the provider picker (#25) and the
+/// band popovers (#29) — so "what this Pane is on right now" can never be
+/// spelled two ways. `detail` is the muted section tag riding the right
+/// edge ("provider", "worktree"); empty draws nothing.
 pub fn picker_row(label: SharedString, detail: SharedString, selected: bool, active: bool) -> Div {
     let mut row = div()
         .flex()
@@ -2567,7 +2818,7 @@ mod tests {
         );
         assert_eq!(
             provider_chip_label("codex", Some("gpt-5.4-mini")).as_ref(),
-            "gpt-5.4-mini ⌵"
+            "codex · gpt-5.4-mini ⌵"
         );
     }
 
@@ -2619,25 +2870,6 @@ mod tests {
         assert_eq!(cursor(keycap_allow()), Some(CursorStyle::PointingHand));
         assert_eq!(cursor(keycap_deny()), Some(CursorStyle::PointingHand));
         assert_eq!(cursor(keycap_always()), Some(CursorStyle::PointingHand));
-    }
-
-    /// #24: the chip names the root relative to the binding — `⌵ apps/web`
-    /// — and `⌵ workspace` when no override is set. A root from outside the
-    /// binding (a hand-edited store) shows in full rather than pretending.
-    #[test]
-    fn the_root_chip_names_the_root_relative_to_the_binding() {
-        let binding = WorkspaceBinding::Main {
-            checkout: "/repo".into(),
-        };
-        assert_eq!(root_chip_label(&binding, None).as_ref(), "⌵ workspace");
-        assert_eq!(
-            root_chip_label(&binding, Some(Path::new("/repo/apps/web"))).as_ref(),
-            "⌵ apps/web"
-        );
-        assert_eq!(
-            root_chip_label(&binding, Some(Path::new("/elsewhere/api"))).as_ref(),
-            "⌵ /elsewhere/api"
-        );
     }
 
     /// The app is thin by design, so its render test is that every Block kind

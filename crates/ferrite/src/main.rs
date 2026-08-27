@@ -75,7 +75,13 @@ fn main() {
             eprintln!("ferrite: {refusal}");
         }
 
-        let mut core = Cockpit::new(store, Box::new(Spawn::new(demo, load)));
+        let mut core = match Cockpit::try_new(store, Box::new(Spawn::new(demo, load))) {
+            Ok(core) => core,
+            Err(e) => {
+                eprintln!("ferrite: cannot open the workspace registry: {e}");
+                std::process::exit(1);
+            }
+        };
         core.watch_memory(Box::new(ProcessRss), RSS_LIMIT);
         for thread in adopted {
             if let Err(e) = core.revive(thread) {
@@ -83,7 +89,14 @@ fn main() {
             }
         }
         if core.threads().is_empty() {
-            cockpit::threads_for(&mut core, panes.max(1), provider);
+            if demo || panes > 1 {
+                cockpit::threads_for(&mut core, panes, provider);
+            } else {
+                // The default launch revives the newest parked Thread; an
+                // empty store starts as a draft Pane (#29) — nothing
+                // spawns before the operator's choice.
+                cockpit::revive_latest(&mut core);
+            }
         }
 
         let bounds = Bounds::centered(None, size(px(1440.), px(900.)), cx);
@@ -106,7 +119,7 @@ fn main() {
                     }),
                     ..Default::default()
                 },
-                |_, cx| cx.new(|cx| CockpitView::new(core, cx)),
+                |_, cx| cx.new(|cx| CockpitView::new_with_provider(core, provider, cx)),
             )
             .unwrap();
 

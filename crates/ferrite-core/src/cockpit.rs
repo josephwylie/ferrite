@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 use crate::providers::Session;
 use crate::store::{LoadError, Provider, Store, ThreadWriter};
 use crate::transcript::{BlockId, Input, Lexer, Transcript, Update};
+use crate::workspace::registry::{self, ProjectId, Registry};
 use crate::workspace::{self, WorkspaceBinding, WorkspaceChoice};
 use crate::{Decision, DecisionAnswer, SessionEvent, ThreadId};
 
@@ -263,6 +264,10 @@ impl ToolTiming {
 pub struct Cockpit {
     threads: BTreeMap<ThreadId, Thread>,
     store: Store,
+    /// The workspace registry (#29): registered projects and their
+    /// worktrees, living beside the Thread logs. The selector reads it; the
+    /// bootstrap places worktrees through it.
+    registry: Registry,
     spawner: Box<dyn Spawner>,
     sampler: Option<Box<dyn RssSampler>>,
     /// Bytes one Session may hold before the watchdog replaces it.
@@ -270,14 +275,35 @@ pub struct Cockpit {
 }
 
 impl Cockpit {
-    pub fn new(store: Store, spawner: Box<dyn Spawner>) -> Self {
-        Self {
+    pub fn try_new(store: Store, spawner: Box<dyn Spawner>) -> io::Result<Self> {
+        let registry = Registry::open(store.dir())?;
+        Ok(Self {
             threads: BTreeMap::new(),
             store,
+            registry,
             spawner,
             sampler: None,
             limit: u64::MAX,
-        }
+        })
+    }
+
+    /// Test and embedding convenience. The application uses `try_new` so a
+    /// protected or incompatible registry is reported instead of replaced.
+    pub fn new(store: Store, spawner: Box<dyn Spawner>) -> Self {
+        Self::try_new(store, spawner).expect("the workspace registry opens")
+    }
+
+    /// The workspace registry, for the selector's rows (#29). Read-only:
+    /// registration goes through `register_project`, and worktree entries
+    /// are the bootstrap's own bookkeeping.
+    pub fn registry(&self) -> &Registry {
+        &self.registry
+    }
+
+    /// Register a project root (idempotent, canonicalized) — the selector's
+    /// type-a-path row and the launch seed both land here.
+    pub fn register_project(&mut self, root: &Path) -> io::Result<ProjectId> {
+        self.registry.register(root)
     }
 
     /// Watch Session memory. Off until asked for: the operator's budget is
@@ -309,10 +335,11 @@ impl Cockpit {
                 continue;
             };
             let resume = thread.resume.clone();
-            let cwd = thread
-                .workspace
-                .as_ref()
-                .map(|binding| binding.cwd().to_path_buf());
+            let cwd = workspace::effective_cwd(
+                thread.session_project_root.as_deref(),
+                thread.workspace.as_ref(),
+            )
+            .map(Path::to_path_buf);
             // Drop the old Session before asking for a new one: the leaking
             // process must not outlive its replacement.
             thread.session = None;
@@ -339,25 +366,121 @@ impl Cockpit {
     }
 
     /// Start a Thread: a durable log, a workspace to work in, and a Session
-    /// serving it. A worktree choice creates the worktree here, on demand —
-    /// and a worktree that cannot be created takes the half-born Thread
-    /// with it rather than leaving a binding that points at nothing.
+    /// serving it. Called at first send (#29) — the draft Pane's bootstrap —
+    /// so a failure anywhere leaves NO Thread behind: a worktree that cannot
+    /// be created or adopted, and a Session that will not spawn, both take
+    /// the half-born Thread with them and the Pane stays draft.
+    ///
+    /// The choice's repo registers as a project (idempotent — this is how
+    /// the registry grows as Threads bind roots); a new worktree is placed
+    /// by the registry's central layout on a branch it mints; an existing
+    /// worktree passes the adoption conflict check and skips creation.
     pub fn open(&mut self, provider: Provider, workspace: WorkspaceChoice) -> io::Result<ThreadId> {
-        let (id, writer, binding) = self.store.create(provider, workspace)?;
-        if let Err(e) = ensure_workspace(&binding, id) {
+        self.open_choice(
+            ProviderChoice {
+                provider,
+                model: None,
+            },
+            workspace,
+        )
+    }
+
+    fn open_choice(
+        &mut self,
+        choice: ProviderChoice,
+        workspace: WorkspaceChoice,
+    ) -> io::Result<ThreadId> {
+        let ProviderChoice { provider, model } = choice;
+        let root = match &workspace {
+            WorkspaceChoice::Main { checkout } => checkout,
+            WorkspaceChoice::NewWorktree { repo } => repo,
+            WorkspaceChoice::ExistingWorktree { repo, .. } => repo,
+        };
+        let project = self.registry.register(root)?;
+        let (binding, fresh_branch) = match workspace {
+            WorkspaceChoice::Main { checkout } => (WorkspaceBinding::Main { checkout }, None),
+            WorkspaceChoice::NewWorktree { repo } => {
+                let entry = self.registry.reserve_worktree(project)?;
+                (
+                    WorkspaceBinding::Worktree {
+                        repo,
+                        path: entry.path,
+                    },
+                    Some(entry.branch),
+                )
+            }
+            WorkspaceChoice::ExistingWorktree { repo, path } => {
+                (WorkspaceBinding::Worktree { repo, path }, None)
+            }
+        };
+        let created =
+            self.store
+                .create_with_model(provider, model.clone(), Some(project), binding.clone());
+        let (id, writer) = match created {
+            Ok(created) => created,
+            Err(error) => {
+                if fresh_branch.is_some() {
+                    self.registry.remove_worktree(binding.cwd())?;
+                }
+                return Err(error);
+            }
+        };
+        if let Err(e) = ensure_workspace(&self.registry, &binding, id) {
+            if fresh_branch.is_some() {
+                let _ = self.registry.remove_worktree(binding.cwd());
+            }
             let _ = self.store.delete(id);
             return Err(io::Error::other(e));
         }
-        let session = self.spawner.spawn(SpawnRequest {
+        let session = match self.spawner.spawn(SpawnRequest {
             provider,
-            model: None,
+            model: model.as_deref(),
             resume: None,
-            cwd: Some(binding.cwd()),
-        })?;
+            cwd: workspace::effective_cwd(None, Some(&binding)),
+        }) {
+            Ok(session) => session,
+            // The bootstrap's failure contract: no Thread. The worktree, if
+            // one was just created, stays — real, registered, adoptable.
+            Err(e) => {
+                let _ = self.store.delete(id);
+                return Err(e);
+            }
+        };
         self.threads.insert(
             id,
-            Thread::fresh(session, writer, provider, None, None, Some(binding), None),
+            Thread::fresh(session, writer, provider, model, None, Some(binding), None),
         );
+        Ok(id)
+    }
+
+    /// Turn one draft into a live, locked Thread. The Thread log and Session
+    /// are implementation details of this transaction: if the first prompt
+    /// cannot reach the Session, both are removed and the caller still owns
+    /// the exact prompt and draft choices.
+    pub fn bootstrap(
+        &mut self,
+        choice: ProviderChoice,
+        workspace: WorkspaceChoice,
+        prompt: &str,
+    ) -> io::Result<ThreadId> {
+        let id = self.open_choice(choice, workspace)?;
+        if let Some(binding) = self.workspace(id) {
+            let notice = format!("opened in {}", binding.cwd().display());
+            self.threads
+                .get_mut(&id)
+                .expect("open inserted the Thread")
+                .transcript
+                .apply(Input::Notice(notice));
+        }
+        let delivered = deliver(
+            self.threads.get_mut(&id).expect("open inserted the Thread"),
+            prompt.to_string(),
+        );
+        if let Err(error) = delivered {
+            self.threads.remove(&id);
+            self.store.delete(id)?;
+            return Err(error);
+        }
         Ok(id)
     }
 
@@ -373,36 +496,19 @@ impl Cockpit {
         self.threads.get(&thread)?.session_project_root.as_deref()
     }
 
-    /// Pick (or clear) the git repo inside the binding where this Thread's
-    /// work happens. Durable before anything in memory changes. On a Thread
-    /// with a live Session the Session ends here — the root is fixed for a
-    /// Session's lifetime, never mutated under one — and the next prompt
-    /// respawns through `send`'s resume path, which re-arms the preface. A
-    /// prompt queued behind the ended Session is that next prompt: it goes
-    /// out immediately as the new Session's first. Works on a parked Thread
-    /// too: only the store is touched. A root only means anything inside a
-    /// binding — a Thread from before bindings were recorded stores it but
-    /// never prefaces, having no workspace root to name.
-    pub fn set_session_project_root(
+    // Legacy #24 fixtures exercise persisted `session_project_root` loading.
+    // No production writer exists after the #29 lock.
+    #[cfg(test)]
+    fn set_session_project_root(
         &mut self,
         thread: ThreadId,
         root: Option<PathBuf>,
     ) -> Result<(), LoadError> {
         match self.threads.get_mut(&thread) {
             Some(state) => {
-                if state.session_project_root == root {
-                    return Ok(());
-                }
                 state.session = None;
-                // Session-scoped state dies with the Session: the process
-                // that would have resolved a pending Decision or ended the
-                // turn is gone. A queued prompt is the operator's own and
-                // is released below.
                 state.pending = None;
                 state.busy = false;
-                // The store flushes the writer, rewrites the log, and hands
-                // the writer back on the new file — or fails leaving it
-                // valid on the untouched old one.
                 self.store.set_session_project_root(
                     thread,
                     root.clone(),
@@ -412,10 +518,6 @@ impl Cockpit {
             }
             None => self.store.set_session_project_root(thread, root, None)?,
         }
-        // A prompt held behind the ended Session must not strand — no turn
-        // will ever end to release it. It goes out now through the
-        // send-respawn path, as the new Session's first prompt, wearing the
-        // new preface: exactly what the operator picked the root for.
         if let Some(held) = self
             .threads
             .get_mut(&thread)
@@ -459,10 +561,11 @@ impl Cockpit {
         if state.provider == choice.provider && state.model == choice.model {
             return Ok(());
         }
-        let cwd = state
-            .workspace
-            .as_ref()
-            .map(|binding| binding.cwd().to_path_buf());
+        let cwd = workspace::effective_cwd(
+            state.session_project_root.as_deref(),
+            state.workspace.as_ref(),
+        )
+        .map(Path::to_path_buf);
         // No resume: pre-lock there is no conversation for the new
         // provider to reload, and the old provider's id means nothing to it.
         let session = self
@@ -516,16 +619,15 @@ impl Cockpit {
             .is_some_and(|state| state.first_prompt_sent)
     }
 
-    /// Delete a Thread for good: its log, its directory, and — when it was
-    /// bound to a worktree — the worktree itself, but only a clean one
-    /// ("clean" exactly as `git status` defines it). A dirty worktree
-    /// refuses the whole deletion before anything is touched: uncommitted
-    /// agent work must never vanish with a keystroke. The worktree's branch
-    /// is never deleted — it is what keeps the Thread's commits reachable
-    /// after the tree is gone.
+    /// Delete a Thread for good: its log and directory. Registered project
+    /// worktrees survive as durable, adoptable workspace inventory. Only a
+    /// legacy unregistered worktree binding is removed, and then only when
+    /// clean (`git status` defines clean); its branch is never deleted.
     pub fn delete(&mut self, thread: ThreadId) -> Result<(), DeleteError> {
         let snapshot = self.store.load(thread).map_err(DeleteError::Load)?;
-        if let Some(WorkspaceBinding::Worktree { repo, path }) = snapshot.workspace() {
+        if let (None, Some(WorkspaceBinding::Worktree { repo, path })) =
+            (snapshot.project_id(), snapshot.workspace())
+        {
             // A worktree already gone by hand leaves nothing to check or
             // remove; the log's deletion below is all that is left to do.
             if path.exists() {
@@ -539,6 +641,10 @@ impl Cockpit {
                 self.threads.remove(&thread);
                 workspace::remove_worktree(&repo, &path).map_err(DeleteError::Git)?;
             }
+            // The menu forgets the removed tree; the branch stays git's.
+            self.registry
+                .remove_worktree(&path)
+                .map_err(DeleteError::Io)?;
         }
         self.threads.remove(&thread);
         self.store.delete(thread).map_err(DeleteError::Io)
@@ -564,11 +670,12 @@ impl Cockpit {
         // Thread was parked is recreated on its own branch before anything
         // spawns into it.
         if let Some(binding) = &workspace {
-            ensure_workspace(binding, thread).map_err(|e| LoadError::Io(io::Error::other(e)))?;
+            ensure_workspace(&self.registry, binding, thread)
+                .map_err(|e| LoadError::Io(io::Error::other(e)))?;
         }
-        let cwd = workspace
-            .as_ref()
-            .map(|binding| binding.cwd().to_path_buf());
+        let session_project_root = snapshot.session_project_root();
+        let cwd = workspace::effective_cwd(session_project_root.as_deref(), workspace.as_ref())
+            .map(Path::to_path_buf);
         let model = snapshot.model();
         let session = self
             .spawner
@@ -589,7 +696,7 @@ impl Cockpit {
             model,
             resume,
             workspace,
-            snapshot.session_project_root(),
+            session_project_root,
         );
         let inputs = snapshot.inputs();
         // The lock arms with the history (#25): a replayed operator prompt
@@ -610,8 +717,8 @@ impl Cockpit {
     /// other, history replayed and the Session resuming the file's own
     /// session id. A refusal is the import module's, unchanged: readable,
     /// and no Thread was created.
-    pub fn import(&self, path: &Path) -> Result<ThreadId, crate::import::ImportError> {
-        crate::import::import(&self.store, path)
+    pub fn import(&mut self, path: &Path) -> Result<ThreadId, crate::import::ImportError> {
+        crate::import::import_registered(&self.store, &mut self.registry, path)
     }
 
     /// Send a prompt now: on the wire, in the transcript, in the log. A
@@ -631,10 +738,11 @@ impl Cockpit {
         }
         if state.session.is_none() {
             let resume = state.resume.clone();
-            let cwd = state
-                .workspace
-                .as_ref()
-                .map(|binding| binding.cwd().to_path_buf());
+            let cwd = workspace::effective_cwd(
+                state.session_project_root.as_deref(),
+                state.workspace.as_ref(),
+            )
+            .map(Path::to_path_buf);
             match self.spawner.spawn(SpawnRequest {
                 provider: state.provider,
                 model: state.model.as_deref(),
@@ -653,7 +761,11 @@ impl Cockpit {
                 }
             }
         }
-        deliver(state, text);
+        if let Err(error) = deliver(state, text) {
+            state
+                .transcript
+                .apply(Input::Notice(format!("send failed: {error}")));
+        }
     }
 
     /// Stop the running turn.
@@ -766,7 +878,9 @@ impl Cockpit {
                 if thread.session.is_some() {
                     // Through `deliver`, like any prompt: the preface and
                     // the vanished-root guard apply to held prompts too.
-                    update.dirty.extend(deliver(thread, held).dirty);
+                    if let Ok(sent) = deliver(thread, held) {
+                        update.dirty.extend(sent.dirty);
+                    }
                 }
             }
             frame.push(update);
@@ -848,6 +962,24 @@ impl Cockpit {
             .unwrap_or_default()
     }
 
+    /// Models actually announced by live Sessions of this provider, stable
+    /// and deduplicated for a draft that has no Session of its own.
+    pub fn announced_models(&self, provider: Provider) -> Vec<String> {
+        let mut models = Vec::new();
+        for thread in self
+            .threads
+            .values()
+            .filter(|thread| thread.provider == provider)
+        {
+            for model in &thread.models {
+                if !models.contains(model) {
+                    models.push(model.clone());
+                }
+            }
+        }
+        models
+    }
+
     /// The model this Thread chose before its first prompt (#25) — the ✓ in
     /// the provider picker. `None` is the provider's default.
     pub fn model(&self, thread: ThreadId) -> Option<&str> {
@@ -916,12 +1048,12 @@ fn vanished_root_refusal(state: &Thread) -> Option<String> {
 /// session-context block when a root is set: the transcript and the log
 /// carry the operator's raw text, displayed ≠ sent. Answers what the
 /// transcript changed.
-fn deliver(state: &mut Thread, text: String) -> Update {
+fn deliver(state: &mut Thread, text: String) -> io::Result<Update> {
     if let Some(refusal) = vanished_root_refusal(state) {
-        return state.transcript.apply(Input::Notice(refusal));
+        return Err(io::Error::new(io::ErrorKind::NotFound, refusal));
     }
     let Some(session) = &mut state.session else {
-        return Update::default();
+        return Err(io::Error::new(io::ErrorKind::NotConnected, "no Session"));
     };
     let prefaced = match (&state.session_project_root, &state.workspace) {
         (Some(root), Some(binding)) if state.preface_pending => Some(format!(
@@ -939,30 +1071,42 @@ fn deliver(state: &mut Thread, text: String) -> Update {
         )),
         _ => None,
     };
-    if let Err(e) = session.send(prefaced.as_deref().unwrap_or(&text)) {
-        return state
-            .transcript
-            .apply(Input::Notice(format!("send failed: {e}")));
-    }
+    session.send(prefaced.as_deref().unwrap_or(&text))?;
     // The Session's first prompt has gone out; every later one is bare.
     state.preface_pending = false;
     // And the Thread's first locks its provider for good (#25, #29).
     state.first_prompt_sent = true;
     let _ = state.writer.record_prompt(&text);
-    state.transcript.apply(Input::Prompt(text))
+    Ok(state.transcript.apply(Input::Prompt(text)))
 }
 
-/// The workspace a binding names, made real: a worktree is created (or
-/// recreated) on the Thread's own branch; the main checkout is the
-/// operator's and is touched by nothing.
+/// The workspace a binding names, made real; the main checkout is the
+/// operator's and is touched by nothing. A missing worktree is created —
+/// or recreated after a hand-deletion — on its registered branch (#29's
+/// central layout), falling back to the Thread-named branch for worktrees
+/// from before the registry. A tree already standing passes the adoption
+/// conflict check instead: git itself must call it a worktree of this
+/// repo, or a Session would spawn into a directory that only looks like
+/// one.
 fn ensure_workspace(
+    registry: &Registry,
     binding: &WorkspaceBinding,
     thread: ThreadId,
 ) -> Result<(), workspace::GitError> {
-    if let WorkspaceBinding::Worktree { repo, path } = binding {
-        workspace::ensure_worktree(repo, path, &branch_name(thread))?;
+    let WorkspaceBinding::Worktree { repo, path } = binding else {
+        return Ok(());
+    };
+    // Anything already standing at the path must BE the worktree — a
+    // directory that merely exists there (squatting where one was, or was
+    // never) must not be silently rebuilt over or spawned into.
+    if path.exists() {
+        return registry::adoption_check(repo, path);
     }
-    Ok(())
+    let branch = registry
+        .branch_for(path)
+        .map(str::to_string)
+        .unwrap_or_else(|| branch_name(thread));
+    workspace::ensure_worktree(repo, path, &branch)
 }
 
 /// The branch a Thread's worktree lives on. Named for the Thread so the
@@ -1051,6 +1195,7 @@ mod tests {
     struct Scripted {
         rx: Receiver<SessionEvent>,
         sent: Rc<RefCell<Vec<String>>>,
+        fail_send: Rc<RefCell<bool>>,
     }
 
     impl crate::providers::Session for Scripted {
@@ -1059,6 +1204,9 @@ mod tests {
         }
 
         fn send(&mut self, text: &str) -> std::io::Result<()> {
+            if *self.fail_send.borrow() {
+                return Err(io::Error::other("stub refused first prompt"));
+            }
             self.sent.borrow_mut().push(text.to_string());
             Ok(())
         }
@@ -1090,6 +1238,7 @@ mod tests {
         attempts: Rc<RefCell<usize>>,
         /// While set, spawn refuses — how a test makes a restart fail.
         fail: Rc<RefCell<bool>>,
+        fail_send: Rc<RefCell<bool>>,
     }
 
     impl Fake {
@@ -1131,6 +1280,7 @@ mod tests {
             Ok(Box::new(Scripted {
                 rx,
                 sent: self.sent.clone(),
+                fail_send: self.fail_send.clone(),
             }))
         }
     }
@@ -1181,7 +1331,7 @@ mod tests {
         let thread = cockpit
             .open(
                 Provider::Claude,
-                WorkspaceChoice::Worktree { repo: repo.clone() },
+                WorkspaceChoice::NewWorktree { repo: repo.clone() },
             )
             .unwrap();
 
@@ -1200,6 +1350,181 @@ mod tests {
             Some(path.as_path()),
             "the Session must spawn inside the worktree"
         );
+    }
+
+    /// #29: opening registers the choice's repo as a project (the registry
+    /// grows as Threads bind roots), a new worktree lands in the central
+    /// layout on a registry-minted branch, and the Thread header carries
+    /// the project id.
+    #[test]
+    fn opening_registers_the_project_and_places_the_worktree_centrally() {
+        let root = scratch("central-open");
+        let dir = scratch("central-open-store");
+        let repo = init_repo(&root);
+        let fake = Fake::default();
+        let mut cockpit = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake));
+
+        let thread = cockpit
+            .open(
+                Provider::Claude,
+                WorkspaceChoice::NewWorktree { repo: repo.clone() },
+            )
+            .unwrap();
+
+        let projects = cockpit.registry().projects();
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].title, "repo");
+        let project = projects[0].id;
+        assert_eq!(cockpit.peek(thread).unwrap().project_id, Some(project));
+
+        let entries = cockpit.registry().worktrees(project);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].branch, "ferrite/wt-1");
+        let path = cockpit.workspace(thread).unwrap().cwd().to_path_buf();
+        assert_eq!(entries[0].path, path);
+        // The central layout: under the store's worktrees/, never inside
+        // the repo or a per-Thread store directory.
+        assert!(
+            path.starts_with(dir.join("worktrees")),
+            "central layout: {path:?}"
+        );
+        assert_eq!(path.file_name().unwrap(), "ferrite-wt-1");
+    }
+
+    /// #29: choosing an existing worktree adopts the standing tree — no
+    /// creation, no new branch — and the Session spawns into it.
+    #[test]
+    fn opening_with_an_existing_worktree_adopts_the_standing_tree() {
+        let root = scratch("adopt-open");
+        let (mut cockpit, fake) = cockpit("adopt-open-store");
+        let repo = init_repo(&root);
+        let first = cockpit
+            .open(
+                Provider::Claude,
+                WorkspaceChoice::NewWorktree { repo: repo.clone() },
+            )
+            .unwrap();
+        let path = cockpit.workspace(first).unwrap().cwd().to_path_buf();
+        // The first Thread is gone; its worktree outlives it as the
+        // adoptable row. Deleting would remove the tree, so park instead.
+        cockpit.park(first).unwrap();
+
+        let second = cockpit
+            .open(
+                Provider::Claude,
+                WorkspaceChoice::ExistingWorktree {
+                    repo: repo.clone(),
+                    path: path.clone(),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(
+            cockpit.workspace(second),
+            Some(&WorkspaceBinding::Worktree {
+                repo: repo.clone(),
+                path: path.clone(),
+            })
+        );
+        assert_eq!(
+            fake.cwds.borrow().last().unwrap().as_deref(),
+            Some(path.as_path())
+        );
+        // Adoption minted nothing: one worktree entry, one branch.
+        let project = cockpit.registry().projects()[0].id;
+        assert_eq!(cockpit.registry().worktrees(project).len(), 1);
+        let branches = crate::workspace::git_for_tests(&repo, &["branch", "--list", "ferrite/*"]);
+        assert_eq!(branches.matches("ferrite/").count(), 1, "{branches:?}");
+    }
+
+    /// #29: the adoption conflict check — a directory that git does not
+    /// call a worktree of the repo refuses the whole open, and no Thread
+    /// is left behind.
+    #[test]
+    fn adopting_a_directory_that_is_not_a_worktree_refuses_and_leaves_no_thread() {
+        let root = scratch("adopt-refused");
+        let (mut cockpit, _fake) = cockpit("adopt-refused-store");
+        let repo = init_repo(&root);
+        let squatter = root.join("squatter");
+        std::fs::create_dir_all(&squatter).unwrap();
+
+        let refused = cockpit.open(
+            Provider::Claude,
+            WorkspaceChoice::ExistingWorktree {
+                repo: repo.clone(),
+                path: squatter.clone(),
+            },
+        );
+
+        assert!(refused.is_err(), "a squatting directory must refuse");
+        assert!(cockpit.threads().is_empty());
+        assert_eq!(cockpit.parked().unwrap(), vec![], "no half-born Thread");
+    }
+
+    /// #29's bootstrap failure contract: a Session that will not spawn
+    /// takes the half-born Thread with it — the draft Pane stays draft and
+    /// nothing claims to exist. The worktree just created stays, real and
+    /// registered: it is adoptable, not half-born.
+    #[test]
+    fn a_failed_spawn_at_bootstrap_leaves_no_thread_behind() {
+        let root = scratch("bootstrap-fails");
+        let (mut cockpit, fake) = cockpit("bootstrap-fails-store");
+        let repo = init_repo(&root);
+        *fake.fail.borrow_mut() = true;
+
+        let refused = cockpit.open(
+            Provider::Claude,
+            WorkspaceChoice::NewWorktree { repo: repo.clone() },
+        );
+
+        assert!(refused.is_err());
+        assert!(cockpit.threads().is_empty());
+        assert_eq!(cockpit.parked().unwrap(), vec![], "no half-born Thread");
+        let project = cockpit.registry().projects()[0].id;
+        assert_eq!(
+            cockpit.registry().worktrees(project).len(),
+            1,
+            "the created worktree survives as an adoptable entry"
+        );
+    }
+
+    #[test]
+    fn a_failed_thread_create_removes_the_reserved_worktree() {
+        let root = scratch("create-fails-after-reserve");
+        let repo = init_repo(&root);
+        let store = Store::open(scratch("create-fails-after-reserve-store"))
+            .unwrap()
+            .refuse_create();
+        let mut cockpit = Cockpit::new(store, Box::new(Fake::default()));
+
+        let refused = cockpit.open(Provider::Claude, WorkspaceChoice::NewWorktree { repo });
+
+        assert!(refused.is_err());
+        assert!(cockpit.threads().is_empty());
+        let project = cockpit.registry().projects()[0].id;
+        assert!(cockpit.registry().worktrees(project).is_empty());
+    }
+
+    #[test]
+    fn a_failed_first_send_leaves_no_thread_or_log() {
+        let root = scratch("first-send-fails");
+        let (mut cockpit, fake) = cockpit("first-send-fails-store");
+        let repo = init_repo(&root);
+        *fake.fail_send.borrow_mut() = true;
+
+        let refused = cockpit.bootstrap(
+            ProviderChoice {
+                provider: Provider::Codex,
+                model: Some("announced-model".into()),
+            },
+            WorkspaceChoice::Main { checkout: repo },
+            "exact drafted prompt",
+        );
+
+        assert!(refused.is_err());
+        assert!(cockpit.threads().is_empty());
+        assert!(cockpit.parked().unwrap().is_empty(), "the log was removed");
+        assert!(fake.sent.borrow().is_empty());
     }
 
     #[test]
@@ -1241,7 +1566,7 @@ mod tests {
         let thread = cockpit
             .open(
                 Provider::Claude,
-                WorkspaceChoice::Worktree { repo: repo.clone() },
+                WorkspaceChoice::NewWorktree { repo: repo.clone() },
             )
             .unwrap();
         let binding = cockpit.workspace(thread).cloned().unwrap();
@@ -1269,49 +1594,47 @@ mod tests {
         );
     }
 
-    /// AC: the worktree is removed when the Thread is deleted, if clean —
-    /// and a dirty one refuses the whole deletion, destroying nothing.
+    /// Registered central worktrees outlive every individual Thread. Two
+    /// Threads may share one adoption, so deleting either cannot inspect or
+    /// remove the checkout beneath the other.
     #[test]
-    fn deleting_a_thread_removes_a_clean_worktree_and_refuses_a_dirty_one() {
+    fn deleting_a_thread_preserves_a_shared_registered_worktree() {
         let root = scratch("delete-worktree");
         let (mut cockpit, _fake) = cockpit("delete-worktree-store");
         let repo = init_repo(&root);
-        let thread = cockpit
+        let first = cockpit
             .open(
                 Provider::Claude,
-                WorkspaceChoice::Worktree { repo: repo.clone() },
+                WorkspaceChoice::NewWorktree { repo: repo.clone() },
             )
             .unwrap();
-        let path = cockpit.workspace(thread).unwrap().cwd().to_path_buf();
-
-        // The agent left uncommitted work: deletion must refuse whole.
+        let path = cockpit.workspace(first).unwrap().cwd().to_path_buf();
+        let second = cockpit
+            .open(
+                Provider::Codex,
+                WorkspaceChoice::ExistingWorktree {
+                    repo: repo.clone(),
+                    path: path.clone(),
+                },
+            )
+            .unwrap();
         std::fs::write(path.join("wip.txt"), "uncommitted\n").unwrap();
-        match cockpit.delete(thread) {
-            Err(DeleteError::DirtyWorktree { path: dirty }) => assert_eq!(dirty, path),
-            other => panic!("a dirty worktree must refuse deletion: {other:?}"),
-        }
+        cockpit.delete(first).unwrap();
         assert_eq!(
             std::fs::read_to_string(path.join("wip.txt")).unwrap(),
             "uncommitted\n",
-            "refusal must destroy nothing"
+            "the registered checkout survives"
         );
         assert!(
-            cockpit.workspace(thread).is_some(),
-            "the Thread must survive its own refused deletion"
+            cockpit.workspace(second).is_some(),
+            "the other Thread still uses the checkout"
         );
-
-        // Cleaned up, the deletion goes through: worktree gone, Thread gone,
-        // branch kept (a clean tree can still hold unmerged commits).
-        std::fs::remove_file(path.join("wip.txt")).unwrap();
-        cockpit.delete(thread).unwrap();
-        assert!(!path.exists(), "the worktree must be removed");
-        assert!(cockpit.threads().is_empty());
-        assert_eq!(cockpit.parked().unwrap(), vec![]);
-        let branches =
-            crate::workspace::git_for_tests(&repo, &["branch", "--list", &branch_name(thread)]);
-        assert!(
-            branches.contains(&branch_name(thread)),
-            "the branch must survive: {branches:?}"
+        assert_eq!(
+            cockpit
+                .registry()
+                .worktrees(cockpit.registry().projects()[0].id)
+                .len(),
+            1
         );
     }
 
@@ -1356,13 +1679,13 @@ mod tests {
         let one = cockpit
             .open(
                 Provider::Claude,
-                WorkspaceChoice::Worktree { repo: repo.clone() },
+                WorkspaceChoice::NewWorktree { repo: repo.clone() },
             )
             .unwrap();
         let two = cockpit
             .open(
                 Provider::Codex,
-                WorkspaceChoice::Worktree { repo: repo.clone() },
+                WorkspaceChoice::NewWorktree { repo: repo.clone() },
             )
             .unwrap();
 
@@ -1593,7 +1916,7 @@ mod tests {
     /// AC (#24): changing the selection on a live Thread ends its Session —
     /// no mid-session mutation of the root — and the next prompt respawns
     /// through the resume path with the preface re-armed, naming the new
-    /// root. The spawn cwd stays the binding, exactly as before.
+    /// root. The respawn's cwd is the chain's head (#29): the picked root.
     #[test]
     fn changing_the_root_ends_the_session_and_the_next_prompt_respawns_with_the_preface() {
         let (mut cockpit, fake) = cockpit("root-change");
@@ -1634,8 +1957,8 @@ mod tests {
         let binding = std::env::temp_dir();
         assert_eq!(
             fake.cwds.borrow().last().unwrap().as_deref(),
-            Some(binding.as_path()),
-            "the spawn cwd stays the binding — the root travels as text only"
+            Some(second_root.as_path()),
+            "the respawn's cwd is the chain's head (#29): the picked root"
         );
         assert_eq!(
             fake.sent.borrow().as_slice(),
@@ -2100,7 +2423,7 @@ mod tests {
     /// through this door, with the same readable error and no Thread.
     #[test]
     fn the_import_door_passes_a_refusal_through_unchanged() {
-        let (cockpit, _fake) = cockpit("import-door-refused");
+        let (mut cockpit, _fake) = cockpit("import-door-refused");
         let dir = scratch("import-door-refused-file");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("junk.jsonl");

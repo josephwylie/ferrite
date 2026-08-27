@@ -38,6 +38,14 @@ fn a_claude_session_file_imports_into_a_thread_that_can_resume_it() {
 
     let snapshot = store.load(thread).unwrap();
     assert_eq!(snapshot.provider(), Provider::Claude);
+    let project = snapshot
+        .project_id()
+        .expect("imports durably name a project");
+    let registry = ferrite_core::workspace::registry::Registry::open(store.dir()).unwrap();
+    assert_eq!(
+        registry.project(project).unwrap().root,
+        PathBuf::from("/workspace")
+    );
     // The whole point: the file's own session id is what the next Session
     // resumes from — this is the value the live probe hands to
     // `ClaudeConfig::resume` and gets the conversation back.

@@ -71,9 +71,13 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
         // #21: fold the nav to its LED rail and back — the VS Code sidebar
         // muscle memory (cmd-t/w/f are spoken for by #20).
         (with_primary("b"), "cockpit::ToggleNav", None),
-        // Shift: the same new Thread, in its own worktree instead of the
-        // checkout the operator is sitting in.
+        // Shift: the same draft, aimed straight at "new worktree" instead
+        // of the checkout the operator is sitting in.
         (with_primary("shift-n"), "cockpit::NewWorktreeThread", None),
+        // #29: tab walks the draft Pane's band chips, then returns to the
+        // prompt. Bare — a Thread Pane has no second tab stop, so the key
+        // is dead everywhere else.
+        ("tab".into(), "cockpit::BandCycle", None),
         // Close parks the Thread; it is still there, and reopening revives it.
         (with_primary("w"), "cockpit::CloseThread", None),
         // And back again: the most recently parked Thread, revived.
@@ -81,34 +85,13 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
         // cmd-q is the macOS convention; Windows has no cmd, so ctrl-q there
         // (alt-f4 comes free from the OS).
         (with_primary("q"), "ferrite::Quit", None),
-        // #24: the session-project-root selector on the focused Pane. The
-        // menu keys ride the RootSelector context the open popover holds
-        // focus in — and they sit BELOW the bare enter/escape rows above,
-        // because gpui breaks a same-depth tie toward the later binding:
-        // moving these up would hand the popover's enter back to Submit.
-        (with_primary("p"), "cockpit::ToggleRootSelector", None),
-        (
-            "up".into(),
-            "cockpit::SelectorPrevious",
-            Some("RootSelector"),
-        ),
-        ("down".into(), "cockpit::SelectorNext", Some("RootSelector")),
-        (
-            "enter".into(),
-            "cockpit::SelectorPick",
-            Some("RootSelector"),
-        ),
-        (
-            "escape".into(),
-            "cockpit::SelectorDismiss",
-            Some("RootSelector"),
-        ),
-        // #23: the Composer's `/` and `@` popovers. Same tie-break law as
-        // the RootSelector rows above: these sit BELOW the bare enter and
-        // escape rows so gpui's same-depth precedence hands the keys to the
-        // open menu — enter picks instead of submitting, escape dismisses
-        // instead of interrupting — and escape with no popover keeps its
-        // existing meaning.
+        // #23: the Composer's `/` and `@` popovers (and #29's band
+        // popovers, which ride the same keys). These sit BELOW the bare
+        // enter and escape rows, because gpui breaks a same-depth tie
+        // toward the later binding: it hands the keys to the open menu —
+        // enter picks instead of submitting, escape dismisses instead of
+        // interrupting — and escape with no popover keeps its existing
+        // meaning.
         ("up".into(), "cockpit::MenuPrevious", Some("ComposerMenu")),
         ("down".into(), "cockpit::MenuNext", Some("ComposerMenu")),
         ("enter".into(), "cockpit::MenuPick", Some("ComposerMenu")),
@@ -151,8 +134,6 @@ mod tests {
             ("cockpit::CloseThread", "w"),
             ("cockpit::ReopenThread", "o"),
             ("ferrite::Quit", "q"),
-            // #24: the root selector opens from either platform's primary.
-            ("cockpit::ToggleRootSelector", "p"),
         ];
         let strokes = |platform: Platform| -> Vec<(String, &'static str)> {
             bindings(platform)
@@ -187,42 +168,15 @@ mod tests {
         assert_eq!(shape(Platform::Mac), shape(Platform::Windows));
     }
 
-    /// #24: the root selector's menu keys exist on both platforms, and only
-    /// inside the popover's own key context — a bare arrow key must never
-    /// steal from anything else.
+    /// #29: tab is the band's chip walk, bare on both platforms — a Thread
+    /// Pane has no second tab stop, so the key is dead everywhere else.
     #[test]
-    fn the_root_selector_menu_keys_are_scoped_to_its_context_on_both_platforms() {
+    fn tab_cycles_the_band_on_both_platforms() {
         for platform in [Platform::Mac, Platform::Windows] {
-            let table = bindings(platform);
-            for (key, action) in [
-                ("up", "cockpit::SelectorPrevious"),
-                ("down", "cockpit::SelectorNext"),
-                ("enter", "cockpit::SelectorPick"),
-                ("escape", "cockpit::SelectorDismiss"),
-            ] {
-                assert!(
-                    table.contains(&(key.into(), action, Some("RootSelector"))),
-                    "{platform:?} is missing {key} for {action} in RootSelector"
-                );
-            }
-            // The tie-break the popover leans on: its enter and escape rows
-            // are added after the bare Submit/Interrupt rows, so gpui's
-            // same-depth precedence picks them while the popover is up.
-            for (bare, scoped) in [
-                ("cockpit::Submit", "cockpit::SelectorPick"),
-                ("cockpit::Interrupt", "cockpit::SelectorDismiss"),
-            ] {
-                let at = |wanted: &str| {
-                    table
-                        .iter()
-                        .position(|(_, action, _)| *action == wanted)
-                        .unwrap_or_else(|| panic!("{wanted} is not in the table"))
-                };
-                assert!(
-                    at(bare) < at(scoped),
-                    "{scoped} must be bound after {bare} ({platform:?})"
-                );
-            }
+            assert!(
+                bindings(platform).contains(&("tab".into(), "cockpit::BandCycle", None)),
+                "{platform:?} is missing tab for cockpit::BandCycle"
+            );
         }
     }
 

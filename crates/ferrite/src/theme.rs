@@ -204,10 +204,6 @@ pub const MENU_ROW_H: f32 = 26.0;
 pub const POPOVER_FOOTER_H: f32 = 22.0;
 /// 4px — the popover's own padding around its rows.
 pub const POPOVER_PAD: f32 = 4.0;
-/// 260px — the root-selector popover's width (issue #24's pinned design;
-/// the comps draw their popovers at the composer's width, which a header
-/// anchor does not have).
-pub const POPOVER_W: f32 = 260.0;
 /// 14px — the Composer stack's horizontal padding (input, queued, meta).
 pub const COMPOSER_PAD_X: f32 = 14.0;
 /// 6px LED dot (Dense header, Cockpit cells) / 5px on the wall.

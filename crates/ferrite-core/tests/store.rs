@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use ferrite_core::providers::{ClaudeConfig, ClaudeSession};
 use ferrite_core::store::{Provider, Store};
 use ferrite_core::transcript::{Input, Transcript};
-use ferrite_core::workspace::WorkspaceChoice;
+use ferrite_core::workspace::WorkspaceBinding;
 use ferrite_core::{SessionEvent, ToolResult, TurnOutcome};
 
 /// The session id the committed resume capture announces — the conversation
@@ -127,10 +127,11 @@ fn a_restart_restores_the_thread_and_the_next_prompt_continues_the_session() {
     let mut operator_saw = Transcript::default();
     let thread_id = {
         let store = Store::open(&dir).unwrap();
-        let (id, mut writer, _) = store
+        let (id, mut writer) = store
             .create(
                 Provider::Claude,
-                WorkspaceChoice::Main {
+                None,
+                WorkspaceBinding::Main {
                     checkout: std::env::temp_dir(),
                 },
             )

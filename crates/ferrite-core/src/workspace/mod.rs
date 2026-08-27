@@ -17,6 +17,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+pub mod registry;
+
 /// The checkout a Thread works in. Persisted by the store (as its own
 /// schema), resolved to a Session's working directory by the cockpit.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,13 +41,27 @@ impl WorkspaceBinding {
 }
 
 /// What the operator picks at Thread creation: work in the main checkout,
-/// or in a dedicated worktree Ferrite will create. The worktree's own path
-/// is not the operator's to choose — the store places it, which is what
-/// turns a choice into a `WorkspaceBinding`.
+/// in a fresh worktree Ferrite will create, or in a worktree it already
+/// registered (#29 — the adoptable row). A new worktree's path is not the
+/// operator's to choose — the registry places it, which is what turns a
+/// choice into a `WorkspaceBinding`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkspaceChoice {
     Main { checkout: PathBuf },
-    Worktree { repo: PathBuf },
+    NewWorktree { repo: PathBuf },
+    ExistingWorktree { repo: PathBuf, path: PathBuf },
+}
+
+/// The one cwd chain every spawn reads (#29): `session_project_root ??
+/// worktree_path ?? project_root` — the last two being what `cwd` already
+/// collapses a binding to. Open, revive, send-respawn, sweep and re-aim all
+/// answer their `SpawnRequest.cwd` here, so a new fact about where Sessions
+/// run travels to every path at once.
+pub fn effective_cwd<'a>(
+    session_project_root: Option<&'a Path>,
+    workspace: Option<&'a WorkspaceBinding>,
+) -> Option<&'a Path> {
+    session_project_root.or_else(|| workspace.map(WorkspaceBinding::cwd))
 }
 
 /// Directory names the repository scan never enters or reports: dependency
@@ -202,6 +218,45 @@ fn path_str(path: &Path) -> Result<&str, GitError> {
             path.display()
         )))
     })
+}
+
+/// The checkout the tree at `cwd` is on (#29's display-only header): the
+/// branch by name, or the short commit id for a detached HEAD. `None` where
+/// `cwd` is not a git checkout at all — a header has nothing honest to say
+/// there. Callers cache the answer on a stated cadence; nothing renders
+/// through this per frame.
+pub fn checkout_branch(cwd: &Path) -> Option<String> {
+    let branch = git(cwd, &["branch", "--show-current"]).ok()?;
+    let branch = branch.trim();
+    if !branch.is_empty() {
+        return Some(branch.to_string());
+    }
+    // Detached HEAD: `--show-current` answers nothing; the short commit id
+    // is the honest name of what is checked out.
+    let head = git(cwd, &["rev-parse", "--short", "HEAD"]).ok()?;
+    let head = head.trim();
+    (!head.is_empty()).then(|| head.to_string())
+}
+
+/// The local branches of `repo`, in git's own ref order.
+pub fn branches(repo: &Path) -> Result<Vec<String>, GitError> {
+    let listed = git(
+        repo,
+        &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+    )?;
+    Ok(listed.lines().map(str::to_string).collect())
+}
+
+/// The worktree paths git itself registers for `repo` — the first line of
+/// each `git worktree list --porcelain` stanza, main checkout included.
+/// The adoption conflict check's ground truth (#29).
+pub(crate) fn worktree_paths(repo: &Path) -> Result<Vec<PathBuf>, GitError> {
+    let listed = git(repo, &["worktree", "list", "--porcelain"])?;
+    Ok(listed
+        .lines()
+        .filter_map(|line| line.strip_prefix("worktree "))
+        .map(PathBuf::from)
+        .collect())
 }
 
 /// Whether the tree at `cwd` is clean exactly as `git status` defines it:
@@ -561,6 +616,66 @@ mod tests {
         assert_eq!(mention_files(&root, 2).len(), 2);
         // An unreadable or missing root is an empty menu, not an error.
         assert!(mention_files(&root.join("nowhere"), 100).is_empty());
+    }
+
+    /// #29: the display-only header's source — the branch by name, the
+    /// short id for a detached HEAD, and nothing at all outside a checkout.
+    #[test]
+    fn checkout_branch_names_the_branch_the_detached_head_or_nothing() {
+        let root = scratch("branch-of");
+        let repo = init_repo(&root);
+        assert_eq!(checkout_branch(&repo).as_deref(), Some("main"));
+
+        let tree = root.join("store").join("wt");
+        ensure_worktree(&repo, &tree, "ferrite/wt-1").unwrap();
+        assert_eq!(checkout_branch(&tree).as_deref(), Some("ferrite/wt-1"));
+
+        // Detached: the short commit id is what is honestly checked out.
+        let head = git(&repo, &["rev-parse", "--short", "HEAD"]).unwrap();
+        git(&tree, &["checkout", "-q", "--detach"]).unwrap();
+        assert_eq!(checkout_branch(&tree).as_deref(), Some(head.trim()));
+
+        // Not a checkout at all: nothing to say.
+        let bare = root.join("bare-dir");
+        fs::create_dir_all(&bare).unwrap();
+        assert_eq!(checkout_branch(&bare), None);
+    }
+
+    #[test]
+    fn branches_lists_the_local_branches() {
+        let root = scratch("branches");
+        let repo = init_repo(&root);
+        git(&repo, &["branch", "feature"]).unwrap();
+
+        assert_eq!(branches(&repo).unwrap(), ["feature", "main"]);
+    }
+
+    /// #29: the one cwd chain — session_project_root ?? worktree_path ??
+    /// project_root — pure and total over every binding shape.
+    #[test]
+    fn the_effective_cwd_chain_falls_back_in_order() {
+        let root = PathBuf::from("/repos/project/api");
+        let main = WorkspaceBinding::Main {
+            checkout: "/repos/project".into(),
+        };
+        let tree = WorkspaceBinding::Worktree {
+            repo: "/repos/project".into(),
+            path: "/store/worktrees/project-abc/wt".into(),
+        };
+        assert_eq!(
+            effective_cwd(Some(&root), Some(&main)),
+            Some(root.as_path()),
+            "a session project root outranks the binding"
+        );
+        assert_eq!(
+            effective_cwd(None, Some(&tree)).unwrap(),
+            Path::new("/store/worktrees/project-abc/wt")
+        );
+        assert_eq!(
+            effective_cwd(None, Some(&main)).unwrap(),
+            Path::new("/repos/project")
+        );
+        assert_eq!(effective_cwd(None, None), None);
     }
 
     #[test]

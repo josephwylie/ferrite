@@ -13,7 +13,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::workspace::{WorkspaceBinding, WorkspaceChoice};
+use crate::workspace::registry::ProjectId;
+use crate::workspace::WorkspaceBinding;
 use crate::SessionEvent;
 use crate::{transcript::Input, ThreadId};
 
@@ -39,7 +40,11 @@ use crate::{transcript::Input, ThreadId};
 ///   pick recorded, verbatim as the provider announced it. A v1–v4 log
 ///   loads with none — the provider's default, which is also what absent
 ///   means.
-const SCHEMA_VERSION: u32 = 5;
+/// - **6** — the registered project in the header (#29): the registry id of
+///   the project the Thread's CWD choice named. A v1–v5 log loads with none
+///   — the resolved binding paths stay the durable truth either way, so a
+///   Thread without one loses nothing but a grouping key.
+const SCHEMA_VERSION: u32 = 6;
 
 /// Which agent backend serves this Thread — persisted so a restart knows
 /// which provider to revive the Thread on.
@@ -112,6 +117,11 @@ struct Header {
     /// `None` — and every v1–v4 header — means the provider's default.
     #[serde(default)]
     model: Option<String>,
+    /// Schema 6+; the registry id of the project this Thread's CWD choice
+    /// named (#29). `None` — and every v1–v5 header — means unregistered:
+    /// the binding's resolved paths still say where work happens.
+    #[serde(default)]
+    project_id: Option<ProjectId>,
 }
 
 /// The persisted form of a Thread's workspace binding, mirroring
@@ -472,6 +482,8 @@ const DEFAULT_FLUSH_INTERVAL: std::time::Duration = std::time::Duration::from_se
 pub struct Store {
     dir: PathBuf,
     flush_interval: std::time::Duration,
+    #[cfg(test)]
+    fail_create: bool,
 }
 
 impl Store {
@@ -490,20 +502,42 @@ impl Store {
         Ok(Self {
             dir,
             flush_interval,
+            #[cfg(test)]
+            fail_create: false,
         })
     }
 
-    /// Mint a new Thread and hand back its writer and resolved workspace
-    /// binding. The Thread is durable before this returns: a crash
-    /// immediately after still shows it. For a worktree choice the store
-    /// names the path — inside the Thread's own directory, so the
-    /// worktree's lifecycle is visibly the Thread's — but runs no git: the
-    /// caller creates the tree.
+    #[cfg(test)]
+    pub(crate) fn refuse_create(mut self) -> Self {
+        self.fail_create = true;
+        self
+    }
+
+    /// Mint a new Thread from an already-resolved workspace binding. The
+    /// Thread is durable before this returns: a crash immediately after
+    /// still shows it. The store runs no git and places no paths — worktree
+    /// placement is the registry's (#29) — it only writes the resolved
+    /// truth down.
     pub fn create(
         &self,
         provider: Provider,
-        workspace: WorkspaceChoice,
-    ) -> io::Result<(ThreadId, ThreadWriter, WorkspaceBinding)> {
+        project: Option<ProjectId>,
+        binding: WorkspaceBinding,
+    ) -> io::Result<(ThreadId, ThreadWriter)> {
+        self.create_with_model(provider, None, project, binding)
+    }
+
+    pub(crate) fn create_with_model(
+        &self,
+        provider: Provider,
+        model: Option<String>,
+        project: Option<ProjectId>,
+        binding: WorkspaceBinding,
+    ) -> io::Result<(ThreadId, ThreadWriter)> {
+        #[cfg(test)]
+        if self.fail_create {
+            return Err(io::Error::other("stub refused Thread creation"));
+        }
         let mut next = self.thread_ids()?.last().map_or(1, |id| id.get() + 1);
         loop {
             match fs::create_dir(self.dir.join(next.to_string())) {
@@ -513,13 +547,6 @@ impl Store {
             }
         }
         let id = ThreadId::new(next);
-        let binding = match workspace {
-            WorkspaceChoice::Main { checkout } => WorkspaceBinding::Main { checkout },
-            WorkspaceChoice::Worktree { repo } => WorkspaceBinding::Worktree {
-                repo,
-                path: self.worktree_path(id),
-            },
-        };
 
         let mut file = OpenOptions::new()
             .create_new(true)
@@ -532,7 +559,8 @@ impl Store {
             // Work starts in the binding itself; a root is picked later.
             session_project_root: None,
             // And on the provider's default model; a choice is picked later.
-            model: None,
+            model,
+            project_id: project,
         };
         file.write_all(line(&header)?.as_bytes())?;
         file.sync_data()?;
@@ -544,15 +572,14 @@ impl Store {
                 flush_interval: self.flush_interval,
                 buffered_since: None,
             },
-            binding,
         ))
     }
 
-    /// Where a Thread's dedicated worktree lives: inside the Thread's own
-    /// store directory, beside its log — created at Thread creation, removed
-    /// at Thread deletion, exactly like everything else in there.
-    fn worktree_path(&self, id: ThreadId) -> PathBuf {
-        self.dir.join(id.to_string()).join("worktree")
+    /// Where the store keeps its files — what the registry binds to, so the
+    /// registry file and the central worktree layout live beside the Thread
+    /// logs (#29).
+    pub fn dir(&self) -> &Path {
+        &self.dir
     }
 
     /// Remove one Thread entirely: its log, its directory, everything in it.
@@ -599,6 +626,7 @@ impl Store {
             workspace: header.workspace.as_ref().map(PersistedBinding::live),
             session_project_root: header.session_project_root,
             model: header.model,
+            project_id: header.project_id,
         })
     }
 
@@ -633,6 +661,7 @@ impl Store {
             workspace: header.workspace,
             session_project_root: header.session_project_root,
             model: header.model,
+            project_id: header.project_id,
             records,
         })
     }
@@ -646,7 +675,8 @@ impl Store {
     /// is flushed before the rewrite reads the log and swapped onto the new
     /// file after. The swap happens only once the rename has succeeded: on
     /// any error the caller's writer is untouched and still valid.
-    pub fn set_session_project_root(
+    #[cfg(test)]
+    pub(crate) fn set_session_project_root(
         &self,
         id: ThreadId,
         root: Option<PathBuf>,
@@ -742,6 +772,7 @@ impl Store {
             workspace: snapshot.workspace.clone(),
             session_project_root: snapshot.session_project_root.clone(),
             model: snapshot.model.clone(),
+            project_id: snapshot.project_id,
         })?;
         for record in &snapshot.records {
             contents.push_str(&line(record)?);
@@ -773,6 +804,9 @@ pub struct ThreadMeta {
     /// `None` — including every pre-v5 log — means the provider's default
     /// model.
     pub model: Option<String>,
+    /// `None` — including every pre-v6 log — means unregistered (#29): the
+    /// binding's resolved paths still say where work happens.
+    pub project_id: Option<ProjectId>,
 }
 
 /// One Thread as loaded from disk: everything a restart needs.
@@ -785,6 +819,7 @@ pub struct ThreadSnapshot {
     workspace: Option<PersistedBinding>,
     session_project_root: Option<PathBuf>,
     model: Option<String>,
+    project_id: Option<ProjectId>,
     records: Vec<Record>,
 }
 
@@ -811,6 +846,12 @@ impl ThreadSnapshot {
     /// default.
     pub fn model(&self) -> Option<String> {
         self.model.clone()
+    }
+
+    /// The registered project this Thread's CWD choice named (#29). `None`
+    /// — including every log from before schema 6 — means unregistered.
+    pub fn project_id(&self) -> Option<ProjectId> {
+        self.project_id
     }
 
     /// The provider-native id the next Session resumes with — the latest the
@@ -928,53 +969,53 @@ mod tests {
     }
 
     /// The binding for tests that are not about bindings.
-    fn main_choice() -> WorkspaceChoice {
-        WorkspaceChoice::Main {
+    fn main_choice() -> WorkspaceBinding {
+        WorkspaceBinding::Main {
             checkout: std::env::temp_dir(),
         }
     }
 
     /// A Thread's workspace binding is part of what a restart restores:
-    /// both shapes round-trip, and the worktree's path is the store's own
-    /// placement — inside the Thread's directory.
+    /// both shapes round-trip exactly as the caller resolved them — since
+    /// #29 the registry places worktrees, and the store only writes the
+    /// resolved truth down. The project id rides the same header.
     #[test]
     fn a_thread_s_workspace_binding_survives_reopening_the_store() {
         let dir = scratch("binding");
         let store = Store::open(&dir).unwrap();
-        let (main_id, _writer, main_binding) = store
-            .create(
-                Provider::Claude,
-                WorkspaceChoice::Main {
-                    checkout: "/repos/project".into(),
-                },
-            )
+        let main_binding = WorkspaceBinding::Main {
+            checkout: "/repos/project".into(),
+        };
+        let (main_id, _writer) = store
+            .create(Provider::Claude, None, main_binding.clone())
             .unwrap();
-        assert_eq!(
-            main_binding,
-            WorkspaceBinding::Main {
-                checkout: "/repos/project".into(),
-            }
-        );
-        let (wt_id, _writer, wt_binding) = store
-            .create(
-                Provider::Codex,
-                WorkspaceChoice::Worktree {
-                    repo: "/repos/project".into(),
-                },
-            )
+        let wt_binding = WorkspaceBinding::Worktree {
+            repo: "/repos/project".into(),
+            path: "/store/worktrees/project-4f2a1c9e7b30/ferrite-wt-1".into(),
+        };
+        let project = registry_id(&dir, "project-a");
+        let (wt_id, _writer) = store
+            .create(Provider::Codex, Some(project), wt_binding.clone())
             .unwrap();
-        assert_eq!(
-            wt_binding,
-            WorkspaceBinding::Worktree {
-                repo: "/repos/project".into(),
-                path: dir.join(wt_id.to_string()).join("worktree"),
-            }
-        );
 
         // The fake restart: nothing survives but the directory.
         let store = Store::open(&dir).unwrap();
         assert_eq!(store.load(main_id).unwrap().workspace(), Some(main_binding));
+        assert_eq!(store.load(main_id).unwrap().project_id(), None);
         assert_eq!(store.load(wt_id).unwrap().workspace(), Some(wt_binding));
+        assert_eq!(store.load(wt_id).unwrap().project_id(), Some(project));
+        assert_eq!(store.peek(wt_id).unwrap().project_id, Some(project));
+    }
+
+    /// A real ProjectId for header tests — minted by the registry, which is
+    /// the only place one comes from.
+    fn registry_id(dir: &Path, name: &str) -> ProjectId {
+        let root = dir.join(name);
+        fs::create_dir_all(&root).unwrap();
+        crate::workspace::registry::Registry::open(dir)
+            .unwrap()
+            .register(&root)
+            .unwrap()
     }
 
     /// Deletion is per-Thread and total: the log directory goes, the other
@@ -983,8 +1024,8 @@ mod tests {
     fn a_deleted_thread_is_gone_and_its_neighbours_are_not() {
         let dir = scratch("delete");
         let store = Store::open(&dir).unwrap();
-        let (first, _writer, _) = store.create(Provider::Claude, main_choice()).unwrap();
-        let (second, _writer, _) = store.create(Provider::Codex, main_choice()).unwrap();
+        let (first, _writer) = store.create(Provider::Claude, None, main_choice()).unwrap();
+        let (second, _writer) = store.create(Provider::Codex, None, main_choice()).unwrap();
 
         store.delete(first).unwrap();
 
@@ -1002,10 +1043,11 @@ mod tests {
     fn peek_reads_the_header_line_and_never_the_records() {
         let dir = scratch("peek");
         let store = Store::open(&dir).unwrap();
-        let (id, writer, binding) = store
+        let (id, writer) = store
             .create(
                 Provider::Codex,
-                WorkspaceChoice::Main {
+                None,
+                WorkspaceBinding::Main {
                     checkout: "/repos/project".into(),
                 },
             )
@@ -1029,7 +1071,6 @@ mod tests {
                 checkout: "/repos/project".into(),
             })
         );
-        assert_eq!(binding, meta.workspace.clone().unwrap());
         assert_eq!(
             meta.session_project_root,
             Some(PathBuf::from("/repos/project/api"))
@@ -1043,7 +1084,7 @@ mod tests {
     fn peek_refuses_a_future_schema_like_load_does() {
         let dir = scratch("peek-future");
         let store = Store::open(&dir).unwrap();
-        let (id, writer, _binding) = store.create(Provider::Claude, main_choice()).unwrap();
+        let (id, writer) = store.create(Provider::Claude, None, main_choice()).unwrap();
         drop(writer);
         let path = dir.join(id.to_string()).join("log.jsonl");
         let log = fs::read_to_string(&path).unwrap();
@@ -1146,7 +1187,7 @@ mod tests {
     fn a_thread_s_session_project_root_survives_reopening_the_store() {
         let dir = scratch("session-root");
         let store = Store::open(&dir).unwrap();
-        let (id, mut writer, _) = store.create(Provider::Claude, main_choice()).unwrap();
+        let (id, mut writer) = store.create(Provider::Claude, None, main_choice()).unwrap();
         assert_eq!(store.load(id).unwrap().session_project_root(), None);
 
         store
@@ -1221,6 +1262,40 @@ mod tests {
         assert_eq!(thread.resume_target(), Some("v4-era-4f2a"));
     }
 
+    /// The frozen contract for schema 5, byte for byte what its writer
+    /// produced: the chosen model in the header, but no project id. Logs
+    /// like this exist on disks; they must load forever.
+    const V5_LOG: &str = concat!(
+        r#"{"schema":5,"provider":"codex","workspace":{"kind":"worktree","repo":"/repos/project","path":"/store/7/worktree"},"session_project_root":null,"model":"gpt-5.4-mini"}"#,
+        "\n",
+        r#"{"type":"init","session_id":"v5-era-4f2a","model":"gpt-5.4-mini"}"#,
+        "\n",
+        r#"{"type":"turn_ended","outcome":"completed","cost_usd":null}"#,
+        "\n",
+    );
+
+    /// AC (schema story): loading a log written at schema v5 succeeds after
+    /// the bump to v6 — binding and model intact, and no project id,
+    /// exactly what v5 recorded: those Threads registered nothing.
+    #[test]
+    fn a_log_written_at_schema_v5_still_loads_after_the_bump() {
+        let dir = scratch("v5");
+        plant_log(&dir, "17", V5_LOG);
+
+        let thread = Store::open(&dir).unwrap().load(ThreadId::new(17)).unwrap();
+        assert_eq!(thread.provider(), Provider::Codex);
+        assert_eq!(thread.model(), Some("gpt-5.4-mini".into()));
+        assert_eq!(thread.project_id(), None);
+        assert_eq!(
+            thread.workspace(),
+            Some(WorkspaceBinding::Worktree {
+                repo: "/repos/project".into(),
+                path: "/store/7/worktree".into(),
+            })
+        );
+        assert_eq!(thread.resume_target(), Some("v5-era-4f2a"));
+    }
+
     /// AC (#25): the provider and model choice survives restart. Setting it
     /// rewrites the header; the Thread's open writer rides the rewrite the
     /// same way the root setter's does. Clearing the model hands back None,
@@ -1229,7 +1304,7 @@ mod tests {
     fn a_thread_s_provider_and_model_survive_reopening_the_store() {
         let dir = scratch("provider-model");
         let store = Store::open(&dir).unwrap();
-        let (id, mut writer, _) = store.create(Provider::Claude, main_choice()).unwrap();
+        let (id, mut writer) = store.create(Provider::Claude, None, main_choice()).unwrap();
         assert_eq!(store.load(id).unwrap().model(), None);
 
         store
@@ -1371,7 +1446,7 @@ mod tests {
     fn no_durable_write_ever_occurs_per_delta() {
         let dir = scratch("no-per-delta");
         let store = Store::open(&dir).unwrap();
-        let (id, mut writer, _) = store.create(Provider::Claude, main_choice()).unwrap();
+        let (id, mut writer) = store.create(Provider::Claude, None, main_choice()).unwrap();
         let log = dir.join(id.to_string()).join("log.jsonl");
 
         for seed in 0..32u64 {
@@ -1405,7 +1480,7 @@ mod tests {
     fn a_long_turn_flushes_on_the_interval_not_per_delta() {
         let dir = scratch("interval");
         let store = Store::with_flush_interval(&dir, std::time::Duration::from_millis(50)).unwrap();
-        let (id, mut writer, _) = store.create(Provider::Claude, main_choice()).unwrap();
+        let (id, mut writer) = store.create(Provider::Claude, None, main_choice()).unwrap();
         let log = dir.join(id.to_string()).join("log.jsonl");
         let header_len = fs::metadata(&log).unwrap().len();
 
@@ -1441,7 +1516,7 @@ mod tests {
     fn a_crash_torn_tail_never_loses_the_thread() {
         let dir = scratch("torn");
         let store = Store::open(&dir).unwrap();
-        let (id, mut writer, _) = store.create(Provider::Claude, main_choice()).unwrap();
+        let (id, mut writer) = store.create(Provider::Claude, None, main_choice()).unwrap();
         writer.record_prompt("try the café fix").unwrap();
         for event in claude_turn() {
             writer.record_event(&event).unwrap();
@@ -1668,7 +1743,7 @@ mod tests {
             &dir,
             "3",
             concat!(
-                r#"{"schema":6,"provider":"claude"}"#,
+                r#"{"schema":7,"provider":"claude"}"#,
                 "\n",
                 r#"{"type":"init","session_id":"from-the-future","model":"m"}"#,
                 "\n",
@@ -1678,7 +1753,7 @@ mod tests {
         let store = Store::open(&dir).unwrap();
         match store.load(ThreadId::new(3)) {
             Err(LoadError::FutureSchema { found, supported }) => {
-                assert_eq!(found, 6);
+                assert_eq!(found, 7);
                 assert_eq!(supported, SCHEMA_VERSION);
             }
             Ok(_) => panic!("a future schema must not load"),
@@ -1693,7 +1768,7 @@ mod tests {
     fn the_operator_prompt_and_the_diff_card_survive_the_round_trip() {
         let dir = scratch("prompt-diff");
         let store = Store::open(&dir).unwrap();
-        let (id, mut writer, _) = store.create(Provider::Claude, main_choice()).unwrap();
+        let (id, mut writer) = store.create(Provider::Claude, None, main_choice()).unwrap();
 
         let mut live = Transcript::default();
         writer.record_prompt("fix the typo").unwrap();
@@ -1751,7 +1826,7 @@ mod tests {
     fn a_codex_turn_keeps_its_reasoning_and_token_accounting() {
         let dir = scratch("codex");
         let store = Store::open(&dir).unwrap();
-        let (id, mut writer, _) = store.create(Provider::Codex, main_choice()).unwrap();
+        let (id, mut writer) = store.create(Provider::Codex, None, main_choice()).unwrap();
 
         let usage = SessionEvent::TokenUsage {
             total_tokens: 900,
@@ -1825,7 +1900,7 @@ mod tests {
     fn a_flushed_turn_replays_identically_after_reopening() {
         let dir = scratch("roundtrip");
         let store = Store::open(&dir).unwrap();
-        let (id, mut writer, _) = store.create(Provider::Claude, main_choice()).unwrap();
+        let (id, mut writer) = store.create(Provider::Claude, None, main_choice()).unwrap();
 
         let mut live = Transcript::default();
         for event in claude_turn() {
@@ -1851,7 +1926,7 @@ mod tests {
         let dir = scratch("reopen");
         {
             let store = Store::open(&dir).unwrap();
-            let (id, _writer, _) = store.create(Provider::Claude, main_choice()).unwrap();
+            let (id, _writer) = store.create(Provider::Claude, None, main_choice()).unwrap();
             assert_eq!(id.to_string(), "1");
         }
 

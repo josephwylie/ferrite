@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use crate::store::{Provider, Store};
-use crate::workspace::WorkspaceChoice;
+use crate::workspace::WorkspaceBinding;
 use crate::{SessionEvent, ThreadId, ToolResult, TurnOutcome};
 
 /// Importing failed; no Thread was created.
@@ -79,6 +79,15 @@ enum Entry {
 /// is durable when this returns, and `store.load(id).resume_target()` names
 /// the imported session — the id the next Session resumes from.
 pub fn import(store: &Store, path: &Path) -> Result<ThreadId, ImportError> {
+    let mut registry = crate::workspace::registry::Registry::open(store.dir())?;
+    import_registered(store, &mut registry, path)
+}
+
+pub fn import_registered(
+    store: &Store,
+    registry: &mut crate::workspace::registry::Registry,
+    path: &Path,
+) -> Result<ThreadId, ImportError> {
     let bytes = std::fs::read(path)?;
     let parsed = parse(&bytes)?;
 
@@ -91,8 +100,12 @@ pub fn import(store: &Store, path: &Path) -> Result<ThreadId, ImportError> {
         .clone()
         .or_else(|| path.parent().map(Path::to_path_buf))
         .unwrap_or_default();
-    let (id, mut writer, _binding) =
-        store.create(parsed.provider, WorkspaceChoice::Main { checkout })?;
+    let project = registry.register_recorded(&checkout)?;
+    let (id, mut writer) = store.create(
+        parsed.provider,
+        Some(project),
+        WorkspaceBinding::Main { checkout },
+    )?;
 
     // A failure past this point must not leave a half-written Thread
     // claiming to be the imported conversation (the error type says no
