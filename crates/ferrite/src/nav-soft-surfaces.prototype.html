@@ -10,11 +10,11 @@
 
       /* Proposed — Soft. Pure neutral greys, measured from the reference desktop app.
          Nav is the lightest field, Panes sit above the ground, the ground is the darkest. */
-      --ground: #111111;
-      --pane: #1a1a1a;
+      --ground: #0e0e0e;
+      --pane: #171717;
       --nav: #232323;
-      --raised: #242424;
-      --menu: #272727;
+      --raised: #282828;
+      --menu: #282828;
       --hover: #2c2c2c;
       --fill: #343434;
       --fill-hover: #3b3b3b;
@@ -26,7 +26,7 @@
       --text-strong: #ffffff;
       --text: #dedede;
       --text-2: #a8a8a8;
-      --text-muted: #909090;
+      --text-muted: #959595;
       --text-on-fill: #9e9e9e;
       --sep: #6e6e6e;
       --group-rail: #4a4a4a;
@@ -117,17 +117,23 @@
 
     /* ── Window chrome: traffic lights and the one scope path ───────────── */
 
-    .title-bar {
-      display: flex; align-items: center; flex: 0 0 42px; block-size: 42px; gap: 12px;
-      padding-inline: 13px 15px; background: var(--ground);
+    .title-bar { display: flex; align-items: stretch; flex: 0 0 42px; block-size: 42px; background: var(--ground); }
+    .title-chrome {
+      display: flex; align-items: center; flex: 0 0 var(--nav-width); gap: 8px;
+      padding-inline: 13px 8px; background: var(--nav);
+      transition-property: flex-basis, background-color;
+      transition-duration: 160ms; transition-timing-function: cubic-bezier(.2, 0, 0, 1);
     }
+    .app.nav-collapsed .title-chrome { flex: 0 0 auto; background: transparent; }
+    .title-scope { display: flex; align-items: center; min-inline-size: 0; flex: 1; padding-inline: 13px; }
     :root[data-mode="aperture"] .title-bar { border-block-end: 1px solid var(--line); }
-    .traffic { display: flex; gap: 8px; }
+    .traffic { display: flex; gap: 8px; flex: 0 0 auto; }
     .traffic span { inline-size: 12px; block-size: 12px; border-radius: 50%; }
     .traffic span:nth-child(1) { background: var(--macos-close); }
     .traffic span:nth-child(2) { background: var(--macos-minimize); }
     .traffic span:nth-child(3) { background: var(--macos-zoom); }
     .scope { display: flex; align-items: baseline; min-inline-size: 0; gap: 6px; font-size: var(--fs-md); }
+    .title-chrome .icon-button { margin-inline-start: 4px; }
     .scope .project { flex: 0 0 auto; color: var(--text-2); }
     .scope .sep { flex: 0 0 auto; color: var(--sep); }
     .scope .group {
@@ -257,6 +263,7 @@
     /* ── Collapsed rail ─────────────────────────────────────────────────── */
 
     .nav-rail { display: flex; flex-direction: column; align-items: center; inline-size: var(--nav-rail-width); min-block-size: 0; padding-block: 7px; }
+    .nav-rail .rail-filter { flex: 0 0 auto; }
     .rail-items { display: flex; flex-direction: column; align-items: center; gap: 2px; margin-block-start: 12px; min-block-size: 0; overflow-y: auto; scrollbar-width: none; }
     .rail-item {
       display: grid; place-items: center; inline-size: 28px; block-size: 28px; flex: 0 0 auto;
@@ -384,10 +391,15 @@
   -->
   <div class="app">
     <header class="title-bar">
-      <span class="traffic" aria-hidden="true"><span></span><span></span><span></span></span>
-      <span class="scope">
-        <span class="project">ferrite</span><span class="sep">›</span><span class="group">Project-scoped navigation prototype</span>
-      </span>
+      <div class="title-chrome">
+        <span class="traffic" aria-hidden="true"><span></span><span></span><span></span></span>
+        <button class="icon-button" id="collapseButton" type="button" aria-label="Collapse navigation" aria-expanded="true"></button>
+      </div>
+      <div class="title-scope">
+        <span class="scope">
+          <span class="project">ferrite</span><span class="sep">›</span><span class="group">Project-scoped navigation prototype</span>
+        </span>
+      </div>
     </header>
 
     <div class="workspace">
@@ -398,7 +410,6 @@
                     aria-haspopup="listbox" aria-expanded="false" aria-controls="projectFilterMenu" aria-describedby="filterStatus">
               <span id="filterSummary">All Projects</span><span id="filterChevron" aria-hidden="true"></span>
             </button>
-            <button class="icon-button" id="collapseButton" type="button" aria-label="Collapse navigation" aria-expanded="true"></button>
             <div class="filter-menu" id="projectFilterMenu" role="listbox" aria-label="Choose Project" hidden></div>
             <span class="sr-only" id="filterStatus" aria-live="polite">All Projects shown in navigation. Cockpit unchanged.</span>
           </div>
@@ -407,7 +418,6 @@
         </div>
 
         <div class="nav-rail">
-          <button class="icon-button" id="expandButton" type="button" aria-label="Expand navigation"></button>
           <button class="icon-button rail-filter" id="railFilterButton" type="button" aria-label="Project filter: All Projects. Expand to change."></button>
           <div class="rail-items" id="railItems" aria-label="Threads"></div>
         </div>
@@ -715,19 +725,20 @@
       closeProjectMenu();
       collapsed = value;
       $("navShell").classList.toggle("collapsed", collapsed);
-      $("collapseButton").setAttribute("aria-expanded", String(!collapsed));
+      document.querySelector(".app").classList.toggle("nav-collapsed", collapsed);
+      const button = $("collapseButton");
+      button.setAttribute("aria-expanded", String(!collapsed));
+      button.setAttribute("aria-label", collapsed ? "Expand navigation" : "Collapse navigation");
     }
 
     $("collapseButton").innerHTML = icons.sidebar;
-    $("expandButton").innerHTML = icons.sidebar;
     $("railFilterButton").innerHTML = icons.chevronDown;
     $("filterChevron").innerHTML = icons.chevronDown;
     document.querySelectorAll(".pane-branch").forEach(branch => {
       branch.innerHTML = `${icons.branch}<span>${branch.getAttribute("title")}</span>`;
     });
 
-    $("collapseButton").addEventListener("click", () => setCollapsed(true));
-    $("expandButton").addEventListener("click", () => setCollapsed(false));
+    $("collapseButton").addEventListener("click", () => setCollapsed(!collapsed));
     $("railFilterButton").addEventListener("click", () => {
       setCollapsed(false);
       requestAnimationFrame(() => openProjectMenu());
