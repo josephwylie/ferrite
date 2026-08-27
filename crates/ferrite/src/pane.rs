@@ -24,9 +24,11 @@ use gpui::{
     Entity, FocusHandle, FontWeight, HighlightStyle, Pixels, ScrollHandle, SharedString, Stateful,
     StyledText,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::Duration;
+#[cfg(test)]
+use std::{cell::RefCell, rc::Rc};
 
 use crate::composer::Composer;
 use crate::pointer::{Pointer, PointerPressed};
@@ -35,9 +37,9 @@ use crate::select::SelectionOverlay;
 // literal survives in render code, which is #22's grep-able law.
 use crate::theme;
 use crate::theme::{
-    ACCENT, CODE_KEYWORD, CODE_STR, EDGE, EDGE_STRONG, FAIL, FAIL_WASH, GOOD, GOOD_WASH, HAIRLINE,
-    IDLE, INK, INK_FAINT, INK_MUTED, INK_SECONDARY, INK_TERTIARY, INSET, RAISED, SURFACE, WAIT,
-    WAIT_EDGE, WAIT_WASH,
+    ACCENT, ACCENT_WASH, CODE_KEYWORD, CODE_STR, EDGE, EDGE_STRONG, FAIL, FAIL_WASH, GOOD,
+    GOOD_WASH, HAIRLINE, IDLE, INK, INK_FAINT, INK_MUTED, INK_SECONDARY, INK_TERTIARY, INSET,
+    RAISED, SURFACE, WAIT, WAIT_EDGE, WAIT_WASH,
 };
 
 /// One Pane's view state: what the window owns per Pane. Everything it
@@ -55,10 +57,25 @@ pub struct PaneView {
     pub scroll: ScrollHandle,
     /// A pending Decision takes the keyboard: y and n are answers, not text.
     pub decision_focus: FocusHandle,
+    disclosure: ToolDisclosure,
     /// The wall cell's folded reading — everything the L3 recipe needs that
     /// is not an O(1) transcript read. The cockpit rebuilds it whenever the
     /// Thread's transcript changes; a frame never walks Blocks at L3.
     pub wall: WallCard,
+}
+
+struct ToolDisclosure {
+    expanded: HashSet<String>,
+    target: Option<String>,
+    focus: FocusHandle,
+    #[cfg(test)]
+    bounds: Rc<RefCell<HashMap<String, gpui::Bounds<Pixels>>>>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DisclosureState {
+    Collapsed,
+    Expanded,
 }
 
 /// A Thread, or the draft that becomes one at first send (#29).
@@ -122,6 +139,13 @@ impl PaneView {
             composer: cx.new(Composer::new),
             scroll: ScrollHandle::new(),
             decision_focus: cx.focus_handle(),
+            disclosure: ToolDisclosure {
+                expanded: HashSet::new(),
+                target: None,
+                focus: cx.focus_handle(),
+                #[cfg(test)]
+                bounds: Rc::new(RefCell::new(HashMap::new())),
+            },
             wall: WallCard::default(),
         }
     }
@@ -135,6 +159,13 @@ impl PaneView {
             composer: cx.new(Composer::new),
             scroll: ScrollHandle::new(),
             decision_focus: cx.focus_handle(),
+            disclosure: ToolDisclosure {
+                expanded: HashSet::new(),
+                target: None,
+                focus: cx.focus_handle(),
+                #[cfg(test)]
+                bounds: Rc::new(RefCell::new(HashMap::new())),
+            },
             wall: WallCard::default(),
         }
     }
@@ -166,6 +197,98 @@ impl PaneView {
     pub fn adopt_thread(&mut self, thread: ThreadId) {
         self.content = PaneContent::Thread(thread);
         self.name = SharedString::from(format!("thread-{thread:02}"));
+    }
+
+    pub(crate) fn toggle_tool(&mut self, call: &str) {
+        if !self.disclosure.expanded.remove(call) {
+            self.disclosure.expanded.insert(call.to_string());
+        }
+        self.disclosure.target = Some(call.to_string());
+    }
+
+    pub(crate) fn tool_state(&self, call: &str) -> DisclosureState {
+        if self.disclosure.expanded.contains(call) {
+            DisclosureState::Expanded
+        } else {
+            DisclosureState::Collapsed
+        }
+    }
+
+    pub(crate) fn tool_targeted(&self, call: &str) -> bool {
+        self.disclosure.target.as_deref() == Some(call)
+    }
+
+    pub(crate) fn has_tool_target(&self) -> bool {
+        self.disclosure.target.is_some()
+    }
+
+    pub(crate) fn targeted_tool(&self) -> Option<&str> {
+        self.disclosure.target.as_deref()
+    }
+
+    pub(crate) fn tool_focus(&self) -> FocusHandle {
+        self.disclosure.focus.clone()
+    }
+
+    pub(crate) fn cycle_tools(&mut self, calls: &[String], reverse: bool) -> Option<&str> {
+        let next = if calls.is_empty() {
+            None
+        } else if reverse {
+            match self
+                .disclosure
+                .target
+                .as_ref()
+                .and_then(|target| calls.iter().position(|call| call == target))
+            {
+                None => calls.last().cloned(),
+                Some(0) => None,
+                Some(at) => calls.get(at - 1).cloned(),
+            }
+        } else {
+            match self
+                .disclosure
+                .target
+                .as_ref()
+                .and_then(|target| calls.iter().position(|call| call == target))
+            {
+                None => calls.first().cloned(),
+                Some(at) if at + 1 == calls.len() => None,
+                Some(at) => calls.get(at + 1).cloned(),
+            }
+        };
+        self.disclosure.target = next;
+        self.disclosure.target.as_deref()
+    }
+
+    pub(crate) fn prune_tools(&mut self, calls: &HashSet<String>) {
+        self.disclosure.expanded.retain(|call| calls.contains(call));
+        if self
+            .disclosure
+            .target
+            .as_ref()
+            .is_some_and(|call| !calls.contains(call))
+        {
+            self.disclosure.target = None;
+        }
+    }
+
+    pub(crate) fn clear_tool_target(&mut self) {
+        self.disclosure.target = None;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn tool_expanded(&self, call: &str) -> bool {
+        self.disclosure.expanded.contains(call)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn tool_bounds(&self, call: &str) -> Option<gpui::Bounds<Pixels>> {
+        self.disclosure.bounds.borrow().get(call).copied()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn tool_bounds_sink(&self) -> Rc<RefCell<HashMap<String, gpui::Bounds<Pixels>>>> {
+        self.disclosure.bounds.clone()
     }
 }
 
@@ -221,6 +344,8 @@ pub struct PaneState<'a> {
     /// laid into the L1 card or the L2 body here. None while nothing
     /// pends, and at the wall, which draws no keycaps.
     pub decide: Option<AnyElement>,
+    /// L1 tool chevrons, already wired to the cockpit's shared toggle door.
+    pub tool_controls: HashMap<String, AnyElement>,
 }
 
 /// The wall's state matrix (glance.md §4), selected from O(1) reads plus the
@@ -364,6 +489,7 @@ pub fn render_pane(view: &PaneView, state: PaneState<'_>, level: Level) -> impl 
         usage_ring,
         controls,
         decide,
+        mut tool_controls,
     } = state;
     let status = transcript.map(|t| t.status());
     let state = wall_state(
@@ -442,7 +568,14 @@ pub fn render_pane(view: &PaneView, state: PaneState<'_>, level: Level) -> impl 
             if let Some(todos) = transcript.todos() {
                 pane = pane.child(tasks_strip(todos, transcript.current_task()));
             }
-            pane = pane.child(body(view, transcript, level, &selection, timings));
+            pane = pane.child(body(
+                view,
+                transcript,
+                level,
+                &selection,
+                timings,
+                &mut tool_controls,
+            ));
             // The CHANGED strip rides above the Composer whenever the
             // Thread has touched files (#22 C11). `Instruments::of` walks
             // every Block, per frame — the same price every L2 cell already
@@ -1295,12 +1428,25 @@ pub fn rendered_window(blocks: &[Block], level: Level) -> &[Block] {
     &blocks[tail..]
 }
 
+/// Output-bearing tool rows in exactly the window L1 draws. Disclosure
+/// cycling, focus validation, and controls all consume this one eligibility
+/// rule so an invisible row can never remain keyboard-addressable.
+pub fn rendered_output_tools(blocks: &[Block], level: Level) -> impl Iterator<Item = &ToolBlock> {
+    rendered_window(blocks, level)
+        .iter()
+        .filter_map(|block| match &block.body {
+            Body::Tool(tool) if tool.output.is_some() => Some(tool),
+            _ => None,
+        })
+}
+
 fn body(
     view: &PaneView,
     transcript: &Transcript,
     level: Level,
     selection: &SelectionOverlay,
     timings: Option<&HashMap<String, ToolTiming>>,
+    tool_controls: &mut HashMap<String, AnyElement>,
 ) -> impl IntoElement {
     // Only Thread Panes have a transcript body; a draft never lands here.
     let thread = view.thread().map(|thread| thread.get()).unwrap_or(0);
@@ -1322,7 +1468,19 @@ fn body(
         // anywhere in it anchors at the nearest character.
         .hover_text();
     for block in rendered_window(transcript.blocks(), level) {
-        body = body.child(render_block(block, selection, timings));
+        body = body.child(render_block(
+            block,
+            selection,
+            timings,
+            view.tool_state(match &block.body {
+                Body::Tool(tool) => &tool.call,
+                _ => "",
+            }) == DisclosureState::Expanded,
+            match &block.body {
+                Body::Tool(tool) => tool_controls.remove(&tool.call),
+                _ => None,
+            },
+        ));
     }
     body
 }
@@ -2236,6 +2394,8 @@ fn render_block(
     block: &Block,
     selection: &SelectionOverlay,
     timings: Option<&HashMap<String, ToolTiming>>,
+    expanded: bool,
+    disclosure: Option<AnyElement>,
 ) -> AnyElement {
     let row = div().w_full().flex_shrink_0();
     match &block.body {
@@ -2345,7 +2505,9 @@ fn render_block(
                     ),
             )
             .into_any_element(),
-        Body::Tool(tool) => render_tool(row, block.id, tool, selection, timings),
+        Body::Tool(tool) => render_tool(
+            row, block.id, tool, selection, timings, expanded, disclosure,
+        ),
     }
 }
 
@@ -2375,6 +2537,8 @@ fn render_tool(
     tool: &ToolBlock,
     selection: &SelectionOverlay,
     timings: Option<&HashMap<String, ToolTiming>>,
+    expanded: bool,
+    disclosure: Option<AnyElement>,
 ) -> AnyElement {
     // Command runners' args read as prose; every other summary is a
     // path-like subject and takes the accent (the comps' file links,
@@ -2412,7 +2576,21 @@ fn render_tool(
                     .child(selection.piece(block, ")", Vec::new())),
             );
     }
-    let mut line = gutter_row(div(), "⏺", INK_TERTIARY, false).child(call);
+    let has_disclosure = disclosure.is_some();
+    let gutter = div()
+        .relative()
+        .flex_shrink_0()
+        .w(px(theme::GUTTER_W))
+        .children(disclosure)
+        .when(!has_disclosure, |gutter| {
+            gutter.text_color(rgb(INK_TERTIARY)).child("⏺")
+        });
+    let mut line = div()
+        .flex()
+        .flex_row()
+        .gap(px(8.))
+        .child(gutter)
+        .child(call);
     // A settled call's clock, where the cockpit stamped one; running calls
     // tick on the activity line instead. Sub-tenth blips render nothing —
     // a column of 0.0s is noise, not an instrument.
@@ -2427,9 +2605,16 @@ fn render_tool(
     // was promoted from; a countless chip keeps the line, which still says
     // more than the chip does.
     let mut promoted = false;
-    let verdict = if let Some(diff) = &tool.diff {
-        Some(diff_stat(diff.added, diff.removed).text_size(px(theme::TEXT_META)))
-    } else if command_runner && matches!(tool.state, ToolState::Ok) {
+    let mut verdicts: Vec<AnyElement> = tool_verdicts(tool)
+        .into_iter()
+        .map(|verdict| match verdict {
+            ToolVerdict::Diff(added, removed) => diff_stat(added, removed)
+                .text_size(px(theme::TEXT_META))
+                .into_any_element(),
+            ToolVerdict::Failed => chip("failed", FAIL, FAIL_WASH).into_any_element(),
+        })
+        .collect();
+    if verdicts.is_empty() && command_runner && matches!(tool.state, ToolState::Ok) {
         // A command runner that settled without an error exited 0 — that
         // is exactly what `is_error` carries for one; a test run reads its
         // count off its own result line, or stays honestly countless.
@@ -2444,14 +2629,12 @@ fn render_tool(
         } else {
             SharedString::from("exit 0")
         };
-        Some(chip(label, GOOD, GOOD_WASH))
-    } else {
-        None
-    };
-    if verdict.is_some() || settled_clock.is_some() {
+        verdicts.push(chip(label, GOOD, GOOD_WASH).into_any_element());
+    }
+    if !verdicts.is_empty() || settled_clock.is_some() {
         line = line.child(div().flex_1());
     }
-    line = line.children(verdict);
+    line = line.children(verdicts);
     if let Some(total) = settled_clock {
         line = line.child(
             div()
@@ -2466,7 +2649,34 @@ fn render_tool(
         .flex_col()
         .gap(px(theme::TRANSCRIPT_GAP))
         .child(line);
-    if !promoted {
+    if expanded {
+        if let Some(output) = &tool.output {
+            let color = if matches!(tool.state, ToolState::Failed(_)) {
+                FAIL
+            } else {
+                INK_MUTED
+            };
+            card = card.child(
+                div()
+                    .pl(px(theme::INDENT))
+                    .w_full()
+                    .text_color(rgb(color))
+                    .child(selection.line(block, output.text.clone(), Vec::new())),
+            );
+            if output.omitted_bytes > 0 {
+                card = card.child(
+                    div()
+                        .pl(px(theme::INDENT))
+                        .text_size(px(theme::TEXT_META))
+                        .text_color(rgb(INK_MUTED))
+                        .child(format!(
+                            "… {} bytes omitted from inline view",
+                            output.omitted_bytes
+                        )),
+                );
+            }
+        }
+    } else if !promoted {
         if let Some(line) = &tool.result_line {
             card = card.child(
                 div()
@@ -2478,20 +2688,71 @@ fn render_tool(
             );
         }
     }
-    if let ToolState::Failed(message) = &tool.state {
-        card = card.child(
-            div()
-                .pl(px(theme::INDENT))
-                .w_full()
-                .truncate()
-                .text_color(rgb(FAIL))
-                .child(selection.line(block, format!("⎿ {message}"), Vec::new())),
-        );
+    if !expanded {
+        if let ToolState::Failed(message) = &tool.state {
+            card = card.child(
+                div()
+                    .pl(px(theme::INDENT))
+                    .w_full()
+                    .truncate()
+                    .text_color(rgb(FAIL))
+                    .child(selection.line(block, format!("⎿ {message}"), Vec::new())),
+            );
+        }
     }
     if let Some(diff) = &tool.diff {
         card = card.child(render_diff(block, diff, selection));
     }
     card.into_any_element()
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ToolVerdict {
+    Diff(usize, usize),
+    Failed,
+}
+
+fn tool_verdicts(tool: &ToolBlock) -> Vec<ToolVerdict> {
+    let mut verdicts = Vec::with_capacity(2);
+    if let Some(diff) = &tool.diff {
+        verdicts.push(ToolVerdict::Diff(diff.added, diff.removed));
+    }
+    if matches!(tool.state, ToolState::Failed(_)) {
+        verdicts.push(ToolVerdict::Failed);
+    }
+    verdicts
+}
+
+/// The only clickable part of a tool row. Its pointer role and pressed
+/// treatment make the chevron's hit target honest while the row stays text.
+pub fn tool_disclosure_control(
+    call: &str,
+    expanded: bool,
+    targeted: bool,
+    focus: &FocusHandle,
+) -> Stateful<Div> {
+    div()
+        .id(SharedString::from(format!("tool-disclosure-{call}")))
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .justify_center()
+        .absolute()
+        .left(px((theme::GUTTER_W - theme::TOOL_DISCLOSURE_HIT) / 2.))
+        .top(px(-1.))
+        .w(px(theme::TOOL_DISCLOSURE_HIT))
+        .h(px(theme::TOOL_DISCLOSURE_HIT))
+        .rounded(px(theme::R_TIGHT))
+        .text_color(rgb(if targeted { ACCENT } else { INK_MUTED }))
+        .when(targeted, |control| {
+            control
+                .bg(rgba(ACCENT_WASH))
+                .track_focus(focus)
+                .key_context("ToolDisclosure")
+        })
+        .child(if expanded { "▾" } else { "▸" })
+        .hover_control()
+        .press_control()
 }
 
 /// A bare diff, per DirectionDense: no card, no filename header — the tool
@@ -2698,7 +2959,7 @@ mod tests {
         transcript.apply(Input::Event(SessionEvent::ToolCompleted {
             id: "toolu_2".into(),
             output: "applied".into(),
-            is_error: false,
+            is_error: true,
             result: ToolResult::FileEdit {
                 path: "/workspace/x.txt".into(),
                 hunks: vec![Hunk {
@@ -2741,6 +3002,7 @@ mod tests {
         thread: ThreadId,
         selection: crate::select::TranscriptSelection,
         blocks: Vec<Block>,
+        expanded: HashSet<String>,
     }
 
     impl Render for ShowsBlocks {
@@ -2756,11 +3018,13 @@ mod tests {
                 .w(px(900.))
                 .font_family(crate::theme::FONT_MONO)
                 .text_size(px(12.))
-                .children(
-                    self.blocks
-                        .iter()
-                        .map(|block| render_block(block, &overlay, None)),
-                )
+                .children(self.blocks.iter().map(|block| {
+                    let expanded = matches!(
+                        &block.body,
+                        Body::Tool(tool) if self.expanded.contains(&tool.call)
+                    );
+                    render_block(block, &overlay, None, expanded, None)
+                }))
         }
     }
 
@@ -2769,6 +3033,7 @@ mod tests {
             thread: ThreadId::new(1),
             selection: crate::select::TranscriptSelection::default(),
             blocks,
+            expanded: HashSet::new(),
         }
     }
 
@@ -2906,6 +3171,18 @@ mod tests {
     #[gpui::test]
     fn every_block_kind_paints(cx: &mut TestAppContext) {
         let transcript = every_kind();
+        let failed_edit = transcript
+            .blocks()
+            .iter()
+            .find_map(|block| match &block.body {
+                Body::Tool(tool) if tool.call == "toolu_2" => Some(tool),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(
+            tool_verdicts(failed_edit),
+            vec![ToolVerdict::Diff(1, 1), ToolVerdict::Failed]
+        );
         let blocks: Vec<Block> = transcript.blocks().to_vec();
 
         let kinds: Vec<&str> = blocks
@@ -2990,6 +3267,7 @@ mod tests {
     #[gpui::test]
     fn every_block_kind_registers_its_selectable_text(cx: &mut TestAppContext) {
         let transcript = every_kind();
+        let instruments = Instruments::of(&transcript);
         let blocks: Vec<Block> = transcript.blocks().to_vec();
         let ids: Vec<ferrite_core::transcript::BlockId> =
             blocks.iter().map(|block| block.id).collect();
@@ -3032,6 +3310,25 @@ mod tests {
         // Bash's was promoted into its chip, which is chrome — so its count
         // never registers.
         assert!(all.contains("⎿ applied"), "the result line: {all}");
+
+        view.update(cx, |view, cx| {
+            view.expanded.insert("toolu_2".into());
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let expanded = view.read_with(cx, |view, _| view.selection.registered(thread));
+        assert_eq!(
+            expanded
+                .iter()
+                .filter(|(_, _, _, text)| text == "+delta" || text == "-bravo")
+                .count(),
+            2,
+            "the edit diff still renders exactly once expanded"
+        );
+        assert!(expanded.iter().any(|(_, _, _, text)| text == "applied"));
+        assert!(!expanded.iter().any(|(_, _, _, text)| text == "⎿ applied"));
+        assert_eq!(instruments.changed.len(), 1);
+        assert_eq!((instruments.added, instruments.removed), (1, 1));
         assert!(
             !all.contains("42 passed"),
             "a promoted chip is chrome: {all}"

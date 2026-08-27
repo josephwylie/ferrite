@@ -53,7 +53,8 @@ pub enum Body {
     Meta(String),
 }
 
-/// A tool call as one collapsed row: what ran, on what, how it went.
+/// A tool call as one row: what ran, on what, how it went, and the bounded
+/// provider output an L1 Pane may disclose.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolBlock {
     /// The provider's id for this call — what a later result quotes.
@@ -67,9 +68,17 @@ pub struct ToolBlock {
     pub diff: Option<Diff>,
     /// The first line of the tool's output, trimmed to a row — what the
     /// Pane's `⎿` continuation shows (DirectionDense). Errors carry their
-    /// message in `state` instead; the rest of the output was the model's
-    /// to read, never Ferrite's to keep.
+    /// message in `state` instead; disclosure reads `output`.
     pub result_line: Option<String>,
+    /// Exact provider output retained for inline disclosure, bounded so one
+    /// noisy call cannot dominate a many-Pane cockpit.
+    pub output: Option<ToolOutput>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolOutput {
+    pub text: String,
+    pub omitted_bytes: usize,
 }
 
 /// A file edit, ready to draw red and green.
@@ -442,9 +451,10 @@ impl Transcript {
                 // A failure already carries its message in the state; a
                 // success keeps its first output line for the `⎿` row.
                 let result_line = (!is_error).then(|| result_line(&output)).flatten();
+                let output = retained_output(&output);
                 Update {
                     dirty: self
-                        .settle_tool(&id, state, diff, result_line)
+                        .settle_tool(&id, state, diff, result_line, output)
                         .into_iter()
                         .collect(),
                     ..Update::default()
@@ -459,6 +469,7 @@ impl Transcript {
                     state: ToolState::Running,
                     diff: None,
                     result_line: None,
+                    output: None,
                 }));
                 Update {
                     dirty: vec![block],
@@ -660,6 +671,7 @@ impl Transcript {
         state: ToolState,
         diff: Option<Diff>,
         result_line: Option<String>,
+        output: Option<ToolOutput>,
     ) -> Option<BlockId> {
         let block = self
             .blocks
@@ -668,12 +680,17 @@ impl Transcript {
         let Body::Tool(tool) = &mut block.body else {
             return None;
         };
-        if tool.state == state && tool.diff == diff && tool.result_line == result_line {
+        if tool.state == state
+            && tool.diff == diff
+            && tool.result_line == result_line
+            && tool.output == output
+        {
             return None;
         }
         tool.state = state;
         tool.diff = diff;
         tool.result_line = result_line;
+        tool.output = output;
         Some(block.id)
     }
 
@@ -698,6 +715,22 @@ const ERROR_CHARS: usize = 200;
 /// How much of a tool's output its `⎿` continuation row carries — one line
 /// that never wraps at transcript density.
 const RESULT_CHARS: usize = 80;
+
+const TOOL_OUTPUT_BYTES: usize = 64 * 1024;
+
+fn retained_output(output: &str) -> Option<ToolOutput> {
+    if output.trim().is_empty() {
+        return None;
+    }
+    let mut end = output.len().min(TOOL_OUTPUT_BYTES);
+    while !output.is_char_boundary(end) {
+        end -= 1;
+    }
+    Some(ToolOutput {
+        text: output[..end].to_string(),
+        omitted_bytes: output.len() - end,
+    })
+}
 
 /// Cut to `limit` characters, marking the cut.
 fn trim(text: &str, limit: usize) -> String {
@@ -1575,6 +1608,58 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_settled_tool_retains_exact_bounded_output_on_its_stable_row() {
+        let mut transcript = Transcript::default();
+        transcript.apply(started("before", "Read", serde_json::Value::Null));
+        transcript.apply(started("toolu_1", "Edit", serde_json::Value::Null));
+        let row = transcript.blocks()[1].id;
+        transcript.apply(Input::Notice("later tail block".into()));
+        let output = format!("first line\n{}éTAIL", "x".repeat(65_524));
+
+        let update = transcript.apply(Input::Event(SessionEvent::ToolCompleted {
+            id: "toolu_1".into(),
+            output: output.clone(),
+            is_error: false,
+            result: crate::ToolResult::FileEdit {
+                path: "/workspace/x.txt".into(),
+                hunks: vec![crate::Hunk {
+                    old_start: 1,
+                    old_lines: 1,
+                    new_start: 1,
+                    new_lines: 1,
+                    lines: vec!["-old".into(), "+new".into()],
+                }],
+            },
+        }));
+
+        assert_eq!(update.dirty, vec![row]);
+        let Body::Tool(tool) = &transcript.blocks()[1].body else {
+            panic!("expected the settled tool row")
+        };
+        assert_eq!(tool.result_line.as_deref(), Some("first line"));
+        let retained = tool.output.as_ref().expect("non-blank output is retained");
+        assert_eq!(retained.text.as_bytes(), &output.as_bytes()[..65_535]);
+        assert!(retained.text.is_char_boundary(retained.text.len()));
+        assert_eq!(retained.omitted_bytes, output.len() - retained.text.len());
+        let diff = tool.diff.as_ref().expect("structured diff stays folded");
+        assert_eq!((diff.added, diff.removed), (1, 1));
+
+        let failure = transcript.apply(completed("toolu_1", "line one\nline two", true));
+        assert_eq!(failure.dirty, vec![row]);
+        let Body::Tool(tool) = &transcript.blocks()[1].body else {
+            panic!("expected the same tool row")
+        };
+        assert!(
+            matches!(&tool.state, ToolState::Failed(message) if message == "line one\nline two")
+        );
+        assert_eq!(tool.result_line, None);
+        assert_eq!(
+            tool.output.as_ref().map(|output| output.text.as_str()),
+            Some("line one\nline two")
+        );
+    }
+
     /// DirectionDense's `⎿` continuation: a settled tool keeps the first
     /// line of its output, trimmed to a row — folded here, never parsed by
     /// the Pane (#22).
@@ -1621,6 +1706,7 @@ mod tests {
             panic!("expected a tool row")
         };
         assert_eq!(tool.result_line, None);
+        assert_eq!(tool.output, None);
 
         let mut failed = Transcript::default();
         failed.apply(started("toolu_2", "Bash", serde_json::Value::Null));

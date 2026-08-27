@@ -74,10 +74,10 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
         // Shift: the same draft, aimed straight at "new worktree" instead
         // of the checkout the operator is sitting in.
         (with_primary("shift-n"), "cockpit::NewWorktreeThread", None),
-        // #29: tab walks the draft Pane's band chips, then returns to the
-        // prompt. Bare — a Thread Pane has no second tab stop, so the key
-        // is dead everywhere else.
+        // Tab keeps #29's draft-band walk; on a Thread Pane the same action
+        // walks L1 tool disclosures. Shift-Tab is the reverse Thread walk.
         ("tab".into(), "cockpit::BandCycle", None),
+        ("shift-tab".into(), "cockpit::ToolCyclePrevious", None),
         // Close parks the Thread; it is still there, and reopening revives it.
         (with_primary("w"), "cockpit::CloseThread", None),
         // And back again: the most recently parked Thread, revived.
@@ -110,6 +110,11 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
         ("up".into(), "cockpit::MenuPrevious", Some("ComposerMenu")),
         ("down".into(), "cockpit::MenuNext", Some("ComposerMenu")),
         ("enter".into(), "cockpit::MenuPick", Some("ComposerMenu")),
+        (
+            "enter".into(),
+            "cockpit::ToggleTool",
+            Some("ToolDisclosure"),
+        ),
         (
             "escape".into(),
             "cockpit::MenuDismiss",
@@ -188,8 +193,8 @@ mod tests {
         assert_eq!(shape(Platform::Mac), shape(Platform::Windows));
     }
 
-    /// #29: tab is the band's chip walk, bare on both platforms — a Thread
-    /// Pane has no second tab stop, so the key is dead everywhere else.
+    /// Tab stays the draft band's chip walk and doubles as the forward L1
+    /// disclosure walk; Shift-Tab is its reverse on Thread Panes.
     #[test]
     fn tab_cycles_the_band_on_both_platforms() {
         for platform in [Platform::Mac, Platform::Windows] {
@@ -197,6 +202,11 @@ mod tests {
                 bindings(platform).contains(&("tab".into(), "cockpit::BandCycle", None)),
                 "{platform:?} is missing tab for cockpit::BandCycle"
             );
+            assert!(bindings(platform).contains(&(
+                "shift-tab".into(),
+                "cockpit::ToolCyclePrevious",
+                None
+            )));
         }
     }
 
@@ -235,6 +245,20 @@ mod tests {
                     "{scoped} must be bound after {bare} ({platform:?})"
                 );
             }
+            assert!(table.contains(&(
+                "enter".into(),
+                "cockpit::ToggleTool",
+                Some("ToolDisclosure")
+            )));
+            let submit = table
+                .iter()
+                .position(|(_, action, _)| *action == "cockpit::Submit")
+                .unwrap();
+            let toggle = table
+                .iter()
+                .position(|(_, action, _)| *action == "cockpit::ToggleTool")
+                .unwrap();
+            assert!(submit < toggle, "tool Enter must beat bare Submit");
         }
     }
 

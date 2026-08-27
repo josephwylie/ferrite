@@ -227,6 +227,8 @@ pub const RING_W: f32 = 1.5;
 pub const RING_INSET: f32 = 3.0;
 /// 14px — the transcript glyph gutter (❯ / ⏺ / list numbers).
 pub const GUTTER_W: f32 = 14.0;
+/// 20px — tool disclosure pointer/focus target, centered over the gutter.
+pub const TOOL_DISCLOSURE_HIT: f32 = 20.0;
 /// 22px — indent under a tool row (⎿ continuations, bare diffs, markdown).
 pub const INDENT: f32 = 22.0;
 /// 30px — the bare diff's right-aligned line-number column.

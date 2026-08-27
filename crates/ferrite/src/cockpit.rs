@@ -39,6 +39,8 @@ actions!(
         NewThread,
         NewWorktreeThread,
         BandCycle,
+        ToolCyclePrevious,
+        ToggleTool,
         CloseThread,
         ReopenThread,
         CopySelection,
@@ -540,6 +542,7 @@ impl CockpitView {
             // The wall card refolds only when the Thread actually changed —
             // this is the seam that keeps L3 free of per-frame Block walks.
             if !update.dirty.is_empty() || !update.evicted.is_empty() {
+                self.prune_tool_disclosures(update.thread);
                 self.refresh_wall(update.thread);
                 // Turn end is the other stated refresh moment (#29): the
                 // turn that just finished may have moved the checkout.
@@ -552,6 +555,27 @@ impl CockpitView {
             self.refresh_wall(thread);
         }
         cx.notify();
+    }
+
+    /// Transcript membership changes only through the pump. Prune stale
+    /// expanded call ids here once per changed Thread, never per frame.
+    fn prune_tool_disclosures(&mut self, thread: ThreadId) {
+        let Some(index) = self.pane_for(thread) else {
+            return;
+        };
+        let valid = self
+            .cockpit
+            .transcript(thread)
+            .into_iter()
+            .flat_map(|transcript| transcript.blocks())
+            .filter_map(|block| match &block.body {
+                ferrite_core::transcript::Body::Tool(tool) if tool.output.is_some() => {
+                    Some(tool.call.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        self.panes[index].prune_tools(&valid);
     }
 
     /// Refold one Thread's wall card. Called wherever its transcript can
@@ -786,21 +810,70 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// Tab on a draft (#29): walk the band's chips, then back to the
-    /// prompt. Anywhere else the key does nothing — no Pane has a second
-    /// tab stop.
-    fn band_cycle(&mut self, _: &BandCycle, _window: &mut Window, cx: &mut Context<Self>) {
+    /// Tab walks a draft's band (#29), or an L1 Thread Pane's rendered tool
+    /// disclosures before returning to the Composer.
+    fn band_cycle(&mut self, _: &BandCycle, window: &mut Window, cx: &mut Context<Self>) {
         let Some(draft) = self
             .panes
             .get_mut(self.focused)
             .and_then(PaneView::draft_mut)
         else {
+            self.cycle_tools(false, window, cx);
             return;
         };
         draft.band_focus = pane::BandChip::next(draft.band_focus);
         // The popover belongs to the chip it opened from; tab moves on.
         self.band = None;
         cx.notify();
+    }
+
+    fn tool_cycle_previous(
+        &mut self,
+        _: &ToolCyclePrevious,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.cycle_tools(true, window, cx);
+    }
+
+    fn cycle_tools(&mut self, reverse: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.level_now(window) != Level::Transcript || self.panes[self.focused].draft().is_some()
+        {
+            return;
+        }
+        let calls = self.expandable_tools(self.focused, Level::Transcript);
+        let targeted = self.panes[self.focused]
+            .cycle_tools(&calls, reverse)
+            .is_some();
+        let focus = if targeted {
+            self.panes[self.focused].tool_focus()
+        } else {
+            self.panes[self.focused].composer.focus_handle(cx)
+        };
+        window.focus(&focus);
+        cx.notify();
+    }
+
+    fn toggle_tool_action(&mut self, _: &ToggleTool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(thread) = self.focused_thread() else {
+            return;
+        };
+        let Some(call) = self.panes[self.focused].targeted_tool().map(str::to_string) else {
+            return;
+        };
+        self.toggle_tool(thread, &call, window, cx);
+    }
+
+    fn expandable_tools(&self, index: usize, level: Level) -> Vec<String> {
+        let Some(thread) = self.panes[index].thread() else {
+            return Vec::new();
+        };
+        self.cockpit
+            .transcript(thread)
+            .into_iter()
+            .flat_map(|transcript| pane::rendered_output_tools(transcript.blocks(), level))
+            .map(|tool| tool.call.clone())
+            .collect()
     }
 
     fn allow(&mut self, _: &Allow, window: &mut Window, cx: &mut Context<Self>) {
@@ -1094,6 +1167,7 @@ impl CockpitView {
             return false;
         };
         self.cockpit.has_prompt_history(thread)
+            && !self.panes[index].has_tool_target()
             && self.rename.is_none()
             && !self.cockpit.busy(thread)
             && self.cockpit.pending(thread).is_none()
@@ -2648,6 +2722,9 @@ impl CockpitView {
     /// handler, and the root's bubble handler dismisses any open selector —
     /// this Pane included.
     fn pointer_down(&mut self, index: usize, event: &MouseDownEvent, cx: &mut Context<Self>) {
+        if let Some(pane) = self.panes.get_mut(index) {
+            pane.clear_tool_target();
+        }
         self.focus_pane(index);
         // A draft has no transcript to select in (#29).
         if let Some(pane) = self.panes.get(index) {
@@ -2962,6 +3039,30 @@ impl Render for CockpitView {
         let attention = self.attention();
         let level = self.level_now(window);
 
+        if level == Level::Transcript {
+            for index in 0..self.panes.len() {
+                let target = self.panes[index].targeted_tool().map(str::to_string);
+                let target_is_rendered = target.as_ref().is_none_or(|target| {
+                    self.panes[index]
+                        .thread()
+                        .and_then(|thread| self.cockpit.transcript(thread))
+                        .is_some_and(|transcript| {
+                            pane::rendered_output_tools(transcript.blocks(), level)
+                                .any(|tool| tool.call == *target)
+                        })
+                });
+                if !target_is_rendered {
+                    self.panes[index].clear_tool_target();
+                }
+            }
+        } else {
+            // L2/L3 never walk Blocks: only their invisible keyboard target
+            // clears. Expanded call ids survive the zoom round-trip.
+            for pane in &mut self.panes {
+                pane.clear_tool_target();
+            }
+        }
+
         // A selection is only real while its rows draw (#27): zooming below
         // L1, parking the Pane, or fullscreening another Thread clears it
         // here rather than leaving invisible clipboard state behind cmd-c.
@@ -3086,6 +3187,7 @@ impl Render for CockpitView {
                     // Decision pends: the card is part of its stack and the
                     // input stays live (PromptBox state 04) — y/n/a answer
                     // through the region's own Decision key context (#23).
+                    Level::Transcript if pane.has_tool_target() => Some(pane.tool_focus()),
                     Level::Transcript => Some(pane.composer.focus_handle(cx)),
                     _ if pane
                         .thread()
@@ -3162,6 +3264,8 @@ impl Render for CockpitView {
             .on_action(cx.listener(Self::new_thread))
             .on_action(cx.listener(Self::new_worktree_thread))
             .on_action(cx.listener(Self::band_cycle))
+            .on_action(cx.listener(Self::tool_cycle_previous))
+            .on_action(cx.listener(Self::toggle_tool_action))
             .on_action(cx.listener(Self::close_thread))
             .on_action(cx.listener(Self::reopen_thread))
             .on_action(cx.listener(Self::copy_selection))
@@ -3355,6 +3459,7 @@ impl CockpitView {
                 decide: (level != Level::Wall)
                     .then(|| self.decide_keycaps(index, level, cx))
                     .flatten(),
+                tool_controls: self.tool_disclosures(index, thread, level, cx),
             },
             level,
         ));
@@ -3378,6 +3483,73 @@ impl CockpitView {
             }
         }
         rendered
+    }
+
+    fn tool_disclosures(
+        &self,
+        index: usize,
+        thread: ThreadId,
+        level: Level,
+        cx: &mut Context<Self>,
+    ) -> std::collections::HashMap<String, AnyElement> {
+        if level != Level::Transcript {
+            return std::collections::HashMap::new();
+        }
+        let pane = &self.panes[index];
+        let Some(transcript) = self.cockpit.transcript(thread) else {
+            return std::collections::HashMap::new();
+        };
+        let mut controls = std::collections::HashMap::new();
+        for tool in pane::rendered_output_tools(transcript.blocks(), level) {
+            let call = tool.call.clone();
+            let wired = pane::tool_disclosure_control(
+                &call,
+                pane.tool_state(&call) == pane::DisclosureState::Expanded,
+                pane.tool_targeted(&call),
+                &pane.tool_focus(),
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener({
+                    let call = call.clone();
+                    move |view, _: &MouseDownEvent, window, cx| {
+                        cx.stop_propagation();
+                        view.toggle_tool(thread, &call, window, cx);
+                    }
+                }),
+            );
+            #[cfg(test)]
+            let wired = {
+                let sink = pane.tool_bounds_sink();
+                let measured = call.clone();
+                div()
+                    .child(wired)
+                    .on_children_prepainted(move |bounds, _, _| {
+                        if let Some(bounds) = bounds.first() {
+                            sink.borrow_mut().insert(measured.clone(), *bounds);
+                        }
+                    })
+            };
+            controls.insert(call, wired.into_any_element());
+        }
+        controls
+    }
+
+    fn toggle_tool(
+        &mut self,
+        thread: ThreadId,
+        call: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = self.pane_for(thread) else {
+            return;
+        };
+        self.focus_pane(index);
+        self.selection.clear();
+        self.panes[index].toggle_tool(call);
+        window.focus(&self.panes[index].tool_focus());
+        cx.notify();
     }
 
     /// The pending Decision's keycaps (#26), each press wired to the exact
@@ -5501,6 +5673,204 @@ mod tests {
             Some("before\nBash(echo hi)\n⎿ done\nafter"),
             "the exit-0 chip and the ⏺ are chrome and must not copy"
         );
+    }
+
+    #[gpui::test]
+    fn clicking_the_tool_chevron_replaces_the_compact_line_with_selectable_output(
+        cx: &mut TestAppContext,
+    ) {
+        let (core, fake) = cockpit("tool-disclosure-pointer", 1);
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+        let output = format!("first line\n{}TAIL", "x".repeat(65_540));
+        let stream = fake.streams.borrow();
+        stream[0]
+            .send(SessionEvent::ToolStarted {
+                id: "toolu_9".into(),
+                name: "Bash".into(),
+                input: serde_json::json!({ "command": "echo hi" }),
+            })
+            .unwrap();
+        stream[0]
+            .send(SessionEvent::ToolCompleted {
+                id: "toolu_9".into(),
+                output,
+                is_error: false,
+                result: ferrite_core::ToolResult::Opaque,
+            })
+            .unwrap();
+        stream[0]
+            .send(SessionEvent::ToolStarted {
+                id: "toolu_10".into(),
+                name: "Read".into(),
+                input: serde_json::json!({ "file_path": "/workspace/pending" }),
+            })
+            .unwrap();
+        drop(stream);
+        tick(cx);
+
+        view.read_with(cx, |view, _| {
+            let transcript = view.cockpit.transcript(thread).unwrap();
+            let id = |call: &str| {
+                transcript
+                    .blocks()
+                    .iter()
+                    .find_map(|block| match &block.body {
+                        Body::Tool(tool) if tool.call == call => Some(block.id),
+                        _ => None,
+                    })
+                    .unwrap()
+            };
+            let x = |block| {
+                view.selection
+                    .caret_position(thread, block, 0, 0)
+                    .unwrap()
+                    .x
+            };
+            assert_eq!(
+                x(id("toolu_9")),
+                x(id("toolu_10")),
+                "a disclosure must occupy the existing gutter, not shift call text"
+            );
+        });
+
+        let collapsed = view.read_with(cx, |view, _| view.selection.registered(thread));
+        assert!(collapsed
+            .iter()
+            .any(|(_, _, _, text)| text == "⎿ first line"));
+        let chevron = view.read_with(cx, |view, _| {
+            let bounds = view.panes[0]
+                .tool_bounds("toolu_9")
+                .expect("the actual rendered chevron bounds");
+            assert_eq!(bounds.size.width, px(crate::theme::TOOL_DISCLOSURE_HIT));
+            bounds.center()
+        });
+        cx.simulate_click(chevron, gpui::Modifiers::none());
+        cx.run_until_parked();
+
+        view.read_with(cx, |view, _| {
+            assert!(view.panes[0].tool_expanded("toolu_9"));
+            let runs = view.selection.registered(thread);
+            assert!(runs.iter().any(|(_, _, _, text)| {
+                text.starts_with("first line\n") && text.len() == 64 * 1024
+            }));
+            assert!(!runs.iter().any(|(_, _, _, text)| text == "⎿ first line"));
+            assert!(!runs
+                .iter()
+                .any(|(_, _, _, text)| text.contains('▾') || text.contains("bytes omitted")));
+        });
+
+        let chevron = view.read_with(cx, |view, _| {
+            view.panes[0].tool_bounds("toolu_9").unwrap().center()
+        });
+        cx.simulate_click(chevron, gpui::Modifiers::none());
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert!(!view.panes[0].tool_expanded("toolu_9"));
+            assert!(view
+                .selection
+                .registered(thread)
+                .iter()
+                .any(|(_, _, _, text)| text == "⎿ first line"));
+        });
+
+        let composer = view.read_with(cx, |view, _| {
+            let body = view.panes[0].scroll.bounds();
+            gpui::point(body.center().x, body.bottom() + px(20.))
+        });
+        cx.simulate_click(composer, gpui::Modifiers::none());
+        cx.update(|window, cx| {
+            view.read_with(cx, |view, cx| {
+                assert!(!view.panes[0].tool_targeted("toolu_9"));
+                assert!(view.panes[0].composer.focus_handle(cx).is_focused(window));
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn keyboard_cycles_tool_controls_and_enter_toggles_without_submitting(cx: &mut TestAppContext) {
+        let (mut core, fake) = cockpit("tool-disclosure-keyboard", 1);
+        let thread = core.threads()[0];
+        core.send(thread, "prior prompt".into());
+        cx.update(|cx| {
+            cx.bind_keys([
+                KeyBinding::new("tab", BandCycle, None),
+                KeyBinding::new("shift-tab", ToolCyclePrevious, None),
+                KeyBinding::new("enter", Submit, None),
+                KeyBinding::new("enter", ToggleTool, Some("ToolDisclosure")),
+            ])
+        });
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        let stream = fake.streams.borrow();
+        stream[0]
+            .send(SessionEvent::ToolStarted {
+                id: "toolu_9".into(),
+                name: "Bash".into(),
+                input: serde_json::json!({ "command": "echo hi" }),
+            })
+            .unwrap();
+        stream[0]
+            .send(SessionEvent::ToolCompleted {
+                id: "toolu_9".into(),
+                output: "first line\nsecond line".into(),
+                is_error: false,
+                result: ferrite_core::ToolResult::Opaque,
+            })
+            .unwrap();
+        stream[0]
+            .send(SessionEvent::TurnEnded {
+                outcome: ferrite_core::TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+        drop(stream);
+        tick(cx);
+        cx.simulate_input("unsent draft");
+
+        cx.simulate_keystrokes("tab");
+        view.read_with(cx, |view, _| {
+            assert!(view.panes[0].tool_targeted("toolu_9"));
+            assert!(!view.history_available(0, Level::Transcript));
+        });
+        cx.simulate_keystrokes("enter");
+        view.read_with(cx, |view, _| {
+            assert!(view.panes[0].tool_expanded("toolu_9"));
+            assert_eq!(
+                fake.sent.borrow().as_slice(),
+                ["prior prompt"],
+                "Enter must not submit"
+            );
+        });
+
+        cx.simulate_keystrokes("tab");
+        cx.update(|window, cx| {
+            view.read_with(cx, |view, cx| {
+                assert!(!view.panes[0].tool_targeted("toolu_9"));
+                assert!(view.panes[0].composer.focus_handle(cx).is_focused(window));
+            });
+        });
+
+        cx.simulate_keystrokes("shift-tab");
+        view.read_with(
+            cx,
+            |view, _| assert!(view.panes[0].tool_targeted("toolu_9")),
+        );
+        for line in 0..200 {
+            fake.streams.borrow()[0]
+                .send(SessionEvent::TextDelta {
+                    text: format!("later block {line}\n\n"),
+                })
+                .unwrap();
+        }
+        tick(cx);
+        cx.update(|window, cx| {
+            view.read_with(cx, |view, cx| {
+                assert!(!view.panes[0].tool_targeted("toolu_9"));
+                assert!(view.panes[0].composer.focus_handle(cx).is_focused(window));
+            });
+        });
     }
 
     /// #15 review, at the rendered window (#27): streaming slides the
