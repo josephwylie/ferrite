@@ -464,7 +464,7 @@ impl Groups {
                     .position(|item| *item == thread)
                     .ok_or(ApplyError::MissingGroup)?;
                 target.members.remove(old);
-                let at = gap_after_removal(old, index, target.members.len());
+                let at = index.min(target.members.len());
                 target.members.insert(at, thread);
                 Ok(Applied {
                     group: Some(group),
@@ -478,7 +478,7 @@ impl Groups {
                     .position(|item| item.id == group)
                     .ok_or(ApplyError::MissingGroup)?;
                 let item = self.groups.remove(old);
-                let at = gap_after_removal(old, index, self.groups.len());
+                let at = group_gap_after_removal(old, index, self.groups.len());
                 self.groups.insert(at, item);
                 Ok(Applied {
                     group: Some(group),
@@ -574,8 +574,7 @@ impl Groups {
     }
 }
 
-/// Convert a gap index measured before removal to an insertion index after it.
-fn gap_after_removal(old: usize, gap: usize, remaining: usize) -> usize {
+fn group_gap_after_removal(old: usize, gap: usize, remaining: usize) -> usize {
     gap.saturating_sub(usize::from(gap > old)).min(remaining)
 }
 
@@ -815,8 +814,8 @@ mod tests {
         ];
         let mut ids = Vec::new();
         let mut writers = Vec::new();
-        for index in 0..102 {
-            let project = if index == 101 {
+        for index in 0..103 {
+            let project = if index == 102 {
                 projects[1]
             } else {
                 projects[0]
@@ -826,7 +825,7 @@ mod tests {
                     Provider::Claude,
                     Some(project),
                     WorkspaceBinding::Main {
-                        checkout: roots[usize::from(index == 101)].clone(),
+                        checkout: roots[usize::from(index == 102)].clone(),
                     },
                 )
                 .unwrap();
@@ -842,7 +841,7 @@ mod tests {
             .unwrap()
             .group
             .unwrap();
-        for thread in &ids[2..101] {
+        for thread in &ids[2..100] {
             groups
                 .apply(GroupChange::Join {
                     thread: *thread,
@@ -851,22 +850,54 @@ mod tests {
                 })
                 .unwrap();
         }
-        assert_eq!(groups.get(group).unwrap().members, ids[..101]);
+        assert_eq!(groups.get(group).unwrap().members, ids[..100]);
         assert_eq!(grid(100), (10, 10));
+        let join = groups.preview_drop(
+            Drag::Thread {
+                thread: ids[100],
+                group: None,
+            },
+            DropTarget::GroupHeader(group),
+        );
+        assert!(matches!(join, Plan::Change(GroupChange::Join { .. })));
+        let applied = match join {
+            Plan::Change(change) => groups.apply(change).unwrap(),
+            _ => unreachable!(),
+        };
+        assert_eq!(applied.group, Some(group));
+
+        let downward = groups.preview_drop(
+            Drag::Thread {
+                thread: ids[0],
+                group: Some(group),
+            },
+            DropTarget::ThreadRow {
+                thread: ids[100],
+                group: Some(group),
+                index: 100,
+            },
+        );
+        match downward {
+            Plan::Change(change) => groups.apply(change).unwrap(),
+            _ => panic!("same-project downward reorder was refused"),
+        };
+        let mut expected = ids[1..101].to_vec();
+        expected.push(ids[0]);
+        assert_eq!(groups.get(group).unwrap().members, expected);
         drop(groups);
         let groups = Groups::load(&dir).unwrap();
-        assert_eq!(groups.get(group).unwrap().members, ids[..101]);
+        assert_eq!(groups.get(group).unwrap().members, expected);
         assert!(matches!(
             groups.preview_drop(
                 Drag::Thread {
-                    thread: ids[101],
+                    thread: ids[102],
                     group: None,
                 },
                 DropTarget::GroupHeader(group),
             ),
             Plan::Refused(reason) if reason.contains("different projects")
         ));
-        assert_eq!(groups.get(group).unwrap().members, ids[..101]);
+        assert_eq!(groups.get(group).unwrap().members, expected);
     }
 
     #[test]
@@ -901,8 +932,8 @@ mod tests {
     }
 
     #[test]
-    fn reorder_indices_are_gaps_measured_before_removal() {
-        let dir = scratch("reorder-gaps");
+    fn member_reorders_use_final_positions_while_group_moves_use_gaps() {
+        let dir = scratch("reorder-positions");
         let (threads, _writers) = stored_threads(&dir, 7);
         let mut groups = Groups::load(&dir).unwrap();
         let first = groups

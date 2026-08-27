@@ -6,7 +6,7 @@
 //! Drawing only, like `pane.rs`: the cockpit assembles a `NavState` per
 //! frame from O(1) reads (`status()`, `pending()`, `todos()`) plus the
 //! parked-row cache it rebuilds on park/revive — `Store::load` and
-//! `Instruments::of` are banned here, which is what keeps the 24-Pane wall
+//! `Instruments::of` are banned here, which keeps large Groups
 //! smooth with the nav open. Click wiring stays in `cockpit.rs`, the same
 //! split `pane_cell` uses. Rows keep stable positions and never re-sort: a
 //! park or revive moves a row between sections — a real state change — and
@@ -41,7 +41,7 @@ pub struct NavState {
     pub collapsed: bool,
 }
 
-/// One running Thread's row: a Wall cell flattened to one line.
+/// One running Thread's row: a Pane flattened to one line.
 pub struct RunningRow {
     pub thread: ThreadId,
     pub name: SharedString,
@@ -87,8 +87,8 @@ pub fn shell(collapsed: bool) -> Div {
         .bg(rgb(INSET))
         .border_r_1()
         .border_color(rgba(EDGE))
-        // Rows past the window's height are clipped, not smeared over the
-        // grid; a scrolling nav is not v1.
+        // The child row column owns vertical scrolling; the shell clips it
+        // to the nav instead of letting rows paint over the Cockpit.
         .overflow_hidden()
 }
 
@@ -138,10 +138,10 @@ pub fn group_header_with_title(
     active: bool,
 ) -> Stateful<Div> {
     row_frame(("nav-group", id.get() as usize), active)
+        .debug_selector(|| format!("nav-group-{}", id.get()))
         .font_weight(FontWeight::SEMIBOLD)
         .text_size(px(TEXT_ROW))
         .text_color(rgb(INK_SECONDARY))
-        .child("▸")
         .child(title)
         .child(div().flex_1())
         .child(
@@ -313,6 +313,7 @@ pub fn thread_title_text(title: SharedString, color: u32) -> Div {
 pub fn editable_group_title(id: GroupId, title: SharedString) -> Stateful<Div> {
     div()
         .id(("rename-group", id.get() as usize))
+        .debug_selector(|| format!("rename-group-{}", id.get()))
         .min_w_0()
         .truncate()
         .rounded_sm()
@@ -324,6 +325,7 @@ pub fn editable_group_title(id: GroupId, title: SharedString) -> Stateful<Div> {
 pub fn editable_thread_title(thread: ThreadId, title: SharedString, color: u32) -> Stateful<Div> {
     div()
         .id(("rename-thread", thread.get() as usize))
+        .debug_selector(|| format!("rename-thread-{}", thread.get()))
         .min_w_0()
         .truncate()
         .rounded_sm()

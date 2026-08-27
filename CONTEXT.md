@@ -28,8 +28,17 @@ A view, never an identity.
 _Avoid_: window, tile, terminal.
 
 **Cockpit**
-The grid of Panes — the whole many-thread view, up to the 24-pane wall.
+The visible Panes: **Solo** shows exactly one Thread; **Group** shows the exact
+ordered membership of one durable Group (two or more Threads). Groups have no
+product cap.
 _Avoid_: dashboard, workspace (see Workspace binding).
+
+**Solo**
+The default Cockpit view: exactly the focused Thread's Pane.
+
+**Group**
+A durable, operator-ordered set of two or more Threads from one registered
+project. Opening its header shows exactly its members in the Cockpit.
 
 **Semantic zoom**
 A Pane's rendering chosen by its size: **L1** (near: transcript + prompt),
@@ -68,7 +77,8 @@ would be a new concept, not a revival of this one.
 - Open-source project; dual-licensed MIT + Apache-2.0.
 - Name kept: Ferrite (iOS audio app collision accepted — distant category).
 - v1 providers: Claude + Codex, minimal.
-- v1 cockpit: the full 24-pane wall including semantic zoom L1–L3.
+- v1 cockpit: Solo by default; an opened Group shows its exact membership with
+  semantic zoom L1–L3 and no product cap.
 - v1 git: workspace binding only (worktree or main); no checkpoints yet.
 - Issue-tracker/board integration: later, not v1.
 - Platforms: macOS (Metal) AND Windows (DirectX 11) first-class from the start.

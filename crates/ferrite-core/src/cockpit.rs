@@ -303,6 +303,8 @@ pub struct Cockpit {
     sampler: Option<Box<dyn RssSampler>>,
     /// Bytes one Session may hold before the watchdog replaces it.
     limit: u64,
+    #[cfg(test)]
+    refuse_park: std::collections::HashSet<ThreadId>,
 }
 
 impl Cockpit {
@@ -317,6 +319,8 @@ impl Cockpit {
             spawner,
             sampler: None,
             limit: u64::MAX,
+            #[cfg(test)]
+            refuse_park: std::collections::HashSet::new(),
         })
     }
 
@@ -787,6 +791,10 @@ impl Cockpit {
             return Ok(());
         };
         state.session = None;
+        #[cfg(test)]
+        if self.refuse_park.contains(&thread) {
+            return Err(io::Error::other("stub refused to park"));
+        }
         state.writer.flush()
     }
 
@@ -858,13 +866,14 @@ impl Cockpit {
                 continue;
             }
             if let Err(error) = self.revive(*thread) {
+                let mut rollback_failure = None;
                 for opened in revived.into_iter().rev() {
                     if let Err(error) = self.park(opened) {
-                        return Err(ReviveGroupError::Rollback {
-                            thread: opened,
-                            error,
-                        });
+                        rollback_failure.get_or_insert((opened, error));
                     }
+                }
+                if let Some((thread, error)) = rollback_failure {
+                    return Err(ReviveGroupError::Rollback { thread, error });
                 }
                 return Err(ReviveGroupError::Member {
                     thread: *thread,
@@ -1009,8 +1018,12 @@ impl Cockpit {
         self.threads.keys().copied().collect()
     }
 
-    pub fn thread_title(&self, thread: ThreadId) -> Option<&str> {
-        self.threads.get(&thread)?.title.as_deref()
+    /// The durable operator title, whether this Thread is live or parked.
+    pub fn thread_title(&self, thread: ThreadId) -> Result<Option<String>, LoadError> {
+        if let Some(state) = self.threads.get(&thread) {
+            return Ok(state.title.clone());
+        }
+        self.store.peek(thread).map(|meta| meta.title)
     }
 
     pub fn rename_thread(&mut self, thread: ThreadId, title: &str) -> io::Result<()> {
@@ -2018,18 +2031,28 @@ mod tests {
         let (mut cockpit, fake) = cockpit("revive-group-atomic");
         let first = cockpit.open(Provider::Claude, main_choice()).unwrap();
         let second = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        let third = cockpit.open(Provider::Claude, main_choice()).unwrap();
         let group = cockpit
             .apply_group(GroupChange::Create { first, second })
             .unwrap()
             .group
             .unwrap();
+        cockpit
+            .apply_group(GroupChange::Join {
+                thread: third,
+                group,
+                index: None,
+            })
+            .unwrap();
         cockpit.park(first).unwrap();
         cockpit.park(second).unwrap();
-        *fake.fail_at.borrow_mut() = Some(*fake.attempts.borrow() + 2);
+        cockpit.park(third).unwrap();
+        cockpit.refuse_park.insert(first);
+        *fake.fail_at.borrow_mut() = Some(*fake.attempts.borrow() + 3);
 
         assert!(matches!(
             cockpit.revive_group(group),
-            Err(ReviveGroupError::Member { thread, .. }) if thread == second
+            Err(ReviveGroupError::Rollback { thread, .. }) if thread == first
         ));
         assert!(
             cockpit.threads().is_empty(),
@@ -2037,12 +2060,13 @@ mod tests {
         );
         assert_eq!(
             cockpit.groups().get(group).unwrap().members,
-            [first, second]
+            [first, second, third]
         );
 
+        cockpit.refuse_park.clear();
         *fake.fail_at.borrow_mut() = None;
-        assert_eq!(cockpit.revive_group(group).unwrap(), [first, second]);
-        assert_eq!(cockpit.threads(), [first, second]);
+        assert_eq!(cockpit.revive_group(group).unwrap(), [first, second, third]);
+        assert_eq!(cockpit.threads(), [first, second, third]);
     }
 
     #[test]
@@ -2053,14 +2077,25 @@ mod tests {
         let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
 
         cockpit.rename_thread(thread, "  Parser work  ").unwrap();
-        assert_eq!(cockpit.thread_title(thread), Some("Parser work"));
+        assert_eq!(
+            cockpit.thread_title(thread).unwrap().as_deref(),
+            Some("Parser work")
+        );
         assert!(cockpit.rename_thread(thread, "   ").is_err());
         cockpit.park(thread).unwrap();
+        assert_eq!(
+            cockpit.thread_title(thread).unwrap().as_deref(),
+            Some("Parser work"),
+            "the one title seam reads parked Threads too"
+        );
         drop(cockpit);
 
         let mut relaunched = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake));
         relaunched.revive(thread).unwrap();
-        assert_eq!(relaunched.thread_title(thread), Some("Parser work"));
+        assert_eq!(
+            relaunched.thread_title(thread).unwrap().as_deref(),
+            Some("Parser work")
+        );
     }
 
     /// AC: two Threads on the same repo in separate worktrees cannot touch
