@@ -36,6 +36,10 @@ pub struct Composer {
     /// tie-break lets the menu's enter/escape rows beat bare Submit and
     /// Interrupt. An ancestor context would lose that tie.
     menu_open: bool,
+    /// The focused idle Thread can recall a delivered prompt. The cockpit
+    /// derives this alongside the footer hint; this flag only arms the
+    /// focused node's key context.
+    history_available: bool,
     last_layout: Option<ShapedLine>,
     last_bounds: Option<Bounds<Pixels>>,
 }
@@ -49,6 +53,7 @@ impl Composer {
             line: Line::default(),
             mentions: Vec::new(),
             menu_open: false,
+            history_available: false,
             last_layout: None,
             last_bounds: None,
         }
@@ -58,6 +63,13 @@ impl Composer {
     pub fn set_menu_open(&mut self, open: bool, cx: &mut Context<Self>) {
         if self.menu_open != open {
             self.menu_open = open;
+            cx.notify();
+        }
+    }
+
+    pub fn set_history_available(&mut self, available: bool, cx: &mut Context<Self>) {
+        if self.history_available != available {
+            self.history_available = available;
             cx.notify();
         }
     }
@@ -290,10 +302,11 @@ impl Render for Composer {
             // (#26's text role, #27) — an arrow over the one line the
             // operator types into would say the opposite of the truth.
             .hover_text()
-            .key_context(if self.menu_open {
-                "Composer ComposerMenu"
-            } else {
-                "Composer"
+            .key_context(match (self.history_available, self.menu_open) {
+                (true, true) => "Composer ComposerHistory ComposerMenu",
+                (true, false) => "Composer ComposerHistory",
+                (false, true) => "Composer ComposerMenu",
+                (false, false) => "Composer",
             })
             .track_focus(&self.focus_handle(cx))
             .on_action(cx.listener(Self::backspace))

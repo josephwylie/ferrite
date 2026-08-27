@@ -869,6 +869,16 @@ impl ThreadSnapshot {
     pub fn inputs(&self) -> Vec<Input> {
         self.records.iter().map(Record::input).collect()
     }
+
+    pub(crate) fn prompt_texts(&self) -> Vec<String> {
+        self.records
+            .iter()
+            .filter_map(|record| match record {
+                Record::Prompt { text } => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
 }
 
 /// Appends one Thread's records. Buffered: nothing reaches the disk until a

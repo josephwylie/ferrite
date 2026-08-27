@@ -12,6 +12,8 @@ use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
 use crate::groups::{Applied, ApplyError, Drag, DropTarget, GroupChange, GroupId, Groups, Plan};
+pub use crate::prompt_history::HistoryDirection;
+use crate::prompt_history::PromptHistory;
 use crate::providers::Session;
 use crate::store::{LoadError, Provider, Store, ThreadWriter};
 use crate::transcript::{BlockId, Input, Lexer, Transcript, Update};
@@ -164,6 +166,7 @@ struct Thread {
     pending: Option<Decision>,
     /// A prompt the operator wrote while the turn was still running.
     queued: Option<String>,
+    prompt_history: PromptHistory,
     busy: bool,
     /// The provider-native id a replacement Session resumes from — the latest
     /// the provider announced. Held here rather than read back from the log,
@@ -229,6 +232,7 @@ impl Thread {
             model,
             pending: None,
             queued: None,
+            prompt_history: PromptHistory::new(Vec::new()),
             busy: false,
             resume,
             workspace,
@@ -808,6 +812,7 @@ impl Cockpit {
             workspace,
             session_project_root,
         );
+        state.prompt_history = PromptHistory::new(snapshot.prompt_texts());
         let inputs = snapshot.inputs();
         // The lock arms with the history (#25): a replayed operator prompt
         // is a first prompt already sent.
@@ -839,6 +844,7 @@ impl Cockpit {
         let Some(state) = self.threads.get_mut(&thread) else {
             return;
         };
+        state.prompt_history.reset();
         // Guarded before anything spawns: a refused send must not leave a
         // fresh provider process behind. `deliver` guards again for the
         // sends that never pass through here.
@@ -1007,6 +1013,7 @@ impl Cockpit {
     /// turn ends, which is when it is sent.
     pub fn queue(&mut self, thread: ThreadId, text: String) {
         if let Some(state) = self.threads.get_mut(&thread) {
+            state.prompt_history.reset();
             state.queued = Some(text);
         }
     }
@@ -1014,7 +1021,27 @@ impl Cockpit {
     /// Take a held prompt back into the Composer, so a typo written mid-turn
     /// is fixable before it goes out.
     pub fn unqueue(&mut self, thread: ThreadId) -> Option<String> {
-        self.threads.get_mut(&thread)?.queued.take()
+        let state = self.threads.get_mut(&thread)?;
+        state.prompt_history.reset();
+        state.queued.take()
+    }
+
+    pub fn has_prompt_history(&self, thread: ThreadId) -> bool {
+        self.threads
+            .get(&thread)
+            .is_some_and(|state| state.prompt_history.has_entries())
+    }
+
+    pub fn recall_prompt(
+        &mut self,
+        thread: ThreadId,
+        direction: HistoryDirection,
+        current_draft: &str,
+    ) -> Option<String> {
+        self.threads
+            .get_mut(&thread)?
+            .prompt_history
+            .recall(direction, current_draft)
     }
 
     pub fn queued(&self, thread: ThreadId) -> Option<&str> {
@@ -1187,6 +1214,7 @@ fn deliver(state: &mut Thread, text: String) -> io::Result<Update> {
     // And the Thread's first locks its provider for good (#25, #29).
     state.first_prompt_sent = true;
     let _ = state.writer.record_prompt(&text);
+    state.prompt_history.append(text.clone());
     Ok(state.transcript.apply(Input::Prompt(text)))
 }
 
@@ -2079,6 +2107,112 @@ mod tests {
             .any(|block| matches!(&block.body, Body::Prompt(line) if line == "run the tests")));
     }
 
+    #[test]
+    fn prompt_history_is_per_thread_and_rebuilt_from_the_log() {
+        let (mut cockpit, _) = cockpit("prompt-history-core");
+        let first = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        let second = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        cockpit.send(first, "one".into());
+        cockpit.send(first, "two".into());
+        cockpit.send(second, "other".into());
+
+        assert_eq!(
+            cockpit.recall_prompt(first, HistoryDirection::Older, "draft"),
+            Some("two".into())
+        );
+        assert_eq!(
+            cockpit.recall_prompt(second, HistoryDirection::Older, "second draft"),
+            Some("other".into())
+        );
+
+        cockpit.park(first).unwrap();
+        cockpit.revive(first).unwrap();
+        assert_eq!(
+            cockpit.recall_prompt(first, HistoryDirection::Older, "revived draft"),
+            Some("two".into())
+        );
+        assert_eq!(
+            cockpit.recall_prompt(first, HistoryDirection::Older, "ignored edit"),
+            Some("one".into())
+        );
+    }
+
+    #[test]
+    fn only_successful_delivery_joins_history_and_queued_delivery_waits_for_turn_end() {
+        let (mut cockpit, fake) = cockpit("prompt-history-delivery");
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        cockpit.send(thread, "sent".into());
+        *fake.fail_send.borrow_mut() = true;
+        cockpit.send(thread, "refused".into());
+        *fake.fail_send.borrow_mut() = false;
+        assert_eq!(
+            cockpit.recall_prompt(thread, HistoryDirection::Older, "draft"),
+            Some("sent".into())
+        );
+
+        cockpit.queue(thread, "taken back".into());
+        assert_eq!(cockpit.unqueue(thread).as_deref(), Some("taken back"));
+        assert_eq!(
+            cockpit.recall_prompt(thread, HistoryDirection::Older, "after unqueue"),
+            Some("sent".into()),
+            "unqueue resets traversal and never appends"
+        );
+
+        fake.streams.borrow()[0].send(text("working")).unwrap();
+        cockpit.pump();
+        cockpit.queue(thread, "held".into());
+        assert_eq!(
+            cockpit.recall_prompt(thread, HistoryDirection::Older, "while held"),
+            Some("sent".into()),
+            "queueing resets traversal but does not append"
+        );
+        fake.streams.borrow()[0].send(ended()).unwrap();
+        cockpit.pump();
+        assert_eq!(
+            cockpit.recall_prompt(thread, HistoryDirection::Older, "after release"),
+            Some("held".into()),
+            "turn-end delivery appends through the single delivery chokepoint"
+        );
+    }
+
+    #[test]
+    fn a_new_cockpit_recovers_prompt_history_from_the_store() {
+        let dir = scratch("prompt-history-relaunch");
+        let fake = Fake::default();
+        let mut cockpit = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake.clone()));
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        cockpit.send(thread, "before relaunch".into());
+        cockpit.park(thread).unwrap();
+        drop(cockpit);
+
+        let mut relaunched = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake));
+        relaunched.revive(thread).unwrap();
+        assert_eq!(
+            relaunched.recall_prompt(thread, HistoryDirection::Older, "draft"),
+            Some("before relaunch".into())
+        );
+    }
+
+    #[test]
+    fn bootstrap_delivery_is_immediately_recallable() {
+        let (mut cockpit, _) = cockpit("prompt-history-bootstrap");
+        let thread = cockpit
+            .bootstrap(
+                ProviderChoice {
+                    provider: Provider::Claude,
+                    model: None,
+                },
+                main_choice(),
+                "first prompt",
+            )
+            .unwrap();
+
+        assert_eq!(
+            cockpit.recall_prompt(thread, HistoryDirection::Older, "draft"),
+            Some("first prompt".into())
+        );
+    }
+
     /// The exact wire preface for one binding + root pair (#24) — what the
     /// provider sees and nothing the operator ever does.
     fn preface(binding: &Path, root: &Path) -> String {
@@ -2637,6 +2771,11 @@ mod tests {
             "the imported Thread is durable and parked, ready to revive"
         );
         cockpit.revive(thread).unwrap();
+        assert_eq!(
+            cockpit.recall_prompt(thread, HistoryDirection::Older, "draft"),
+            Some("first question".into()),
+            "imported prompt records participate in recall"
+        );
         let transcript = cockpit.transcript(thread).unwrap();
         assert_eq!(transcript.session_id(), Some("door-9c1d"));
         assert!(

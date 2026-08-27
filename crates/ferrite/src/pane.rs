@@ -187,6 +187,7 @@ pub struct PaneState<'a> {
     /// Whether the Composer line is empty — what decides the idle
     /// placeholder, read where the cockpit has a `cx` to read it with.
     pub composer_empty: bool,
+    pub history_available: bool,
     /// The Session's permission mode, in the provider's own word — the meta
     /// row's mode chip (#23). None (no announcement, or a provider that
     /// makes none) draws no chip; display-only either way.
@@ -353,6 +354,7 @@ pub fn render_pane(view: &PaneView, state: PaneState<'_>, level: Level) -> impl 
         branch,
         menu,
         composer_empty,
+        history_available,
         permission_mode,
         provider_chip,
         focused,
@@ -460,6 +462,7 @@ pub fn render_pane(view: &PaneView, state: PaneState<'_>, level: Level) -> impl 
                     queued,
                     running,
                     empty: composer_empty,
+                    history_available,
                     menu,
                     mode: permission_mode,
                     provider_chip,
@@ -584,6 +587,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
                 queued: None,
                 running: false,
                 empty: composer_empty,
+                history_available: false,
                 menu,
                 mode: None,
                 provider_chip: None,
@@ -1346,6 +1350,7 @@ struct ComposerStack<'a> {
     queued: Option<&'a str>,
     running: bool,
     empty: bool,
+    history_available: bool,
     menu: Option<AnyElement>,
     mode: Option<&'a str>,
     /// The meta row's provider control (#25) — Some pre-lock only.
@@ -1368,6 +1373,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         queued,
         running,
         empty,
+        history_available,
         menu,
         mode,
         provider_chip,
@@ -1498,7 +1504,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
     }
     meta = meta.child(div().flex_1());
     // The footer's right side, per the Main comp: the hints this Composer
-    // actually answers (#23's menus — no ↑ history exists yet), then the
+    // actually answers (#23's menus and #30's eligible prompt history), then the
     // provider's spot beside them. Before the first prompt that spot is
     // the selector's chip control (#25); after the lock it reverts to
     // today's plain muted label. The header's provider chip stays.
@@ -1507,11 +1513,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
             .flex_shrink_0()
             .text_size(px(theme::TEXT_CHIP))
             .text_color(rgb(INK_MUTED))
-            .child(if is_draft {
-                "@ project files · /import"
-            } else {
-                "@ files · / commands"
-            }),
+            .child(composer_hints(is_draft, history_available)),
     );
     if let Some(chip) = provider_chip {
         meta = meta.child(chip);
@@ -1525,6 +1527,16 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         );
     }
     region.child(meta)
+}
+
+fn composer_hints(is_draft: bool, history_available: bool) -> &'static str {
+    if is_draft {
+        "@ project files · /import"
+    } else if history_available {
+        "↑ history · @ files · / commands"
+    } else {
+        "@ files · / commands"
+    }
 }
 
 /// The idle line's ghost text, PromptBox state 01's pattern verbatim:
@@ -2635,6 +2647,20 @@ fn code(source: &str, tokens: Option<&[Token]>) -> Vec<(std::ops::Range<usize>, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn footer_advertises_history_only_when_the_context_is_armed() {
+        assert_eq!(
+            composer_hints(false, true),
+            "↑ history · @ files · / commands"
+        );
+        assert_eq!(composer_hints(false, false), "@ files · / commands");
+        assert_eq!(
+            composer_hints(true, true),
+            "@ project files · /import",
+            "drafts never advertise Thread history"
+        );
+    }
     use ferrite_core::transcript::{Input, Lexer, Todos};
     use ferrite_core::{Hunk, SessionEvent, ToolResult, TurnOutcome};
     use gpui::{size, TestAppContext};

@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use ferrite_core::cockpit::{Cockpit, ProviderChoice};
+use ferrite_core::cockpit::{Cockpit, HistoryDirection, ProviderChoice};
 use ferrite_core::docview::{Cell, Level};
 use ferrite_core::groups::{
     grid as group_grid, Drag, DropTarget, GroupChange, GroupId, Groups, Plan,
@@ -48,6 +48,8 @@ actions!(
         MenuPrevious,
         MenuPick,
         MenuDismiss,
+        HistoryOlder,
+        HistoryNewer,
         ToggleGroup,
         MoveToGroup,
         RenameGroup,
@@ -129,6 +131,10 @@ pub struct CockpitView {
     /// the text moves again, or `sync_menu` would reopen it on the very
     /// text the operator dismissed it over.
     menu_muted: bool,
+    /// A recalled slash/mention prompt is a programmatic edit: consume its
+    /// `Edited` event without deriving a menu. The next operator edit clears
+    /// the ordinary `menu_muted` latch and derives again.
+    suppress_recall_menu_once: bool,
     /// The open Composer-slot picker, or None — the import file-picker
     /// (#11) or the provider picker (#25), one engine. At most one, always
     /// on the Thread that opened it; render self-heals it shut when the
@@ -362,6 +368,7 @@ impl CockpitView {
             parked_rows: Vec::new(),
             menu: None,
             menu_muted: false,
+            suppress_recall_menu_once: false,
             picker: None,
             session_file_roots: default_session_roots(),
             launch_project,
@@ -457,6 +464,12 @@ impl CockpitView {
                     self.band = None;
                 }
             }
+        }
+        if self.suppress_recall_menu_once {
+            self.suppress_recall_menu_once = false;
+            self.menu = None;
+            cx.notify();
+            return;
         }
         self.menu_muted = false;
         self.sync_menu(cx);
@@ -1038,6 +1051,56 @@ impl CockpitView {
 
     fn menu_previous(&mut self, _: &MenuPrevious, _window: &mut Window, cx: &mut Context<Self>) {
         self.step_popover(-1, cx);
+    }
+
+    fn history_older(&mut self, _: &HistoryOlder, window: &mut Window, cx: &mut Context<Self>) {
+        self.recall_history(HistoryDirection::Older, window, cx);
+    }
+
+    fn history_newer(&mut self, _: &HistoryNewer, window: &mut Window, cx: &mut Context<Self>) {
+        self.recall_history(HistoryDirection::Newer, window, cx);
+    }
+
+    fn recall_history(
+        &mut self,
+        direction: HistoryDirection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let index = self.focused;
+        if !self.history_available(index, self.level_now(window)) {
+            return;
+        }
+        let Some(thread) = self.panes[index].thread() else {
+            return;
+        };
+        let composer = self.panes[index].composer.clone();
+        let draft = composer.read(cx).text().to_string();
+        let Some(text) = self.cockpit.recall_prompt(thread, direction, &draft) else {
+            return;
+        };
+        self.menu = None;
+        self.menu_muted = true;
+        self.suppress_recall_menu_once = true;
+        composer.update(cx, |composer, cx| composer.set(text, cx));
+        cx.notify();
+    }
+
+    fn history_available(&self, index: usize, level: Level) -> bool {
+        if level != Level::Transcript || index != self.focused {
+            return false;
+        }
+        let Some(thread) = self.panes.get(index).and_then(PaneView::thread) else {
+            return false;
+        };
+        self.cockpit.has_prompt_history(thread)
+            && self.rename.is_none()
+            && !self.cockpit.busy(thread)
+            && self.cockpit.pending(thread).is_none()
+            && self.cockpit.queued(thread).is_none()
+            && self.menu.is_none()
+            && self.picker.is_none()
+            && self.band.is_none()
     }
 
     /// Clamp-step the open popover's selection — one stepper for both
@@ -2996,6 +3059,14 @@ impl Render for CockpitView {
             pane.composer
                 .update(cx, |composer, cx| composer.set_menu_open(open, cx));
         }
+        let history_available: Vec<bool> = (0..self.panes.len())
+            .map(|index| self.history_available(index, level))
+            .collect();
+        for (pane, available) in self.panes.iter().zip(history_available) {
+            pane.composer.update(cx, |composer, cx| {
+                composer.set_history_available(available, cx)
+            });
+        }
 
         // Focus follows the operator, but only onto something this level
         // actually renders: focusing a Composer a wall cell never drew leaves
@@ -3098,6 +3169,8 @@ impl Render for CockpitView {
             .on_action(cx.listener(Self::toggle_nav))
             .on_action(cx.listener(Self::menu_next))
             .on_action(cx.listener(Self::menu_previous))
+            .on_action(cx.listener(Self::history_older))
+            .on_action(cx.listener(Self::history_newer))
             .on_action(cx.listener(Self::menu_pick))
             .on_action(cx.listener(Self::menu_dismiss))
             .on_action(cx.listener(Self::toggle_group))
@@ -3256,6 +3329,7 @@ impl CockpitView {
                     .then(|| self.composer_menu(index, cx))
                     .flatten(),
                 composer_empty: pane.composer.read(cx).is_empty(),
+                history_available: self.history_available(index, level),
                 // The meta row's mode chip — only where the meta row
                 // renders.
                 permission_mode: (level == Level::Transcript)
@@ -3927,16 +4001,18 @@ mod tests {
     struct Scripted {
         rx: Receiver<SessionEvent>,
         fail_send: Rc<RefCell<bool>>,
+        sent: Rc<RefCell<Vec<String>>>,
     }
 
     impl Session for Scripted {
         fn events(&self) -> &Receiver<SessionEvent> {
             &self.rx
         }
-        fn send(&mut self, _text: &str) -> std::io::Result<()> {
+        fn send(&mut self, text: &str) -> std::io::Result<()> {
             if *self.fail_send.borrow() {
                 return Err(std::io::Error::other("stub refused first prompt"));
             }
+            self.sent.borrow_mut().push(text.to_string());
             Ok(())
         }
         fn interrupt(&mut self) -> std::io::Result<()> {
@@ -3960,6 +4036,7 @@ mod tests {
         /// While set, spawn refuses — how a test fails a bootstrap (#29).
         fail: Rc<RefCell<bool>>,
         fail_send: Rc<RefCell<bool>>,
+        sent: Rc<RefCell<Vec<String>>>,
     }
 
     impl Spawner for Fake {
@@ -3979,6 +4056,7 @@ mod tests {
             Ok(Box::new(Scripted {
                 rx,
                 fail_send: self.fail_send.clone(),
+                sent: self.sent.clone(),
             }))
         }
     }
@@ -6165,6 +6243,177 @@ mod tests {
         view.read_with(cx, |view, cx| {
             view.panes[0].composer.read(cx).text().to_string()
         })
+    }
+
+    #[gpui::test]
+    fn history_arrows_only_replace_the_composer_and_restore_the_exact_draft(
+        cx: &mut TestAppContext,
+    ) {
+        let (mut core, fake) = cockpit("prompt-history-view", 1);
+        let thread = core.threads()[0];
+        core.send(thread, "one".into());
+        core.send(thread, "two".into());
+        bind_production_keys(cx);
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, cx| {
+            view.panes[0]
+                .composer
+                .update(cx, |composer, cx| composer.set("  thr…  ".into(), cx));
+        });
+        tick(cx);
+
+        for (key, expected) in [("up", "two"), ("up", "one")] {
+            cx.simulate_keystrokes(key);
+            tick(cx);
+            assert_eq!(composer_text(&view, cx), expected);
+        }
+        view.update(cx, |view, cx| {
+            view.panes[0]
+                .composer
+                .update(cx, |composer, cx| composer.set("one edited".into(), cx));
+        });
+        for (key, expected) in [
+            ("up", "one edited"),
+            ("down", "two"),
+            ("down", "  thr…  "),
+            ("down", "  thr…  "),
+        ] {
+            cx.simulate_keystrokes(key);
+            tick(cx);
+            assert_eq!(composer_text(&view, cx), expected);
+        }
+        assert_eq!(fake.sent.borrow().as_slice(), ["one", "two"]);
+        view.read_with(cx, |view, _| {
+            assert_eq!(
+                view.cockpit
+                    .transcript(thread)
+                    .unwrap()
+                    .blocks()
+                    .iter()
+                    .filter(|block| matches!(block.body, Body::Prompt(_)))
+                    .count(),
+                2
+            );
+        });
+
+        cx.simulate_keystrokes("up");
+        cx.simulate_input(" please");
+        cx.simulate_keystrokes("enter");
+        tick(cx);
+        assert_eq!(
+            fake.sent.borrow().as_slice(),
+            ["one", "two", "two please"],
+            "editing a recall uses the ordinary send path exactly once"
+        );
+    }
+
+    #[gpui::test]
+    fn recalling_a_slash_prompt_does_not_open_its_menu_until_a_real_edit(cx: &mut TestAppContext) {
+        let (mut core, _) = cockpit("prompt-history-slash", 1);
+        let thread = core.threads()[0];
+        core.send(thread, "older".into());
+        core.send(thread, "/".into());
+        bind_production_keys(cx);
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        tick(cx);
+
+        cx.simulate_keystrokes("up");
+        tick(cx);
+        assert_eq!(composer_text(&view, cx), "/");
+        view.read_with(cx, |view, _| {
+            assert!(view.menu.is_none(), "recall itself must not derive a menu")
+        });
+        cx.simulate_keystrokes("up");
+        tick(cx);
+        assert_eq!(composer_text(&view, cx), "older");
+
+        cx.simulate_keystrokes("down");
+        cx.simulate_input("p");
+        tick(cx);
+        assert_eq!(composer_text(&view, cx), "/p");
+        view.read_with(cx, |view, _| {
+            assert!(
+                view.menu.is_some(),
+                "the next real edit restores menu derivation"
+            )
+        });
+    }
+
+    #[gpui::test]
+    fn menu_and_decision_states_disarm_history_before_their_arrows_dispatch(
+        cx: &mut TestAppContext,
+    ) {
+        let (mut core, fake) = cockpit("prompt-history-precedence", 1);
+        let thread = core.threads()[0];
+        core.send(thread, "history".into());
+        bind_production_keys(cx);
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        tick(cx);
+        cx.update(|window, cx| {
+            assert!(view
+                .read(cx)
+                .history_available(0, view.read(cx).level_now(window)))
+        });
+
+        view.update(cx, |view, cx| {
+            view.panes[0]
+                .composer
+                .update(cx, |composer, cx| composer.set("/".into(), cx));
+        });
+        tick(cx);
+        view.read_with(cx, |view, _| assert!(view.menu.is_some()));
+        cx.update(|window, cx| {
+            assert!(!view
+                .read(cx)
+                .history_available(0, view.read(cx).level_now(window)))
+        });
+        cx.simulate_keystrokes("up");
+        assert_eq!(composer_text(&view, cx), "/", "menu owns the arrow");
+
+        view.update(cx, |view, cx| {
+            view.menu = None;
+            view.panes[0]
+                .composer
+                .update(cx, |composer, cx| composer.set("draft".into(), cx));
+        });
+        fake.streams.borrow()[0]
+            .send(decision("history-decision"))
+            .unwrap();
+        tick(cx);
+        cx.update(|window, cx| {
+            assert!(!view
+                .read(cx)
+                .history_available(0, view.read(cx).level_now(window)))
+        });
+        cx.simulate_keystrokes("up");
+        assert_eq!(composer_text(&view, cx), "draft", "Decision owns its state");
+    }
+
+    #[gpui::test]
+    fn group_rename_disarms_the_thread_composer_history_context_and_hint(cx: &mut TestAppContext) {
+        let (mut core, _) = cockpit("prompt-history-rename", 1);
+        let thread = core.threads()[0];
+        core.send(thread, "history".into());
+        core.apply_group(GroupChange::Create {
+            seed: thread,
+            with: None,
+        })
+        .unwrap();
+        bind_production_keys(cx);
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        tick(cx);
+
+        cx.simulate_keystrokes("cmd-g cmd-r");
+        tick(cx);
+        view.read_with(cx, |view, _| assert!(view.rename.is_some()));
+        cx.update(|window, cx| {
+            assert!(
+                !view
+                    .read(cx)
+                    .history_available(0, view.read(cx).level_now(window)),
+                "the visible Thread Composer must not advertise or arm history while rename owns focus"
+            )
+        });
     }
 
     /// The line's triggers, parsed exactly as the wire reads them: `/` only

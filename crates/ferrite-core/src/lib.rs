@@ -8,6 +8,7 @@ pub mod cockpit;
 pub mod docview;
 pub mod groups;
 pub mod import;
+mod prompt_history;
 pub mod providers;
 pub mod store;
 pub mod transcript;

@@ -90,6 +90,16 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
         // cmd-q is the macOS convention; Windows has no cmd, so ctrl-q there
         // (alt-f4 comes free from the OS).
         (with_primary("q"), "ferrite::Quit", None),
+        (
+            "up".into(),
+            "cockpit::HistoryOlder",
+            Some("ComposerHistory"),
+        ),
+        (
+            "down".into(),
+            "cockpit::HistoryNewer",
+            Some("ComposerHistory"),
+        ),
         // #23: the Composer's `/` and `@` popovers (and #29's band
         // popovers, which ride the same keys). These sit BELOW the bare
         // enter and escape rows, because gpui breaks a same-depth tie
@@ -225,6 +235,31 @@ mod tests {
                     "{scoped} must be bound after {bare} ({platform:?})"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn prompt_history_arrows_are_scoped_and_menu_arrows_stay_later() {
+        for platform in [Platform::Mac, Platform::Windows] {
+            let table = bindings(platform);
+            for (key, action) in [
+                ("up", "cockpit::HistoryOlder"),
+                ("down", "cockpit::HistoryNewer"),
+            ] {
+                assert!(
+                    table.contains(&(key.into(), action, Some("ComposerHistory"))),
+                    "{platform:?} is missing {key} for {action}"
+                );
+            }
+            let history = table
+                .iter()
+                .position(|(_, action, _)| *action == "cockpit::HistoryOlder")
+                .unwrap();
+            let menu = table
+                .iter()
+                .position(|(_, action, _)| *action == "cockpit::MenuPrevious")
+                .unwrap();
+            assert!(history < menu, "menu arrows must retain precedence");
         }
     }
 
