@@ -30,6 +30,7 @@
       --text-on-fill: #9e9e9e;
       --sep: #6e6e6e;
       --group-rail: #4a4a4a;
+      --stage: #070707;
       --scrollbar: #3a3a3a;
       --selection: #3f3f3f;
 
@@ -84,6 +85,7 @@
       --text-on-fill: #b3b6bd;
       --sep: #5b5e66;
       --group-rail: #31333a;
+      --stage: #020202;
       --scrollbar: #2f3136;
       --selection: #34373d;
       --focus: #c7ccd6;
@@ -113,6 +115,21 @@
     :focus-visible { outline: 1.5px solid var(--focus); outline-offset: 2px; }
 
     .app { display: flex; flex-direction: column; block-size: 100vh; min-block-size: 720px; }
+
+    /* Window view -- the whole app shown as one window on a bare desktop, scaled to fit. */
+    :root[data-view="window"], :root[data-view="window"] body {
+      min-inline-size: 0; min-block-size: 0; overflow: hidden; background: var(--stage);
+    }
+    :root[data-view="window"] body {
+      display: grid; place-items: center; block-size: 100vh; padding-block: 28px 60px;
+    }
+    :root[data-view="window"] .app {
+      inline-size: 1440px; block-size: 900px; min-block-size: 0;
+      border-radius: 10px; overflow: hidden;
+      box-shadow: 0 40px 90px -30px rgba(0, 0, 0, 0.9), 0 0 0 1px rgba(255, 255, 255, 0.07);
+      zoom: var(--fit, 1);
+    }
+    :root[data-view="window"] .pane-grid { padding-block-end: var(--grid-pad); }
     .workspace { display: flex; flex: 1; min-block-size: 0; }
 
     /* ── Window chrome: traffic lights and the one scope path ───────────── */
@@ -590,6 +607,14 @@
 
     const params = new URLSearchParams(location.search);
     if (params.get("shell") === "host") document.documentElement.dataset.shell = "host";
+    const view = params.get("view") === "full" ? "full" : "window";
+    document.documentElement.dataset.view = view;
+
+    function fitWindow() {
+      if (view !== "window") return;
+      const fit = Math.min(1, (innerWidth - 56) / 1440, (innerHeight - 88) / 900);
+      document.documentElement.style.setProperty("--fit", fit.toFixed(4));
+    }
 
     function modeFromUrl() {
       return params.get("mode") === "aperture" ? "aperture" : "soft";
@@ -800,6 +825,8 @@
       if (event.key === "ArrowRight" && !filterOpen) setMode("soft");
     });
 
+    addEventListener("resize", fitWindow);
+    fitWindow();
     setMode(modeFromUrl());
     renderProjectFilter();
     renderTree();
