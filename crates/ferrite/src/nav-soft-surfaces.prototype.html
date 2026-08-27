@@ -176,7 +176,6 @@
     .group-block { margin-block-end: 15px; }
     .group-members {
       display: grid; gap: 3px; margin-inline-start: 18px; padding-block: 4px 1px; padding-inline-start: 9px;
-      border-inline-start: 1px solid var(--color-line-strong);
     }
     .nav-row {
       position: relative; display: flex; align-items: center; min-inline-size: 0; min-block-size: 44px;
@@ -186,8 +185,8 @@
     }
     .nav-row:hover { background: var(--color-control-hover); color: var(--color-text-primary); }
     .nav-row:active { cursor: grabbing; scale: 0.995; }
-    .nav-row.selected { background: transparent; color: var(--color-text-primary); box-shadow: inset 2px 0 0 var(--color-focus); }
-    .nav-row.selected:hover { background: var(--color-selected); }
+    .nav-row.selected { background: var(--color-selected); color: var(--color-text-primary); }
+    .nav-row.selected:hover { background: var(--color-selected-hover); }
     .nav-row.scope-active { color: var(--color-text-primary); }
     .nav-row.scope-active .row-leading { border-radius: var(--radius-chip); background: var(--color-focus-wash); color: var(--color-focus); }
     .nav-row.scope-active:hover .row-leading { background: var(--color-selected); }
