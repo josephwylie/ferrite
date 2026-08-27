@@ -1,0 +1,494 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ferrite Project Sections Prototype</title>
+  <!-- Three project-navigation variants, switchable via ?variant=A/B/C, beside a realistic Cockpit. THROWAWAY. -->
+  <style>
+    :root {
+      color-scheme: dark;
+      --ground: #050505;
+      --surface: #0e0e0e;
+      --inset: #0a0a0a;
+      --raised: #191919;
+      --composer: #161616;
+      --hairline: rgba(255,255,255,.045);
+      --edge: rgba(255,255,255,.07);
+      --edge-strong: rgba(255,255,255,.12);
+      --ink: #f3f4f7;
+      --ink-secondary: #a7abb4;
+      --ink-tertiary: #8b8f97;
+      --ink-muted: #7f8187;
+      --ink-faint: #54575f;
+      --accent: #c7ccd6;
+      --accent-wash: rgba(199,204,214,.14);
+      --good: #7fc99b;
+      --good-wash: rgba(127,201,155,.13);
+      --wait: #d8c082;
+      --wait-wash: rgba(216,192,130,.13);
+      --wait-edge: rgba(216,192,130,.35);
+      --fail: #e08c84;
+      --fail-wash: rgba(224,140,132,.13);
+      --prototype: #8fb3d9;
+      --p-density: 1;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--ground);
+      color: var(--ink-secondary);
+      font-size: 12px;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-width: 1040px; min-height: 720px; background: var(--ground); }
+    body { min-height: 100vh; overflow: hidden; }
+    button { font: inherit; color: inherit; }
+    button:focus-visible, [draggable="true"]:focus-visible { outline: 1px solid var(--accent); outline-offset: -2px; }
+
+    .app { height: 100vh; min-height: 720px; display: flex; flex-direction: column; background: var(--ground); }
+    .titlebar {
+      height: 34px; flex: 0 0 34px; display: flex; align-items: center; gap: 10px;
+      padding-inline: 12px; border-block-end: 1px solid var(--hairline); background: var(--ground);
+    }
+    .traffic { display: flex; gap: 7px; margin-inline-end: 2px; }
+    .traffic i { inline-size: 12px; block-size: 12px; border-radius: 50%; display: block; }
+    .traffic i:nth-child(1) { background: #ff5f57; }
+    .traffic i:nth-child(2) { background: #febc2e; }
+    .traffic i:nth-child(3) { background: #28c840; }
+    .app-title { color: var(--ink-secondary); font-weight: 600; font-size: 11px; }
+    .view-path { display: flex; align-items: center; min-width: 0; gap: 7px; color: var(--ink-muted); }
+    .view-path strong { color: var(--ink-secondary); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .view-path .path-sep { color: var(--ink-faint); }
+    .global-census { margin-inline-start: auto; display: flex; gap: 7px; color: var(--ink-muted); font: 10px Menlo, Consolas, monospace; }
+    .global-census .attention { color: var(--wait); }
+
+    .workspace { min-height: 0; flex: 1; display: flex; }
+    .nav-shell { position: relative; flex: 0 0 auto; min-height: 0; display: flex; background: var(--inset); border-inline-end: 1px solid var(--edge); }
+    .nav-shell.collapsed .nav-expanded { display: none; }
+    .nav-shell:not(.collapsed) .nav-rail { display: none; }
+    .nav-expanded, .nav-rail { min-height: 0; width: 100%; }
+
+    .nav-top { height: 34px; display: flex; align-items: center; justify-content: space-between; padding-inline: 10px; flex: 0 0 auto; color: var(--ink-muted); font-size: 10px; }
+    .nav-top b { color: var(--ink-muted); font-weight: 500; }
+    .nav-top .waiting { color: var(--wait); }
+    .nav-content { height: calc(100% - 34px); overflow: hidden; }
+    .nav-bottom-note {
+      position: absolute; inset-inline: 8px; inset-block-end: 8px; padding: 6px 7px;
+      border: 1px solid var(--edge); border-radius: 4px; background: var(--raised);
+      color: var(--ink-muted); font: 9px/1.45 Menlo, Consolas, monospace;
+    }
+    .nav-bottom-note b { color: var(--ink-secondary); font-weight: 500; }
+
+    .project-section { margin-block-end: 14px; }
+    .project-head {
+      min-height: 31px; display: flex; align-items: center; gap: 7px; padding-inline: 9px;
+      background: rgba(255,255,255,.018); color: var(--ink-secondary); cursor: default;
+    }
+    .project-head .project-mark { inline-size: 14px; block-size: 14px; border: 1px solid var(--edge-strong); border-radius: 3px; display: grid; place-items: center; color: var(--ink-muted); font: 8px Menlo, Consolas, monospace; flex: 0 0 auto; }
+    .project-head .project-copy { min-width: 0; flex: 1; }
+    .project-head strong, .project-head small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .project-head strong { font-size: 10.5px; color: var(--ink-secondary); font-weight: 650; }
+    .project-head small { margin-block-start: 1px; color: var(--ink-faint); font: 8.5px Menlo, Consolas, monospace; }
+    .project-count { color: var(--ink-faint); font: 9px Menlo, Consolas, monospace; }
+
+    .sub-label { height: 20px; display: flex; align-items: end; padding: 0 10px 3px 26px; color: var(--ink-faint); font-size: 8.5px; text-transform: uppercase; letter-spacing: .06em; }
+    .group { margin-block: 2px 5px; }
+    .group-head, .thread-row {
+      position: relative; min-width: 0; display: flex; align-items: center; gap: 6px; min-height: 27px;
+      padding-inline: 9px; border-inline-start: 2px solid transparent; user-select: none;
+    }
+    .group-head { color: var(--ink-secondary); font-size: 10.5px; font-weight: 650; cursor: grab; }
+    .group-head.active { background: var(--accent-wash); border-inline-start-color: var(--accent); color: var(--ink); }
+    .group-head:active, .thread-row:active { cursor: grabbing; }
+    .group-head .group-name, .thread-main { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .group-head .count { color: var(--ink-faint); font: 9px Menlo, Consolas, monospace; }
+    .thread-row { min-height: 26px; color: var(--ink-secondary); cursor: grab; font-size: 10.5px; }
+    .thread-row.nested { padding-inline-start: 27px; }
+    .thread-row.focused { background: var(--edge); border-inline-start-color: var(--accent); }
+    .thread-row.parked { color: var(--ink-muted); }
+    .thread-main { display: flex; align-items: baseline; gap: 5px; }
+    .thread-main strong { color: currentColor; font-weight: 650; flex: 0 0 auto; }
+    .thread-main .branch { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--ink-faint); font: 9px Menlo, Consolas, monospace; }
+    .provider { color: var(--ink-faint); font: 8.5px Menlo, Consolas, monospace; flex: 0 0 auto; }
+    .status-dot { inline-size: 6px; block-size: 6px; flex: 0 0 auto; border-radius: 50%; background: var(--ink-tertiary); }
+    .status-dot.running { background: var(--good); }
+    .status-dot.attention { background: var(--wait); }
+    .status-dot.blocked { background: var(--fail); }
+    .status-dot.parked { background: transparent; border: 1px solid var(--ink-faint); }
+    .needs-you { flex: 0 0 auto; color: var(--wait); background: var(--wait-wash); border-radius: 4px; padding: 2px 5px; font: 8.5px Menlo, Consolas, monospace; }
+    .chevron, .grip { flex: 0 0 auto; color: var(--ink-muted); }
+    .chevron { width: 8px; height: 8px; }
+    .grip { width: 7px; height: 12px; opacity: .65; }
+
+    .drop-slot { height: 5px; margin-inline: 8px; border-radius: 2px; transition: background 80ms linear; }
+    .drop-slot::after { content: ""; display: block; height: 1px; background: transparent; transform: translateY(2px); }
+    .drop-slot.allowed::after { background: var(--good); }
+    .drop-slot.refused::after { background: var(--fail); }
+    .drop-target.allowed { background: var(--good-wash); outline: 1px solid rgba(127,201,155,.28); outline-offset: -1px; }
+    .drop-target.refused { background: var(--fail-wash); outline: 1px solid rgba(224,140,132,.28); outline-offset: -1px; cursor: not-allowed; }
+    .dragging { opacity: .5; }
+
+    .prototype-banner {
+      min-height: 39px; flex: 0 0 auto; display: flex; align-items: center; gap: 9px; padding-inline: 10px;
+      border-block-end: 1px solid rgba(143,179,217,.18); background: rgba(143,179,217,.055);
+      color: var(--ink-muted); font: 9.5px Menlo, Consolas, monospace;
+    }
+    .prototype-banner .proto-chip { color: var(--prototype); border: 1px solid rgba(143,179,217,.28); border-radius: 4px; padding: 3px 5px; }
+    .prototype-banner strong { color: var(--ink-secondary); font-weight: 500; }
+    .prototype-banner .pending { margin-inline-start: auto; color: var(--wait); }
+    .prototype-banner button { border: 1px solid var(--edge-strong); border-radius: 4px; background: var(--raised); padding: 4px 7px; cursor: pointer; }
+
+    .cockpit { min-width: 0; flex: 1; display: flex; flex-direction: column; background: var(--ground); }
+    .pane-grid { min-height: 0; flex: 1; display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); grid-template-rows: repeat(2, minmax(0,1fr)); gap: 6px; padding: 8px; padding-block-end: 38px; }
+    .pane { min-width: 0; min-height: 0; display: flex; flex-direction: column; border: 1px solid var(--edge); background: var(--surface); }
+    .pane.focused { box-shadow: inset 0 0 0 1px var(--accent); }
+    .pane.attention { box-shadow: inset 0 0 0 1px var(--wait); }
+    .pane-head { min-height: 24px; display: flex; align-items: center; gap: 6px; padding-inline: 9px; border-block-end: 1px solid var(--hairline); }
+    .pane-head strong { color: var(--ink); font-size: 10.5px; font-weight: 650; }
+    .pane-head .branch { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-muted); font: 9px Menlo, Consolas, monospace; }
+    .pane-head .provider-chip { margin-inline-start: auto; flex: 0 0 auto; color: var(--ink-secondary); background: var(--raised); border-radius: 4px; padding: 3px 5px; font: 8.5px Menlo, Consolas, monospace; }
+    .pane-body { min-height: 0; flex: 1; overflow: hidden; padding: 11px 12px; font: 10px/1.52 Menlo, Consolas, monospace; }
+    .pane-body .signal { display: flex; align-items: center; gap: 6px; margin-block-end: 10px; color: var(--ink-tertiary); }
+    .pane-body .signal.good { color: var(--good); }
+    .pane-body .signal.wait { color: var(--wait); }
+    .pane-body .signal.fail { color: var(--fail); }
+    .pane-body p { margin: 0 0 7px; max-width: 72ch; }
+    .pane-body .muted { color: var(--ink-muted); }
+    .pane-body .faint { color: var(--ink-faint); }
+    .meter { display: flex; gap: 2px; margin-block: 9px 12px; }
+    .meter i { width: 17px; height: 4px; border-radius: 1px; background: var(--raised); }
+    .meter i.on { background: var(--accent); }
+    .tool-row { display: flex; gap: 7px; padding-block: 3px; color: var(--ink-secondary); }
+    .tool-row b { color: var(--ink); font-weight: 650; }
+    .tool-row time { margin-inline-start: auto; color: var(--ink-faint); }
+    .composer { height: 35px; flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding-inline: 10px; border-block-start: 1px solid var(--edge-strong); background: var(--composer); color: var(--ink-muted); font: 9px Menlo, Consolas, monospace; }
+    .composer .cursor { width: 6px; height: 14px; background: var(--accent); }
+    .composer .hint { margin-inline-start: auto; }
+
+    .rail-study {
+      position: absolute; inset-inline-end: 14px; inset-block-end: 48px; display: flex; align-items: stretch;
+      border: 1px solid var(--edge-strong); border-radius: 5px; background: rgba(5,5,5,.96); box-shadow: 0 6px 16px -4px rgba(0,0,0,.4); z-index: 3;
+    }
+    .rail-study-label { width: 92px; padding: 8px; border-inline-end: 1px solid var(--edge); color: var(--ink-muted); font: 8.5px/1.45 Menlo, Consolas, monospace; }
+    .rail-study-label b { display: block; margin-block-end: 4px; color: var(--ink-secondary); font-weight: 500; }
+    .mini-rail { min-width: 40px; padding-block: 7px; background: var(--inset); display: flex; flex-direction: column; align-items: center; gap: 7px; }
+    .mini-project { width: 22px; min-height: 19px; display: grid; place-items: center; border: 1px solid var(--edge); border-radius: 3px; color: var(--ink-muted); font: 8px Menlo, Consolas, monospace; }
+    .mini-project.active { color: var(--ink); background: var(--accent-wash); border-color: var(--edge-strong); }
+    .mini-divider { width: 20px; height: 1px; background: var(--hairline); margin-block: 1px; }
+    .mini-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--good); }
+    .mini-dot.wait { background: var(--wait); box-shadow: 0 0 0 4px var(--wait-wash); }
+    .mini-dot.parked { width: 6px; height: 6px; background: transparent; border: 1px solid var(--ink-faint); }
+
+    .switcher {
+      position: fixed; z-index: 20; inset-inline-start: 50%; inset-block-end: 12px; transform: translateX(-50%);
+      display: flex; align-items: center; gap: 5px; padding: 5px; border: 1px solid rgba(143,179,217,.42);
+      border-radius: 999px; background: #10141a; box-shadow: 0 6px 16px -4px rgba(0,0,0,.55); color: var(--ink-secondary);
+    }
+    .switcher button { min-width: 31px; height: 29px; border: 0; border-radius: 999px; background: transparent; cursor: pointer; }
+    .switcher button:hover { background: var(--accent-wash); color: var(--ink); }
+    .switcher-label { min-width: 196px; text-align: center; color: var(--prototype); font: 10px Menlo, Consolas, monospace; }
+
+    /* Variant A: one full hierarchy, projects as the outer tree. */
+    .variant-a { width: 258px; }
+    .variant-a.collapsed { width: 40px; }
+    .tree-scroll { height: 100%; padding-block-end: 58px; overflow: hidden; }
+    .tree-scroll .project-section:first-child .project-head { border-block-start: 1px solid var(--hairline); }
+
+    /* Variant B: project master list selects one focused detail pane. */
+    .variant-b { width: 318px; }
+    .variant-b.collapsed { width: 40px; }
+    .focus-layout { height: 100%; display: grid; grid-template-columns: 104px 214px; }
+    .project-index { min-width: 0; border-inline-end: 1px solid var(--edge); background: var(--ground); padding: 6px; }
+    .project-tab { width: 100%; min-height: 89px; display: block; text-align: start; padding: 8px 7px; border: 1px solid transparent; border-radius: 4px; background: transparent; cursor: pointer; color: var(--ink-muted); }
+    .project-tab + .project-tab { margin-block-start: 5px; }
+    .project-tab.active { background: var(--accent-wash); border-color: var(--edge); color: var(--ink-secondary); }
+    .project-tab strong, .project-tab span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .project-tab strong { color: currentColor; font-size: 10px; }
+    .project-tab .tab-meta { margin-block: 5px 4px; color: var(--ink-faint); font: 8px Menlo, Consolas, monospace; }
+    .project-tab .tab-child { color: var(--ink-muted); font-size: 8.5px; line-height: 1.45; }
+    .focus-detail { min-width: 0; position: relative; padding-block-end: 56px; overflow: hidden; }
+    .focus-detail .project-head { min-height: 37px; background: rgba(255,255,255,.025); }
+
+    /* Variant C: projects remain parallel lanes; hierarchy is spatial, not nested. */
+    .variant-c { width: 390px; }
+    .variant-c.collapsed { width: 64px; }
+    .lane-layout { height: 100%; display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 1px; background: var(--edge); }
+    .project-lane { min-width: 0; position: relative; padding-block-end: 58px; overflow: hidden; background: var(--inset); }
+    .project-lane .project-head { min-height: 43px; align-items: flex-start; padding-block: 7px; }
+    .project-lane .project-head small { white-space: normal; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+    .project-lane .group-head, .project-lane .thread-row { padding-inline: 7px; }
+    .project-lane .thread-row.nested { padding-inline-start: 20px; }
+    .project-lane .sub-label { padding-inline-start: 20px; }
+    .project-lane .nav-bottom-note { inset-inline: 6px; }
+
+    .nav-rail { background: var(--inset); padding-block: 7px; }
+    .nav-rail-stack { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+    .nav-rail.variant-c-rail { display: grid; grid-template-columns: repeat(2, 32px); align-content: start; }
+    .nav-rail.variant-c-rail .nav-rail-stack { gap: 7px; }
+
+    @media (max-width: 1180px) {
+      .variant-c { width: 350px; }
+      .pane-body { font-size: 9px; }
+      .rail-study { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <div class="switcher" role="navigation" aria-label="Prototype variants">
+    <button id="prev" aria-label="Previous variant">←</button>
+    <div class="switcher-label" id="switcher-label"></div>
+    <button id="next" aria-label="Next variant">→</button>
+  </div>
+
+  <script>
+    const variants = {
+      A: { name: "Nested project tree", className: "variant-a" },
+      B: { name: "Project-filtered focus", className: "variant-b" },
+      C: { name: "Parallel project lanes", className: "variant-c" },
+    };
+
+    const projects = [
+      {
+        id: "ferrite", mark: "Fe", title: "ferrite", root: "~/Projects/ferrite", active: true,
+        groups: [{
+          id: "nav-prototype", title: "Project-scoped navigation prototype", active: true,
+          threads: [
+            { id: "thread-08", branch: "codex/prototype-32", status: "running", provider: "cx", focused: true },
+            { id: "thread-12", branch: "main", status: "attention", provider: "cl", needs: true },
+            { id: "thread-14", branch: "ferrite/feature/project-registry-migration", status: "running", provider: "cx" },
+            { id: "thread-21", branch: "main", status: "running", provider: "cl" },
+            { id: "thread-22", branch: "ferrite/feature/cross-platform-gpui-rendering", status: "parked", provider: "cx" },
+          ],
+        }],
+        solos: [
+          { id: "thread-17", branch: "ferrite/fix/provider-stream-recovery", status: "running", provider: "cl" },
+          { id: "thread-24", branch: "main", status: "parked", provider: "cx" },
+        ],
+      },
+      {
+        id: "observability", mark: "AO", title: "agent-observability-control-plane", root: "~/Projects/agent-observability-control-plane",
+        groups: [{
+          id: "provider-replay", title: "Provider stream hardening & replay", active: false,
+          threads: [
+            { id: "thread-29", branch: "replay/durable-provider-event-normalization", status: "running", provider: "cx" },
+            { id: "thread-30", branch: "main", status: "blocked", provider: "cl" },
+          ],
+        }],
+        solos: [
+          { id: "thread-31", branch: "feature/windows-directx11-device-recovery", status: "attention", provider: "cx", needs: true },
+          { id: "thread-33", branch: "main", status: "parked", provider: "cl" },
+        ],
+      },
+    ];
+
+    let current = new URLSearchParams(location.search).get("variant")?.toUpperCase();
+    if (!variants[current]) current = "A";
+    let focusedProject = "ferrite";
+    let navCollapsed = false;
+    let dragState = null;
+
+    const icon = {
+      chevron: `<svg class="chevron" viewBox="0 0 8 8" aria-hidden="true"><path d="M2 1.5 5 4 2 6.5" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+      grip: `<svg class="grip" viewBox="0 0 7 12" aria-hidden="true"><g fill="currentColor"><circle cx="2" cy="2" r=".8"/><circle cx="5" cy="2" r=".8"/><circle cx="2" cy="6" r=".8"/><circle cx="5" cy="6" r=".8"/><circle cx="2" cy="10" r=".8"/><circle cx="5" cy="10" r=".8"/></g></svg>`,
+    };
+
+    function threadRow(thread, project, nested = false) {
+      const label = thread.status === "parked" ? "parked" : thread.status;
+      return `<div class="thread-row drop-target ${nested ? "nested" : ""} ${thread.focused ? "focused" : ""} ${thread.status === "parked" ? "parked" : ""}"
+        draggable="true" tabindex="0" data-drag-kind="thread" data-thread="${thread.id}" data-project="${project.id}" data-drop-project="${project.id}"
+        title="${thread.id} · ${thread.branch} · ${label}">
+        <span class="status-dot ${thread.status}"></span>
+        <span class="thread-main"><strong>${thread.id}</strong><span class="branch">${thread.branch}</span></span>
+        ${thread.needs ? `<span class="needs-you">needs you</span>` : `<span class="provider">${thread.provider}</span>`}
+      </div>`;
+    }
+
+    function groupBlock(group, project, nested = true) {
+      return `<div class="group">
+        <div class="drop-slot" data-drop-project="${project.id}" data-drop-kind="group-gap"></div>
+        <div class="group-head drop-target ${group.active ? "active" : ""}" draggable="true" tabindex="0"
+          data-drag-kind="group" data-project="${project.id}" data-drop-project="${project.id}" title="Drag group to reorder within ${project.title}">
+          ${icon.grip}${icon.chevron}<span class="group-name">${group.title}</span><span class="count">${group.threads.length}</span>
+        </div>
+        ${group.threads.map(thread => threadRow(thread, project, nested)).join("")}
+      </div>`;
+    }
+
+    function projectHead(project, detailed = true) {
+      return `<div class="project-head" title="${project.root}">
+        <span class="project-mark">${project.mark}</span>
+        <span class="project-copy"><strong>${project.title}</strong>${detailed ? `<small>${project.root}</small>` : ""}</span>
+        <span class="project-count">${project.groups.length}g · ${project.solos.length}s</span>
+      </div>`;
+    }
+
+    function projectContents(project, includeHead = true) {
+      return `<section class="project-section" data-project-section="${project.id}">
+        ${includeHead ? projectHead(project) : ""}
+        <div class="sub-label">Groups</div>
+        ${project.groups.map(group => groupBlock(group, project, true)).join("")}
+        <div class="drop-slot" data-drop-project="${project.id}" data-drop-kind="group-gap"></div>
+        <div class="sub-label">Solo Threads</div>
+        ${project.solos.map(thread => threadRow(thread, project, false)).join("")}
+        <div class="drop-slot" data-drop-project="${project.id}" data-drop-kind="loose"></div>
+      </section>`;
+    }
+
+    function bottomNote() {
+      return `<div class="nav-bottom-note"><b>Drag targets are live.</b><br>Within-project previews only.<br>Cross-project drops refuse.</div>`;
+    }
+
+    function rail(projectsToShow = projects) {
+      return `<div class="nav-rail"><div class="nav-rail-stack">
+        ${projectsToShow.map((project, i) => `<span class="mini-project ${i === 0 ? "active" : ""}" title="${project.title}">${project.mark}</span>
+          <span class="mini-dot ${i === 0 ? "wait" : ""}"></span><span class="mini-dot"></span><span class="mini-dot parked"></span>`).join(`<span class="mini-divider"></span>`)}
+      </div></div>`;
+    }
+
+    function variantA() {
+      return `<div class="nav-expanded"><div class="nav-top"><b>PROJECTS</b><span>11 live · <span class="waiting">2 waiting</span></span></div>
+        <div class="nav-content tree-scroll">${projects.map(project => projectContents(project)).join("")}</div>${bottomNote()}
+      </div>${rail()}`;
+    }
+
+    function projectTab(project) {
+      return `<button class="project-tab ${focusedProject === project.id ? "active" : ""}" data-project-tab="${project.id}" title="Focus ${project.title}">
+        <strong>${project.title}</strong><span class="tab-meta">${project.groups.length} group · ${project.solos.length} solo</span>
+        <span class="tab-child">${project.groups[0].title}</span><span class="tab-child">${project.solos[0].id} · solo</span>
+      </button>`;
+    }
+
+    function variantB() {
+      const project = projects.find(p => p.id === focusedProject) || projects[0];
+      return `<div class="nav-expanded"><div class="nav-top"><b>PROJECT FOCUS</b><span class="waiting">2 waiting</span></div>
+        <div class="nav-content focus-layout">
+          <div class="project-index">${projects.map(projectTab).join("")}</div>
+          <div class="focus-detail">${projectHead(project)}${projectContents(project, false)}${bottomNote()}</div>
+        </div>
+      </div>${rail()}`;
+    }
+
+    function variantC() {
+      const dualRail = `<div class="nav-rail variant-c-rail">${projects.map((project, i) => `<div class="nav-rail-stack"><span class="mini-project ${i === 0 ? "active" : ""}">${project.mark}</span><span class="mini-dot ${i === 0 ? "wait" : ""}"></span><span class="mini-dot"></span><span class="mini-dot parked"></span></div>`).join("")}</div>`;
+      return `<div class="nav-expanded"><div class="nav-top"><b>PROJECT LANES</b><span>11 live · <span class="waiting">2 waiting</span></span></div>
+        <div class="nav-content lane-layout">${projects.map(project => `<section class="project-lane">${projectHead(project)}${projectContents(project, false)}${bottomNote()}</section>`).join("")}</div>
+      </div>${dualRail}`;
+    }
+
+    function pane(thread, branch, state, copy, provider, extra = "") {
+      return `<article class="pane ${state === "focused" ? "focused" : ""} ${state === "attention" ? "attention" : ""}">
+        <header class="pane-head"><span class="status-dot ${state === "attention" ? "attention" : "running"}"></span><strong>${thread}</strong><span class="branch">${branch}</span><span class="provider-chip">${provider}</span></header>
+        <div class="pane-body">${copy}${extra}</div>
+        <div class="composer"><span class="cursor"></span><span>steer this Thread…</span><span class="hint">@ files · / commands</span></div>
+      </article>`;
+    }
+
+    function railStudy() {
+      if (current === "B") {
+        return `<div class="rail-study-label"><b>COLLAPSED · ⌘B</b>Project focus becomes a project switcher; counts retain attention.</div>
+          <div class="mini-rail"><span class="mini-project active">Fe</span><span class="mini-dot wait"></span><span class="mini-divider"></span><span class="mini-project">AO</span><span class="mini-dot"></span></div>`;
+      }
+      if (current === "C") {
+        return `<div class="rail-study-label"><b>COLLAPSED · ⌘B</b>Parallel lanes compress to paired project rails.</div>
+          <div class="mini-rail"><span class="mini-project active">Fe</span><span class="mini-dot wait"></span><span class="mini-dot"></span><span class="mini-dot parked"></span></div>
+          <div class="mini-rail"><span class="mini-project">AO</span><span class="mini-dot"></span><span class="mini-dot parked"></span></div>`;
+      }
+      return `<div class="rail-study-label"><b>COLLAPSED · ⌘B</b>Project boundary survives as marks + grouped LED rhythm.</div>
+        <div class="mini-rail"><span class="mini-project active">Fe</span><span class="mini-dot wait"></span><span class="mini-dot"></span><span class="mini-dot parked"></span><span class="mini-divider"></span><span class="mini-project">AO</span><span class="mini-dot"></span><span class="mini-dot parked"></span></div>`;
+    }
+
+    function cockpit() {
+      return `<main class="cockpit">
+        <div class="prototype-banner">
+          <span class="proto-chip">PROTOTYPE · ${current}</span><strong>${variants[current].name}</strong>
+          <span id="prototype-state">Read-only sample state · no persistence</span>
+          <span class="pending">Global Wall ↔ groups policy remains pending</span>
+          <button id="collapse-nav" aria-pressed="${navCollapsed}">${navCollapsed ? "Open nav" : "Show collapsed"} · ⌘B</button>
+        </div>
+        <section class="pane-grid" aria-label="Active group Cockpit">
+          ${pane("thread-08", "codex/prototype-32", "focused", `<div class="signal good"><span class="status-dot running"></span>working · visual prototype</div><p>Inspecting project ownership at incumbent Ferrite density.</p><div class="meter"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></div><div class="tool-row"><b>Read</b><span>nav.rs · groups.rs</span><time>0.4s</time></div><div class="tool-row"><b>Render</b><span>variant ${current}</span></div>`, "cx · gpt-5.6")}
+          ${pane("thread-12", "main", "attention", `<div class="signal wait"><span class="status-dot attention"></span>needs you · visual decision</div><p>Choose how Project ownership should read before production work begins.</p><p class="muted">Allow visual Project sections?</p>`, "cl · sonnet-4-5", `<div class="tool-row"><b>Decision</b><span>variant review pending</span></div>`)}
+          ${pane("thread-14", "ferrite/feature/project-registry-migration", "running", `<div class="signal"><span class="status-dot running"></span>working · registry inspection</div><p class="muted">ProjectId is durable identity; the path remains behind the Registry interface.</p><div class="tool-row"><b>Read</b><span>workspace/registry.rs</span><time>0.2s</time></div><div class="tool-row"><b>Search</b><span>project_id</span></div>`, "cx · gpt-5.6")}
+          ${pane("thread-21", "main", "running", `<div class="signal good"><span class="status-dot running"></span>working · group invariants</div><p>Drop preview stays truthful: membership and cross-project refusal remain in core.</p><p class="faint">No renderer-owned duplicate tree.</p><div class="meter"><i class="on"></i><i class="on"></i><i></i><i></i><i></i></div>`, "cl · sonnet-4-5")}
+        </section>
+        <div class="rail-study" aria-label="Collapsed navigation study">${railStudy()}</div>
+      </main>`;
+    }
+
+    function render() {
+      const renderer = current === "A" ? variantA : current === "B" ? variantB : variantC;
+      document.getElementById("root").innerHTML = `<div class="app">
+        <header class="titlebar">
+          <span class="traffic" aria-hidden="true"><i></i><i></i><i></i></span><span class="app-title">ferrite</span>
+          <span class="view-path"><span class="path-sep">/</span><strong>Project-scoped navigation prototype</strong><span class="path-sep">·</span><span>Group view</span></span>
+          <span class="global-census"><span>12 panes</span><span>·</span><span class="attention">2 need you</span></span>
+        </header>
+        <div class="workspace"><aside class="nav-shell ${variants[current].className} ${navCollapsed ? "collapsed" : ""}">${renderer()}</aside>${cockpit()}</div>
+      </div>`;
+      document.getElementById("switcher-label").textContent = `${current} — ${variants[current].name}`;
+      history.replaceState({}, "", `${location.pathname}?variant=${current}`);
+      wireInteractions();
+    }
+
+    function wireInteractions() {
+      document.querySelectorAll("[data-project-tab]").forEach(button => button.addEventListener("click", () => {
+        focusedProject = button.dataset.projectTab;
+        render();
+      }));
+      document.getElementById("collapse-nav").addEventListener("click", () => { navCollapsed = !navCollapsed; render(); });
+
+      document.querySelectorAll("[draggable='true']").forEach(item => {
+        item.addEventListener("dragstart", event => {
+          dragState = { project: item.dataset.project, kind: item.dataset.dragKind, label: item.dataset.thread || item.querySelector(".group-name")?.textContent || "item" };
+          item.classList.add("dragging");
+          event.dataTransfer.effectAllowed = "move";
+          event.dataTransfer.setData("text/plain", dragState.label);
+        });
+        item.addEventListener("dragend", () => { item.classList.remove("dragging"); clearDropFeedback(); dragState = null; });
+      });
+
+      document.querySelectorAll("[data-drop-project]").forEach(target => {
+        target.addEventListener("dragover", event => {
+          if (!dragState) return;
+          event.preventDefault();
+          const allowed = target.dataset.dropProject === dragState.project;
+          event.dataTransfer.dropEffect = allowed ? "move" : "none";
+          target.classList.toggle("allowed", allowed);
+          target.classList.toggle("refused", !allowed);
+        });
+        target.addEventListener("dragleave", () => target.classList.remove("allowed", "refused"));
+        target.addEventListener("drop", event => {
+          event.preventDefault();
+          const allowed = target.dataset.dropProject === dragState?.project;
+          const state = document.getElementById("prototype-state");
+          if (state) state.textContent = allowed
+            ? `Preview only: ${dragState.label} has a valid within-project target · not saved`
+            : `Refused: ${dragState?.label || "item"} belongs to another Project · unchanged`;
+          clearDropFeedback();
+        });
+      });
+    }
+
+    function clearDropFeedback() { document.querySelectorAll(".allowed,.refused").forEach(node => node.classList.remove("allowed", "refused")); }
+
+    function cycle(delta) {
+      const keys = Object.keys(variants);
+      current = keys[(keys.indexOf(current) + delta + keys.length) % keys.length];
+      navCollapsed = false;
+      render();
+    }
+
+    document.getElementById("prev").addEventListener("click", () => cycle(-1));
+    document.getElementById("next").addEventListener("click", () => cycle(1));
+    addEventListener("keydown", event => {
+      const target = event.target;
+      if (target.matches("input, textarea, [contenteditable='true']")) return;
+      if (event.key === "ArrowLeft") { event.preventDefault(); cycle(-1); }
+      if (event.key === "ArrowRight") { event.preventDefault(); cycle(1); }
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "b") { event.preventDefault(); navCollapsed = !navCollapsed; render(); }
+    });
+
+    render();
+  </script>
+</body>
+</html>
