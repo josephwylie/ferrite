@@ -38,10 +38,10 @@
       --color-macos-zoom: #28c840;
       --shadow-menu: 0 8px 24px -8px oklch(0 0 0 / 0.58), 0 1px 2px oklch(0 0 0 / 0.28);
       --shadow-pane: none;
-      --radius-control: 8px;
-      --radius-pane: 10px;
-      --radius-chip: 6px;
-      --radius-menu: 14px;
+      --radius-control: 6px;
+      --radius-pane: 7px;
+      --radius-chip: 4px;
+      --radius-menu: 8px;
       --font-ui: ui-rounded, "SF Pro Rounded", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       --font-data: "SFMono-Regular", Menlo, Consolas, monospace;
       --nav-width: 286px;
@@ -111,13 +111,6 @@
     .scope-path { display: flex; align-items: center; min-inline-size: 0; gap: 7px; color: var(--color-text-muted); }
     .scope-path strong { min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text-secondary); font-weight: 580; }
     .scope-path .sep { color: var(--color-text-faint); }
-    .census { display: flex; align-items: center; gap: 6px; margin-inline-start: auto; color: var(--color-text-muted); font: 10px var(--font-data); }
-    .pending-label {
-      display: flex; align-items: center; gap: 6px; min-inline-size: 0; max-inline-size: 310px;
-      color: var(--color-status-attention); font-size: 10px; white-space: nowrap;
-    }
-    .pending-label span:last-child { overflow: hidden; text-overflow: ellipsis; }
-
     .icon-button {
       display: grid; place-items: center; inline-size: 30px; block-size: 30px; flex: 0 0 auto;
       border: 0; border-radius: var(--radius-control); background: transparent; color: var(--color-text-muted); cursor: pointer;
@@ -144,20 +137,32 @@
     .nav-heading-copy strong { display: block; color: var(--color-text-primary); font-size: 13px; font-weight: 650; }
     .nav-heading-copy span { display: block; color: var(--color-text-muted); font-size: 9.5px; }
 
-    .project-filter { padding: 7px var(--row-inset) 10px; }
-    .filter-label { display: flex; align-items: center; justify-content: space-between; margin-block-end: 7px; color: var(--color-text-muted); font-size: 10px; }
-    .filter-label output { color: var(--color-text-faint); font: 9px var(--font-data); }
-    .filter-options { display: flex; gap: 5px; min-inline-size: 0; }
-    .filter-button {
-      min-inline-size: 0; block-size: 29px; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-      padding-inline: 9px; border: 0; border-radius: var(--radius-control); background: transparent;
-      color: var(--color-text-muted); font-size: 10px; cursor: pointer;
+    .project-filter { position: relative; z-index: 6; padding: 7px var(--row-inset) 11px; }
+    .filter-label { display: block; margin-block-end: 6px; color: var(--color-text-muted); font-size: 10px; }
+    .filter-trigger {
+      display: flex; align-items: center; justify-content: space-between; inline-size: 100%; block-size: 34px; gap: 8px;
+      padding-inline: 10px 8px; border: 0; border-radius: var(--radius-control); background: var(--color-control);
+      color: var(--color-text-secondary); cursor: pointer;
       transition-property: background-color, color, scale; transition-duration: 120ms; transition-timing-function: ease-out;
     }
-    .filter-button:hover { background: var(--color-control-hover); color: var(--color-text-primary); }
-    .filter-button[aria-pressed="true"] { background: var(--color-selected); color: var(--color-text-primary); font-weight: 620; }
-    .filter-button[aria-pressed="true"]:hover { background: var(--color-selected-hover); }
-    .filter-button:active { scale: 0.96; }
+    .filter-trigger:hover, .filter-trigger[aria-expanded="true"] { background: var(--color-control-hover); color: var(--color-text-primary); }
+    .filter-trigger:active { scale: 0.99; }
+    .filter-trigger svg { inline-size: 14px; block-size: 14px; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; transition: rotate 120ms ease-out; }
+    .filter-trigger[aria-expanded="true"] svg { rotate: 180deg; }
+    .filter-menu {
+      position: absolute; z-index: 8; inset-inline: var(--row-inset); inset-block-start: calc(100% - 5px);
+      display: flex; flex-direction: column; gap: 2px; padding: 4px; border: 1px solid var(--color-line-strong);
+      border-radius: var(--radius-menu); background: var(--color-control); box-shadow: var(--shadow-menu);
+    }
+    .filter-menu[hidden] { display: none; }
+    .filter-option {
+      display: flex; align-items: center; justify-content: space-between; inline-size: 100%; min-block-size: 31px; gap: 8px;
+      padding-inline: 9px 7px; border: 0; border-radius: var(--radius-control); background: transparent;
+      color: var(--color-text-secondary); text-align: start; cursor: pointer;
+    }
+    .filter-option:hover, .filter-option:focus-visible { background: var(--color-control-hover); color: var(--color-text-primary); }
+    .filter-option[aria-selected="true"] { background: var(--color-selected); color: var(--color-text-primary); font-weight: 620; }
+    .filter-option svg { inline-size: 14px; block-size: 14px; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 
     .nav-tree { flex: 1; min-block-size: 0; overflow-y: auto; padding: 8px 7px 74px; scrollbar-width: thin; scrollbar-color: var(--color-control) transparent; }
     .list-label {
@@ -165,49 +170,60 @@
       padding-inline: 8px; color: var(--color-text-faint); font-size: 9px; font-weight: 600;
     }
     .list-label span:last-child { font: 9px var(--font-data); font-weight: 400; }
-    .list-label.solo { margin-block-start: 11px; }
+    .list-label.solo { margin-block-start: 15px; }
     .empty-filter { margin: 10px 8px; color: var(--color-text-muted); font-size: 11px; }
 
-    .group-block { margin-block-end: 6px; }
+    .group-block { margin-block-end: 15px; }
+    .group-members {
+      display: grid; gap: 3px; margin-inline-start: 18px; padding-block: 4px 1px; padding-inline-start: 9px;
+      border-inline-start: 1px solid var(--color-line-strong);
+    }
     .nav-row {
-      position: relative; display: flex; align-items: center; min-inline-size: 0; min-block-size: 46px;
-      padding: 6px 7px; border: 0; border-radius: var(--radius-control); color: var(--color-text-secondary);
+      position: relative; display: flex; align-items: center; min-inline-size: 0; min-block-size: 44px;
+      padding: 6px 8px; border: 0; border-radius: var(--radius-control); color: var(--color-text-secondary);
       cursor: grab; user-select: none;
       transition-property: background-color, color, scale, box-shadow; transition-duration: 120ms; transition-timing-function: ease-out;
     }
     .nav-row:hover { background: var(--color-control-hover); color: var(--color-text-primary); }
     .nav-row:active { cursor: grabbing; scale: 0.995; }
-    .nav-row.selected { background: var(--color-selected); color: var(--color-text-primary); }
-    .nav-row.selected:hover { background: var(--color-selected-hover); }
-    .nav-row.scope-active { background: var(--color-control); color: var(--color-text-primary); }
-    .nav-row.scope-active:hover { background: var(--color-control-hover); }
-    .nav-row.member { margin-inline-start: 22px; }
-    .nav-row.member::before {
-      content: ""; position: absolute; inset-inline-start: -12px; inset-block: 9px; inline-size: 1px;
-      background: var(--color-line-strong);
-    }
+    .nav-row.selected { background: transparent; color: var(--color-text-primary); box-shadow: inset 2px 0 0 var(--color-focus); }
+    .nav-row.selected:hover { background: var(--color-selected); }
+    .nav-row.scope-active { color: var(--color-text-primary); }
+    .nav-row.scope-active .row-leading { border-radius: var(--radius-chip); background: var(--color-focus-wash); color: var(--color-focus); }
+    .nav-row.scope-active:hover .row-leading { background: var(--color-selected); }
+    .nav-tree > .thread-row { margin-block-end: 3px; }
+    .thread-row { min-block-size: 57px; padding-block: 7px; }
     .row-leading { display: grid; place-items: center; inline-size: 22px; flex: 0 0 22px; color: var(--color-text-muted); }
     .row-leading .chevron { inline-size: 14px; block-size: 14px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
     .row-content { min-inline-size: 0; flex: 1; }
     .row-title-line, .row-meta-line { display: flex; align-items: center; min-inline-size: 0; gap: 6px; }
     .row-title { min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: currentColor; font-size: 11px; font-weight: 620; }
     .group-row .row-title { font-size: 11.5px; }
-    .row-meta-line { margin-block-start: 2px; color: var(--color-text-muted); font: 9px var(--font-data); }
+    .row-meta-line { margin-block-start: 3px; color: var(--color-text-muted); font: 9px var(--font-data); }
     .branch { min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .provider { flex: 0 0 auto; color: var(--color-text-faint); }
-    .row-project { flex: 0 0 auto; max-inline-size: 86px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text-muted); font: 9px var(--font-ui); }
+    .row-project { flex: 0 0 auto; max-inline-size: 108px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text-muted); font: 9px var(--font-ui); }
     .row-project::before { content: "·"; margin-inline-end: 5px; color: var(--color-text-faint); }
-    .member .row-project { max-inline-size: 72px; }
+    .group-row .row-project::before { content: none; }
     .count { flex: 0 0 auto; color: var(--color-text-faint); font: 9px var(--font-data); }
+    .thread-row .row-meta-line { gap: 5px; }
+    .thread-row .row-project { max-inline-size: 94px; color: var(--color-text-muted); font-weight: 570; }
+    .thread-row .row-project::before { content: none; }
+    .thread-row .branch::before { content: "·"; margin-inline-end: 5px; color: var(--color-text-faint); }
+    .row-provider-state { display: flex; align-items: center; justify-content: space-between; min-inline-size: 0; min-block-size: 15px; margin-block-start: 3px; }
+    .provider-icon { display: inline-grid; place-items: center; inline-size: 15px; block-size: 15px; color: var(--color-text-faint); }
+    .provider-icon svg { inline-size: 13px; block-size: 13px; fill: none; stroke: currentColor; stroke-width: 1.35; stroke-linecap: round; stroke-linejoin: round; }
 
     .status-dot { inline-size: 7px; block-size: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--color-text-faint); }
     .status-dot.running { background: var(--color-status-running); }
     .status-dot.attention { background: var(--color-status-attention); }
     .status-dot.blocked { background: var(--color-status-blocked); }
     .status-dot.parked { background: transparent; box-shadow: inset 0 0 0 1px var(--color-text-faint); }
-    .status-chip { flex: 0 0 auto; padding: 1px 5px; border-radius: var(--radius-chip); font-size: 8.5px; font-weight: 550; }
-    .status-chip.attention { color: var(--color-status-attention); background: var(--color-status-attention-wash); }
-    .status-chip.blocked { color: var(--color-status-blocked); background: var(--color-status-blocked-wash); }
+    .status-label { flex: 0 0 auto; color: var(--color-text-faint); font-size: 8.5px; font-weight: 560; }
+    .status-label.running { color: var(--color-status-running); }
+    .status-label.parked { color: var(--color-text-faint); }
+    .status-label.attention, .status-label.blocked { padding: 1px 5px; border-radius: var(--radius-chip); }
+    .status-label.attention { color: var(--color-status-attention); background: var(--color-status-attention-wash); }
+    .status-label.blocked { color: var(--color-status-blocked); background: var(--color-status-blocked-wash); }
 
     .drag-message {
       position: absolute; inset-inline: 9px; inset-block-end: 9px; min-block-size: 50px; padding: 8px 9px;
@@ -220,18 +236,21 @@
     .dragging { opacity: .45; }
 
     .nav-rail { display: flex; flex-direction: column; align-items: center; inline-size: var(--nav-rail-width); min-block-size: 0; padding-block: 6px; }
-    .rail-filter { display: flex; flex-direction: column; gap: 5px; margin-block: 5px 10px; }
-    .rail-filter button {
+    .rail-filter { margin-block: 5px 10px; }
+    .rail-filter-trigger {
       display: grid; place-items: center; inline-size: 32px; block-size: 28px; border: 0; border-radius: var(--radius-control);
-      background: transparent; color: var(--color-text-muted); font-size: 9px; cursor: pointer;
+      background: var(--color-control); color: var(--color-text-secondary); font-size: 9px; font-weight: 620; cursor: pointer;
     }
-    .rail-filter button:hover { background: var(--color-control-hover); color: var(--color-text-primary); }
-    .rail-filter button[aria-pressed="true"] { background: var(--color-selected); color: var(--color-text-primary); font-weight: 650; }
+    .rail-filter-trigger:hover { background: var(--color-control-hover); color: var(--color-text-primary); }
     .rail-divider { inline-size: 24px; block-size: 1px; margin-block: 2px 9px; background: var(--color-line-strong); }
-    .rail-statuses { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+    .rail-statuses { display: flex; flex-direction: column; align-items: center; gap: 8px; }
     .rail-status { display: grid; place-items: center; inline-size: 28px; block-size: 24px; border-radius: var(--radius-control); }
     .rail-status.selected { background: var(--color-selected); }
     .rail-status.attention { background: var(--color-status-attention-wash); }
+    .rail-state { color: var(--color-text-faint); font: 7px var(--font-data); }
+    .rail-state.running { color: var(--color-status-running); }
+    .rail-state.attention { color: var(--color-status-attention); }
+    .rail-state.blocked { color: var(--color-status-blocked); }
 
     .cockpit { min-inline-size: 0; flex: 1; display: flex; flex-direction: column; background: var(--color-ground); }
     .cockpit-strip {
@@ -242,7 +261,7 @@
     .cockpit-strip .scope { color: var(--color-text-muted); }
     .cockpit-strip .spacer { flex: 1; }
     .cockpit-strip .attention { color: var(--color-status-attention); }
-    .interaction-note { min-inline-size: 0; max-inline-size: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text-faint); }
+    .cockpit-census { display: flex; align-items: center; gap: 6px; color: var(--color-text-muted); font: 10px var(--font-data); }
 
     .pane-grid {
       display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr));
@@ -253,9 +272,11 @@
       overflow: hidden; border: 1px solid transparent; border-radius: var(--radius-pane); background: var(--color-pane); box-shadow: var(--shadow-pane);
     }
     :root[data-mode="aperture"] .pane { border-color: var(--color-line-strong); }
-    .pane.focused { box-shadow: inset 0 0 0 1.5px var(--color-focus), var(--shadow-pane); }
-    .pane.attention { box-shadow: inset 0 0 0 1.5px var(--color-status-attention), var(--shadow-pane); }
-    .pane.blocked { box-shadow: inset 0 0 0 1.5px var(--color-status-blocked), var(--shadow-pane); }
+    .pane::before, .pane::after { content: ""; position: absolute; z-index: 4; inset: 0; border: 0 solid transparent; border-radius: inherit; pointer-events: none; }
+    .pane.attention::before { border-width: 1.5px; border-color: var(--color-status-attention); }
+    .pane.blocked::before { border-width: 1.5px; border-color: var(--color-status-blocked); }
+    .pane.focused::after { border-width: 2px; border-color: var(--color-focus); }
+    .pane.focused.attention::before, .pane.focused.blocked::before { inset: 4px; border-width: 1px; border-radius: calc(var(--radius-pane) - 3px); }
     .pane-head {
       display: flex; align-items: center; flex: 0 0 34px; gap: 7px; min-inline-size: 0; block-size: 34px;
       padding-inline: 11px; color: var(--color-text-muted);
@@ -297,24 +318,26 @@
     .prompt-mark { color: var(--color-focus); font-size: 13px; }
     .composer .hint { margin-inline-start: auto; color: var(--color-text-faint); white-space: nowrap; }
 
-    .mode-switcher {
+    .prototype-controls {
       position: fixed; z-index: 10; inset-inline-start: 50%; inset-block-end: 13px; translate: -50% 0;
       display: flex; align-items: center; gap: 4px; padding: 5px; border-radius: var(--radius-menu);
       background: var(--color-control); box-shadow: var(--shadow-menu);
     }
+    .prototype-note { display: flex; align-items: center; block-size: 31px; padding-inline: 9px 12px; border-inline-end: 1px solid var(--color-line-strong); color: var(--color-text-muted); font-size: 9.5px; white-space: nowrap; }
+    .mode-switcher { display: flex; align-items: center; gap: 4px; }
     .mode-switcher button {
-      min-inline-size: 132px; block-size: 31px; border: 0; border-radius: calc(var(--radius-menu) - 5px);
+      min-inline-size: 132px; block-size: 31px; border: 0; border-radius: var(--radius-control);
       background: transparent; color: var(--color-text-muted); cursor: pointer;
       transition-property: background-color, color, scale; transition-duration: 120ms; transition-timing-function: ease-out;
     }
     .mode-switcher button:hover { background: var(--color-control-hover); color: var(--color-text-primary); }
     .mode-switcher button[aria-pressed="true"] { background: var(--color-selected); color: var(--color-text-primary); font-weight: 620; }
     .mode-switcher button:active { scale: 0.96; }
+    .sr-only { position: absolute; inline-size: 1px; block-size: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
     @media (max-width: 1240px) {
       :root { --nav-width: 266px; }
-      .pending-label { max-inline-size: 220px; }
-      .interaction-note { max-inline-size: 240px; }
+      .prototype-note { display: none; }
       .pane-body { font-size: 9.5px; }
     }
   </style>
@@ -325,7 +348,7 @@
     THESIS: soften Ferrite's dark layers and remove its border cage without changing its left-nav + 2×2 Cockpit shell.
     OWN-WORLD: restrained neutral dark fields, filled selection, rounded controls, humanist chrome, data-only mono, status color used only for status.
     STORY: the operator filters the nav by Project while Groups remain parents, members remain nested, and every row names its Project.
-    FIRST VIEWPORT: Project filter at nav top; mixed-project Groups and solo Threads beneath; the unchanged dense four-Pane Cockpit at right.
+    FIRST VIEWPORT: one Project dropdown at nav top; mixed-project Groups and solo Threads beneath; the unchanged dense four-Pane Cockpit at right.
     FORM: one DOM and one dataset; ?mode=soft|aperture swaps tokens and surface treatment only.
   -->
   <div class="app">
@@ -333,10 +356,6 @@
       <span class="traffic" aria-hidden="true"><span></span><span></span><span></span></span>
       <span class="product-name">Ferrite</span>
       <span class="scope-path"><span class="sep">/</span><strong>Project-scoped navigation</strong><span class="sep">·</span><span>Group view</span></span>
-      <span class="census"><span>12 panes</span><span>·</span><span>3 need you</span></span>
-      <span class="pending-label" title="Unresolved: keep the Global Wall, or persist every multi-Pane view as a Group">
-        <span class="status-dot attention"></span><span>Pending · Global Wall ↔ every multi-Pane view is a Group</span>
-      </span>
     </header>
 
     <div class="workspace">
@@ -346,23 +365,29 @@
             <div class="nav-heading-copy"><strong>Threads</strong><span>Groups first · solos at root</span></div>
             <button class="icon-button" id="collapseButton" aria-label="Collapse navigation" aria-expanded="true"></button>
           </div>
-          <nav class="project-filter" aria-label="Project filter">
-            <div class="filter-label"><span>Project</span><output id="filterSummary">All Projects</output></div>
-            <div class="filter-options" id="filterOptions"></div>
+          <nav class="project-filter" id="projectFilter" aria-label="Project filter">
+            <span class="filter-label">Project</span>
+            <button class="filter-trigger" id="projectFilterButton" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="projectFilterMenu" aria-describedby="filterStatus">
+              <span id="filterSummary">All Projects</span><span id="filterChevron" aria-hidden="true"></span>
+            </button>
+            <div class="filter-menu" id="projectFilterMenu" role="listbox" aria-label="Choose Project" hidden></div>
+            <span class="sr-only" id="filterStatus" aria-live="polite">All Projects shown in navigation. Cockpit unchanged.</span>
           </nav>
           <div class="nav-tree" id="navTree"></div>
           <div class="drag-message" aria-live="polite"><strong>Drag preview</strong><span id="dragMessage">Within-Project moves are valid. Cross-Project moves refuse.</span></div>
         </div>
         <div class="nav-rail">
           <button class="icon-button" id="expandButton" aria-label="Expand navigation"></button>
-          <div class="rail-filter" id="railFilter" aria-label="Project filter"></div>
+          <div class="rail-filter">
+            <button class="rail-filter-trigger" id="railFilterButton" type="button" aria-label="Project filter: All Projects. Expand to change." title="Project: All Projects">All</button>
+          </div>
           <div class="rail-divider"></div>
           <div class="rail-statuses" aria-label="Collapsed Thread states">
-            <span class="rail-status selected"><span class="status-dot running"></span></span>
-            <span class="rail-status attention"><span class="status-dot attention"></span></span>
-            <span class="rail-status"><span class="status-dot running"></span></span>
-            <span class="rail-status"><span class="status-dot blocked"></span></span>
-            <span class="rail-status"><span class="status-dot parked"></span></span>
+            <span class="rail-status selected" aria-label="running"><span class="rail-state running">run</span></span>
+            <span class="rail-status attention" aria-label="needs you"><span class="rail-state attention">you</span></span>
+            <span class="rail-status" aria-label="running"><span class="rail-state running">run</span></span>
+            <span class="rail-status" aria-label="blocked"><span class="rail-state blocked">blk</span></span>
+            <span class="rail-status" aria-label="parked"><span class="rail-state parked">park</span></span>
           </div>
         </div>
       </aside>
@@ -370,8 +395,8 @@
       <main class="cockpit">
         <div class="cockpit-strip">
           <strong>ferrite</strong><span class="scope">› Project-scoped navigation prototype</span>
-          <span class="spacer"></span><span class="interaction-note" id="interactionNote">Nav filter only · Cockpit scope and membership stay unchanged</span>
-          <span>4 panes</span><span>·</span><span class="attention">1 needs you</span>
+          <span class="spacer"></span>
+          <span class="cockpit-census"><span>4 panes</span><span>·</span><span class="attention">1 needs you</span></span>
         </div>
 
         <section class="pane-grid" aria-label="Four Pane Cockpit">
@@ -429,16 +454,24 @@
     </div>
   </div>
 
-  <nav class="mode-switcher" aria-label="Visual comparison">
-    <button data-mode-button="aperture" aria-pressed="false">Current · Aperture</button>
-    <button data-mode-button="soft" aria-pressed="true">Proposed · Soft</button>
-  </nav>
+  <aside class="prototype-controls">
+    <span class="prototype-note" aria-describedby="prototypeQuestion">Prototype only · Wall/Group model pending</span>
+    <span class="sr-only" id="prototypeQuestion">Unresolved: keep Global Wall, or persist every multi-Pane view as a Group.</span>
+    <nav class="mode-switcher" aria-label="Visual comparison">
+      <button data-mode-button="aperture" aria-pressed="false">Current · Aperture</button>
+      <button data-mode-button="soft" aria-pressed="true">Proposed · Soft</button>
+    </nav>
+  </aside>
 
   <script>
     const icons = {
       sidebar: `<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3" width="15" height="14" rx="2.5"></rect><path d="M7 3v14"></path></svg>`,
       chevron: `<svg class="chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m6 3.5 4.5 4.5L6 12.5"></path></svg>`,
+      chevronDown: `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4"></path></svg>`,
+      check: `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3.5 8 3 3 6-6.5"></path></svg>`,
       branch: `<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="4" cy="4" r="1.5"></circle><circle cx="12" cy="4" r="1.5"></circle><circle cx="4" cy="12" r="1.5"></circle><path d="M4 5.5v5M5.5 4H8a4 4 0 0 1 4 4v2.5"></path></svg>`,
+      codex: `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="m5.5 4-3 4 3 4M10.5 4l3 4-3 4M9 2.5 7 13.5"></path></svg>`,
+      claude: `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2v12M2 8h12M3.8 3.8l8.4 8.4M12.2 3.8l-8.4 8.4"></path><circle cx="8" cy="8" r="1.7"></circle></svg>`,
     };
 
     const projects = [
@@ -483,7 +516,13 @@
 
     let selectedProject = "all";
     let collapsed = false;
+    let filterOpen = false;
     let dragState = null;
+
+    const projectChoices = [
+      { id: "all", title: "All Projects", railLabel: "All" },
+      ...projects.map(project => ({ id: project.id, title: project.title, railLabel: project.railLabel })),
+    ];
 
     function modeFromUrl() {
       const candidate = new URLSearchParams(location.search).get("mode");
@@ -500,49 +539,76 @@
       history.replaceState({}, "", `${location.pathname}?${params}`);
     }
 
-    function filterButtons(compact = false) {
-      const options = [{ id: "all", filterLabel: "All", railLabel: "All", title: "All Projects" }, ...projects];
-      return options.map(project => `<button type="button" class="${compact ? "" : "filter-button"}" data-project-filter="${project.id}" aria-pressed="${selectedProject === project.id}" title="${project.title || "All Projects"}">${compact ? project.railLabel : project.filterLabel}</button>`).join("");
+    function selectedChoice() {
+      return projectChoices.find(choice => choice.id === selectedProject) || projectChoices[0];
+    }
+
+    function renderProjectFilter() {
+      const selected = selectedChoice();
+      document.getElementById("filterSummary").textContent = selected.title;
+      const railButton = document.getElementById("railFilterButton");
+      railButton.textContent = selected.railLabel;
+      railButton.setAttribute("aria-label", `Project filter: ${selected.title}. Expand to change.`);
+      railButton.title = `Project: ${selected.title}`;
+      document.getElementById("projectFilterMenu").innerHTML = projectChoices.map(choice => {
+        const isSelected = choice.id === selectedProject;
+        return `<button type="button" class="filter-option" role="option" aria-selected="${isSelected}" data-project-option="${choice.id}"><span>${choice.title}</span>${isSelected ? icons.check : ""}</button>`;
+      }).join("");
+      document.querySelectorAll("[data-project-option]").forEach(option => {
+        option.addEventListener("click", () => selectProject(option.dataset.projectOption));
+      });
+    }
+
+    function openProjectMenu(edge = "selected") {
+      const menu = document.getElementById("projectFilterMenu");
+      filterOpen = true;
+      menu.hidden = false;
+      document.getElementById("projectFilterButton").setAttribute("aria-expanded", "true");
+      requestAnimationFrame(() => {
+        const options = [...menu.querySelectorAll("[data-project-option]")];
+        const target = edge === "last" ? options.at(-1) : options.find(option => option.getAttribute("aria-selected") === "true") || options[0];
+        target?.focus();
+      });
+    }
+
+    function closeProjectMenu(returnFocus = false) {
+      filterOpen = false;
+      document.getElementById("projectFilterMenu").hidden = true;
+      document.getElementById("projectFilterButton").setAttribute("aria-expanded", "false");
+      if (returnFocus) document.getElementById("projectFilterButton").focus();
+    }
+
+    function selectProject(id) {
+      selectedProject = id;
+      renderProjectFilter();
+      renderTree();
+      document.getElementById("filterStatus").textContent = `${selectedChoice().title} shown in navigation. Cockpit unchanged.`;
+      closeProjectMenu(true);
     }
 
     function threadRow(thread, project, member = false) {
-      const chip = thread.chip ? `<span class="status-chip ${thread.state}">${thread.chip}</span>` : "";
+      const stateLabel = thread.chip || (thread.state === "running" ? "running" : "parked");
+      const provider = thread.provider === "cx" ? { name: "Codex", icon: icons.codex, className: "codex" } : { name: "Claude", icon: icons.claude, className: "claude" };
       return `<div class="nav-row thread-row ${member ? "member" : ""} ${thread.selected ? "selected" : ""}" tabindex="0" draggable="true" data-drag-kind="thread" data-project="${project.id}" data-thread="${thread.id}" data-drop-project="${project.id}" title="${thread.id} · ${thread.branch} · ${project.title}">
-        <span class="row-leading"><span class="status-dot ${thread.state}"></span></span>
         <span class="row-content">
-          <span class="row-title-line"><span class="row-title">${thread.id}</span>${chip}<span class="count"></span></span>
-          <span class="row-meta-line"><span class="branch">${thread.branch}</span><span class="provider">${thread.provider}</span><span class="row-project">${project.rowLabel}</span></span>
+          <span class="row-title-line"><span class="row-title">${thread.id}</span><span class="count"></span></span>
+          <span class="row-meta-line"><span class="row-project">${project.rowLabel}</span><span class="branch">${thread.branch}</span></span>
+          <span class="row-provider-state"><span class="provider-icon ${provider.className}" role="img" aria-label="${provider.name}" title="${provider.name}">${provider.icon}</span><span class="status-label ${thread.state}">${stateLabel}</span></span>
         </span>
       </div>`;
     }
 
     function groupBlock(group, project) {
       return `<section class="group-block" data-project="${project.id}">
-        <div class="nav-row group-row ${group.active ? "scope-active" : ""}" tabindex="0" draggable="true" data-drag-kind="group" data-group="${group.id}" data-project="${project.id}" data-drop-project="${project.id}" title="${group.title} · ${project.title}">
+        <div class="nav-row group-row ${group.active ? "scope-active" : ""}" tabindex="0" draggable="true" data-drag-kind="group" data-group="${group.id}" data-project="${project.id}" data-drop-project="${project.id}" aria-current="${group.active ? "page" : "false"}" title="${group.title} · ${project.title}">
           <span class="row-leading">${icons.chevron}</span>
           <span class="row-content">
             <span class="row-title-line"><span class="row-title">${group.title}</span><span class="count">${group.threads.length}</span></span>
-            <span class="row-meta-line"><span>${group.threads.length} Threads</span><span class="row-project">${project.rowLabel}</span></span>
+            <span class="row-meta-line"><span class="row-project">${project.rowLabel}</span></span>
           </span>
         </div>
-        ${group.threads.map(thread => threadRow(thread, project, true)).join("")}
+        <div class="group-members">${group.threads.map(thread => threadRow(thread, project, true)).join("")}</div>
       </section>`;
-    }
-
-    function renderFilters() {
-      document.getElementById("filterOptions").innerHTML = filterButtons(false);
-      document.getElementById("railFilter").innerHTML = filterButtons(true);
-      const selected = projects.find(project => project.id === selectedProject);
-      document.getElementById("filterSummary").textContent = selected ? selected.filterLabel : "All Projects";
-      document.querySelectorAll("[data-project-filter]").forEach(button => {
-        button.addEventListener("click", () => {
-          selectedProject = button.dataset.projectFilter;
-          renderFilters();
-          renderTree();
-          const label = selectedProject === "all" ? "All Projects" : projects.find(project => project.id === selectedProject).title;
-          document.getElementById("interactionNote").textContent = `${label} in nav · Cockpit scope and membership unchanged`;
-        });
-      });
     }
 
     function renderTree() {
@@ -593,6 +659,7 @@
     }
 
     function setCollapsed(value) {
+      closeProjectMenu();
       collapsed = value;
       document.getElementById("navShell").classList.toggle("collapsed", collapsed);
       document.getElementById("collapseButton").setAttribute("aria-expanded", String(!collapsed));
@@ -600,12 +667,50 @@
 
     document.getElementById("collapseButton").innerHTML = icons.sidebar;
     document.getElementById("expandButton").innerHTML = icons.sidebar;
+    document.getElementById("filterChevron").innerHTML = icons.chevronDown;
     document.querySelectorAll(".pane-branch").forEach(branch => {
       const label = branch.getAttribute("title");
       branch.innerHTML = `${icons.branch}<span>${label}</span>`;
     });
     document.getElementById("collapseButton").addEventListener("click", () => setCollapsed(true));
     document.getElementById("expandButton").addEventListener("click", () => setCollapsed(false));
+    document.getElementById("railFilterButton").addEventListener("click", () => {
+      setCollapsed(false);
+      requestAnimationFrame(() => openProjectMenu());
+    });
+    document.getElementById("projectFilterButton").addEventListener("click", () => filterOpen ? closeProjectMenu() : openProjectMenu());
+    document.getElementById("projectFilterButton").addEventListener("keydown", event => {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        openProjectMenu(event.key === "ArrowUp" ? "last" : "selected");
+      }
+      if (event.key === "Escape") closeProjectMenu();
+    });
+    document.getElementById("projectFilterMenu").addEventListener("keydown", event => {
+      const options = [...event.currentTarget.querySelectorAll("[data-project-option]")];
+      const currentIndex = options.indexOf(document.activeElement);
+      let nextIndex = currentIndex;
+      if (event.key === "ArrowDown") nextIndex = (currentIndex + 1) % options.length;
+      if (event.key === "ArrowUp") nextIndex = (currentIndex - 1 + options.length) % options.length;
+      if (event.key === "Home") nextIndex = 0;
+      if (event.key === "End") nextIndex = options.length - 1;
+      if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+        event.preventDefault();
+        options[nextIndex]?.focus();
+      }
+      if ((event.key === "Enter" || event.key === " ") && document.activeElement?.matches("[data-project-option]")) {
+        event.preventDefault();
+        document.activeElement.click();
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeProjectMenu(true);
+      }
+      if (event.key === "Tab") closeProjectMenu();
+    });
+    document.addEventListener("mousedown", event => {
+      if (filterOpen && !document.getElementById("projectFilter").contains(event.target)) closeProjectMenu();
+    });
     document.querySelectorAll("[data-mode-button]").forEach(button => button.addEventListener("click", () => setMode(button.dataset.modeButton)));
     addEventListener("keydown", event => {
       if (event.target.matches("input, textarea, [contenteditable='true']")) return;
@@ -618,7 +723,7 @@
     });
 
     setMode(modeFromUrl());
-    renderFilters();
+    renderProjectFilter();
     renderTree();
   </script>
 </body>
