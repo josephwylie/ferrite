@@ -2549,6 +2549,26 @@ impl CockpitView {
     fn apply_drop(&mut self, drag: NavDrag, target: DropTarget, cx: &mut Context<Self>) {
         self.view = drag.origin;
         match self.cockpit.plan_group_drop(drag.drag, target) {
+            Plan::Change(GroupChange::Leave { thread })
+                if matches!(drag.drag, Drag::Thread { group: Some(_), .. }) =>
+            {
+                let Drag::Thread {
+                    group: Some(group), ..
+                } = drag.drag
+                else {
+                    unreachable!();
+                };
+                self.view = View::Group(group);
+                self.remove_thread_from_view(thread, cx);
+                if self.pending_leave(group) == Some(thread)
+                    || self.cockpit.groups().of(thread).is_none()
+                {
+                    self.view = View::Solo;
+                    if let Some(index) = self.pane_for(thread) {
+                        self.focus_pane(index);
+                    }
+                }
+            }
             Plan::Change(change) => {
                 self.apply_group_change(change);
             }
@@ -3720,7 +3740,10 @@ impl CockpitView {
             let gap_target = DropTarget::GroupGap(group_index);
             rows = rows.child(
                 drop_feedback(
-                    div().h(px(crate::theme::POPOVER_PAD)),
+                    div()
+                        .id(("group-gap", group_index))
+                        .debug_selector(move || format!("group-gap-{group_index}"))
+                        .h(px(crate::theme::POPOVER_PAD)),
                     self.cockpit.groups().clone(),
                     gap_target,
                 )
@@ -3911,7 +3934,12 @@ impl CockpitView {
                 view.apply_drop(*drag, terminal_target, cx)
             })),
         );
-        let mut loose = div().flex().flex_col().flex_1();
+        let mut loose = div()
+            .id("loose-zone")
+            .debug_selector(|| "loose-zone".into())
+            .flex()
+            .flex_col()
+            .flex_1();
         for row in state
             .running
             .iter()
@@ -4327,6 +4355,28 @@ mod tests {
         group
     }
 
+    fn drag_nav(cx: &mut gpui::VisualTestContext, source: &'static str, target: &'static str) {
+        let source = cx.debug_bounds(source).unwrap();
+        let target = cx.debug_bounds(target).unwrap();
+        let source = gpui::point(source.right() - px(5.), source.center().y);
+        cx.simulate_mouse_down(source, gpui::MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_mouse_move(
+            gpui::point(source.x - px(30.), source.y),
+            gpui::MouseButton::Left,
+            gpui::Modifiers::none(),
+        );
+        cx.simulate_mouse_move(
+            target.center(),
+            gpui::MouseButton::Left,
+            gpui::Modifiers::none(),
+        );
+        cx.simulate_mouse_up(
+            target.center(),
+            gpui::MouseButton::Left,
+            gpui::Modifiers::none(),
+        );
+    }
+
     #[gpui::test]
     fn solo_group_draft_and_close_follow_the_persisted_view_state_machine(cx: &mut TestAppContext) {
         let (mut core, _fake) = cockpit("group-view-state", 3);
@@ -4560,12 +4610,20 @@ mod tests {
 
     #[gpui::test]
     fn pointer_drag_joins_then_reorders_to_the_after_last_target(cx: &mut TestAppContext) {
-        let (mut core, _) = cockpit("group-pointer-drag", 3);
+        let (mut core, _) = cockpit("group-pointer-drag", 5);
         let threads = core.threads();
         let group = core
             .apply_group(GroupChange::Create {
                 first: threads[0],
                 second: threads[1],
+            })
+            .unwrap()
+            .group
+            .unwrap();
+        let second_group = core
+            .apply_group(GroupChange::Create {
+                first: threads[3],
+                second: threads[4],
             })
             .unwrap()
             .group
@@ -4576,58 +4634,76 @@ mod tests {
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         cx.run_until_parked();
 
-        let source = cx.debug_bounds("nav-thread-3").unwrap();
-        let target = cx.debug_bounds("nav-group-1").unwrap();
-        let source = gpui::point(source.right() - px(5.), source.center().y);
-        cx.simulate_mouse_down(source, gpui::MouseButton::Left, gpui::Modifiers::none());
-        cx.simulate_mouse_move(
-            gpui::point(source.x - px(30.), source.y),
-            gpui::MouseButton::Left,
-            gpui::Modifiers::none(),
-        );
-        cx.simulate_mouse_move(
-            target.center(),
-            gpui::MouseButton::Left,
-            gpui::Modifiers::none(),
-        );
-        cx.simulate_mouse_up(
-            target.center(),
-            gpui::MouseButton::Left,
-            gpui::Modifiers::none(),
-        );
+        drag_nav(cx, "nav-thread-3", "nav-group-1");
         view.read_with(cx, |view, _| {
             assert_eq!(
                 view.cockpit.groups().get(group).unwrap().members,
-                threads,
+                threads[..3],
                 "the real drop dispatched the join plan"
             );
         });
 
-        let source = cx.debug_bounds("nav-thread-1").unwrap();
-        let target = cx.debug_bounds("member-tail-1").unwrap();
-        let source = gpui::point(source.right() - px(5.), source.center().y);
-        cx.simulate_mouse_down(source, gpui::MouseButton::Left, gpui::Modifiers::none());
-        cx.simulate_mouse_move(
-            gpui::point(source.x - px(30.), source.y),
-            gpui::MouseButton::Left,
-            gpui::Modifiers::none(),
-        );
-        cx.simulate_mouse_move(
-            target.center(),
-            gpui::MouseButton::Left,
-            gpui::Modifiers::none(),
-        );
-        cx.simulate_mouse_up(
-            target.center(),
-            gpui::MouseButton::Left,
-            gpui::Modifiers::none(),
-        );
+        drag_nav(cx, "nav-thread-1", "member-tail-1");
         view.read_with(cx, |view, _| {
             assert_eq!(
                 view.cockpit.groups().get(group).unwrap().members,
                 [threads[1], threads[2], threads[0]],
                 "downward reorder lands after the last member"
             );
+        });
+
+        drag_nav(cx, "nav-group-2", "group-gap-0");
+        view.read_with(cx, |view, _| {
+            let groups: Vec<_> = view.cockpit.groups().iter().map(|group| group.id).collect();
+            assert_eq!(groups, [second_group, group]);
+        });
+    }
+
+    #[gpui::test]
+    fn pointer_dragging_from_a_pair_with_a_draft_keeps_the_group_pending(cx: &mut TestAppContext) {
+        let (mut core, _) = cockpit("group-pointer-pending-draft", 2);
+        let threads = core.threads();
+        let group = core
+            .apply_group(GroupChange::Create {
+                first: threads[0],
+                second: threads[1],
+            })
+            .unwrap()
+            .group
+            .unwrap();
+        cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-t", NewThread, None)]));
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, cx| view.enter_group(group, cx));
+        cx.simulate_keystrokes("cmd-t");
+        let draft = view.read_with(cx, |view, _| view.panes[view.focused].composer.clone());
+        cx.simulate_input("preserve this exact prompt");
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        cx.run_until_parked();
+
+        drag_nav(cx, "nav-thread-1", "loose-zone");
+
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.view, View::Solo);
+            assert_eq!(view.focused_thread(), Some(threads[0]));
+            assert_eq!(
+                view.cockpit.groups().get(group).unwrap().members,
+                threads,
+                "the pending leave has not dissolved the durable pair"
+            );
+        });
+        view.update(cx, |view, cx| view.enter_group(group, cx));
+        view.read_with(cx, |view, cx| {
+            let visible = view.visible_indices();
+            assert_eq!(visible.len(), 2, "survivor plus Draft");
+            let visible_threads: Vec<_> = visible
+                .iter()
+                .filter_map(|index| view.panes[*index].thread())
+                .collect();
+            assert_eq!(visible_threads, [threads[1]]);
+            assert!(visible
+                .iter()
+                .any(|index| view.panes[*index].composer == draft));
+            assert_eq!(draft.read(cx).text(), "preserve this exact prompt");
         });
     }
 
