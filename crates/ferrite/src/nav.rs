@@ -12,6 +12,7 @@
 //! park or revive moves a row between sections — a real state change — and
 //! nothing else moves anything.
 
+use ferrite_core::groups::GroupId;
 use ferrite_core::store::Provider;
 use ferrite_core::transcript::{Status, Todos};
 use ferrite_core::ThreadId;
@@ -20,8 +21,8 @@ use gpui::{div, px, rgb, rgba, Div, FontWeight, Pixels, SharedString, Stateful};
 
 use crate::pointer::{Pointer, PointerPressed};
 use crate::theme::{
-    ACCENT, EDGE, FAIL, GOOD, HAIRLINE, IDLE, INK, INK_FAINT, INK_MUTED, INK_SECONDARY, INSET,
-    TRANSPARENT, WAIT, WAIT_WASH,
+    ACCENT, EDGE, FAIL, GOOD, GRID_PAD, HAIRLINE, IDLE, INK, INK_FAINT, INK_MUTED, INK_SECONDARY,
+    INSET, POPOVER_PAD, TEXT_CHIP_SM, TEXT_ROW, TRANSPARENT, WAIT, WAIT_WASH,
 };
 
 /// The nav's two widths: the 208px column, and the 40px LED rail cmd-b
@@ -128,6 +129,39 @@ pub fn header(threads: usize, waiting: usize, collapsed: bool) -> Div {
         .px(px(10.))
         .child(div().text_color(rgb(INK_MUTED)).child("THREADS"))
         .child(count)
+}
+
+pub fn group_header(id: GroupId, title: SharedString, count: usize, active: bool) -> Stateful<Div> {
+    row_frame(("nav-group", id.get() as usize), active)
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_size(px(TEXT_ROW))
+        .text_color(rgb(INK_SECONDARY))
+        .child("▸")
+        .child(div().min_w_0().truncate().child(title))
+        .child(div().flex_1())
+        .child(
+            div()
+                .text_size(px(TEXT_CHIP_SM))
+                .text_color(rgb(INK_FAINT))
+                .child(count.to_string()),
+        )
+}
+
+pub fn group_editor(id: GroupId) -> Stateful<Div> {
+    row_frame(("nav-group", id.get() as usize), true).child("▸")
+}
+
+pub fn drag_badge(label: SharedString) -> Div {
+    div()
+        .bg(rgb(INSET))
+        .border_1()
+        .border_color(rgba(EDGE))
+        .rounded_sm()
+        .px(px(GRID_PAD))
+        .py(px(POPOVER_PAD))
+        .text_size(px(TEXT_ROW))
+        .text_color(rgb(INK))
+        .child(label)
 }
 
 /// One running Thread's 28px row: LED, name, binding, then provider and the

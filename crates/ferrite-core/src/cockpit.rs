@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
+use crate::groups::{Applied, ApplyError, Drag, DropTarget, GroupChange, GroupId, Groups, Plan};
 use crate::providers::Session;
 use crate::store::{LoadError, Provider, Store, ThreadWriter};
 use crate::transcript::{BlockId, Input, Lexer, Transcript, Update};
@@ -268,6 +269,7 @@ pub struct Cockpit {
     /// worktrees, living beside the Thread logs. The selector reads it; the
     /// bootstrap places worktrees through it.
     registry: Registry,
+    groups: Groups,
     spawner: Box<dyn Spawner>,
     sampler: Option<Box<dyn RssSampler>>,
     /// Bytes one Session may hold before the watchdog replaces it.
@@ -277,10 +279,12 @@ pub struct Cockpit {
 impl Cockpit {
     pub fn try_new(store: Store, spawner: Box<dyn Spawner>) -> io::Result<Self> {
         let registry = Registry::open(store.dir())?;
+        let groups = Groups::load(store.dir())?;
         Ok(Self {
             threads: BTreeMap::new(),
             store,
             registry,
+            groups,
             spawner,
             sampler: None,
             limit: u64::MAX,
@@ -298,6 +302,18 @@ impl Cockpit {
     /// are the bootstrap's own bookkeeping.
     pub fn registry(&self) -> &Registry {
         &self.registry
+    }
+
+    pub fn groups(&self) -> &Groups {
+        &self.groups
+    }
+
+    pub fn apply_group(&mut self, change: GroupChange) -> Result<Applied, ApplyError> {
+        self.groups.apply(change)
+    }
+
+    pub fn plan_group_drop(&self, drag: Drag, target: DropTarget) -> Plan {
+        self.groups.preview_drop(drag, target)
     }
 
     /// Register a project root (idempotent, canonicalized) — the selector's
@@ -484,6 +500,59 @@ impl Cockpit {
         Ok(id)
     }
 
+    /// Bootstrap a draft into an existing group as one operator transaction.
+    /// Expected group failures happen before a Thread or prompt is created;
+    /// a later persistence failure rolls the new Thread back.
+    pub fn bootstrap_in_group(
+        &mut self,
+        choice: ProviderChoice,
+        workspace: WorkspaceChoice,
+        prompt: &str,
+        group: GroupId,
+    ) -> io::Result<ThreadId> {
+        let root = match &workspace {
+            WorkspaceChoice::Main { checkout } => checkout,
+            WorkspaceChoice::NewWorktree { repo } => repo,
+            WorkspaceChoice::ExistingWorktree { repo, .. } => repo,
+        };
+        let project = self.registry.register(root)?;
+        self.groups
+            .validate_join_project(group, Some(project))
+            .map_err(io::Error::other)?;
+
+        let id = self.open_choice(choice, workspace)?;
+        if let Err(error) = self.groups.apply(GroupChange::Join {
+            thread: id,
+            group,
+            index: None,
+        }) {
+            self.threads.remove(&id);
+            self.store.delete(id)?;
+            return Err(io::Error::other(error));
+        }
+        if let Some(binding) = self.workspace(id) {
+            let notice = format!("opened in {}", binding.cwd().display());
+            self.threads
+                .get_mut(&id)
+                .expect("open inserted the Thread")
+                .transcript
+                .apply(Input::Notice(notice));
+        }
+        if let Err(error) = deliver(
+            self.threads.get_mut(&id).expect("open inserted the Thread"),
+            prompt.to_string(),
+        ) {
+            // Membership is removed durably before the Thread it references.
+            self.groups
+                .apply(GroupChange::Leave { thread: id })
+                .map_err(io::Error::other)?;
+            self.threads.remove(&id);
+            self.store.delete(id)?;
+            return Err(error);
+        }
+        Ok(id)
+    }
+
     /// The checkout an open Thread works in — what the Pane's chrome shows.
     pub fn workspace(&self, thread: ThreadId) -> Option<&WorkspaceBinding> {
         self.threads.get(&thread)?.workspace.as_ref()
@@ -619,35 +688,76 @@ impl Cockpit {
             .is_some_and(|state| state.first_prompt_sent)
     }
 
+    pub fn project_id(&self, thread: ThreadId) -> Option<ProjectId> {
+        self.try_project_id(thread).ok().flatten()
+    }
+
+    pub fn try_project_id(&self, thread: ThreadId) -> Result<Option<ProjectId>, LoadError> {
+        self.store.peek(thread).map(|meta| meta.project_id)
+    }
+
     /// Delete a Thread for good: its log and directory. Registered project
     /// worktrees survive as durable, adoptable workspace inventory. Only a
     /// legacy unregistered worktree binding is removed, and then only when
     /// clean (`git status` defines clean); its branch is never deleted.
     pub fn delete(&mut self, thread: ThreadId) -> Result<(), DeleteError> {
         let snapshot = self.store.load(thread).map_err(DeleteError::Load)?;
-        if let (None, Some(WorkspaceBinding::Worktree { repo, path })) =
-            (snapshot.project_id(), snapshot.workspace())
-        {
-            // A worktree already gone by hand leaves nothing to check or
-            // remove; the log's deletion below is all that is left to do.
-            if path.exists() {
-                if !workspace::is_clean(&path).map_err(DeleteError::Git)? {
-                    return Err(DeleteError::DirtyWorktree { path });
-                }
-                // The Session dies before its worktree goes: a live process
-                // whose cwd is the directory being removed holds it open on
-                // Windows, and the dirty check above already ruled out any
-                // work that Session had in flight.
-                self.threads.remove(&thread);
-                workspace::remove_worktree(&repo, &path).map_err(DeleteError::Git)?;
-            }
-            // The menu forgets the removed tree; the branch stays git's.
-            self.registry
-                .remove_worktree(&path)
-                .map_err(DeleteError::Io)?;
+        let membership = self.groups.of(thread).and_then(|group| {
+            group
+                .members
+                .iter()
+                .position(|member| *member == thread)
+                .map(|index| (group.id, index))
+        });
+        if membership.is_some() {
+            self.groups
+                .apply(GroupChange::Leave { thread })
+                .map_err(|error| DeleteError::Io(io::Error::other(error)))?;
         }
-        self.threads.remove(&thread);
-        self.store.delete(thread).map_err(DeleteError::Io)
+
+        let deleted = (|| {
+            if let (None, Some(WorkspaceBinding::Worktree { repo, path })) =
+                (snapshot.project_id(), snapshot.workspace())
+            {
+                // A worktree already gone by hand leaves nothing to check or
+                // remove; the log's deletion below is all that is left to do.
+                if path.exists() {
+                    if !workspace::is_clean(&path).map_err(DeleteError::Git)? {
+                        return Err(DeleteError::DirtyWorktree { path });
+                    }
+                    // The Session dies before its worktree goes: a live process
+                    // whose cwd is the directory being removed holds it open on
+                    // Windows, and the dirty check above already ruled out any
+                    // work that Session had in flight.
+                    self.threads.remove(&thread);
+                    workspace::remove_worktree(&repo, &path).map_err(DeleteError::Git)?;
+                }
+                // The menu forgets the removed tree; the branch stays git's.
+                self.registry
+                    .remove_worktree(&path)
+                    .map_err(DeleteError::Io)?;
+            }
+            self.threads.remove(&thread);
+            self.store.delete(thread).map_err(DeleteError::Io)
+        })();
+
+        if let Err(error) = deleted {
+            if let Some((group, index)) = membership {
+                self.groups
+                    .apply(GroupChange::Join {
+                        thread,
+                        group,
+                        index: Some(index),
+                    })
+                    .map_err(|restore| {
+                        DeleteError::Io(io::Error::other(format!(
+                            "{error}; restoring group membership also failed: {restore}"
+                        )))
+                    })?;
+            }
+            return Err(error);
+        }
+        Ok(())
     }
 
     /// Close a Pane: the Session ends, the log is flushed, and the Thread
@@ -1528,6 +1638,100 @@ mod tests {
     }
 
     #[test]
+    fn grouped_bootstrap_refuses_a_full_group_before_creating_or_sending_a_thread() {
+        let root = scratch("group-bootstrap-full");
+        let repo = init_repo(&root);
+        let (mut cockpit, fake) = cockpit("group-bootstrap-full-store");
+        let mut threads = Vec::new();
+        for _ in 0..crate::groups::GROUP_CAP {
+            threads.push(
+                cockpit
+                    .open(
+                        Provider::Claude,
+                        WorkspaceChoice::Main {
+                            checkout: repo.clone(),
+                        },
+                    )
+                    .unwrap(),
+            );
+        }
+        let group = cockpit
+            .apply_group(GroupChange::Create {
+                seed: threads[0],
+                with: None,
+            })
+            .unwrap()
+            .group
+            .unwrap();
+        for thread in &threads[1..] {
+            cockpit
+                .apply_group(GroupChange::Join {
+                    thread: *thread,
+                    group,
+                    index: None,
+                })
+                .unwrap();
+        }
+        let sent_before = fake.sent.borrow().len();
+
+        let refused = cockpit.bootstrap_in_group(
+            ProviderChoice {
+                provider: Provider::Claude,
+                model: None,
+            },
+            WorkspaceChoice::Main { checkout: repo },
+            "exact drafted prompt",
+            group,
+        );
+
+        assert!(refused.is_err());
+        assert_eq!(cockpit.threads(), threads);
+        assert_eq!(fake.sent.borrow().len(), sent_before);
+        assert_eq!(cockpit.groups().get(group).unwrap().members.len(), 16);
+    }
+
+    #[test]
+    fn grouped_bootstrap_persists_membership_before_sending() {
+        let root = scratch("group-bootstrap-persist");
+        let repo = init_repo(&root);
+        let store_dir = scratch("group-bootstrap-persist-store");
+        let fake = Fake::default();
+        let mut cockpit = Cockpit::new(Store::open(&store_dir).unwrap(), Box::new(fake.clone()));
+        let seed = cockpit
+            .open(
+                Provider::Claude,
+                WorkspaceChoice::Main {
+                    checkout: repo.clone(),
+                },
+            )
+            .unwrap();
+        let group = cockpit
+            .apply_group(GroupChange::Create { seed, with: None })
+            .unwrap()
+            .group
+            .unwrap();
+        let groups_path = store_dir.join("groups.json");
+        std::fs::remove_file(&groups_path).unwrap();
+        std::fs::create_dir(&groups_path).unwrap();
+
+        let refused = cockpit.bootstrap_in_group(
+            ProviderChoice {
+                provider: Provider::Claude,
+                model: None,
+            },
+            WorkspaceChoice::Main { checkout: repo },
+            "must not be sent",
+            group,
+        );
+
+        assert!(refused.is_err());
+        assert_eq!(fake.sent.borrow().as_slice(), &[] as &[String]);
+        assert_eq!(cockpit.threads(), vec![seed]);
+        assert_eq!(cockpit.groups().get(group).unwrap().members, vec![seed]);
+        assert!(cockpit.parked().unwrap().is_empty());
+    }
+
+    #[test]
     fn opening_on_the_main_checkout_spawns_the_session_there() {
         let root = scratch("main-open");
         let (mut cockpit, fake) = cockpit("main-open-store");
@@ -1665,6 +1869,38 @@ mod tests {
             std::fs::read_to_string(repo.join("operator.txt")).unwrap(),
             "the operator's own\n"
         );
+    }
+
+    #[test]
+    fn deleting_a_grouped_thread_removes_membership_before_the_log() {
+        let root = scratch("delete-grouped");
+        let repo = init_repo(&root);
+        let (mut cockpit, _fake) = cockpit("delete-grouped-store");
+        let one = cockpit
+            .open(
+                Provider::Claude,
+                WorkspaceChoice::Main {
+                    checkout: repo.clone(),
+                },
+            )
+            .unwrap();
+        let two = cockpit
+            .open(Provider::Claude, WorkspaceChoice::Main { checkout: repo })
+            .unwrap();
+        let group = cockpit
+            .apply_group(GroupChange::Create {
+                seed: one,
+                with: Some(two),
+            })
+            .unwrap()
+            .group
+            .unwrap();
+
+        cockpit.delete(one).unwrap();
+
+        assert_eq!(cockpit.groups().get(group).unwrap().members, vec![two]);
+        assert_eq!(cockpit.threads(), vec![two]);
+        assert_eq!(cockpit.store.thread_ids().unwrap(), vec![two]);
     }
 
     /// AC: two Threads on the same repo in separate worktrees cannot touch

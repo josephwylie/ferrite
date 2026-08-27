@@ -10,6 +10,7 @@
 
 use ferrite_core::cockpit::{ProviderChoice, ToolTiming};
 use ferrite_core::docview::{is_test_run, passed_count, Instruments, Level, Tests};
+use ferrite_core::groups::GroupId;
 use ferrite_core::transcript::{
     Block, BlockId, Body, Class, Diff, Span, Status, Style, Todos, Token, ToolBlock, ToolState,
     Transcript, Usage,
@@ -78,6 +79,8 @@ pub struct DraftBinding {
     /// A failed bootstrap's words, shown where the band is. The Pane stays
     /// draft and the prompt stays in the Composer.
     pub error: Option<SharedString>,
+    /// Group scope awaiting a real Thread id. Never persisted as a fake id.
+    pub pending_group: Option<GroupId>,
 }
 
 /// The band's three chips, in tab order.
