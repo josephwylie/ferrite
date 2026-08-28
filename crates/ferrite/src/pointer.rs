@@ -17,46 +17,38 @@
 //! `cx.notify` loop rides a mouse move.
 
 use gpui::prelude::*;
-use gpui::{rgb, rgba, StyleRefinement};
+use gpui::{rgb, StyleRefinement};
 
-use crate::theme::{EDGE, EDGE_STRONG, HOVER, PRESSED, RAISED_HOVER, RAISED_PRESSED};
+use crate::theme::{FILL, FILL_HOVER, HOVER, PRESSED};
 
 /// The hover styles, named by role. Blanket-implemented: anything styleable
 /// and interactive can say what role it plays.
 pub trait Pointer: Styled + InteractiveElement + Sized {
     /// A row picked whole, drawn on its container's ground (menu, selector
-    /// and nav rows): the HOVER wash, pointer cursor.
+    /// and nav rows): the opaque HOVER face, pointer cursor. Soft's hover is
+    /// a solid `#2c2c2c`, not a wash — nothing translucent is layered.
     fn hover_row(self) -> Self {
         self.cursor_pointer().hover(row_wash)
     }
 
-    /// A bordered, self-grounded control that does one verb (window
-    /// controls, root chip): the EDGE-tone fill, pointer cursor.
+    /// A self-grounded control that does one verb (window controls, root
+    /// chip): the HOVER face, pointer cursor. Soft gives it no border.
     fn hover_control(self) -> Self {
         self.cursor_pointer().hover(control_fill)
     }
 
-    /// A control resting on the opaque RAISED chip ground (keycaps): the
-    /// same EDGE lift, precomposed over RAISED — hover replaces the
-    /// background, and a translucent fill would let the card behind the
-    /// chip bleed through.
+    /// A control resting on the opaque RAISED chip ground (keycaps): FILL,
+    /// one step above RAISED. Every Soft face is opaque, so nothing behind
+    /// the chip can bleed through a hover.
     fn hover_raised(self) -> Self {
         self.cursor_pointer().hover(raised_fill)
     }
 
-    /// A Pane as a click-to-focus button (L2/wall cells): the border lifts
-    /// EDGE → EDGE_STRONG, pointer cursor. Never a wash — the cell's ground
-    /// is the state canvas, and hover speaks border weight so the attention
-    /// rings keep color to themselves.
-    fn hover_cell(self) -> Self {
-        self.cursor_pointer().hover(cell_lift)
-    }
-
-    /// A click target already carrying a ground stronger than any wash
-    /// (the keyboard-selected row, the accent provider chip): hover adds
-    /// nothing the ground doesn't already say, so only the cursor speaks.
+    /// A click target already carrying the selected FILL (the current
+    /// Group row, `.current:hover` in the prototype): hover cannot wash over
+    /// a ground stronger than itself, so it steps the ground up instead.
     fn hover_carried(self) -> Self {
-        self.cursor_pointer()
+        self.cursor_pointer().hover(carried_fill)
     }
 
     /// Selectable transcript text (#27): the I-beam says characters are
@@ -73,17 +65,17 @@ impl<E: Styled + InteractiveElement> Pointer for E {}
 /// because gpui's `.active()` tracks the pressed element, which takes
 /// element identity: only stateful widgets can wear one.
 pub trait PointerPressed: Pointer + StatefulInteractiveElement {
-    /// A pressed row: the PRESSED wash (nav rows, rail dots).
+    /// A pressed row: the PRESSED face (nav rows, rail dots).
     fn press_row(self) -> Self {
         self.active(row_press)
     }
 
-    /// A pressed self-grounded control: the EDGE_STRONG-tone fill.
+    /// A pressed self-grounded control: the PRESSED face.
     fn press_control(self) -> Self {
         self.active(control_press)
     }
 
-    /// A pressed control on the RAISED ground: EDGE_STRONG precomposed,
+    /// A pressed control on the RAISED ground: the PRESSED face, opaque
     /// for the same no-bleed reason as `hover_raised`.
     fn press_raised(self) -> Self {
         self.active(raised_press)
@@ -96,31 +88,31 @@ impl<E: Pointer + StatefulInteractiveElement> PointerPressed for E {}
 // assertable as data — gpui keeps the stored hover style crate-private.
 
 fn row_wash(row: StyleRefinement) -> StyleRefinement {
-    row.bg(rgba(HOVER))
+    row.bg(rgb(HOVER))
 }
 
 fn control_fill(control: StyleRefinement) -> StyleRefinement {
-    control.bg(rgba(EDGE))
+    control.bg(rgb(HOVER))
 }
 
 fn raised_fill(control: StyleRefinement) -> StyleRefinement {
-    control.bg(rgb(RAISED_HOVER))
+    control.bg(rgb(FILL))
 }
 
-fn cell_lift(cell: StyleRefinement) -> StyleRefinement {
-    cell.border_color(rgba(EDGE_STRONG))
+fn carried_fill(row: StyleRefinement) -> StyleRefinement {
+    row.bg(rgb(FILL_HOVER))
 }
 
 fn row_press(row: StyleRefinement) -> StyleRefinement {
-    row.bg(rgba(PRESSED))
+    row.bg(rgb(PRESSED))
 }
 
 fn control_press(control: StyleRefinement) -> StyleRefinement {
-    control.bg(rgba(EDGE_STRONG))
+    control.bg(rgb(PRESSED))
 }
 
 fn raised_press(control: StyleRefinement) -> StyleRefinement {
-    control.bg(rgb(RAISED_PRESSED))
+    control.bg(rgb(PRESSED))
 }
 
 #[cfg(test)]
@@ -133,49 +125,47 @@ mod tests {
     }
 
     /// The pairing the trait owns: each role's refinement carries exactly
-    /// its token — the RAISED variants opaque, so nothing behind a keycap
-    /// can bleed through — and every role sets the pointer cursor.
+    /// its token, and every role sets the pointer cursor. Every Soft face is
+    /// opaque — `rgb`, never `rgba` — so nothing behind a hovered surface,
+    /// the Decision card's amber included, can tint it.
     #[test]
     fn each_role_pairs_its_token_with_the_pointer() {
         let row = row_wash(StyleRefinement::default());
-        assert_eq!(background(&row), Some(&Fill::from(rgba(HOVER))));
+        assert_eq!(background(&row), Some(&Fill::from(rgb(HOVER))));
         assert_eq!(row.border_color, None, "a row hover never touches borders");
         assert_eq!(
             background(&row_press(StyleRefinement::default())),
-            Some(&Fill::from(rgba(PRESSED)))
+            Some(&Fill::from(rgb(PRESSED)))
         );
 
         let control = control_fill(StyleRefinement::default());
-        assert_eq!(background(&control), Some(&Fill::from(rgba(EDGE))));
+        assert_eq!(background(&control), Some(&Fill::from(rgb(HOVER))));
         assert_eq!(
             background(&control_press(StyleRefinement::default())),
-            Some(&Fill::from(rgba(EDGE_STRONG)))
+            Some(&Fill::from(rgb(PRESSED)))
         );
 
-        // The keycap faces are precomposed and opaque — `rgb`, never
-        // `rgba` — so the card's amber can never tint a hovered keycap.
         assert_eq!(
             background(&raised_fill(StyleRefinement::default())),
-            Some(&Fill::from(rgb(RAISED_HOVER)))
+            Some(&Fill::from(rgb(FILL)))
         );
         assert_eq!(
             background(&raised_press(StyleRefinement::default())),
-            Some(&Fill::from(rgb(RAISED_PRESSED)))
+            Some(&Fill::from(rgb(PRESSED)))
         );
 
-        let cell = cell_lift(StyleRefinement::default());
-        assert_eq!(cell.border_color, Some(rgba(EDGE_STRONG).into()));
+        // The selected Group row steps its own ground up rather than
+        // washing over it: FILL -> FILL_HOVER, the prototype's
+        // `.current:hover`.
         assert_eq!(
-            background(&cell),
-            None,
-            "a cell hover is border weight only — the ground is the state canvas"
+            background(&carried_fill(StyleRefinement::default())),
+            Some(&Fill::from(rgb(FILL_HOVER)))
         );
 
         for element in [
             div().hover_row(),
             div().hover_control(),
             div().hover_raised(),
-            div().hover_cell(),
             div().hover_carried(),
         ] {
             let mut element = element;

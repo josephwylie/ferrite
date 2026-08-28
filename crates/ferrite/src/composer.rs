@@ -5,7 +5,7 @@ use std::ops::Range;
 
 use gpui::prelude::*;
 use gpui::{
-    actions, div, fill, point, px, relative, rgb, rgba, App, Bounds, Context, Element, ElementId,
+    actions, div, fill, point, px, relative, rgb, App, Bounds, Context, Element, ElementId,
     ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable,
     GlobalElementId, LayoutId, PaintQuad, Pixels, ShapedLine, SharedString, Style, TextRun,
     UTF16Selection, UnderlineStyle, Window,
@@ -348,18 +348,27 @@ fn pill_ranges(text: &str, mentions: &[SharedString]) -> Vec<Range<usize>> {
     ranges
 }
 
-/// The line's text runs: the base style, the comp's @-pill (ACCENT ink on
-/// the ACCENT_WASH ground) over `pills`, and the IME underline over
-/// `marked` — split at every boundary so each run wears exactly its styles.
+/// The line's text runs: the base style, the @-pill (`TEXT` ink on the
+/// opaque `SELECTION` ground) over `pills`, the selection's own `TEXT_STRONG`
+/// ink over `selected` — the selection quad is opaque `#3f3f3f` and the
+/// shaped line paints straight over it — and the IME underline over `marked`.
+/// Split at every boundary so each run wears exactly its styles.
+///
+/// The prototype draws no mention pill; `TEXT` on `SELECTION` are the
+/// nearest tokens it does define, so no new value is invented here.
 fn runs_for(
     base: &TextRun,
     len: usize,
     marked: Option<Range<usize>>,
     pills: &[Range<usize>],
+    selected: Option<Range<usize>>,
 ) -> Vec<TextRun> {
     let mut cuts = vec![0, len];
     if let Some(marked) = &marked {
         cuts.extend([marked.start, marked.end]);
+    }
+    if let Some(selected) = &selected {
+        cuts.extend([selected.start, selected.end]);
     }
     for pill in pills {
         cuts.extend([pill.start, pill.end]);
@@ -380,15 +389,21 @@ fn runs_for(
             .iter()
             .any(|pill| pill.start <= from && to <= pill.end)
         {
-            run.color = rgb(crate::theme::ACCENT).into();
-            run.background_color = Some(rgba(crate::theme::ACCENT_WASH).into());
+            run.color = rgb(crate::theme::TEXT).into();
+            run.background_color = Some(rgb(crate::theme::SELECTION).into());
+        }
+        if selected
+            .as_ref()
+            .is_some_and(|selected| selected.start <= from && to <= selected.end)
+        {
+            run.color = rgb(crate::theme::TEXT_STRONG).into();
         }
         if marked
             .as_ref()
             .is_some_and(|marked| marked.start <= from && to <= marked.end)
         {
             run.underline = Some(UnderlineStyle {
-                color: Some(run.color),
+                color: Some(rgb(crate::theme::SEP).into()),
                 thickness: px(1.),
                 wavy: false,
             });
@@ -470,7 +485,13 @@ impl Element for LineElement {
             underline: None,
             strikethrough: None,
         };
-        let runs = runs_for(&run, content.len(), marked, &pills);
+        let runs = runs_for(
+            &run,
+            content.len(),
+            marked,
+            &pills,
+            (!selected.is_empty()).then(|| selected.clone()),
+        );
 
         let font_size = style.font_size.to_pixels(window.rem_size());
         let line = window
@@ -479,15 +500,20 @@ impl Element for LineElement {
 
         let (selection, cursor) = if selected.is_empty() {
             let x = line.x_for_index(cursor);
+            // The Soft caret: a 2 × 14 `--text-2` bar, square, no radius, no
+            // blink. The prototype centres it in the 20px prompt row (y = row
+            // top + 3); this element is the shaped line's own box, centred in
+            // that row by `items_center`, so centring in `bounds` lands on the
+            // same pixel whatever the line height resolves to.
+            let inset = ((bounds.bottom() - bounds.top()) - px(crate::theme::CARET_H)) / 2.;
             (
                 None,
-                // The comps' block cursor: solid accent, 7px wide.
                 Some(fill(
                     Bounds::new(
-                        point(bounds.left() + x, bounds.top()),
-                        gpui::size(px(crate::theme::CURSOR_W), bounds.bottom() - bounds.top()),
+                        point(bounds.left() + x, bounds.top() + inset),
+                        gpui::size(px(crate::theme::CARET_W), px(crate::theme::CARET_H)),
                     ),
-                    gpui::rgb(crate::theme::ACCENT),
+                    rgb(crate::theme::TEXT_2),
                 )),
             )
         } else {
@@ -503,9 +529,9 @@ impl Element for LineElement {
                             bounds.bottom(),
                         ),
                     ),
-                    // The transcript's selection wash: one selection colour
-                    // everywhere, whoever paints it.
-                    rgba(crate::theme::SELECTION),
+                    // One selection colour everywhere, whoever paints it —
+                    // opaque `#3f3f3f`, with `TEXT_STRONG` runs over it.
+                    rgb(crate::theme::SELECTION),
                 )),
                 None,
             )
@@ -601,7 +627,7 @@ mod tests {
             strikethrough: None,
         };
         let text = "read @a now";
-        let runs = runs_for(&base, text.len(), Some(8..11), &[5..7]);
+        let runs = runs_for(&base, text.len(), Some(8..11), &[5..7], None);
         let lens: Vec<usize> = runs.iter().map(|run| run.len).collect();
         assert_eq!(lens.iter().sum::<usize>(), text.len());
         assert_eq!(lens, [5, 2, 1, 3]);
@@ -614,6 +640,25 @@ mod tests {
         assert!(runs[2].underline.is_none());
 
         // An empty line still hands the shaper one (empty) run.
-        assert_eq!(runs_for(&base, 0, None, &[]).len(), 1);
+        assert_eq!(runs_for(&base, 0, None, &[], None).len(), 1);
+    }
+
+    /// The selection quad is opaque `#3f3f3f` and the shaped line paints over
+    /// it, so every covered run carries the strong ink instead of the base.
+    #[test]
+    fn selected_runs_take_the_strong_ink() {
+        let base = TextRun {
+            len: 0,
+            font: gpui::font(crate::theme::FONT_MONO),
+            color: rgb(crate::theme::TEXT_2).into(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let runs = runs_for(&base, 11, None, &[], Some(5..7));
+        let lens: Vec<usize> = runs.iter().map(|run| run.len).collect();
+        assert_eq!(lens, [5, 2, 4]);
+        assert_eq!(runs[1].color, rgb(crate::theme::TEXT_STRONG).into());
+        assert_eq!(runs[0].color, base.color);
     }
 }

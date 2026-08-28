@@ -2,6 +2,7 @@
 mod cockpit;
 mod composer;
 mod fuzzy;
+mod icons;
 mod keymap;
 mod line;
 mod nav;
@@ -13,6 +14,7 @@ mod theme;
 
 use ferrite_core::cockpit::Cockpit;
 use ferrite_core::store::{Provider, Store};
+use ferrite_core::workspace::WorkspaceChoice;
 use gpui::*;
 
 use cockpit::CockpitView;
@@ -23,6 +25,17 @@ actions!(ferrite, [Quit]);
 /// One Session may hold this much before the watchdog replaces it. Generous:
 /// a busy agent legitimately grows, and a restart costs the operator context.
 const RSS_LIMIT: u64 = 4 * 1024 * 1024 * 1024;
+
+/// The four static JetBrains Mono instances, compiled in. gpui has no
+/// variation-axis support, so the prototype's one variable face cannot
+/// serve: each weight is its own file. All four share the typographic
+/// family `theme::FONT_MONO`, and CoreText resolves the right face from
+/// `.font_weight(..)` — see that constant's own doc for the measured
+/// FontId table, and never reach a weight by family name.
+static JBM_REGULAR: &[u8] = include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf");
+static JBM_MEDIUM: &[u8] = include_bytes!("../assets/fonts/JetBrainsMono-Medium.ttf");
+static JBM_SEMIBOLD: &[u8] = include_bytes!("../assets/fonts/JetBrainsMono-SemiBold.ttf");
+static JBM_BOLD: &[u8] = include_bytes!("../assets/fonts/JetBrainsMono-Bold.ttf");
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -58,7 +71,22 @@ fn main() {
         .and_then(|n| n.parse().ok())
         .unwrap_or(1);
 
-    Application::new().run(move |cx: &mut App| {
+    // The icons are registered on the application, before `run`:
+    // `with_assets` replaces both the asset source and the SVG renderer,
+    // and `svg()` finds neither afterwards.
+    Application::new().with_assets(icons::Assets).run(move |cx: &mut App| {
+        // First, before anything can lay out text in it: the bundled mono
+        // face. `add_fonts` returns a Result and a discarded one fails
+        // silently — you get the system font and no explanation.
+        cx.text_system()
+            .add_fonts(vec![
+                std::borrow::Cow::Borrowed(JBM_REGULAR),
+                std::borrow::Cow::Borrowed(JBM_MEDIUM),
+                std::borrow::Cow::Borrowed(JBM_SEMIBOLD),
+                std::borrow::Cow::Borrowed(JBM_BOLD),
+            ])
+            .expect("the bundled JetBrains Mono faces load");
+
         let bindings = load_bindings(keymap::PLATFORM, cx);
         cx.bind_keys(bindings);
         cx.on_action(|_: &Quit, cx| cx.quit());
@@ -90,7 +118,7 @@ fn main() {
         }
         if core.threads().is_empty() {
             if demo || panes > 1 {
-                cockpit::threads_for(&mut core, panes, provider);
+                seed_wall(&mut core, panes, provider);
             } else {
                 // The default launch revives the newest parked Thread; an
                 // empty store starts as a draft Pane (#29) — nothing
@@ -127,6 +155,69 @@ fn main() {
             .update(cx, |_, _window, cx| cx.activate(true))
             .unwrap();
     });
+}
+
+/// The multi-Pane seed (`--demo`, `--panes N`): revive whatever this store
+/// already parked — newest first, which `cockpit::threads_for` does — and
+/// open new Threads for the room that is left.
+///
+/// Those new Threads alternate the two providers, starting at `first`. A
+/// wall opened on one provider draws the same logomark down the whole nav;
+/// the design shows both marks mixed, so the seed has to deal both.
+fn seed_wall(core: &mut Cockpit, panes: usize, first: Provider) {
+    // The wall opens on a Group. The nav's selected fill is carried by the
+    // current Group — the one holding the focused Pane's Thread — so a wall
+    // of nothing but solo Threads leaves that fill unpainted and every Group
+    // title at `TEXT` instead of `TEXT_STRONG`. A store that already holds
+    // Groups (any run after the first) is therefore revived from the first
+    // Group's members before anything else; a fresh store has no Group to
+    // revive from and gets one from `cockpit::seed_groups`, over the Threads
+    // opened below. Panes open in ThreadId order, so the first member taken
+    // here is the focused Pane's Thread.
+    let members: Vec<ferrite_core::ThreadId> = core
+        .groups()
+        .iter()
+        .next()
+        .map(|group| group.members.clone())
+        .unwrap_or_default();
+    // ...but only into the leading Panes. The Cockpit is a census, not a
+    // monoculture: a Decision waits in one Pane and a Session has closed in
+    // the last, which is what paints the two coloured `.signal` lines and
+    // the attention and blocked borders. A revived Thread replays its log,
+    // and a log carries neither a pending Decision nor an exit — both are
+    // Session state — so those Panes have to be freshly dealt. The demo
+    // spawner deals its seeds in open order and a revived Thread takes
+    // none, so the three Panes held back here get seeds 0, 1 and 2:
+    // the Decision the interactive script stops on, a working Thread, and
+    // a Session that closed.
+    let revivable = panes.saturating_sub(3).max(1);
+    let mut open = 0;
+    for thread in members.into_iter().take(revivable) {
+        match core.revive(thread) {
+            Ok(()) => open += 1,
+            Err(e) => eprintln!("ferrite: thread {thread} could not be revived: {e:?}"),
+        }
+    }
+    let parked = core.parked().map(|threads| threads.len()).unwrap_or(0);
+    open += cockpit::threads_for(core, revivable.saturating_sub(open).min(parked), first).len();
+    let checkout = std::env::current_dir().unwrap_or_else(|_| ".".into());
+    while open < panes {
+        let provider = match (open % 2 == 0, first) {
+            (true, first) => first,
+            (false, Provider::Claude) => Provider::Codex,
+            (false, Provider::Codex) => Provider::Claude,
+        };
+        let choice = WorkspaceChoice::Main {
+            checkout: checkout.clone(),
+        };
+        match core.open(provider, choice) {
+            Ok(_) => open += 1,
+            Err(e) => {
+                eprintln!("ferrite: could not open a thread: {e}");
+                break;
+            }
+        }
+    }
 }
 
 fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {

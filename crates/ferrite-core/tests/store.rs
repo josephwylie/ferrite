@@ -143,7 +143,7 @@ fn a_restart_restores_the_thread_and_the_next_prompt_continues_the_session() {
             "Remember the codeword: ferrite-resume-ok".into(),
         ));
         for event in first_turn() {
-            writer.record_event(&event).unwrap();
+            writer.record_event(&event, None).unwrap();
             operator_saw.apply(Input::Event(event));
         }
         id
@@ -209,7 +209,7 @@ fn a_restart_restores_the_thread_and_the_next_prompt_continues_the_session() {
     ));
     let continued = drain(session.events());
     for event in &continued {
-        writer.record_event(event).unwrap();
+        writer.record_event(event, None).unwrap();
         operator_saw.apply(Input::Event(event.clone()));
     }
     drop(writer);

@@ -705,7 +705,7 @@ mod tests {
     #[test]
     fn the_wash_splits_highlight_runs_and_fills_the_gaps() {
         let bold = HighlightStyle {
-            color: Some(rgb(crate::theme::INK).into()),
+            color: Some(rgb(crate::theme::TEXT_STRONG).into()),
             ..Default::default()
         };
         fn selected(runs: &[(Range<usize>, HighlightStyle)], range: Range<usize>) -> Option<bool> {

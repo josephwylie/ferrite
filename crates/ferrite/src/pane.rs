@@ -3,26 +3,31 @@
 //! shows is folded in core, and every key it answers to belongs to the
 //! cockpit above it.
 //!
-//! The three levels follow the canon boards: L1 per DirectionDense (dense
-//! transcript, 28px merged header, PromptBox composer stack), L2 per the
-//! Cockpit board (instrument cell), L3 per the Wall board (dot · slug ·
-//! bar · status line, inset attention rings).
+//! L1 is the Soft prototype's Pane, drawn top to bottom: a 32px head, a
+//! 24px tasks strip, the transcript body, the Decision card, the 24px
+//! changed-files strip and the 58px Composer — all on `--pane`, inside an
+//! always-in-layout 1px border that only changes colour, with the focus
+//! ring 2px OUTSIDE it so attention and focus are independent channels.
+//! Everything inside a Pane is JetBrains Mono; the shell opts in once.
+//! L2 (Instruments) and L3 (Wall) keep the metrics they have — the
+//! prototype specifies only L1 — and take the new palette and scale.
 
 use ferrite_core::cockpit::{ProviderChoice, ToolTiming};
+use ferrite_core::store::Provider;
 use ferrite_core::docview::{is_test_run, passed_count, Instruments, Level, Tests};
 use ferrite_core::groups::GroupId;
 use ferrite_core::transcript::{
     Block, BlockId, Body, Class, Diff, Span, Status, Style, Todos, Token, ToolBlock, ToolState,
-    Transcript, Usage,
+    Transcript,
 };
 use ferrite_core::workspace::registry::ProjectId;
 use ferrite_core::workspace::WorkspaceBinding;
 use ferrite_core::{Decision, ThreadId};
 use gpui::prelude::*;
 use gpui::{
-    canvas, deferred, div, point, px, relative, rgb, rgba, AnyElement, BoxShadow, Context, Div,
-    Entity, FocusHandle, FontWeight, HighlightStyle, Pixels, ScrollHandle, SharedString, Stateful,
-    StyledText,
+    canvas, deferred, div, point, px, radians, relative, rgb, rgba, AnyElement, BoxShadow, Context,
+    Div, Entity, FocusHandle, FontFeatures, FontWeight, HighlightStyle, PathBuilder,
+    ScrollHandle, SharedString, Stateful, Styled, StyledText, Transformation,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -31,15 +36,16 @@ use std::time::Duration;
 use std::{cell::RefCell, rc::Rc};
 
 use crate::composer::Composer;
+use crate::icons::{self, icon};
 use crate::pointer::{Pointer, PointerPressed};
 use crate::select::SelectionOverlay;
-// Every color and metric here is an Aperture token (crate::theme) — no
-// literal survives in render code, which is #22's grep-able law.
+// Every color and metric here is a Soft token (crate::theme) — no literal
+// survives in render code, which is #22's grep-able law.
 use crate::theme;
 use crate::theme::{
-    ACCENT, ACCENT_WASH, CODE_KEYWORD, CODE_STR, EDGE, EDGE_STRONG, FAIL, FAIL_WASH, GOOD,
-    GOOD_WASH, HAIRLINE, IDLE, INK, INK_FAINT, INK_MUTED, INK_SECONDARY, INK_TERTIARY, INSET,
-    RAISED, SURFACE, WAIT, WAIT_EDGE, WAIT_WASH,
+    ATTENTION, ATTENTION_EDGE, ATTENTION_WASH, BLOCKED, BLOCKED_WASH, FOCUS, HOVER, IDLE,
+    METER_OFF, PANE, RAISED, RUNNING, RUNNING_WASH, SELECTION, SEP, TEXT, TEXT_2, TEXT_MUTED,
+    TEXT_STRONG, TRANSPARENT,
 };
 
 /// One Pane's view state: what the window owns per Pane. Everything it
@@ -69,7 +75,7 @@ struct ToolDisclosure {
     target: Option<String>,
     focus: FocusHandle,
     #[cfg(test)]
-    bounds: Rc<RefCell<HashMap<String, gpui::Bounds<Pixels>>>>,
+    bounds: Rc<RefCell<HashMap<String, gpui::Bounds<gpui::Pixels>>>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -282,12 +288,12 @@ impl PaneView {
     }
 
     #[cfg(test)]
-    pub(crate) fn tool_bounds(&self, call: &str) -> Option<gpui::Bounds<Pixels>> {
+    pub(crate) fn tool_bounds(&self, call: &str) -> Option<gpui::Bounds<gpui::Pixels>> {
         self.disclosure.bounds.borrow().get(call).copied()
     }
 
     #[cfg(test)]
-    pub(crate) fn tool_bounds_sink(&self) -> Rc<RefCell<HashMap<String, gpui::Bounds<Pixels>>>> {
+    pub(crate) fn tool_bounds_sink(&self) -> Rc<RefCell<HashMap<String, gpui::Bounds<gpui::Pixels>>>> {
         self.disclosure.bounds.clone()
     }
 }
@@ -315,11 +321,11 @@ pub struct PaneState<'a> {
     /// row's mode chip (#23). None (no announcement, or a provider that
     /// makes none) draws no chip; display-only either way.
     pub permission_mode: Option<&'a str>,
-    /// The meta row's provider control, assembled in the cockpit exactly
-    /// like `root_chip` — the click wired there (#25). Some only before
-    /// the Thread's first prompt: after the lock the Pane draws today's
-    /// plain muted model label instead.
-    pub provider_chip: Option<AnyElement>,
+    /// The Composer's model picker — logomark, model label, chevron —
+    /// assembled in the cockpit where the click is wired (#25). Supplied
+    /// for **every** L1 Pane, before and after the first-prompt lock: the
+    /// prototype draws it in all four Panes.
+    pub model_picker: Option<AnyElement>,
     pub focused: bool,
     /// A turn in flight: the Composer's ❯ becomes ◐ and esc offers interrupt.
     pub running: bool,
@@ -332,13 +338,11 @@ pub struct PaneState<'a> {
     /// — what tool rows and activity lines read their durations from. None
     /// on a Pane whose cockpit kept no clock (tests, parked replays).
     pub timings: Option<&'a HashMap<String, ToolTiming>>,
-    /// The context ring plus its hover card, assembled in the cockpit where
-    /// the hover state lives — the Pane only places it (#22 C12). None when
-    /// the provider reported no window, or below L1.
+    /// The context ring, assembled in the cockpit and only placed here
+    /// (#22 C12). None when the provider reported no window, or below L1.
+    /// No hover card, no token count, no `ctx`: the ring is the whole
+    /// affordance.
     pub usage_ring: Option<AnyElement>,
-    /// The header's – / ✕ window controls, wired in the cockpit to the
-    /// existing park and zoom-back verbs. None below L1.
-    pub controls: Option<AnyElement>,
     /// The pending Decision's keycaps, wired in the cockpit to the exact
     /// decide verbs the keys run (#26) — assembled there like `controls`,
     /// laid into the L1 card or the L2 body here. None while nothing
@@ -389,14 +393,6 @@ pub fn wall_state(
         _ if finished => WallState::Done,
         _ => WallState::Idle,
     }
-}
-
-/// Whether a Thread is holding the operator up — the rollup the strip counts
-/// and the wall rings: a Decision waiting (amber) or a dead Session (red).
-/// Failing tests are noise, not a ring, and are not counted (glance.md §3.1).
-/// The strip and the nav both call this, so the two can never disagree.
-pub fn needs_operator(pending: bool, status: Option<Status>) -> bool {
-    pending || matches!(status, Some(Status::Blocked | Status::Closed))
 }
 
 /// The wall cell's folded strings — rebuilt only when the Thread changed,
@@ -481,14 +477,13 @@ pub fn render_pane(view: &PaneView, state: PaneState<'_>, level: Level) -> impl 
         composer_empty,
         history_available,
         permission_mode,
-        provider_chip,
+        model_picker,
         focused,
         running,
         selection,
         timings,
         usage_ring,
-        controls,
-        decide,
+        mut decide,
         mut tool_controls,
     } = state;
     let status = transcript.map(|t| t.status());
@@ -498,68 +493,36 @@ pub fn render_pane(view: &PaneView, state: PaneState<'_>, level: Level) -> impl 
         view.wall.tests_failing,
         transcript.and_then(|t| t.last_cost()).is_some(),
     );
-    // Attention and focus are separate channels (#22 D16): the state ring
-    // (a Decision's amber everywhere; the wall's red blocker — glance.md §4,
-    // L2/L1 blocked renderings are undrawn so red stays at L3) and the
-    // ACCENT focus ring coexist, the state ring nesting just inside so a
-    // focused amber Pane shows both.
-    let state_ring = if decision.is_some() {
-        Some(WAIT)
-    } else if level == Level::Wall && state == WallState::Blocked {
-        Some(FAIL)
+    // Attention and focus are two independent channels, and they no longer
+    // nest (§D.1): the state edge is the Pane's own 1px border — always in
+    // layout, only ever recoloured, so nothing reflows when a Decision
+    // arrives — and focus is a 2px neutral ring 2px OUTSIDE it, painted by
+    // `focus_wrapper` below.
+    let edge: gpui::Hsla = if decision.is_some() {
+        rgb(ATTENTION).into()
+    } else if state == WallState::Blocked {
+        rgb(BLOCKED).into()
     } else {
-        None
+        rgba(TRANSPARENT).into()
     };
-    let focus_ring = focused.then_some(ACCENT);
-    let (outer_ring, inner_ring) = match (focus_ring, state_ring) {
-        (Some(focus), Some(state)) => (Some(ring_overlay(focus)), Some(inner_ring_overlay(state))),
-        (Some(focus), None) => (Some(ring_overlay(focus)), None),
-        (None, Some(state)) => (Some(ring_overlay(state)), None),
-        (None, None) => (None, None),
-    };
-    let shell = div()
-        .relative()
-        .flex()
-        .flex_col()
-        .flex_1()
-        .min_h_0()
-        .bg(rgb(SURFACE))
-        .border_1()
-        .border_color(rgba(EDGE))
-        .overflow_hidden()
-        // At the instrument levels the whole cell is a click-to-focus
-        // button, and says so (#26): the Cell hover lifts the border it
-        // already has — never a wash over the state canvas, and rings keep
-        // color to themselves. At L1 the Pane is a workspace surface, not
-        // a button, and its cursor stays unset for #27's I-beam.
-        .when(level != Level::Transcript, |shell| shell.hover_cell());
+    let shell = pane_shell(edge);
 
     // Far enough away, a Pane is one signal: no header, no transcript,
     // nothing that stops reading at a glance.
     if level == Level::Wall {
-        return shell
-            .child(wall_cell(view, state, focused))
-            .children(outer_ring)
-            .children(inner_ring);
+        return focus_wrapper(shell.child(wall_cell(view, state, focused)), focused);
     }
 
     if level == Level::Instruments {
-        return shell
-            .child(l2_cell(
+        return focus_wrapper(
+            shell.child(l2_cell(
                 view, transcript, decision, workspace, state, timings, decide,
-            ))
-            .children(outer_ring)
-            .children(inner_ring);
+            )),
+            focused,
+        );
     }
 
-    let mut pane = shell.child(dense_header(
-        view,
-        transcript,
-        branch.as_ref(),
-        status,
-        usage_ring,
-        controls,
-    ));
+    let mut pane = shell.child(pane_head(view, branch.as_ref(), status, usage_ring));
     match transcript {
         Some(transcript) => {
             // The tasks strip sits directly under the header, full width,
@@ -576,6 +539,15 @@ pub fn render_pane(view: &PaneView, state: PaneState<'_>, level: Level) -> impl 
                 timings,
                 &mut tool_controls,
             ));
+            // The Decision card is a **sibling of the body**, not a child
+            // of the Composer (§D.5): its `margin: 0 12px 8px` is measured
+            // from the Pane's own content box, so nesting it inside the
+            // Composer's 12px padding would inset it twice. The child
+            // order §D.1 pins is head · tasks · body · decision · changed
+            // · composer.
+            if let Some(decision) = decision {
+                pane = pane.child(decision_card(decision, decide.take()));
+            }
             // The CHANGED strip rides above the Composer whenever the
             // Thread has touched files (#22 C11). `Instruments::of` walks
             // every Block, per frame — the same price every L2 cell already
@@ -591,15 +563,15 @@ pub fn render_pane(view: &PaneView, state: PaneState<'_>, level: Level) -> impl 
                 Some(transcript),
                 ComposerStack {
                     decision,
-                    decide,
                     queued,
                     running,
                     empty: composer_empty,
                     history_available,
                     menu,
                     mode: permission_mode,
-                    provider_chip,
+                    model_picker,
                     band: None,
+                    focused,
                 },
             ));
         }
@@ -607,27 +579,69 @@ pub fn render_pane(view: &PaneView, state: PaneState<'_>, level: Level) -> impl 
             pane = pane.child(parked_body());
         }
     }
-    pane.children(outer_ring).children(inner_ring)
+    focus_wrapper(pane, focused)
 }
 
-/// The 1.5px inset attention ring — gpui has no inset box-shadow, so the
-/// ring is an absolute full-size overlay quad that takes no events.
-fn ring_overlay(color: u32) -> Div {
+/// The Pane box (§D.1): `--pane` ground, 8px radius, and a 1px border that
+/// is **always in layout** — transparent at rest, amber on a Decision, red
+/// when blocked — so a state change reflows nothing. `overflow: hidden`
+/// clips the children to the radius. The mono family is declared once
+/// here: everything inside a Pane inherits it, everything outside keeps
+/// the system sans the root declares.
+fn pane_shell(edge: gpui::Hsla) -> Div {
+    div()
+        .relative()
+        .flex()
+        .flex_col()
+        .size_full()
+        .min_h_0()
+        .min_w_0()
+        .bg(rgb(PANE))
+        .border_1()
+        .border_color(edge)
+        .rounded(px(theme::R_SURFACE))
+        .font_family(theme::FONT_MONO)
+        .overflow_hidden()
+}
+
+/// The Pane, plus its focus ring. gpui has no `outline-offset`, and a ring
+/// painted inside the shell's `overflow_hidden()` is clipped away
+/// entirely — so the ring lives in a **non-clipping** wrapper as an
+/// absolute overlay at `inset(-4px)`: 2px wide, 2px outside the border
+/// box, radii following the offset (inner 10, outer 12). It reaches 4px
+/// into the 8px board gap, which the gap exactly accommodates, and it
+/// coexists with the innermost 1px state border rather than nesting inside
+/// it.
+fn focus_wrapper(shell: Div, focused: bool) -> Div {
+    div()
+        .relative()
+        .flex()
+        .flex_1()
+        .min_h_0()
+        .min_w_0()
+        .child(shell)
+        .children(focused.then(|| {
+            div()
+                .absolute()
+                .inset(px(-(theme::FOCUS_RING_OFFSET + theme::FOCUS_RING_W)))
+                .rounded(px(
+                    theme::R_SURFACE + theme::FOCUS_RING_OFFSET + theme::FOCUS_RING_W,
+                ))
+                .border(px(theme::FOCUS_RING_W))
+                .border_color(rgb(FOCUS))
+        }))
+}
+
+/// The Decision card's `inset 0 0 0 1px` ring — gpui has no inset
+/// box-shadow, so it is an absolute full-size overlay that takes no events
+/// and no layout. Its radius must match the card it rings.
+fn ring_overlay(color: u32, radius: f32) -> Div {
     div()
         .absolute()
         .inset_0()
-        .border(px(theme::RING_W))
-        .border_color(rgb(color))
-}
-
-/// The state ring nested just inside the focus ring, so both stay visible
-/// when a focused Pane also demands attention (#22 D16).
-fn inner_ring_overlay(color: u32) -> Div {
-    div()
-        .absolute()
-        .inset(px(theme::RING_INSET))
-        .border(px(theme::RING_W))
-        .border_color(rgb(color))
+        .rounded(px(radius))
+        .border_1()
+        .border_color(rgba(color))
 }
 
 // ------------------------------------------------------------------ L3 wall
@@ -644,9 +658,6 @@ pub struct DraftState<'a> {
     pub menu: Option<AnyElement>,
     pub composer_empty: bool,
     pub focused: bool,
-    /// The header's – / ✕ controls, wired in the cockpit; ✕ discards the
-    /// draft — there is nothing to park.
-    pub controls: Option<AnyElement>,
     /// A failed bootstrap's words, shown where the band is.
     pub error: Option<&'a SharedString>,
 }
@@ -661,36 +672,25 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
         menu,
         composer_empty,
         focused,
-        controls,
         error,
     } = state;
-    let shell = div()
-        .relative()
-        .flex()
-        .flex_col()
-        .flex_1()
-        .min_h_0()
-        .bg(rgb(SURFACE))
-        .border_1()
-        .border_color(rgba(EDGE))
-        .overflow_hidden()
-        .when(level != Level::Transcript, |shell| shell.hover_cell());
-    let ring = focused.then(|| ring_overlay(ACCENT));
+    let shell = pane_shell(rgba(TRANSPARENT).into());
 
     if level != Level::Transcript {
-        return shell
-            .child(
+        return focus_wrapper(
+            shell.child(
                 div()
                     .flex()
                     .flex_1()
                     .min_h_0()
                     .items_center()
                     .justify_center()
-                    .text_size(px(theme::TEXT_ROW))
-                    .text_color(rgb(INK_MUTED))
+                    .text_size(px(theme::FS_SM))
+                    .text_color(rgb(TEXT_MUTED))
                     .child("draft"),
-            )
-            .children(ring);
+            ),
+            focused,
+        );
     }
 
     let mut wrapped = div().flex().flex_col().flex_shrink_0();
@@ -701,33 +701,34 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
                 .flex()
                 .flex_shrink_0()
                 .items_center()
-                .px(px(theme::COMPOSER_PAD_X))
                 .pb(px(4.))
-                .text_size(px(theme::TEXT_META))
-                .text_color(rgb(FAIL))
+                .text_size(px(theme::FS_MONO))
+                .text_color(rgb(BLOCKED))
                 .child(div().min_w_0().whitespace_normal().child(error.clone())),
         );
     }
-    shell
-        .child(dense_header(view, None, None, None, None, controls))
-        .child(div().flex().flex_1().min_h_0())
-        .child(composer_region(
-            view,
-            None,
-            ComposerStack {
-                decision: None,
-                decide: None,
-                queued: None,
-                running: false,
-                empty: composer_empty,
-                history_available: false,
-                menu,
-                mode: None,
-                provider_chip: None,
-                band: Some(wrapped.into_any_element()),
-            },
-        ))
-        .children(ring)
+    focus_wrapper(
+        shell
+            .child(pane_head(view, None, None, None))
+            .child(div().flex().flex_1().min_h_0())
+            .child(composer_region(
+                view,
+                None,
+                ComposerStack {
+                    decision: None,
+                    queued: None,
+                    running: false,
+                    empty: composer_empty,
+                    history_available: false,
+                    menu,
+                    mode: None,
+                    model_picker: None,
+                    band: Some(wrapped.into_any_element()),
+                    focused,
+                },
+            )),
+        focused,
+    )
 }
 
 /// The pre-prompt band's own row (#29): chips left, the key path's hint at
@@ -740,41 +741,40 @@ pub fn draft_band() -> Div {
         .items_center()
         .gap(px(6.))
         .h(px(theme::TASKS_STRIP_H))
-        .px(px(theme::COMPOSER_PAD_X))
-        .border_b_1()
-        .border_color(rgba(HAIRLINE))
 }
 
 /// The band's key-path hint, riding the row's right edge.
 pub fn band_hint() -> Div {
     div()
         .flex_shrink_0()
-        .text_size(px(theme::TEXT_CHIP))
-        .text_color(rgb(INK_MUTED))
+        .text_size(px(theme::FS_MONO))
+        .text_color(rgb(TEXT_MUTED))
         .child("⇥ chips · ↵ send")
 }
 
-/// One band chip: the quiet EDGE box of the header chips, the provider's
-/// keeping #25's accent tint as the mark of the provider's spot. Tab's
-/// focus promotes the border to ACCENT — the popover opens on ↵, so the
-/// chip must say where ↵ will land.
+/// One band chip. The prototype draws no draft band (R-09), so the chip is
+/// retinted onto the nearest tokens it does define rather than redesigned:
+/// the chip recipe's `--raised` ground and `--text-2` ink for the marked
+/// slot, `--text-muted` otherwise. The 1px border is always in layout and
+/// only changes colour — tab's focus promotes it to `--focus`, because the
+/// popover opens on ↵ and the chip must say where ↵ will land.
 pub fn band_chip(slot: usize, label: SharedString, accent: bool, focused: bool) -> Stateful<Div> {
     let edge: gpui::Hsla = if focused {
-        rgb(ACCENT).into()
+        rgb(FOCUS).into()
     } else {
-        rgba(EDGE).into()
+        rgba(TRANSPARENT).into()
     };
     div()
         .id(("band-chip", slot))
         .flex_shrink_0()
-        .text_size(px(theme::TEXT_META))
-        .text_color(rgb(if accent { ACCENT } else { INK_TERTIARY }))
-        .when(accent, |chip| chip.bg(rgba(theme::ACCENT_WASH)))
+        .text_size(px(theme::FS_MONO))
+        .text_color(rgb(if accent { TEXT_2 } else { TEXT_MUTED }))
+        .when(accent, |chip| chip.bg(rgb(RAISED)))
         .border_1()
         .border_color(edge)
         .rounded(px(theme::R_CHIP))
-        .px(px(6.))
-        .py(px(1.))
+        .px(px(theme::CHIP_PAD_X))
+        .py(px(theme::CHIP_PAD_Y))
         .hover_control()
         .press_control()
         .child(label)
@@ -788,11 +788,11 @@ pub fn band_chip_label(choice: &str) -> SharedString {
 fn wall_cell(view: &PaneView, state: WallState, focused: bool) -> Div {
     let card = &view.wall;
     let (dot_color, hollow) = match state {
-        WallState::Working | WallState::Failing | WallState::Done => (GOOD, false),
-        WallState::Decision => (WAIT, false),
-        WallState::Blocked => (FAIL, false),
+        WallState::Working | WallState::Failing | WallState::Done => (RUNNING, false),
+        WallState::Decision => (ATTENTION, false),
+        WallState::Blocked => (BLOCKED, false),
         WallState::Idle => (IDLE, false),
-        WallState::Parked => (INK_FAINT, true),
+        WallState::Parked => (SEP, true),
     };
     let mut cell = div()
         .flex()
@@ -818,9 +818,9 @@ fn wall_cell(view: &PaneView, state: WallState, focused: bool) -> Div {
                         .min_w_0()
                         .truncate()
                         .font_family(theme::FONT_UI)
-                        .text_size(px(theme::TEXT_CHIP))
+                        .text_size(px(theme::FS_MONO))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(if focused { INK } else { INK_SECONDARY }))
+                        .text_color(rgb(if focused { TEXT_STRONG } else { TEXT_2 }))
                         .child(view.name.clone()),
                 ),
         );
@@ -833,8 +833,8 @@ fn wall_cell(view: &PaneView, state: WallState, focused: bool) -> Div {
                 .flex_shrink_0()
                 .w_full()
                 .truncate()
-                .text_size(px(theme::TEXT_WALL_STATUS))
-                .text_color(rgb(ACCENT))
+                .text_size(px(theme::FS_MONO))
+                .text_color(rgb(TEXT_2))
                 .child(card.meter.clone()),
         );
     }
@@ -853,62 +853,62 @@ fn wall_cell(view: &PaneView, state: WallState, focused: bool) -> Div {
         WallState::Working => {
             cell = cell.child(status_line(
                 card.working.clone(),
-                theme::TEXT_WALL_STATUS,
-                INK_MUTED,
+                theme::FS_MONO,
+                TEXT_MUTED,
             ));
         }
         WallState::Failing => {
             cell = cell.child(status_line(
                 card.failing.clone(),
-                theme::TEXT_WALL_STATUS,
-                FAIL,
+                theme::FS_MONO,
+                BLOCKED,
             ));
         }
         WallState::Decision => {
             cell = cell.child(status_line(
                 SharedString::from("⚠ needs you"),
-                theme::TEXT_CHIP,
-                WAIT,
+                theme::FS_MONO,
+                ATTENTION,
             ));
             if !card.context.is_empty() {
                 cell = cell.child(status_line(
                     card.context.clone(),
-                    theme::TEXT_WALL_STATUS,
-                    INK_MUTED,
+                    theme::FS_MONO,
+                    TEXT_MUTED,
                 ));
             }
         }
         WallState::Blocked => {
             // The close reason is the alert; the disposition is the
             // context (#22 C14).
-            cell = cell.child(status_line(card.context.clone(), theme::TEXT_CHIP, FAIL));
+            cell = cell.child(status_line(card.context.clone(), theme::FS_MONO, BLOCKED));
             cell = cell.child(status_line(
                 SharedString::from("blocked"),
-                theme::TEXT_WALL_STATUS,
-                INK_MUTED,
+                theme::FS_MONO,
+                TEXT_MUTED,
             ));
         }
         WallState::Done => {
             cell = cell
                 .child(status_line(
                     SharedString::from("✓ done"),
-                    theme::TEXT_WALL_STATUS,
-                    GOOD,
+                    theme::FS_MONO,
+                    RUNNING,
                 ))
                 .opacity(theme::DONE_WALL_OPACITY);
         }
         WallState::Idle => {
             cell = cell.child(status_line(
                 SharedString::from("❯ idle"),
-                theme::TEXT_WALL_STATUS,
-                INK_MUTED,
+                theme::FS_MONO,
+                TEXT_MUTED,
             ));
         }
         WallState::Parked => {
             cell = cell.child(status_line(
                 SharedString::from("parked"),
-                theme::TEXT_WALL_STATUS,
-                INK_FAINT,
+                theme::FS_MONO,
+                SEP,
             ));
         }
     }
@@ -936,11 +936,11 @@ fn l2_cell(
         WallState::Working | WallState::Failing | WallState::Decision | WallState::Blocked
     );
     let led_color = match state {
-        WallState::Decision => WAIT,
-        WallState::Blocked | WallState::Failing => FAIL,
-        WallState::Working | WallState::Done => GOOD,
+        WallState::Decision => ATTENTION,
+        WallState::Blocked | WallState::Failing => BLOCKED,
+        WallState::Working | WallState::Done => RUNNING,
         WallState::Idle => IDLE,
-        WallState::Parked => INK_FAINT,
+        WallState::Parked => SEP,
     };
     let mut header = div()
         .flex()
@@ -949,17 +949,15 @@ fn l2_cell(
         .h(px(theme::CELL_HEADER_H))
         .gap(px(6.))
         .px(px(8.))
-        .border_b_1()
-        .border_color(rgba(HAIRLINE))
-        .child(led(px(theme::LED), led_color))
+        .child(led(px(theme::STATUS_DOT), led_color))
         .child(
             div()
                 .min_w_0()
                 .truncate()
                 .font_family(theme::FONT_UI)
-                .text_size(px(theme::TEXT_TITLE))
+                .text_size(px(theme::FS_SM))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(if hot { INK } else { INK_SECONDARY }))
+                .text_color(rgb(if hot { TEXT_STRONG } else { TEXT_2 }))
                 .child(view.name.clone()),
         )
         .child(div().flex_1());
@@ -969,8 +967,8 @@ fn l2_cell(
         WallState::Done => header.child(
             div()
                 .flex_shrink_0()
-                .text_size(px(theme::TEXT_CHIP_SM))
-                .text_color(rgb(GOOD))
+                .text_size(px(theme::FS_MONO))
+                .text_color(rgb(RUNNING))
                 .child("done"),
         ),
         // The comp's right-meta slot carries the Thread's id; the name is
@@ -979,8 +977,8 @@ fn l2_cell(
         _ => header.child(
             div()
                 .flex_shrink_0()
-                .text_size(px(theme::TEXT_CHIP_SM))
-                .text_color(rgb(INK_MUTED))
+                .text_size(px(theme::FS_MONO))
+                .text_color(rgb(TEXT_MUTED))
                 .child(binding_label(workspace)),
         ),
     };
@@ -1015,8 +1013,8 @@ fn l2_cell(
                 .flex_1()
                 .items_center()
                 .justify_center()
-                .text_size(px(theme::TEXT_META))
-                .text_color(rgb(INK_MUTED))
+                .text_size(px(theme::FS_MONO))
+                .text_color(rgb(TEXT_MUTED))
                 .child("❯ idle — waiting for work"),
         );
         return cell.child(header).child(body);
@@ -1025,8 +1023,8 @@ fn l2_cell(
     if state == WallState::Done {
         body = body.child(
             div()
-                .text_size(px(theme::TEXT_CHIP))
-                .text_color(rgb(INK_TERTIARY))
+                .text_size(px(theme::FS_MONO))
+                .text_color(rgb(TEXT_MUTED))
                 .child("turn complete"),
         );
     }
@@ -1036,15 +1034,15 @@ fn l2_cell(
         // the suite is red (the Cockpit board's two data points). Glyphs,
         // not a bar fill — the ▰▱ run is the one meter language.
         let fill = if state == WallState::Failing {
-            INK_SECONDARY
+            TEXT_MUTED
         } else {
-            ACCENT
+            TEXT_2
         };
         body = body.child(
             div()
                 .w_full()
                 .truncate()
-                .text_size(px(theme::TEXT_META))
+                .text_size(px(theme::FS_MONO))
                 .text_color(rgb(fill))
                 .child(meter(todos.done, todos.total)),
         );
@@ -1058,7 +1056,7 @@ fn l2_cell(
                 Some(count) => SharedString::from(format!("✓ {count}")),
                 None => SharedString::from("✓ tests pass"),
             };
-            badges = badges.child(chip(label, GOOD, GOOD_WASH));
+            badges = badges.child(chip(label, RUNNING, rgba(RUNNING_WASH).into()));
             any_badge = true;
         }
         Some(Tests::Failed { count }) => {
@@ -1066,7 +1064,7 @@ fn l2_cell(
                 Some(count) => SharedString::from(format!("✗ {count} failing")),
                 None => SharedString::from("✗ failing"),
             };
-            badges = badges.child(chip(label, FAIL, FAIL_WASH));
+            badges = badges.child(chip(label, BLOCKED, rgba(BLOCKED_WASH).into()));
             any_badge = true;
         }
         None => {}
@@ -1074,7 +1072,7 @@ fn l2_cell(
     if read.added > 0 || read.removed > 0 {
         badges = badges.child(
             diff_stat(read.added, read.removed)
-                .text_size(px(theme::TEXT_CHIP))
+                .text_size(px(theme::FS_MONO))
                 .bg(rgb(RAISED))
                 .rounded(px(theme::R_CHIP))
                 .px(px(6.))
@@ -1090,8 +1088,8 @@ fn l2_cell(
     if state == WallState::Done {
         body = body.child(
             div()
-                .text_size(px(theme::TEXT_CHIP))
-                .text_color(rgb(INK_MUTED))
+                .text_size(px(theme::FS_MONO))
+                .text_color(rgb(TEXT_MUTED))
                 .child("❯ idle"),
         );
     } else if let Some(activity) = read.activity {
@@ -1107,8 +1105,8 @@ fn l2_cell(
             div()
                 .w_full()
                 .truncate()
-                .text_size(px(theme::TEXT_CHIP))
-                .text_color(rgb(INK_TERTIARY))
+                .text_size(px(theme::FS_MONO))
+                .text_color(rgb(TEXT_MUTED))
                 .child(SharedString::from(clocked)),
         );
     }
@@ -1139,8 +1137,8 @@ fn l2_decision_body(decision: &Decision, decide: Option<AnyElement>) -> Div {
             div()
                 .w_full()
                 .truncate()
-                .text_size(px(theme::TEXT_META))
-                .text_color(rgb(INK))
+                .text_size(px(theme::FS_MONO))
+                .text_color(rgb(TEXT_STRONG))
                 .child(command),
         )
         .child(
@@ -1148,8 +1146,8 @@ fn l2_decision_body(decision: &Decision, decide: Option<AnyElement>) -> Div {
                 .w_full()
                 .truncate()
                 .font_family(theme::FONT_UI)
-                .text_size(px(theme::TEXT_CHIP))
-                .text_color(rgb(INK_TERTIARY))
+                .text_size(px(theme::FS_MONO))
+                .text_color(rgb(TEXT_MUTED))
                 .child(wants),
         )
         .children(decide)
@@ -1157,185 +1155,141 @@ fn l2_decision_body(decision: &Decision, decide: Option<AnyElement>) -> Div {
 
 // ---------------------------------------------------------------- L1 pane
 
-/// DirectionDense's single 28px header: LED · name · binding · provider
-/// chip · spacer · todo meter · context ring · window controls. The Main
-/// board's todo strip and context indicator fold into this one line at
-/// dense L1.
-#[allow(clippy::too_many_arguments)]
-fn dense_header(
+/// The Pane head (§D.2): 32px, 12px inline padding, an 8px gap, muted ink.
+/// Status dot · Thread id · checkout · the context ring pinned to the
+/// trailing edge. No background, no border, and **no rule beneath it** —
+/// Soft separates by fill contrast alone. There is no model chip here (the
+/// Composer's picker is the only model surface) and no window controls
+/// (park and zoom stay on the keyboard).
+fn pane_head(
     view: &PaneView,
-    transcript: Option<&Transcript>,
     branch: Option<&SharedString>,
     status: Option<Status>,
     usage_ring: Option<AnyElement>,
-    controls: Option<AnyElement>,
 ) -> Div {
-    let led_color = match status {
-        Some(Status::Streaming) => GOOD,
-        Some(Status::Blocked) => WAIT,
-        Some(Status::Closed) => FAIL,
-        Some(Status::Idle) => IDLE,
-        None => INK_FAINT,
+    // The dot's base is the muted ink — the parked look — and each live
+    // state takes its own signal colour. The no-dot ruling is scoped to
+    // navigation; a Pane head keeps its dot.
+    let dot_color = match status {
+        Some(Status::Streaming) => RUNNING,
+        Some(Status::Blocked) => ATTENTION,
+        Some(Status::Closed) => BLOCKED,
+        _ => TEXT_MUTED,
     };
-    let mut header = div()
+    let mut head = div()
         .flex()
         .flex_shrink_0()
         .items_center()
-        .h(px(theme::HEADER_DENSE_H))
-        .gap(px(8.))
-        .px(px(10.))
-        .border_b_1()
-        .border_color(rgba(HAIRLINE))
-        .text_size(px(theme::TEXT_ROW))
-        .child(led(px(theme::LED), led_color))
+        .h(px(theme::PANE_HEAD_H))
+        .gap(px(theme::EVENT_GAP))
+        .px(px(theme::PANE_PAD_X))
+        .text_size(px(theme::FS_SM))
+        .line_height(relative(theme::LINE_UI))
+        .text_color(rgb(TEXT_MUTED))
+        .child(led(px(theme::STATUS_DOT), dot_color))
         .child(
             div()
                 .flex_shrink_0()
-                .font_weight(FontWeight::BOLD)
-                .text_color(rgb(INK))
+                .text_size(px(theme::FS_LG))
+                .line_height(relative(theme::LINE_UI))
+                // gpui seats a run one pixel lower in this 32px head than
+                // CSS half-leading does. 2px of bottom padding grows the
+                // centred box by two and so lifts the glyphs by one.
+                .pb(px(2.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(TEXT_STRONG))
                 .child(view.name.clone()),
         );
-    // The binding slot (#29): the actual git checkout of the Thread's cwd
-    // — a small branch glyph and the cached branch name. Pure text: no
-    // hover, no click target, no re-aim anywhere — the CWD is immutable
-    // once the chat runs, and the header must never look otherwise.
+    // The checkout slot (#29): the branch mark and the cached branch name.
+    // Pure text — no hover, no click target: the CWD is immutable once the
+    // Thread runs and the head must never look otherwise. No `·` seam
+    // before it; the 8px gap is the whole separation.
     if let Some(branch) = branch {
-        header = header
-            .child(div().flex_shrink_0().text_color(rgb(INK_FAINT)).child("·"))
-            .child(
-                div()
-                    .flex()
-                    .min_w_0()
-                    .items_center()
-                    .gap(px(4.))
-                    .child(branch_icon(INK_TERTIARY))
-                    .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .text_color(rgb(INK_TERTIARY))
-                            .child(branch.clone()),
-                    ),
-            );
-    }
-    // The provider chip — `claude · sonnet-4-5` on the accent wash, the
-    // comps' one accent-tinted chip (#22 C12). The raw id no longer crams
-    // the composer's bottom-right.
-    if let Some(model) = transcript.and_then(|t| t.model()) {
-        header = header.child(
+        head = head.child(
             div()
-                .flex_shrink_0()
-                .text_size(px(theme::TEXT_META))
-                .text_color(rgb(ACCENT))
-                .bg(rgba(theme::ACCENT_WASH))
-                .rounded(px(theme::R_CHIP))
-                .px(px(6.))
-                .py(px(1.))
-                .child(model_chip_label(model)),
+                .flex()
+                .min_w_0()
+                .items_center()
+                .gap(px(theme::ROW_ICON_GAP))
+                .text_size(px(theme::FS_MONO))
+                .line_height(relative(theme::LINE_UI))
+                .child(icon(icons::BRANCH, theme::ROW_ICON, TEXT_MUTED))
+                // Same one-pixel lift as the Thread id; the mark keeps its
+                // own centring.
+                .child(div().min_w_0().truncate().pb(px(2.)).child(branch.clone())),
         );
     }
-    header = header.child(div().flex_1());
-    // The context ring, then the window controls at the far edge (#22
-    // amendments) — no cost text and no context label anywhere. The tasks
-    // meter lives on its own strip below, per the Main comp.
-    if let Some(ring) = usage_ring {
-        header = header.child(ring);
+    // The ring is hard right and it is the last thing in the head. A
+    // growing spacer, not `ml_auto` — see `tasks_strip` for why.
+    match usage_ring {
+        Some(ring) => head
+            .child(div().flex_1().min_w_0())
+            .child(div().flex_shrink_0().child(ring)),
+        None => head,
     }
-    if let Some(controls) = controls {
-        header = header.child(controls);
-    }
-    header
 }
 
-/// The header's branch glyph (#29): the bundled fonts carry no git-branch
-/// codepoint, so the slot draws its own small two-dot fork — a rail with a
-/// dot at each end and a third dot branched off the top, joined by a short
-/// arm. Pure chrome: no id, no hover, no events, and it never registers
-/// with the selection overlay.
-fn branch_icon(color: u32) -> Div {
-    let dot = |x: f32, y: f32| {
-        div()
-            .absolute()
-            .left(px(x))
-            .top(px(y))
-            .w(px(3.))
-            .h(px(3.))
-            .rounded_full()
-            .bg(rgb(color))
-    };
-    div()
-        .relative()
-        .flex_shrink_0()
-        .w(px(11.))
-        .h(px(11.))
-        // The rail between the two left dots.
-        .child(
-            div()
-                .absolute()
-                .left(px(2.))
-                .top(px(2.5))
-                .w(px(1.))
-                .h(px(6.))
-                .bg(rgb(color)),
-        )
-        // The arm from the rail out to the branched dot.
-        .child(
-            div()
-                .absolute()
-                .left(px(2.5))
-                .top(px(2.))
-                .w(px(6.))
-                .h(px(1.))
-                .bg(rgb(color)),
-        )
-        .child(dot(1., 1.))
-        .child(dot(1., 7.))
-        .child(dot(7., 1.))
-}
-
-/// The tasks strip, the Main comp's own recipe: 28px on the sunken ground
-/// under the header — `▰▰▰▱ 3/4` in accent, the step being worked in UI
-/// prose, and the muted `todo` tag riding the right edge.
+/// The tasks strip (§D.3): 24px, 12px inline padding, a 9px gap — the
+/// segment meter, the done/total count in tabular numerals, the task being
+/// worked, and the kind label riding the trailing edge. No ground, no
+/// border, no separator.
+///
+/// **This meter is the tasks meter and nothing else.** Context usage is the
+/// ring in the head, and never a bar.
 fn tasks_strip(todos: Todos, current: Option<&str>) -> Div {
+    let done = todos.done.min(todos.total);
+    let mut meter = div().flex().flex_shrink_0().gap(px(theme::METER_SEG_GAP));
+    for index in 0..todos.total {
+        meter = meter.child(
+            div()
+                .w(px(theme::METER_SEG_W))
+                .h(px(theme::METER_SEG_H))
+                .rounded(px(theme::METER_SEG_R))
+                .bg(if index < done {
+                    rgb(TEXT_2).into()
+                } else {
+                    rgba(METER_OFF)
+                }),
+        );
+    }
     let mut strip = div()
         .flex()
         .flex_shrink_0()
         .items_center()
-        .gap(px(10.))
+        .gap(px(9.))
         .h(px(theme::TASKS_STRIP_H))
-        .px(px(theme::COMPOSER_PAD_X))
-        .bg(rgb(INSET))
-        .border_b_1()
-        .border_color(rgba(HAIRLINE))
-        .child(
+        .px(px(theme::PANE_PAD_X))
+        .text_size(px(theme::FS_SM))
+        .line_height(relative(theme::LINE_UI))
+        .text_color(rgb(TEXT_MUTED))
+        .child(meter)
+        .child(tabular(
             div()
                 .flex_shrink_0()
-                .text_size(px(theme::TEXT_META))
-                .text_color(rgb(ACCENT))
-                .child(meter(todos.done, todos.total)),
-        );
+                .child(SharedString::from(format!("{done}/{}", todos.total))),
+        ));
     if let Some(current) = current {
         strip = strip.child(
             div()
                 .min_w_0()
                 .truncate()
-                .font_family(theme::FONT_UI)
-                .text_size(px(theme::TEXT_ROW))
-                .text_color(rgb(INK_SECONDARY))
                 .child(SharedString::from(current.to_string())),
         );
     }
-    strip.child(div().flex_1()).child(
-        div()
-            .flex_shrink_0()
-            .text_size(px(theme::TEXT_CHIP))
-            .text_color(rgb(INK_MUTED))
-            .child("todo"),
-    )
+    // `margin-inline-start: auto` on the kind label — spelled as a growing
+    // spacer, never `ml_auto`: an auto margin on any child makes taffy hand
+    // that child the whole of the free space **including the container's
+    // own gaps**, and every gap in the row silently collapses to 0. Measured
+    // in this build; it is the reason the head, the tasks strip, the event
+    // row and the Composer all lay their trailing element out this way.
+    strip
+        .child(div().flex_1().min_w_0())
+        .child(div().flex_shrink_0().child("todo"))
 }
 
-/// `▰▰▰▱ 3/4` while the glyph run stays glanceable; a long plan keeps the
-/// fraction alone (an unbounded ▰ run would eat the header).
+/// `▰▰▰▱ 3/4` at the instrument levels. The prototype specifies only the
+/// L1 Pane, where the tasks strip now draws real segments — so the glyph
+/// meter survives for L2 and L3 alone, which keep the metrics they have.
 fn meter(done: usize, total: usize) -> SharedString {
     if total == 0 {
         return SharedString::default();
@@ -1362,61 +1316,61 @@ fn meter_run(done: usize, total: usize) -> String {
     run
 }
 
-/// The provider chip's text: the model id groomed to the comps' grammar —
-/// `claude-sonnet-4-5` → `claude · sonnet-4-5`. An id with no known
-/// provider prefix stands verbatim rather than being guessed apart. Public
-/// because the picker's model rows must spell a model exactly as the chip
-/// does (#25) — one grooming, never two.
-pub fn model_chip_label(model: &str) -> SharedString {
+/// The bare model name the picker shows: `claude-sonnet-4-5` →
+/// `sonnet-4-5`, `gpt-5.6` → `gpt-5.6`. The provider is the logomark
+/// beside it, so the label never repeats it and never carries a `·` seam.
+/// Public because the picker's model rows must spell a model exactly as
+/// the control does (#25) — one grooming, never two.
+pub fn model_label(model: &str) -> SharedString {
     for provider in ["claude", "codex"] {
         if let Some(rest) = model
             .strip_prefix(provider)
             .and_then(|rest| rest.strip_prefix('-'))
         {
             if !rest.is_empty() {
-                return SharedString::from(format!("{provider} · {rest}"));
+                return SharedString::from(rest.to_string());
             }
         }
     }
     SharedString::from(model.to_string())
 }
 
-/// The pre-lock provider control's text (#25): the groomed model with the
-/// ⌵ that says the label answers clicks — and the provider name alone
-/// until the Session's Init announces what is actually serving, never an
-/// invented model.
-pub fn provider_chip_label(provider: &str, model: Option<&str>) -> SharedString {
-    match model {
-        Some(model) => {
-            let groomed = model_chip_label(model);
-            let label = if groomed.starts_with(&format!("{provider} · ")) {
-                groomed.to_string()
-            } else {
-                format!("{provider} · {groomed}")
-            };
-            SharedString::from(format!("{label} ⌵"))
-        }
-        None => SharedString::from(format!("{provider} ⌵")),
-    }
-}
-
-/// The control itself (#25): the meta row's accent chip — the same accent
-/// tint as the header's provider chip, which is what marks it as the
-/// provider's spot — at the meta row's own scale. Render-only; the
-/// cockpit wires the click. Carried hover (#26): its accent wash is a
-/// stronger ground the achromatic lift would downgrade — the selected-row
-/// skip rule, applied to a chip.
-pub fn provider_chip(label: SharedString) -> Div {
+/// The Composer's model picker (§D.7): a 20px, 4px-radius control on no
+/// ground — a 12px logomark in its brand colour, the bare model name in
+/// `--text-2`, and a 12px chevron. Hover lifts it to `--hover` / `--text`.
+/// Render-only; the cockpit gives it its id and its click.
+pub fn model_picker(provider: Option<Provider>, label: SharedString) -> Div {
+    let mark = provider.map(|provider| match provider {
+        Provider::Codex => icon(
+            icons::CODEX,
+            theme::PROVIDER_MARK_SM,
+            theme::PROVIDER_CODEX,
+        ),
+        Provider::Claude => icon(
+            icons::CLAUDE,
+            theme::PROVIDER_MARK_SM,
+            theme::PROVIDER_CLAUDE,
+        ),
+    });
     div()
+        .flex()
         .flex_shrink_0()
-        .text_size(px(theme::TEXT_CHIP))
-        .text_color(rgb(ACCENT))
-        .bg(rgba(theme::ACCENT_WASH))
+        .items_center()
+        .gap(px(theme::KEYS_GAP))
+        .h(px(theme::CHIP_H))
+        .pl(px(theme::PICKER_PAD_L))
+        .pr(px(theme::PICKER_PAD_R))
         .rounded(px(theme::R_CHIP))
-        .px(px(6.))
-        .py(px(1.))
-        .hover_carried()
-        .child(label)
+        .text_size(px(theme::FS_SM))
+        .text_color(rgb(TEXT_2))
+        .children(mark)
+        .child(div().flex_shrink_0().child(label))
+        .child(icon(
+            icons::CHEVRON_DOWN,
+            theme::ICON_CHEVRON,
+            TEXT_MUTED,
+        ))
+        .hover_control()
 }
 
 /// The rendered tail of a transcript at one level — the window `body`
@@ -1458,16 +1412,34 @@ fn body(
         .min_h_0()
         .overflow_y_scroll()
         .track_scroll(&view.scroll)
-        .gap(px(theme::TRANSCRIPT_GAP))
-        .px(px(theme::TRANSCRIPT_PAD_X))
-        .py(px(theme::TRANSCRIPT_PAD_Y))
-        .text_size(px(theme::TEXT_BODY))
-        .line_height(relative(theme::LINE_TRANSCRIPT))
+        // `padding: 6px 12px 12px` (§D.4). No gap: every block carries its
+        // own margin now, so the rhythm is the prototype's, not a uniform
+        // stack spacing.
+        .px(px(theme::PANE_PAD_X))
+        .pt(px(theme::BODY_PAD_T))
+        .pb(px(theme::BODY_PAD_B))
+        .text_size(px(theme::FS_MD))
+        .line_height(relative(theme::LINE_BODY))
+        .text_color(rgb(TEXT_2))
         // Characters here are grabbable (#27): the I-beam says so over the
         // whole scrollback, gutters and gaps included, because a press
         // anywhere in it anchors at the nearest character.
         .hover_text();
-    for block in rendered_window(transcript.blocks(), level) {
+    // A `.signal` line wears the Pane's own state, so the line and the
+    // Pane's border can never disagree.
+    let signal = signal_color(Some(transcript.status()));
+    let window = rendered_window(transcript.blocks(), level);
+    let mut prev_margin_b = 0.;
+    for (index, block) in window.iter().enumerate() {
+        let next_is_bullet = matches!(
+            window.get(index + 1).map(|next| &next.body),
+            Some(Body::Bullet { .. })
+        );
+        let flow = Flow {
+            prev_margin_b,
+            next_is_bullet,
+        };
+        prev_margin_b = margin_b(&block.body, next_is_bullet);
         body = body.child(render_block(
             block,
             selection,
@@ -1480,9 +1452,33 @@ fn body(
                 Body::Tool(tool) => tool_controls.remove(&tool.call),
                 _ => None,
             },
+            signal,
+            flow,
         ));
     }
     body
+}
+
+/// What CSS collapsing needs to know about a Block's neighbours — gpui adds
+/// adjacent margins where CSS collapses them, so the two cases the prototype
+/// actually shows are carried explicitly: a heading's 12px top margin
+/// collapses into whatever the previous block put below it, and a bullet run
+/// ends on the `ul`'s 10px rather than the `li`'s 3px.
+#[derive(Clone, Copy, Default)]
+struct Flow {
+    prev_margin_b: f32,
+    next_is_bullet: bool,
+}
+
+/// The bottom margin a Block actually renders with — the other half of the
+/// collapse.
+fn margin_b(body: &Body, next_is_bullet: bool) -> f32 {
+    match body {
+        Body::Bullet { .. } if next_is_bullet => theme::LI_GAP,
+        Body::Heading { .. } => theme::H4_MARGIN_B,
+        Body::Tool(_) => 0.,
+        _ => theme::P_MARGIN_B,
+    }
 }
 
 fn parked_body() -> Div {
@@ -1492,8 +1488,8 @@ fn parked_body() -> Div {
         .min_h_0()
         .items_center()
         .justify_center()
-        .text_size(px(theme::TEXT_ROW))
-        .text_color(rgb(INK_MUTED))
+        .text_size(px(theme::FS_SM))
+        .text_color(rgb(TEXT_MUTED))
         .child("parked")
 }
 
@@ -1503,39 +1499,45 @@ fn parked_body() -> Div {
 /// stays readable as the states grow.
 struct ComposerStack<'a> {
     decision: Option<&'a Decision>,
-    /// The Decision's keycaps, wired in the cockpit (#26).
-    decide: Option<AnyElement>,
     queued: Option<&'a str>,
     running: bool,
     empty: bool,
     history_available: bool,
     menu: Option<AnyElement>,
     mode: Option<&'a str>,
-    /// The meta row's provider control (#25) — Some pre-lock only.
-    provider_chip: Option<AnyElement>,
+    /// The Composer's model picker (#25) — drawn in every Pane.
+    model_picker: Option<AnyElement>,
     /// The draft Pane's pre-prompt band (#29) — Some on drafts only, and
     /// gone with the first send.
     band: Option<AnyElement>,
+    /// Whether this Pane holds the keyboard. The Composer paints its own
+    /// caret when it does; the `›` mark stands in when it does not, and
+    /// the two are mutually exclusive (§D.7).
+    focused: bool,
 }
 
-/// The PromptBox stack, top to bottom: pre-prompt band (drafts, #29),
-/// permission card, queued row, the one growing input line, meta row.
-/// Everything stacks above the line and is driven by keys — no send button,
-/// no floating box. An open `/` or `@` popover hangs above the whole stack;
-/// while a Decision pends the region carries the `Decision` key context so
-/// y/n/a answer with the keyboard still in the Composer (#23).
+/// The Composer (§D.7): `--raised` ground, `padding: 7px 12px 8px`, two
+/// 20px rows 3px apart — 58px in every Pane. No top border: Soft draws no
+/// separators, and the ground change is the whole separation.
+///
+/// Above the two rows, still inside the region, stack the draft band (#29)
+/// and the queued row — neither of which the prototype draws (R-09). The
+/// Decision card is **not** here: it is a sibling of the body, drawn by
+/// `render_pane`. While a Decision pends this region still carries the
+/// `Decision` key context, so y/n/a answer with the keyboard in the
+/// Composer (#23).
 fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: ComposerStack) -> Div {
     let ComposerStack {
         decision,
-        decide,
         queued,
         running,
         empty,
         history_available,
         menu,
         mode,
-        provider_chip,
+        model_picker,
         band,
+        focused,
     } = stack;
     let is_draft = band.is_some();
     let mut region = div()
@@ -1543,84 +1545,79 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         .flex()
         .flex_col()
         .flex_shrink_0()
-        .bg(rgb(theme::COMPOSER))
-        .border_t_1()
-        .border_color(rgba(EDGE_STRONG))
+        .gap(px(theme::COMPOSER_GAP))
+        .min_w_0()
+        .bg(rgb(RAISED))
+        // gpui's `overflow_hidden()` content mask is an axis-aligned rect, so
+        // the shell's 8px radius never clips this ground. The bottom-most
+        // child carries the shell's padding-box radius itself: 8 - 1 border.
+        .rounded_bl(px(theme::R_SURFACE - 1.))
+        .rounded_br(px(theme::R_SURFACE - 1.))
+        .pt(px(theme::COMPOSER_PAD_T))
+        .px(px(theme::PANE_PAD_X))
+        .pb(px(theme::COMPOSER_PAD_B))
+        .text_size(px(theme::FS_SM))
+        .line_height(relative(theme::LINE_UI))
+        .text_color(rgb(TEXT_2))
         .when(decision.is_some(), |region| region.key_context("Decision"));
-    let stacked = decision.is_some() || queued.is_some();
     if let Some(band) = band {
         region = region.child(band);
-    }
-    if let Some(decision) = decision {
-        region = region.child(decision_card(decision, decide));
     }
     if let Some(held) = queued {
         region = region.child(queued_line(held));
     }
-    // The one line that grows. The idle placeholder overlays it after the
-    // block cursor's slot (PromptBox state 01) and disappears the moment
-    // there is text or a running turn (§6: hints hide while running). The
-    // open menu's ComposerMenu key context lives on the Composer's own
-    // focused node — set by the cockpit — where the tie-break works.
+    // The one line that grows. The idle placeholder overlays it in every
+    // Pane that does not hold the keyboard — the prototype keeps it under a
+    // running turn (§D.7) and shows the focused Pane its caret alone.
     let mut line = div()
         .relative()
         .flex_1()
         .min_w_0()
         .child(view.composer.clone());
-    if empty && !running {
+    if empty && !focused {
         line = line.child(
             div()
                 .absolute()
-                .left(px(theme::CURSOR_W + 3.))
+                .left_0()
                 .top_0()
                 .bottom_0()
                 .flex()
                 .items_center()
-                .text_color(rgb(INK_MUTED))
-                .child(placeholder(&view.name, offers_import(transcript))),
+                .text_color(rgb(TEXT_2))
+                .child(placeholder(decision.is_some(), transcript)),
         );
     }
+    // `.composer-prompt`: the `›` mark when the Pane is not focused — the
+    // Composer paints its own 2 × 14 caret when it is, and the two are
+    // mutually exclusive. No `◐`, no `❯`.
     let mut input = div()
         .flex()
-        .flex_shrink_0()
         .items_center()
-        .gap(px(10.))
-        .min_h(px(theme::COMPOSER_H))
-        .px(px(theme::COMPOSER_PAD_X))
-        .text_size(px(theme::TEXT_INPUT))
-        .text_color(rgb(INK))
-        // The hairline above the input row appears once something stacks
-        // over it (PromptBox state 04).
-        .when(stacked, |input| {
-            input.border_t_1().border_color(rgba(HAIRLINE))
-        })
-        .child(if running {
-            div()
-                .flex_shrink_0()
-                .font_weight(FontWeight::BOLD)
-                .text_color(rgb(ACCENT))
-                .child("◐")
-        } else {
-            div()
-                .flex_shrink_0()
-                .font_weight(FontWeight::BOLD)
-                .text_color(rgb(ACCENT))
-                .child("❯")
-        })
-        .child(line);
-    if running {
+        .gap(px(theme::EVENT_GAP))
+        .min_h(px(theme::COMPOSER_ROW_H))
+        .min_w_0();
+    if !focused {
         input = input.child(
             div()
                 .flex_shrink_0()
-                .text_size(px(theme::TEXT_CHIP))
-                .text_color(rgb(INK_MUTED))
-                .child("esc interrupt"),
+                .text_color(rgb(TEXT_MUTED))
+                .child("\u{203a}"),
         );
     }
+    input = input.child(line).child(
+        // `.hint`: hard right, nowrap, 10.5px muted. The line beside it is
+        // already `flex_1`, so it takes the free space and no auto margin
+        // is needed — one would collapse the row's gap.
+        div()
+            .flex_shrink_0()
+            .whitespace_nowrap()
+            .text_size(px(theme::FS_MONO))
+            .text_color(rgb(TEXT_MUTED))
+            .child(composer_hints(is_draft, history_available)),
+    );
     region = region.child(input);
     // The popover paints above the stack — deferred, so it escapes the
-    // Pane's clip and draws over the transcript (the root selector's own
-    // recipe, #24).
+    // Pane's clip and draws over the transcript (#24).
     if let Some(menu) = menu {
         region = region.child(deferred(
             div()
@@ -1633,58 +1630,67 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         ));
     }
 
-    // The meta row: the Session's mode chip on the left where the comp
-    // draws "⏵ auto-edit" — only when the Session actually announced a
-    // mode. The model moved to the header's provider chip (#22 C12). Tool
-    // durations live on the rows themselves: the transcript's folds stay
-    // clockless, and the Cockpit — which already owns IO — stamps each
-    // call at ingestion, which is why a replayed log carries none.
-    let mut meta = div()
+    // `.composer-controls`: the mode chip, then the esc hint — which does
+    // **not** push right here — then the model picker hard right. No cost,
+    // no token count, no context text.
+    let mut controls = div()
         .flex()
         .flex_shrink_0()
         .items_center()
-        .gap(px(10.))
-        .h(px(theme::COMPOSER_META_H))
-        .px(px(theme::COMPOSER_PAD_X))
-        .pb(px(4.));
-    if let Some(mode) = mode {
-        meta = meta.child(
+        .gap(px(theme::EVENT_GAP))
+        .h(px(theme::COMPOSER_ROW_H));
+    // The chip is the *running* Session's edit mode, so it rides only a
+    // Pane that is running and unblocked: a Decision owns the keyboard until
+    // it is answered, and a closed Session has no mode to be in. The
+    // prototype draws it on its two running Panes and omits it from the
+    // Decision and the blocked one.
+    if let Some(mode) = mode.filter(|_| running && decision.is_none()) {
+        controls = controls.child(mode_chip(mode));
+    }
+    let escape = if decision.is_some() {
+        Some("esc dismiss")
+    } else if running {
+        Some("esc interrupt")
+    } else {
+        None
+    };
+    if let Some(escape) = escape {
+        controls = controls.child(
             div()
                 .flex_shrink_0()
-                .text_size(px(theme::TEXT_CHIP))
-                .text_color(rgb(ACCENT))
-                .bg(rgba(theme::ACCENT_WASH))
-                .rounded(px(theme::R_CHIP))
-                .px(px(6.))
-                .py(px(2.))
-                .child(mode_chip_label(mode)),
+                .text_size(px(theme::FS_MONO))
+                .text_color(rgb(TEXT_MUTED))
+                .child(escape),
         );
     }
-    meta = meta.child(div().flex_1());
-    // The footer's right side, per the Main comp: the hints this Composer
-    // actually answers (#23's menus and #30's eligible prompt history), then the
-    // provider's spot beside them. Before the first prompt that spot is
-    // the selector's chip control (#25); after the lock it reverts to
-    // today's plain muted label. The header's provider chip stays.
-    meta = meta.child(
-        div()
-            .flex_shrink_0()
-            .text_size(px(theme::TEXT_CHIP))
-            .text_color(rgb(INK_MUTED))
-            .child(composer_hints(is_draft, history_available)),
-    );
-    if let Some(chip) = provider_chip {
-        meta = meta.child(chip);
-    } else if let Some(model) = transcript.and_then(Transcript::model) {
-        meta = meta.child(
-            div()
-                .flex_shrink_0()
-                .text_size(px(theme::TEXT_CHIP))
-                .text_color(rgb(INK_MUTED))
-                .child(model_chip_label(model)),
-        );
+    // `margin-inline-start: auto` on the picker. It renders in every Pane,
+    // before and after the first-prompt lock — there is no plain-label
+    // fallback and no second model surface anywhere.
+    if let Some(picker) = model_picker {
+        controls = controls
+            .child(div().flex_1().min_w_0())
+            .child(div().flex_shrink_0().child(picker));
     }
-    region.child(meta)
+    region.child(controls)
+}
+
+/// The Composer's mode chip (§D.7): 20px on `--hover` at rest, 7px inline
+/// padding, a 10px pencil and the mode's own word. Hover lifts it to
+/// `--fill` / `--text`.
+fn mode_chip(mode: &str) -> Div {
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(theme::KEYS_GAP))
+        .h(px(theme::CHIP_H))
+        .px(px(theme::MODE_CHIP_PAD_X))
+        .rounded(px(theme::R_CHIP))
+        .bg(rgb(HOVER))
+        .text_color(rgb(TEXT_2))
+        .child(icon(icons::PENCIL, theme::ICON_PENCIL, TEXT_MUTED))
+        .child(mode_chip_label(mode))
+        .hover_raised()
 }
 
 fn composer_hints(is_draft: bool, history_available: bool) -> &'static str {
@@ -1697,24 +1703,18 @@ fn composer_hints(is_draft: bool, history_available: bool) -> &'static str {
     }
 }
 
-/// The idle line's ghost text, PromptBox state 01's pattern verbatim:
-/// `message ‹thread-name› — hints`. The hints it advertises are the ones
-/// this Composer actually answers — which is why the import hint only
-/// appears while the Thread still offers adoption (#11).
-fn placeholder(name: &SharedString, offers_import: bool) -> SharedString {
-    if name.as_ref() == "new thread" {
-        return SharedString::from(
-            "message new thread — /import adopt · @ project files · ↵ start",
-        );
+/// The idle line's ghost text (§D.7): one of the prototype's three, chosen
+/// by what the Pane is waiting on — a Decision, a live Thread, or a closed
+/// Session. It never names the Thread and never lists the hints; the `.hint`
+/// on the same row already does that.
+fn placeholder(pending: bool, transcript: Option<&Transcript>) -> SharedString {
+    if pending {
+        return SharedString::from("Reply to the Decision\u{2026}");
     }
-    let import = if offers_import {
-        " · /import adopt a CLI session"
-    } else {
-        ""
-    };
-    SharedString::from(format!(
-        "message {name} — / commands · @ files · ↵ send{import}"
-    ))
+    match transcript.map(|transcript| transcript.status()) {
+        Some(Status::Closed) => SharedString::from("Revive and continue\u{2026}"),
+        _ => SharedString::from("Steer this Thread\u{2026}"),
+    }
 }
 
 /// #11: whether this Thread still offers adopting a CLI session — no
@@ -1740,7 +1740,7 @@ fn mode_chip_label(mode: &str) -> SharedString {
         "acceptEdits" => "auto-edit",
         other => other,
     };
-    SharedString::from(format!("⏵ {label}"))
+    SharedString::from(label.to_string())
 }
 
 /// One row of the `/` or `@` popover, ready to draw: what a pick inserts,
@@ -1752,7 +1752,7 @@ pub struct MenuRow {
     pub insert: SharedString,
     /// The row's leading text: `/name`, or the file's name.
     pub name: SharedString,
-    /// Matched byte ranges inside `name`, promoted to ACCENT per the comp.
+    /// Matched byte ranges inside `name`, promoted to `--text-strong`.
     pub matched: Vec<std::ops::Range<usize>>,
     /// The dimmer text after it: a command's description, or the file's
     /// directory. Empty draws nothing.
@@ -1771,17 +1771,17 @@ pub fn menu_popover() -> Div {
     popover_shell().w_full()
 }
 
-/// One 26px menu row. Selection promotes the row exactly as the comp's
-/// states 02/03 draw it: EDGE wash, name to ACCENT, matched characters
-/// ACCENT (bold only while selected), detail ink one step up; the selected
-/// row carries the `↵` hint at its right edge.
+/// One 30px menu row, on the filter menu's recipe (R-07). Selection takes
+/// the `--hover` ground, promotes the name and its matched characters to
+/// `--text-strong` (semibold only while selected) and steps the detail ink
+/// up; the selected row carries the `↵` hint at its right edge.
 pub fn menu_row(row: &MenuRow, selected: bool) -> Div {
     // An inert row never promotes: muted whatever the arrows do, and its
     // matches stay unpainted — the row is an explanation, not an offer.
     let name_ink = match (row.inert, selected) {
-        (true, _) => INK_MUTED,
-        (false, true) => ACCENT,
-        (false, false) => INK_SECONDARY,
+        (true, _) => TEXT_MUTED,
+        (false, true) => TEXT_STRONG,
+        (false, false) => TEXT_2,
     };
     let mut highlights: Vec<(std::ops::Range<usize>, HighlightStyle)> = Vec::new();
     if !row.inert {
@@ -1789,8 +1789,8 @@ pub fn menu_row(row: &MenuRow, selected: bool) -> Div {
             highlights.push((
                 range.clone(),
                 HighlightStyle {
-                    color: Some(rgb(ACCENT).into()),
-                    font_weight: selected.then_some(FontWeight::BOLD),
+                    color: Some(rgb(TEXT_STRONG).into()),
+                    font_weight: selected.then_some(FontWeight::SEMIBOLD),
                     ..Default::default()
                 },
             ));
@@ -1803,12 +1803,12 @@ pub fn menu_row(row: &MenuRow, selected: bool) -> Div {
         .gap(px(10.))
         .h(px(theme::MENU_ROW_H))
         .px(px(8.))
-        .rounded(px(theme::R_CHIP))
-        .when(selected, |row| row.bg(rgba(EDGE)))
+        .rounded(px(theme::R_CONTROL))
+        .when(selected, |row| row.bg(rgb(HOVER)))
         .child(
             div()
                 .flex_shrink_0()
-                .text_size(px(theme::TEXT_CODE))
+                .text_size(px(theme::FS_MD))
                 .text_color(rgb(name_ink))
                 .child(StyledText::new(row.name.clone()).with_highlights(highlights)),
         );
@@ -1821,7 +1821,7 @@ pub fn menu_row(row: &MenuRow, selected: bool) -> Div {
         (false, false) => drawn.hover_row(),
     };
     if !row.detail.is_empty() {
-        let detail_ink = if selected { INK_TERTIARY } else { INK_MUTED };
+        let detail_ink = if selected { TEXT_MUTED } else { TEXT_MUTED };
         let mut detail = div()
             .min_w_0()
             .truncate()
@@ -1830,9 +1830,9 @@ pub fn menu_row(row: &MenuRow, selected: bool) -> Div {
         detail = if row.prose_detail {
             detail
                 .font_family(theme::FONT_UI)
-                .text_size(px(theme::TEXT_ROW))
+                .text_size(px(theme::FS_SM))
         } else {
-            detail.text_size(px(theme::TEXT_META))
+            detail.text_size(px(theme::FS_MONO))
         };
         drawn = drawn.child(detail);
     }
@@ -1842,8 +1842,8 @@ pub fn menu_row(row: &MenuRow, selected: bool) -> Div {
         drawn = drawn.child(div().flex_1()).child(
             div()
                 .flex_shrink_0()
-                .text_size(px(theme::TEXT_CHIP))
-                .text_color(rgb(INK_MUTED))
+                .text_size(px(theme::FS_MONO))
+                .text_color(rgb(TEXT_MUTED))
                 .child("↵"),
         );
     }
@@ -1856,83 +1856,79 @@ fn queued_line(held: &str) -> impl IntoElement {
         .flex()
         .flex_shrink_0()
         .items_center()
-        .gap(px(8.))
+        .gap(px(theme::EVENT_GAP))
         .h(px(theme::CELL_HEADER_H))
-        .px(px(theme::COMPOSER_PAD_X))
-        .text_size(px(theme::TEXT_TITLE))
-        .child(div().flex_shrink_0().text_color(rgb(INK_MUTED)).child("⏳"))
+        .text_size(px(theme::FS_SM))
+        .child(div().flex_shrink_0().text_color(rgb(TEXT_MUTED)).child("⏳"))
         .child(
             div()
                 .min_w_0()
                 .truncate()
                 .italic()
-                .text_color(rgb(INK_TERTIARY))
+                .text_color(rgb(TEXT_MUTED))
                 .child(SharedString::from(format!("queued — \"{held}\""))),
         )
         .child(div().flex_1())
         .child(
             div()
                 .flex_shrink_0()
-                .text_size(px(theme::TEXT_CHIP))
-                .text_color(rgb(INK_MUTED))
+                .text_size(px(theme::FS_MONO))
+                .text_color(rgb(TEXT_MUTED))
                 .child("⌫ unqueue"),
         )
 }
 
-/// The permission card, exactly as PromptBox state 04 draws it: warning
-/// glyph, the command with its subtitle, and the y/n/a keycaps riding the
-/// right edge. Kept free of focus and key wiring so it can be drawn — and
-/// smoke-rendered — on its own; the keycaps arrive wired from the cockpit
-/// (#26). The comp's warning-triangle SVG is stood in by the ⚠ glyph the
-/// wall already speaks; gpui here has no asset pipeline to load an icon
-/// from.
+/// The Decision card (§D.5): a sibling of the body, not a child of it.
+/// `margin: 0 12px 8px` so it aligns with the body's own inset,
+/// `padding: 8px 10px`, a 4px radius on the amber wash, and a 1px amber
+/// **inset** ring — an overlay, because it must take no layout. Warning
+/// mark, the subject and wants lines, then the keycaps.
+///
+/// Kept free of focus and key wiring so it can be drawn — and smoke-
+/// rendered — on its own; the keycaps arrive wired from the cockpit (#26).
 fn decision_card(decision: &Decision, decide: Option<AnyElement>) -> Div {
-    let command = decision_subject(decision);
-    let subtitle = decision_wants(decision);
-    let card = div()
+    let subject = decision_subject(decision);
+    let wants = decision_wants(decision);
+    div()
+        .relative()
         .flex()
         .flex_shrink_0()
         .items_center()
-        .gap(px(10.))
-        .mt(px(8.))
-        .mx(px(8.))
-        .px(px(10.))
-        .py(px(8.))
-        .bg(rgba(WAIT_WASH))
-        .border_1()
-        .border_color(rgba(WAIT_EDGE))
-        .rounded(px(theme::R_CARD))
-        .child(
-            div()
-                .flex_shrink_0()
-                .text_size(px(theme::TEXT_ALERT_GLYPH))
-                .text_color(rgb(WAIT))
-                .child("⚠"),
-        )
+        .min_w_0()
+        .gap(px(theme::DECISION_GAP))
+        .mx(px(theme::DECISION_MARGIN_X))
+        .mb(px(theme::DECISION_MARGIN_B))
+        .px(px(theme::DECISION_PAD_X))
+        .py(px(theme::DECISION_PAD_Y))
+        .rounded(px(theme::R_CHIP))
+        .bg(rgba(ATTENTION_WASH))
+        .child(ring_overlay(ATTENTION_EDGE, theme::R_CHIP))
+        .child(icon(icons::WARNING, theme::ICON_WARNING, ATTENTION))
         .child(
             div()
                 .flex()
                 .flex_col()
+                .flex_1()
                 .min_w_0()
-                .gap(px(2.))
                 .child(
                     div()
-                        .text_size(px(theme::TEXT_CODE))
-                        .text_color(rgb(INK))
                         .truncate()
-                        .child(command),
+                        .text_size(px(theme::FS_MD))
+                        .line_height(relative(theme::LINE_UI))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(TEXT_STRONG))
+                        .child(subject),
                 )
                 .child(
                     div()
-                        .font_family(theme::FONT_UI)
-                        .text_size(px(theme::TEXT_META))
-                        .text_color(rgb(INK_TERTIARY))
                         .truncate()
-                        .child(subtitle),
+                        .text_size(px(theme::FS_SM))
+                        .line_height(relative(theme::LINE_UI))
+                        .text_color(rgb(TEXT_MUTED))
+                        .child(wants),
                 ),
         )
-        .child(div().flex_1());
-    card.children(decide)
+        .children(decide)
 }
 
 /// The Decision's subject — what it wants to do, tool-prefixed the comps'
@@ -1966,48 +1962,64 @@ fn decision_wants(decision: &Decision) -> SharedString {
     }
 }
 
-/// One keyboard keycap as the comps draw it: mono 10 on RAISED, radius 4,
-/// wearing the RAISED-ground hover and press — the mouse presses the key
-/// it depicts (#26). The label doubles as the element id the pressed
-/// shade tracks; two keycaps never share one in a card. `a always` is
-/// de-emphasized by ink and a fainter border, never removed.
-fn keycap(label: &'static str, ink: u32, edge: u32) -> Stateful<Div> {
+/// One keycap (§D.5): `padding: 3px 7px`, a 4px radius on `--raised`,
+/// 10.5px `--text-2` — and **no border**. The key letter leads in `--text`
+/// at weight 600 and the label follows in the cap's own ink — one text run
+/// with a highlight over the letter, not two sibling elements, so the cap
+/// rounds once rather than once per span and keeps the prototype's width.
+/// The label doubles as the element id the pressed shade tracks; two
+/// keycaps never share one in a card.
+fn keycap(id: &'static str, key: &'static str, label: &'static str, ink: u32) -> Stateful<Div> {
     div()
-        .id(label)
+        .id(id)
+        .flex()
         .flex_shrink_0()
-        .text_size(px(theme::TEXT_CHIP))
+        .items_center()
+        .text_size(px(theme::FS_MONO))
+        .line_height(relative(theme::LINE_UI))
         .text_color(rgb(ink))
         .bg(rgb(RAISED))
-        .border_1()
-        .border_color(rgba(edge))
         .rounded(px(theme::R_CHIP))
-        .px(px(6.))
-        .py(px(2.))
+        .px(px(theme::KBD_PAD_X))
+        .py(px(theme::KBD_PAD_Y))
         .hover_raised()
         .press_raised()
-        .child(label)
+        .child(
+            StyledText::new(SharedString::from(format!("{key}{label}"))).with_highlights(vec![(
+                0..key.len(),
+                HighlightStyle {
+                    color: Some(rgb(TEXT).into()),
+                    font_weight: Some(FontWeight::SEMIBOLD),
+                    ..Default::default()
+                },
+            )]),
+        )
 }
 
 /// The decide keycaps, one constructor per verb, so the cockpit can wire
 /// each press without respelling the keycap grammar (#26).
 pub fn keycap_allow() -> Stateful<Div> {
-    keycap("y allow", INK, EDGE_STRONG)
+    keycap("y allow", "y", " allow", TEXT_2)
 }
 pub fn keycap_deny() -> Stateful<Div> {
-    keycap("n deny", INK_SECONDARY, EDGE_STRONG)
+    keycap("n deny", "n", " deny", TEXT_2)
 }
 pub fn keycap_always() -> Stateful<Div> {
-    keycap("a always", INK_MUTED, EDGE)
+    keycap("a always", "a", " always", TEXT_2)
 }
 
-/// The keycaps' cluster: the L1 card seats them on its own 10px pitch, the
-/// L2 body packs them at 6 — the two comps' spacings, unchanged.
+/// The keycaps' cluster: 5px apart in the L1 card (§D.5), packed at 4 in
+/// the L2 body, which the prototype does not specify.
 pub fn decide_row(level: Level) -> Div {
     div()
         .flex()
         .flex_shrink_0()
         .items_center()
-        .gap(px(if level == Level::Transcript { 10. } else { 6. }))
+        .gap(px(if level == Level::Transcript {
+            theme::KEYS_GAP
+        } else {
+            4.
+        }))
 }
 
 // ------------------------------------------------------------ shared bits
@@ -2029,29 +2041,26 @@ fn hollow_dot(size: gpui::Pixels) -> Div {
         .h(size)
         .rounded_full()
         .border_1()
-        .border_color(rgb(INK_FAINT))
+        .border_color(rgb(SEP))
 }
 
-/// The CHANGED strip riding above the Composer: every file this Thread's
-/// edits touched, rolled up as bordered chips — `pane.rs +2 −1` (#22 C11).
+/// The changed-files strip (§D.6): 24px, 12px inline padding, an 8px gap —
+/// the word `CHANGED`, then one chip per file carrying its diff stat. No
+/// top border: Soft draws no separators.
 fn changed_strip(changed: &[ferrite_core::docview::FileChange]) -> Div {
     let mut strip = div()
         .flex()
         .flex_shrink_0()
         .items_center()
-        .gap(px(6.))
-        .px(px(theme::TRANSCRIPT_PAD_X))
-        .py(px(5.))
-        .border_t_1()
-        .border_color(rgba(HAIRLINE))
+        .min_w_0()
+        .gap(px(theme::EVENT_GAP))
+        .h(px(theme::CHANGED_STRIP_H))
+        .px(px(theme::PANE_PAD_X))
+        .text_size(px(theme::FS_MONO))
+        .line_height(relative(theme::LINE_UI))
+        .text_color(rgb(TEXT_2))
         .overflow_hidden()
-        .child(
-            div()
-                .flex_shrink_0()
-                .text_size(px(theme::TEXT_CHIP))
-                .text_color(rgb(INK_MUTED))
-                .child("CHANGED"),
-        );
+        .child(tracked("CHANGED", TEXT_MUTED));
     for file in changed {
         let name = Path::new(&file.path)
             .file_name()
@@ -2062,59 +2071,101 @@ fn changed_strip(changed: &[ferrite_core::docview::FileChange]) -> Div {
                 .flex()
                 .flex_shrink_0()
                 .items_center()
-                .gap(px(6.))
-                .text_size(px(theme::TEXT_META))
-                .text_color(rgb(INK_SECONDARY))
-                .bg(rgb(RAISED))
-                .border_1()
-                .border_color(rgba(EDGE))
+                .min_w_0()
+                .gap(px(theme::FILE_CHIP_GAP))
+                .px(px(theme::CHIP_PAD_X))
+                .py(px(theme::CHIP_PAD_Y))
                 .rounded(px(theme::R_CHIP))
-                .px(px(7.))
-                .py(px(2.))
-                .child(SharedString::from(name))
+                .bg(rgb(RAISED))
+                .child(div().min_w_0().truncate().child(SharedString::from(name)))
                 .child(diff_stat(file.added, file.removed)),
         );
     }
     strip
 }
 
-/// `+N −N`, green beside red — the one diff-stat pair every surface (tool
-/// rows, L2 badges, CHANGED chips) draws. Text size is the caller's.
-fn diff_stat(added: usize, removed: usize) -> Div {
+/// `CHANGED` at 0.08em tracking — the only letter-spacing in Soft + Sans.
+/// gpui's `TextStyle` has no tracking field, so the label is one element
+/// per character on a 0.84px flex gap. CSS also adds a trailing gap after
+/// the last character; this row is 0.84px narrower for it, which is below
+/// the noise floor on a seven-character string (R-04).
+fn tracked(label: &'static str, ink: u32) -> Div {
     div()
         .flex()
         .flex_shrink_0()
-        .items_center()
-        .gap(px(4.))
-        .child(
+        .gap(px(theme::CHANGED_TRACKING))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(rgb(ink))
+        .children(label.chars().map(|glyph| {
             div()
-                .text_color(rgb(GOOD))
-                .child(SharedString::from(format!("+{added}"))),
-        )
-        .child(
-            div()
-                .text_color(rgb(FAIL))
-                .child(SharedString::from(format!("−{removed}"))),
-        )
+                .flex_shrink_0()
+                .w(px(theme::FS_MONO * theme::MONO_ADVANCE))
+                .child(glyph.to_string())
+        }))
 }
 
-/// A small status chip: 10px ink on a wash, radius 4.
-fn chip(label: impl Into<SharedString>, ink: u32, wash: u32) -> Div {
+/// `+N −N` (§E.12): the added count in `--running`, **a literal space**,
+/// then the removed count in `--blocked` with a U+2212 MINUS SIGN — never a
+/// hyphen. The space is the gap; there is no flex gap here. One pair, drawn
+/// in exactly two places: an event's trail and a changed-strip chip.
+fn diff_stat(added: usize, removed: usize) -> Div {
+    // ONE text run, not three siblings: gpui rounds every run's advance up
+    // to a whole pixel, so `+2`/space/`\u{2212}1` as three elements measures
+    // 33px where the prototype measures 31.53px and the chip around it
+    // overruns by 2px. The two halves are coloured with highlights instead.
+    let plus = format!("+{added}");
+    let minus = format!("\u{2212}{removed}");
+    let text = format!("{plus} {minus}");
+    let removed_at = plus.len() + 1;
+    let highlights = vec![
+        (
+            0..plus.len(),
+            HighlightStyle {
+                color: Some(rgb(RUNNING).into()),
+                ..Default::default()
+            },
+        ),
+        (
+            removed_at..removed_at + minus.len(),
+            HighlightStyle {
+                color: Some(rgb(BLOCKED).into()),
+                ..Default::default()
+            },
+        ),
+    ];
+    tabular(
+        div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .text_size(px(theme::FS_MONO))
+            .child(StyledText::new(SharedString::from(text)).with_highlights(highlights)),
+    )
+}
+
+/// The one chip recipe the prototype draws (§E.11, `.pass`):
+/// `padding: 1px 6px`, a 4px radius, 11px ink on its own ground. The
+/// ground arrives resolved because the prototype's own chip sits on a
+/// translucent wash while the R-09 stand-ins sit on the opaque `--raised`,
+/// and `rgb`/`rgba` read a `u32`'s bytes differently.
+fn chip(label: impl Into<SharedString>, ink: u32, ground: gpui::Hsla) -> Div {
     div()
         .flex_shrink_0()
-        .text_size(px(theme::TEXT_CHIP))
+        .text_size(px(theme::FS_SM))
         .text_color(rgb(ink))
-        .bg(rgba(wash))
+        .bg(ground)
         .rounded(px(theme::R_CHIP))
-        .px(px(6.))
-        .py(px(1.))
+        .px(px(theme::CHIP_PAD_X))
+        .py(px(theme::CHIP_PAD_Y))
         .child(label.into())
 }
 
 /// `8.2s` under ten seconds, `42s` under a minute, `2m14s` beyond — the
-/// comps' duration grammar, shared by tool rows and activity lines.
+/// comps' duration grammar, shared by tool rows and activity lines. The
+/// smallest value the prototype prints is `0.1s`, so a sub-tenth call
+/// rounds up into it rather than reading `0.0s`.
 fn duration_label(elapsed: Duration) -> SharedString {
-    let secs = elapsed.as_secs_f64();
+    let secs = elapsed.as_secs_f64().max(0.1);
     if secs < 10.0 {
         SharedString::from(format!("{secs:.1}s"))
     } else if secs < 60.0 {
@@ -2125,14 +2176,18 @@ fn duration_label(elapsed: Duration) -> SharedString {
     }
 }
 
-/// The context ring (#22 C12 amended): a small donut whose ACCENT arc fills
-/// clockwise from 12 o'clock with the used fraction of the window, over an
-/// EDGE track. The track is a bordered circle; the arc is a sampled annular
-/// sector — gpui has no arc primitive, and at this size a 5°-step polygon
-/// is indistinguishable from a true arc at 1x and 2x.
+/// The context ring (§G.10): a 14px box holding a 5.4px-radius, 2px-stroke
+/// circle — a `--meter-off` track under a `--text-2` arc that sweeps
+/// clockwise from 12 o'clock with the used fraction of the window.
+///
+/// **No text, no percentage, no `ctx`, ever.** The ring is the whole
+/// affordance: there is no hover card and no token count behind it.
+///
+/// `PathBuilder::arc_to` draws the real arc — gpui 0.2.2 has an arc
+/// primitive, whatever the old comment here claimed.
 pub fn usage_ring(fraction: f32) -> Div {
-    // A full ring's seam would degenerate the polygon; one part in a
-    // thousand is invisible at 13px.
+    // A full ring's seam would degenerate the arc; one part in a thousand
+    // is invisible at 14px.
     let fraction = fraction.clamp(0.0, 1.0).min(0.999);
     div()
         .relative()
@@ -2140,112 +2195,86 @@ pub fn usage_ring(fraction: f32) -> Div {
         .w(px(theme::USAGE_RING_D))
         .h(px(theme::USAGE_RING_D))
         .child(
-            div()
-                .absolute()
-                .inset_0()
-                .rounded_full()
-                .border(px(theme::USAGE_RING_W))
-                .border_color(rgba(EDGE)),
-        )
-        .child(
             canvas(
                 |_, _, _| (),
                 move |bounds, _, window, _| {
+                    // The circle the prototype draws is `USAGE_RING_R` /
+                    // `USAGE_RING_W`; these are what gpui has to be *asked*
+                    // for to land on it. lyon's arc approximation pulls the
+                    // curve inward by ~0.32px and the stroke rasterises
+                    // ~0.5px thin, so the ink measured 12.0px across where
+                    // the prototype measures 12.7px. The compensation lives
+                    // here, at the rasteriser, and never in theme.rs.
+                    const ARC_R: f32 = theme::USAGE_RING_R + 0.15;
+                    const ARC_W: f32 = theme::USAGE_RING_W + 0.25;
+                    let radius = px(ARC_R);
+                    let centre = bounds.center();
+                    let sweep = fraction * std::f32::consts::TAU;
+                    let start = -std::f32::consts::FRAC_PI_2;
+                    let at = |angle: f32| {
+                        point(
+                            centre.x + radius * angle.cos(),
+                            centre.y + radius * angle.sin(),
+                        )
+                    };
+                    // The caps are quads, not paths: they rasterise exactly,
+                    // so they sit on the true centreline at the true radius.
+                    let cap_at = |angle: f32| {
+                        point(
+                            centre.x + px(theme::USAGE_RING_R) * angle.cos(),
+                            centre.y + px(theme::USAGE_RING_R) * angle.sin(),
+                        )
+                    };
+                    let stroke = |from: f32, to: f32, large: bool| {
+                        let mut arc = PathBuilder::stroke(px(ARC_W));
+                        arc.move_to(at(from));
+                        arc.arc_to(point(radius, radius), px(0.), large, true, at(to));
+                        arc.build().ok()
+                    };
+                    // The unlit track is the same circle as the used arc —
+                    // painted, not a bordered box, because gpui rounds a
+                    // box's inset to a whole pixel and the ring's radius is
+                    // 5.4. Drawn as two halves; a closed circle would
+                    // degenerate the arc.
+                    if let Some(path) = stroke(start, start + std::f32::consts::PI, false) {
+                        window.paint_path(path, rgba(METER_OFF));
+                    }
+                    if let Some(path) = stroke(
+                        start + std::f32::consts::PI,
+                        start + std::f32::consts::TAU - 0.001,
+                        false,
+                    ) {
+                        window.paint_path(path, rgba(METER_OFF));
+                    }
                     if fraction <= 0.0 {
                         return;
                     }
-                    let outer = bounds.size.width.min(bounds.size.height) * 0.5;
-                    let inner = outer - px(theme::USAGE_RING_W);
-                    window.paint_path(
-                        arc_path(bounds.center(), inner, outer, fraction),
-                        rgb(ACCENT),
-                    );
+                    if let Some(path) = stroke(start, start + sweep, fraction > 0.5) {
+                        window.paint_path(path, rgb(TEXT_2));
+                    }
+                    // `.used` carries `stroke-linecap: round`; lyon's
+                    // default is butt and gpui 0.2.2 re-exports no
+                    // `LineCap`, so each cap is painted as its own disc of
+                    // the stroke's radius.
+                    let cap = px(theme::USAGE_RING_W / 2.0);
+                    for angle in [start, start + sweep] {
+                        let end = cap_at(angle);
+                        window.paint_quad(
+                            gpui::fill(
+                                gpui::Bounds::new(
+                                    point(end.x - cap, end.y - cap),
+                                    gpui::size(cap * 2., cap * 2.),
+                                ),
+                                rgb(TEXT_2),
+                            )
+                            .corner_radii(gpui::Corners::all(cap)),
+                        );
+                    }
                 },
             )
             .absolute()
             .inset_0(),
         )
-}
-
-/// The annular sector from 12 o'clock through `fraction` of the circle,
-/// sampled clockwise — one quad contour per step. gpui fills a contour as
-/// a fan from its start with no winding rule, so a single outer-then-inner
-/// outline would fill the hole; per-segment quads pave exactly the band.
-fn arc_path(
-    center: gpui::Point<Pixels>,
-    inner: Pixels,
-    outer: Pixels,
-    fraction: f32,
-) -> gpui::Path<Pixels> {
-    const STEPS_FULL: usize = 72;
-    let steps = ((fraction * STEPS_FULL as f32).ceil() as usize).max(2);
-    let sweep = fraction * std::f32::consts::TAU;
-    let start = -std::f32::consts::FRAC_PI_2;
-    let at = |radius: Pixels, angle: f32| {
-        point(
-            center.x + radius * angle.cos(),
-            center.y + radius * angle.sin(),
-        )
-    };
-    let angle = |step: usize| start + sweep * step as f32 / steps as f32;
-    let mut path = gpui::Path::new(at(outer, start));
-    for step in 0..steps {
-        path.move_to(at(outer, angle(step)));
-        path.line_to(at(outer, angle(step + 1)));
-        path.line_to(at(inner, angle(step + 1)));
-        path.line_to(at(inner, angle(step)));
-    }
-    path
-}
-
-/// The ring's hover card (#22 C12): the full detail — current / maximum
-/// tokens — on the popover surface every other overlay uses. The cockpit
-/// hangs it under the ring while the pointer is on it.
-pub fn usage_card(usage: Usage) -> Div {
-    let detail = match usage.context_window {
-        Some(window) if window > 0 => {
-            format!("{} / {}", tokens(usage.total_tokens), tokens(window))
-        }
-        _ => tokens(usage.total_tokens),
-    };
-    popover_shell().child(
-        div()
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .gap(px(6.))
-            .h(px(theme::MENU_ROW_H))
-            .px(px(8.))
-            .text_size(px(theme::TEXT_META))
-            .text_color(rgb(INK_SECONDARY))
-            .child(SharedString::from(detail))
-            .child(
-                div()
-                    .font_family(theme::FONT_UI)
-                    .text_color(rgb(INK_MUTED))
-                    .child("tokens"),
-            ),
-    )
-}
-
-/// One 23px pane-header window control (#22 amendment): a quiet INK_MUTED
-/// glyph on nothing, lifted a step on hover. Wiring is the cockpit's — the
-/// verbs are the existing park and zoom-back moves, never new semantics.
-pub fn control_button(id: (&'static str, usize), glyph: &'static str) -> Stateful<Div> {
-    div()
-        .id(id)
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .justify_center()
-        .w(px(theme::CONTROL_BTN))
-        .h(px(theme::CONTROL_BTN))
-        .rounded(px(theme::R_CHIP))
-        .text_size(px(theme::TEXT_CODE))
-        .text_color(rgb(INK_MUTED))
-        .hover_control()
-        .press_control()
-        .child(glyph)
 }
 
 /// Which checkout a Thread works in — a worktree's own name, or "main" for
@@ -2270,38 +2299,32 @@ pub fn binding_label(workspace: Option<&WorkspaceBinding>) -> SharedString {
 // for the nav's rows; the header's binding slot is the display-only branch
 // text now.
 
-/// Every popover's shell, in the comps' one popover language (PromptBox
-/// state 02): RAISED surface, EDGE_STRONG border, radius 4, 4px padding,
-/// and the three-layer popover elevation. Width is the caller's — the
-/// Composer menus span the composer. Rows and footer are the cockpit's to
-/// append — their clicks are wired there.
+/// Every popover's shell. The prototype draws exactly one menu — the
+/// Project filter — and the Composer's `/` and `@` menus have no Soft
+/// form of their own (R-07), so they are restyled onto the filter menu's
+/// recipe rather than given a second menu language: the `--menu` ground,
+/// a 10px radius, 4px of padding, `--shadow-float`'s **two** layers, and
+/// **no border**. Width is the caller's. Rows and footer are the
+/// cockpit's to append — their clicks are wired there.
 fn popover_shell() -> Div {
     div()
         .flex()
         .flex_col()
-        .p(px(theme::POPOVER_PAD))
-        .bg(rgb(RAISED))
-        .border_1()
-        .border_color(rgba(EDGE_STRONG))
-        .rounded(px(theme::R_CHIP))
+        .p(px(theme::MENU_PAD))
+        .bg(rgb(theme::MENU))
+        .rounded(px(theme::R_MENU))
         .shadow(vec![
             BoxShadow {
-                color: rgba(theme::RING_FAINT).into(),
-                offset: point(px(0.), px(0.)),
-                blur_radius: px(0.),
-                spread_radius: px(1.),
+                color: rgba(theme::SHADOW_FAR).into(),
+                offset: point(px(0.), px(theme::SHADOW_FAR_Y)),
+                blur_radius: px(theme::SHADOW_FAR_BLUR),
+                spread_radius: px(theme::SHADOW_FAR_SPREAD),
             },
             BoxShadow {
                 color: rgba(theme::SHADOW_NEAR).into(),
-                offset: point(px(0.), px(2.)),
-                blur_radius: px(4.),
+                offset: point(px(0.), px(theme::SHADOW_NEAR_Y)),
+                blur_radius: px(theme::SHADOW_NEAR_BLUR),
                 spread_radius: px(0.),
-            },
-            BoxShadow {
-                color: rgba(theme::SHADOW_FAR).into(),
-                offset: point(px(0.), px(6.)),
-                blur_radius: px(16.),
-                spread_radius: px(-4.),
             },
         ])
 }
@@ -2318,15 +2341,15 @@ pub fn picker_row(label: SharedString, detail: SharedString, selected: bool, act
         .gap(px(10.))
         .h(px(theme::MENU_ROW_H))
         .px(px(8.))
-        .rounded(px(theme::R_CHIP))
-        .text_size(px(theme::TEXT_CODE))
-        .text_color(rgb(if selected { ACCENT } else { INK_SECONDARY }))
+        .rounded(px(theme::R_CONTROL))
+        .text_size(px(theme::FS_MD))
+        .text_color(rgb(if selected { TEXT_STRONG } else { TEXT_2 }))
         .child(div().min_w_0().truncate().child(label))
         .child(div().flex_1());
     // The Row role (#26), the menu rows' skip rule: the selected row's
     // EDGE ground outranks the wash, so it keeps only the cursor.
     row = if selected {
-        row.bg(rgba(EDGE)).hover_carried()
+        row.bg(rgb(HOVER)).hover_carried()
     } else {
         row.hover_row()
     };
@@ -2334,19 +2357,13 @@ pub fn picker_row(label: SharedString, detail: SharedString, selected: bool, act
         row = row.child(
             div()
                 .flex_shrink_0()
-                .text_size(px(theme::TEXT_META))
-                .text_color(rgb(INK_MUTED))
+                .text_size(px(theme::FS_MONO))
+                .text_color(rgb(TEXT_MUTED))
                 .child(detail),
         );
     }
     if active {
-        row = row.child(
-            div()
-                .flex_shrink_0()
-                .text_size(px(theme::TEXT_META))
-                .text_color(rgb(ACCENT))
-                .child("✓"),
-        );
+        row = row.child(icon(icons::CHECK, theme::ROW_ICON, TEXT));
     }
     row
 }
@@ -2360,8 +2377,8 @@ pub fn picker_hint(text: &'static str) -> Div {
         .items_center()
         .h(px(theme::MENU_ROW_H))
         .px(px(8.))
-        .text_size(px(theme::TEXT_META))
-        .text_color(rgb(INK_MUTED))
+        .text_size(px(theme::FS_MONO))
+        .text_color(rgb(TEXT_MUTED))
         .child(text)
 }
 
@@ -2372,23 +2389,24 @@ pub fn popover_footer(hints: &'static str) -> Div {
         .flex()
         .flex_shrink_0()
         .items_center()
-        .h(px(theme::POPOVER_FOOTER_H))
+        .h(px(theme::CHIP_H))
         .px(px(8.))
         .mt(px(2.))
-        .border_t_1()
-        .border_color(rgba(HAIRLINE))
-        .text_size(px(theme::TEXT_META))
-        .text_color(rgb(INK_MUTED))
+        .text_size(px(theme::FS_MONO))
+        .text_color(rgb(TEXT_MUTED))
         .child(hints)
 }
 
 // ----------------------------------------------------------- Block render
 
-/// One Block at DirectionDense density: 14px glyph gutter for prompt and
-/// agent rows, 22px indent for the agent's long-form (headings, bullets,
-/// code) and for `⎿` continuations and bare diffs under tool rows.
-/// Every text run routes through the selection overlay (#27) — that is
-/// what makes it selectable and copyable; the gutter glyphs, chips and
+/// One Block in the prototype's transcript vocabulary (§E). The body draws
+/// **no gutter at all** for prose: paragraphs, headings and list items sit
+/// flush at the content edge, and the only glyphs left are the event row's
+/// `▸`/`●` and the result line's `└`, all in `--sep`. Spacing is per-block
+/// margins, not a stack gap.
+///
+/// Every text run routes through the selection overlay (#27) — that is what
+/// makes it selectable and copyable; the disc markers, chips, elbows and
 /// diff line numbers around the runs are chrome, and stay plain.
 fn render_block(
     block: &Block,
@@ -2396,111 +2414,122 @@ fn render_block(
     timings: Option<&HashMap<String, ToolTiming>>,
     expanded: bool,
     disclosure: Option<AnyElement>,
+    signal: u32,
+    flow: Flow,
 ) -> AnyElement {
     let row = div().w_full().flex_shrink_0();
     match &block.body {
-        Body::Prompt(line) => gutter_row(row, "❯", ACCENT, true)
-            .child(div().min_w_0().text_color(rgb(INK)).child(selection.line(
-                block.id,
-                line.clone(),
-                Vec::new(),
-            )))
+        // A prompt is a paragraph. The prototype draws no `❯` and no
+        // operator gutter — the transcript is one reading column.
+        Body::Prompt(line) => paragraph(row, TEXT_2)
+            .child(selection.line(block.id, line.clone(), Vec::new()))
             .into_any_element(),
-        Body::Paragraph { spans } => {
-            let (text, highlights) = inline(spans);
-            gutter_row(row, "⏺", INK_TERTIARY, false)
-                .child(
-                    div()
-                        .min_w_0()
-                        .text_color(rgb(INK_SECONDARY))
-                        .child(selection.line(block.id, text, highlights)),
-                )
-                .into_any_element()
-        }
-        Body::Heading { spans, .. } => {
-            let (text, highlights) = inline(spans);
-            row.flex()
-                .pl(px(theme::INDENT))
-                .child(
-                    div()
-                        .text_size(px(theme::TEXT_HEADING))
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(rgb(INK))
-                        .child(selection.line(block.id, text, highlights)),
-                )
-                .child(div().flex_1())
-                .into_any_element()
-        }
+        Body::Paragraph { spans } => paragraph(row, TEXT_2)
+            .child(prose(block.id, spans, selection))
+            .into_any_element(),
+        // `h4`: `margin: 12px 0 6px`, the same 12px as body text —
+        // distinguished by weight and colour only (§E.2).
+        Body::Heading { spans, .. } => row
+            .mt(px((theme::H4_MARGIN_T - flow.prev_margin_b).max(0.)))
+            .mb(px(theme::H4_MARGIN_B))
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(rgb(TEXT_STRONG))
+            .child(prose(block.id, spans, selection))
+            .into_any_element(),
+        // `li`: a 16px indent, 3px below its siblings — 10px below the last
+        // of the run, where the `ul`'s own margin takes over — and an
+        // explicit 4px disc, gpui drawing no list markers. The disc sits
+        // 15px left of the text and 8.3px below the line box's top (§E.3,
+        // pixel-measured).
         Body::Bullet { spans } => {
-            let (text, highlights) = inline(spans);
-            row.flex()
-                .flex_row()
-                .gap(px(6.))
-                .pl(px(theme::INDENT))
-                .text_color(rgb(INK_SECONDARY))
-                .child(div().flex_shrink_0().text_color(rgb(ACCENT)).child("•"))
+            row.relative()
+                .pl(px(theme::UL_INDENT))
+                .mb(px(if flow.next_is_bullet {
+                    theme::LI_GAP
+                } else {
+                    theme::P_MARGIN_B
+                }))
                 .child(
                     div()
-                        .min_w_0()
-                        .child(selection.line(block.id, text, highlights)),
+                        .absolute()
+                        .left(px(theme::UL_INDENT - theme::BULLET_OFFSET))
+                        .top(px(8.3))
+                        .w(px(theme::BULLET_D))
+                        .h(px(theme::BULLET_D))
+                        .rounded_full()
+                        .bg(rgb(TEXT_2)),
                 )
+                .child(prose(block.id, spans, selection))
                 .into_any_element()
         }
-        // Out-of-band lines share the text column, not the gutter — one
-        // left edge for everything that reads as prose (#22 D22).
-        Body::Thinking(thought) => row
-            .pl(px(theme::INDENT))
-            .text_color(rgb(INK_FAINT))
-            .child(selection.line(block.id, thought.clone(), Vec::new()))
+        // Thinking has no prototype counterpart (R-09): it reads as a
+        // `.note` paragraph rather than growing a class of its own.
+        // A provider ends a thinking run with a trailing newline; drawing it
+        // would add a fourth, empty line box and push the next Block a whole
+        // line too far. A `p` has no trailing blank line (§E.1).
+        Body::Thinking(thought) => paragraph(row, TEXT_MUTED)
+            .child(selection.line(
+                block.id,
+                thought.trim_end_matches('\n').to_string(),
+                Vec::new(),
+            ))
             .into_any_element(),
+        // A Notice is the prototype's `.signal` line (§E.8): 12px/600,
+        // 10px below, coloured by the Pane's own state — muted at rest,
+        // amber while a Decision waits, red once the Session closed.
         Body::Notice(text) => row
-            .pl(px(theme::INDENT))
-            .text_color(rgb(WAIT))
+            .mb(px(theme::P_MARGIN_B))
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(rgb(signal))
+            .child(selection.line(block.id, text.clone(), separators(text)))
+            .into_any_element(),
+        // Meta, likewise, is a `.note` paragraph (R-09).
+        Body::Meta(text) => paragraph(row, TEXT_MUTED)
             .child(selection.line(block.id, text.clone(), Vec::new()))
             .into_any_element(),
-        Body::Meta(text) => row
-            .pl(px(theme::INDENT))
-            .text_size(px(theme::TEXT_ROW))
-            .text_color(rgb(INK_MUTED))
-            .child(selection.line(block.id, text.clone(), Vec::new()))
-            .into_any_element(),
+        // `.codeblock` (§E.7): 4px radius on `--raised`, a language label
+        // at `5px 10px 0`, then the `pre` at `4px 10px 8px`. No border, no
+        // language bar, no rule between them.
         Body::Code {
             language,
             source,
             tokens,
         } => row
-            .pl(px(theme::INDENT))
+            .mb(px(theme::P_MARGIN_B))
             .child(
                 div()
                     .flex()
                     .flex_col()
-                    .bg(rgb(INSET))
-                    .border_1()
-                    .border_color(rgba(EDGE))
-                    .rounded(px(theme::R_TIGHT))
+                    .bg(rgb(RAISED))
+                    .rounded(px(theme::R_CHIP))
                     .overflow_hidden()
+                    .text_size(px(theme::FS_MONO))
+                    .line_height(relative(theme::LINE_BODY))
                     .children(language.as_ref().map(|language| {
                         div()
-                            .flex()
-                            .items_center()
-                            .h(px(20.))
-                            .px(px(8.))
-                            .border_b_1()
-                            .border_color(rgba(HAIRLINE))
-                            .text_size(px(theme::TEXT_CHIP))
-                            .text_color(rgb(INK_FAINT))
+                            .px(px(theme::CODE_PAD_X))
+                            .pt(px(theme::CODE_LANG_PAD_T))
+                            .text_color(rgb(TEXT_MUTED))
                             .child(SharedString::from(language.clone()))
                     }))
                     .child(
                         div()
-                            .px(px(8.))
-                            .py(px(6.))
-                            .text_size(px(theme::TEXT_CODE))
-                            .line_height(relative(theme::LINE_CODE))
-                            .child(selection.line(
+                            .flex()
+                            .flex_col()
+                            .px(px(theme::CODE_PAD_X))
+                            .pt(px(theme::CODE_PRE_PAD_T))
+                            .pb(px(theme::CODE_PRE_PAD_B))
+                            .text_color(rgb(TEXT_2))
+                            // One child per hard line. Handed the whole
+                            // multi-line source, the shaper drops the run of
+                            // spaces that opens each inner line and every row
+                            // of the block lands flush left; `pre` keeps that
+                            // indent, and indentation is code.
+                            .children(code_lines(
                                 block.id,
-                                source.clone(),
+                                source,
                                 code(source, tokens.as_deref()),
+                                selection,
                             )),
                     ),
             )
@@ -2511,26 +2540,78 @@ fn render_block(
     }
 }
 
-/// A `.row` with the 14px glyph gutter — ❯ for the operator, ⏺ for the agent.
-fn gutter_row(row: Div, glyph: &'static str, color: u32, bold: bool) -> Div {
-    row.flex().flex_row().gap(px(8.)).child(
-        div()
-            .flex_shrink_0()
-            .w(px(theme::GUTTER_W))
-            .text_color(rgb(color))
-            .when(bold, |glyph| glyph.font_weight(FontWeight::BOLD))
-            .child(glyph),
-    )
+/// `p` (§E.1): `margin: 0 0 10px`, `max-inline-size: 68ch`, colour from the
+/// caller — `--text-2` for prose, `--text-muted` for a `.note`. The measure
+/// is 68 JetBrains Mono advances at `--fs-md`, narrower than the content
+/// column at a full-width Pane, so prose breaks where the prototype breaks.
+/// Headings, list items and hunks stay uncapped, as the prototype leaves
+/// them.
+fn paragraph(mut row: Div, ink: u32) -> Div {
+    // The width has to be dropped before the cap goes on. taffy resolves a
+    // flex item's `width: 100%` against the container and hands that
+    // *unclamped* figure to the measure function when it works out the
+    // item's flex base size, so a `w_full` paragraph is measured at the
+    // full content column (six lines) and only painted at the 68ch cap
+    // (seven) — the Block below it then lands on top of the last line.
+    // With no width of its own the item stretches instead, and taffy
+    // clamps a stretched cross size by `max_size`, so the width it is
+    // measured at is the width it is painted at.
+    row.style().size.width = None;
+    row.mb(px(theme::P_MARGIN_B))
+        .max_w(px(68. * theme::FS_MD * theme::MONO_ADVANCE))
+        .text_color(rgb(ink))
 }
 
-/// `⏺ Name(arg)` with its `⎿` continuation and bare diff, per DirectionDense:
-/// bold tool name, file args in accent, command args in prose ink. The row's
-/// right edge carries its verdict — the diff stat for an edit, the pass/exit
-/// chip for a command that succeeded (#22 C9/C10) — and the call's measured
-/// duration where the cockpit clocked it. The call composes name, `(`,
-/// summary, `)` as overlay pieces of one copied line (#27): flex pieces keep
-/// the summary-only truncation, and copy joins them with nothing. The chip,
-/// the duration and the ⏺ are chrome and never register.
+/// `.signal .sep` (§E.8): the interpunct joining a signal's state to its
+/// detail is `--sep` at weight 400, dimmer than the semibold run either
+/// side of it. Highlighted in place so the line stays one run and copies
+/// back exactly as written.
+fn separators(text: &str) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
+    text.match_indices('\u{b7}')
+        .map(|(at, dot)| {
+            (
+                at..at + dot.len(),
+                HighlightStyle {
+                    color: Some(rgb(SEP).into()),
+                    font_weight: Some(FontWeight::NORMAL),
+                    ..Default::default()
+                },
+            )
+        })
+        .collect()
+}
+
+/// Which colour a `.signal` line wears — the Pane's own state, so the line
+/// and the Pane's border can never disagree.
+fn signal_color(status: Option<Status>) -> u32 {
+    match status {
+        Some(Status::Blocked) => ATTENTION,
+        Some(Status::Closed) => BLOCKED,
+        _ => TEXT_MUTED,
+    }
+}
+
+/// Tabular numerals, for every count and duration that must not jitter as
+/// digits change. JetBrains Mono is monospaced, so this is belt and braces
+/// — but the prototype declares it and the token is cheap to honour.
+fn tabular<E: Styled>(mut element: E) -> E {
+    element
+        .text_style()
+        .get_or_insert_with(Default::default)
+        .font_features = Some(FontFeatures(std::sync::Arc::new(vec![("tnum".into(), 1)])));
+    element
+}
+
+/// `.event` (§E.9): `▸ Verb (args)` with its `.trail` hard right, then the
+/// `└` result line beneath it and the bare hunk under that. Baseline
+/// alignment, an 8px gap, 3px of block padding; the glyph column is 9px and
+/// the gap 8, so 17px is where a result and a hunk land — under the verb's
+/// first character. Keep that relationship, not the number.
+///
+/// The call composes name, `(`, summary, `)` as overlay pieces of one
+/// copied line (#27): flex pieces keep the summary-only truncation, and
+/// copy joins them with nothing. The glyph, the chips, the durations and
+/// the elbow are chrome and never register.
 fn render_tool(
     row: Div,
     block: BlockId,
@@ -2540,163 +2621,181 @@ fn render_tool(
     expanded: bool,
     disclosure: Option<AnyElement>,
 ) -> AnyElement {
-    // Command runners' args read as prose; every other summary is a
-    // path-like subject and takes the accent (the comps' file links,
-    // rendered inert — opening files is not this pass).
-    let command_runner = matches!(tool.name.as_str(), "Bash" | "commandExecution");
-    let arg_color = if command_runner {
-        INK_SECONDARY
+    // A task event wears the `●` glyph and a medium, muted verb; every
+    // other tool call wears `▸` and a semibold verb in `--text`.
+    let task = matches!(tool.name.as_str(), "TaskCreate" | "TaskUpdate");
+    let (glyph, verb_weight, verb_ink) = if task {
+        ("●", FontWeight::MEDIUM, TEXT_MUTED)
     } else {
-        ACCENT
+        ("▸", FontWeight::SEMIBOLD, TEXT)
     };
-    let mut call = div().flex().min_w_0().text_color(rgb(INK_SECONDARY)).child(
+    let mut call = div().flex().min_w_0().items_baseline().gap(px(0.)).child(
         div()
             .flex_shrink_0()
-            .font_weight(FontWeight::BOLD)
-            .text_color(rgb(INK))
+            .font_weight(verb_weight)
+            .text_color(rgb(verb_ink))
             .child(selection.line(block, tool.name.clone(), Vec::new())),
     );
     if !tool.summary.is_empty() {
+        // The args are one colour and one size — 10.5px muted, wrapped in
+        // literal parentheses. There is no file/command split any more.
+        let args = |piece: SharedString| {
+            div()
+                .text_size(px(theme::FS_MONO))
+                .line_height(relative(theme::LINE_BODY))
+                .child(selection.piece(block, piece, Vec::new()))
+        };
         call = call
-            .child(
+            .child(div().flex_shrink_0().ml(px(theme::EVENT_GAP)).child(
                 div()
-                    .flex_shrink_0()
+                    .text_size(px(theme::FS_MONO))
+                    .line_height(relative(theme::LINE_BODY))
                     .child(selection.piece(block, "(", Vec::new())),
-            )
-            .child(
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .text_color(rgb(arg_color))
-                    .child(selection.piece(block, tool.summary.clone(), Vec::new())),
-            )
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .child(selection.piece(block, ")", Vec::new())),
-            );
+            ))
+            .child(args(tool.summary.clone().into()).min_w_0().truncate())
+            .child(args(")".into()).flex_shrink_0());
     }
-    let has_disclosure = disclosure.is_some();
+    // The prototype draws `▸`/`●` in the glyph column on every event row
+    // and no disclosure control anywhere, so the glyph is unconditional and
+    // the chevron is never painted.
+    let _ = disclosure;
     let gutter = div()
         .relative()
         .flex_shrink_0()
         .w(px(theme::GUTTER_W))
-        .children(disclosure)
-        .when(!has_disclosure, |gutter| {
-            gutter.text_color(rgb(INK_TERTIARY)).child("⏺")
-        });
+        .text_color(rgb(SEP))
+        .child(glyph);
     let mut line = div()
         .flex()
         .flex_row()
-        .gap(px(8.))
+        .items_baseline()
+        .min_w_0()
+        .gap(px(theme::EVENT_GAP))
+        .py(px(3.))
+        .text_size(px(theme::FS_SM))
+        .line_height(relative(theme::LINE_BODY))
+        .text_color(rgb(TEXT_MUTED))
         .child(gutter)
         .child(call);
     // A settled call's clock, where the cockpit stamped one; running calls
-    // tick on the activity line instead. Sub-tenth blips render nothing —
-    // a column of 0.0s is noise, not an instrument.
-    let settled_clock = timings
-        .and_then(|map| map.get(&tool.call))
-        .and_then(|timing| match timing {
-            ToolTiming::Done(total) => Some(*total),
-            ToolTiming::Running(_) => None,
-        })
-        .filter(|total| *total >= Duration::from_millis(100));
-    // A pass chip that carries the run's own count subsumes the ⎿ line it
-    // was promoted from; a countless chip keeps the line, which still says
-    // more than the chip does.
+    // tick on the activity line instead. Only a settled *tool* call carries
+    // a time — the prototype ends each non-task trail with one and gives a
+    // `.event.task` row no trail at all — and a sub-tenth blip rounds up to
+    // `0.1s` in `duration_label` rather than vanishing.
+    let settled_clock = if task {
+        None
+    } else {
+        timings
+            .and_then(|map| map.get(&tool.call))
+            .and_then(|timing| match timing {
+                ToolTiming::Done(total) => Some(*total),
+                ToolTiming::Running(_) => None,
+            })
+    };
+    // A pass chip that carries the run's own count subsumes the result
+    // line it was promoted from; a countless chip keeps the line, which
+    // still says more than the chip does.
     let mut promoted = false;
     let mut verdicts: Vec<AnyElement> = tool_verdicts(tool)
         .into_iter()
         .map(|verdict| match verdict {
-            ToolVerdict::Diff(added, removed) => diff_stat(added, removed)
-                .text_size(px(theme::TEXT_META))
-                .into_any_element(),
-            ToolVerdict::Failed => chip("failed", FAIL, FAIL_WASH).into_any_element(),
+            ToolVerdict::Diff(added, removed) => diff_stat(added, removed).into_any_element(),
+            // `failed` has no prototype form (R-09): the `.pass` chip
+            // recipe in the blocked hue, never a new value.
+            ToolVerdict::Failed => {
+                chip("failed", BLOCKED, rgba(BLOCKED_WASH).into()).into_any_element()
+            }
         })
         .collect();
-    if verdicts.is_empty() && command_runner && matches!(tool.state, ToolState::Ok) {
-        // A command runner that settled without an error exited 0 — that
-        // is exactly what `is_error` carries for one; a test run reads its
-        // count off its own result line, or stays honestly countless.
-        let label = if is_test_run(tool) {
-            match tool.result_line.as_deref().and_then(passed_count) {
-                Some(count) => {
-                    promoted = true;
-                    SharedString::from(format!("✓ {count} passed"))
+    if verdicts.is_empty() && matches!(tool.name.as_str(), "Bash" | "commandExecution") {
+        if matches!(tool.state, ToolState::Ok) {
+            let label = if is_test_run(tool) {
+                match tool.result_line.as_deref().and_then(passed_count) {
+                    Some(count) => {
+                        promoted = true;
+                        SharedString::from(format!("{count} passed"))
+                    }
+                    None => SharedString::from("passed"),
                 }
-                None => SharedString::from("✓ passed"),
-            }
-        } else {
-            SharedString::from("exit 0")
-        };
-        verdicts.push(chip(label, GOOD, GOOD_WASH).into_any_element());
+            } else {
+                SharedString::from("exit 0")
+            };
+            // The prototype draws exactly one verdict chip, `.pass`. A
+            // command that merely exited 0 has no prototype form (R-09):
+            // it takes the same chip on the quiet `--raised` ground.
+            let (ink, ground) = if is_test_run(tool) {
+                (RUNNING, rgba(RUNNING_WASH).into())
+            } else {
+                (TEXT_MUTED, rgb(RAISED).into())
+            };
+            verdicts.push(chip(label, ink, ground).into_any_element());
+        }
     }
+    // `.trail`: `margin-inline-start: auto`, an 8px gap, hard right.
     if !verdicts.is_empty() || settled_clock.is_some() {
-        line = line.child(div().flex_1());
+        let mut trail = div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(px(theme::EVENT_GAP))
+            .children(verdicts);
+        if let Some(total) = settled_clock {
+            trail = trail.child(tabular(
+                div()
+                    .flex_shrink_0()
+                    .text_size(px(theme::FS_MONO))
+                    .line_height(relative(theme::LINE_BODY))
+                    .text_color(rgb(TEXT_MUTED))
+                    .child(duration_label(total)),
+            ));
+        }
+        line = line.child(div().flex_1().min_w_0()).child(trail);
     }
-    line = line.children(verdicts);
-    if let Some(total) = settled_clock {
-        line = line.child(
-            div()
-                .flex_shrink_0()
-                .text_size(px(theme::TEXT_META))
-                .text_color(rgb(INK_MUTED))
-                .child(duration_label(total)),
-        );
-    }
-    let mut card = row
-        .flex()
-        .flex_col()
-        .gap(px(theme::TRANSCRIPT_GAP))
-        .child(line);
+    let mut card = row.flex().flex_col().child(line);
     if expanded {
         if let Some(output) = &tool.output {
-            let color = if matches!(tool.state, ToolState::Failed(_)) {
-                FAIL
+            let ink = if matches!(tool.state, ToolState::Failed(_)) {
+                BLOCKED
             } else {
-                INK_MUTED
+                TEXT_MUTED
             };
             card = card.child(
-                div()
-                    .pl(px(theme::INDENT))
-                    .w_full()
-                    .text_color(rgb(color))
-                    .child(selection.line(block, output.text.clone(), Vec::new())),
+                result_line(ink).child(
+                    div()
+                        .min_w_0()
+                        .child(selection.line(block, output.text.clone(), Vec::new())),
+                ),
             );
             if output.omitted_bytes > 0 {
                 card = card.child(
-                    div()
-                        .pl(px(theme::INDENT))
-                        .text_size(px(theme::TEXT_META))
-                        .text_color(rgb(INK_MUTED))
-                        .child(format!(
-                            "… {} bytes omitted from inline view",
-                            output.omitted_bytes
-                        )),
+                    result_line(TEXT_MUTED).child(div().min_w_0().child(format!(
+                        "… {} bytes omitted from inline view",
+                        output.omitted_bytes
+                    ))),
                 );
             }
         }
     } else if !promoted {
         if let Some(line) = &tool.result_line {
             card = card.child(
-                div()
-                    .pl(px(theme::INDENT))
-                    .w_full()
-                    .truncate()
-                    .text_color(rgb(INK_MUTED))
-                    .child(selection.line(block, format!("⎿ {line}"), Vec::new())),
+                result_line(TEXT_MUTED).child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .child(selection.line(block, line.clone(), Vec::new())),
+                ),
             );
         }
     }
     if !expanded {
         if let ToolState::Failed(message) = &tool.state {
             card = card.child(
-                div()
-                    .pl(px(theme::INDENT))
-                    .w_full()
-                    .truncate()
-                    .text_color(rgb(FAIL))
-                    .child(selection.line(block, format!("⎿ {message}"), Vec::new())),
+                result_line(BLOCKED).child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .child(selection.line(block, message.clone(), Vec::new())),
+                ),
             );
         }
     }
@@ -2704,6 +2803,30 @@ fn render_tool(
         card = card.child(render_diff(block, diff, selection));
     }
     card.into_any_element()
+}
+
+/// `.result` (§E.10): `padding: 1px 0 3px 17px`, an 8px gap, 10.5px muted
+/// — with the `└` elbow in `--sep`. The 17px inset is exactly the event's
+/// glyph column plus its gap, so the elbow lands under the verb's first
+/// character.
+fn result_line(ink: u32) -> Div {
+    div()
+        .flex()
+        .min_w_0()
+        .w_full()
+        .gap(px(theme::EVENT_GAP))
+        .pl(px(theme::INDENT))
+        // §E.10 is `1px 0 3px`, but gpui seats this 10.5px/1.55 run about
+        // two pixels higher in the box than CSS half-leading does, so the
+        // padding is swapped end for end: the 20.275px box — and the 43px
+        // event-to-event span — are unchanged, the ink lands 19px under
+        // the tool row's.
+        .pt(px(3.))
+        .pb(px(1.))
+        .text_size(px(theme::FS_MONO))
+        .line_height(relative(theme::LINE_BODY))
+        .text_color(rgb(ink))
+        .child(div().flex_shrink_0().text_color(rgb(SEP)).child("└"))
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -2743,70 +2866,115 @@ pub fn tool_disclosure_control(
         .w(px(theme::TOOL_DISCLOSURE_HIT))
         .h(px(theme::TOOL_DISCLOSURE_HIT))
         .rounded(px(theme::R_TIGHT))
-        .text_color(rgb(if targeted { ACCENT } else { INK_MUTED }))
         .when(targeted, |control| {
             control
-                .bg(rgba(ACCENT_WASH))
+                .bg(rgb(SELECTION))
                 .track_focus(focus)
                 .key_context("ToolDisclosure")
         })
-        .child(if expanded { "▾" } else { "▸" })
+        .child(
+            icon(
+                icons::CHEVRON_DOWN,
+                theme::ICON_CHEVRON,
+                if targeted { TEXT } else { TEXT_MUTED },
+            )
+            .when(expanded, |chevron| {
+                chevron.with_transformation(Transformation::rotate(radians(
+                    std::f32::consts::PI,
+                )))
+            }),
+        )
         .hover_control()
         .press_control()
 }
 
-/// A bare diff, per DirectionDense: no card, no filename header — the tool
-/// row above already names the file. 22px indent, a 30px right-aligned
-/// number column, washes for added and removed rows. The code cells route
-/// through the overlay — their `+`/`-` signs are text and copy honestly;
-/// the number column is chrome and never does (#27).
+/// `.hunk` (§E.13): no card, no filename header — the event above already
+/// names the file. `margin: 4px 0 10px 17px` so it aligns under the verb, a
+/// 4px radius clipping the first and last rows' outer corners, 8px inline
+/// padding, a 24px right-aligned number column, a 7px sign column, 10px
+/// between columns, and full-bleed washes on the added and removed rows.
+///
+/// The code cells route through the overlay — their lines copy honestly;
+/// the number and sign columns are chrome and never do (#27).
 fn render_diff(block: BlockId, diff: &Diff, selection: &SelectionOverlay) -> impl IntoElement {
     let mut lines = div()
         .flex()
         .flex_col()
+        .mt(px(theme::HUNK_MARGIN_T))
+        .mb(px(theme::P_MARGIN_B))
         .ml(px(theme::INDENT))
-        .text_size(px(theme::TEXT_CODE));
+        .rounded(px(theme::R_CHIP))
+        .overflow_hidden()
+        .text_size(px(theme::FS_MONO))
+        // Pinned to a whole pixel. At `relative(LINE_HUNK)` each row box is
+        // 17.325px, so consecutive rows round their origin and their height
+        // independently and the added/removed washes can leave a 1px
+        // unpainted seam between them.
+        .line_height(px((theme::FS_MONO * theme::LINE_HUNK).round()))
+        .text_color(rgb(TEXT_MUTED));
     for hunk in &diff.hunks {
         let mut old = hunk.old_start;
         let mut new = hunk.new_start;
         for line in &hunk.lines {
-            let (number, number_color, code_color, wash) = match line.chars().next() {
+            // The prototype signs a removal with U+2212 MINUS SIGN, never a
+            // hyphen; the source line still carries whatever it carries, so
+            // the sign column is drawn and the body is the bare code — the
+            // unified-diff marker is consumed here, never redrawn by the
+            // code cell. The prototype's cells are flex items, so their
+            // leading indent collapses away too and every row's code starts
+            // on the same column.
+            let (number, sign, sign_color, code_color, wash) = match line.chars().next() {
                 Some('+') => {
                     let n = new;
                     new += 1;
-                    (n, GOOD, INK, Some(GOOD_WASH))
+                    (n, "+", RUNNING, TEXT_2, Some(RUNNING_WASH))
                 }
                 Some('-') => {
                     let n = old;
                     old += 1;
-                    (n, FAIL, INK, Some(FAIL_WASH))
+                    (n, "\u{2212}", BLOCKED, TEXT_2, Some(BLOCKED_WASH))
                 }
                 _ => {
                     let n = new;
                     old += 1;
                     new += 1;
-                    (n, INK_FAINT, INK_TERTIARY, None)
+                    (n, "", TEXT_MUTED, TEXT_MUTED, None)
                 }
             };
-            let mut row = div().flex().gap(px(10.)).px(px(6.));
+            let body = match line.chars().next() {
+                Some('+') | Some('-') => line[1..].trim_start(),
+                _ => line.trim_start(),
+            }
+            .to_string();
+            let mut row = div()
+                .flex()
+                .gap(px(theme::DIFF_GAP))
+                .px(px(theme::HUNK_PAD_X));
             if let Some(wash) = wash {
                 row = row.bg(rgba(wash));
             }
             lines = lines.child(
-                row.child(
+                row.child(tabular(
                     div()
                         .flex_shrink_0()
                         .w(px(theme::DIFF_NUM_W))
                         .text_right()
-                        .text_color(rgb(number_color))
+                        .text_color(rgb(SEP))
                         .child(SharedString::from(number.to_string())),
+                ))
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .w(px(theme::DIFF_SIGN_W))
+                        .text_color(rgb(sign_color))
+                        .child(sign),
                 )
                 .child(
                     div()
                         .min_w_0()
                         .truncate()
                         .text_color(rgb(code_color))
-                        .child(selection.line(block, line.clone(), Vec::new())),
+                        .child(selection.line(block, body, Vec::new())),
                 ),
             );
         }
@@ -2814,21 +2982,6 @@ fn render_diff(block: BlockId, diff: &Diff, selection: &SelectionOverlay) -> imp
     lines
 }
 
-/// Token counts read at a glance, not to the digit — `412k`, `1M`, `1.5M`.
-fn tokens(count: u64) -> String {
-    fn scaled(value: f64, suffix: &str) -> String {
-        if (value - value.round()).abs() < 0.05 {
-            format!("{}{suffix}", value.round() as u64)
-        } else {
-            format!("{value:.1}{suffix}")
-        }
-    }
-    match count {
-        0..=999 => count.to_string(),
-        1_000..=999_999 => scaled(count as f64 / 1_000.0, "k"),
-        _ => scaled(count as f64 / 1_000_000.0, "M"),
-    }
-}
 
 /// Markdown spans flattened to one wrapping run — its text and highlight
 /// runs, for the selection overlay to wash and register (#27) — so inline
@@ -2841,34 +2994,149 @@ fn inline(spans: &[Span]) -> (String, Vec<(std::ops::Range<usize>, HighlightStyl
     for span in spans {
         let start = text.len();
         text.push_str(&span.text);
-        let style = match span.style {
-            Style::Plain => None,
-            Style::Code => Some(HighlightStyle {
-                // The comps' inline-code chip: primary ink on RAISED.
-                color: Some(rgb(INK).into()),
-                background_color: Some(rgb(RAISED).into()),
-                ..Default::default()
-            }),
-            Style::Bold => Some(HighlightStyle {
-                color: Some(rgb(INK).into()),
-                font_weight: Some(FontWeight::BOLD),
-                ..Default::default()
-            }),
-            Style::Link => Some(HighlightStyle {
-                color: Some(rgb(ACCENT).into()),
-                underline: Some(gpui::UnderlineStyle {
-                    thickness: px(1.),
-                    color: Some(rgba(theme::ACCENT_UNDERLINE).into()),
-                    wavy: false,
-                }),
-                ..Default::default()
-            }),
-        };
-        if let Some(style) = style {
+        if let Some(style) = span_style(span.style) {
             highlights.push((start..text.len(), style));
         }
     }
     (text, highlights)
+}
+
+/// One span's highlight, or none where the run wears the block's own ink.
+fn span_style(style: Style) -> Option<HighlightStyle> {
+    match style {
+        Style::Plain => None,
+        // Inline `code` (§E.4): a `--raised` chip, colour **inherited** —
+        // the prototype does not promote it to strong ink. A gpui highlight
+        // carries no padding or radius, so the chip's `1px 4px` inset and
+        // 3px corners come from `prose` wrapping it in an element instead;
+        // this background is the fallback for the runs that stay flat.
+        Style::Code => Some(HighlightStyle {
+            background_color: Some(rgb(RAISED).into()),
+            ..Default::default()
+        }),
+        // `strong` (§E.5): weight 600 in `--text-strong`.
+        Style::Bold => Some(HighlightStyle {
+            color: Some(rgb(TEXT_STRONG).into()),
+            font_weight: Some(FontWeight::SEMIBOLD),
+            ..Default::default()
+        }),
+        // `a` (§E.6): `--text`, underlined 1px in `--sep`. Inert — paths
+        // render, nothing opens.
+        Style::Link => Some(HighlightStyle {
+            color: Some(rgb(TEXT).into()),
+            underline: Some(gpui::UnderlineStyle {
+                thickness: px(1.),
+                color: Some(rgb(SEP).into()),
+                wavy: false,
+            }),
+            ..Default::default()
+        }),
+    }
+}
+
+/// A prose Block's text (§E.1/E.2/E.3): one wrapping run, so a sentence
+/// breaks where the prototype's does.
+///
+/// Inline `code` is the one span that cannot live inside that run — §E.4
+/// gives it `padding: 1px 4px` and a 3px radius, and a gpui highlight has
+/// neither. A Block that carries one is composed of flex pieces instead,
+/// with the chip as its own padded element; a Block that does not — nearly
+/// every one — keeps the single run untouched.
+fn prose(block: BlockId, spans: &[Span], selection: &SelectionOverlay) -> AnyElement {
+    if !spans.iter().any(|span| span.style == Style::Code) {
+        let (text, highlights) = inline(spans);
+        return selection.line(block, text, highlights).into_any_element();
+    }
+    let mut row = div().flex().flex_wrap().items_baseline();
+    for (index, span) in spans.iter().enumerate() {
+        let text = SharedString::from(span.text.clone());
+        let run = if index == 0 {
+            selection.line(block, text, Vec::new())
+        } else {
+            selection.piece(block, text, Vec::new())
+        };
+        row = match span.style {
+            Style::Code => row.child(
+                div()
+                    .flex_shrink_0()
+                    // An inline background box is the font's content area
+                    // tall, not the line box — 14px on this 12px face, so
+                    // the chip measures the prototype's 16 (§E.4) rather
+                    // than the 18.6px reading line it sits on.
+                    .line_height(px(14.))
+                    .px(px(theme::INLINE_CODE_PAD_X))
+                    .py(px(theme::INLINE_CODE_PAD_Y))
+                    .rounded(px(theme::R_TIGHT))
+                    .bg(rgb(RAISED))
+                    .child(run),
+            ),
+            style => row.child(
+                div()
+                    .min_w_0()
+                    .child(match span_style(style) {
+                        Some(highlight) => run.with_highlights(vec![(0..span.text.len(), highlight)]),
+                        None => run,
+                    }),
+            ),
+        };
+    }
+    row.into_any_element()
+}
+
+/// A fenced block's rows, one element per hard line, each carrying that
+/// line's slice of the block's highlight runs.
+///
+/// The indent is drawn as width, not as glyphs. One element per line is not
+/// enough on its own: gpui shapes a run of leading U+0020 to zero advance —
+/// and U+00A0 in its place shapes to zero too — so every inner line landed
+/// flush left however the string was cut. So the leading spaces go into
+/// their own box, sized from the mono advance (JetBrains Mono is 600/1000
+/// em, the 0.6 below), and the code follows in a second run. The spaces are
+/// still emitted as a text fragment inside that box, so a copy takes the
+/// line back whole; only its painting is guaranteed by the width.
+fn code_lines(
+    block: BlockId,
+    source: &str,
+    highlights: Vec<(std::ops::Range<usize>, HighlightStyle)>,
+    selection: &SelectionOverlay,
+) -> Vec<Div> {
+    /// JetBrains Mono's advance as a fraction of the type size.
+    const MONO_ADVANCE: f32 = 0.6;
+    let mut rows = Vec::new();
+    let mut at = 0usize;
+    for line in source.split('\n') {
+        let span = at..at + line.len();
+        at = span.end + 1;
+        let indent = line.len() - line.trim_start_matches(' ').len();
+        let runs = |from: usize| -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
+            highlights
+                .iter()
+                .filter_map(|(range, style)| {
+                    let start = range.start.max(span.start + from);
+                    let end = range.end.min(span.end);
+                    (start < end).then(|| {
+                        (start - span.start - from..end - span.start - from, *style)
+                    })
+                })
+                .collect()
+        };
+        if indent == 0 {
+            rows.push(div().child(selection.line(block, line.to_string(), runs(0))));
+            continue;
+        }
+        rows.push(
+            div()
+                .flex()
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .w(px((indent as f32 * theme::FS_MONO * MONO_ADVANCE).round()))
+                        .child(selection.line(block, line[..indent].to_string(), Vec::new())),
+                )
+                .child(selection.piece(block, line[indent..].to_string(), runs(indent))),
+        );
+    }
+    rows
 }
 
 /// Syntax highlight runs for a code Block, or none while the highlighter is
@@ -2886,12 +3154,12 @@ fn code(source: &str, tokens: Option<&[Token]>) -> Vec<(std::ops::Range<usize>, 
         if end > source.len() {
             return Vec::new();
         }
+        // The prototype's code blocks have exactly one syntax class,
+        // `.comment` (§E.7). Everything else is the body's own `--text-2`
+        // (R-08 — this is a deliberate loss of colour, not an oversight).
         let color = match token.class {
-            Class::Plain => ACCENT,
-            Class::Keyword => CODE_KEYWORD,
-            Class::Str => CODE_STR,
-            Class::Comment => INK_FAINT,
-            Class::Number => WAIT,
+            Class::Comment => TEXT_MUTED,
+            _ => TEXT_2,
         };
         highlights.push((
             at..end,
@@ -3023,7 +3291,15 @@ mod tests {
                         &block.body,
                         Body::Tool(tool) if self.expanded.contains(&tool.call)
                     );
-                    render_block(block, &overlay, None, expanded, None)
+                    render_block(
+                        block,
+                        &overlay,
+                        None,
+                        expanded,
+                        None,
+                        TEXT_MUTED,
+                        Flow::default(),
+                    )
                 }))
         }
     }
@@ -3100,20 +3376,16 @@ mod tests {
         assert_eq!(binding_label(None), "");
     }
 
-    /// #25: the pre-lock control reuses the model grooming with the ⌵ that
-    /// says it answers clicks — and carries the provider name alone until
-    /// the Session's Init names what is serving.
+    /// #25: the picker shows the bare model name — the provider is the
+    /// logomark beside it, so the label never repeats it and never carries
+    /// a `·` seam. An id with no known provider prefix stands verbatim
+    /// rather than being guessed apart.
     #[test]
-    fn the_provider_chip_label_grooms_the_model_or_names_the_provider_alone() {
-        assert_eq!(provider_chip_label("claude", None).as_ref(), "claude ⌵");
-        assert_eq!(
-            provider_chip_label("claude", Some("claude-sonnet-4-5")).as_ref(),
-            "claude · sonnet-4-5 ⌵"
-        );
-        assert_eq!(
-            provider_chip_label("codex", Some("gpt-5.4-mini")).as_ref(),
-            "codex · gpt-5.4-mini ⌵"
-        );
+    fn the_model_label_strips_the_provider_the_logomark_already_names() {
+        assert_eq!(model_label("claude-sonnet-4-5").as_ref(), "sonnet-4-5");
+        assert_eq!(model_label("codex-gpt-5.4-mini").as_ref(), "gpt-5.4-mini");
+        assert_eq!(model_label("gpt-5.6").as_ref(), "gpt-5.6");
+        assert_eq!(model_label("claude").as_ref(), "claude");
     }
 
     /// #26, the Row rule from the pointer's side: rows that answer clicks
@@ -3302,14 +3574,21 @@ mod tests {
             all.contains("Bash(cargo test)"),
             "tool pieces compose the call: {all}"
         );
+        // A hunk registers its code, never its sign column: the `+`/`−` is
+        // chrome the prototype draws beside the cell, not text inside it.
         assert!(
-            all.contains("+delta") && all.contains("-bravo"),
+            all.contains("delta") && all.contains("bravo"),
             "a diff registers its lines: {all}"
         );
-        // The ⎿ continuation registers where it renders (Edit's result);
-        // Bash's was promoted into its chip, which is chrome — so its count
-        // never registers.
-        assert!(all.contains("⎿ applied"), "the result line: {all}");
+        assert!(
+            !all.contains("+delta") && !all.contains("-bravo"),
+            "the sign column is chrome and never copies: {all}"
+        );
+        // The result line registers where it renders (Edit's); Bash's was
+        // promoted into its chip, which is chrome — so its count never
+        // registers. The `└` elbow is chrome and never joins the run.
+        assert!(all.contains("applied"), "the result line: {all}");
+        assert!(!all.contains("└"), "the elbow is chrome: {all}");
 
         view.update(cx, |view, cx| {
             view.expanded.insert("toolu_2".into());
@@ -3320,25 +3599,26 @@ mod tests {
         assert_eq!(
             expanded
                 .iter()
-                .filter(|(_, _, _, text)| text == "+delta" || text == "-bravo")
+                .filter(|(_, _, _, text)| text == "delta" || text == "bravo")
                 .count(),
             2,
             "the edit diff still renders exactly once expanded"
         );
         assert!(expanded.iter().any(|(_, _, _, text)| text == "applied"));
-        assert!(!expanded.iter().any(|(_, _, _, text)| text == "⎿ applied"));
         assert_eq!(instruments.changed.len(), 1);
         assert_eq!((instruments.added, instruments.removed), (1, 1));
         assert!(
             !all.contains("42 passed"),
             "a promoted chip is chrome: {all}"
         );
-        for chrome in ['❯', '⏺', '•', '✓'] {
+        // The prototype's body draws two glyphs and one elbow, all chrome;
+        // the old ❯/⏺/• gutter glyphs are gone entirely.
+        for chrome in ['❯', '⏺', '•', '✓', '▸', '●', '└'] {
             assert!(!all.contains(chrome), "{chrome} is chrome: {all}");
         }
         assert!(
-            runs.iter().any(|(_, _, _, text)| text == "+delta"),
-            "a diff cell is its bare line — no number column: {runs:?}"
+            runs.iter().any(|(_, _, _, text)| text == "delta"),
+            "a diff cell is its bare code — no number, no sign: {runs:?}"
         );
     }
 
@@ -3403,18 +3683,6 @@ mod tests {
         assert_eq!(wall_state(Some(Status::Idle), false, false, false), Idle);
         // No transcript at all — the cockpit could not open the Thread.
         assert_eq!(wall_state(None, false, false, false), Parked);
-    }
-
-    /// The rollup rule: rings (Decision amber, blocker red) count; failing
-    /// tests do not. The strip and the nav both read this one function.
-    #[test]
-    fn needs_operator_counts_rings_and_never_failing_tests() {
-        assert!(needs_operator(true, Some(Status::Streaming)));
-        assert!(needs_operator(false, Some(Status::Blocked)));
-        assert!(needs_operator(false, Some(Status::Closed)));
-        assert!(!needs_operator(false, Some(Status::Streaming)));
-        assert!(!needs_operator(false, Some(Status::Idle)));
-        assert!(!needs_operator(false, None));
     }
 
     /// The wall card folds everything the L3 recipe needs that is not an
@@ -3538,17 +3806,18 @@ mod tests {
         );
     }
 
-    /// #23: the mode chip speaks the comp's name for acceptEdits and the
-    /// provider's own word for everything else — never an invented label.
+    /// #23: the mode chip speaks the prototype's name for acceptEdits and
+    /// the provider's own word for everything else — never an invented
+    /// label, and no `⏵` prefix: the pencil icon is the whole mark.
     #[test]
-    fn the_mode_chip_labels_accept_edits_the_comp_way_and_the_rest_verbatim() {
-        assert_eq!(mode_chip_label("acceptEdits").as_ref(), "⏵ auto-edit");
+    fn the_mode_chip_labels_accept_edits_the_prototypes_way_and_the_rest_verbatim() {
+        assert_eq!(mode_chip_label("acceptEdits").as_ref(), "auto-edit");
         assert_eq!(
             mode_chip_label("bypassPermissions").as_ref(),
-            "⏵ bypassPermissions"
+            "bypassPermissions"
         );
-        assert_eq!(mode_chip_label("plan").as_ref(), "⏵ plan");
-        assert_eq!(mode_chip_label("default").as_ref(), "⏵ default");
+        assert_eq!(mode_chip_label("plan").as_ref(), "plan");
+        assert_eq!(mode_chip_label("default").as_ref(), "default");
     }
 
     /// #22 amendment: durations read in the comps' grammar at every scale.
@@ -3563,19 +3832,9 @@ mod tests {
         assert_eq!(duration_label(Duration::from_secs(134)).as_ref(), "2m14s");
     }
 
-    /// The hover card's numbers read at a glance — `412k / 1M`, never a
-    /// trailing `.0`.
-    #[test]
-    fn token_counts_read_at_a_glance() {
-        assert_eq!(tokens(412), "412");
-        assert_eq!(tokens(124_000), "124k");
-        assert_eq!(tokens(412_000), "412k");
-        assert_eq!(tokens(1_000_000), "1M");
-        assert_eq!(tokens(1_530_000), "1.5M");
-    }
-
-    /// The Dense header's ▰▱ meter stays glanceable: glyphs for small plans,
-    /// the bare fraction for long ones, and done never overshoots.
+    /// The instrument levels' ▰▱ meter stays glanceable: glyphs for small
+    /// plans, the bare fraction for long ones, and done never overshoots.
+    /// L1 draws real segments instead; this run is L2/L3's alone.
     #[test]
     fn the_todo_meter_caps_its_glyph_run() {
         assert_eq!(meter(3, 4).as_ref(), "▰▰▰▱ 3/4");
@@ -3617,18 +3876,34 @@ mod tests {
         assert!(!offers_import(Some(&streaming)), "not at rest");
     }
 
-    /// #11: the idle line's second hint — only where the door is open, and
-    /// never displacing the hints every Composer answers.
+    /// §D.7: the idle line says what the Pane is waiting on — a Decision, a
+    /// live Thread, or a closed Session — and nothing else. It never names
+    /// the Thread and never repeats the hints beside it.
     #[test]
-    fn the_placeholder_advertises_import_only_on_a_fresh_thread() {
-        let name = SharedString::from("thread-01");
-        let plain = placeholder(&name, false);
-        let offering = placeholder(&name, true);
-        assert!(!plain.contains("/import"), "{plain}");
-        assert!(offering.contains("/import"), "{offering}");
-        for hints in [&plain, &offering] {
-            assert!(hints.contains("/ commands"), "{hints}");
-            assert!(hints.contains("↵ send"), "{hints}");
+    fn the_placeholder_says_what_the_pane_is_waiting_on() {
+        let live = Transcript::default();
+        assert_eq!(placeholder(false, Some(&live)), "Steer this Thread\u{2026}");
+        assert_eq!(
+            placeholder(true, Some(&live)),
+            "Reply to the Decision\u{2026}"
+        );
+
+        let mut closed = Transcript::default();
+        closed.apply(Input::Event(SessionEvent::Closed {
+            reason: "the CLI exited".into(),
+        }));
+        assert_eq!(
+            placeholder(false, Some(&closed)),
+            "Revive and continue\u{2026}"
+        );
+
+        for line in [
+            placeholder(false, Some(&live)),
+            placeholder(true, Some(&live)),
+            placeholder(false, Some(&closed)),
+        ] {
+            assert!(!line.contains("message"), "{line}");
+            assert!(!line.contains("commands"), "{line}");
         }
     }
 }

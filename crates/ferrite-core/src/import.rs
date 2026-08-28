@@ -125,14 +125,17 @@ pub fn import_registered(
 }
 
 fn write_history(writer: &mut crate::store::ThreadWriter, parsed: ParsedSession) -> io::Result<()> {
-    writer.record_event(&SessionEvent::Init {
-        session_id: parsed.session_id,
-        model: parsed.model,
-    })?;
+    writer.record_event(
+        &SessionEvent::Init {
+            session_id: parsed.session_id,
+            model: parsed.model,
+        },
+        None,
+    )?;
     for entry in &parsed.entries {
         match entry {
             Entry::Prompt(text) => writer.record_prompt(text)?,
-            Entry::Event(event) => writer.record_event(event)?,
+            Entry::Event(event) => writer.record_event(event, None)?,
         }
     }
     writer.flush()

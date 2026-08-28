@@ -203,9 +203,9 @@ struct Thread {
     /// in the provider's own word. Display-only, and Session state exactly
     /// like the menu: None until announced, gone with the Session.
     permission_mode: Option<String>,
-    /// Each tool call's wall clock, stamped when THIS cockpit ingested its
-    /// events — the transcript's folds stay clockless, so a replayed log
-    /// has no durations, honestly. Keyed by the provider's call id, the
+    /// Each tool call's wall clock: stamped when this cockpit ingested its
+    /// events, and restored from the log on revive — the transcript's folds
+    /// stay clockless either way. Keyed by the provider's call id, the
     /// `ToolBlock.call` a row renders from.
     timings: HashMap<String, ToolTiming>,
 }
@@ -813,6 +813,14 @@ impl Cockpit {
             session_project_root,
         );
         state.prompt_history = PromptHistory::new(snapshot.prompt_texts());
+        // The clocks come back with the history: a settled call's duration
+        // was measured when it ran and written down, so the replayed rows
+        // draw the same durations they drew before the restart.
+        state.timings = snapshot
+            .tool_durations()
+            .into_iter()
+            .map(|(id, total)| (id, ToolTiming::Done(total)))
+            .collect();
         let inputs = snapshot.inputs();
         // The lock arms with the history (#25): a replayed operator prompt
         // is a first prompt already sent.
@@ -979,10 +987,14 @@ impl Cockpit {
             };
             let mut release = None;
             for event in events {
-                let _ = thread.writer.record_event(&event);
+                // Folded first, then written: the fold is what stops a tool
+                // call's clock, and the record carries that reading so a
+                // revived Thread keeps its durations.
                 if let Wake::Send(held) = fold(thread, &event) {
                     release = Some(held);
                 }
+                let duration = settled_duration(thread, &event);
+                let _ = thread.writer.record_event(&event, duration);
                 let applied = thread.transcript.apply(Input::Event(event));
                 update.dirty.extend(applied.dirty);
                 update.evicted.extend(applied.evicted);
@@ -1072,9 +1084,9 @@ impl Cockpit {
         self.threads.get(&thread)?.pending.as_ref()
     }
 
-    /// The wall clocks of this Thread's tool calls, keyed by call id — only
-    /// the calls this cockpit ingested live. A replayed history has no
-    /// clock, and pretending otherwise would print made-up durations.
+    /// The wall clocks of this Thread's tool calls, keyed by call id — the
+    /// calls this cockpit ingested live, plus the ones its log recorded a
+    /// duration for. Never a guess: a call with no measured clock is absent.
     pub fn tool_timings(&self, thread: ThreadId) -> Option<&HashMap<String, ToolTiming>> {
         Some(&self.threads.get(&thread)?.timings)
     }
@@ -1251,6 +1263,19 @@ fn ensure_workspace(
 /// operator can read `git branch` and know whose work each one is.
 fn branch_name(thread: ThreadId) -> String {
     format!("ferrite/thread-{thread}")
+}
+
+/// The clock reading this event settled, for the log to keep. Only a
+/// completed tool call has one, and only where the fold just stopped it —
+/// a call whose start this cockpit never saw stays clockless.
+fn settled_duration(state: &Thread, event: &SessionEvent) -> Option<Duration> {
+    let SessionEvent::ToolCompleted { id, .. } = event else {
+        return None;
+    };
+    match state.timings.get(id) {
+        Some(ToolTiming::Done(total)) => Some(*total),
+        _ => None,
+    }
 }
 
 /// The bookkeeping half of a fold: what the operator is on the hook for.

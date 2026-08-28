@@ -207,6 +207,12 @@ enum Record {
         /// wrote by never recording one.
         #[serde(default)]
         result: PersistedToolResult,
+        /// How long the call ran, as the cockpit clocked it live. Absent
+        /// from any log written before the clock was persisted, and absent
+        /// for a call whose start this cockpit never saw — the row then
+        /// draws no duration, exactly as it did.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duration_ms: Option<u64>,
     },
     TurnEnded {
         outcome: Outcome,
@@ -305,8 +311,10 @@ impl PersistedToolResult {
 impl Record {
     /// The persisted form of one live event, or `None` for events that are
     /// Session state rather than durable history (a pending Decision dies
-    /// with its Session; there is nothing to replay it into).
-    fn from_event(event: &SessionEvent) -> Option<Record> {
+    /// with its Session; there is nothing to replay it into). `duration` is
+    /// the wall clock the cockpit measured for a settled tool call — the one
+    /// thing in the record no event carries.
+    fn from_event(event: &SessionEvent, duration: Option<std::time::Duration>) -> Option<Record> {
         Some(match event {
             SessionEvent::Init { session_id, model } => Record::Init {
                 session_id: session_id.clone(),
@@ -329,6 +337,7 @@ impl Record {
                 output: output.clone(),
                 is_error: *is_error,
                 result: PersistedToolResult::from_live(result),
+                duration_ms: duration.map(|total| total.as_millis() as u64),
             },
             SessionEvent::TurnEnded { outcome, cost_usd } => Record::TurnEnded {
                 outcome: match outcome {
@@ -395,6 +404,9 @@ impl Record {
                 output,
                 is_error,
                 result,
+                // The clock is not transcript vocabulary — it replays
+                // through `tool_durations`, into the cockpit's own timings.
+                duration_ms: _,
             } => Input::Event(SessionEvent::ToolCompleted {
                 id: id.clone(),
                 output: output.clone(),
@@ -870,6 +882,25 @@ impl ThreadSnapshot {
         self.records.iter().map(Record::input).collect()
     }
 
+    /// Every settled tool call's wall clock, keyed by the provider's call
+    /// id — what the cockpit clocked when the call actually ran. Replayed
+    /// into the cockpit's timings so a revived Thread's rows still carry
+    /// the durations they were drawn with; calls logged before the clock
+    /// was persisted are simply absent.
+    pub(crate) fn tool_durations(&self) -> Vec<(String, std::time::Duration)> {
+        self.records
+            .iter()
+            .filter_map(|record| match record {
+                Record::ToolCompleted {
+                    id,
+                    duration_ms: Some(ms),
+                    ..
+                } => Some((id.clone(), std::time::Duration::from_millis(*ms))),
+                _ => None,
+            })
+            .collect()
+    }
+
     pub(crate) fn prompt_texts(&self) -> Vec<String> {
         self.records
             .iter()
@@ -894,8 +925,14 @@ pub struct ThreadWriter {
 impl ThreadWriter {
     /// Buffer one Session event, converted to the persisted schema. Flushes
     /// internally when the event is a boundary (turn end, close).
-    pub fn record_event(&mut self, event: &SessionEvent) -> io::Result<()> {
-        let Some(record) = Record::from_event(event) else {
+    /// `duration` is the wall clock a settled tool call took, where the
+    /// caller measured one; `None` everywhere else.
+    pub fn record_event(
+        &mut self,
+        event: &SessionEvent,
+        duration: Option<std::time::Duration>,
+    ) -> io::Result<()> {
+        let Some(record) = Record::from_event(event, duration) else {
             return Ok(());
         };
         self.push(record)
@@ -1463,7 +1500,7 @@ mod tests {
             let start = fs::metadata(&log).unwrap().len();
             let count = (seed % 40 + 5) as usize;
             for event in arbitrary_mid_turn_events(seed, count) {
-                writer.record_event(&event).unwrap();
+                writer.record_event(&event, None).unwrap();
                 assert_eq!(
                     fs::metadata(&log).unwrap().len(),
                     start,
@@ -1471,10 +1508,13 @@ mod tests {
                 );
             }
             writer
-                .record_event(&SessionEvent::TurnEnded {
-                    outcome: TurnOutcome::Completed,
-                    cost_usd: None,
-                })
+                .record_event(
+                    &SessionEvent::TurnEnded {
+                        outcome: TurnOutcome::Completed,
+                        cost_usd: None,
+                    },
+                    None,
+                )
                 .unwrap();
             assert!(
                 fs::metadata(&log).unwrap().len() > start,
@@ -1495,9 +1535,12 @@ mod tests {
         let header_len = fs::metadata(&log).unwrap().len();
 
         writer
-            .record_event(&SessionEvent::TextDelta {
-                text: "mid-turn ".into(),
-            })
+            .record_event(
+                &SessionEvent::TextDelta {
+                    text: "mid-turn ".into(),
+                },
+                None,
+            )
             .unwrap();
         assert_eq!(
             fs::metadata(&log).unwrap().len(),
@@ -1507,9 +1550,12 @@ mod tests {
 
         std::thread::sleep(std::time::Duration::from_millis(80));
         writer
-            .record_event(&SessionEvent::TextDelta {
-                text: "still going".into(),
-            })
+            .record_event(
+                &SessionEvent::TextDelta {
+                    text: "still going".into(),
+                },
+                None,
+            )
             .unwrap();
         assert!(
             fs::metadata(&log).unwrap().len() > header_len,
@@ -1529,20 +1575,26 @@ mod tests {
         let (id, mut writer) = store.create(Provider::Claude, None, main_choice()).unwrap();
         writer.record_prompt("try the café fix").unwrap();
         for event in claude_turn() {
-            writer.record_event(&event).unwrap();
+            writer.record_event(&event, None).unwrap();
         }
         // Multi-byte characters on the final line: a tear can land inside
         // one, and a loader that insists on whole-file UTF-8 dies there.
         writer
-            .record_event(&SessionEvent::TextDelta {
-                text: "naïve café ☕ résumé".into(),
-            })
+            .record_event(
+                &SessionEvent::TextDelta {
+                    text: "naïve café ☕ résumé".into(),
+                },
+                None,
+            )
             .unwrap();
         writer
-            .record_event(&SessionEvent::TurnEnded {
-                outcome: TurnOutcome::Completed,
-                cost_usd: None,
-            })
+            .record_event(
+                &SessionEvent::TurnEnded {
+                    outcome: TurnOutcome::Completed,
+                    cost_usd: None,
+                },
+                None,
+            )
             .unwrap();
         drop(writer);
 
@@ -1653,10 +1705,13 @@ mod tests {
         let mut writer = store.writer(ThreadId::new(7)).unwrap();
         writer.record_prompt("continue where you left off").unwrap();
         writer
-            .record_event(&SessionEvent::TurnEnded {
-                outcome: TurnOutcome::Completed,
-                cost_usd: None,
-            })
+            .record_event(
+                &SessionEvent::TurnEnded {
+                    outcome: TurnOutcome::Completed,
+                    cost_usd: None,
+                },
+                None,
+            )
             .unwrap();
         drop(writer);
 
@@ -1716,10 +1771,13 @@ mod tests {
         let mut writer = store.writer(ThreadId::new(4)).unwrap();
         writer.record_prompt("are you still there").unwrap();
         writer
-            .record_event(&SessionEvent::TurnEnded {
-                outcome: TurnOutcome::Completed,
-                cost_usd: None,
-            })
+            .record_event(
+                &SessionEvent::TurnEnded {
+                    outcome: TurnOutcome::Completed,
+                    cost_usd: None,
+                },
+                None,
+            )
             .unwrap();
         drop(writer);
 
@@ -1817,7 +1875,7 @@ mod tests {
                 cost_usd: None,
             },
         ] {
-            writer.record_event(&event).unwrap();
+            writer.record_event(&event, None).unwrap();
             live.apply(Input::Event(event));
         }
         drop(writer);
@@ -1872,7 +1930,7 @@ mod tests {
                 reason: "codex app-server exited: exit status: 0".into(),
             },
         ] {
-            writer.record_event(&event).unwrap();
+            writer.record_event(&event, None).unwrap();
         }
         drop(writer);
 
@@ -1914,7 +1972,7 @@ mod tests {
 
         let mut live = Transcript::default();
         for event in claude_turn() {
-            writer.record_event(&event).unwrap();
+            writer.record_event(&event, None).unwrap();
             live.apply(Input::Event(event));
         }
         drop(writer);

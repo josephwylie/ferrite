@@ -199,10 +199,23 @@ impl DemoSession {
     }
 
     /// A Session that says nothing until spoken to — what a revived demo
-    /// Thread gets, because its history already replayed from the log.
+    /// Thread gets, because its history already replayed from the log. It
+    /// still announces its permission mode, the way a resumed provider's
+    /// handshake does: the log drops that event, so the Composer's mode
+    /// chip would otherwise never come back on revive.
     pub fn quiet() -> Self {
         let (tx, rx) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
+        play(
+            tx.clone(),
+            cancel.clone(),
+            vec![Step::new(
+                10,
+                SessionEvent::PermissionMode {
+                    mode: "acceptEdits".into(),
+                },
+            )],
+        );
         Self { rx, tx, cancel }
     }
 
@@ -305,7 +318,7 @@ const TURN_ONE: &str = "Ferrite renders whatever the provider streams: no harnes
     - fenced blocks handed to the injected highlighter\n\n\
     ```rust\n\
     fn apply(&mut self, input: Input) -> Update {\n\
-        // events in, Blocks out\n\
+    \u{20}   // events in, Blocks out\n\
     }\n\
     ```\n\n";
 
@@ -338,10 +351,14 @@ fn seed(variant: usize) -> Vec<Step> {
     match variant % SEEDS {
         0 => script(),
         1 => seed_working_planned(),
-        2 => seed_failing(),
+        // Seed 2 is the closed Session and seed 0 the Decision the
+        // interactive script stops on: the wall's freshly-dealt Panes take
+        // the first seeds in order, so the Cockpit opens on the census the
+        // prototype draws — running, a Decision, running, closed.
+        2 => seed_blocked(),
         3 => seed_done(0.22),
         4 => seed_reading(),
-        5 => seed_blocked(),
+        5 => seed_failing(),
         // Two idle seeds on purpose: the Wall census keeps a pair of
         // quiet cells.
         6 | 11 => seed_idle(),
@@ -374,6 +391,14 @@ fn boot(session_id: &str) -> Vec<Step> {
                     "claude-opus-4-1".into(),
                     "claude-haiku-4-5".into(),
                 ],
+            },
+        ),
+        // And the handshake's permission mode — what the Composer's mode
+        // chip reads. Every Session announces one, so every Pane draws it.
+        Step::new(
+            10,
+            SessionEvent::PermissionMode {
+                mode: "acceptEdits".into(),
             },
         ),
     ]
@@ -764,12 +789,6 @@ fn seed_decision() -> Vec<Step> {
 /// on.
 pub fn script() -> Vec<Step> {
     let mut steps = boot("4f2a1c9e-7b30-4d18-9c62-1ea55d0b7742");
-    steps.push(Step::new(
-        40,
-        SessionEvent::PermissionMode {
-            mode: "acceptEdits".into(),
-        },
-    ));
     usage(&mut steps, 124_000);
     think(&mut steps, THINKING);
     prose(&mut steps, TURN_ONE);
@@ -1025,7 +1044,7 @@ mod tests {
     /// #22 B: a revived demo Thread already replayed its history from the
     /// log — the fresh Session must not play the same turn over it again.
     #[test]
-    fn a_revived_demo_thread_replays_nothing() {
+    fn a_revived_demo_thread_announces_its_mode_and_replays_nothing() {
         use ferrite_core::cockpit::Spawner;
         use ferrite_core::store::Provider;
         let mut spawn = Spawn::new(true, false);
@@ -1037,12 +1056,18 @@ mod tests {
                 cwd: None,
             })
             .expect("demo spawns never fail");
+        let events = revived.events();
         assert!(
-            revived
-                .events()
-                .recv_timeout(Duration::from_millis(200))
-                .is_err(),
-            "a resumed demo Session must stay quiet"
+            matches!(
+                events.recv_timeout(Duration::from_millis(500)),
+                Ok(SessionEvent::PermissionMode { .. })
+            ),
+            "a resumed Session announces its permission mode, as the \
+             handshake does — the log does not carry that event"
+        );
+        assert!(
+            events.recv_timeout(Duration::from_millis(200)).is_err(),
+            "and then stays quiet: its history already replayed from the log"
         );
     }
 
