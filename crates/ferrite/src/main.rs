@@ -118,7 +118,7 @@ fn main() {
         }
         if core.threads().is_empty() {
             if demo || panes > 1 {
-                seed_wall(&mut core, panes, provider);
+                seed_wall(&mut core, panes, provider, demo);
             } else {
                 // The default launch revives the newest parked Thread; an
                 // empty store starts as a draft Pane (#29) — nothing
@@ -164,7 +164,7 @@ fn main() {
 /// Those new Threads alternate the two providers, starting at `first`. A
 /// wall opened on one provider draws the same logomark down the whole nav;
 /// the design shows both marks mixed, so the seed has to deal both.
-fn seed_wall(core: &mut Cockpit, panes: usize, first: Provider) {
+fn seed_wall(core: &mut Cockpit, panes: usize, first: Provider, demo: bool) {
     // The wall opens on a Group. The nav's selected fill is carried by the
     // current Group — the one holding the focused Pane's Thread — so a wall
     // of nothing but solo Threads leaves that fill unpainted and every Group
@@ -217,6 +217,15 @@ fn seed_wall(core: &mut Cockpit, panes: usize, first: Provider) {
                 break;
             }
         }
+    }
+    // The Group tier the demo shows off, and only the demo: its titles are
+    // written copy and it opens Threads of its own to fill a second Group.
+    // That is fixture, exactly like the scripted transcripts around it, and
+    // it may never reach a store an operator keeps work in — `--panes N`
+    // alone spawns real Sessions, so it does not qualify.
+    if demo {
+        let wall: Vec<ferrite_core::ThreadId> = core.threads().to_vec();
+        cockpit::seed_groups(core, &wall, first);
     }
 }
 

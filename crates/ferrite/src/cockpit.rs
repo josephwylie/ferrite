@@ -410,14 +410,6 @@ impl CockpitView {
         if view.panes.is_empty() {
             view.open_draft_with_provider(pane::DraftTarget::Main, launch_provider, cx);
         }
-        // A wall — the only launch that opens more than one Pane at once —
-        // opens grouped: the Group tier is what the nav is shaped around,
-        // and a wall with no Group leaves it with nothing to carry the
-        // selected fill. One store gets this once.
-        if view.panes.len() > 1 {
-            let wall: Vec<ThreadId> = view.panes.iter().filter_map(PaneView::thread).collect();
-            seed_groups(&mut view.cockpit, &wall, launch_provider);
-        }
         view.refresh_parked();
         // The first frame's wall cards — every rebuild after rides a change.
         let threads: Vec<ThreadId> = view.panes.iter().filter_map(|pane| pane.thread()).collect();
@@ -4171,12 +4163,14 @@ fn deal(first: Provider, nth: usize) -> Provider {
     }
 }
 
-/// The Group tier a multi-pane launch shows: the wall's own Threads are the
-/// first Group — so the selected fill lands on a Group and never on a
-/// Thread — and three parked Threads are the second. Every other Thread in
-/// the store stays solo. A store that already holds a Group is the
-/// operator's own and is left untouched.
-fn seed_groups(cockpit: &mut Cockpit, wall: &[ThreadId], provider: Provider) {
+/// The Group tier the **demo** shows: the wall's own Threads are the first
+/// Group and three Threads it opens and parks are the second, so the nav's
+/// selected fill has a Group to land on. Both titles are written copy and
+/// the second Group's members are Threads nothing asked for — fixture, like
+/// the scripted transcripts, and callable only from the `--demo` launch. A
+/// store that already holds a Group is the operator's own and is left
+/// untouched.
+pub fn seed_groups(cockpit: &mut Cockpit, wall: &[ThreadId], provider: Provider) {
     if cockpit.groups().iter().next().is_some() {
         return;
     }

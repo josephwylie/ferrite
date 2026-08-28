@@ -25,9 +25,9 @@ use ferrite_core::workspace::WorkspaceBinding;
 use ferrite_core::{Decision, ThreadId};
 use gpui::prelude::*;
 use gpui::{
-    canvas, deferred, div, point, px, radians, relative, rgb, rgba, AnyElement, BoxShadow, Context,
+    canvas, deferred, div, point, px, relative, rgb, rgba, AnyElement, BoxShadow, Context,
     Div, Entity, FocusHandle, FontFeatures, FontWeight, HighlightStyle, PathBuilder,
-    ScrollHandle, SharedString, Stateful, Styled, StyledText, Transformation,
+    ScrollHandle, SharedString, Stateful, Styled, StyledText,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -2655,16 +2655,18 @@ fn render_tool(
             .child(args(tool.summary.clone().into()).min_w_0().truncate())
             .child(args(")".into()).flex_shrink_0());
     }
-    // The prototype draws `▸`/`●` in the glyph column on every event row
-    // and no disclosure control anywhere, so the glyph is unconditional and
-    // the chevron is never painted.
-    let _ = disclosure;
+    // The prototype draws `▸`/`●` in the glyph column and no chevron
+    // anywhere, so the glyph is unconditional — and the disclosure rides on
+    // top of it as an invisible hit target rather than replacing it. A tool
+    // row with output stays openable by pointer and by keyboard without the
+    // Pane drawing one pixel the prototype does not.
     let gutter = div()
         .relative()
         .flex_shrink_0()
         .w(px(theme::GUTTER_W))
         .text_color(rgb(SEP))
-        .child(glyph);
+        .child(glyph)
+        .children(disclosure);
     let mut line = div()
         .flex()
         .flex_row()
@@ -2854,36 +2856,29 @@ pub fn tool_disclosure_control(
     targeted: bool,
     focus: &FocusHandle,
 ) -> Stateful<Div> {
+    // Nothing is drawn. The prototype puts `▸` in the glyph column and no
+    // chevron anywhere, so the control is the glyph's own square: an
+    // invisible hit target laid over the gutter the row already paints.
+    // `expanded` therefore turns nothing — the disclosed output below the
+    // row is the whole tell, which is what the prototype shows too.
+    let _ = expanded;
     div()
         .id(SharedString::from(format!("tool-disclosure-{call}")))
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .justify_center()
         .absolute()
         .left(px((theme::GUTTER_W - theme::TOOL_DISCLOSURE_HIT) / 2.))
         .top(px(-1.))
         .w(px(theme::TOOL_DISCLOSURE_HIT))
         .h(px(theme::TOOL_DISCLOSURE_HIT))
         .rounded(px(theme::R_TIGHT))
+        // Keyboard cycling is the one time the target has to be visible:
+        // without a ground the operator cannot see which row `tab` is on.
+        // The pointer never triggers it.
         .when(targeted, |control| {
             control
                 .bg(rgb(SELECTION))
                 .track_focus(focus)
                 .key_context("ToolDisclosure")
         })
-        .child(
-            icon(
-                icons::CHEVRON_DOWN,
-                theme::ICON_CHEVRON,
-                if targeted { TEXT } else { TEXT_MUTED },
-            )
-            .when(expanded, |chevron| {
-                chevron.with_transformation(Transformation::rotate(radians(
-                    std::f32::consts::PI,
-                )))
-            }),
-        )
         .hover_control()
         .press_control()
 }
