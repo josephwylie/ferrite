@@ -34,11 +34,11 @@ use gpui::{
 use crate::icons::{self, icon};
 use crate::pointer::{Pointer, PointerPressed};
 use crate::theme::{
-    FILL, FONT_UI, FS_LG, FS_MD, FS_SM, GROUP_RAIL, GROUP_ROW_H, HOVER, ICON_BUTTON,
+    FILL, FONT_UI, FS_LG, FS_MD, FS_SM, GROUP_GAP, GROUP_RAIL, GROUP_ROW_H, HOVER, ICON_BUTTON,
     ICON_BUTTON_GLYPH, ICON_CHEVRON_LG, LINE_TIGHT, MEMBER_GAP, MEMBER_INDENT, MENU, MENU_PAD,
     MENU_ROW_H, MENU_TOP, NAV, NAV_HEAD_H, PROVIDER_CLAUDE, PROVIDER_CODEX, PROVIDER_MARK,
     MEMBERS_TOP, NAV_TREE_PAD, NAV_TREE_PAD_B, RAIL_INSET, RAIL_OFFSET, R_CONTROL,
-    R_MENU, ROW_GAP, ROW_ICON, ROW_ICON_GAP, ROW_PAD_X, ROW_PAD_Y, ROW_TEXT_W, SCROLLBAR, SCROLLBAR_THUMB_W,
+    R_MENU, R_TIGHT, ROW_GAP, ROW_ICON, ROW_ICON_GAP, ROW_PAD_X, ROW_PAD_Y, ROW_TEXT_W, SCROLLBAR, SCROLLBAR_THUMB_W,
     SCROLLBAR_W, SHADOW_FAR, SHADOW_FAR_BLUR, SHADOW_FAR_SPREAD, SHADOW_FAR_Y, SHADOW_NEAR,
     SHADOW_NEAR_BLUR, SHADOW_NEAR_Y, SOLOS_TOP, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG,
     THREAD_ROW_H, TRAFFIC_RESERVE, WIN_CHROME_H,
@@ -414,15 +414,67 @@ pub fn scrollbar(scroll: &ScrollHandle) -> Div {
 /// first take a 16px margin — the caller applies it from the index, because
 /// only the caller knows which block is first once the filter has run.
 pub fn group_block() -> Div {
-    div().flex().flex_col().flex_shrink_0()
+    div().relative().flex().flex_col().flex_shrink_0()
+}
+
+/// The 16px band between two Group blocks — real space the prototype
+/// already draws, doubling as the "insert between these two" drop target.
+pub fn group_gap(index: usize) -> Stateful<Div> {
+    div()
+        .id(("group-gap", index))
+        .debug_selector(move || format!("group-gap-{index}"))
+        .flex_shrink_0()
+        .h(px(GROUP_GAP))
+}
+
+/// "Insert above the first Group", which has no band of its own: the tree
+/// starts at its own padding and the prototype draws nothing there. So the
+/// target is absolute — laid over the first Group header's top edge, taking
+/// no layout and, without `occlude`, stealing none of its clicks either.
+pub fn group_gap_lead(index: usize) -> Stateful<Div> {
+    div()
+        .id(("group-gap", index))
+        .debug_selector(move || format!("group-gap-{index}"))
+        .absolute()
+        .top_0()
+        .left_0()
+        .right_0()
+        .h(px(MEMBERS_TOP))
+}
+
+/// "Append after the last member", by the same trick: the 2px the members
+/// column already leaves below its last row, claimed as a drop target.
+pub fn member_tail(id: GroupId) -> Stateful<Div> {
+    div()
+        .id(("member-tail", id.get() as usize))
+        .debug_selector(move || format!("member-tail-{}", id.get()))
+        .absolute()
+        .bottom_0()
+        .left_0()
+        .right_0()
+        .h(px(MEMBER_GAP))
 }
 
 /// The 43px Group parent row: the title, then the Project it belongs to.
 /// **The Group is what carries the selected fill** — a Thread row never
 /// does — and the current Group also takes the white title. No provider
 /// mark, no checkout line, no disclosure glyph, no member count.
+#[cfg(test)]
 pub fn group_row(row: &GroupBlock) -> Stateful<Div> {
+    group_row_with_title(row, row.title.clone())
+}
+
+/// `group_row` with the title leaf supplied by the caller — the cockpit
+/// hands in a click-to-rename wrapper, or the live editor while renaming.
+/// The cell around it is unchanged either way: the geometry below is what
+/// makes the title truncate at all, and an editor swapped in at the row
+/// level instead would take the Project line with it.
+pub fn group_row_with_title(row: &GroupBlock, title: impl IntoElement) -> Stateful<Div> {
     row_frame(("nav-group", row.id.get() as usize), GROUP_ROW_H, row.current)
+        .debug_selector({
+            let id = row.id;
+            move || format!("nav-group-{}", id.get())
+        })
         // A truncating title needs a **definite** width on its very first
         // measure. gpui caches a nowrap line's first measure permanently
         // (gpui-0.2.2 elements/text.rs:373 — `wrap_width` is `None` for
@@ -452,21 +504,10 @@ pub fn group_row(row: &GroupBlock) -> Stateful<Div> {
                         .font_weight(FontWeight::SEMIBOLD)
                         .line_height(relative(LINE_TIGHT))
                         .text_color(rgb(if row.current { TEXT_STRONG } else { TEXT }))
-                        .child(row.title.clone()),
+                        .child(title),
                 ),
         )
         .child(meta_line(icons::FOLDER, row.project.clone(), TEXT_2))
-}
-
-/// The rename state: the same 43px frame, the title cell replaced by the
-/// caller's editor. It always reads as current — a row being renamed is the
-/// row you are looking at.
-pub fn group_editor(id: GroupId) -> Stateful<Div> {
-    row_frame(("nav-group", id.get() as usize), GROUP_ROW_H, true)
-        .text_size(px(FS_LG))
-        .font_weight(FontWeight::SEMIBOLD)
-        .line_height(relative(LINE_TIGHT))
-        .text_color(rgb(TEXT_STRONG))
 }
 
 /// The members container, and the one line the whole Soft system draws: a
@@ -501,12 +542,23 @@ pub fn members(rows: Vec<AnyElement>) -> Div {
 /// when the provider is unknown so the title never widens by 22px.
 ///
 /// The row never carries the selected fill: that belongs to its Group.
+#[cfg(test)]
 pub fn thread_row(row: &ThreadRow) -> Stateful<Div> {
+    thread_row_with_title(row, row.name.clone())
+}
+
+/// `thread_row` with the title leaf supplied by the caller — see
+/// `group_row_with_title`.
+pub fn thread_row_with_title(row: &ThreadRow, title: impl IntoElement) -> Stateful<Div> {
     row_frame(
         ("nav-thread", row.thread.get() as usize),
         THREAD_ROW_H,
         false,
     )
+    .debug_selector({
+        let thread = row.thread;
+        move || format!("nav-thread-{}", thread.get())
+    })
     .child(
         div()
             .flex()
@@ -522,7 +574,7 @@ pub fn thread_row(row: &ThreadRow) -> Stateful<Div> {
                     .font_weight(FontWeight::SEMIBOLD)
                     .line_height(relative(LINE_TIGHT))
                     .text_color(rgb(TEXT))
-                    .child(row.name.clone()),
+                    .child(title),
             )
             .child(provider_mark(row.provider, PROVIDER_MARK)),
     )
@@ -533,8 +585,10 @@ pub fn thread_row(row: &ThreadRow) -> Stateful<Div> {
 /// The solo section: Threads no Group claims, at root indent with no rail.
 /// 24px below the last Group — and nothing above it when the filter has
 /// left no Groups at all, which is the caller's `first` to decide.
-pub fn solos(rows: Vec<AnyElement>) -> Div {
+pub fn solos(rows: Vec<AnyElement>) -> Stateful<Div> {
     div()
+        .id("loose-zone")
+        .debug_selector(|| "loose-zone".into())
         .flex()
         .flex_col()
         .gap(px(MEMBER_GAP))
@@ -557,6 +611,34 @@ pub fn empty_filter(project: &str) -> Div {
 
 /// The badge that follows the pointer while a row is being dragged into a
 /// Group. It rides the menu ground — it is floating, like a menu is.
+/// A Group title that says it can be renamed: the row's own title text,
+/// plus the hover wash every other control in the system wears. No border
+/// and no field ground — a title that looked like an input would read as a
+/// second control in a row that has none.
+pub fn rename_target_group(id: GroupId, title: SharedString) -> Stateful<Div> {
+    div()
+        .id(("rename-group", id.get() as usize))
+        .debug_selector(move || format!("rename-group-{}", id.get()))
+        .min_w_0()
+        .truncate()
+        .rounded(px(R_TIGHT))
+        .child(title)
+        .hover_control()
+}
+
+/// A Thread title that says it can be renamed — `rename_target_group`'s
+/// twin, on the smaller row.
+pub fn rename_target_thread(thread: ThreadId, title: SharedString) -> Stateful<Div> {
+    div()
+        .id(("rename-thread", thread.get() as usize))
+        .debug_selector(move || format!("rename-thread-{}", thread.get()))
+        .min_w_0()
+        .truncate()
+        .rounded(px(R_TIGHT))
+        .child(title)
+        .hover_control()
+}
+
 pub fn drag_badge(label: SharedString) -> Div {
     div()
         .bg(rgb(MENU))

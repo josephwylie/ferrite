@@ -53,11 +53,6 @@ actions!(
         MenuDismiss,
         HistoryOlder,
         HistoryNewer,
-        ToggleGroup,
-        MoveToGroup,
-        RenameGroup,
-        MoveGroupUp,
-        MoveGroupDown,
     ]
 );
 
@@ -173,18 +168,46 @@ pub struct CockpitView {
     /// exactly like the picker; render self-heals it shut when focus leaves
     /// the draft or the draft stops being one.
     band: Option<BandPopover>,
-    scope: Scope,
-    rename: Option<(GroupId, Entity<crate::composer::Composer>)>,
+    view: View,
+    /// The inline title rename in flight, if any: what is being renamed,
+    /// and the one-line Composer standing in for its title. At most one —
+    /// the title cell *is* the editor, so two at once would need two rows
+    /// to be the row you are looking at.
+    rename: Option<(RenameTarget, Entity<crate::composer::Composer>)>,
     group_error: Option<SharedString>,
 }
 
+/// What an inline rename is aimed at. Both are titles the operator owns:
+/// a Group's, and a Thread's own display name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Scope {
-    Wall,
+enum RenameTarget {
+    Group(GroupId),
+    Thread(ThreadId),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// What the Cockpit is showing. There is no global wall: the operator sees
+/// exactly one Thread, or exactly one Group's ordered membership (#28).
+enum View {
+    /// The default: exactly the focused Thread's Pane.
+    Solo,
+    /// One durable Group — two or more Threads from one registered Project.
     Group(GroupId),
 }
 
 struct NavDragPreview(SharedString);
+
+/// A nav drag, plus the View it started from. The row's own mouse-down
+/// fires before the drag does — clicking a Group row enters it — so by the
+/// time the drop lands, `self.view` is wherever the *press* took the
+/// operator, not where they picked the row up. The drop's meaning belongs
+/// to the origin: dragging the second member out of a pair you are looking
+/// at is a different act from dragging it out of a Group you are not.
+#[derive(Clone, Copy)]
+struct NavDrag {
+    drag: Drag,
+    origin: View,
+}
 
 impl Render for NavDragPreview {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
@@ -197,8 +220,8 @@ impl Render for NavDragPreview {
 /// a row with no border cannot carry without moving 2px mid-drag, so the
 /// wash alone speaks — `--drop-valid` or `--drop-refused`, never both.
 fn drop_feedback<E: gpui::InteractiveElement>(element: E, groups: Groups, target: DropTarget) -> E {
-    element.drag_over::<Drag>(move |style, drag, _, _| {
-        if matches!(groups.preview_drop(*drag, target), Plan::Refused(_)) {
+    element.drag_over::<NavDrag>(move |style, drag, _, _| {
+        if matches!(groups.preview_drop(drag.drag, target), Plan::Refused(_)) {
             style.bg(rgba(crate::theme::BLOCKED_WASH))
         } else {
             style.bg(rgba(crate::theme::RUNNING_WASH))
@@ -261,7 +284,6 @@ enum PickKind {
     ImportFile,
     /// #25: re-aim the Thread's provider / model before its first prompt.
     Provider,
-    Group,
 }
 
 /// One pickable row beside its own consequence.
@@ -277,14 +299,6 @@ struct PickRow {
 enum Choice {
     Adopt(std::path::PathBuf),
     Provision(ProviderChoice),
-    Group(GroupPick),
-}
-
-#[derive(Clone, Copy)]
-enum GroupPick {
-    Existing(GroupId),
-    New,
-    Solo,
 }
 
 /// Which popover the Composer has open, and everything it shows — rebuilt
@@ -398,7 +412,7 @@ impl CockpitView {
             session_file_roots: default_session_roots(),
             launch_project,
             band: None,
-            scope: Scope::Wall,
+            view: View::Solo,
             rename: None,
             group_error: None,
         };
@@ -681,7 +695,7 @@ impl CockpitView {
     /// prototype specifies a board for four Panes and no other count, so
     /// every other count keeps the chunked rows (R-01).
     fn tall_left_board(&self) -> bool {
-        matches!(self.scope, Scope::Wall) && self.visible_indices().len() == 4
+        matches!(self.view, View::Group(_)) && self.visible_indices().len() == 4
     }
 
     /// How much of the window the nav holds right now: the 208px column, or
@@ -704,19 +718,29 @@ impl CockpitView {
         if self.fullscreen.is_some() {
             return Level::Transcript;
         }
-        Level::for_cell(self.cell(window, self.scope_columns()))
+        Level::for_cell(self.cell(window, self.view_columns()))
     }
 
     fn visible_indices(&self) -> Vec<usize> {
-        match self.scope {
-            Scope::Wall => (0..self.panes.len()).collect(),
-            Scope::Group(group) => {
+        match self.view {
+            View::Solo => self
+                .panes
+                .get(self.focused)
+                .map(|_| vec![self.focused])
+                .unwrap_or_default(),
+            View::Group(group) => {
                 let Some(group) = self.cockpit.groups().get(group) else {
                     return Vec::new();
                 };
+                // A Thread whose leave is deferred onto a pending draft is
+                // already gone as far as the operator is concerned: the
+                // draft is standing in its place, and both at once would
+                // show the pair as three.
+                let pending_leave = self.pending_leave(group.id);
                 group
                     .members
                     .iter()
+                    .filter(|thread| Some(**thread) != pending_leave)
                     .filter_map(|thread| self.pane_for(*thread))
                     .chain(self.panes.iter().enumerate().filter_map(|(index, pane)| {
                         pane.draft()
@@ -728,27 +752,39 @@ impl CockpitView {
         }
     }
 
-    fn scope_columns(&self) -> usize {
+    /// The member of this Group whose leave is waiting on a draft — see
+    /// `remove_thread_from_view`. At most one: a Group holds at most one
+    /// pending draft, and a draft defers at most one leave.
+    fn pending_leave(&self, group: GroupId) -> Option<ThreadId> {
+        self.panes.iter().find_map(|pane| {
+            let draft = pane.draft()?;
+            (draft.pending_group == Some(group))
+                .then_some(draft.pending_leave)
+                .flatten()
+        })
+    }
+
+    fn view_columns(&self) -> usize {
         if self.tall_left_board() {
             return 2;
         }
-        match self.scope {
-            Scope::Wall => columns(self.visible_indices().len()),
-            Scope::Group(_) => group_grid(self.visible_indices().len()).1.max(1),
+        match self.view {
+            View::Solo => 1,
+            View::Group(_) => group_grid(self.visible_indices().len()).1.max(1),
         }
     }
 
-    fn heal_scope(&mut self) {
-        if let Scope::Group(group) = self.scope {
+    fn heal_view(&mut self) {
+        if let View::Group(group) = self.view {
             if self.cockpit.groups().get(group).is_none() {
-                self.scope = Scope::Wall;
+                self.view = View::Solo;
             }
         }
     }
 
     fn heal_group_focus(&mut self) {
-        self.heal_scope();
-        let Scope::Group(group) = self.scope else {
+        self.heal_view();
+        let View::Group(group) = self.view else {
             return;
         };
         let focused_is_visible = self.focused_thread().is_some_and(|thread| {
@@ -761,15 +797,165 @@ impl CockpitView {
             if let Some(next) = self.visible_indices().first().copied() {
                 self.focus_pane(next);
             } else {
-                self.scope = Scope::Wall;
+                self.view = View::Solo;
             }
         }
+    }
+
+    /// Open the inline editor on a title, seeded with the title as it
+    /// stands — a rename starts from what is there, not from an empty line.
+    /// A Group whose id no longer resolves has no title to edit, and the
+    /// press is dropped rather than opening an editor over nothing.
+    fn start_rename(&mut self, target: RenameTarget, cx: &mut Context<Self>) {
+        let title = match target {
+            RenameTarget::Group(group) => self
+                .cockpit
+                .groups()
+                .get(group)
+                .map(|group| group.display_title()),
+            // A Thread with no stored title shows its generated one, so
+            // that is what the editor opens on: the operator edits the name
+            // they can see.
+            RenameTarget::Thread(thread) => Some(
+                self.cockpit
+                    .thread_title(thread)
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| format!("thread-{thread:02}")),
+            ),
+        };
+        let Some(title) = title else {
+            return;
+        };
+        let editor = cx.new(crate::composer::Composer::new);
+        editor.update(cx, |editor, cx| editor.set(title, cx));
+        self.rename = Some((target, editor));
+        cx.notify();
+    }
+
+    /// Close the editor. `save` commits — except on a blank line, which is
+    /// not a rename to an empty title but a rename the operator abandoned.
+    /// A refusal from the store lands where every other Group error does;
+    /// the editor still closes, so a row is never stuck in edit.
+    fn finish_rename(&mut self, save: bool, cx: &mut Context<Self>) {
+        let Some((target, editor)) = self.rename.take() else {
+            return;
+        };
+        if !save {
+            cx.notify();
+            return;
+        }
+        let title = editor.update(cx, |line, cx| line.take(cx));
+        if title.trim().is_empty() {
+            cx.notify();
+            return;
+        }
+        let result = match target {
+            RenameTarget::Group(group) => self
+                .cockpit
+                .apply_group(GroupChange::Rename { group, title })
+                .map(|_| ())
+                .map_err(|error| error.to_string()),
+            RenameTarget::Thread(thread) => self
+                .cockpit
+                .rename_thread(thread, &title)
+                .map_err(|error| error.to_string()),
+        };
+        if let Err(error) = result {
+            self.group_error = Some(error.into());
+        } else {
+            // A renamed Thread's parked row still carries the old name.
+            self.refresh_parked();
+            self.group_error = None;
+        }
+        cx.notify();
+    }
+
+    /// A Group's title cell: the live editor while this Group is the one
+    /// being renamed, otherwise the title with a press that opens it. That
+    /// press stops there — the row underneath would otherwise enter the
+    /// Group on the way to renaming it.
+    fn editable_group_title(
+        &self,
+        group: GroupId,
+        title: SharedString,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        if let Some((RenameTarget::Group(editing), editor)) = &self.rename {
+            if *editing == group {
+                return div()
+                    .min_w_0()
+                    .flex_1()
+                    .child(editor.clone())
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
+                    )
+                    .into_any_element();
+            }
+        }
+        nav::rename_target_group(group, title)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    view.start_rename(RenameTarget::Group(group), cx);
+                }),
+            )
+            .into_any_element()
+    }
+
+    /// A Thread's title cell — `editable_group_title`'s twin.
+    fn editable_thread_title(
+        &self,
+        thread: ThreadId,
+        title: SharedString,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        if let Some((RenameTarget::Thread(editing), editor)) = &self.rename {
+            if *editing == thread {
+                return div()
+                    .min_w_0()
+                    .flex_1()
+                    .child(editor.clone())
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
+                    )
+                    .into_any_element();
+            }
+        }
+        nav::rename_target_thread(thread, title)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    view.start_rename(RenameTarget::Thread(thread), cx);
+                }),
+            )
+            .into_any_element()
     }
 
     fn apply_group_change(&mut self, change: GroupChange) -> Option<ferrite_core::groups::Applied> {
         match self.cockpit.apply_group(change) {
             Ok(applied) => {
                 self.group_error = None;
+                // The Group the operator was looking at just dissolved
+                // under them. Its survivor is the one Thread still on
+                // screen, so that is where they land — never the Thread
+                // that left, and never a blank Cockpit.
+                if let View::Group(active) = self.view {
+                    if let Some(dissolved) = applied
+                        .dissolved
+                        .iter()
+                        .find(|dissolved| dissolved.group == active)
+                    {
+                        self.view = View::Solo;
+                        if let Some(index) = self.pane_for(dissolved.survivor) {
+                            self.focus_pane(index);
+                        }
+                    }
+                }
                 self.heal_group_focus();
                 Some(applied)
             }
@@ -792,19 +978,8 @@ impl CockpitView {
     }
 
     fn submit(&mut self, _: &Submit, _window: &mut Window, cx: &mut Context<Self>) {
-        if let Some((group, editor)) = self.rename.take() {
-            let title = editor.update(cx, |line, cx| line.take(cx));
-            if self
-                .apply_group_change(GroupChange::Rename {
-                    group,
-                    title: title.clone(),
-                })
-                .is_none()
-            {
-                editor.update(cx, |line, cx| line.set(title, cx));
-                self.rename = Some((group, editor));
-            }
-            cx.notify();
+        if self.rename.is_some() {
+            self.finish_rename(true, cx);
             return;
         }
         // A draft's ↵ (#29): on a band chip it opens that chip's popover;
@@ -862,8 +1037,8 @@ impl CockpitView {
     }
 
     fn interrupt(&mut self, _: &Interrupt, _window: &mut Window, cx: &mut Context<Self>) {
-        if self.rename.take().is_some() {
-            cx.notify();
+        if self.rename.is_some() {
+            self.finish_rename(false, cx);
             return;
         }
         // On a draft, escape returns to the prompt (#29): the band's tab
@@ -1571,32 +1746,6 @@ impl CockpitView {
                     self.pick_provider(thread, choice.clone(), cx);
                 }
             }
-            Choice::Group(choice) => {
-                let Some(thread) = picker.thread else {
-                    return;
-                };
-                let current = self.cockpit.groups().of(thread).map(|group| group.id);
-                let change = match *choice {
-                    GroupPick::Existing(group) if current == Some(group) => {
-                        self.group_error = None;
-                        cx.notify();
-                        return;
-                    }
-                    GroupPick::Existing(group) => GroupChange::Join {
-                        thread,
-                        group,
-                        index: None,
-                    },
-                    GroupPick::New => GroupChange::Create {
-                        seed: thread,
-                        with: None,
-                    },
-                    GroupPick::Solo => GroupChange::Leave { thread },
-                };
-                if self.apply_group_change(change).is_none() {
-                    self.picker = Some(picker);
-                }
-            }
         }
     }
 
@@ -1738,23 +1887,27 @@ impl CockpitView {
     ) {
         let binding = pane::DraftBinding {
             provider,
-            project: match self.scope {
-                Scope::Group(group) => self
+            project: match self.view {
+                View::Group(group) => self
                     .cockpit
                     .groups()
                     .get(group)
                     .and_then(|group| group.members.first())
                     .and_then(|thread| self.cockpit.project_id(*thread))
                     .unwrap_or(self.launch_project),
-                Scope::Wall => self.launch_project,
+                View::Solo => self.launch_project,
             },
             target,
             band_focus: None,
             error: None,
-            pending_group: match self.scope {
-                Scope::Group(group) => Some(group),
-                Scope::Wall => None,
+            pending_group: match self.view {
+                View::Group(group) => Some(group),
+                View::Solo => None,
             },
+            // A Draft opened from the nav replaces nobody; only the pair-swap
+            // path (a two-member Group whose member leaves as this Draft
+            // arrives) carries a leave, and it sets this itself.
+            pending_leave: None,
         };
         let pane = PaneView::new_draft(binding, cx);
         cx.subscribe(&pane.composer, Self::composer_edited).detach();
@@ -2029,6 +2182,7 @@ impl CockpitView {
         }
         let provider = draft.provider.clone();
         let pending_group = draft.pending_group;
+        let pending_leave = draft.pending_leave;
         let resolved = self.resolve_target(draft.project, &draft.target);
         let opened = resolved.and_then(|choice| {
             match pending_group {
@@ -2045,6 +2199,12 @@ impl CockpitView {
                     composer.take(cx);
                 });
                 self.panes[self.focused].adopt_thread(thread);
+                // The leave this draft was holding open (see
+                // `remove_thread_from_view`) applies now, and only now: the
+                // new member is already in, so the pair never dissolves.
+                if let Some(leaving) = pending_leave {
+                    self.apply_group_change(GroupChange::Leave { thread: leaving });
+                }
                 if self.fullscreen.as_ref().is_some_and(
                     |shown| matches!(shown, PaneIdentity::Draft(open) if *open == composer),
                 ) {
@@ -2263,8 +2423,19 @@ impl CockpitView {
         else {
             return;
         };
+        let pending = self.panes[at]
+            .draft()
+            .and_then(|draft| draft.pending_group.zip(draft.pending_leave));
         self.panes.remove(at);
         self.band = None;
+        // Nothing came to replace the leaving Thread, so the leave it was
+        // holding open applies now — dissolving the pair, exactly as
+        // closing that Pane would have done without a draft in the way.
+        if let Some((_group, thread)) = pending {
+            self.apply_group_change(GroupChange::Leave { thread });
+            cx.notify();
+            return;
+        }
         self.focus_pane(self.focused.min(self.panes.len().saturating_sub(1)));
         cx.notify();
     }
@@ -2296,12 +2467,6 @@ impl CockpitView {
                         at == picker.selected,
                         pick_row.active,
                     ),
-                    PickKind::Group => pane::picker_row(
-                        pick_row.row.name.clone(),
-                        pick_row.row.detail.clone(),
-                        at == picker.selected,
-                        pick_row.active,
-                    ),
                 };
                 popover = popover.child(drawn.on_mouse_down(
                     MouseButton::Left,
@@ -2319,7 +2484,6 @@ impl CockpitView {
             let hints = match picker.kind {
                 PickKind::ImportFile => "↑↓ select · ↵ adopt · esc dismiss",
                 PickKind::Provider => "↑↓ move · ↵ pick · esc dismiss",
-                PickKind::Group => "↑↓ move · ↵ pick · esc dismiss",
             };
             popover = popover.child(pane::popover_footer(hints));
             return Some(popover.into_any_element());
@@ -2440,9 +2604,14 @@ impl CockpitView {
             .groups()
             .iter()
             .filter_map(|group| {
+                // A member whose leave is parked on a pending draft has
+                // already left as far as the operator is concerned, here
+                // exactly as in `visible_indices`.
+                let pending_leave = self.pending_leave(group.id);
                 let members: Vec<nav::ThreadRow> = group
                     .members
                     .iter()
+                    .filter(|thread| Some(**thread) != pending_leave)
                     .filter(|thread| self.admitted(**thread))
                     .map(|thread| self.thread_row(*thread))
                     .collect();
@@ -2464,11 +2633,20 @@ impl CockpitView {
             })
             .collect();
 
+        // ...and so it lands in the solos below, which is where a Thread on
+        // its way out of a Group belongs.
         let grouped: std::collections::HashSet<ThreadId> = self
             .cockpit
             .groups()
             .iter()
-            .flat_map(|group| group.members.iter().copied())
+            .flat_map(|group| {
+                let pending_leave = self.pending_leave(group.id);
+                group
+                    .members
+                    .iter()
+                    .copied()
+                    .filter(move |thread| Some(*thread) != pending_leave)
+            })
             .collect();
         // Open Panes' Threads first, in pane order, then the park order.
         let mut solos: Vec<nav::ThreadRow> = self
@@ -2532,31 +2710,82 @@ impl CockpitView {
     /// clicked Thread like every other deliberate move.
     fn focus_thread(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
         if let Some(index) = self.pane_for(thread) {
-            self.scope = self
+            self.view = self
                 .cockpit
                 .groups()
                 .of(thread)
-                .map_or(Scope::Wall, |group| Scope::Group(group.id));
+                .map_or(View::Solo, |group| View::Group(group.id));
             self.focus_pane(index);
             cx.notify();
         }
     }
 
-    fn enter_group(&mut self, group: GroupId, cx: &mut Context<Self>) {
-        self.scope = Scope::Group(group);
-        if let Some(index) = self.cockpit.groups().get(group).and_then(|group| {
-            group
-                .members
-                .iter()
-                .find_map(|thread| self.pane_for(*thread))
-        }) {
-            self.focus_pane(index);
+    /// Open a Group: every member gets a Pane, parked ones included. A
+    /// Group *is* its membership on screen, so entering one that has a
+    /// parked member and showing the rest would be showing a different
+    /// Group. Focus stays put when the operator was already on a member,
+    /// so entering from one of its own rows does not jump them.
+    pub(crate) fn enter_group(&mut self, group: GroupId, cx: &mut Context<Self>) {
+        match self.cockpit.revive_group(group) {
+            Ok(members) => {
+                let retain_focus = self
+                    .focused_thread()
+                    .filter(|thread| members.contains(thread));
+                for thread in &members {
+                    if self.pane_for(*thread).is_none() {
+                        self.open_pane(*thread, cx);
+                        self.refresh_wall(*thread);
+                    }
+                }
+                self.park_order.retain(|thread| !members.contains(thread));
+                self.refresh_parked();
+                self.view = View::Group(group);
+                if let Some(index) = retain_focus
+                    .or_else(|| members.first().copied())
+                    .and_then(|thread| self.pane_for(thread))
+                {
+                    self.focus_pane(index);
+                }
+            }
+            Err(error) => {
+                self.group_error = Some(error.to_string().into());
+            }
         }
         cx.notify();
     }
 
-    fn apply_drop(&mut self, drag: Drag, target: DropTarget, cx: &mut Context<Self>) {
-        match self.cockpit.plan_group_drop(drag, target) {
+    fn apply_drop(&mut self, drag: NavDrag, target: DropTarget, cx: &mut Context<Self>) {
+        // Undo whatever the press did on the way into the drag.
+        self.view = drag.origin;
+        match self.cockpit.plan_group_drop(drag.drag, target) {
+            // Dragging a member out of a Group is the pointer's spelling of
+            // closing its Pane, so it takes the same door — which is what
+            // defers the leave when a draft is pending in a pair, and what
+            // keeps the ordinal-preserving focus. Landing it as a plain
+            // change here would tear that pair down under the draft.
+            Plan::Change(GroupChange::Leave { thread })
+                if matches!(drag.drag, Drag::Thread { group: Some(_), .. }) =>
+            {
+                let Drag::Thread {
+                    group: Some(group), ..
+                } = drag.drag
+                else {
+                    unreachable!("the guard above matched this exact shape");
+                };
+                self.view = View::Group(group);
+                self.remove_thread_from_view(thread, cx);
+                // Out of the Group for real — either the leave applied, or
+                // it is parked on a draft. Either way the dragged Thread is
+                // no longer a member, so the operator follows it to Solo.
+                if self.pending_leave(group) == Some(thread)
+                    || self.cockpit.groups().of(thread).is_none()
+                {
+                    self.view = View::Solo;
+                    if let Some(index) = self.pane_for(thread) {
+                        self.focus_pane(index);
+                    }
+                }
+            }
             Plan::Change(change) => {
                 self.apply_group_change(change);
             }
@@ -2573,11 +2802,11 @@ impl CockpitView {
     fn revive_thread(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
         match self.cockpit.revive(thread) {
             Ok(()) => {
-                self.scope = self
+                self.view = self
                     .cockpit
                     .groups()
                     .of(thread)
-                    .map_or(Scope::Wall, |group| Scope::Group(group.id));
+                    .map_or(View::Solo, |group| View::Group(group.id));
                 self.park_order.retain(|parked| *parked != thread);
                 self.open_pane(thread, cx);
                 self.focus_pane(self.panes.len() - 1);
@@ -2660,15 +2889,58 @@ impl CockpitView {
         self.remove_thread_from_view(thread, cx);
     }
 
+    /// Take one Thread out of whatever the operator is looking at. In Solo
+    /// that is a park, plain. In a Group it is a Leave — and the survivor
+    /// the operator lands on is the Thread that took this one's ordinal,
+    /// not the first member: closing the middle Pane of three should leave
+    /// the pointer where it was, the way closing a browser tab does.
+    ///
+    /// The exception is a pair with a draft pending in it. A Group needs
+    /// two members, so leaving a pair dissolves it — which would tear down
+    /// the very Group the draft is waiting to join. The leave is therefore
+    /// *deferred* onto the draft as `pending_leave`, and the Group stays
+    /// whole and visible until the draft either sends (bootstrap applies
+    /// the leave, membership never dips below two) or is discarded (the
+    /// leave applies then, and the pair dissolves as it always would).
     fn remove_thread_from_view(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        if matches!(self.scope, Scope::Group(_)) {
-            if let Some(applied) = self.apply_group_change(GroupChange::Leave { thread }) {
-                if applied.dissolved.is_some() {
-                    self.scope = Scope::Wall;
+        if let View::Group(group) = self.view {
+            let members = self
+                .cockpit
+                .groups()
+                .get(group)
+                .map(|group| group.members.clone())
+                .unwrap_or_default();
+            let ordinal = members
+                .iter()
+                .position(|member| *member == thread)
+                .unwrap_or(0);
+            if members.len() == 2 {
+                if let Some(draft) = self
+                    .panes
+                    .iter_mut()
+                    .filter_map(PaneView::draft_mut)
+                    .find(|draft| draft.pending_group == Some(group))
+                {
+                    draft.pending_leave = Some(thread);
+                    let survivor = members[usize::from(members[0] == thread)];
+                    if let Some(index) = self.pane_for(survivor) {
+                        self.focus_pane(index);
+                    }
+                    cx.notify();
+                    return;
                 }
-                let visible = self.visible_indices();
-                if let Some(next) = visible.first().copied() {
-                    self.focus_pane(next);
+            }
+            if let Some(applied) = self.apply_group_change(GroupChange::Leave { thread }) {
+                if let Some(dissolved) = applied.dissolved.iter().find(|item| item.group == group) {
+                    self.view = View::Solo;
+                    if let Some(index) = self.pane_for(dissolved.survivor) {
+                        self.focus_pane(index);
+                    }
+                } else if let Some(group) = self.cockpit.groups().get(group) {
+                    let next = group.members[ordinal.min(group.members.len() - 1)];
+                    if let Some(index) = self.pane_for(next) {
+                        self.focus_pane(index);
+                    }
                 }
                 cx.notify();
             }
@@ -2698,159 +2970,20 @@ impl CockpitView {
     }
 
     /// Jump to the next Thread waiting on the operator — the whole point of
-    /// a wall you cannot read all of at once.
+    /// a Group you cannot read all of at once.
     fn next_decision(&mut self, _: &NextDecision, _window: &mut Window, cx: &mut Context<Self>) {
         let Some(next) = self.cockpit.next_blocked(self.focused_thread()) else {
             return;
         };
         if let Some(pane) = self.pane_for(next) {
-            self.scope = self
+            self.view = self
                 .cockpit
                 .groups()
                 .of(next)
-                .map_or(Scope::Wall, |group| Scope::Group(group.id));
+                .map_or(View::Solo, |group| View::Group(group.id));
             self.focus_pane(pane);
             cx.notify();
         }
-    }
-
-    fn toggle_group(&mut self, _: &ToggleGroup, _window: &mut Window, cx: &mut Context<Self>) {
-        if matches!(self.scope, Scope::Group(_)) {
-            self.scope = Scope::Wall;
-        } else if let Some(thread) = self.focused_thread() {
-            let group = self
-                .cockpit
-                .groups()
-                .of(thread)
-                .map(|group| group.id)
-                .or_else(|| {
-                    self.apply_group_change(GroupChange::Create {
-                        seed: thread,
-                        with: None,
-                    })?
-                    .group
-                });
-            if let Some(group) = group {
-                self.scope = Scope::Group(group);
-            }
-        }
-        cx.notify();
-    }
-
-    fn move_to_group(&mut self, _: &MoveToGroup, _window: &mut Window, cx: &mut Context<Self>) {
-        let Some(thread) = self.focused_thread() else {
-            return;
-        };
-        let current = self.cockpit.groups().of(thread).map(|group| group.id);
-        let project = match self.cockpit.try_project_id(thread) {
-            Ok(Some(project)) => project,
-            Ok(None) => {
-                self.group_error = Some("Thread project metadata is missing".into());
-                cx.notify();
-                return;
-            }
-            Err(error) => {
-                self.group_error = Some(error.to_string().into());
-                cx.notify();
-                return;
-            }
-        };
-        let row = |name: String, detail: &'static str| pane::MenuRow {
-            insert: SharedString::default(),
-            name: name.into(),
-            matched: Vec::new(),
-            detail: detail.into(),
-            prose_detail: false,
-            inert: false,
-        };
-        let mut rows = Vec::new();
-        for group in self.cockpit.groups().iter() {
-            let Some(first) = group.members.first().copied() else {
-                continue;
-            };
-            match self.cockpit.try_project_id(first) {
-                Ok(Some(group_project)) if group_project == project => rows.push(PickRow {
-                    row: row(group.display_title(), "group"),
-                    active: current == Some(group.id),
-                    choice: Choice::Group(GroupPick::Existing(group.id)),
-                }),
-                Ok(Some(_)) => {}
-                Ok(None) => {
-                    self.group_error = Some("A group has missing project metadata".into());
-                    cx.notify();
-                    return;
-                }
-                Err(error) => {
-                    self.group_error = Some(error.to_string().into());
-                    cx.notify();
-                    return;
-                }
-            }
-        }
-        rows.push(PickRow {
-            row: row("new group".into(), "create"),
-            active: false,
-            choice: Choice::Group(GroupPick::New),
-        });
-        rows.push(PickRow {
-            row: row("solo".into(), "remove from group"),
-            active: current.is_none(),
-            choice: Choice::Group(GroupPick::Solo),
-        });
-        let selected = rows.iter().position(|row| row.active).unwrap_or(0);
-        let composer = self.panes[self.focused].composer.clone();
-        self.picker = Some(Picker {
-            thread: Some(thread),
-            composer,
-            rows,
-            selected,
-            kind: PickKind::Group,
-        });
-        cx.notify();
-    }
-
-    fn rename_group(&mut self, _: &RenameGroup, _window: &mut Window, cx: &mut Context<Self>) {
-        let Scope::Group(group) = self.scope else {
-            return;
-        };
-        let title = self
-            .cockpit
-            .groups()
-            .get(group)
-            .map(|group| group.display_title())
-            .unwrap_or_default();
-        let editor = cx.new(crate::composer::Composer::new);
-        editor.update(cx, |editor, cx| editor.set(title, cx));
-        self.rename = Some((group, editor));
-        cx.notify();
-    }
-
-    fn move_group(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let Scope::Group(group) = self.scope else {
-            return;
-        };
-        let at = self
-            .cockpit
-            .groups()
-            .iter()
-            .position(|item| item.id == group)
-            .unwrap_or(0);
-        let last = self.cockpit.groups().iter().count().saturating_sub(1);
-        let destination = (at as isize + delta).clamp(0, last as isize) as usize;
-        if destination == at {
-            self.group_error = None;
-            cx.notify();
-            return;
-        }
-        let gap = destination + usize::from(destination > at);
-        self.apply_group_change(GroupChange::MoveGroup { group, index: gap });
-        cx.notify();
-    }
-    fn move_group_up(&mut self, _: &MoveGroupUp, _: &mut Window, cx: &mut Context<Self>) {
-        self.move_group(-1, cx);
-    }
-    fn move_group_down(&mut self, _: &MoveGroupDown, _: &mut Window, cx: &mut Context<Self>) {
-        self.move_group(1, cx);
     }
 
     /// A left press lands the operator on this Pane. It only moves focus —
@@ -3150,22 +3283,10 @@ fn provider_label(provider: Provider) -> &'static str {
     }
 }
 
-/// Columns for `count` Panes: the boards' own grids are wide, not square —
-/// the Cockpit comp lays 6 cells 3×2 and the Wall lays 24 cells 6×4 — so
-/// the column count follows a 3:2 grid, never wider than the wall's six.
-/// (6×4 is also what makes the wall math work: 24 Panes at the 1440-default
-/// window land under the 200px Wall threshold, per sidebar-and-impl §2.)
-fn columns(count: usize) -> usize {
-    if count <= 1 {
-        return 1;
-    }
-    (count as f64 * 1.5).sqrt().ceil().clamp(1.0, 6.0) as usize
-}
-
 impl Render for CockpitView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.measure();
-        self.heal_scope();
+        self.heal_view();
         // A fullscreened Thread whose Pane is gone — removed by a path that
         // bypassed `focus_pane` — falls back to the grid, never a blank
         // cockpit. Render is the one chokepoint every removal passes.
@@ -3255,7 +3376,6 @@ impl Render for CockpitView {
                                 .thread
                                 .is_none_or(|thread| self.cockpit.first_prompt_sent(thread))
                     }
-                    PickKind::Group => false,
                 }
         }) {
             self.picker = None;
@@ -3280,10 +3400,6 @@ impl Render for CockpitView {
         // pick, dismissal and heal passes.
         let menu_thread = self.menu.as_ref().and_then(|menu| menu.thread);
         let picker_thread = self.picker.as_ref().and_then(|picker| picker.thread);
-        let group_picker_open = self
-            .picker
-            .as_ref()
-            .is_some_and(|picker| matches!(picker.kind, PickKind::Group));
         for pane in &self.panes {
             let thread = pane.thread();
             let open = (thread.is_some() && (thread == menu_thread || thread == picker_thread))
@@ -3381,7 +3497,7 @@ impl Render for CockpitView {
                 .child(self.pane_cell(visible[2], level, cx).col_start(2))
                 .child(self.pane_cell(visible[3], level, cx).col_start(2))
         } else {
-            let columns = self.scope_columns();
+            let columns = self.view_columns();
             let mut grid = frame().flex().flex_col();
             for row in visible.chunks(columns) {
                 let mut line = div()
@@ -3415,10 +3531,9 @@ impl Render for CockpitView {
             // At wall range no Pane holds a Composer, so the answer keys are
             // not competing with typing: they answer whichever Thread is
             // flagged, without the operator focusing it first.
-            .when(level == Level::Wall && !group_picker_open, |wall| {
+            .when(level == Level::Wall, |wall| {
                 wall.key_context("Wall")
             })
-            .when(group_picker_open, |root| root.key_context("ComposerMenu"))
             .on_action(cx.listener(Self::submit))
             .on_action(cx.listener(Self::unqueue_from_backspace))
             .on_action(cx.listener(Self::interrupt))
@@ -3444,11 +3559,6 @@ impl Render for CockpitView {
             .on_action(cx.listener(Self::history_newer))
             .on_action(cx.listener(Self::menu_pick))
             .on_action(cx.listener(Self::menu_dismiss))
-            .on_action(cx.listener(Self::toggle_group))
-            .on_action(cx.listener(Self::move_to_group))
-            .on_action(cx.listener(Self::rename_group))
-            .on_action(cx.listener(Self::move_group_up))
-            .on_action(cx.listener(Self::move_group_down))
             // The root covers the window, so a release anywhere ends the
             // drag; the selection it made stays until the next press. Moves
             // ride the root too (#27): a sweep keeps extending after the
@@ -3485,6 +3595,12 @@ impl Render for CockpitView {
                     if view.nav_filter_open {
                         view.nav_filter_open = false;
                         dismissed = true;
+                    }
+                    // A press outside the editor abandons the rename — the
+                    // operator looked away, which is escape, not enter.
+                    // It notifies itself, so it is not counted above.
+                    if view.rename.is_some() {
+                        view.finish_rename(false, cx);
                     }
                     if dismissed {
                         cx.notify();
@@ -3561,7 +3677,7 @@ impl CockpitView {
             self.selection
                 .overlay(thread, pane::rendered_window(blocks, level))
         };
-        let mut rendered = cell.child(pane::render_pane(
+        let rendered = cell.child(pane::render_pane(
             pane,
             pane::PaneState {
                 transcript: self.cockpit.transcript(thread),
@@ -3618,25 +3734,6 @@ impl CockpitView {
             },
             level,
         ));
-        if level != Level::Transcript
-            && focused
-            && self.picker.as_ref().is_some_and(|picker| {
-                matches!(picker.kind, PickKind::Group) && picker.composer == pane.composer
-            })
-        {
-            if let Some(menu) = self.composer_menu(index, cx) {
-                rendered = rendered.child(deferred(
-                    div()
-                        .absolute()
-                        .bottom_0()
-                        .left_0()
-                        .right_0()
-                        .mx(px(crate::theme::GRID_GAP))
-                        .mb(px(crate::theme::GRID_GAP))
-                        .child(menu),
-                ));
-            }
-        }
         rendered
     }
 
@@ -3876,6 +3973,8 @@ impl CockpitView {
     /// The 16px between Group blocks is also the `GroupGap` drop zone, so
     /// reordering costs no layout of its own.
     fn nav_tree(&self, state: &nav::NavState, cx: &mut Context<Self>) -> Stateful<Div> {
+        // Every drag started from this frame started from this View.
+        let origin = self.view;
         let mut tree = nav::nav_tree(&self.nav_scroll);
         if let Some(error) = &self.group_error {
             tree = tree.child(
@@ -3891,36 +3990,35 @@ impl CockpitView {
         }
         for (index, group) in state.groups.iter().enumerate() {
             let id = group.id;
+            let gap = DropTarget::GroupGap(index);
             if index > 0 {
-                let gap = DropTarget::GroupGap(index);
-                tree =
-                    tree.child(
-                        drop_feedback(
-                            div().flex_shrink_0().h(px(crate::theme::GROUP_GAP)),
-                            self.cockpit.groups().clone(),
-                            gap,
-                        )
-                        .on_drop(cx.listener(
-                            move |view, drag: &Drag, _, cx| view.apply_drop(*drag, gap, cx),
-                        )),
-                    );
+                tree = tree.child(
+                    drop_feedback(nav::group_gap(index), self.cockpit.groups().clone(), gap)
+                        .on_drop(cx.listener(move |view, drag: &NavDrag, _, cx| {
+                            view.apply_drop(*drag, gap, cx)
+                        })),
+                );
             }
-            let head = match &self.rename {
-                Some((editing, editor)) if *editing == id => {
-                    nav::group_editor(id).child(editor.clone())
-                }
-                _ => nav::group_row(group),
-            };
+            let head = nav::group_row_with_title(
+                group,
+                self.editable_group_title(id, group.title.clone(), cx),
+            );
             let mut block = nav::group_block().child(
                 drop_feedback(
                     head,
                     self.cockpit.groups().clone(),
                     DropTarget::GroupHeader(id),
                 )
-                .on_drag(Drag::Group(id), move |_, _, _, cx| {
-                    cx.new(|_| NavDragPreview("group".into()))
-                })
-                .on_drop(cx.listener(move |view, drag: &Drag, _, cx| {
+                .on_drag(
+                    NavDrag {
+                        drag: Drag::Group(id),
+                        origin,
+                    },
+                    move |_, _, _, cx| {
+                        cx.new(|_| NavDragPreview("group".into()))
+                    },
+                )
+                .on_drop(cx.listener(move |view, drag: &NavDrag, _, cx| {
                     view.apply_drop(*drag, DropTarget::GroupHeader(id), cx)
                 }))
                 .on_mouse_down(
@@ -3928,6 +4026,15 @@ impl CockpitView {
                     cx.listener(move |view, _: &MouseDownEvent, _, cx| view.enter_group(id, cx)),
                 ),
             );
+            // Gap 0 has no band of its own; it rides the header instead.
+            if index == 0 {
+                block = block.child(
+                    drop_feedback(nav::group_gap_lead(index), self.cockpit.groups().clone(), gap)
+                        .on_drop(cx.listener(move |view, drag: &NavDrag, _, cx| {
+                            view.apply_drop(*drag, gap, cx)
+                        })),
+                );
+            }
             if !group.members.is_empty() {
                 let rows = group
                     .members
@@ -3935,28 +4042,48 @@ impl CockpitView {
                     .enumerate()
                     .map(|(at, row)| self.thread_element(row, Some(id), at, cx))
                     .collect();
-                block = block.child(nav::members(rows));
+                let mut members = nav::members(rows);
+                // Appending to the Group means dropping past its last row —
+                // an index one beyond the end, aimed at the last member.
+                if let Some(last) = group.members.last().map(|row| row.thread) {
+                    let tail = DropTarget::ThreadRow {
+                        thread: last,
+                        group: Some(id),
+                        index: group.members.len(),
+                    };
+                    members = members.child(
+                        drop_feedback(nav::member_tail(id), self.cockpit.groups().clone(), tail)
+                            .on_drop(cx.listener(move |view, drag: &NavDrag, _, cx| {
+                                view.apply_drop(*drag, tail, cx)
+                            })),
+                    );
+                }
+                block = block.child(members);
             }
             tree = tree.child(block);
         }
-        if !state.solos.is_empty() {
-            let rows = state
-                .solos
-                .iter()
-                .map(|row| self.thread_element(row, None, 0, cx))
-                .collect();
-            // `nav::solos` carries the 24px that separates it from the last
-            // Group. With no Group above it there is nothing to separate
-            // from, and the section starts at the tree's own padding.
-            let solos = nav::solos(rows).when(state.groups.is_empty(), |solos| solos.mt(px(0.)));
-            tree = tree.child(
-                drop_feedback(solos, self.cockpit.groups().clone(), DropTarget::LooseZone).on_drop(
-                    cx.listener(|view, drag: &Drag, _, cx| {
-                        view.apply_drop(*drag, DropTarget::LooseZone, cx)
-                    }),
-                ),
-            );
-        }
+        let rows = state
+            .solos
+            .iter()
+            .map(|row| self.thread_element(row, None, 0, cx))
+            .collect();
+        // `nav::solos` carries the 24px that separates it from the last
+        // Group. With no Group above it there is nothing to separate
+        // from, and the section starts at the tree's own padding. With no
+        // solo rows at all it separates nothing either — but it still
+        // renders, as the empty ground below the tree: with every Thread in
+        // a Group that is the only place left to drop one to get it out.
+        let empty = state.solos.is_empty();
+        let solos = nav::solos(rows)
+            .when(empty || state.groups.is_empty(), |solos| solos.mt(px(0.)))
+            .when(empty, |solos| solos.flex_1());
+        tree = tree.child(
+            drop_feedback(solos, self.cockpit.groups().clone(), DropTarget::LooseZone).on_drop(
+                cx.listener(|view, drag: &NavDrag, _, cx| {
+                    view.apply_drop(*drag, DropTarget::LooseZone, cx)
+                }),
+            ),
+        );
         if state.groups.is_empty() && state.solos.is_empty() {
             tree = tree.child(nav::empty_filter(&state.filter.label));
         }
@@ -3976,17 +4103,28 @@ impl CockpitView {
     ) -> AnyElement {
         let thread = row.thread;
         let open = self.pane_for(thread).is_some();
+        let origin = self.view;
         let target = DropTarget::ThreadRow {
             thread,
             group,
             index,
         };
-        drop_feedback(nav::thread_row(row), self.cockpit.groups().clone(), target)
-            .on_drag(Drag::Thread { thread, group }, move |_, _, _, cx| {
-                cx.new(|_| NavDragPreview(format!("thread-{thread:02}").into()))
-            })
+        let head = nav::thread_row_with_title(
+            row,
+            self.editable_thread_title(thread, row.name.clone(), cx),
+        );
+        drop_feedback(head, self.cockpit.groups().clone(), target)
+            .on_drag(
+                NavDrag {
+                    drag: Drag::Thread { thread, group },
+                    origin,
+                },
+                move |_, _, _, cx| {
+                    cx.new(|_| NavDragPreview(format!("thread-{thread:02}").into()))
+                },
+            )
             .on_drop(
-                cx.listener(move |view, drag: &Drag, _, cx| view.apply_drop(*drag, target, cx)),
+                cx.listener(move |view, drag: &NavDrag, _, cx| view.apply_drop(*drag, target, cx)),
             )
             .on_mouse_down(
                 MouseButton::Left,
@@ -3996,7 +4134,7 @@ impl CockpitView {
                         return;
                     }
                     if let Some(group) = group {
-                        view.scope = Scope::Group(group);
+                        view.view = View::Group(group);
                     }
                     view.revive_thread(thread, cx);
                 }),
@@ -4105,19 +4243,19 @@ pub fn revive_latest(cockpit: &mut Cockpit) {
 
 /// Fill the cockpit for a multi-pane run (`--panes N`, the perf load).
 ///
-/// The wall deals the two Providers alternately, because the nav is meant
-/// to carry both logomarks and a single-Provider wall draws one mark down
+/// The seed deals the two Providers alternately, because the nav is meant
+/// to carry both logomarks and a single-Provider seed draws one mark down
 /// the whole tree. Each slot takes the newest parked Thread of the Provider
 /// it is owed — newest, because that is what the operator was last looking
 /// at — and opens a new one only when the store has none.
 pub fn threads_for(cockpit: &mut Cockpit, wanted: usize, provider: Provider) -> Vec<ThreadId> {
     // A Group's members must share one Project (§3.5f), so the launch
-    // directory is registered up front and the wall is built inside it.
+    // directory is registered up front and the seed is built inside it.
     let project = cockpit.register_project(&here()).ok();
     let mut parked = cockpit.parked().unwrap_or_default();
     parked.reverse();
     // Only this Project's parked Threads come back: one left over from
-    // another checkout could not join the wall's Group, and a mixed wall
+    // another checkout could not join the seeded Group, and a mixed seed
     // would leave the nav with no Group at all.
     let mut pool: Vec<ThreadId> = parked
         .into_iter()
@@ -4163,29 +4301,29 @@ fn deal(first: Provider, nth: usize) -> Provider {
     }
 }
 
-/// The Group tier the **demo** shows: the wall's own Threads are the first
+/// The Group tier the **demo** shows: the seeded Threads are the first
 /// Group and three Threads it opens and parks are the second, so the nav's
 /// selected fill has a Group to land on. Both titles are written copy and
 /// the second Group's members are Threads nothing asked for — fixture, like
 /// the scripted transcripts, and callable only from the `--demo` launch. A
 /// store that already holds a Group is the operator's own and is left
 /// untouched.
-pub fn seed_groups(cockpit: &mut Cockpit, wall: &[ThreadId], provider: Provider) {
+pub fn seed_groups(cockpit: &mut Cockpit, seeded: &[ThreadId], provider: Provider) {
     if cockpit.groups().iter().next().is_some() {
         return;
     }
-    let wall = &wall[..wall.len().min(FIRST_GROUP)];
-    form_group(cockpit, wall, "Project-scoped navigation prototype");
+    let first_group = &seeded[..seeded.len().min(FIRST_GROUP)];
+    form_group(cockpit, first_group, "Project-scoped navigation prototype");
     let mut parked = Vec::new();
     while parked.len() < SECOND_GROUP {
-        // Dealt on from where the wall left off, so the second Group's
-        // rows mix both logomarks too instead of repeating one.
-        let provider = deal(provider, wall.len() + parked.len());
+        // Dealt on from where the first Group left off, so the second
+        // Group's rows mix both logomarks too instead of repeating one.
+        let provider = deal(provider, first_group.len() + parked.len());
         match cockpit.open(provider, WorkspaceChoice::Main { checkout: here() }) {
             Ok(id) => {
                 // A member is a Thread, not a Pane: the Session ends the
-                // moment it exists, so the wall stays the size it was asked
-                // for and the row is parked like the prototype's.
+                // moment it exists, so the Cockpit stays the size it was
+                // asked for and the row is parked like the prototype's.
                 if let Err(e) = cockpit.park(id) {
                     eprintln!("ferrite: thread {id} would not park: {e}");
                 }
@@ -4204,8 +4342,8 @@ pub fn seed_groups(cockpit: &mut Cockpit, wall: &[ThreadId], provider: Provider)
     );
 }
 
-/// How many of the wall's Threads the first seeded Group holds, and how
-/// many parked Threads the second holds.
+/// How many of the seeded Threads the first Group holds, and how many
+/// parked Threads the second holds.
 const FIRST_GROUP: usize = 4;
 const SECOND_GROUP: usize = 3;
 
@@ -4221,8 +4359,8 @@ fn form_group(cockpit: &mut Cockpit, members: &[ThreadId], title: &str) {
         return;
     };
     let group = match cockpit.apply_group(GroupChange::Create {
-        seed,
-        with: Some(with),
+        first: seed,
+        second: with,
     }) {
         Ok(applied) => applied.group,
         Err(e) => {
@@ -4334,6 +4472,31 @@ mod tests {
         dir
     }
 
+    /// Put every open Thread into one Group. A multi-Pane view **is** a Group
+    /// (#28), so any test that wants more than one Pane on screen has to say
+    /// which Group they share — `View::Solo` shows exactly the focused Pane.
+    fn group_all(cockpit: &mut Cockpit) -> GroupId {
+        let threads = cockpit.threads();
+        let group = cockpit
+            .apply_group(GroupChange::Create {
+                first: threads[0],
+                second: threads[1],
+            })
+            .unwrap()
+            .group
+            .unwrap();
+        for thread in &threads[2..] {
+            cockpit
+                .apply_group(GroupChange::Join {
+                    thread: *thread,
+                    group,
+                    index: None,
+                })
+                .unwrap();
+        }
+        group
+    }
+
     fn cockpit(name: &str, panes: usize) -> (Cockpit, Fake) {
         let fake = Fake::default();
         let store = Store::open(scratch(name)).unwrap();
@@ -4352,22 +4515,22 @@ mod tests {
     ) {
         let (mut core, _fake) = cockpit("group-scope-close", 2);
         let threads = core.threads();
-        core.apply_group(GroupChange::Create {
-            seed: threads[0],
-            with: Some(threads[1]),
-        })
-        .unwrap();
+        let group = core
+            .apply_group(GroupChange::Create {
+                first: threads[0],
+                second: threads[1],
+            })
+            .unwrap()
+            .group
+            .unwrap();
         cx.update(|cx| {
-            cx.bind_keys([
-                KeyBinding::new("cmd-g", ToggleGroup, None),
-                KeyBinding::new("cmd-w", CloseThread, None),
-            ])
+            cx.bind_keys([KeyBinding::new("cmd-w", CloseThread, None)])
         });
         let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
 
-        cx.simulate_keystrokes("cmd-g");
+        view.update(cx, |view, _| view.view = View::Group(group));
         view.read_with(cx, |view, _| {
-            assert!(matches!(view.scope, Scope::Group(_)));
+            assert!(matches!(view.view, View::Group(_)));
             assert_eq!(view.visible_indices().len(), 2);
         });
         cx.simulate_keystrokes("cmd-w");
@@ -4377,87 +4540,27 @@ mod tests {
             assert_eq!(view.visible_indices().len(), 1);
         });
     }
-
-    #[gpui::test]
-    fn move_to_group_picker_stays_visible_and_operable_at_instrument_level(
-        cx: &mut TestAppContext,
-    ) {
-        let (mut core, _fake) = cockpit("group-picker-instruments", 3);
-        let threads = core.threads();
-        let group = core
-            .apply_group(GroupChange::Create {
-                seed: threads[1],
-                with: Some(threads[2]),
-            })
-            .unwrap()
-            .group
-            .unwrap();
-        core.park(threads[1]).unwrap();
-        core.park(threads[2]).unwrap();
-        cx.update(|cx| {
-            cx.bind_keys([
-                KeyBinding::new("cmd-shift-g", MoveToGroup, None),
-                KeyBinding::new("up", MenuPrevious, Some("ComposerMenu")),
-                KeyBinding::new("enter", MenuPick, Some("ComposerMenu")),
-            ]);
-        });
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
-        cx.simulate_resize(gpui::size(px(560.), px(700.)));
-        tick(cx);
-        cx.update(|window, cx| {
-            assert_eq!(view.read(cx).level_now(window), Level::Instruments);
-        });
-
-        cx.simulate_keystrokes("cmd-shift-g");
-        tick(cx);
-        view.update(cx, |view, cx| {
-            assert!(matches!(
-                view.picker.as_ref(),
-                Some(Picker {
-                    kind: PickKind::Group,
-                    ..
-                })
-            ));
-            assert!(
-                view.composer_menu(0, cx).is_some(),
-                "the focused L2 cell has the shared picker popover"
-            );
-        });
-
-        cx.simulate_keystrokes("up up enter");
-        tick(cx);
-        view.read_with(cx, |view, _| {
-            assert_eq!(view.cockpit.groups().of(threads[0]).unwrap().id, group);
-            assert!(view.picker.is_none());
-        });
-        view.update(cx, |view, cx| {
-            view.group_error = Some("old error".into());
-            view.apply_drop(Drag::Group(group), DropTarget::LooseZone, cx);
-            assert!(
-                view.group_error.is_none(),
-                "predictable no-drop feedback ends with the drag"
-            );
-        });
-    }
-
     #[gpui::test]
     fn a_group_scoped_draft_joins_only_after_its_first_send_succeeds(cx: &mut TestAppContext) {
         let (mut core, _fake) = cockpit("group-draft", 2);
         let threads = core.threads();
-        core.apply_group(GroupChange::Create {
-            seed: threads[0],
-            with: Some(threads[1]),
-        })
-        .unwrap();
+        let group = core
+            .apply_group(GroupChange::Create {
+                first: threads[0],
+                second: threads[1],
+            })
+            .unwrap()
+            .group
+            .unwrap();
         cx.update(|cx| {
             cx.bind_keys([
-                KeyBinding::new("cmd-g", ToggleGroup, None),
                 KeyBinding::new("cmd-t", NewThread, None),
                 KeyBinding::new("enter", Submit, None),
             ])
         });
         let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
-        cx.simulate_keystrokes("cmd-g cmd-t");
+        view.update(cx, |view, _| view.view = View::Group(group));
+        cx.simulate_keystrokes("cmd-t");
         view.read_with(cx, |view, _| {
             assert_eq!(
                 view.visible_indices().len(),
@@ -4862,14 +4965,19 @@ mod tests {
     /// room — the operator never focuses the Pane it belongs to.
     #[gpui::test]
     fn a_wall_flagged_decision_is_answered_without_focusing_its_pane(cx: &mut TestAppContext) {
-        let (core, fake) = cockpit("wall-answer", 24);
+        let (mut core, fake) = cockpit("wall-answer", 24);
+        let group = group_all(&mut core);
         cx.update(|cx| {
             cx.bind_keys([KeyBinding::new("y", Allow, Some("Wall"))]);
         });
         let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
-        // 24 Panes at the app's default 1440×900 is wall range: 6 columns
-        // of ~197px cells, under the 200px threshold.
-        cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+        view.update(cx, |view, _| view.view = View::Group(group));
+        // A 24-member Group lays out on `groups::grid`, which gives 5 columns
+        // here, not the 6 the old global wall's `columns()` gave — so 1440
+        // now leaves ~219px cells, one band above the wall. 1200 puts the
+        // same 5 columns at ~171px, under the 200px threshold, which is the
+        // range this test is about.
+        cx.simulate_resize(gpui::size(px(1200.), px(900.)));
         view.update(cx, |view, _| {
             assert_eq!(view.panes.len(), 24);
         });
@@ -4895,16 +5003,23 @@ mod tests {
         });
     }
 
-    /// The grids the boards draw: 6 cells lay 3×2 (Cockpit board) and 24
-    /// lay 6×4 (Wall board); one Pane keeps the whole width.
+    /// A Group's grid is near-square with the long edge horizontal, and it
+    /// is the *only* grid now: with the global wall gone (#28) there is no
+    /// board-specific shape to follow and no six-column ceiling — a Group
+    /// is as wide as its own membership makes it. `group_grid` returns
+    /// (rows, columns); the cockpit reads the second.
     #[test]
-    fn the_grid_follows_the_boards_wide_shape() {
-        assert_eq!(columns(1), 1);
-        assert_eq!(columns(2), 2);
-        assert_eq!(columns(6), 3);
-        assert_eq!(columns(24), 6);
-        // Never wider than the wall's six, whatever the count.
-        assert_eq!(columns(48), 6);
+    fn the_grid_follows_the_groups_own_membership() {
+        assert_eq!(group_grid(1), (1, 1));
+        assert_eq!(group_grid(2), (1, 2));
+        assert_eq!(group_grid(6), (2, 3));
+        // The prototype's tall-left board is four Panes, laid 2×2 here and
+        // overridden to 2×3 by `tall_left_board` in the cockpit itself.
+        assert_eq!(group_grid(4), (2, 2));
+        // Past the old wall's 24, and past its six columns: nothing clamps.
+        assert_eq!(group_grid(24), (5, 5));
+        assert_eq!(group_grid(48), (7, 7));
+        assert_eq!(group_grid(100), (10, 10));
     }
 
     /// AC1: no mode switch — the same cockpit renders at a different altitude
@@ -5404,8 +5519,10 @@ mod tests {
     /// and the keyboard follows it into that Pane's Composer.
     #[gpui::test]
     fn clicking_a_pane_focuses_it_and_the_keyboard_follows(cx: &mut TestAppContext) {
-        let (core, _fake) = cockpit("click-focus", 2);
+        let (mut core, _fake) = cockpit("click-focus", 2);
+        let group = group_all(&mut core);
         let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, _| view.view = View::Group(group));
         // Two Panes side by side, each big enough to hold a Composer even
         // with the 208px nav (#21) taken off the left.
         cx.simulate_resize(gpui::size(px(1800.), px(600.)));
@@ -6072,7 +6189,8 @@ mod tests {
     /// AC3: one key walks to whoever is waiting, wherever they are in the grid.
     #[gpui::test]
     fn one_key_jumps_to_the_pane_that_needs_answering(cx: &mut TestAppContext) {
-        let (core, fake) = cockpit("jump", 4);
+        let (mut core, fake) = cockpit("jump", 4);
+        let group = group_all(&mut core);
         cx.update(|cx| {
             cx.bind_keys([
                 KeyBinding::new("cmd-d", NextDecision, None),
@@ -6080,6 +6198,7 @@ mod tests {
             ]);
         });
         let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, _| view.view = View::Group(group));
         fake.streams.borrow()[2].send(decision("perm_03")).unwrap();
         tick(cx);
         view.read_with(cx, |view, _| assert_eq!(view.focused, 0));
@@ -6127,11 +6246,13 @@ mod tests {
     /// the level made observable — and the focus snap holding in fullscreen.
     #[gpui::test]
     fn cmd_f_fullscreens_the_focused_pane_and_toggles_back(cx: &mut TestAppContext) {
-        let (core, _fake) = cockpit("fullscreen", 4);
+        let (mut core, _fake) = cockpit("fullscreen", 4);
+        let group = group_all(&mut core);
         cx.update(|cx| {
             cx.bind_keys([KeyBinding::new("cmd-f", ToggleFullscreen, None)]);
         });
         let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, _| view.view = View::Group(group));
         // Four Panes in this window sit at Instruments (three ~246px
         // columns beside the nav): no Composer anywhere.
         cx.simulate_resize(gpui::size(px(980.), px(700.)));
@@ -6265,7 +6386,8 @@ mod tests {
     /// the Thread the operator just left.
     #[gpui::test]
     fn paging_while_fullscreen_moves_the_fullscreen_to_the_next_thread(cx: &mut TestAppContext) {
-        let (core, _fake) = cockpit("fullscreen-page", 3);
+        let (mut core, _fake) = cockpit("fullscreen-page", 3);
+        let group = group_all(&mut core);
         cx.update(|cx| {
             cx.bind_keys([
                 KeyBinding::new("cmd-f", ToggleFullscreen, None),
@@ -6273,6 +6395,7 @@ mod tests {
             ]);
         });
         let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, _| view.view = View::Group(group));
         tick(cx);
         cx.simulate_keystrokes("cmd-f");
         view.read_with(cx, |view, _| {
@@ -6837,33 +6960,6 @@ mod tests {
         });
         cx.simulate_keystrokes("up");
         assert_eq!(composer_text(&view, cx), "draft", "Decision owns its state");
-    }
-
-    #[gpui::test]
-    fn group_rename_disarms_the_thread_composer_history_context_and_hint(cx: &mut TestAppContext) {
-        let (mut core, _) = cockpit("prompt-history-rename", 1);
-        let thread = core.threads()[0];
-        core.send(thread, "history".into());
-        core.apply_group(GroupChange::Create {
-            seed: thread,
-            with: None,
-        })
-        .unwrap();
-        bind_production_keys(cx);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
-        tick(cx);
-
-        cx.simulate_keystrokes("cmd-g cmd-r");
-        tick(cx);
-        view.read_with(cx, |view, _| assert!(view.rename.is_some()));
-        cx.update(|window, cx| {
-            assert!(
-                !view
-                    .read(cx)
-                    .history_available(0, view.read(cx).level_now(window)),
-                "the visible Thread Composer must not advertise or arm history while rename owns focus"
-            )
-        });
     }
 
     /// The line's triggers, parsed exactly as the wire reads them: `/` only
@@ -8267,5 +8363,451 @@ mod tests {
         assert_eq!(age_label(ago(3 * 3600), now), "3h ago");
         assert_eq!(age_label(ago(2 * 86400), now), "2d ago");
         assert_eq!(age_label(None, now), "age unknown");
+    }
+
+    fn drag_nav(cx: &mut gpui::VisualTestContext, source: &'static str, target: &'static str) {
+        let source = cx.debug_bounds(source).unwrap();
+        let target = cx.debug_bounds(target).unwrap();
+        let source = gpui::point(source.right() - px(5.), source.center().y);
+        cx.simulate_mouse_down(source, gpui::MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_mouse_move(
+            gpui::point(source.x - px(30.), source.y),
+            gpui::MouseButton::Left,
+            gpui::Modifiers::none(),
+        );
+        cx.simulate_mouse_move(
+            target.center(),
+            gpui::MouseButton::Left,
+            gpui::Modifiers::none(),
+        );
+        cx.simulate_mouse_up(
+            target.center(),
+            gpui::MouseButton::Left,
+            gpui::Modifiers::none(),
+        );
+    }
+
+    #[gpui::test]
+    fn solo_group_draft_and_close_follow_the_persisted_view_state_machine(cx: &mut TestAppContext) {
+        let (mut core, _fake) = cockpit("group-view-state", 3);
+        let threads = core.threads();
+        let group = core
+            .apply_group(GroupChange::Create {
+                first: threads[0],
+                second: threads[1],
+            })
+            .unwrap()
+            .group
+            .unwrap();
+        core.apply_group(GroupChange::Join {
+            thread: threads[2],
+            group,
+            index: None,
+        })
+        .unwrap();
+        cx.update(|cx| {
+            cx.bind_keys([
+                KeyBinding::new("cmd-w", CloseThread, None),
+                KeyBinding::new("cmd-t", NewThread, None),
+                KeyBinding::new("enter", Submit, None),
+            ])
+        });
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.view, View::Solo);
+            assert_eq!(view.visible_indices(), [0]);
+        });
+        view.update(cx, |view, cx| view.enter_group(group, cx));
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.view, View::Group(group));
+            let visible: Vec<_> = view
+                .visible_indices()
+                .into_iter()
+                .filter_map(|index| view.panes[index].thread())
+                .collect();
+            assert_eq!(visible, threads);
+        });
+
+        cx.simulate_keystrokes("cmd-t");
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.visible_indices().len(), 4, "pending draft appends");
+            assert_eq!(view.cockpit.groups().get(group).unwrap().members, threads);
+        });
+        cx.simulate_input("build it");
+        cx.simulate_keystrokes("enter");
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.cockpit.groups().get(group).unwrap().members.len(), 4);
+        });
+
+        cx.simulate_keystrokes("cmd-w");
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.view, View::Group(group));
+            assert_eq!(view.visible_indices().len(), 3);
+            assert_eq!(view.cockpit.threads().len(), 4, "leaving never parks");
+        });
+        cx.simulate_keystrokes("cmd-w cmd-w");
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.view, View::Solo);
+            assert!(view.cockpit.groups().get(group).is_none());
+            assert_eq!(view.visible_indices().len(), 1);
+            assert_eq!(view.cockpit.threads().len(), 4);
+        });
+    }
+
+    #[gpui::test]
+    fn a_pending_draft_keeps_a_pair_open_until_it_sends_or_closes(cx: &mut TestAppContext) {
+        let (mut core, _fake) = cockpit("group-pending-draft", 4);
+        let threads = core.threads();
+        let sending = core
+            .apply_group(GroupChange::Create {
+                first: threads[0],
+                second: threads[1],
+            })
+            .unwrap()
+            .group
+            .unwrap();
+        let closing = core
+            .apply_group(GroupChange::Create {
+                first: threads[2],
+                second: threads[3],
+            })
+            .unwrap()
+            .group
+            .unwrap();
+        cx.update(|cx| {
+            cx.bind_keys([
+                KeyBinding::new("cmd-t", NewThread, None),
+                KeyBinding::new("cmd-w", CloseThread, None),
+                KeyBinding::new("enter", Submit, None),
+            ])
+        });
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+
+        view.update(cx, |view, cx| view.enter_group(sending, cx));
+        cx.simulate_keystrokes("cmd-t");
+        let sending_draft = view.read_with(cx, |view, _| view.panes[view.focused].composer.clone());
+        view.update(cx, |view, _| {
+            view.focus_pane(view.pane_for(threads[0]).unwrap())
+        });
+        cx.simulate_keystrokes("cmd-w");
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.view, View::Group(sending));
+            assert_eq!(view.visible_indices().len(), 2, "survivor plus Draft");
+            assert_eq!(view.cockpit.groups().get(sending).unwrap().members.len(), 2);
+        });
+        view.update(cx, |view, _| {
+            let draft = view
+                .panes
+                .iter()
+                .position(|pane| pane.composer == sending_draft)
+                .unwrap();
+            view.focus_pane(draft);
+        });
+        cx.simulate_input("preserve this prompt");
+        cx.simulate_keystrokes("enter");
+        view.read_with(cx, |view, _| {
+            let members = &view.cockpit.groups().get(sending).unwrap().members;
+            assert_eq!(members.len(), 2);
+            assert_eq!(members[0], threads[1]);
+            assert!(!members.contains(&threads[0]));
+        });
+
+        view.update(cx, |view, cx| view.enter_group(closing, cx));
+        cx.simulate_keystrokes("cmd-t");
+        let closing_draft = view.read_with(cx, |view, _| view.panes[view.focused].composer.clone());
+        cx.simulate_input("discard only when I close");
+        view.update(cx, |view, _| {
+            view.focus_pane(view.pane_for(threads[2]).unwrap())
+        });
+        cx.simulate_keystrokes("cmd-w");
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.view, View::Group(closing));
+            assert_eq!(view.visible_indices().len(), 2);
+        });
+        view.update(cx, |view, _| {
+            let draft = view
+                .panes
+                .iter()
+                .position(|pane| pane.composer == closing_draft)
+                .unwrap();
+            view.focus_pane(draft);
+        });
+        cx.simulate_keystrokes("cmd-w");
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.view, View::Solo);
+            assert!(view.cockpit.groups().get(closing).is_none());
+            assert_eq!(view.focused_thread(), Some(threads[3]));
+        });
+    }
+
+    #[gpui::test]
+    fn pointer_opens_a_group_and_renames_parked_thread_and_group_titles(cx: &mut TestAppContext) {
+        let (mut core, _) = cockpit("group-pointer-open-rename", 2);
+        let threads = core.threads();
+        let group = core
+            .apply_group(GroupChange::Create {
+                first: threads[0],
+                second: threads[1],
+            })
+            .unwrap()
+            .group
+            .unwrap();
+        assert_eq!(group.get(), 1);
+        core.rename_thread(threads[1], "Existing parked title")
+            .unwrap();
+        core.park(threads[1]).unwrap();
+        cx.update(|cx| cx.bind_keys([KeyBinding::new("enter", Submit, None)]));
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        cx.run_until_parked();
+
+        let thread_title = cx
+            .debug_bounds("rename-thread-2")
+            .expect("the parked title is rendered");
+        cx.simulate_click(thread_title.center(), gpui::Modifiers::none());
+        view.read_with(cx, |view, cx| {
+            let editor = &view.rename.as_ref().expect("inline Thread editor").1;
+            assert_eq!(editor.read(cx).text(), "Existing parked title");
+        });
+        view.update(cx, |view, cx| {
+            let editor = view.rename.as_ref().unwrap().1.clone();
+            editor.update(cx, |line, cx| line.set("cancel me".into(), cx));
+        });
+        cx.simulate_click(gpui::point(px(500.), px(350.)), gpui::Modifiers::none());
+        view.read_with(cx, |view, _| {
+            assert!(view.rename.is_none());
+            assert_eq!(
+                view.cockpit.thread_title(threads[1]).unwrap().as_deref(),
+                Some("Existing parked title")
+            );
+        });
+
+        let thread_title = cx.debug_bounds("rename-thread-2").unwrap();
+        cx.simulate_click(thread_title.center(), gpui::Modifiers::none());
+        view.update(cx, |view, cx| {
+            let editor = view.rename.as_ref().unwrap().1.clone();
+            editor.update(cx, |line, cx| line.set("Saved parked title".into(), cx));
+        });
+        cx.simulate_keystrokes("enter");
+
+        let group_title = cx.debug_bounds("rename-group-1").unwrap();
+        cx.simulate_click(group_title.center(), gpui::Modifiers::none());
+        view.update(cx, |view, cx| {
+            let editor = view.rename.as_ref().unwrap().1.clone();
+            editor.update(cx, |line, cx| line.set("Saved Group title".into(), cx));
+        });
+        cx.simulate_keystrokes("enter");
+
+        let header = cx.debug_bounds("nav-group-1").unwrap();
+        cx.simulate_click(
+            gpui::point(header.right() - px(6.), header.center().y),
+            gpui::Modifiers::none(),
+        );
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.view, View::Group(group));
+            assert_eq!(view.visible_indices().len(), 2);
+            assert_eq!(
+                view.cockpit.thread_title(threads[1]).unwrap().as_deref(),
+                Some("Saved parked title")
+            );
+            assert_eq!(
+                view.cockpit.groups().get(group).unwrap().display_title(),
+                "Saved Group title"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn pointer_drag_joins_then_reorders_to_the_after_last_target(cx: &mut TestAppContext) {
+        let (mut core, _) = cockpit("group-pointer-drag", 5);
+        let threads = core.threads();
+        let group = core
+            .apply_group(GroupChange::Create {
+                first: threads[0],
+                second: threads[1],
+            })
+            .unwrap()
+            .group
+            .unwrap();
+        let second_group = core
+            .apply_group(GroupChange::Create {
+                first: threads[3],
+                second: threads[4],
+            })
+            .unwrap()
+            .group
+            .unwrap();
+        core.rename_thread(threads[2], "Durable drag title")
+            .unwrap();
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        cx.run_until_parked();
+
+        drag_nav(cx, "nav-thread-3", "nav-group-1");
+        view.read_with(cx, |view, _| {
+            assert_eq!(
+                view.cockpit.groups().get(group).unwrap().members,
+                threads[..3],
+                "the real drop dispatched the join plan"
+            );
+        });
+
+        drag_nav(cx, "nav-thread-1", "member-tail-1");
+        view.read_with(cx, |view, _| {
+            assert_eq!(
+                view.cockpit.groups().get(group).unwrap().members,
+                [threads[1], threads[2], threads[0]],
+                "downward reorder lands after the last member"
+            );
+        });
+
+        drag_nav(cx, "nav-group-2", "group-gap-0");
+        view.read_with(cx, |view, _| {
+            let groups: Vec<_> = view.cockpit.groups().iter().map(|group| group.id).collect();
+            assert_eq!(groups, [second_group, group]);
+        });
+    }
+
+    #[gpui::test]
+    fn pointer_dragging_from_a_pair_with_a_draft_keeps_the_group_pending(cx: &mut TestAppContext) {
+        let (mut core, _) = cockpit("group-pointer-pending-draft", 2);
+        let threads = core.threads();
+        let group = core
+            .apply_group(GroupChange::Create {
+                first: threads[0],
+                second: threads[1],
+            })
+            .unwrap()
+            .group
+            .unwrap();
+        cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-t", NewThread, None)]));
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, cx| view.enter_group(group, cx));
+        cx.simulate_keystrokes("cmd-t");
+        let draft = view.read_with(cx, |view, _| view.panes[view.focused].composer.clone());
+        cx.simulate_input("preserve this exact prompt");
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        cx.run_until_parked();
+
+        drag_nav(cx, "nav-thread-1", "loose-zone");
+
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.view, View::Solo);
+            assert_eq!(view.focused_thread(), Some(threads[0]));
+            assert_eq!(
+                view.cockpit.groups().get(group).unwrap().members,
+                threads,
+                "the pending leave has not dissolved the durable pair"
+            );
+        });
+        view.update(cx, |view, cx| view.enter_group(group, cx));
+        view.read_with(cx, |view, cx| {
+            let visible = view.visible_indices();
+            assert_eq!(visible.len(), 2, "survivor plus Draft");
+            let visible_threads: Vec<_> = visible
+                .iter()
+                .filter_map(|index| view.panes[*index].thread())
+                .collect();
+            assert_eq!(visible_threads, [threads[1]]);
+            assert!(visible
+                .iter()
+                .any(|index| view.panes[*index].composer == draft));
+            assert_eq!(draft.read(cx).text(), "preserve this exact prompt");
+        });
+    }
+
+    #[gpui::test]
+    fn a_hundred_member_group_remains_reachable_through_nav_scroll(cx: &mut TestAppContext) {
+        let (mut core, _) = cockpit("group-nav-scroll", 100);
+        group_all(&mut core);
+        let (_view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(320.)));
+        cx.run_until_parked();
+        let before = cx.debug_bounds("nav-thread-100").unwrap();
+        assert!(
+            before.center().y > px(320.),
+            "the last row starts below the viewport"
+        );
+
+        // Past the end and clamped there, rather than a measured distance:
+        // a member row is 56.5px tall (#32), so 100 of them are ~5900px of
+        // column and any number tuned to a shorter row would stop short.
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: gpui::point(px(100.), px(200.)),
+            delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-40_000.))),
+            modifiers: gpui::Modifiers::none(),
+            touch_phase: gpui::TouchPhase::default(),
+        });
+        cx.run_until_parked();
+        let after = cx.debug_bounds("nav-thread-100").unwrap();
+        assert!(
+            after.center().y < px(320.),
+            "scrolling exposes the final member: {after:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn drag_from_a_pair_tracks_the_origin_and_focuses_the_survivor(cx: &mut TestAppContext) {
+        let (mut core, _) = cockpit("group-drag-origin", 3);
+        let threads = core.threads();
+        let group = core
+            .apply_group(GroupChange::Create {
+                first: threads[0],
+                second: threads[1],
+            })
+            .unwrap()
+            .group
+            .unwrap();
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, cx| {
+            view.enter_group(group, cx);
+            view.apply_drop(
+                NavDrag {
+                    drag: Drag::Thread {
+                        thread: threads[0],
+                        group: Some(group),
+                    },
+                    origin: View::Group(group),
+                },
+                DropTarget::ThreadRow {
+                    thread: threads[2],
+                    group: None,
+                    index: 0,
+                },
+                cx,
+            );
+        });
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.view, View::Solo);
+            assert_eq!(view.focused_thread(), Some(threads[1]));
+            assert!(view.cockpit.groups().get(group).is_none());
+        });
+    }
+
+    #[gpui::test]
+    fn inline_title_rename_disarms_the_thread_composer_history_context_and_hint(
+        cx: &mut TestAppContext,
+    ) {
+        let (mut core, _) = cockpit("prompt-history-rename", 1);
+        let thread = core.threads()[0];
+        core.send(thread, "history".into());
+        bind_production_keys(cx);
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        tick(cx);
+
+        view.update(cx, |view, cx| {
+            view.start_rename(RenameTarget::Thread(thread), cx)
+        });
+        tick(cx);
+        view.read_with(cx, |view, _| assert!(view.rename.is_some()));
+        cx.update(|window, cx| {
+            assert!(
+                !view
+                    .read(cx)
+                    .history_available(0, view.read(cx).level_now(window)),
+                "the visible Thread Composer must not advertise or arm history while rename owns focus"
+            )
+        });
     }
 }

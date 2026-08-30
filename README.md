@@ -2,11 +2,13 @@
 
 Ferrite is a native (GPUI) cockpit for running many coding agents in parallel.
 Each **Thread** — one durable agent conversation, with its Provider and its
-workspace binding — shows in a **Pane** of the **Cockpit** grid, up to a
-24-pane wall. A Pane's size picks its semantic zoom: near, the transcript and
-a Composer; smaller, instruments; at wall range, a status LED. **Decisions** —
-anything a Thread is blocked on that only you can answer — are answerable
-straight from the wall with one key. Ferrite is not a harness and never talks
+workspace binding — shows in a **Pane** of the **Cockpit**. You see one
+Thread at a time, or one **Group** — Threads you have put together, whose
+membership is the Cockpit's grid. A Pane's size picks its semantic zoom:
+near, the transcript and a Composer; smaller, instruments; at wall range, a
+status LED. **Decisions** — anything a Thread is blocked on that only you
+can answer — are answerable at wall range with one key, without focusing
+the Pane first. Ferrite is not a harness and never talks
 to a Provider's API itself: it drives the official Claude and Codex CLIs and
 renders what they stream.
 
@@ -53,7 +55,7 @@ Shortcuts are spelled with `cmd` below; on Windows the same shortcuts use
 - `cmd-shift-n` — new Thread in its own git worktree
 - `escape` — interrupt the running Session
 - `y` / `n` / `a` — answer a Decision (allow / deny / always), from the
-  focused Pane or straight from the wall
+  focused Pane or from any Pane at wall range
 - `cmd-]` / `cmd-[` — next / previous Pane; `cmd-d` — jump to the next Decision
 - `cmd-w` — park a Thread; `cmd-o` — revive the newest parked one
 

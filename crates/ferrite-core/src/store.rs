@@ -44,7 +44,9 @@ use crate::{transcript::Input, ThreadId};
 ///   the project the Thread's CWD choice named. A v1–v5 log loads with none
 ///   — the resolved binding paths stay the durable truth either way, so a
 ///   Thread without one loses nothing but a grouping key.
-const SCHEMA_VERSION: u32 = 6;
+/// - **7** — an optional operator-chosen Thread title. Older Threads keep
+///   their generated `thread-NN` label until renamed.
+const SCHEMA_VERSION: u32 = 7;
 
 /// Which agent backend serves this Thread — persisted so a restart knows
 /// which provider to revive the Thread on.
@@ -122,6 +124,9 @@ struct Header {
     /// the binding's resolved paths still say where work happens.
     #[serde(default)]
     project_id: Option<ProjectId>,
+    /// Schema 7+; absent means the generated `thread-NN` label.
+    #[serde(default)]
+    title: Option<String>,
 }
 
 /// The persisted form of a Thread's workspace binding, mirroring
@@ -496,6 +501,8 @@ pub struct Store {
     flush_interval: std::time::Duration,
     #[cfg(test)]
     fail_create: bool,
+    #[cfg(test)]
+    fail_delete: bool,
 }
 
 impl Store {
@@ -516,12 +523,20 @@ impl Store {
             flush_interval,
             #[cfg(test)]
             fail_create: false,
+            #[cfg(test)]
+            fail_delete: false,
         })
     }
 
     #[cfg(test)]
     pub(crate) fn refuse_create(mut self) -> Self {
         self.fail_create = true;
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn refuse_delete(mut self) -> Self {
+        self.fail_delete = true;
         self
     }
 
@@ -573,6 +588,7 @@ impl Store {
             // And on the provider's default model; a choice is picked later.
             model,
             project_id: project,
+            title: None,
         };
         file.write_all(line(&header)?.as_bytes())?;
         file.sync_data()?;
@@ -598,6 +614,10 @@ impl Store {
     /// The caller settles the worktree's fate first — anything still under
     /// the Thread's directory goes with it.
     pub fn delete(&self, id: ThreadId) -> io::Result<()> {
+        #[cfg(test)]
+        if self.fail_delete {
+            return Err(io::Error::other("stub refused Thread deletion"));
+        }
         fs::remove_dir_all(self.dir.join(id.to_string()))
     }
 
@@ -639,6 +659,7 @@ impl Store {
             session_project_root: header.session_project_root,
             model: header.model,
             project_id: header.project_id,
+            title: header.title,
         })
     }
 
@@ -674,6 +695,7 @@ impl Store {
             session_project_root: header.session_project_root,
             model: header.model,
             project_id: header.project_id,
+            title: header.title,
             records,
         })
     }
@@ -742,6 +764,29 @@ impl Store {
         Ok(())
     }
 
+    pub fn set_title(
+        &self,
+        id: ThreadId,
+        title: String,
+        mut writer: Option<&mut ThreadWriter>,
+    ) -> Result<(), LoadError> {
+        if let Some(w) = writer.as_mut() {
+            w.flush()?;
+        }
+        let mut snapshot = self.load(id)?;
+        snapshot.title = Some(title);
+        let file = self.rewrite(&snapshot)?;
+        if let Some(w) = writer {
+            *w = ThreadWriter {
+                file,
+                buffer: Vec::new(),
+                flush_interval: self.flush_interval,
+                buffered_since: None,
+            };
+        }
+        Ok(())
+    }
+
     /// Reopen one Thread's log for appending — how a revived Thread's next
     /// turns reach the same history after a restart.
     ///
@@ -785,6 +830,7 @@ impl Store {
             session_project_root: snapshot.session_project_root.clone(),
             model: snapshot.model.clone(),
             project_id: snapshot.project_id,
+            title: snapshot.title.clone(),
         })?;
         for record in &snapshot.records {
             contents.push_str(&line(record)?);
@@ -819,6 +865,7 @@ pub struct ThreadMeta {
     /// `None` — including every pre-v6 log — means unregistered (#29): the
     /// binding's resolved paths still say where work happens.
     pub project_id: Option<ProjectId>,
+    pub title: Option<String>,
 }
 
 /// One Thread as loaded from disk: everything a restart needs.
@@ -832,6 +879,7 @@ pub struct ThreadSnapshot {
     session_project_root: Option<PathBuf>,
     model: Option<String>,
     project_id: Option<ProjectId>,
+    title: Option<String>,
     records: Vec<Record>,
 }
 
@@ -864,6 +912,10 @@ impl ThreadSnapshot {
     /// — including every log from before schema 6 — means unregistered.
     pub fn project_id(&self) -> Option<ProjectId> {
         self.project_id
+    }
+
+    pub fn title(&self) -> Option<&str> {
+        self.title.as_deref()
     }
 
     /// The provider-native id the next Session resumes with — the latest the
@@ -1811,7 +1863,7 @@ mod tests {
             &dir,
             "3",
             concat!(
-                r#"{"schema":7,"provider":"claude"}"#,
+                r#"{"schema":8,"provider":"claude"}"#,
                 "\n",
                 r#"{"type":"init","session_id":"from-the-future","model":"m"}"#,
                 "\n",
@@ -1821,7 +1873,7 @@ mod tests {
         let store = Store::open(&dir).unwrap();
         match store.load(ThreadId::new(3)) {
             Err(LoadError::FutureSchema { found, supported }) => {
-                assert_eq!(found, 7);
+                assert_eq!(found, 8);
                 assert_eq!(supported, SCHEMA_VERSION);
             }
             Ok(_) => panic!("a future schema must not load"),

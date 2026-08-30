@@ -104,6 +104,9 @@ pub struct DraftBinding {
     pub error: Option<SharedString>,
     /// Group scope awaiting a real Thread id. Never persisted as a fake id.
     pub pending_group: Option<GroupId>,
+    /// A pair member whose durable leave waits for this Draft to become the
+    /// replacement. Closing the Draft applies the leave and dissolves.
+    pub pending_leave: Option<ThreadId>,
 }
 
 /// The band's three chips, in tab order.

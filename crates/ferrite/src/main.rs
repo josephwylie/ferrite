@@ -65,8 +65,7 @@ fn main() {
             }
         }
     }
-    // How many Panes to open. The wall's own number is 24, which is what the
-    // perf run uses.
+    // How many Panes to open. The perf run uses 24.
     let panes: usize = flag(&args, "--panes")
         .and_then(|n| n.parse().ok())
         .unwrap_or(1);
@@ -118,7 +117,7 @@ fn main() {
         }
         if core.threads().is_empty() {
             if demo || panes > 1 {
-                seed_wall(&mut core, panes, provider, demo);
+                seed_panes(&mut core, panes, provider, demo);
             } else {
                 // The default launch revives the newest parked Thread; an
                 // empty store starts as a draft Pane (#29) — nothing
@@ -126,6 +125,14 @@ fn main() {
                 cockpit::revive_latest(&mut core);
             }
         }
+
+        // The demo's Group (above): the fixture opens *on* it. The default
+        // view is Solo (#28), which is right for a launch but wrong here —
+        // the board the demo exists to draw is a Group's membership, and
+        // Solo would show one Pane of it.
+        let seeded_group = demo
+            .then(|| core.groups().iter().next().map(|group| group.id))
+            .flatten();
 
         let bounds = Bounds::centered(None, size(px(1440.), px(900.)), cx);
         let window = cx
@@ -151,6 +158,12 @@ fn main() {
             )
             .unwrap();
 
+        if let Some(group) = seeded_group {
+            window
+                .update(cx, |view, _window, cx| view.enter_group(group, cx))
+                .unwrap();
+        }
+
         window
             .update(cx, |_, _window, cx| cx.activate(true))
             .unwrap();
@@ -162,13 +175,15 @@ fn main() {
 /// open new Threads for the room that is left.
 ///
 /// Those new Threads alternate the two providers, starting at `first`. A
-/// wall opened on one provider draws the same logomark down the whole nav;
-/// the design shows both marks mixed, so the seed has to deal both.
-fn seed_wall(core: &mut Cockpit, panes: usize, first: Provider, demo: bool) {
-    // The wall opens on a Group. The nav's selected fill is carried by the
-    // current Group — the one holding the focused Pane's Thread — so a wall
-    // of nothing but solo Threads leaves that fill unpainted and every Group
-    // title at `TEXT` instead of `TEXT_STRONG`. A store that already holds
+/// Cockpit opened on one provider draws the same logomark down the whole
+/// nav; the design shows both marks mixed, so the seed has to deal both.
+fn seed_panes(core: &mut Cockpit, panes: usize, first: Provider, demo: bool) {
+    // The seeded Panes are a Group's members: with no global wall (#28) a
+    // Group is the only view that shows more than one Pane. The nav's
+    // selected fill is carried by the current Group too — the one holding
+    // the focused Pane's Thread — so a seed of nothing but solo Threads
+    // leaves that fill unpainted and every Group title at `TEXT` instead of
+    // `TEXT_STRONG`. A store that already holds
     // Groups (any run after the first) is therefore revived from the first
     // Group's members before anything else; a fresh store has no Group to
     // revive from and gets one from `cockpit::seed_groups`, over the Threads
@@ -224,8 +239,8 @@ fn seed_wall(core: &mut Cockpit, panes: usize, first: Provider, demo: bool) {
     // it may never reach a store an operator keeps work in — `--panes N`
     // alone spawns real Sessions, so it does not qualify.
     if demo {
-        let wall: Vec<ferrite_core::ThreadId> = core.threads().to_vec();
-        cockpit::seed_groups(core, &wall, first);
+        let seeded: Vec<ferrite_core::ThreadId> = core.threads().to_vec();
+        cockpit::seed_groups(core, &seeded, first);
     }
 }
 

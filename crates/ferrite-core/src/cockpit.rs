@@ -148,6 +148,29 @@ impl std::fmt::Display for DeleteError {
 
 impl std::error::Error for DeleteError {}
 
+#[derive(Debug)]
+pub enum ReviveGroupError {
+    MissingGroup,
+    Member { thread: ThreadId, error: LoadError },
+    Rollback { thread: ThreadId, error: io::Error },
+}
+
+impl std::fmt::Display for ReviveGroupError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingGroup => write!(f, "group no longer exists"),
+            Self::Member { thread, error } => {
+                write!(f, "could not revive Thread {thread}: {error}")
+            }
+            Self::Rollback { thread, error } => {
+                write!(f, "could not roll back revived Thread {thread}: {error}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ReviveGroupError {}
+
 struct Thread {
     transcript: Transcript,
     /// Highlighting answers for this Thread's own Blocks. Per Thread because
@@ -163,6 +186,7 @@ struct Thread {
     /// provider's default. Every respawn reads it, so the choice holds for
     /// the Thread's whole life.
     model: Option<String>,
+    title: Option<String>,
     pending: Option<Decision>,
     /// A prompt the operator wrote while the turn was still running.
     queued: Option<String>,
@@ -230,6 +254,7 @@ impl Thread {
             writer,
             provider,
             model,
+            title: None,
             pending: None,
             queued: None,
             prompt_history: PromptHistory::new(Vec::new()),
@@ -278,6 +303,8 @@ pub struct Cockpit {
     sampler: Option<Box<dyn RssSampler>>,
     /// Bytes one Session may hold before the watchdog replaces it.
     limit: u64,
+    #[cfg(test)]
+    refuse_park: std::collections::HashSet<ThreadId>,
 }
 
 impl Cockpit {
@@ -292,6 +319,8 @@ impl Cockpit {
             spawner,
             sampler: None,
             limit: u64::MAX,
+            #[cfg(test)]
+            refuse_park: std::collections::HashSet::new(),
         })
     }
 
@@ -706,14 +735,9 @@ impl Cockpit {
     /// clean (`git status` defines clean); its branch is never deleted.
     pub fn delete(&mut self, thread: ThreadId) -> Result<(), DeleteError> {
         let snapshot = self.store.load(thread).map_err(DeleteError::Load)?;
-        let membership = self.groups.of(thread).and_then(|group| {
-            group
-                .members
-                .iter()
-                .position(|member| *member == thread)
-                .map(|index| (group.id, index))
-        });
-        if membership.is_some() {
+        let groups_before = self.groups.clone();
+        let grouped = self.groups.of(thread).is_some();
+        if grouped {
             self.groups
                 .apply(GroupChange::Leave { thread })
                 .map_err(|error| DeleteError::Io(io::Error::other(error)))?;
@@ -746,13 +770,9 @@ impl Cockpit {
         })();
 
         if let Err(error) = deleted {
-            if let Some((group, index)) = membership {
+            if grouped {
                 self.groups
-                    .apply(GroupChange::Join {
-                        thread,
-                        group,
-                        index: Some(index),
-                    })
+                    .restore_snapshot(groups_before)
                     .map_err(|restore| {
                         DeleteError::Io(io::Error::other(format!(
                             "{error}; restoring group membership also failed: {restore}"
@@ -771,6 +791,10 @@ impl Cockpit {
             return Ok(());
         };
         state.session = None;
+        #[cfg(test)]
+        if self.refuse_park.contains(&thread) {
+            return Err(io::Error::other("stub refused to park"));
+        }
         state.writer.flush()
     }
 
@@ -791,6 +815,7 @@ impl Cockpit {
         let cwd = workspace::effective_cwd(session_project_root.as_deref(), workspace.as_ref())
             .map(Path::to_path_buf);
         let model = snapshot.model();
+        let title = snapshot.title().map(str::to_string);
         let session = self
             .spawner
             .spawn(SpawnRequest {
@@ -812,6 +837,7 @@ impl Cockpit {
             workspace,
             session_project_root,
         );
+        state.title = title;
         state.prompt_history = PromptHistory::new(snapshot.prompt_texts());
         // The clocks come back with the history: a settled call's duration
         // was measured when it ran and written down, so the replayed rows
@@ -832,6 +858,39 @@ impl Cockpit {
 
         self.threads.insert(thread, state);
         Ok(())
+    }
+
+    /// Open every member of one persisted Group or leave the live set unchanged.
+    pub fn revive_group(&mut self, group: GroupId) -> Result<Vec<ThreadId>, ReviveGroupError> {
+        let members = self
+            .groups
+            .get(group)
+            .ok_or(ReviveGroupError::MissingGroup)?
+            .members
+            .clone();
+        let mut revived = Vec::new();
+        for thread in &members {
+            if self.threads.contains_key(thread) {
+                continue;
+            }
+            if let Err(error) = self.revive(*thread) {
+                let mut rollback_failure = None;
+                for opened in revived.into_iter().rev() {
+                    if let Err(error) = self.park(opened) {
+                        rollback_failure.get_or_insert((opened, error));
+                    }
+                }
+                if let Some((thread, error)) = rollback_failure {
+                    return Err(ReviveGroupError::Rollback { thread, error });
+                }
+                return Err(ReviveGroupError::Member {
+                    thread: *thread,
+                    error,
+                });
+            }
+            revived.push(*thread);
+        }
+        Ok(members)
     }
 
     /// Adopt a CLI session file as a Thread of this cockpit (#11) — the
@@ -965,6 +1024,36 @@ impl Cockpit {
 
     pub fn threads(&self) -> Vec<ThreadId> {
         self.threads.keys().copied().collect()
+    }
+
+    /// The durable operator title, whether this Thread is live or parked.
+    pub fn thread_title(&self, thread: ThreadId) -> Result<Option<String>, LoadError> {
+        if let Some(state) = self.threads.get(&thread) {
+            return Ok(state.title.clone());
+        }
+        self.store.peek(thread).map(|meta| meta.title)
+    }
+
+    pub fn rename_thread(&mut self, thread: ThreadId, title: &str) -> io::Result<()> {
+        let title = title.trim();
+        if title.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Thread title cannot be blank",
+            ));
+        }
+        let mut state = self.threads.get_mut(&thread);
+        self.store
+            .set_title(
+                thread,
+                title.to_string(),
+                state.as_mut().map(|state| &mut state.writer),
+            )
+            .map_err(io::Error::other)?;
+        if let Some(state) = state {
+            state.title = Some(title.to_string());
+        }
+        Ok(())
     }
 
     /// One frame: drain every live Session, fold what arrived, and write it
@@ -1401,6 +1490,7 @@ mod tests {
         attempts: Rc<RefCell<usize>>,
         /// While set, spawn refuses — how a test makes a restart fail.
         fail: Rc<RefCell<bool>>,
+        fail_at: Rc<RefCell<Option<usize>>>,
         fail_send: Rc<RefCell<bool>>,
     }
 
@@ -1425,7 +1515,8 @@ mod tests {
             request: SpawnRequest,
         ) -> std::io::Result<Box<dyn crate::providers::Session>> {
             *self.attempts.borrow_mut() += 1;
-            if *self.fail.borrow() {
+            let attempt = *self.attempts.borrow();
+            if *self.fail.borrow() || *self.fail_at.borrow() == Some(attempt) {
                 return Err(std::io::Error::other("stub refused to spawn"));
             }
             let (tx, rx) = mpsc::channel();
@@ -1691,59 +1782,6 @@ mod tests {
     }
 
     #[test]
-    fn grouped_bootstrap_refuses_a_full_group_before_creating_or_sending_a_thread() {
-        let root = scratch("group-bootstrap-full");
-        let repo = init_repo(&root);
-        let (mut cockpit, fake) = cockpit("group-bootstrap-full-store");
-        let mut threads = Vec::new();
-        for _ in 0..crate::groups::GROUP_CAP {
-            threads.push(
-                cockpit
-                    .open(
-                        Provider::Claude,
-                        WorkspaceChoice::Main {
-                            checkout: repo.clone(),
-                        },
-                    )
-                    .unwrap(),
-            );
-        }
-        let group = cockpit
-            .apply_group(GroupChange::Create {
-                seed: threads[0],
-                with: None,
-            })
-            .unwrap()
-            .group
-            .unwrap();
-        for thread in &threads[1..] {
-            cockpit
-                .apply_group(GroupChange::Join {
-                    thread: *thread,
-                    group,
-                    index: None,
-                })
-                .unwrap();
-        }
-        let sent_before = fake.sent.borrow().len();
-
-        let refused = cockpit.bootstrap_in_group(
-            ProviderChoice {
-                provider: Provider::Claude,
-                model: None,
-            },
-            WorkspaceChoice::Main { checkout: repo },
-            "exact drafted prompt",
-            group,
-        );
-
-        assert!(refused.is_err());
-        assert_eq!(cockpit.threads(), threads);
-        assert_eq!(fake.sent.borrow().len(), sent_before);
-        assert_eq!(cockpit.groups().get(group).unwrap().members.len(), 16);
-    }
-
-    #[test]
     fn grouped_bootstrap_persists_membership_before_sending() {
         let root = scratch("group-bootstrap-persist");
         let repo = init_repo(&root);
@@ -1758,8 +1796,19 @@ mod tests {
                 },
             )
             .unwrap();
+        let second = cockpit
+            .open(
+                Provider::Claude,
+                WorkspaceChoice::Main {
+                    checkout: repo.clone(),
+                },
+            )
+            .unwrap();
         let group = cockpit
-            .apply_group(GroupChange::Create { seed, with: None })
+            .apply_group(GroupChange::Create {
+                first: seed,
+                second,
+            })
             .unwrap()
             .group
             .unwrap();
@@ -1779,8 +1828,11 @@ mod tests {
 
         assert!(refused.is_err());
         assert_eq!(fake.sent.borrow().as_slice(), &[] as &[String]);
-        assert_eq!(cockpit.threads(), vec![seed]);
-        assert_eq!(cockpit.groups().get(group).unwrap().members, vec![seed]);
+        assert_eq!(cockpit.threads(), vec![seed, second]);
+        assert_eq!(
+            cockpit.groups().get(group).unwrap().members,
+            vec![seed, second]
+        );
         assert!(cockpit.parked().unwrap().is_empty());
     }
 
@@ -1942,8 +1994,8 @@ mod tests {
             .unwrap();
         let group = cockpit
             .apply_group(GroupChange::Create {
-                seed: one,
-                with: Some(two),
+                first: one,
+                second: two,
             })
             .unwrap()
             .group
@@ -1951,9 +2003,124 @@ mod tests {
 
         cockpit.delete(one).unwrap();
 
-        assert_eq!(cockpit.groups().get(group).unwrap().members, vec![two]);
+        assert!(cockpit.groups().get(group).is_none());
         assert_eq!(cockpit.threads(), vec![two]);
         assert_eq!(cockpit.store.thread_ids().unwrap(), vec![two]);
+    }
+
+    #[test]
+    fn failed_delete_restores_the_exact_group_snapshot() {
+        let store = Store::open(scratch("delete-group-rollback"))
+            .unwrap()
+            .refuse_delete();
+        let mut cockpit = Cockpit::new(store, Box::new(Fake::default()));
+        let threads: Vec<_> = (0..4)
+            .map(|_| cockpit.open(Provider::Claude, main_choice()).unwrap())
+            .collect();
+        let first = cockpit
+            .apply_group(GroupChange::Create {
+                first: threads[0],
+                second: threads[1],
+            })
+            .unwrap()
+            .group
+            .unwrap();
+        let second = cockpit
+            .apply_group(GroupChange::Create {
+                first: threads[2],
+                second: threads[3],
+            })
+            .unwrap()
+            .group
+            .unwrap();
+        cockpit
+            .apply_group(GroupChange::Rename {
+                group: first,
+                title: "exact title".into(),
+            })
+            .unwrap();
+        cockpit
+            .apply_group(GroupChange::MoveGroup {
+                group: second,
+                index: 0,
+            })
+            .unwrap();
+        let before: Vec<_> = cockpit.groups().iter().cloned().collect();
+
+        assert!(cockpit.delete(threads[0]).is_err());
+        assert_eq!(cockpit.groups().iter().cloned().collect::<Vec<_>>(), before);
+    }
+
+    #[test]
+    fn revive_group_is_ordered_and_rolls_back_when_a_later_member_fails() {
+        let (mut cockpit, fake) = cockpit("revive-group-atomic");
+        let first = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        let second = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        let third = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        let group = cockpit
+            .apply_group(GroupChange::Create { first, second })
+            .unwrap()
+            .group
+            .unwrap();
+        cockpit
+            .apply_group(GroupChange::Join {
+                thread: third,
+                group,
+                index: None,
+            })
+            .unwrap();
+        cockpit.park(first).unwrap();
+        cockpit.park(second).unwrap();
+        cockpit.park(third).unwrap();
+        cockpit.refuse_park.insert(first);
+        *fake.fail_at.borrow_mut() = Some(*fake.attempts.borrow() + 3);
+
+        assert!(matches!(
+            cockpit.revive_group(group),
+            Err(ReviveGroupError::Rollback { thread, .. }) if thread == first
+        ));
+        assert!(
+            cockpit.threads().is_empty(),
+            "the first revival rolled back"
+        );
+        assert_eq!(
+            cockpit.groups().get(group).unwrap().members,
+            [first, second, third]
+        );
+
+        cockpit.refuse_park.clear();
+        *fake.fail_at.borrow_mut() = None;
+        assert_eq!(cockpit.revive_group(group).unwrap(), [first, second, third]);
+        assert_eq!(cockpit.threads(), [first, second, third]);
+    }
+
+    #[test]
+    fn thread_title_is_durable_and_blank_rename_is_refused() {
+        let dir = scratch("thread-title");
+        let fake = Fake::default();
+        let mut cockpit = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake.clone()));
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+
+        cockpit.rename_thread(thread, "  Parser work  ").unwrap();
+        assert_eq!(
+            cockpit.thread_title(thread).unwrap().as_deref(),
+            Some("Parser work")
+        );
+        assert!(cockpit.rename_thread(thread, "   ").is_err());
+        cockpit.park(thread).unwrap();
+        assert_eq!(
+            cockpit.thread_title(thread).unwrap().as_deref(),
+            Some("Parser work"),
+            "the one title seam reads parked Threads too"
+        );
+        drop(cockpit);
+
+        let mut relaunched = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake));
+        relaunched.revive(thread).unwrap();
+        assert_eq!(
+            relaunched.thread_title(thread).unwrap().as_deref(),
+            Some("Parser work")
+        );
     }
 
     /// AC: two Threads on the same repo in separate worktrees cannot touch
