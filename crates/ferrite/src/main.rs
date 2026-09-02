@@ -351,6 +351,9 @@ fn app_menus() -> Vec<Menu> {
         Menu {
             name: "Edit".into(),
             items: vec![
+                MenuItem::os_action("Undo", composer::Undo, OsAction::Undo),
+                MenuItem::os_action("Redo", composer::Redo, OsAction::Redo),
+                MenuItem::separator(),
                 MenuItem::os_action("Cut", composer::Cut, OsAction::Cut),
                 MenuItem::os_action("Copy", composer::Copy, OsAction::Copy),
                 MenuItem::os_action("Paste", composer::Paste, OsAction::Paste),

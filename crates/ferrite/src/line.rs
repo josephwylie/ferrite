@@ -15,7 +15,24 @@ pub struct Line {
     /// The caret sits at `selection.start` when true, else at `end`.
     reversed: bool,
     marked: Option<Range<usize>>,
+    /// Earlier states of the line, newest last — what cmd-z restores.
+    /// Consecutive single-character insertions coalesce into one step, so
+    /// undo takes back a word, not a letter.
+    undo: Vec<Snapshot>,
+    /// States undone, newest last — what shift-cmd-z restores.
+    redo: Vec<Snapshot>,
+    /// The last edit was a plain typed character: the next one joins it.
+    typing: bool,
 }
+
+#[derive(Clone, PartialEq)]
+struct Snapshot {
+    content: String,
+    selection: Range<usize>,
+}
+
+/// How many states the line remembers.
+const UNDO_DEPTH: usize = 200;
 
 impl Default for Line {
     fn default() -> Self {
@@ -24,6 +41,9 @@ impl Default for Line {
             selection: 0..0,
             reversed: false,
             marked: None,
+            undo: Vec::new(),
+            redo: Vec::new(),
+            typing: false,
         }
     }
 }
@@ -82,16 +102,74 @@ impl Line {
     /// Put a line back, ready to edit at its end — a prompt recalled from the
     /// queue, or history.
     pub fn set(&mut self, text: String) {
+        self.remember(false);
         let at = text.len();
         self.content = text;
         self.place(at);
         self.marked = None;
     }
 
-    /// Hand the line over and clear it — what Enter does.
+    /// Hand the line over and clear it — what Enter does. A sent line is
+    /// history's, not undo's.
     pub fn take(&mut self) -> String {
         self.place(0);
+        self.undo.clear();
+        self.redo.clear();
+        self.typing = false;
         std::mem::take(&mut self.content)
+    }
+
+    /// Take back the last edit; false when there is none.
+    pub fn undo(&mut self) -> bool {
+        let Some(previous) = self.undo.pop() else {
+            return false;
+        };
+        self.redo.push(self.snapshot());
+        self.restore(previous);
+        true
+    }
+
+    /// Put back what the last undo took; false when there is nothing.
+    pub fn redo(&mut self) -> bool {
+        let Some(next) = self.redo.pop() else {
+            return false;
+        };
+        self.undo.push(self.snapshot());
+        self.restore(next);
+        true
+    }
+
+    fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            content: self.content.clone(),
+            selection: self.selection.clone(),
+        }
+    }
+
+    fn restore(&mut self, snapshot: Snapshot) {
+        self.content = snapshot.content;
+        self.selection = snapshot.selection;
+        self.reversed = false;
+        self.marked = None;
+        self.typing = false;
+    }
+
+    /// Record the state before an edit. `typed` is a plain character
+    /// insertion, which joins the previous one instead of opening a new
+    /// step; any other edit closes the run.
+    fn remember(&mut self, typed: bool) {
+        if typed && self.typing {
+            return;
+        }
+        let snapshot = self.snapshot();
+        if self.undo.last() != Some(&snapshot) {
+            self.undo.push(snapshot);
+            if self.undo.len() > UNDO_DEPTH {
+                self.undo.remove(0);
+            }
+        }
+        self.redo.clear();
+        self.typing = typed;
     }
 
     /// Remove the selection, or the character before the cursor.
@@ -384,6 +462,11 @@ impl Line {
     /// has marked, else the selection. Committing clears the mark.
     pub fn replace(&mut self, range: Option<Range<usize>>, text: &str) {
         let range = self.target(range);
+        let typed = range.is_empty()
+            && self.marked.is_none()
+            && text.chars().count() == 1
+            && !text.chars().all(char::is_whitespace);
+        self.remember(typed);
         self.content.replace_range(range.clone(), text);
         self.place(range.start + text.len());
         self.marked = None;
@@ -397,6 +480,7 @@ impl Line {
         selection: Option<Range<usize>>,
     ) {
         let range = self.target(range);
+        self.remember(false);
         self.content.replace_range(range.clone(), text);
         self.marked = (!text.is_empty()).then(|| range.start..range.start + text.len());
         // Both ends of an IME selection are relative to where the text landed.
@@ -642,6 +726,37 @@ mod tests {
         assert_eq!(line.selected_text(), Some("now"));
         line.backspace();
         assert_eq!(line.text(), "open crates/ferrite ");
+    }
+
+    /// cmd-z takes back the last edit — a typed word as one step, a
+    /// deletion as its own — and shift-cmd-z puts it back; a new edit
+    /// after an undo forgets the redo.
+    #[test]
+    fn undo_takes_back_a_word_of_typing_and_redo_returns_it() {
+        let mut line = Line::default();
+        for c in "fix".chars() {
+            line.replace(None, &c.to_string());
+        }
+        line.replace(None, " ");
+        for c in "tests".chars() {
+            line.replace(None, &c.to_string());
+        }
+        assert_eq!(line.text(), "fix tests");
+        assert!(line.undo());
+        assert_eq!(line.text(), "fix ", "the typed word is one step");
+        assert!(line.undo());
+        assert_eq!(line.text(), "fix");
+        assert!(line.redo());
+        assert_eq!(line.text(), "fix ");
+        line.delete_word_left();
+        assert_eq!(line.text(), "");
+        assert!(!line.redo(), "a new edit forgot the redo");
+        assert!(line.undo());
+        assert_eq!(line.text(), "fix ");
+        assert!(line.redo(), "and the undo made a new one");
+        assert_eq!(line.text(), "");
+        line.take();
+        assert!(!line.undo(), "a sent line is not undone");
     }
 
     // U+1F312 is 4 bytes of UTF-8 and a 2-unit surrogate pair in UTF-16, which

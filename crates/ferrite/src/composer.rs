@@ -45,6 +45,8 @@ actions!(
         // propagate, so cmd-c still copies a transcript selection.
         Copy,
         Cut,
+        Undo,
+        Redo,
     ]
 );
 
@@ -306,6 +308,18 @@ impl Composer {
         self.edited(cx);
     }
 
+    fn undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
+        if self.line.undo() {
+            self.edited(cx);
+        }
+    }
+
+    fn redo(&mut self, _: &Redo, _: &mut Window, cx: &mut Context<Self>) {
+        if self.line.redo() {
+            self.edited(cx);
+        }
+    }
+
     /// Where a window point falls in the line, as a byte offset — past the
     /// end when it is right of the text.
     fn offset_at(&self, position: gpui::Point<Pixels>) -> Option<usize> {
@@ -504,6 +518,8 @@ impl Render for Composer {
             .on_action(cx.listener(Self::select_all))
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(Self::cut))
+            .on_action(cx.listener(Self::undo))
+            .on_action(cx.listener(Self::redo))
             .child(LineElement {
                 composer: cx.entity(),
             })

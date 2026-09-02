@@ -101,6 +101,8 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
         // the transcript's copy still answers.
         (with_primary("c"), "composer::Copy", Some("Composer")),
         (with_primary("x"), "composer::Cut", Some("Composer")),
+        (with_primary("z"), "composer::Undo", Some("Composer")),
+        (with_primary("shift-z"), "composer::Redo", Some("Composer")),
         // Emacs muscle memory every shell honours: ctrl-a / ctrl-e to the
         // line's ends, ctrl-w kills the word before the caret.
         ("ctrl-a".into(), "composer::Home", Some("Composer")),
@@ -205,6 +207,8 @@ mod tests {
             ("composer::SelectAll", "a"),
             ("composer::Copy", "c"),
             ("composer::Cut", "x"),
+            ("composer::Undo", "z"),
+            ("composer::Redo", "shift-z"),
             ("cockpit::CopySelection", "c"),
             ("cockpit::NextPane", "]"),
             ("cockpit::PreviousPane", "["),
