@@ -224,8 +224,9 @@ fn revive_latest(cockpit: &mut Cockpit) {
 
 /// Where a Dock launch stands, in place of the `/` launchd starts it in:
 /// the directory the newest Thread works in — its Project's root, else its
-/// binding's repo — skipping Threads whose directory is gone, and, with
-/// none left, home, where a new terminal opens.
+/// binding's repo — skipping Threads whose directory is gone; with no
+/// Thread, the newest registered Project still on disk; with none, home,
+/// where a new terminal opens.
 fn dock_launch_dir(cockpit: &Cockpit) -> std::path::PathBuf {
     let parked = cockpit.parked().unwrap_or_default();
     let worked = parked
@@ -244,7 +245,17 @@ fn dock_launch_dir(cockpit: &Cockpit) -> std::path::PathBuf {
                 })
         })
         .find(|dir| dir.is_dir());
+    let registered = || {
+        cockpit
+            .registry()
+            .projects()
+            .iter()
+            .rev()
+            .map(|project| project.root.clone())
+            .find(|root| root.is_dir())
+    };
     worked
+        .or_else(registered)
         .or_else(|| std::env::var_os("HOME").map(std::path::PathBuf::from))
         .unwrap_or_else(|| std::path::PathBuf::from("/"))
 }
@@ -321,7 +332,7 @@ mod tests {
     }
 
     /// A Dock launch stands where the newest Thread works — launchd's `/`
-    /// is no Project — and, with no Thread at all, at home.
+    /// is no Project — else in the newest registered Project, else at home.
     #[test]
     fn a_dock_launch_stands_where_the_newest_thread_works() {
         let dir = std::env::temp_dir().join(format!("ferrite-launch-{}-dock", std::process::id()));
@@ -332,6 +343,12 @@ mod tests {
         assert_eq!(dock_launch_dir(&core), home, "an empty store: home");
 
         let checkout = std::env::current_dir().unwrap();
+        core.register_project(&checkout).unwrap();
+        assert_eq!(
+            dock_launch_dir(&core),
+            checkout,
+            "a registered Project, no Thread yet: the Project"
+        );
         core.open(
             Provider::Claude,
             WorkspaceChoice::Main {
