@@ -22,6 +22,11 @@ use crate::pane::{wall_card, WallCard};
 /// draws that line empty and keeps its height rather than inventing a word.
 #[derive(Default)]
 pub struct ThreadFacts {
+    /// What the Thread is called: the operator's title, else its first
+    /// prompt, else its number — `Cockpit::display_title`, cached by the
+    /// same moments as the other facts (a first prompt sent, a rename, a
+    /// park) so no frame reads a log to name a row.
+    pub name: SharedString,
     /// The branch its effective cwd is actually on, read from git (#29) —
     /// the agent itself may switch branches, which is exactly why the
     /// header reads the repo and not the binding. A cwd outside any
@@ -105,6 +110,7 @@ impl Facts {
         let ordered = cockpit.parked_in_order().unwrap_or_default();
         for thread in &ordered {
             let facts = self.threads.entry(*thread).or_default();
+            facts.name = SharedString::from(cockpit.display_title(*thread, true));
             let Ok(meta) = cockpit.peek(*thread) else {
                 facts.provider = None;
                 facts.project = None;
@@ -152,10 +158,29 @@ impl Facts {
             ),
             Err(_) => (None, None),
         };
+        let name = SharedString::from(cockpit.display_title(thread, true));
         let facts = self.threads.entry(thread).or_default();
         facts.branch = branch;
         facts.project = project;
         facts.project_label = project_label;
+        facts.name = name;
+    }
+
+    /// The name alone — after a first prompt or a rename, the one fact
+    /// that moved.
+    pub fn renamed(&mut self, cockpit: &Cockpit, thread: ThreadId) {
+        let name = SharedString::from(cockpit.display_title(thread, true));
+        self.threads.entry(thread).or_default().name = name;
+    }
+
+    /// What a Thread is called, from the cache; its number until a moment
+    /// has named it.
+    pub fn name(&self, thread: ThreadId) -> SharedString {
+        self.threads
+            .get(&thread)
+            .filter(|facts| !facts.name.is_empty())
+            .map(|facts| facts.name.clone())
+            .unwrap_or_else(|| SharedString::from(format!("thread-{}", thread.get())))
     }
 
     /// Refold one Thread's wall card, wherever its transcript can change.

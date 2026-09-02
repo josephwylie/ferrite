@@ -16,7 +16,7 @@ use ferrite_core::{DecisionAnswer, ThreadId};
 use gpui::prelude::*;
 use gpui::{
     actions, deferred, div, px, rgb, rgba, AnyElement, ClipboardItem, Context, Div, Entity,
-    FocusHandle, Focusable, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
+    FocusHandle, Focusable, FontWeight, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
     ScrollHandle, SharedString, Stateful, Window,
 };
 
@@ -144,7 +144,11 @@ pub struct CockpitView {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RenameTarget {
     Group(GroupId),
+    /// A Thread, renamed from its nav row.
     Thread(ThreadId),
+    /// A Thread, renamed from its Pane head — the same title, a different
+    /// editor site, so the two never draw one editor twice.
+    PaneTitle(ThreadId),
 }
 
 struct NavDragPreview(SharedString);
@@ -435,6 +439,17 @@ impl CockpitView {
         if opened || self.panes.len() != before {
             self.facts.parked_changed(&self.cockpit);
         }
+        self.refresh_names();
+    }
+
+    /// Every open Pane's name, from the cache — the head, the L2 and L3
+    /// cells read `PaneView::name`, and it moves only at a naming moment.
+    fn refresh_names(&mut self) {
+        for pane in &mut self.panes {
+            if let Some(thread) = pane.thread() {
+                pane.name = self.facts.name(thread);
+            }
+        }
     }
 
     /// Where this Pane sits in the grid.
@@ -649,13 +664,9 @@ impl CockpitView {
             // A Thread with no stored title shows its generated one, so
             // that is what the editor opens on: the operator edits the name
             // they can see.
-            RenameTarget::Thread(thread) => Some(
-                self.cockpit
-                    .thread_title(thread)
-                    .ok()
-                    .flatten()
-                    .unwrap_or_else(|| format!("thread-{thread:02}")),
-            ),
+            RenameTarget::Thread(thread) | RenameTarget::PaneTitle(thread) => {
+                Some(self.cockpit.display_title(thread, true))
+            }
         };
         let Some(title) = title else {
             return;
@@ -689,7 +700,7 @@ impl CockpitView {
                 .apply_group(GroupChange::Rename { group, title })
                 .map(|_| ())
                 .map_err(|error| error.to_string()),
-            RenameTarget::Thread(thread) => self
+            RenameTarget::Thread(thread) | RenameTarget::PaneTitle(thread) => self
                 .cockpit
                 .rename_thread(thread, &title)
                 .map_err(|error| error.to_string()),
@@ -697,8 +708,10 @@ impl CockpitView {
         if let Err(error) = result {
             self.group_error = Some(error.into());
         } else {
-            // A renamed Thread's parked row still carries the old name.
-            self.facts.parked_changed(&self.cockpit);
+            if let RenameTarget::Thread(thread) | RenameTarget::PaneTitle(thread) = target {
+                self.facts.renamed(&self.cockpit, thread);
+                self.refresh_names();
+            }
             self.group_error = None;
         }
         cx.notify();
@@ -733,6 +746,41 @@ impl CockpitView {
                 cx.listener(move |view, _: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();
                     view.start_rename(RenameTarget::Group(group), cx);
+                }),
+            )
+            .into_any_element()
+    }
+
+    /// The Pane head's title: the live editor while this Thread is being
+    /// renamed from its head, else the name — a double-click opens the
+    /// editor, a single click only lands on the Pane. The press stops
+    /// there so the cell's own focus does not also clear a selection.
+    fn pane_title(&self, index: usize, thread: ThreadId, cx: &mut Context<Self>) -> AnyElement {
+        if let Some((RenameTarget::PaneTitle(editing), editor)) = &self.rename {
+            if *editing == thread {
+                return div()
+                    .min_w_0()
+                    .flex_1()
+                    .font_weight(FontWeight::NORMAL)
+                    .child(editor.clone())
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
+                    )
+                    .into_any_element();
+            }
+        }
+        pane::head_title(self.panes[index].name.clone())
+            .id(("pane-title", thread.get() as usize))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |view, event: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    view.focus_pane(index);
+                    if event.click_count >= 2 {
+                        view.start_rename(RenameTarget::PaneTitle(thread), cx);
+                    }
+                    cx.notify();
                 }),
             )
             .into_any_element()
@@ -826,6 +874,9 @@ impl CockpitView {
             self.panes[self.focused()].scroll.scroll_to_bottom();
         }
         self.facts.acted(&self.cockpit, thread);
+        // A first prompt names an untitled Thread.
+        self.facts.renamed(&self.cockpit, thread);
+        self.refresh_names();
         cx.notify();
     }
 
@@ -2270,7 +2321,7 @@ impl CockpitView {
         let facts = self.facts.get(thread);
         nav::ThreadRow {
             thread,
-            name: SharedString::from(format!("thread-{thread:02}")),
+            name: self.facts.name(thread),
             project: facts.and_then(|facts| facts.project_label.clone()),
             branch: facts.and_then(|facts| facts.branch.clone()),
             provider: self
@@ -3066,6 +3117,7 @@ impl CockpitView {
                 .then(|| self.decide_keycaps(index, level, cx))
                 .flatten(),
             tool_controls: self.tool_disclosures(index, thread, level, cx),
+            title: l1.then(|| self.pane_title(index, thread, cx)),
         };
         cell.child(pane::render_pane(pane, facts, wiring, level))
     }
@@ -3456,6 +3508,7 @@ impl CockpitView {
             row,
             self.editable_thread_title(thread, row.name.clone(), cx),
         );
+        let badge = self.facts.name(thread);
         drop_feedback(head, self.cockpit.groups().clone(), target)
             .on_drag(
                 NavDrag {
@@ -3463,7 +3516,8 @@ impl CockpitView {
                     origin,
                 },
                 move |_, _, _, cx| {
-                    cx.new(|_| NavDragPreview(format!("thread-{thread:02}").into()))
+                    let badge = badge.clone();
+                    cx.new(|_| NavDragPreview(badge))
                 },
             )
             .on_drop(

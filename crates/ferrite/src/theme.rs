@@ -450,6 +450,9 @@ pub const CODE_PRE_PAD_B: f32 = 8.0;
 pub const INLINE_CODE_PAD_X: f32 = 4.0;
 #[allow(dead_code)]
 pub const INLINE_CODE_PAD_Y: f32 = 1.0;
+/// 5px — the operator's prompt block's block padding: the `--raised`
+/// ground the line stands on, so a prompt reads apart from an answer.
+pub const PROMPT_PAD_Y: f32 = 5.0;
 /// A hunk row: 8px inline padding, a 24px right-aligned number column, a
 /// 7px sign column, 10px between columns. A hunk sits 4px below the event
 /// and 10px above what follows.

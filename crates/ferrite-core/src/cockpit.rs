@@ -1044,6 +1044,47 @@ impl Cockpit {
         self.store.peek(thread).map(|meta| meta.title)
     }
 
+    /// What a Thread is called on screen: the title the operator gave it;
+    /// else, when `auto` is on, the first line of its first prompt,
+    /// shortened; else its number. Reads one header line (and at most
+    /// the first few records) off disk for a parked Thread — callers cache
+    /// it by moment, never per frame.
+    pub fn display_title(&self, thread: ThreadId, auto: bool) -> String {
+        let numbered = || format!("thread-{}", thread.get());
+        if let Some(open) = self.thread(thread) {
+            if let Some(title) = open.title() {
+                return title.to_string();
+            }
+            if !auto {
+                return numbered();
+            }
+            return open
+                .transcript()
+                .blocks()
+                .iter()
+                .find_map(|block| match &block.body {
+                    crate::transcript::Body::Prompt(text) => Some(title_from_prompt(text)),
+                    _ => None,
+                })
+                .unwrap_or_else(numbered);
+        }
+        let Ok(meta) = self.store.peek(thread) else {
+            return numbered();
+        };
+        if let Some(title) = meta.title {
+            return title;
+        }
+        if !auto {
+            return numbered();
+        }
+        self.store
+            .peek_first_prompt(thread)
+            .ok()
+            .flatten()
+            .map(|text| title_from_prompt(&text))
+            .unwrap_or_else(numbered)
+    }
+
     pub fn rename_thread(&mut self, thread: ThreadId, title: &str) -> io::Result<()> {
         let title = title.trim();
         if title.is_empty() {
@@ -1241,7 +1282,12 @@ impl Cockpit {
             .map_err(ProvisionError::Spawn)?;
         let state = self.threads.get_mut(&thread).expect("checked above");
         self.store
-            .set_provider(thread, state.provider, model.clone(), Some(&mut state.writer))
+            .set_provider(
+                thread,
+                state.provider,
+                model.clone(),
+                Some(&mut state.writer),
+            )
             .map_err(ProvisionError::Store)?;
         // The old Session goes as the new one arrives; the transcript is
         // the conversation and stays. The new process has not been told the
@@ -1250,10 +1296,8 @@ impl Cockpit {
         state.model = model.clone();
         state.preface_pending = true;
         state.pending = None;
-        let label = crate::providers::models::label(
-            model.as_deref().unwrap_or("default"),
-            &state.models,
-        );
+        let label =
+            crate::providers::models::label(model.as_deref().unwrap_or("default"), &state.models);
         state
             .transcript
             .apply(Input::Notice(format!("model changed to {label}")));
@@ -1570,9 +1614,10 @@ impl Cockpit {
             None => self.bootstrap(choice, workspace, prompt)?,
         };
         self.roster.draft_became(draft, thread);
-        let refused_leave = scope
-            .pending_leave
-            .and_then(|leaving| self.apply_group(GroupChange::Leave { thread: leaving }).err());
+        let refused_leave = scope.pending_leave.and_then(|leaving| {
+            self.apply_group(GroupChange::Leave { thread: leaving })
+                .err()
+        });
         Ok(Bootstrapped {
             thread,
             refused_leave,
@@ -1754,13 +1799,38 @@ impl Cockpit {
             .iter()
             .filter(|thread| !order.contains(thread))
             .copied()
-            .chain(order.iter().filter(|thread| parked.contains(thread)).copied())
+            .chain(
+                order
+                    .iter()
+                    .filter(|thread| parked.contains(thread))
+                    .copied(),
+            )
             .collect())
     }
 }
 
 fn megabytes(bytes: u64) -> String {
     format!("{} MB", bytes / (1024 * 1024))
+}
+
+/// A Thread's name from its first prompt: the first non-blank line,
+/// whitespace collapsed, cut to `TITLE_CHARS` characters with an ellipsis.
+/// A prompt that is only whitespace names nothing.
+pub fn title_from_prompt(text: &str) -> String {
+    const TITLE_CHARS: usize = 48;
+    let line = text
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("");
+    let collapsed: String = line.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut chars = collapsed.chars();
+    let cut: String = chars.by_ref().take(TITLE_CHARS).collect();
+    if chars.next().is_some() {
+        format!("{}…", cut.trim_end())
+    } else {
+        cut
+    }
 }
 
 /// The first-prompt lock, read off a replayed history (#25, #29): an
@@ -2093,8 +2163,10 @@ mod tests {
             )
             .unwrap();
 
-        let Some(WorkspaceBinding::Worktree { path, repo: bound }) =
-            cockpit.thread(thread).and_then(|open| open.workspace()).cloned()
+        let Some(WorkspaceBinding::Worktree { path, repo: bound }) = cockpit
+            .thread(thread)
+            .and_then(|open| open.workspace())
+            .cloned()
         else {
             panic!(
                 "the Pane must know its binding: {:?}",
@@ -2138,7 +2210,12 @@ mod tests {
         let entries = cockpit.registry().worktrees(project);
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].branch, "ferrite/wt-1");
-        let path = cockpit.thread(thread).and_then(|open| open.workspace()).unwrap().cwd().to_path_buf();
+        let path = cockpit
+            .thread(thread)
+            .and_then(|open| open.workspace())
+            .unwrap()
+            .cwd()
+            .to_path_buf();
         assert_eq!(entries[0].path, path);
         // The central layout: under the store's worktrees/, never inside
         // the repo or a per-Thread store directory.
@@ -2162,7 +2239,12 @@ mod tests {
                 WorkspaceChoice::NewWorktree { repo: repo.clone() },
             )
             .unwrap();
-        let path = cockpit.thread(first).and_then(|open| open.workspace()).unwrap().cwd().to_path_buf();
+        let path = cockpit
+            .thread(first)
+            .and_then(|open| open.workspace())
+            .unwrap()
+            .cwd()
+            .to_path_buf();
         // The first Thread is gone; its worktree outlives it as the
         // adoptable row. Deleting would remove the tree, so park instead.
         cockpit.park(first).unwrap();
@@ -2382,7 +2464,11 @@ mod tests {
                 WorkspaceChoice::NewWorktree { repo: repo.clone() },
             )
             .unwrap();
-        let binding = cockpit.thread(thread).and_then(|open| open.workspace()).cloned().unwrap();
+        let binding = cockpit
+            .thread(thread)
+            .and_then(|open| open.workspace())
+            .cloned()
+            .unwrap();
         cockpit.park(thread).unwrap();
         drop(cockpit);
         // While Ferrite is off, the worktree vanishes by hand.
@@ -2396,7 +2482,10 @@ mod tests {
         );
         relaunched.revive(thread).unwrap();
 
-        assert_eq!(relaunched.thread(thread).and_then(|open| open.workspace()), Some(&binding));
+        assert_eq!(
+            relaunched.thread(thread).and_then(|open| open.workspace()),
+            Some(&binding)
+        );
         assert!(
             binding.cwd().join(".git").exists(),
             "the worktree must come back on demand"
@@ -2421,7 +2510,12 @@ mod tests {
                 WorkspaceChoice::NewWorktree { repo: repo.clone() },
             )
             .unwrap();
-        let path = cockpit.thread(first).and_then(|open| open.workspace()).unwrap().cwd().to_path_buf();
+        let path = cockpit
+            .thread(first)
+            .and_then(|open| open.workspace())
+            .unwrap()
+            .cwd()
+            .to_path_buf();
         let second = cockpit
             .open(
                 Provider::Codex,
@@ -2439,7 +2533,10 @@ mod tests {
             "the registered checkout survives"
         );
         assert!(
-            cockpit.thread(second).and_then(|open| open.workspace()).is_some(),
+            cockpit
+                .thread(second)
+                .and_then(|open| open.workspace())
+                .is_some(),
             "the other Thread still uses the checkout"
         );
         assert_eq!(
@@ -2691,7 +2788,12 @@ mod tests {
         assert_eq!(updates[0].thread, one);
         assert_eq!(updates[0].dirty.len(), 1);
         assert_eq!(cockpit.thread(one).unwrap().transcript().blocks().len(), 1);
-        assert!(cockpit.thread(two).unwrap().transcript().blocks().is_empty());
+        assert!(cockpit
+            .thread(two)
+            .unwrap()
+            .transcript()
+            .blocks()
+            .is_empty());
     }
 
     /// #22: durations are stamped at ingestion — a call runs on a live
@@ -2711,7 +2813,10 @@ mod tests {
             })
             .unwrap();
         cockpit.pump();
-        let running = cockpit.thread(thread).map(|open| open.tool_timings()).unwrap()["t1"];
+        let running = cockpit
+            .thread(thread)
+            .map(|open| open.tool_timings())
+            .unwrap()["t1"];
         assert!(matches!(running, ToolTiming::Running(_)));
         let first = running.elapsed();
         assert!(
@@ -2728,7 +2833,10 @@ mod tests {
             })
             .unwrap();
         cockpit.pump();
-        let done = cockpit.thread(thread).map(|open| open.tool_timings()).unwrap()["t1"];
+        let done = cockpit
+            .thread(thread)
+            .map(|open| open.tool_timings())
+            .unwrap()["t1"];
         let ToolTiming::Done(total) = done else {
             panic!("a settled call fixes its total: {done:?}");
         };
@@ -2748,7 +2856,11 @@ mod tests {
             })
             .unwrap();
         cockpit.pump();
-        assert!(!cockpit.thread(thread).map(|open| open.tool_timings()).unwrap().contains_key("ghost"));
+        assert!(!cockpit
+            .thread(thread)
+            .map(|open| open.tool_timings())
+            .unwrap()
+            .contains_key("ghost"));
     }
 
     fn decision(id: &str, tool: &str) -> SessionEvent {
@@ -2788,7 +2900,13 @@ mod tests {
         cockpit.send(thread, "run the tests".into());
 
         assert_eq!(fake.sent.borrow().as_slice(), ["run the tests"]);
-        let echoed = cockpit.thread(thread).unwrap().transcript().blocks().last().cloned();
+        let echoed = cockpit
+            .thread(thread)
+            .unwrap()
+            .transcript()
+            .blocks()
+            .last()
+            .cloned();
         assert!(
             matches!(echoed.map(|b| b.body), Some(Body::Prompt(line)) if line == "run the tests")
         );
@@ -2796,7 +2914,8 @@ mod tests {
         cockpit.park(thread).unwrap();
         cockpit.revive(thread).unwrap();
         assert!(cockpit
-            .thread(thread).map(|open| open.transcript())
+            .thread(thread)
+            .map(|open| open.transcript())
             .unwrap()
             .blocks()
             .iter()
@@ -2942,12 +3061,22 @@ mod tests {
         let fake = Fake::default();
         let mut cockpit = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake.clone()));
         let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        assert_eq!(cockpit.thread(thread).and_then(|open| open.session_project_root()), None);
+        assert_eq!(
+            cockpit
+                .thread(thread)
+                .and_then(|open| open.session_project_root()),
+            None
+        );
         let root = existing_root("preface-root");
         cockpit
             .set_session_project_root(thread, Some(root.clone()))
             .unwrap();
-        assert_eq!(cockpit.thread(thread).and_then(|open| open.session_project_root()), Some(root.as_path()));
+        assert_eq!(
+            cockpit
+                .thread(thread)
+                .and_then(|open| open.session_project_root()),
+            Some(root.as_path())
+        );
 
         cockpit.send(thread, "run the tests".into());
         cockpit.send(thread, "and the lints".into());
@@ -3051,7 +3180,12 @@ mod tests {
         cockpit.park(thread).unwrap();
         cockpit.revive(thread).unwrap();
 
-        assert_eq!(cockpit.thread(thread).and_then(|open| open.session_project_root()), Some(root.as_path()));
+        assert_eq!(
+            cockpit
+                .thread(thread)
+                .and_then(|open| open.session_project_root()),
+            Some(root.as_path())
+        );
         cockpit.send(thread, "after the revive".into());
         let binding = std::env::temp_dir();
         assert_eq!(
@@ -3137,7 +3271,11 @@ mod tests {
             .set_session_project_root(thread, Some(root.clone()))
             .unwrap();
 
-        assert_eq!(cockpit.thread(thread).and_then(|open| open.queued()), None, "the held prompt went out");
+        assert_eq!(
+            cockpit.thread(thread).and_then(|open| open.queued()),
+            None,
+            "the held prompt went out"
+        );
         assert_eq!(fake.streams.borrow().len(), 2, "a fresh Session took it");
         let binding = std::env::temp_dir();
         assert_eq!(
@@ -3233,7 +3371,11 @@ mod tests {
             .send(decision("perm_01", "Write"))
             .unwrap();
         cockpit.pump();
-        let pending = cockpit.thread(thread).and_then(|open| open.pending()).cloned().unwrap();
+        let pending = cockpit
+            .thread(thread)
+            .and_then(|open| open.pending())
+            .cloned()
+            .unwrap();
 
         cockpit.respond(
             thread,
@@ -3244,7 +3386,13 @@ mod tests {
         );
 
         assert_eq!(cockpit.thread(thread).and_then(|open| open.pending()), None);
-        let last = cockpit.thread(thread).unwrap().transcript().blocks().last().cloned();
+        let last = cockpit
+            .thread(thread)
+            .unwrap()
+            .transcript()
+            .blocks()
+            .last()
+            .cloned();
         assert!(matches!(last.map(|b| b.body), Some(Body::Meta(line)) if line == "allowed Write"));
 
         // A second press answers nothing twice.
@@ -3278,7 +3426,8 @@ mod tests {
         let update = cockpit.pump();
 
         let code = cockpit
-            .thread(thread).map(|open| open.transcript())
+            .thread(thread)
+            .map(|open| open.transcript())
             .unwrap()
             .blocks()
             .iter()
@@ -3522,7 +3671,14 @@ mod tests {
             .unwrap();
         cockpit.pump();
 
-        assert_eq!(cockpit.thread(one).and_then(|open| open.pending()).unwrap().tool_name, "Write");
+        assert_eq!(
+            cockpit
+                .thread(one)
+                .and_then(|open| open.pending())
+                .unwrap()
+                .tool_name,
+            "Write"
+        );
         assert_eq!(cockpit.thread(two).and_then(|open| open.pending()), None);
         assert_eq!(cockpit.blocked(), vec![one]);
     }
@@ -3573,7 +3729,10 @@ mod tests {
         assert!(cockpit.thread(thread).is_some_and(|open| open.busy()));
 
         cockpit.queue(thread, "and then run the tests".into());
-        assert_eq!(cockpit.thread(thread).and_then(|open| open.queued()), Some("and then run the tests"));
+        assert_eq!(
+            cockpit.thread(thread).and_then(|open| open.queued()),
+            Some("and then run the tests")
+        );
         assert!(fake.sent.borrow().is_empty(), "nothing goes out mid-turn");
 
         fake.streams.borrow()[0].send(ended()).unwrap();
@@ -3615,7 +3774,14 @@ mod tests {
     fn a_commands_event_becomes_the_thread_menu_and_never_the_history() {
         let (mut cockpit, fake) = cockpit("commands");
         let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        assert!(cockpit.thread(thread).map(|open| open.commands()).unwrap_or_default().is_empty(), "nothing is static");
+        assert!(
+            cockpit
+                .thread(thread)
+                .map(|open| open.commands())
+                .unwrap_or_default()
+                .is_empty(),
+            "nothing is static"
+        );
 
         let menu = vec![crate::SessionCommand {
             name: "compact".into(),
@@ -3634,10 +3800,26 @@ mod tests {
             .unwrap();
         cockpit.pump();
 
-        assert_eq!(cockpit.thread(thread).map(|open| open.commands()).unwrap_or_default(), menu.as_slice());
-        assert_eq!(cockpit.thread(thread).and_then(|open| open.permission_mode()), Some("acceptEdits"));
+        assert_eq!(
+            cockpit
+                .thread(thread)
+                .map(|open| open.commands())
+                .unwrap_or_default(),
+            menu.as_slice()
+        );
+        assert_eq!(
+            cockpit
+                .thread(thread)
+                .and_then(|open| open.permission_mode()),
+            Some("acceptEdits")
+        );
         assert!(
-            cockpit.thread(thread).unwrap().transcript().blocks().is_empty(),
+            cockpit
+                .thread(thread)
+                .unwrap()
+                .transcript()
+                .blocks()
+                .is_empty(),
             "a menu is not conversation"
         );
 
@@ -3645,8 +3827,17 @@ mod tests {
         // waits for its own Session's announcement.
         cockpit.park(thread).unwrap();
         cockpit.revive(thread).unwrap();
-        assert!(cockpit.thread(thread).map(|open| open.commands()).unwrap_or_default().is_empty());
-        assert_eq!(cockpit.thread(thread).and_then(|open| open.permission_mode()), None);
+        assert!(cockpit
+            .thread(thread)
+            .map(|open| open.commands())
+            .unwrap_or_default()
+            .is_empty());
+        assert_eq!(
+            cockpit
+                .thread(thread)
+                .and_then(|open| open.permission_mode()),
+            None
+        );
     }
 
     /// #25: the Session's announced model list becomes the Thread's — the
@@ -3656,7 +3847,14 @@ mod tests {
     fn a_models_event_becomes_the_thread_menu_and_never_the_history() {
         let (mut cockpit, fake) = cockpit("models");
         let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        assert!(cockpit.thread(thread).map(|open| open.models()).unwrap_or_default().is_empty(), "nothing is static");
+        assert!(
+            cockpit
+                .thread(thread)
+                .map(|open| open.models())
+                .unwrap_or_default()
+                .is_empty(),
+            "nothing is static"
+        );
 
         fake.streams.borrow()[0]
             .send(SessionEvent::Models {
@@ -3674,13 +3872,22 @@ mod tests {
             .collect();
         assert_eq!(values, ["sonnet", "opus", "haiku"]);
         assert!(
-            cockpit.thread(thread).unwrap().transcript().blocks().is_empty(),
+            cockpit
+                .thread(thread)
+                .unwrap()
+                .transcript()
+                .blocks()
+                .is_empty(),
             "a model list is not conversation"
         );
 
         cockpit.park(thread).unwrap();
         cockpit.revive(thread).unwrap();
-        assert!(cockpit.thread(thread).map(|open| open.models()).unwrap_or_default().is_empty());
+        assert!(cockpit
+            .thread(thread)
+            .map(|open| open.models())
+            .unwrap_or_default()
+            .is_empty());
     }
 
     /// AC (#25): choosing a provider before the first prompt replaces the
@@ -3725,10 +3932,21 @@ mod tests {
             &None,
             "the old provider's id means nothing to the new one"
         );
-        assert_eq!(cockpit.thread(thread).map(|open| open.provider()), Some(Provider::Codex));
-        assert_eq!(cockpit.thread(thread).and_then(|open| open.model()), Some("gpt-5.4-mini"));
+        assert_eq!(
+            cockpit.thread(thread).map(|open| open.provider()),
+            Some(Provider::Codex)
+        );
+        assert_eq!(
+            cockpit.thread(thread).and_then(|open| open.model()),
+            Some("gpt-5.4-mini")
+        );
         assert!(
-            cockpit.thread(thread).unwrap().transcript().blocks().is_empty(),
+            cockpit
+                .thread(thread)
+                .unwrap()
+                .transcript()
+                .blocks()
+                .is_empty(),
             "the old Init and prose must not linger"
         );
         // Durable: a crash right now still revives onto the choice.
@@ -3748,10 +3966,14 @@ mod tests {
     fn the_first_prompt_locks_the_provider_for_good() {
         let (mut cockpit, fake) = cockpit("provider-lock");
         let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        assert!(!cockpit.thread(thread).is_some_and(|open| open.first_prompt_sent()));
+        assert!(!cockpit
+            .thread(thread)
+            .is_some_and(|open| open.first_prompt_sent()));
 
         cockpit.send(thread, "hello".into());
-        assert!(cockpit.thread(thread).is_some_and(|open| open.first_prompt_sent()));
+        assert!(cockpit
+            .thread(thread)
+            .is_some_and(|open| open.first_prompt_sent()));
         let attempts = *fake.attempts.borrow();
 
         let refused = cockpit.set_provider(
@@ -3766,7 +3988,10 @@ mod tests {
             "{refused:?}"
         );
         assert_eq!(*fake.attempts.borrow(), attempts, "no spawn was tried");
-        assert_eq!(cockpit.thread(thread).map(|open| open.provider()), Some(Provider::Claude));
+        assert_eq!(
+            cockpit.thread(thread).map(|open| open.provider()),
+            Some(Provider::Claude)
+        );
         assert_eq!(cockpit.peek(thread).unwrap().provider, Provider::Claude);
     }
 
@@ -3786,9 +4011,7 @@ mod tests {
             })
             .unwrap();
         fake.streams.borrow()[0]
-            .send(SessionEvent::TextDelta {
-                text: "hi".into(),
-            })
+            .send(SessionEvent::TextDelta { text: "hi".into() })
             .unwrap();
         cockpit.pump();
         // Mid-turn: refused, nothing spawned.
@@ -3815,9 +4038,15 @@ mod tests {
 
         // A new Session, resuming the conversation, under the new model.
         let pairs = fake.spawn_pairs();
-        assert_eq!(pairs.last().unwrap().model.as_deref(), Some("claude-fable-5-1"));
+        assert_eq!(
+            pairs.last().unwrap().model.as_deref(),
+            Some("claude-fable-5-1")
+        );
         assert_eq!(pairs.last().unwrap().provider, Provider::Claude);
-        assert_eq!(fake.resumed.borrow().last().unwrap().as_deref(), Some("sess-1"));
+        assert_eq!(
+            fake.resumed.borrow().last().unwrap().as_deref(),
+            Some("sess-1")
+        );
         let open = cockpit.thread(thread).unwrap();
         assert_eq!(open.model(), Some("claude-fable-5-1"));
         assert!(open.first_prompt_sent(), "the lock is untouched");
@@ -3825,7 +4054,10 @@ mod tests {
             open.transcript().blocks().len() > blocks_before,
             "the conversation stays, and says the model changed"
         );
-        assert_eq!(cockpit.peek(thread).unwrap().model.as_deref(), Some("claude-fable-5-1"));
+        assert_eq!(
+            cockpit.peek(thread).unwrap().model.as_deref(),
+            Some("claude-fable-5-1")
+        );
         // The same choice again is a no-op.
         let attempts = *fake.attempts.borrow();
         cockpit
@@ -3837,6 +4069,28 @@ mod tests {
         cockpit.park(thread).unwrap();
         cockpit.set_model(thread, None).unwrap();
         assert_eq!(cockpit.peek(thread).unwrap().model, None);
+    }
+
+    /// A Thread is named by the operator, else by its first prompt (open
+    /// or parked, off the first records alone), else by its number.
+    #[test]
+    fn a_thread_is_named_by_its_title_then_its_first_prompt_then_its_number() {
+        let (mut cockpit, _fake) = cockpit("display-title");
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        assert_eq!(cockpit.display_title(thread, true), "thread-1");
+        cockpit.send(thread, "  Fix the   flaky\ntest in ci  ".into());
+        assert_eq!(cockpit.display_title(thread, true), "Fix the flaky");
+        assert_eq!(cockpit.display_title(thread, false), "thread-1", "auto-titling can be off");
+        cockpit.park(thread).unwrap();
+        assert_eq!(cockpit.display_title(thread, true), "Fix the flaky", "parked: read off the log");
+        cockpit.rename_thread(thread, "CI flake").unwrap();
+        assert_eq!(cockpit.display_title(thread, true), "CI flake");
+        cockpit.revive(thread).unwrap();
+        assert_eq!(cockpit.display_title(thread, false), "CI flake", "a given title always wins");
+
+        assert_eq!(title_from_prompt("a".repeat(60).as_str()).chars().count(), 49);
+        assert!(title_from_prompt(&"word ".repeat(20)).ends_with('…'));
+        assert_eq!(title_from_prompt("   \n\n  "), "");
     }
 
     /// The lock arms from replayed history too: a revived Thread whose log
@@ -3862,7 +4116,12 @@ mod tests {
         ));
 
         cockpit.revive(thread).unwrap();
-        assert!(cockpit.thread(thread).is_some_and(|open| open.first_prompt_sent()), "history armed the lock");
+        assert!(
+            cockpit
+                .thread(thread)
+                .is_some_and(|open| open.first_prompt_sent()),
+            "history armed the lock"
+        );
         assert!(matches!(
             cockpit.set_provider(
                 thread,
@@ -3902,9 +4161,20 @@ mod tests {
                 model: Some("gpt-5.4-mini".into()),
             }
         );
-        assert_eq!(cockpit.thread(thread).map(|open| open.provider()), Some(Provider::Codex));
-        assert_eq!(cockpit.thread(thread).and_then(|open| open.model()), Some("gpt-5.4-mini"));
-        assert!(!cockpit.thread(thread).is_some_and(|open| open.first_prompt_sent()), "still unlocked");
+        assert_eq!(
+            cockpit.thread(thread).map(|open| open.provider()),
+            Some(Provider::Codex)
+        );
+        assert_eq!(
+            cockpit.thread(thread).and_then(|open| open.model()),
+            Some("gpt-5.4-mini")
+        );
+        assert!(
+            !cockpit
+                .thread(thread)
+                .is_some_and(|open| open.first_prompt_sent()),
+            "still unlocked"
+        );
     }
 
     /// AC (#25): a CLI that fails to spawn refuses the whole switch — the
@@ -3928,7 +4198,10 @@ mod tests {
             panic!("expected the spawn refusal: {refused:?}");
         };
         assert!(e.to_string().contains("stub refused to spawn"));
-        assert_eq!(cockpit.thread(thread).map(|open| open.provider()), Some(Provider::Claude));
+        assert_eq!(
+            cockpit.thread(thread).map(|open| open.provider()),
+            Some(Provider::Claude)
+        );
         assert_eq!(cockpit.peek(thread).unwrap().provider, Provider::Claude);
         // The old Session still serves: the next send spawns nothing new.
         *fake.fail.borrow_mut() = false;
@@ -3960,7 +4233,12 @@ mod tests {
 
         assert_eq!(fake.streams.borrow().len(), 1, "nothing respawned");
         assert!(
-            !cockpit.thread(thread).unwrap().transcript().blocks().is_empty(),
+            !cockpit
+                .thread(thread)
+                .unwrap()
+                .transcript()
+                .blocks()
+                .is_empty(),
             "and nothing was torn down"
         );
     }
@@ -3992,13 +4270,20 @@ mod tests {
             .iter()
             .filter_map(|pane| pane.thread())
             .collect();
-        assert_eq!(panes, threads, "every open Thread has a Pane, in open order");
+        assert_eq!(
+            panes, threads,
+            "every open Thread has a Pane, in open order"
+        );
         assert_eq!(cockpit.visible(), [PaneIdentity::Thread(threads[0])]);
         assert!(cockpit.focus(PaneIdentity::Thread(threads[2])));
         assert_eq!(cockpit.visible(), [PaneIdentity::Thread(threads[2])]);
         assert_eq!(cockpit.layout().columns, 1);
         cockpit.park(threads[2]).unwrap();
-        assert_eq!(cockpit.roster().panes().len(), 2, "a parked Thread has no Pane");
+        assert_eq!(
+            cockpit.roster().panes().len(),
+            2,
+            "a parked Thread has no Pane"
+        );
         assert_eq!(
             cockpit.roster().focused_thread(),
             Some(threads[1]),
@@ -4032,12 +4317,23 @@ mod tests {
         );
 
         cockpit.close(PaneIdentity::Thread(threads[2])).unwrap();
-        assert_eq!(cockpit.roster().view(), View::Solo, "a pair losing a member dissolves");
-        assert_eq!(cockpit.roster().focused_thread(), Some(threads[0]), "onto the survivor");
+        assert_eq!(
+            cockpit.roster().view(),
+            View::Solo,
+            "a pair losing a member dissolves"
+        );
+        assert_eq!(
+            cockpit.roster().focused_thread(),
+            Some(threads[0]),
+            "onto the survivor"
+        );
         assert!(cockpit.groups().get(group).is_none());
 
         cockpit.close(PaneIdentity::Thread(threads[0])).unwrap();
-        assert!(cockpit.parked().unwrap().contains(&threads[0]), "a Solo close parks");
+        assert!(
+            cockpit.parked().unwrap().contains(&threads[0]),
+            "a Solo close parks"
+        );
         assert_eq!(cockpit.roster().park_order(), [threads[0]]);
         assert_eq!(cockpit.roster().panes().len(), 2);
     }
@@ -4049,7 +4345,10 @@ mod tests {
         let sending = pair(&mut cockpit, threads[0], threads[1]);
         cockpit.enter_group(sending).unwrap();
         let draft = cockpit.open_draft();
-        assert_eq!(cockpit.roster().draft_scope(draft).unwrap().group, Some(sending));
+        assert_eq!(
+            cockpit.roster().draft_scope(draft).unwrap().group,
+            Some(sending)
+        );
         assert_eq!(cockpit.visible().len(), 3, "the pending draft shows");
 
         cockpit.close(PaneIdentity::Thread(threads[0])).unwrap();
@@ -4119,11 +4418,21 @@ mod tests {
             Some(threads[1]),
             "focus stays on the member the operator was on"
         );
-        assert!(cockpit.thread(threads[2]).is_some(), "the parked member revived");
-        assert!(cockpit.roster().park_order().is_empty(), "and cmd-o forgets it");
+        assert!(
+            cockpit.thread(threads[2]).is_some(),
+            "the parked member revived"
+        );
+        assert!(
+            cockpit.roster().park_order().is_empty(),
+            "and cmd-o forgets it"
+        );
 
         assert!(cockpit.focus_thread(threads[0]));
-        assert_eq!(cockpit.roster().view(), View::Solo, "a loose Thread shows Solo");
+        assert_eq!(
+            cockpit.roster().view(),
+            View::Solo,
+            "a loose Thread shows Solo"
+        );
         cockpit.enter_group(group).unwrap();
         assert_eq!(
             cockpit.roster().focused_thread(),
@@ -4152,7 +4461,11 @@ mod tests {
             "the order drained: creation order"
         );
         assert!(cockpit.reopen_last().is_none());
-        assert_eq!(cockpit.roster().focused_thread(), Some(threads[2]), "reopen focuses");
+        assert_eq!(
+            cockpit.roster().focused_thread(),
+            Some(threads[2]),
+            "reopen focuses"
+        );
     }
 
     #[test]
@@ -4160,7 +4473,10 @@ mod tests {
         let (mut cockpit, _) = cockpit("roster-fullscreen");
         let threads = opened(&mut cockpit, 3);
         cockpit.toggle_fullscreen();
-        assert_eq!(cockpit.roster().fullscreen(), Some(PaneIdentity::Thread(threads[0])));
+        assert_eq!(
+            cockpit.roster().fullscreen(),
+            Some(PaneIdentity::Thread(threads[0]))
+        );
         cockpit.step_focus(1);
         assert_eq!(
             cockpit.roster().fullscreen(),
@@ -4168,7 +4484,10 @@ mod tests {
             "Solo has one visible Pane to step through"
         );
         cockpit.focus(PaneIdentity::Thread(threads[1]));
-        assert_eq!(cockpit.roster().fullscreen(), Some(PaneIdentity::Thread(threads[1])));
+        assert_eq!(
+            cockpit.roster().fullscreen(),
+            Some(PaneIdentity::Thread(threads[1]))
+        );
         cockpit.close(PaneIdentity::Thread(threads[1])).unwrap();
         assert_eq!(
             cockpit.roster().fullscreen(),

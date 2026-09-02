@@ -330,6 +330,10 @@ pub struct PaneWiring {
     pub decide: Option<AnyElement>,
     /// L1 tool chevrons, already wired to the cockpit's shared toggle door.
     pub tool_controls: HashMap<String, AnyElement>,
+    /// The head's title cell, wired: the name with a double-click that
+    /// opens the rename editor, or the editor itself while renaming. None
+    /// draws the plain name (L2, L3, drafts).
+    pub title: Option<AnyElement>,
 }
 
 /// The wall's state matrix (glance.md §4), selected from O(1) reads plus the
@@ -470,6 +474,7 @@ pub fn render_pane(
         usage_ring,
         mut decide,
         mut tool_controls,
+        title,
     } = wiring;
     let transcript = thread.map(|thread| thread.transcript());
     let decision = thread.and_then(|thread| thread.pending());
@@ -520,7 +525,7 @@ pub fn render_pane(
         );
     }
 
-    let mut pane = shell.child(pane_head(view, branch.as_ref(), status, usage_ring));
+    let mut pane = shell.child(pane_head(view, branch.as_ref(), status, usage_ring, title));
     match transcript {
         Some(transcript) => {
             // The tasks strip sits directly under the header, full width,
@@ -707,7 +712,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
     }
     focus_wrapper(
         shell
-            .child(pane_head(view, None, None, None))
+            .child(pane_head(view, None, None, None, None))
             .child(div().flex().flex_1().min_h_0())
             .child(composer_region(
                 view,
@@ -1163,6 +1168,7 @@ fn pane_head(
     branch: Option<&SharedString>,
     status: Option<Status>,
     usage_ring: Option<AnyElement>,
+    title: Option<AnyElement>,
 ) -> Div {
     // The dot's base is the muted ink — the parked look — and each live
     // state takes its own signal colour. The no-dot ruling is scoped to
@@ -1186,7 +1192,8 @@ fn pane_head(
         .child(led(px(theme::STATUS_DOT), dot_color))
         .child(
             div()
-                .flex_shrink_0()
+                .min_w_0()
+                .flex_shrink()
                 .text_size(px(theme::FS_LG))
                 .line_height(relative(theme::LINE_UI))
                 // gpui seats a run one pixel lower in this 32px head than
@@ -1195,7 +1202,10 @@ fn pane_head(
                 .pb(px(2.))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(rgb(TEXT_STRONG))
-                .child(view.name.clone()),
+                .child(match title {
+                    Some(title) => title,
+                    None => div().truncate().child(view.name.clone()).into_any_element(),
+                }),
         );
     // The checkout slot (#29): the branch mark and the cached branch name.
     // Pure text — no hover, no click target: the CWD is immutable once the
@@ -1224,6 +1234,20 @@ fn pane_head(
             .child(div().flex_shrink_0().child(ring)),
         None => head,
     }
+}
+
+/// The head's title, saying it can be renamed: the name in its own ink
+/// with the hover wash every control wears, truncating. Render-only; the
+/// cockpit gives it its id and its double-click.
+pub fn head_title(name: SharedString) -> Div {
+    div()
+        .min_w_0()
+        .truncate()
+        .px(px(theme::CHIP_PAD_X))
+        .mx(px(-theme::CHIP_PAD_X))
+        .rounded(px(theme::R_TIGHT))
+        .child(name)
+        .hover_control()
 }
 
 /// The tasks strip (§D.3): 24px, 12px inline padding, a 9px gap — the
@@ -2454,10 +2478,24 @@ fn render_block(
 ) -> AnyElement {
     let row = div().w_full().flex_shrink_0();
     match &block.body {
-        // A prompt is a paragraph. The prototype draws no `❯` and no
-        // operator gutter — the transcript is one reading column.
-        Body::Prompt(line) => paragraph(row, TEXT_2)
-            .child(selection.line(block.id, line.clone(), Vec::new()))
+        // The operator's own line stands apart from the answer: a raised,
+        // content-sized block in the strong ink — the one surface in the
+        // column with a ground of its own, so a glance tells who said
+        // what. No `❯`, no gutter: the ground is the whole marker.
+        Body::Prompt(line) => row
+            .flex()
+            .mb(px(theme::P_MARGIN_B))
+            .child(
+                div()
+                    .min_w_0()
+                    .max_w(px(68. * theme::FS_MD * theme::MONO_ADVANCE))
+                    .px(px(theme::CODE_PAD_X))
+                    .py(px(theme::PROMPT_PAD_Y))
+                    .rounded(px(theme::R_CONTROL))
+                    .bg(rgb(RAISED))
+                    .text_color(rgb(TEXT_STRONG))
+                    .child(selection.line(block.id, line.clone(), Vec::new())),
+            )
             .into_any_element(),
         Body::Paragraph { spans } => paragraph(row, TEXT_2)
             .child(prose(block.id, spans, selection))

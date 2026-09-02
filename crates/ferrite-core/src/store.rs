@@ -46,6 +46,11 @@ use crate::{transcript::Input, ThreadId};
 ///   Thread without one loses nothing but a grouping key.
 /// - **7** — an optional operator-chosen Thread title. Older Threads keep
 ///   their generated `thread-NN` label until renamed.
+/// How far `peek_first_prompt` reads before giving up: the first prompt
+/// is normally the second line, and a log whose first prompt sits past
+/// this much preamble is named by its number instead.
+const FIRST_PROMPT_SCAN: usize = 64 * 1024;
+
 const SCHEMA_VERSION: u32 = 7;
 
 /// Which agent backend serves this Thread — persisted so a restart knows
@@ -661,6 +666,40 @@ impl Store {
             project_id: header.project_id,
             title: header.title,
         })
+    }
+
+    /// The first prompt the operator sent, without loading the log: the
+    /// records are read only until the first `prompt`, and never past
+    /// `FIRST_PROMPT_SCAN` bytes — a huge log with no early prompt costs
+    /// that much and no more. `None` when no prompt was found in reach.
+    pub fn peek_first_prompt(&self, id: ThreadId) -> Result<Option<String>, LoadError> {
+        use std::io::BufRead;
+        let mut reader = io::BufReader::new(File::open(self.log_path(id))?);
+        let mut line = Vec::new();
+        let mut read = 0usize;
+        // The header first; it is not a record.
+        reader.read_until(b'\n', &mut line)?;
+        loop {
+            line.clear();
+            let n = reader.read_until(b'\n', &mut line)?;
+            if n == 0 {
+                return Ok(None);
+            }
+            read += n;
+            if let Ok(serde_json::Value::Object(record)) =
+                serde_json::from_slice::<serde_json::Value>(&line)
+            {
+                if record.get("type").and_then(serde_json::Value::as_str) == Some("prompt") {
+                    return Ok(record
+                        .get("text")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string));
+                }
+            }
+            if read > FIRST_PROMPT_SCAN {
+                return Ok(None);
+            }
+        }
     }
 
     /// Load one Thread's snapshot: its history and resume metadata.
