@@ -129,6 +129,11 @@ pub const DROP_VALID: u32 = RUNNING;
 /// `#e08f86` at 1px inset — a nav row that refuses it.
 #[allow(dead_code)]
 pub const DROP_REFUSED: u32 = BLOCKED;
+/// `#ffffff14` — the seam's grab band under the pointer: a faint lift
+/// over the gutter that says "drag here".
+pub const SEAM_HOVER: u32 = 0xffffff14;
+/// `#7fbf9526` — the wash over the slot a dragged Pane would take.
+pub const DROP_WASH: u32 = 0x7fbf9526;
 /// `0.4` — a row's opacity while it is being dragged.
 #[allow(dead_code)]
 pub const DRAGGING_OPACITY: f32 = 0.4;

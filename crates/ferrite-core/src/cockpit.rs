@@ -380,6 +380,21 @@ impl Cockpit {
         self.registry.register(root)
     }
 
+    /// A Group's Pane layout, reconciled to its members; None for a Group
+    /// that no longer exists.
+    pub fn group_layout(&self, group: GroupId) -> Option<crate::layout::Tree> {
+        self.groups.layout(group)
+    }
+
+    /// Persist a Group's Pane layout — a seam dragged, a Pane dropped.
+    pub fn set_group_layout(
+        &mut self,
+        group: GroupId,
+        tree: crate::layout::Tree,
+    ) -> Result<(), ApplyError> {
+        self.groups.set_layout(group, tree)
+    }
+
     /// Forget a registered Project. Refused while any Thread, open or
     /// parked, records it — the Threads would lose their name and their
     /// filter — so removal is for a root that nothing works in any more.

@@ -8,6 +8,7 @@ use std::time::Duration;
 use ferrite_core::cockpit::{CloseError, Cockpit, HistoryDirection, ProviderChoice};
 use ferrite_core::docview::{Cell, Level};
 use ferrite_core::groups::{Drag, DropTarget, GroupChange, GroupId, Groups, Plan};
+use ferrite_core::layout::{self, Edge, SeamId, Tree, Zone};
 use ferrite_core::roster::{PaneIdentity, View};
 use ferrite_core::store::Provider;
 use ferrite_core::workspace::registry::ProjectId;
@@ -142,6 +143,12 @@ pub struct CockpitView {
     /// The right-click menu, if one is up: what it is about, where it was
     /// summoned, and which destructive row is armed for its second press.
     context_menu: Option<ContextMenu>,
+    /// A seam being dragged: the Group, the seam, and the tree as it
+    /// stands mid-drag — persisted on release, never per move.
+    seam_drag: Option<SeamDrag>,
+    /// A Pane being dragged over another: the target and what a release
+    /// there would do, for the preview wash.
+    drop_preview: Option<(ThreadId, Zone)>,
     /// The operator's settings and where they save; every change saves.
     prefs: Preferences,
     /// The Settings panel is up.
@@ -186,6 +193,33 @@ impl Preferences {
         }
     }
 }
+
+/// A seam mid-drag.
+struct SeamDrag {
+    group: GroupId,
+    seam: SeamId,
+    tree: Tree,
+}
+
+/// A Pane on the move: its title is the handle. Dropped on another Pane
+/// of the same Group it swaps with it (the centre) or splits its slot
+/// (an edge).
+#[derive(Clone, Copy, Debug)]
+struct PaneDrag {
+    thread: ThreadId,
+}
+
+/// The badge that follows the pointer while a Pane is dragged.
+struct PaneDragPreview(SharedString);
+
+impl Render for PaneDragPreview {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        nav::drag_badge(self.0.clone())
+    }
+}
+
+/// How wide the grab band over a seam is, centred on the 8px gap.
+const SEAM_GRAB: f32 = 10.0;
 
 /// Where a folder the picker returns should land.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -487,6 +521,8 @@ impl CockpitView {
             context_menu: None,
             nav_collapsed: prefs.settings.nav_collapsed,
             facts: Facts::with_auto_title(prefs.settings.auto_title),
+            seam_drag: None,
+            drop_preview: None,
             prefs,
             settings_open: false,
             settings_scroll: ScrollHandle::new(),
@@ -736,7 +772,81 @@ impl CockpitView {
         if self.cockpit.roster().fullscreen().is_some() {
             return Level::Transcript;
         }
-        Level::for_cell(self.cell(window))
+        self.level_of(self.focused(), window)
+    }
+
+    /// The board the Panes lay out in, in window coordinates: right of the
+    /// nav, inset by the grid padding.
+    fn board_bounds(&self, window: &Window) -> layout::Rect {
+        let viewport = window.viewport_size();
+        let pad = crate::theme::GRID_PAD;
+        layout::Rect {
+            x: self.nav_width() + pad,
+            y: pad,
+            w: (f32::from(viewport.width) - self.nav_width() - pad * 2.0).max(0.0),
+            h: (f32::from(viewport.height) - pad * 2.0).max(0.0),
+        }
+    }
+
+    /// The Group's tree as it should draw right now: the one mid-drag,
+    /// else the persisted one reconciled to the members — with a pending
+    /// draft spliced in under a stand-in id, since a draft is no Thread.
+    fn group_tree(&self, group: GroupId) -> Option<Tree> {
+        let mut tree = match &self.seam_drag {
+            Some(drag) if drag.group == group => drag.tree.clone(),
+            _ => self.cockpit.group_layout(group)?,
+        };
+        for identity in self.cockpit.visible() {
+            if let PaneIdentity::Draft(draft) = identity {
+                tree.insert(draft_leaf(draft));
+            }
+        }
+        Some(tree)
+    }
+
+    /// Every visible Pane's rect on the board, in window coordinates —
+    /// from the Group's tree, or the one Solo cell. Fullscreen is the
+    /// whole board.
+    fn pane_rects(&self, window: &Window) -> Vec<(usize, layout::Rect)> {
+        let bounds = self.board_bounds(window);
+        if let Some(identity) = self.cockpit.roster().fullscreen() {
+            return self
+                .index_of(identity)
+                .map(|index| vec![(index, bounds)])
+                .unwrap_or_default();
+        }
+        match self.cockpit.roster().view() {
+            View::Group(group) => {
+                let Some(tree) = self.group_tree(group) else {
+                    return Vec::new();
+                };
+                tree.rects(bounds, crate::theme::GRID_GAP)
+                    .into_iter()
+                    .filter_map(|(leaf, rect)| {
+                        let identity = leaf_identity(leaf);
+                        self.index_of(identity).map(|index| (index, rect))
+                    })
+                    .collect()
+            }
+            View::Solo => self
+                .visible_indices()
+                .into_iter()
+                .map(|index| (index, bounds))
+                .collect(),
+        }
+    }
+
+    /// The level one Pane draws at: its own rect's, or the shared cell's
+    /// where no tree governs.
+    fn level_of(&self, index: usize, window: &Window) -> Level {
+        if self.cockpit.roster().fullscreen().is_some() {
+            return Level::Transcript;
+        }
+        self.pane_rects(window)
+            .into_iter()
+            .find(|(at, _)| *at == index)
+            .map(|(_, rect)| Level::for_cell(Cell::new(rect.w, rect.h)))
+            .unwrap_or_else(|| Level::for_cell(self.cell(window)))
     }
 
     /// The Panes on screen, as indices into the mirror — the roster's
@@ -1149,6 +1259,244 @@ impl CockpitView {
         )
     }
 
+    /// The Group's board: Panes at their tree rects, seams over the gaps,
+    /// the drop preview on top. Coordinates are the board's own — the
+    /// frame is `relative`, its origin the nav's right edge — so the rects
+    /// the tree computes for the window are shifted back by that origin.
+    fn tree_board(&self, group: GroupId, tree: Tree, window: &Window, cx: &mut Context<Self>) -> Div {
+        let bounds = self.board_bounds(window);
+        let origin_x = self.nav_width();
+        let local = |rect: layout::Rect| layout::Rect {
+            x: rect.x - origin_x,
+            ..rect
+        };
+        let mut board = div().relative().flex_1().min_w_0().min_h_0();
+        for (leaf, rect) in tree.rects(bounds, crate::theme::GRID_GAP) {
+            let Some(index) = self.index_of(leaf_identity(leaf)) else {
+                continue;
+            };
+            let level = Level::for_cell(Cell::new(rect.w, rect.h));
+            let rect = local(rect);
+            board = board.child(
+                self.pane_cell(index, level, cx)
+                    .absolute()
+                    .left(px(rect.x))
+                    .top(px(rect.y))
+                    .w(px(rect.w))
+                    .h(px(rect.h)),
+            );
+        }
+        for (at, seam) in tree
+            .seams(bounds, crate::theme::GRID_GAP, SEAM_GRAB)
+            .into_iter()
+            .enumerate()
+        {
+            let band = local(seam.band);
+            let id = seam.id.clone();
+            let cursor = match seam.axis {
+                layout::Axis::Row => gpui::CursorStyle::ResizeLeftRight,
+                layout::Axis::Column => gpui::CursorStyle::ResizeUpDown,
+            };
+            let dragging = self
+                .seam_drag
+                .as_ref()
+                .is_some_and(|drag| drag.group == group && drag.seam == seam.id);
+            let line = match seam.axis {
+                layout::Axis::Row => div()
+                    .absolute()
+                    .left(px((band.w - 2.0) / 2.0))
+                    .top_0()
+                    .bottom_0()
+                    .w(px(2.0)),
+                layout::Axis::Column => div()
+                    .absolute()
+                    .top(px((band.h - 2.0) / 2.0))
+                    .left_0()
+                    .right_0()
+                    .h(px(2.0)),
+            };
+            board = board.child(
+                div()
+                    .id(("seam", at))
+                    .absolute()
+                    .left(px(band.x))
+                    .top(px(band.y))
+                    .w(px(band.w))
+                    .h(px(band.h))
+                    .cursor(cursor)
+                    // The seam brightens under the pointer and while it is
+                    // held: the whole resize affordance.
+                    .child(line.rounded(px(1.0)).bg(rgb(if dragging {
+                        crate::theme::FOCUS
+                    } else {
+                        crate::theme::GROUND
+                    })))
+                    .hover(|style| style.bg(rgba(crate::theme::SEAM_HOVER)))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            view.begin_seam_drag(group, id.clone(), cx);
+                        }),
+                    ),
+            );
+        }
+        if let Some((target, zone)) = self.drop_preview {
+            if let Some((_, rect)) = tree
+                .rects(bounds, crate::theme::GRID_GAP)
+                .into_iter()
+                .find(|(leaf, _)| *leaf == target)
+            {
+                let wash = local(layout::zone_rect(rect, zone));
+                board = board.child(
+                    div()
+                        .absolute()
+                        .left(px(wash.x))
+                        .top(px(wash.y))
+                        .w(px(wash.w))
+                        .h(px(wash.h))
+                        .rounded(px(crate::theme::R_SURFACE))
+                        .bg(rgba(crate::theme::DROP_WASH))
+                        .border_1()
+                        .border_color(rgb(crate::theme::DROP_VALID))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            div()
+                                .px(px(crate::theme::ROW_PAD_X))
+                                .py(px(crate::theme::ROW_PAD_Y))
+                                .rounded(px(crate::theme::R_CONTROL))
+                                .bg(rgb(crate::theme::MENU))
+                                .text_size(px(crate::theme::FS_SM))
+                                .text_color(rgb(crate::theme::TEXT))
+                                .child(match zone {
+                                    Zone::Swap => "⇄ Swap",
+                                    Zone::Split(Edge::Left) => "Split left",
+                                    Zone::Split(Edge::Right) => "Split right",
+                                    Zone::Split(Edge::Top) => "Split above",
+                                    Zone::Split(Edge::Bottom) => "Split below",
+                                }),
+                        ),
+                );
+            }
+        }
+        board
+    }
+
+    /// A press on a seam: the drag begins from the persisted tree, and
+    /// the moves until release re-derive the ratio from the pointer.
+    fn begin_seam_drag(&mut self, group: GroupId, seam: SeamId, cx: &mut Context<Self>) {
+        let Some(tree) = self.cockpit.group_layout(group) else {
+            return;
+        };
+        self.seam_drag = Some(SeamDrag { group, seam, tree });
+        cx.notify();
+    }
+
+    /// The pointer moved with a seam held: the ratio follows it, clamped
+    /// by the tree to the 20% floor either side.
+    fn drag_seam(&mut self, position: gpui::Point<Pixels>, window: &Window, cx: &mut Context<Self>) {
+        let bounds = self.board_bounds(window);
+        let pointer = layout::Point {
+            x: f32::from(position.x),
+            y: f32::from(position.y),
+        };
+        let Some(drag) = self.seam_drag.as_mut() else {
+            return;
+        };
+        if let Some(ratio) = drag
+            .tree
+            .ratio_for(&drag.seam, bounds, pointer, crate::theme::GRID_GAP)
+        {
+            if drag.tree.set_ratio(&drag.seam, ratio) {
+                cx.notify();
+            }
+        }
+    }
+
+    /// The release: the dragged tree persists, once.
+    fn end_seam_drag(&mut self, cx: &mut Context<Self>) {
+        let Some(drag) = self.seam_drag.take() else {
+            return;
+        };
+        if let Err(error) = self.cockpit.set_group_layout(drag.group, drag.tree) {
+            self.group_error = Some(error.to_string().into());
+        }
+        cx.notify();
+    }
+
+    /// A Pane dragged over another: what a release here would do, for the
+    /// wash — nothing over itself, nothing across Groups.
+    fn preview_pane_drop(
+        &mut self,
+        source: ThreadId,
+        target: ThreadId,
+        position: gpui::Point<Pixels>,
+        bounds: gpui::Bounds<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let preview = (source != target && self.same_group(source, target)).then(|| {
+            let rect = layout::Rect {
+                x: f32::from(bounds.origin.x),
+                y: f32::from(bounds.origin.y),
+                w: f32::from(bounds.size.width),
+                h: f32::from(bounds.size.height),
+            };
+            let pointer = layout::Point {
+                x: f32::from(position.x),
+                y: f32::from(position.y),
+            };
+            (target, layout::zone(pointer, rect))
+        });
+        if self.drop_preview != preview {
+            self.drop_preview = preview;
+            cx.notify();
+        }
+    }
+
+    fn same_group(&self, a: ThreadId, b: ThreadId) -> bool {
+        match (self.cockpit.groups().of(a), self.cockpit.groups().of(b)) {
+            (Some(x), Some(y)) => x.id == y.id,
+            _ => false,
+        }
+    }
+
+    /// The release of a dragged Pane on another: the centre swaps the two
+    /// leaves, an edge moves the source beside the target — the tree
+    /// persists either way. Reads the preview the last move computed.
+    fn drop_pane(&mut self, source: ThreadId, target: ThreadId, cx: &mut Context<Self>) {
+        let preview = self.drop_preview.take();
+        let Some((previewed, zone)) = preview.filter(|(previewed, _)| *previewed == target) else {
+            cx.notify();
+            return;
+        };
+        self.apply_pane_drop(source, previewed, zone, cx);
+    }
+
+    /// The tree change a drop makes, persisted through the core door.
+    fn apply_pane_drop(&mut self, source: ThreadId, target: ThreadId, zone: Zone, cx: &mut Context<Self>) {
+        let Some(group) = self.cockpit.groups().of(source).map(|group| group.id) else {
+            return;
+        };
+        if !self.same_group(source, target) || source == target {
+            return;
+        }
+        let Some(mut tree) = self.cockpit.group_layout(group) else {
+            return;
+        };
+        let changed = match zone {
+            Zone::Swap => tree.swap(source, target),
+            Zone::Split(edge) => tree.split(target, edge, source),
+        };
+        if changed {
+            if let Err(error) = self.cockpit.set_group_layout(group, tree) {
+                self.group_error = Some(error.to_string().into());
+            }
+        }
+        cx.notify();
+    }
+
     /// cmd-, and the gear: the Settings panel, toggled. Opening it probes
     /// the CLIs' versions once, off the UI thread.
     fn open_settings(&mut self, _: &OpenSettings, _window: &mut Window, cx: &mut Context<Self>) {
@@ -1461,8 +1809,20 @@ impl CockpitView {
                     .into_any_element();
             }
         }
+        let badge = self.panes[index].name.clone();
+        let grouped = self.cockpit.groups().of(thread).is_some();
         pane::head_title(self.panes[index].name.clone())
             .id(("pane-title", thread.get() as usize))
+            // In a Group the title is the Pane's handle: drag it onto
+            // another Pane to swap or split.
+            .when(grouped, |title| {
+                title
+                    .cursor(gpui::CursorStyle::OpenHand)
+                    .on_drag(PaneDrag { thread }, move |_, _, _, cx| {
+                        let badge = badge.clone();
+                        cx.new(|_| PaneDragPreview(badge))
+                    })
+            })
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |view, event: &MouseDownEvent, _, cx| {
@@ -3680,22 +4040,16 @@ impl Render for CockpitView {
                 .flex()
                 .flex_col()
                 .child(self.pane_cell(index, level, cx))
-        } else if layout.tall_left {
-            // The prototype's board, and the only one it specifies: two
-            // columns, three rows, the left Pane spanning all three. Every
-            // other count keeps the chunked rows below (R-01).
-            frame()
-                .grid()
-                .grid_cols(2)
-                .grid_rows(3)
-                .child(
-                    self.pane_cell(visible[0], level, cx)
-                        .col_start(1)
-                        .row_span(3),
-                )
-                .child(self.pane_cell(visible[1], level, cx).col_start(2))
-                .child(self.pane_cell(visible[2], level, cx).col_start(2))
-                .child(self.pane_cell(visible[3], level, cx).col_start(2))
+        } else if let Some((group, tree)) = match self.cockpit.roster().view() {
+            View::Group(group) => self.group_tree(group).map(|tree| (group, tree)),
+            View::Solo => None,
+        } {
+            // A Group's board is its split tree (SwarmDeck's mosaic): every
+            // Pane at the rect the tree gives it, a grab band over every
+            // seam, and — while a Pane is being dragged — the wash that
+            // says what a release would do. Absolute geometry, so a seam
+            // drag moves exactly the two sides it sits between.
+            self.tree_board(group, tree, window, cx)
         } else {
             let columns = layout.columns;
             let mut grid = frame().flex().flex_col();
@@ -3765,11 +4119,25 @@ impl Render for CockpitView {
             // pointer leaves the Pane div, clamped to the origin transcript.
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|view, _: &MouseUpEvent, _, _| view.selection.release()),
+                cx.listener(|view, _: &MouseUpEvent, _, cx| {
+                    view.selection.release();
+                    view.end_seam_drag(cx);
+                    if view.drop_preview.take().is_some() {
+                        cx.notify();
+                    }
+                }),
             )
-            .on_mouse_move(
-                cx.listener(|view, event: &MouseMoveEvent, _, cx| view.pointer_drag(event, cx)),
-            )
+            .on_mouse_move(cx.listener(|view, event: &MouseMoveEvent, window, cx| {
+                if view.seam_drag.is_some() {
+                    if event.dragging() {
+                        view.drag_seam(event.position, window, cx);
+                    } else {
+                        view.end_seam_drag(cx);
+                    }
+                    return;
+                }
+                view.pointer_drag(event, cx)
+            }))
             // A press anywhere the popovers did not swallow dismisses the
             // open Composer menu, picker and band popover — Pane bodies,
             // nav rows that move no focus, the strip, all of it. Bubble
@@ -3871,6 +4239,21 @@ impl CockpitView {
                     view.open_context_menu(MenuTarget::Pane(thread), event.position, cx);
                 }),
             );
+        // A Thread Pane is a drop target for another Pane of its Group:
+        // the moves over it compute the preview, the release applies it.
+        let cell = match pane.thread() {
+            Some(target) => cell
+                .on_drag_move(cx.listener(
+                    move |view, event: &gpui::DragMoveEvent<PaneDrag>, _, cx| {
+                        let source = event.drag(cx).thread;
+                        view.preview_pane_drop(source, target, event.event.position, event.bounds, cx);
+                    },
+                ))
+                .on_drop(cx.listener(move |view, drag: &PaneDrag, _, cx| {
+                    view.drop_pane(drag.thread, target, cx);
+                })),
+            None => cell,
+        };
         // A draft Pane (#29): the band and its popover instead of a
         // transcript — nothing in core exists to read yet.
         let Some(thread) = pane.thread() else {
@@ -4445,6 +4828,20 @@ pub(crate) fn here() -> std::path::PathBuf {
 
 /// A typed path with `~` spelled out — the type-a-path row accepts what an
 /// operator would type at a shell.
+/// A draft's stand-in leaf in a Group's tree: drafts are no Threads and
+/// never persist, so the high ids stand in for them for one frame.
+fn draft_leaf(draft: ferrite_core::roster::DraftId) -> ThreadId {
+    ThreadId::new(u64::MAX - draft.get())
+}
+
+fn leaf_identity(leaf: ThreadId) -> PaneIdentity {
+    if leaf.get() > u64::MAX / 2 {
+        PaneIdentity::Draft(ferrite_core::roster::DraftId::new(u64::MAX - leaf.get()))
+    } else {
+        PaneIdentity::Thread(leaf)
+    }
+}
+
 /// What `<program> --version` says, in one line; the failure in words
 /// when it cannot be run — the About section never guesses.
 fn cli_version(program: &str) -> String {
@@ -8497,6 +8894,76 @@ mod tests {
             assert!(view.cockpit.thread(thread).is_none(), "gone on one press");
         });
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A Group's board is its split tree: two members sit side by side at
+    /// the tree's rects; dragging the seam between them re-shares the
+    /// width and persists on release; a Pane dropped on the other's centre
+    /// swaps them, on an edge splits — both persisted.
+    #[gpui::test]
+    fn the_group_board_resizes_by_its_seam_and_reorders_by_drop(cx: &mut TestAppContext) {
+        let (mut core, _fake) = cockpit("tree-board", 2);
+        let threads = core.threads();
+        let group = core
+            .apply_group(GroupChange::Create {
+                first: threads[0],
+                second: threads[1],
+            })
+            .unwrap()
+            .group
+            .unwrap();
+        bind_production_keys(cx);
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1200.), px(700.)));
+        view.update(cx, |view, cx| view.enter_group(group, cx));
+        tick(cx);
+
+        let rects: Vec<ferrite_core::layout::Rect> = cx.update(|window, cx| {
+            view.read(cx)
+                .pane_rects(window)
+                .into_iter()
+                .map(|(_, rect)| rect)
+                .collect()
+        });
+        assert_eq!(rects.len(), 2, "both members have a rect");
+        assert!((rects[0].w - rects[1].w).abs() < 1.0, "an even split: {rects:?}");
+        assert!(rects[1].x > rects[0].x + rects[0].w, "side by side, a gap between");
+
+        // Grab the seam (the gap between the two rects) and drag it right.
+        let seam_x = rects[0].x + rects[0].w + crate::theme::GRID_GAP / 2.0;
+        let seam_y = rects[0].y + rects[0].h / 2.0;
+        cx.simulate_mouse_down(gpui::point(px(seam_x), px(seam_y)), gpui::MouseButton::Left, gpui::Modifiers::none());
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| assert!(view.seam_drag.is_some(), "the seam is held"));
+        cx.simulate_mouse_move(gpui::point(px(seam_x + 200.), px(seam_y)), gpui::MouseButton::Left, gpui::Modifiers::none());
+        cx.run_until_parked();
+        cx.simulate_mouse_up(gpui::point(px(seam_x + 200.), px(seam_y)), gpui::MouseButton::Left, gpui::Modifiers::none());
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert!(view.seam_drag.is_none(), "released");
+            let tree = view.cockpit.group_layout(group).unwrap();
+            let ratio = match tree.root.as_ref().unwrap() {
+                ferrite_core::layout::Node::Split { ratio, .. } => *ratio,
+                _ => panic!("two members make a split"),
+            };
+            assert!(ratio > 0.6 && ratio < 0.8, "the first side grew: {ratio}");
+        });
+
+        // A drop on the centre swaps; on an edge splits the target's slot.
+        view.update(cx, |view, cx| {
+            view.apply_pane_drop(threads[0], threads[1], Zone::Swap, cx);
+            let tree = view.cockpit.group_layout(group).unwrap();
+            assert_eq!(tree.leaves(), vec![threads[1], threads[0]], "swapped");
+            view.apply_pane_drop(threads[0], threads[1], Zone::Split(Edge::Top), cx);
+            let tree = view.cockpit.group_layout(group).unwrap();
+            match tree.root.as_ref().unwrap() {
+                ferrite_core::layout::Node::Split { axis, .. } => {
+                    assert_eq!(*axis, ferrite_core::layout::Axis::Column, "stacked now")
+                }
+                _ => panic!("still a split"),
+            }
+            assert_eq!(tree.leaves(), vec![threads[0], threads[1]], "the source sits above");
+        });
     }
 
     /// #25: the mouse door — a click on the footer chip opens the picker.

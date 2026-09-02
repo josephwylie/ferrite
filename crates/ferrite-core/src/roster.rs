@@ -23,6 +23,12 @@ use crate::ThreadId;
 pub struct DraftId(u64);
 
 impl DraftId {
+    /// A draft id from its number — for a window mapping a stand-in leaf
+    /// back to the draft it stood for; the roster mints the real ones.
+    pub fn new(id: u64) -> Self {
+        Self(id)
+    }
+
     pub fn get(self) -> u64 {
         self.0
     }
