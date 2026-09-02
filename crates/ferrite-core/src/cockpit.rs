@@ -20,7 +20,7 @@ use crate::store::{LoadError, Provider, Store, ThreadWriter};
 use crate::transcript::{BlockId, Input, Lexer, Transcript, Update};
 use crate::workspace::registry::{self, ProjectId, Registry};
 use crate::workspace::{self, WorkspaceBinding, WorkspaceChoice};
-use crate::{Decision, DecisionAnswer, SessionEvent, ThreadId};
+use crate::{Decision, DecisionAnswer, ModelInfo, SessionEvent, ThreadId};
 
 /// Everything one spawn needs, in one struct: every path that starts a
 /// Session (open, revive, send-respawn, sweep) reads the Thread's stored
@@ -95,6 +95,8 @@ pub struct ProviderChoice {
 pub enum ProvisionError {
     /// The first prompt has gone out; nothing re-aims after it (#25, #29).
     Locked,
+    /// A turn is running: changing the Session now would cut it short.
+    Busy,
     /// The new provider's CLI would not spawn. The words are the
     /// provider's own.
     Spawn(io::Error),
@@ -108,6 +110,7 @@ impl std::fmt::Display for ProvisionError {
             ProvisionError::Locked => {
                 write!(f, "the first prompt was sent; the provider is fixed")
             }
+            ProvisionError::Busy => write!(f, "a turn is running; change the model when it ends"),
             ProvisionError::Spawn(e) => write!(f, "{e}"),
             ProvisionError::Store(e) => write!(f, "{e}"),
         }
@@ -218,7 +221,7 @@ struct Thread {
     /// picker's model rows. Announced like the command menu, empty until
     /// the Session speaks, and Session state exactly like it: never a
     /// static list, gone with the Session.
-    models: Vec<String>,
+    models: Vec<ModelInfo>,
     /// The lock every pre-prompt control reads (#25, #29): armed by the
     /// first operator prompt that goes out, and on revive when the replayed
     /// history holds one. Never disarmed — nothing re-aims a Thread the
@@ -1162,20 +1165,99 @@ impl Cockpit {
 
     /// Models actually announced by live Sessions of this provider, stable
     /// and deduplicated for a draft that has no Session of its own.
-    pub fn announced_models(&self, provider: Provider) -> Vec<String> {
-        let mut models = Vec::new();
+    pub fn announced_models(&self, provider: Provider) -> Vec<ModelInfo> {
+        let mut models: Vec<ModelInfo> = Vec::new();
         for thread in self
             .threads
             .values()
             .filter(|open| open.provider == provider)
         {
             for model in &thread.models {
-                if !models.contains(model) {
+                if !models.iter().any(|known| known.value == model.value) {
                     models.push(model.clone());
                 }
             }
         }
         models
+    }
+
+    /// The picker's rows for `provider`: what its live Sessions announced,
+    /// else the fallback catalog — never empty, so a draft can choose.
+    pub fn model_catalog(&self, provider: Provider) -> Vec<ModelInfo> {
+        crate::providers::models::catalog(provider, &self.announced_models(provider))
+    }
+
+    /// Re-aim one Thread's model, whenever. Before the first prompt this is
+    /// `set_provider`'s own eager swap. After it the running Session is
+    /// replaced by one resuming the same conversation under the new model
+    /// — the transcript and history stay, the header on disk changes, and
+    /// the provider is fixed (a Claude conversation cannot continue on
+    /// Codex). Mid-turn the change is refused rather than cutting the turn.
+    pub fn set_model(
+        &mut self,
+        thread: ThreadId,
+        model: Option<String>,
+    ) -> Result<(), ProvisionError> {
+        let Some(state) = self.threads.get(&thread) else {
+            let meta = self.store.peek(thread).map_err(ProvisionError::Store)?;
+            return self
+                .store
+                .set_provider(thread, meta.provider, model, None)
+                .map_err(ProvisionError::Store);
+        };
+        if !state.first_prompt_sent {
+            return self.set_provider(
+                thread,
+                ProviderChoice {
+                    provider: state.provider,
+                    model,
+                },
+            );
+        }
+        if state.model == model {
+            return Ok(());
+        }
+        if state.busy {
+            return Err(ProvisionError::Busy);
+        }
+        // The conversation must be resumable for the new Session to carry
+        // it: a Session that never named itself has nothing to resume.
+        let Some(resume) = state.resume.clone() else {
+            return Err(ProvisionError::Locked);
+        };
+        let cwd = workspace::effective_cwd(
+            state.session_project_root.as_deref(),
+            state.workspace.as_ref(),
+        )
+        .map(Path::to_path_buf);
+        let session = self
+            .spawner
+            .spawn(SpawnRequest {
+                provider: state.provider,
+                model: model.as_deref(),
+                resume: Some(&resume),
+                cwd: cwd.as_deref(),
+            })
+            .map_err(ProvisionError::Spawn)?;
+        let state = self.threads.get_mut(&thread).expect("checked above");
+        self.store
+            .set_provider(thread, state.provider, model.clone(), Some(&mut state.writer))
+            .map_err(ProvisionError::Store)?;
+        // The old Session goes as the new one arrives; the transcript is
+        // the conversation and stays. The new process has not been told the
+        // workspace yet, so the next prompt carries the preface again.
+        state.session = Some(session);
+        state.model = model.clone();
+        state.preface_pending = true;
+        state.pending = None;
+        let label = crate::providers::models::label(
+            model.as_deref().unwrap_or("default"),
+            &state.models,
+        );
+        state
+            .transcript
+            .apply(Input::Notice(format!("model changed to {label}")));
+        Ok(())
     }
 
     /// The next Thread waiting on the operator, after `from`, wrapping. One
@@ -1286,7 +1368,7 @@ impl<'a> ThreadView<'a> {
     /// The models the live Session's install offers (#25): the provider
     /// picker's model rows. Empty until the Session announces a list —
     /// never a static one.
-    pub fn models(&self) -> &'a [String] {
+    pub fn models(&self) -> &'a [ModelInfo] {
         &self.state.models
     }
 
@@ -3583,7 +3665,14 @@ mod tests {
             .unwrap();
         cockpit.pump();
 
-        assert_eq!(cockpit.thread(thread).map(|open| open.models()).unwrap_or_default(), ["sonnet", "opus", "haiku"]);
+        let values: Vec<&str> = cockpit
+            .thread(thread)
+            .map(|open| open.models())
+            .unwrap_or_default()
+            .iter()
+            .map(|model| model.value.as_str())
+            .collect();
+        assert_eq!(values, ["sonnet", "opus", "haiku"]);
         assert!(
             cockpit.thread(thread).unwrap().transcript().blocks().is_empty(),
             "a model list is not conversation"
@@ -3679,6 +3768,75 @@ mod tests {
         assert_eq!(*fake.attempts.borrow(), attempts, "no spawn was tried");
         assert_eq!(cockpit.thread(thread).map(|open| open.provider()), Some(Provider::Claude));
         assert_eq!(cockpit.peek(thread).unwrap().provider, Provider::Claude);
+    }
+
+    /// The model, unlike the provider, is never locked: after the first
+    /// prompt a change replaces the Session with one resuming the same
+    /// conversation under the new model — the transcript stays, the header
+    /// on disk follows, and a running turn refuses rather than being cut.
+    #[test]
+    fn the_model_can_change_after_the_first_prompt_by_resuming() {
+        let (mut cockpit, fake) = cockpit("model-after-prompt");
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        cockpit.send(thread, "hello".into());
+        fake.streams.borrow()[0]
+            .send(SessionEvent::Init {
+                session_id: "sess-1".into(),
+                model: "claude-opus-5".into(),
+            })
+            .unwrap();
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TextDelta {
+                text: "hi".into(),
+            })
+            .unwrap();
+        cockpit.pump();
+        // Mid-turn: refused, nothing spawned.
+        assert!(cockpit.thread(thread).is_some_and(|open| open.busy()));
+        let attempts = *fake.attempts.borrow();
+        assert!(matches!(
+            cockpit.set_model(thread, Some("claude-fable-5-1".into())),
+            Err(ProvisionError::Busy)
+        ));
+        assert_eq!(*fake.attempts.borrow(), attempts);
+
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TurnEnded {
+                outcome: crate::TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+        cockpit.pump();
+        let blocks_before = cockpit.thread(thread).unwrap().transcript().blocks().len();
+
+        cockpit
+            .set_model(thread, Some("claude-fable-5-1".into()))
+            .unwrap();
+
+        // A new Session, resuming the conversation, under the new model.
+        let pairs = fake.spawn_pairs();
+        assert_eq!(pairs.last().unwrap().model.as_deref(), Some("claude-fable-5-1"));
+        assert_eq!(pairs.last().unwrap().provider, Provider::Claude);
+        assert_eq!(fake.resumed.borrow().last().unwrap().as_deref(), Some("sess-1"));
+        let open = cockpit.thread(thread).unwrap();
+        assert_eq!(open.model(), Some("claude-fable-5-1"));
+        assert!(open.first_prompt_sent(), "the lock is untouched");
+        assert!(
+            open.transcript().blocks().len() > blocks_before,
+            "the conversation stays, and says the model changed"
+        );
+        assert_eq!(cockpit.peek(thread).unwrap().model.as_deref(), Some("claude-fable-5-1"));
+        // The same choice again is a no-op.
+        let attempts = *fake.attempts.borrow();
+        cockpit
+            .set_model(thread, Some("claude-fable-5-1".into()))
+            .unwrap();
+        assert_eq!(*fake.attempts.borrow(), attempts);
+
+        // Parked: the header alone changes.
+        cockpit.park(thread).unwrap();
+        cockpit.set_model(thread, None).unwrap();
+        assert_eq!(cockpit.peek(thread).unwrap().model, None);
     }
 
     /// The lock arms from replayed history too: a revived Thread whose log

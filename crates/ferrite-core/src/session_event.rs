@@ -80,14 +80,62 @@ pub enum SessionEvent {
     /// meta-row mode chip (#23). Claude lifts it from the same initialize
     /// handshake; display-only, and Session state like the menu above.
     PermissionMode { mode: String },
-    /// The models this install offers, in the provider's own values — the
-    /// provider picker's model rows (#25). Claude lifts the list from the
-    /// same initialize handshake; Codex announces no list, so its picker
-    /// offers no model rows. Session state exactly like the command menu:
-    /// never a static list, gone with the Session.
-    Models { models: Vec<String> },
+    /// The models this install offers, each with the name the provider's
+    /// own menu shows — the model picker's rows (#25). Claude lifts the
+    /// list from the same initialize handshake; Codex announces no list,
+    /// so its picker falls back to the catalog in `providers::models`.
+    /// Session state exactly like the command menu: gone with the Session.
+    Models { models: Vec<ModelInfo> },
     /// The session process exited; no further events will arrive.
     Closed { reason: String },
+}
+
+/// One model a provider offers: the value its CLI accepts, and the name a
+/// person reads. The value is what goes on the wire (`--model sonnet`,
+/// `"model": "gpt-5.6"`); the display is what every chip and row shows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelInfo {
+    /// What the provider accepts as the model choice: an alias (`sonnet`,
+    /// `opus[1m]`) or a full id (`claude-fable-5-1`, `gpt-5.6`).
+    pub value: String,
+    /// The human name — `Fable 5.1`, `Opus (1M context)`, `GPT-5.6 Sol`.
+    pub display: String,
+    /// One line of detail the provider's menu shows beside the name, or
+    /// empty.
+    pub detail: String,
+    /// The full id the value resolves to, when the provider says — how the
+    /// model a Session's Init names is matched back to its row.
+    pub resolved: Option<String>,
+}
+
+impl ModelInfo {
+    /// A model known only by its value: the display is groomed from it.
+    pub fn bare(value: impl Into<String>) -> Self {
+        let value = value.into();
+        Self {
+            display: crate::providers::models::display_name(&value),
+            detail: String::new(),
+            resolved: None,
+            value,
+        }
+    }
+
+    /// Whether `model` — an Init's full id or a chosen value — is this row.
+    pub fn is(&self, model: &str) -> bool {
+        self.value == model || self.resolved.as_deref() == Some(model)
+    }
+}
+
+impl From<&str> for ModelInfo {
+    fn from(value: &str) -> Self {
+        Self::bare(value)
+    }
+}
+
+impl PartialEq<str> for ModelInfo {
+    fn eq(&self, other: &str) -> bool {
+        self.value == other
+    }
 }
 
 /// One entry of a Session's command menu, in the provider's own words.

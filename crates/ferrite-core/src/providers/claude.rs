@@ -158,7 +158,7 @@ pub struct ClaudeCapabilities {
     pub permission_mode: String,
     /// Model values this install offers (`"haiku"`, `"opus[1m]"`, …) — the
     /// menu an operator may pick from, not what Ferrite hardcodes.
-    pub models: Vec<String>,
+    pub models: Vec<crate::ModelInfo>,
     /// The CLI's effective slash-command menu — built-ins, skills, project
     /// commands and plugins in one list, disabled overrides already honoured
     /// (#23). The reader announces it as `SessionEvent::Commands`; submitting

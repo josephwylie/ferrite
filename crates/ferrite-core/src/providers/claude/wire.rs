@@ -31,13 +31,32 @@ pub(super) fn parse_capabilities(line: &str, request_id: &str) -> Option<ClaudeC
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string(),
+        // Each entry: `{value, resolvedModel, displayName, description,
+        // …}`. The value is what `--model` accepts; the display name is
+        // what the CLI's own menu shows and so what Ferrite shows.
         models: body
             .get("models")
             .and_then(Value::as_array)
             .map(|models| {
                 models
                     .iter()
-                    .filter_map(|model| Some(model.get("value")?.as_str()?.to_string()))
+                    .filter_map(|model| {
+                        let value = model.get("value")?.as_str()?.to_string();
+                        let text = |key: &str| {
+                            model
+                                .get(key)
+                                .and_then(Value::as_str)
+                                .map(str::to_string)
+                        };
+                        Some(crate::ModelInfo {
+                            display: text("displayName")
+                                .filter(|name| !name.is_empty())
+                                .unwrap_or_else(|| super::super::models::display_name(&value)),
+                            detail: text("description").unwrap_or_default(),
+                            resolved: text("resolvedModel"),
+                            value,
+                        })
+                    })
                     .collect()
             })
             .unwrap_or_default(),
@@ -629,6 +648,16 @@ mod tests {
         .expect("the capture answers req_1");
         assert_eq!(capabilities.permission_mode, "bypassPermissions");
         assert!(capabilities.models.iter().any(|model| model == "haiku"));
+        // The CLI's own names ride the rows, and the value resolves to a
+        // full id the Init can be matched back to.
+        let haiku = capabilities
+            .models
+            .iter()
+            .find(|model| model.value == "haiku")
+            .unwrap();
+        assert_eq!(haiku.display, "Haiku");
+        assert!(haiku.detail.contains("Haiku 4.5"), "{}", haiku.detail);
+        assert!(haiku.is("claude-haiku-4-5-20251001"));
     }
 
     /// #23: the same handshake line carries the CLI's whole effective slash

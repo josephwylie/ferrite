@@ -8,9 +8,11 @@ pub mod cockpit;
 pub mod docview;
 pub mod groups;
 pub mod import;
+pub mod layout;
 mod prompt_history;
 pub mod providers;
 pub mod roster;
+pub mod settings;
 pub mod store;
 pub mod transcript;
 pub mod workspace;
@@ -18,6 +20,6 @@ pub mod workspace;
 mod session_event;
 mod thread;
 pub use session_event::{
-    Decision, DecisionAnswer, Hunk, SessionCommand, SessionEvent, ToolResult, TurnOutcome,
+    Decision, DecisionAnswer, Hunk, ModelInfo, SessionCommand, SessionEvent, ToolResult, TurnOutcome,
 };
 pub use thread::ThreadId;
