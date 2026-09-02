@@ -7,6 +7,7 @@ mod fuzzy;
 mod icons;
 mod keymap;
 mod line;
+mod menu;
 mod nav;
 mod pane;
 mod pointer;

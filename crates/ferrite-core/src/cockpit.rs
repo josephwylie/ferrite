@@ -380,6 +380,29 @@ impl Cockpit {
         self.registry.register(root)
     }
 
+    /// Forget a registered Project. Refused while any Thread, open or
+    /// parked, records it — the Threads would lose their name and their
+    /// filter — so removal is for a root that nothing works in any more.
+    pub fn remove_project(&mut self, project: ProjectId) -> io::Result<()> {
+        let recorded = self
+            .store
+            .thread_ids()?
+            .into_iter()
+            .any(|thread| self.project_id(thread) == Some(project));
+        if recorded {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "Threads still record this Project",
+            ));
+        }
+        self.registry.remove_project(project)
+    }
+
+    /// Retitle a registered Project.
+    pub fn rename_project(&mut self, project: ProjectId, title: &str) -> io::Result<()> {
+        self.registry.rename_project(project, title)
+    }
+
     /// Watch Session memory. Off until asked for: the operator's budget is
     /// theirs to set, and a cockpit with no sampler never restarts anything.
     pub fn watch_memory(&mut self, sampler: Box<dyn RssSampler>, limit: u64) {
@@ -4080,15 +4103,30 @@ mod tests {
         assert_eq!(cockpit.display_title(thread, true), "thread-1");
         cockpit.send(thread, "  Fix the   flaky\ntest in ci  ".into());
         assert_eq!(cockpit.display_title(thread, true), "Fix the flaky");
-        assert_eq!(cockpit.display_title(thread, false), "thread-1", "auto-titling can be off");
+        assert_eq!(
+            cockpit.display_title(thread, false),
+            "thread-1",
+            "auto-titling can be off"
+        );
         cockpit.park(thread).unwrap();
-        assert_eq!(cockpit.display_title(thread, true), "Fix the flaky", "parked: read off the log");
+        assert_eq!(
+            cockpit.display_title(thread, true),
+            "Fix the flaky",
+            "parked: read off the log"
+        );
         cockpit.rename_thread(thread, "CI flake").unwrap();
         assert_eq!(cockpit.display_title(thread, true), "CI flake");
         cockpit.revive(thread).unwrap();
-        assert_eq!(cockpit.display_title(thread, false), "CI flake", "a given title always wins");
+        assert_eq!(
+            cockpit.display_title(thread, false),
+            "CI flake",
+            "a given title always wins"
+        );
 
-        assert_eq!(title_from_prompt("a".repeat(60).as_str()).chars().count(), 49);
+        assert_eq!(
+            title_from_prompt("a".repeat(60).as_str()).chars().count(),
+            49
+        );
         assert!(title_from_prompt(&"word ".repeat(20)).ends_with('…'));
         assert_eq!(title_from_prompt("   \n\n  "), "");
     }

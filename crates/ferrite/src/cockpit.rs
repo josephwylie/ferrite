@@ -15,12 +15,13 @@ use ferrite_core::workspace::WorkspaceChoice;
 use ferrite_core::{DecisionAnswer, ThreadId};
 use gpui::prelude::*;
 use gpui::{
-    actions, deferred, div, px, rgb, rgba, AnyElement, ClipboardItem, Context, Div, Entity,
-    FocusHandle, Focusable, FontWeight, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
-    ScrollHandle, SharedString, Stateful, Window,
+    actions, anchored, deferred, div, px, rgb, rgba, AnyElement, ClipboardItem, Context, Div,
+    Entity, FocusHandle, Focusable, FontWeight, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, Pixels, Point, ScrollHandle, SharedString, Stateful, Window,
 };
 
 use crate::composer::{Composer, Edited};
+use crate::menu;
 use crate::facts::Facts;
 use crate::nav;
 use crate::pane::{self, PaneView};
@@ -136,6 +137,9 @@ pub struct CockpitView {
     /// the title cell *is* the editor, so two at once would need two rows
     /// to be the row you are looking at.
     rename: Option<(RenameTarget, Entity<crate::composer::Composer>)>,
+    /// The right-click menu, if one is up: what it is about, where it was
+    /// summoned, and which destructive row is armed for its second press.
+    context_menu: Option<ContextMenu>,
     group_error: Option<SharedString>,
 }
 
@@ -149,6 +153,43 @@ enum RenameTarget {
     /// A Thread, renamed from its Pane head — the same title, a different
     /// editor site, so the two never draw one editor twice.
     PaneTitle(ThreadId),
+}
+
+/// What a right-click was on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum MenuTarget {
+    /// A nav row.
+    Thread(ThreadId),
+    /// A Pane — the same Thread, but the rename opens in the head.
+    Pane(ThreadId),
+    Group(GroupId),
+    Project(ProjectId),
+}
+
+/// One thing a context-menu row does.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum MenuVerb {
+    Rename,
+    Focus,
+    Fullscreen,
+    Close,
+    LeaveGroup,
+    EnterGroup,
+    DissolveGroup,
+    NewThread,
+    Reveal,
+    CopyPath,
+    Delete,
+    RemoveProject,
+}
+
+/// The context menu up on screen.
+struct ContextMenu {
+    target: MenuTarget,
+    at: Point<Pixels>,
+    rows: Vec<Option<(menu::Item, MenuVerb)>>,
+    /// The destructive row pressed once, waiting for its confirmation.
+    armed: Option<usize>,
 }
 
 struct NavDragPreview(SharedString);
@@ -392,6 +433,7 @@ impl CockpitView {
             session_file_roots: ferrite_core::import::default_roots(),
             launch_project,
             rename: None,
+            context_menu: None,
             group_error: None,
         };
         // Every Thread the launch opened is on the roster already, and
@@ -751,6 +793,304 @@ impl CockpitView {
             .into_any_element()
     }
 
+    /// Summon the context menu for `target` at the pointer. Whatever else
+    /// was up (a popover, the filter, a rename) closes: one floating thing
+    /// at a time.
+    fn open_context_menu(&mut self, target: MenuTarget, at: Point<Pixels>, cx: &mut Context<Self>) {
+        self.popover = None;
+        self.nav_filter_open = false;
+        if self.rename.is_some() {
+            self.finish_rename(false, cx);
+        }
+        let rows = self.context_rows(target);
+        self.context_menu = Some(ContextMenu {
+            target,
+            at,
+            rows,
+            armed: None,
+        });
+        cx.notify();
+    }
+
+    /// The rows a target offers. `None` is a gap between groups of rows.
+    fn context_rows(&self, target: MenuTarget) -> Vec<Option<(menu::Item, MenuVerb)>> {
+        let mut rows: Vec<Option<(menu::Item, MenuVerb)>> = Vec::new();
+        match target {
+            MenuTarget::Thread(thread) | MenuTarget::Pane(thread) => {
+                let open = self.pane_for(thread).is_some();
+                let grouped = self.cockpit.groups().of(thread).is_some();
+                rows.push(Some((menu::Item::new("Rename").hint("⏎ save · esc cancel"), MenuVerb::Rename)));
+                if open {
+                    if self.cockpit.roster().focused_thread() != Some(thread) {
+                        rows.push(Some((menu::Item::new("Focus Pane"), MenuVerb::Focus)));
+                    }
+                    rows.push(Some((menu::Item::new("Toggle Fullscreen").hint("⌘F"), MenuVerb::Fullscreen)));
+                } else {
+                    rows.push(Some((menu::Item::new("Open"), MenuVerb::Focus)));
+                }
+                rows.push(None);
+                rows.push(Some((menu::Item::new("New Thread in this Project").hint("⌘T"), MenuVerb::NewThread)));
+                rows.push(Some((menu::Item::new("Reveal in Finder"), MenuVerb::Reveal)));
+                rows.push(Some((menu::Item::new("Copy Path"), MenuVerb::CopyPath)));
+                rows.push(None);
+                if open {
+                    rows.push(Some((
+                        menu::Item::new(if grouped { "Close Pane" } else { "Park Thread" }).hint("⌘W"),
+                        MenuVerb::Close,
+                    )));
+                }
+                if grouped {
+                    rows.push(Some((menu::Item::new("Leave Group"), MenuVerb::LeaveGroup)));
+                }
+                rows.push(Some((menu::Item::new("Delete Thread").destructive(), MenuVerb::Delete)));
+            }
+            MenuTarget::Group(group) => {
+                rows.push(Some((menu::Item::new("Rename Group"), MenuVerb::Rename)));
+                if self.cockpit.roster().view() != View::Group(group) {
+                    rows.push(Some((menu::Item::new("Open Group"), MenuVerb::EnterGroup)));
+                }
+                rows.push(Some((menu::Item::new("New Thread in this Group").hint("⌘T"), MenuVerb::NewThread)));
+                rows.push(None);
+                rows.push(Some((menu::Item::new("Dissolve Group").destructive(), MenuVerb::DissolveGroup)));
+            }
+            MenuTarget::Project(project) => {
+                rows.push(Some((menu::Item::new("New Thread here").hint("⌘T"), MenuVerb::NewThread)));
+                rows.push(Some((menu::Item::new("Reveal in Finder"), MenuVerb::Reveal)));
+                rows.push(Some((menu::Item::new("Copy Path"), MenuVerb::CopyPath)));
+                rows.push(None);
+                let in_use = self.project_in_use(project);
+                rows.push(Some((
+                    menu::Item::new(if in_use {
+                        "Remove Project (has Threads)"
+                    } else {
+                        "Remove Project"
+                    })
+                    .destructive()
+                    .disabled(in_use),
+                    MenuVerb::RemoveProject,
+                )));
+            }
+        }
+        rows
+    }
+
+    /// Whether any Thread, open or parked, records this Project.
+    fn project_in_use(&self, project: ProjectId) -> bool {
+        self.cockpit
+            .threads()
+            .into_iter()
+            .chain(self.facts.parked().iter().copied())
+            .any(|thread| self.cockpit.project_id(thread) == Some(project))
+    }
+
+    /// The directory a target stands for: a Thread's effective cwd (its
+    /// worktree or checkout), a Group's first member's, a Project's root.
+    fn target_path(&self, target: MenuTarget) -> Option<std::path::PathBuf> {
+        match target {
+            MenuTarget::Thread(thread) | MenuTarget::Pane(thread) => self.thread_path(thread),
+            MenuTarget::Group(group) => self
+                .cockpit
+                .groups()
+                .get(group)
+                .and_then(|group| group.members.first().copied())
+                .and_then(|thread| self.thread_path(thread)),
+            MenuTarget::Project(project) => self
+                .cockpit
+                .registry()
+                .project(project)
+                .map(|project| project.root.clone()),
+        }
+    }
+
+    fn thread_path(&self, thread: ThreadId) -> Option<std::path::PathBuf> {
+        if let Some(open) = self.cockpit.thread(thread) {
+            return ferrite_core::workspace::effective_cwd(
+                open.session_project_root(),
+                open.workspace(),
+            )
+            .map(std::path::Path::to_path_buf);
+        }
+        let meta = self.cockpit.peek(thread).ok()?;
+        ferrite_core::workspace::effective_cwd(
+            meta.session_project_root.as_deref(),
+            meta.workspace.as_ref(),
+        )
+        .map(std::path::Path::to_path_buf)
+    }
+
+    /// A row's press: a destructive row arms on the first press and runs
+    /// on the second; anything else runs at once. The menu closes after
+    /// a verb runs, and stays up while a row is armed.
+    fn press_menu_row(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(open) = self.context_menu.as_mut() else {
+            return;
+        };
+        let Some(Some((item, verb))) = open.rows.get(index) else {
+            return;
+        };
+        if item.disabled {
+            return;
+        }
+        let verb = *verb;
+        if item.destructive && open.armed != Some(index) {
+            open.armed = Some(index);
+            cx.notify();
+            return;
+        }
+        let target = open.target;
+        self.context_menu = None;
+        self.run_menu_verb(target, verb, cx);
+        cx.notify();
+    }
+
+    fn run_menu_verb(&mut self, target: MenuTarget, verb: MenuVerb, cx: &mut Context<Self>) {
+        match (target, verb) {
+            (MenuTarget::Thread(thread), MenuVerb::Rename) => {
+                self.start_rename(RenameTarget::Thread(thread), cx)
+            }
+            (MenuTarget::Pane(thread), MenuVerb::Rename) => {
+                self.start_rename(RenameTarget::PaneTitle(thread), cx)
+            }
+            (MenuTarget::Group(group), MenuVerb::Rename) => {
+                self.start_rename(RenameTarget::Group(group), cx)
+            }
+            (MenuTarget::Thread(thread) | MenuTarget::Pane(thread), MenuVerb::Focus) => {
+                if self.pane_for(thread).is_some() {
+                    self.focus_thread(thread, cx);
+                } else {
+                    self.revive_thread(thread, cx);
+                }
+            }
+            (MenuTarget::Thread(thread) | MenuTarget::Pane(thread), MenuVerb::Fullscreen) => {
+                self.focus_thread(thread, cx);
+                self.cockpit.toggle_fullscreen();
+            }
+            (MenuTarget::Thread(thread) | MenuTarget::Pane(thread), MenuVerb::Close) => {
+                self.close_pane(PaneIdentity::Thread(thread), cx);
+            }
+            (MenuTarget::Thread(thread) | MenuTarget::Pane(thread), MenuVerb::LeaveGroup) => {
+                match self.cockpit.apply_group(GroupChange::Leave { thread }) {
+                    Ok(_) => self.group_error = None,
+                    Err(error) => self.group_error = Some(error.to_string().into()),
+                }
+                self.sync_panes(cx);
+            }
+            (MenuTarget::Group(group), MenuVerb::EnterGroup) => self.enter_group(group, cx),
+            (MenuTarget::Group(group), MenuVerb::DissolveGroup) => {
+                // Members leave one by one; the Group dissolves under two.
+                let members = self
+                    .cockpit
+                    .groups()
+                    .get(group)
+                    .map(|group| group.members.clone())
+                    .unwrap_or_default();
+                for thread in members {
+                    if self.cockpit.groups().get(group).is_none() {
+                        break;
+                    }
+                    if let Err(error) = self.cockpit.apply_group(GroupChange::Leave { thread }) {
+                        self.group_error = Some(error.to_string().into());
+                        break;
+                    }
+                }
+                self.sync_panes(cx);
+            }
+            (_, MenuVerb::NewThread) => {
+                let project = match target {
+                    MenuTarget::Project(project) => Some(project),
+                    MenuTarget::Thread(thread) | MenuTarget::Pane(thread) => {
+                        self.cockpit.project_id(thread)
+                    }
+                    MenuTarget::Group(group) => self
+                        .cockpit
+                        .groups()
+                        .get(group)
+                        .and_then(|group| group.members.first().copied())
+                        .and_then(|thread| self.cockpit.project_id(thread)),
+                };
+                self.open_draft(pane::DraftTarget::Main, cx);
+                if let (Some(project), Some(draft)) = (project, self.focused_draft_mut()) {
+                    draft.project = project;
+                    draft.target = pane::DraftTarget::Main;
+                }
+            }
+            (_, MenuVerb::Reveal) => {
+                if let Some(path) = self.target_path(target) {
+                    cx.reveal_path(&path);
+                }
+            }
+            (_, MenuVerb::CopyPath) => {
+                if let Some(path) = self.target_path(target) {
+                    cx.write_to_clipboard(ClipboardItem::new_string(
+                        path.to_string_lossy().to_string(),
+                    ));
+                }
+            }
+            (MenuTarget::Thread(thread) | MenuTarget::Pane(thread), MenuVerb::Delete) => {
+                if let Err(error) = self.cockpit.delete(thread) {
+                    self.group_error = Some(format!("delete refused: {error}").into());
+                } else {
+                    self.group_error = None;
+                }
+                if self
+                    .popover
+                    .as_ref()
+                    .is_some_and(|open| open.pane == PaneIdentity::Thread(thread))
+                {
+                    self.popover = None;
+                }
+                self.sync_panes(cx);
+                self.facts.parked_changed(&self.cockpit);
+            }
+            (MenuTarget::Project(project), MenuVerb::RemoveProject) => {
+                if let Err(error) = self.cockpit.remove_project(project) {
+                    self.group_error = Some(format!("remove refused: {error}").into());
+                } else {
+                    if self.nav_filter == Some(project) {
+                        self.nav_filter = None;
+                    }
+                    self.group_error = None;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The context menu, floated at the pointer and clamped inside the
+    /// window; `deferred` so nothing later in the tree paints over it. A
+    /// press on the menu's own dead space is swallowed.
+    fn context_menu_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let open = self.context_menu.as_ref()?;
+        let mut shell = menu::shell().on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
+        );
+        for (index, row) in open.rows.iter().enumerate() {
+            shell = match row {
+                None => shell.child(menu::gap()),
+                Some((item, _)) => shell.child(
+                    menu::row(index, item, open.armed == Some(index)).on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            view.press_menu_row(index, cx);
+                        }),
+                    ),
+                ),
+            };
+        }
+        Some(
+            deferred(
+                anchored()
+                    .position(open.at)
+                    .snap_to_window_with_margin(px(crate::theme::GRID_PAD))
+                    .child(shell),
+            )
+            .with_priority(2)
+            .into_any_element(),
+        )
+    }
+
     /// The Pane head's title: the live editor while this Thread is being
     /// renamed from its head, else the name — a double-click opens the
     /// editor, a single click only lands on the Pane. The press stops
@@ -901,6 +1241,10 @@ impl CockpitView {
     }
 
     fn interrupt(&mut self, _: &Interrupt, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.context_menu.take().is_some() {
+            cx.notify();
+            return;
+        }
         if self.rename.is_some() {
             self.finish_rename(false, cx);
             return;
@@ -3017,6 +3361,9 @@ impl Render for CockpitView {
                         view.nav_filter_open = false;
                         dismissed = true;
                     }
+                    if view.context_menu.take().is_some() {
+                        dismissed = true;
+                    }
                     // A press outside the editor abandons the rename — the
                     // operator looked away, which is escape, not enter.
                     // It notifies itself, so it is not counted above.
@@ -3043,8 +3390,18 @@ impl Render for CockpitView {
             // deliberate override of sidebar-and-impl.md §3 ("the nav hides
             // entirely"): the fullscreened Pane spans the area right of the
             // nav, so the swarm stays one click away (#21).
+            // A right press anywhere no row claimed closes the menu.
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|view, _: &MouseDownEvent, _, cx| {
+                    if view.context_menu.take().is_some() {
+                        cx.notify();
+                    }
+                }),
+            )
             .child(self.nav(cx))
             .child(grid)
+            .children(self.context_menu_element(cx))
     }
 }
 
@@ -3066,6 +3423,17 @@ impl CockpitView {
                 MouseButton::Left,
                 cx.listener(move |view, event: &MouseDownEvent, _, cx| {
                     view.pointer_down(index, event, cx)
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |view, event: &MouseDownEvent, _, cx| {
+                    let Some(thread) = view.panes.get(index).and_then(PaneView::thread) else {
+                        return;
+                    };
+                    cx.stop_propagation();
+                    view.focus_pane(index);
+                    view.open_context_menu(MenuTarget::Pane(thread), event.position, cx);
                 }),
             );
         // A draft Pane (#29): the band and its popover instead of a
@@ -3349,17 +3717,33 @@ impl CockpitView {
         let mut menu = nav::filter_menu();
         for (index, option) in state.filter.options.iter().enumerate() {
             let project = option.project;
-            menu = menu.child(nav::filter_option(index, option).on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                    cx.stop_propagation();
-                    // The filter narrows navigation and nothing else: no
-                    // Pane opens, closes or moves because of it.
-                    view.nav_filter = project;
-                    view.nav_filter_open = false;
-                    cx.notify();
-                }),
-            ));
+            menu = menu.child(
+                nav::filter_option(index, option)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            // The filter narrows navigation and nothing else: no
+                            // Pane opens, closes or moves because of it.
+                            view.nav_filter = project;
+                            view.nav_filter_open = false;
+                            cx.notify();
+                        }),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |view, event: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            if let Some(project) = project {
+                                view.open_context_menu(
+                                    MenuTarget::Project(project),
+                                    event.position,
+                                    cx,
+                                );
+                            }
+                        }),
+                    ),
+            );
         }
         head.child(deferred(menu))
     }
@@ -3419,6 +3803,13 @@ impl CockpitView {
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |view, _: &MouseDownEvent, _, cx| view.enter_group(id, cx)),
+                )
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |view, event: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        view.open_context_menu(MenuTarget::Group(id), event.position, cx);
+                    }),
                 ),
             );
             // Gap 0 has no band of its own; it rides the header instead.
@@ -3531,6 +3922,13 @@ impl CockpitView {
                         return;
                     }
                     view.revive_thread(thread, cx);
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |view, event: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    view.open_context_menu(MenuTarget::Thread(thread), event.position, cx);
                 }),
             )
             .into_any_element()
@@ -7505,6 +7903,63 @@ mod tests {
         view.read_with(cx, |view, _| {
             assert_eq!(view.cockpit.thread(thread).and_then(|open| open.model()), Some("opus"), "the model stands");
             assert_eq!(view.cockpit.thread(thread).map(|open| open.provider()), Some(Provider::Claude));
+        });
+    }
+
+    /// A right-click on a Pane summons the menu for its Thread; escape
+    /// closes it; a destructive row arms on the first press and runs on
+    /// the second — a deleted Thread is gone from the grid and the store.
+    #[gpui::test]
+    fn a_right_click_summons_the_menu_and_delete_takes_two_presses(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("context-menu", 2);
+        bind_production_keys(cx);
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        tick(cx);
+        let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+
+        // Right-click inside the focused Pane's transcript.
+        cx.simulate_mouse_down(
+            gpui::point(px(600.), px(300.)),
+            gpui::MouseButton::Right,
+            gpui::Modifiers::none(),
+        );
+        cx.run_until_parked();
+        let (delete, count) = view.read_with(cx, |view, _| {
+            let menu = view.context_menu.as_ref().expect("a right-click opens the menu");
+            assert_eq!(menu.target, MenuTarget::Pane(thread));
+            let labels: Vec<&str> = menu
+                .rows
+                .iter()
+                .flatten()
+                .map(|(item, _)| item.label.as_ref())
+                .collect();
+            assert!(labels.contains(&"Rename"), "{labels:?}");
+            assert!(labels.contains(&"Park Thread"), "{labels:?}");
+            assert!(labels.contains(&"Delete Thread"), "{labels:?}");
+            let delete = menu
+                .rows
+                .iter()
+                .position(|row| matches!(row, Some((_, MenuVerb::Delete))))
+                .unwrap();
+            (delete, view.cockpit.threads().len() + view.cockpit.parked().unwrap().len())
+        });
+
+        // Escape closes it without running anything.
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| assert!(view.context_menu.is_none()));
+
+        view.update(cx, |view, cx| {
+            view.open_context_menu(MenuTarget::Pane(thread), gpui::point(px(600.), px(300.)), cx);
+            view.press_menu_row(delete, cx);
+            let menu = view.context_menu.as_ref().expect("armed, still up");
+            assert_eq!(menu.armed, Some(delete), "the first press only arms");
+            view.press_menu_row(delete, cx);
+            assert!(view.context_menu.is_none(), "the second press runs and closes");
+            assert!(view.cockpit.thread(thread).is_none(), "the Thread is gone from the grid");
+            assert_eq!(view.cockpit.threads().len() + view.cockpit.parked().unwrap().len(), count - 1, "and from the store");
+            assert!(view.panes.iter().all(|pane| pane.thread() != Some(thread)));
         });
     }
 
