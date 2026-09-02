@@ -11,7 +11,6 @@ use ferrite_core::groups::{
     grid as group_grid, Drag, DropTarget, GroupChange, GroupId, Groups, Plan,
 };
 use ferrite_core::store::Provider;
-use ferrite_core::transcript::Status;
 use ferrite_core::workspace::registry::ProjectId;
 use ferrite_core::workspace::{WorkspaceBinding, WorkspaceChoice};
 use ferrite_core::{DecisionAnswer, ThreadId};
@@ -3604,76 +3603,37 @@ impl CockpitView {
                 level,
             ));
         };
+        let open = self.cockpit.thread(thread);
         // The frame's selection seam for this Pane (#27), resolved against
         // exactly the rows the body will draw — the shared rendered window,
         // because copy is what you see.
         let selection = {
-            let blocks = self
-                .cockpit
-                .thread(thread).map(|open| open.transcript())
-                .map(|transcript| transcript.blocks())
-                .unwrap_or(&[]);
+            let blocks = open.map(|open| open.transcript().blocks()).unwrap_or(&[]);
             self.selection
                 .overlay(thread, pane::rendered_window(blocks, level))
         };
-        let rendered = cell.child(pane::render_pane(
-            pane,
-            pane::PaneState {
-                transcript: self.cockpit.thread(thread).map(|open| open.transcript()),
-                decision: self.cockpit.thread(thread).and_then(|open| open.pending()),
-                queued: self.cockpit.thread(thread).and_then(|open| open.queued()),
-                workspace: self.cockpit.thread(thread).and_then(|open| open.workspace()),
-                // The cached checkout label (#29) — display-only, and only
-                // where the L1 header draws its binding slot.
-                branch: (level == Level::Transcript)
-                    .then(|| self.branches.get(&thread).cloned())
-                    .flatten(),
-                // The open `/`/`@` popover — only L1 draws a Composer
-                // to hang it over (#23).
-                menu: (level == Level::Transcript)
-                    .then(|| self.composer_menu(index, cx))
-                    .flatten(),
-                composer_empty: pane.composer.read(cx).is_empty(),
-                history_available: self.history_available(index, level),
-                // The meta row's mode chip — only where the meta row
-                // renders.
-                permission_mode: (level == Level::Transcript)
-                    .then(|| self.cockpit.thread(thread).and_then(|open| open.permission_mode()))
-                    .flatten(),
-                // The Composer's model picker — only where the Composer
-                // renders (#25).
-                model_picker: (level == Level::Transcript)
-                    .then(|| self.model_picker(index, cx))
-                    .flatten(),
-                focused,
-                // `esc interrupt` (§D.7): running **and** focused. The
-                // head's dot reads the transcript's own status, not the
-                // turn-in-flight flag — a revived Thread mid-turn shows the
-                // green dot with `busy` false — so the hint reads the same
-                // predicate the dot does, or the Pane looks running and
-                // offers no way out. The focus half is here because the
-                // prototype's running-but-unfocused Pane draws no hint.
-                running: focused
-                    && self
-                        .cockpit
-                        .thread(thread).map(|open| open.transcript())
-                        .is_some_and(|transcript| transcript.status() == Status::Streaming),
-                selection,
-                timings: self.cockpit.thread(thread).map(|open| open.tool_timings()),
-                // The context ring lives on the L1 head only.
-                usage_ring: (level == Level::Transcript)
-                    .then(|| self.usage_ring(index))
-                    .flatten(),
-                // The Decision keycaps, wired where a card can draw
-                // them — the wall answers with keys alone.
-                decide: (level != Level::Wall)
-                    .then(|| self.decide_keycaps(index, level, cx))
-                    .flatten(),
-                tool_controls: self.tool_disclosures(index, thread, level, cx),
-            },
-            level,
-        ));
-        rendered
+        let facts = pane::PaneFacts {
+            thread: open,
+            // The cached checkout label (#29) — display-only.
+            branch: self.branches.get(&thread).cloned(),
+            composer_empty: pane.composer.read(cx).is_empty(),
+            history_available: self.history_available(index, level),
+            focused,
+            selection,
+        };
+        // Only L1 draws a Composer to hang a popover over (#23), a model
+        // picker (#25) or a context ring; the wall answers with keys alone.
+        let l1 = level == Level::Transcript;
+        let wiring = pane::PaneWiring {
+            menu: l1.then(|| self.composer_menu(index, cx)).flatten(),
+            model_picker: l1.then(|| self.model_picker(index, cx)).flatten(),
+            usage_ring: l1.then(|| self.usage_ring(index)).flatten(),
+            decide: (level != Level::Wall)
+                .then(|| self.decide_keycaps(index, level, cx))
+                .flatten(),
+            tool_controls: self.tool_disclosures(index, thread, level, cx),
+        };
+        cell.child(pane::render_pane(pane, facts, wiring, level))
     }
 
     fn tool_disclosures(

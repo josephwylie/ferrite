@@ -12,7 +12,7 @@
 //! L2 (Instruments) and L3 (Wall) keep the metrics they have — the
 //! prototype specifies only L1 — and take the new palette and scale.
 
-use ferrite_core::cockpit::{ProviderChoice, ToolTiming};
+use ferrite_core::cockpit::{ProviderChoice, ThreadView, ToolTiming};
 use ferrite_core::store::Provider;
 use ferrite_core::docview::{is_test_run, passed_count, Instruments, Level, Tests};
 use ferrite_core::groups::GroupId;
@@ -302,54 +302,47 @@ impl PaneView {
 }
 
 /// Everything one Pane draws, as the cockpit reads it for this frame.
-pub struct PaneState<'a> {
-    pub transcript: Option<&'a Transcript>,
-    pub decision: Option<&'a Decision>,
-    pub queued: Option<&'a str>,
-    pub workspace: Option<&'a WorkspaceBinding>,
+/// What a frame knows about a Pane: the Thread's own facts through one
+/// core handle — `None` for a Thread the cockpit could not open — beside
+/// the four the window alone can answer.
+pub struct PaneFacts<'a> {
+    pub thread: Option<ThreadView<'a>>,
     /// The actual git checkout of the Thread's cwd (#29), cached by the
     /// cockpit and refreshed on turn end and the watchdog cadence — the L1
     /// header's binding slot. Display-only, never a control: post-lock the
     /// CWD is immutable, and nothing may look otherwise.
     pub branch: Option<SharedString>,
-    /// The open `/` or `@` popover for this Pane's Composer, assembled in the
-    /// cockpit exactly like `root_chip` — rows wired to their picks there —
-    /// and hung above the input line here (#23). None when no menu is open.
-    pub menu: Option<AnyElement>,
     /// Whether the Composer line is empty — what decides the idle
     /// placeholder, read where the cockpit has a `cx` to read it with.
     pub composer_empty: bool,
     pub history_available: bool,
-    /// The Session's permission mode, in the provider's own word — the meta
-    /// row's mode chip (#23). None (no announcement, or a provider that
-    /// makes none) draws no chip; display-only either way.
-    pub permission_mode: Option<&'a str>,
-    /// The Composer's model picker — logomark, model label, chevron —
-    /// assembled in the cockpit where the click is wired (#25). Supplied
-    /// for **every** L1 Pane, before and after the first-prompt lock: the
-    /// prototype draws it in all four Panes.
-    pub model_picker: Option<AnyElement>,
     pub focused: bool,
-    /// A turn in flight: the Composer's ❯ becomes ◐ and esc offers interrupt.
-    pub running: bool,
     /// This frame's selection seam (#27): every text run the transcript
     /// draws goes through it — registered for hit-testing and copy, and
     /// washed where the selection covers it. The cockpit owns the drag;
     /// the Pane only routes its runs.
     pub selection: SelectionOverlay,
-    /// The wall clocks of this Thread's tool calls (`Cockpit::tool_timings`)
-    /// — what tool rows and activity lines read their durations from. None
-    /// on a Pane whose cockpit kept no clock (tests, parked replays).
-    pub timings: Option<&'a HashMap<String, ToolTiming>>,
-    /// The context ring, assembled in the cockpit and only placed here
-    /// (#22 C12). None when the provider reported no window, or below L1.
-    /// No hover card, no token count, no `ctx`: the ring is the whole
-    /// affordance.
+}
+
+/// The click-wired elements only the cockpit can build — gpui listeners
+/// are made with its own `Context` — and the Pane only places. Each is
+/// `None` (or empty) below the level that draws it.
+#[derive(Default)]
+pub struct PaneWiring {
+    /// The open `/` or `@` popover for this Pane's Composer, rows wired to
+    /// their picks in the cockpit and hung above the input line here (#23).
+    pub menu: Option<AnyElement>,
+    /// The Composer's model picker — logomark, model label, chevron —
+    /// supplied for **every** L1 Pane, before and after the first-prompt
+    /// lock: the prototype draws it in all four Panes (#25).
+    pub model_picker: Option<AnyElement>,
+    /// The context ring (#22 C12). None when the provider reported no
+    /// window, or below L1. No hover card, no token count, no `ctx`: the
+    /// ring is the whole affordance.
     pub usage_ring: Option<AnyElement>,
-    /// The pending Decision's keycaps, wired in the cockpit to the exact
-    /// decide verbs the keys run (#26) — assembled there like `controls`,
-    /// laid into the L1 card or the L2 body here. None while nothing
-    /// pends, and at the wall, which draws no keycaps.
+    /// The pending Decision's keycaps, wired to the exact decide verbs the
+    /// keys run (#26) — laid into the L1 card or the L2 body. None while
+    /// nothing pends, and at the wall, which draws no keycaps.
     pub decide: Option<AnyElement>,
     /// L1 tool chevrons, already wired to the cockpit's shared toggle door.
     pub tool_controls: HashMap<String, AnyElement>,
@@ -467,29 +460,44 @@ pub fn wall_card(transcript: Option<&Transcript>, decision: Option<&Decision>) -
     }
 }
 
-/// One Pane. A Thread with no transcript is one the cockpit could not open;
-/// it still gets a cell, because a Pane that vanishes hides the problem.
-pub fn render_pane(view: &PaneView, state: PaneState<'_>, level: Level) -> impl IntoElement {
-    let PaneState {
-        transcript,
-        decision,
-        queued,
-        workspace,
+/// One Pane. A Thread with no open state in core is one the cockpit could
+/// not open; it still gets a cell, because a Pane that vanishes hides the
+/// problem.
+pub fn render_pane(
+    view: &PaneView,
+    facts: PaneFacts<'_>,
+    wiring: PaneWiring,
+    level: Level,
+) -> impl IntoElement {
+    let PaneFacts {
+        thread,
         branch,
-        menu,
         composer_empty,
         history_available,
-        permission_mode,
-        model_picker,
         focused,
-        running,
         selection,
-        timings,
+    } = facts;
+    let PaneWiring {
+        menu,
+        model_picker,
         usage_ring,
         mut decide,
         mut tool_controls,
-    } = state;
+    } = wiring;
+    let transcript = thread.map(|thread| thread.transcript());
+    let decision = thread.and_then(|thread| thread.pending());
+    let queued = thread.and_then(|thread| thread.queued());
+    let workspace = thread.and_then(|thread| thread.workspace());
+    let permission_mode = thread.and_then(|thread| thread.permission_mode());
+    let timings = thread.map(|thread| thread.tool_timings());
     let status = transcript.map(|t| t.status());
+    // `esc interrupt` (§D.7): running **and** focused. The head's dot reads
+    // the transcript's own status, not the turn-in-flight flag — a revived
+    // Thread mid-turn shows the green dot with `busy` false — so the hint
+    // reads the same predicate the dot does, or the Pane looks running and
+    // offers no way out. The focus half is here because the prototype's
+    // running-but-unfocused Pane draws no hint.
+    let running = focused && status == Some(Status::Streaming);
     let state = wall_state(
         status,
         decision.is_some(),
