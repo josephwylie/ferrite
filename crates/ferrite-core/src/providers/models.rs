@@ -19,13 +19,21 @@ pub fn fallback(provider: Provider) -> Vec<ModelInfo> {
     let rows: &[(&str, &str, &str)] = match provider {
         Provider::Claude => &[
             ("default", "Default", "The CLI's own default model"),
-            ("fable", "Fable", "Most capable, for the hardest and longest tasks"),
+            (
+                "fable",
+                "Fable",
+                "Most capable, for the hardest and longest tasks",
+            ),
             ("opus", "Opus", "Best for everyday, complex tasks"),
             ("sonnet", "Sonnet", "Efficient for routine tasks"),
             ("haiku", "Haiku", "Fastest, for quick answers"),
         ],
         Provider::Codex => &[
-            ("gpt-5.6-sol", "GPT-5.6 Sol", "Most capable, deepest reasoning"),
+            (
+                "gpt-5.6-sol",
+                "GPT-5.6 Sol",
+                "Most capable, deepest reasoning",
+            ),
             ("gpt-5.6", "GPT-5.6", "Frontier coding model"),
             ("gpt-5.5", "GPT-5.5", "Strong and fast for everyday work"),
             ("gpt-5.4", "GPT-5.4", "Previous generation"),
@@ -180,7 +188,9 @@ mod tests {
         for provider in [Provider::Claude, Provider::Codex] {
             let rows = fallback(provider);
             assert!(rows.len() >= 3, "{provider:?}");
-            assert!(rows.iter().all(|row| !row.value.is_empty() && !row.display.is_empty()));
+            assert!(rows
+                .iter()
+                .all(|row| !row.value.is_empty() && !row.display.is_empty()));
             assert_eq!(catalog(provider, &[]), rows);
         }
         let announced = vec![ModelInfo::bare("sonnet")];

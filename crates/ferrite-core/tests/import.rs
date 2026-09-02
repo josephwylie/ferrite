@@ -658,10 +658,8 @@ fn session_roots(base: &std::path::Path) -> Vec<(Provider, PathBuf)> {
 /// erroring.
 #[test]
 fn session_file_discovery_walks_both_roots_newest_first_and_capped() {
-    let base = std::env::temp_dir().join(format!(
-        "ferrite-import-discovery-{}",
-        std::process::id()
-    ));
+    let base =
+        std::env::temp_dir().join(format!("ferrite-import-discovery-{}", std::process::id()));
     let _ = fs::remove_dir_all(&base);
     let roots = session_roots(&base);
     write_session_file(

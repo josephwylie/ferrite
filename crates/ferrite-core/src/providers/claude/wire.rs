@@ -42,12 +42,8 @@ pub(super) fn parse_capabilities(line: &str, request_id: &str) -> Option<ClaudeC
                     .iter()
                     .filter_map(|model| {
                         let value = model.get("value")?.as_str()?.to_string();
-                        let text = |key: &str| {
-                            model
-                                .get(key)
-                                .and_then(Value::as_str)
-                                .map(str::to_string)
-                        };
+                        let text =
+                            |key: &str| model.get(key).and_then(Value::as_str).map(str::to_string);
                         Some(crate::ModelInfo {
                             display: text("displayName")
                                 .filter(|name| !name.is_empty())

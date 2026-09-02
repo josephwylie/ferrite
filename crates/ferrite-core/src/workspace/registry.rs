@@ -30,7 +30,8 @@ pub struct ProjectId(u64);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Project {
     pub id: ProjectId,
-    /// The root's leaf name — what a selector row says.
+    /// What a selector row says: the root's leaf name until the operator
+    /// `rename_project`s it.
     pub title: String,
     /// The canonicalized root path.
     pub root: PathBuf,
@@ -212,6 +213,56 @@ impl Registry {
         self.projects.iter().find(|project| project.id == id)
     }
 
+    /// Forget a registered Project. Its worktree entries go with it — the
+    /// trees and branches on disk are git's business, this only trims the
+    /// menu. Persisted before the in-memory swap; an error leaves both
+    /// untouched. The id counter never moves backwards, so a later
+    /// `register` of the same root mints a new id: no Thread header still
+    /// carrying the old one can be mistaken for the new project. An unknown
+    /// id is `io::ErrorKind::NotFound`.
+    pub fn remove_project(&mut self, id: ProjectId) -> io::Result<()> {
+        if self.project(id).is_none() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "project is not registered",
+            ));
+        }
+        let mut next = self.clone();
+        next.projects.retain(|project| project.id != id);
+        next.worktrees.remove(&id);
+        next.persist()?;
+        *self = next;
+        Ok(())
+    }
+
+    /// Retitle a Project: what its selector row says. The title is
+    /// trimmed, and a blank one is `io::ErrorKind::InvalidInput`. Persisted
+    /// before the in-memory swap. Only the row changes — the central
+    /// worktree layout is keyed by the root, not the title, so a rename
+    /// never moves where the project's next worktree lands.
+    pub fn rename_project(&mut self, id: ProjectId, title: &str) -> io::Result<()> {
+        let title = title.trim();
+        if title.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "project title is blank",
+            ));
+        }
+        let mut next = self.clone();
+        let project = next
+            .projects
+            .iter_mut()
+            .find(|project| project.id == id)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "project is not registered"))?;
+        if project.title == title {
+            return Ok(());
+        }
+        project.title = title.to_string();
+        next.persist()?;
+        *self = next;
+        Ok(())
+    }
+
     /// The registered worktrees of one project — the workspace chip's rows.
     /// Scoped by construction: no verb answers a cross-project list.
     pub fn worktrees(&self, project: ProjectId) -> &[WorktreeEntry] {
@@ -267,15 +318,17 @@ impl Registry {
     /// Where a worktree of `project` on `branch` lives: the central layout
     /// `<dir>/worktrees/<repoName>-<hash12>/<branch-dashed>` — outside every
     /// repo, keyed by branch so the tree outlives any one Thread, the
-    /// 12-hex path hash keeping same-named repos apart.
+    /// 12-hex path hash keeping same-named repos apart. The repo name is
+    /// the root's leaf, never the title: a retitled project keeps placing
+    /// its worktrees where it always did.
     pub fn place(&self, project: ProjectId, branch: &str) -> PathBuf {
-        let (title, root) = self
+        let (name, root) = self
             .project(project)
-            .map(|entry| (entry.title.as_str(), entry.root.as_path()))
-            .unwrap_or(("unknown", Path::new("")));
+            .map(|entry| (leaf(&entry.root), entry.root.as_path()))
+            .unwrap_or_else(|| ("unknown".to_string(), Path::new("")));
         self.dir
             .join("worktrees")
-            .join(format!("{title}-{}", hash12(root)))
+            .join(format!("{name}-{}", hash12(root)))
             .join(branch.replace('/', "-"))
     }
 
@@ -566,6 +619,167 @@ mod tests {
 
         assert_eq!(registry.worktrees(first).len(), 1);
         assert!(registry.worktrees(second).is_empty());
+    }
+
+    /// Removing a project drops it and its worktree entries, durably: a
+    /// reopen sees neither. An unknown id is `NotFound`, and removal is not
+    /// idempotent — the second ask names a project that is not there.
+    #[test]
+    fn removing_a_project_drops_its_worktrees_and_persists() {
+        let dir = scratch("remove-project");
+        let one = dir.join("one");
+        let two = dir.join("two");
+        fs::create_dir_all(&one).unwrap();
+        fs::create_dir_all(&two).unwrap();
+        let store = dir.join("store");
+        let mut registry = Registry::open(&store).unwrap();
+        let first = registry.register(&one).unwrap();
+        let second = registry.register(&two).unwrap();
+        let removed_tree = registry.reserve_worktree(first).unwrap();
+        let kept_tree = registry.reserve_worktree(second).unwrap();
+
+        registry.remove_project(first).unwrap();
+
+        assert_eq!(registry.project(first), None);
+        assert!(registry.worktrees(first).is_empty());
+        assert_eq!(registry.branch_for(&removed_tree.path), None);
+        // The other project and its worktree are untouched.
+        assert_eq!(registry.projects().len(), 1);
+        assert_eq!(registry.worktrees(second), [kept_tree.clone()]);
+        assert_eq!(
+            registry.branch_for(&kept_tree.path),
+            Some(kept_tree.branch.as_str())
+        );
+
+        let reopened = Registry::open(&store).unwrap();
+        assert_eq!(reopened.project(first), None);
+        assert!(reopened.worktrees(first).is_empty());
+        assert_eq!(reopened.projects().len(), 1);
+        assert_eq!(reopened.worktrees(second), [kept_tree]);
+
+        let error = registry.remove_project(first).err().expect("gone");
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        assert_eq!(
+            registry
+                .remove_project(ProjectId(999))
+                .err()
+                .unwrap()
+                .kind(),
+            io::ErrorKind::NotFound
+        );
+    }
+
+    /// Ids are never reused: re-registering a removed root mints a new id,
+    /// before and after a reopen, so a stale id in a Thread header can
+    /// never resolve to the wrong project.
+    #[test]
+    fn re_registering_a_removed_root_mints_a_new_id() {
+        let dir = scratch("remove-reregister");
+        let repo = dir.join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        let store = dir.join("store");
+        let mut registry = Registry::open(&store).unwrap();
+        let first = registry.register(&repo).unwrap();
+
+        registry.remove_project(first).unwrap();
+        let second = registry.register(&repo).unwrap();
+        assert_ne!(first, second);
+        assert_eq!(registry.projects().len(), 1);
+        assert_eq!(registry.project(first), None);
+        assert_eq!(
+            registry.project(second).unwrap().root,
+            repo.canonicalize().unwrap()
+        );
+
+        // The counter persisted past the removal: a reopen deals on, too.
+        registry.remove_project(second).unwrap();
+        let mut reopened = Registry::open(&store).unwrap();
+        assert!(reopened.projects().is_empty());
+        let third = reopened.register(&repo).unwrap();
+        assert!(third > second, "{third:?} must follow {second:?}");
+        // And the fresh project's worktree counter starts over — its
+        // branches were the old project's, and that project is gone.
+        assert_eq!(
+            reopened.reserve_worktree(third).unwrap().branch,
+            "ferrite/wt-1"
+        );
+    }
+
+    /// A failed removal leaves memory and file as they were.
+    #[test]
+    fn a_failed_removal_leaves_the_project_registered() {
+        let dir = scratch("remove-rollback");
+        let repo = dir.join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        let store = dir.join("store");
+        let mut registry = Registry::open(&store).unwrap();
+        let project = registry.register(&repo).unwrap();
+        let tree = registry.reserve_worktree(project).unwrap();
+
+        let parked = dir.join("parked-store");
+        fs::rename(&store, &parked).unwrap();
+        fs::write(&store, "not a directory").unwrap();
+        assert!(registry.remove_project(project).is_err());
+        assert_eq!(registry.projects().len(), 1, "memory rolled back");
+        assert_eq!(registry.worktrees(project), [tree.clone()]);
+
+        fs::remove_file(&store).unwrap();
+        fs::rename(&parked, &store).unwrap();
+        let reopened = Registry::open(&store).unwrap();
+        assert_eq!(reopened.projects().len(), 1, "file untouched");
+        assert_eq!(reopened.worktrees(project), [tree]);
+    }
+
+    /// A rename trims and persists; a blank title is refused and changes
+    /// nothing; the central layout keys on the root, so the retitled
+    /// project's next worktree lands where it always would have.
+    #[test]
+    fn renaming_a_project_persists_and_refuses_blank() {
+        let dir = scratch("rename");
+        let repo = dir.join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        let store = dir.join("store");
+        let mut registry = Registry::open(&store).unwrap();
+        let project = registry.register(&repo).unwrap();
+        let placed_before = registry.place(project, "ferrite/wt-1");
+
+        registry.rename_project(project, "  Cockpit  ").unwrap();
+
+        assert_eq!(registry.project(project).unwrap().title, "Cockpit");
+        assert_eq!(
+            Registry::open(&store)
+                .unwrap()
+                .project(project)
+                .unwrap()
+                .title,
+            "Cockpit"
+        );
+        assert_eq!(registry.place(project, "ferrite/wt-1"), placed_before);
+
+        for blank in ["", "   ", "\t\n"] {
+            let error = registry
+                .rename_project(project, blank)
+                .err()
+                .expect("blank");
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        }
+        assert_eq!(registry.project(project).unwrap().title, "Cockpit");
+        assert_eq!(
+            Registry::open(&store)
+                .unwrap()
+                .project(project)
+                .unwrap()
+                .title,
+            "Cockpit"
+        );
+        assert_eq!(
+            registry
+                .rename_project(ProjectId(999), "x")
+                .err()
+                .unwrap()
+                .kind(),
+            io::ErrorKind::NotFound
+        );
     }
 
     #[test]

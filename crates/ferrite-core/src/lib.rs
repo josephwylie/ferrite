@@ -20,6 +20,7 @@ pub mod workspace;
 mod session_event;
 mod thread;
 pub use session_event::{
-    Decision, DecisionAnswer, Hunk, ModelInfo, SessionCommand, SessionEvent, ToolResult, TurnOutcome,
+    Decision, DecisionAnswer, Hunk, ModelInfo, SessionCommand, SessionEvent, ToolResult,
+    TurnOutcome,
 };
 pub use thread::ThreadId;

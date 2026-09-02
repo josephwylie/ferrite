@@ -423,7 +423,8 @@ mod tests {
     use std::path::PathBuf;
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("ferrite-roster-{}-{name}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("ferrite-roster-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
     }
@@ -494,10 +495,7 @@ mod tests {
         roster.defer_leave(draft, threads[2]);
         assert_eq!(
             roster.visible(&groups),
-            [
-                PaneIdentity::Thread(threads[0]),
-                PaneIdentity::Draft(draft)
-            ],
+            [PaneIdentity::Thread(threads[0]), PaneIdentity::Draft(draft)],
             "a member whose leave waits on the draft is already gone"
         );
     }
@@ -564,7 +562,11 @@ mod tests {
         assert_eq!(roster.fullscreen(), None);
         assert_eq!(roster.focused(), Some(PaneIdentity::Thread(threads[0])));
         roster.step(1, &groups);
-        assert_eq!(roster.focused(), Some(PaneIdentity::Thread(threads[0])), "Solo steps nowhere");
+        assert_eq!(
+            roster.focused(),
+            Some(PaneIdentity::Thread(threads[0])),
+            "Solo steps nowhere"
+        );
         roster.toggle_fullscreen();
         roster.toggle_fullscreen();
         assert_eq!(roster.fullscreen(), None);

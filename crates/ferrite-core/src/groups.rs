@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::layout::Tree;
 use crate::store::Store;
 use crate::workspace::registry::ProjectId;
 use crate::ThreadId;
@@ -28,11 +29,15 @@ impl GroupId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Group {
     pub id: GroupId,
     pub title: String,
     pub members: Vec<ThreadId>,
+    /// The members' Pane arrangement, once one has been stored; `None` (as
+    /// older files load) means the even grid. Always names exactly the
+    /// members — see `Groups::layout` for the fitted view.
+    pub layout: Option<Tree>,
 }
 
 impl Group {
@@ -41,6 +46,13 @@ impl Group {
             format!("group-{:02}", self.id.0)
         } else {
             self.title.clone()
+        }
+    }
+
+    /// Fit a stored layout to the membership after it changed.
+    fn reconcile_layout(&mut self) {
+        if let Some(tree) = &mut self.layout {
+            tree.reconcile(&self.members);
         }
     }
 }
@@ -193,6 +205,7 @@ pub enum ApplyError {
     CrossProject,
     MissingProject,
     SameThread,
+    InvalidLayout,
 }
 
 impl std::fmt::Display for ApplyError {
@@ -203,6 +216,7 @@ impl std::fmt::Display for ApplyError {
             Self::CrossProject => write!(f, "Threads from different projects cannot be grouped"),
             Self::MissingProject => write!(f, "Thread project metadata is missing"),
             Self::SameThread => write!(f, "a Thread cannot be grouped with itself"),
+            Self::InvalidLayout => write!(f, "layout does not name exactly the group's members"),
         }
     }
 }
@@ -226,6 +240,8 @@ struct PersistedGroup {
     id: GroupId,
     title: String,
     members: Vec<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    layout: Option<Tree>,
 }
 
 /// The one owning module for membership and its durable order.
@@ -290,10 +306,16 @@ impl Groups {
                 healed = true;
                 continue;
             }
+            let layout = stored.layout.clone().map(|mut tree| {
+                tree.reconcile(&members);
+                tree
+            });
+            healed |= layout != stored.layout;
             groups.push(Group {
                 id: stored.id,
                 title: stored.title.clone(),
                 members,
+                layout,
             });
         }
         let next_id = groups.iter().map(|group| group.id.0).max().unwrap_or(0) + 1;
@@ -320,6 +342,45 @@ impl Groups {
         self.groups
             .iter()
             .find(|group| group.members.contains(&thread))
+    }
+
+    /// The Group's Pane arrangement, fit to its current members: the stored
+    /// tree reconciled, or the even grid when none was stored.
+    pub fn layout(&self, group: GroupId) -> Option<Tree> {
+        let group = self.get(group)?;
+        Some(match &group.layout {
+            Some(tree) => {
+                let mut tree = tree.clone();
+                tree.reconcile(&group.members);
+                tree
+            }
+            None => Tree::even(&group.members),
+        })
+    }
+
+    /// Store an arrangement the operator made (a seam drag, a swap, a split).
+    /// The tree must be sound and name exactly the members; on a failed
+    /// write the previous layout stands.
+    pub fn set_layout(&mut self, group: GroupId, tree: Tree) -> Result<(), ApplyError> {
+        let index = self
+            .groups
+            .iter()
+            .position(|item| item.id == group)
+            .ok_or(ApplyError::MissingGroup)?;
+        if tree.is_corrupt() {
+            return Err(ApplyError::InvalidLayout);
+        }
+        let members: BTreeSet<ThreadId> = self.groups[index].members.iter().copied().collect();
+        let leaves: BTreeSet<ThreadId> = tree.leaves().into_iter().collect();
+        if leaves != members {
+            return Err(ApplyError::InvalidLayout);
+        }
+        let before = self.groups[index].layout.replace(tree);
+        if let Err(error) = self.persist() {
+            self.groups[index].layout = before;
+            return Err(error.into());
+        }
+        Ok(())
     }
 
     pub fn apply(&mut self, change: GroupChange) -> Result<Applied, ApplyError> {
@@ -414,6 +475,7 @@ impl Groups {
                     id,
                     title: String::new(),
                     members: vec![first, second],
+                    layout: Some(Tree::even(&[first, second])),
                 });
                 Ok(Applied {
                     group: Some(id),
@@ -439,6 +501,7 @@ impl Groups {
                     .unwrap_or(target.members.len())
                     .min(target.members.len());
                 target.members.insert(at, thread);
+                target.reconcile_layout();
                 Ok(Applied {
                     group: Some(group),
                     dissolved,
@@ -515,6 +578,7 @@ impl Groups {
                 survivor: group.members[0],
             })
         } else {
+            self.groups[index].reconcile_layout();
             None
         }
     }
@@ -564,6 +628,7 @@ impl Groups {
                     id: group.id,
                     title: group.title.clone(),
                     members: group.members.iter().map(|thread| thread.get()).collect(),
+                    layout: group.layout.clone(),
                 })
                 .collect(),
         };
@@ -595,8 +660,203 @@ pub fn grid(count: usize) -> (usize, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::layout::{Node, SeamId};
     use crate::store::Provider;
     use crate::workspace::{registry::Registry, WorkspaceBinding};
+
+    fn leaf_set(tree: &Tree) -> BTreeSet<ThreadId> {
+        tree.leaves().into_iter().collect()
+    }
+
+    #[test]
+    fn a_stored_layout_round_trips_and_older_files_load_without_one() {
+        let dir = scratch("layout-round-trip");
+        let (threads, _writers) = stored_threads(&dir, 2);
+        let mut groups = Groups::load(&dir).unwrap();
+        let group = groups
+            .apply(GroupChange::Create {
+                first: threads[0],
+                second: threads[1],
+            })
+            .unwrap()
+            .group
+            .unwrap();
+        let even = Tree::even(&[threads[0], threads[1]]);
+        assert_eq!(groups.get(group).unwrap().layout, Some(even.clone()));
+
+        let mut custom = even.clone();
+        assert!(custom.set_ratio(&SeamId(vec![]), 0.3));
+        groups.set_layout(group, custom.clone()).unwrap();
+        let reloaded = Groups::load(&dir).unwrap();
+        assert_eq!(reloaded.get(group).unwrap().layout, Some(custom.clone()));
+        assert_eq!(reloaded.layout(group), Some(custom));
+        assert_eq!(reloaded.layout(GroupId::new(99)), None);
+
+        // A file written before layouts existed: no `layout` key at all.
+        let older = serde_json::json!({
+            "version": SCHEMA_VERSION,
+            "groups": [{
+                "id": group.get(),
+                "title": "pair",
+                "members": [threads[0].get(), threads[1].get()],
+            }],
+        });
+        std::fs::write(dir.join(FILE_NAME), serde_json::to_vec(&older).unwrap()).unwrap();
+        let mut groups = Groups::load(&dir).unwrap();
+        assert_eq!(groups.get(group).unwrap().layout, None);
+        assert_eq!(groups.layout(group), Some(even));
+        // Untouched, it persists without one; a stored tree writes the key.
+        groups
+            .apply(GroupChange::Rename {
+                group,
+                title: "renamed".into(),
+            })
+            .unwrap();
+        let written = std::fs::read_to_string(dir.join(FILE_NAME)).unwrap();
+        assert!(!written.contains("layout"), "{written}");
+        groups
+            .set_layout(group, Tree::even(&[threads[1], threads[0]]))
+            .unwrap();
+        let written = std::fs::read_to_string(dir.join(FILE_NAME)).unwrap();
+        assert!(written.contains("\"layout\""), "{written}");
+    }
+
+    #[test]
+    fn load_heals_a_stored_layout_whose_leaves_drifted_from_the_members() {
+        let dir = scratch("layout-heal");
+        let (threads, _writers) = stored_threads(&dir, 3);
+        let drifted = serde_json::json!({
+            "version": SCHEMA_VERSION,
+            "groups": [{
+                "id": 1,
+                "title": "",
+                "members": [threads[0].get(), threads[1].get(), threads[2].get()],
+                // Names a Thread that never existed and misses the third
+                // member; the outer split (and its ratio) outlives the heal.
+                "layout": {"root": {"Split": {
+                    "axis": "Row",
+                    "ratio": 0.3,
+                    "first": {"Leaf": threads[0].get()},
+                    "second": {"Split": {
+                        "axis": "Column",
+                        "ratio": 0.5,
+                        "first": {"Leaf": threads[1].get()},
+                        "second": {"Leaf": 9999},
+                    }},
+                }}},
+            }],
+        });
+        std::fs::write(dir.join(FILE_NAME), serde_json::to_vec(&drifted).unwrap()).unwrap();
+
+        let groups = Groups::load(&dir).unwrap();
+        let group = GroupId::new(1);
+        let layout = groups.get(group).unwrap().layout.clone().unwrap();
+        assert!(!layout.is_corrupt());
+        assert_eq!(leaf_set(&layout), threads.iter().copied().collect());
+        assert!(
+            matches!(layout.root, Some(Node::Split { ratio, .. }) if (ratio - 0.3).abs() < 1e-6),
+            "the operator's ratio survives the heal"
+        );
+        let written = std::fs::read_to_string(dir.join(FILE_NAME)).unwrap();
+        assert!(!written.contains("9999"), "healed on disk too: {written}");
+        assert_eq!(
+            Groups::load(&dir).unwrap().get(group).unwrap().layout,
+            Some(layout)
+        );
+    }
+
+    #[test]
+    fn joining_and_leaving_keep_the_layout_reconciled_and_set_layout_checks_its_leaves() {
+        let dir = scratch("layout-join-leave");
+        let (threads, _writers) = stored_threads(&dir, 4);
+        let mut groups = Groups::load(&dir).unwrap();
+        let group = groups
+            .apply(GroupChange::Create {
+                first: threads[0],
+                second: threads[1],
+            })
+            .unwrap()
+            .group
+            .unwrap();
+        let mut custom = Tree::even(&[threads[0], threads[1]]);
+        assert!(custom.set_ratio(&SeamId(vec![]), 0.3));
+        groups.set_layout(group, custom).unwrap();
+
+        groups
+            .apply(GroupChange::Join {
+                thread: threads[2],
+                group,
+                index: None,
+            })
+            .unwrap();
+        let stored = groups.get(group).unwrap().layout.clone().unwrap();
+        assert_eq!(leaf_set(&stored), threads[..3].iter().copied().collect());
+        assert!(
+            matches!(stored.root, Some(Node::Split { ratio, .. }) if (ratio - 0.3).abs() < 1e-6),
+            "a join extends the tree rather than rebuilding it"
+        );
+
+        groups
+            .apply(GroupChange::Leave { thread: threads[0] })
+            .unwrap();
+        let stored = groups.get(group).unwrap().layout.clone().unwrap();
+        assert!(!stored.is_corrupt());
+        assert_eq!(leaf_set(&stored), threads[1..3].iter().copied().collect());
+        assert_eq!(groups.layout(group), Some(stored.clone()));
+
+        groups
+            .apply(GroupChange::ReorderMember {
+                group,
+                thread: threads[2],
+                index: 0,
+            })
+            .unwrap();
+        assert_eq!(
+            groups.get(group).unwrap().layout,
+            Some(stored.clone()),
+            "a reorder leaves the tree alone"
+        );
+
+        assert_eq!(
+            groups.set_layout(group, Tree::even(&[threads[1], threads[3]])),
+            Err(ApplyError::InvalidLayout),
+            "a tree naming a non-member is refused"
+        );
+        let mut corrupt = Tree::even(&[threads[1], threads[2]]);
+        if let Some(Node::Split { ratio, .. }) = &mut corrupt.root {
+            *ratio = 2.0;
+        }
+        assert_eq!(
+            groups.set_layout(group, corrupt),
+            Err(ApplyError::InvalidLayout)
+        );
+        assert_eq!(
+            groups.set_layout(GroupId::new(99), Tree::even(&[threads[1], threads[2]])),
+            Err(ApplyError::MissingGroup)
+        );
+        assert_eq!(groups.get(group).unwrap().layout, Some(stored));
+
+        // Pulling a member into a new pair reconciles the group it left.
+        groups
+            .apply(GroupChange::Join {
+                thread: threads[3],
+                group,
+                index: None,
+            })
+            .unwrap();
+        groups
+            .apply(GroupChange::Create {
+                first: threads[3],
+                second: threads[0],
+            })
+            .unwrap();
+        let stored = groups.get(group).unwrap().layout.clone().unwrap();
+        assert_eq!(leaf_set(&stored), threads[1..3].iter().copied().collect());
+        assert_eq!(
+            Groups::load(&dir).unwrap().get(group).unwrap().layout,
+            Some(stored)
+        );
+    }
 
     #[test]
     fn moving_from_a_pair_dissolves_it_and_reports_the_survivor() {
