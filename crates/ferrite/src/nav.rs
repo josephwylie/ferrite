@@ -357,6 +357,39 @@ pub fn filter_option(index: usize, option: &FilterOption) -> Stateful<Div> {
         )
 }
 
+/// The filter menu's last row: a verb, not an option — `Add Project…`
+/// with a `+` mark, in the muted ink until hovered. The caller wires the
+/// press to the folder picker.
+pub fn filter_action(index: usize, label: &'static str) -> Stateful<Div> {
+    div()
+        .id(("nav-filter-action", index))
+        .group(FILTER_OPTION_GROUP)
+        .flex()
+        .items_center()
+        .w_full()
+        .min_h(px(MENU_ROW_H))
+        .mt(px(MENU_PAD))
+        .pl(px(MENU_ROW_PAD_L))
+        .pr(px(ROW_PAD_X))
+        .gap(px(ROW_ICON_GAP))
+        .rounded(px(R_CONTROL))
+        .text_size(px(FS_MD))
+        .text_color(rgb(TEXT_2))
+        .hover_row()
+        .press_row()
+        .child(
+            icon(icons::PLUS, ROW_ICON, TEXT_MUTED)
+                .group_hover(FILTER_OPTION_GROUP, |style| style.text_color(rgb(TEXT))),
+        )
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .group_hover(FILTER_OPTION_GROUP, |style| style.text_color(rgb(TEXT_STRONG)))
+                .child(label),
+        )
+}
+
 /// The scrolling tree. It is the only thing in the column that scrolls, and
 /// it carries the whole content inset: 8px top and inline, 16px bottom.
 pub fn nav_tree(scroll: &ScrollHandle) -> Stateful<Div> {

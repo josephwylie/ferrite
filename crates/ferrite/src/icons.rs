@@ -46,6 +46,8 @@ icons![
     "branch",
     "codex",
     "claude",
+    "plus",
+    "gear",
 ];
 
 #[allow(dead_code)]
@@ -66,6 +68,10 @@ pub const BRANCH: &str = "icons/branch.svg";
 pub const CODEX: &str = "icons/codex.svg";
 #[allow(dead_code)]
 pub const CLAUDE: &str = "icons/claude.svg";
+/// `+` — add a Project.
+pub const PLUS: &str = "icons/plus.svg";
+/// The settings gear.
+pub const GEAR: &str = "icons/gear.svg";
 
 pub struct Assets;
 
@@ -127,7 +133,7 @@ mod tests {
             assert!(svg.starts_with("<svg "), "{key} is an svg element");
             assert!(svg.contains("viewBox="), "{key} declares a viewBox");
         }
-        assert_eq!(ICONS.len(), 9, "the prototype draws nine icons");
+        assert_eq!(ICONS.len(), 11, "the nine prototype icons, plus the add and settings marks");
     }
 
     /// The line icons must carry the `.stroke` class's attributes on the
@@ -162,6 +168,6 @@ mod tests {
     #[test]
     fn an_unknown_key_is_absent_rather_than_an_error() {
         assert!(Assets.load("icons/nope.svg").unwrap().is_none());
-        assert_eq!(Assets.list("icons/").unwrap().len(), 9);
+        assert_eq!(Assets.list("icons/").unwrap().len(), 11);
     }
 }

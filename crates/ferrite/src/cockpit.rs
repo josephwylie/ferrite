@@ -155,6 +155,15 @@ enum RenameTarget {
     PaneTitle(ThreadId),
 }
 
+/// Where a folder the picker returns should land.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum BrowseThen {
+    /// The focused draft's Project chip.
+    Draft,
+    /// The nav's Project filter.
+    Filter,
+}
+
 /// What a right-click was on.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum MenuTarget {
@@ -354,6 +363,9 @@ enum BandChoice {
     /// choose it.
     RegisterPath(std::path::PathBuf),
     Target(pane::DraftTarget),
+    /// Open the platform's folder picker; the folder picked registers
+    /// and becomes the draft's Project.
+    Browse,
 }
 
 /// How near the tail still counts as riding it, written as the two facts
@@ -2178,6 +2190,12 @@ impl CockpitView {
                         BandChoice::RegisterPath(expand_home(path)),
                     ));
                 }
+                rows.push(band_row(
+                    SharedString::from("Choose folder…"),
+                    SharedString::from("add a Project"),
+                    false,
+                    BandChoice::Browse,
+                ));
                 rows
             }
             pane::BandChip::Workspace => {
@@ -2283,6 +2301,70 @@ impl CockpitView {
                 {
                     draft.target = target.clone();
                     draft.error = None;
+                }
+            }
+            BandChoice::Browse => self.browse_for_project(BrowseThen::Draft, cx),
+        }
+        cx.notify();
+    }
+
+    /// The platform's folder picker, for a Project not yet registered.
+    /// The picker is modal to the window and answers later; the folder it
+    /// returns registers through the core door and lands where `then`
+    /// says. Cancel changes nothing.
+    fn browse_for_project(&mut self, then: BrowseThen, cx: &mut Context<Self>) {
+        let receiver = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some("Add Project".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let picked = match receiver.await {
+                Ok(Ok(Some(mut paths))) => paths.pop(),
+                _ => None,
+            };
+            let Some(path) = picked else {
+                return;
+            };
+            this.update(cx, |view, cx| view.adopt_browsed_project(path, then, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    /// A folder the picker returned: registered, then chosen where the
+    /// picker was opened from — the draft's Project chip, or the nav's
+    /// filter. A refusal lands where that surface shows errors.
+    fn adopt_browsed_project(
+        &mut self,
+        path: std::path::PathBuf,
+        then: BrowseThen,
+        cx: &mut Context<Self>,
+    ) {
+        match self.cockpit.register_project(&path) {
+            Ok(project) => match then {
+                BrowseThen::Draft => {
+                    if let Some(draft) = self.focused_draft_mut() {
+                        draft.project = project;
+                        draft.target = pane::DraftTarget::Main;
+                        draft.error = None;
+                    }
+                }
+                BrowseThen::Filter => {
+                    self.nav_filter = Some(project);
+                    self.group_error = None;
+                }
+            },
+            Err(e) => {
+                let message = SharedString::from(format!("cannot add {}: {e}", path.display()));
+                match then {
+                    BrowseThen::Draft => {
+                        if let Some(draft) = self.focused_draft_mut() {
+                            draft.error = Some(message);
+                        }
+                    }
+                    BrowseThen::Filter => self.group_error = Some(message),
                 }
             }
         }
@@ -3745,6 +3827,16 @@ impl CockpitView {
                     ),
             );
         }
+        let count = state.filter.options.len();
+        menu = menu.child(nav::filter_action(count, "Add Project…").on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|view, _: &MouseDownEvent, _, cx| {
+                cx.stop_propagation();
+                view.nav_filter_open = false;
+                view.browse_for_project(BrowseThen::Filter, cx);
+                cx.notify();
+            }),
+        ));
         head.child(deferred(menu))
     }
 
