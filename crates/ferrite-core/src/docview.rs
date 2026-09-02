@@ -206,13 +206,15 @@ pub enum Level {
     Transcript,
 }
 
-/// glance.md's zoom ladder: UNDER 200PX → Wall, 200–380PX → Instruments,
-/// OVER 380PX → Transcript. The captions give one number per level, and
-/// only width fits all three example cells (L2 280×176 and L1 400×264 would
-/// both fail on height) — so width is the query axis, resolving glance.md
-/// §8.1 on the comps' own evidence.
-const TRANSCRIPT_OVER: f32 = 380.0;
-const INSTRUMENTS_FROM: f32 = 200.0;
+/// The zoom ladder, by both axes. A transcript with its Composer reads
+/// from 300px wide and 220px tall — three Panes across a laptop window,
+/// or a 3×3 board, are that size and were showing instruments in a
+/// column of empty ground. Under that, instruments from 200px wide and
+/// 120px tall; under that, the wall's one signal.
+const TRANSCRIPT_WIDTH: f32 = 300.0;
+const TRANSCRIPT_HEIGHT: f32 = 220.0;
+const INSTRUMENTS_WIDTH: f32 = 200.0;
+const INSTRUMENTS_HEIGHT: f32 = 120.0;
 
 impl Level {
     /// How many Blocks this level draws. A wall cell draws none — it shows a
@@ -225,11 +227,13 @@ impl Level {
         }
     }
 
-    /// Size decides — the cell's width, per the ladder's captions.
+    /// Size decides — both of the cell's dimensions: a wide strip too
+    /// short for a transcript is instruments, a tall sliver too narrow
+    /// for one likewise.
     pub fn for_cell(cell: Cell) -> Self {
-        if cell.width > TRANSCRIPT_OVER {
+        if cell.width >= TRANSCRIPT_WIDTH && cell.height >= TRANSCRIPT_HEIGHT {
             Level::Transcript
-        } else if cell.width >= INSTRUMENTS_FROM {
+        } else if cell.width >= INSTRUMENTS_WIDTH && cell.height >= INSTRUMENTS_HEIGHT {
             Level::Instruments
         } else {
             Level::Wall
@@ -459,12 +463,21 @@ mod tests {
         assert_eq!(Level::for_cell(Cell::new(400.0, 264.0)), Level::Transcript);
         assert_eq!(Level::for_cell(Cell::new(280.0, 176.0)), Level::Instruments);
         assert_eq!(Level::for_cell(Cell::new(160.0, 100.0)), Level::Wall);
+        // Three across a 1440px window, and a 3×3 board: transcripts.
+        assert_eq!(Level::for_cell(Cell::new(372.0, 880.0)), Level::Transcript);
+        assert_eq!(Level::for_cell(Cell::new(372.0, 285.0)), Level::Transcript);
+        // A strip too short for a transcript is instruments however wide;
+        // too short for instruments, the wall.
+        assert_eq!(Level::for_cell(Cell::new(900.0, 200.0)), Level::Instruments);
+        assert_eq!(Level::for_cell(Cell::new(900.0, 100.0)), Level::Wall);
         // The wall's own computed cell (~142px wide) stays at wall level.
         assert_eq!(Level::for_cell(Cell::new(142.3, 115.5)), Level::Wall);
-        // Boundaries: "under 200" and "over 380" are strict.
+        // Boundaries: 300×220 reads, a hair under does not; 200 wide is
+        // instruments, a hair under is the wall.
+        assert_eq!(Level::for_cell(Cell::new(300.0, 220.0)), Level::Transcript);
+        assert_eq!(Level::for_cell(Cell::new(299.9, 500.0)), Level::Instruments);
+        assert_eq!(Level::for_cell(Cell::new(500.0, 219.9)), Level::Instruments);
         assert_eq!(Level::for_cell(Cell::new(200.0, 500.0)), Level::Instruments);
-        assert_eq!(Level::for_cell(Cell::new(380.0, 500.0)), Level::Instruments);
-        assert_eq!(Level::for_cell(Cell::new(380.5, 500.0)), Level::Transcript);
         assert_eq!(Level::for_cell(Cell::new(199.9, 500.0)), Level::Wall);
     }
 

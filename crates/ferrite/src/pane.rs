@@ -1043,18 +1043,9 @@ fn l2_cell(
     }
 
     if state == WallState::Idle {
-        // Idle still says what was last said: the newest line of the
-        // answer, so a glance tells where the Thread stopped.
-        if let Some(last) = last_words(transcript) {
-            body = body.child(
-                div()
-                    .w_full()
-                    .text_size(px(theme::FS_MONO))
-                    .line_height(relative(theme::LINE_BODY))
-                    .text_color(rgb(TEXT_2))
-                    .child(last),
-            );
-        }
+        // Idle still shows the tail of the conversation: where the Thread
+        // stopped, in its own words, newest at the bottom.
+        body = body.child(l2_tail(transcript));
         body = body.child(
             div()
                 .flex()
@@ -1144,22 +1135,10 @@ fn l2_cell(
     if any_badge {
         body = body.child(badges);
     }
-    // The newest words of the answer so far, a few lines at most: what
+    // The tail of the conversation fills what is left: prompts, answers
+    // and tool rows in one compact column, newest at the bottom — what
     // the Thread is saying, not only that it is saying something.
-    if let Some(last) = last_words(transcript) {
-        body = body.child(
-            div()
-                .w_full()
-                .min_h_0()
-                .overflow_hidden()
-                .text_size(px(theme::FS_MONO))
-                .line_height(relative(theme::LINE_BODY))
-                .text_color(rgb(TEXT_2))
-                .child(last),
-        );
-    }
-
-    body = body.child(div().flex_1());
+    body = body.child(l2_tail(transcript));
     if state == WallState::Done {
         body = body.child(
             div()
@@ -1193,30 +1172,95 @@ fn l2_cell(
     content
 }
 
-/// The newest prose the answer holds — the last paragraph, heading or
-/// bullet — cut to `LAST_WORDS_CHARS` characters so a cell shows where
-/// the Thread is without a transcript. None when nothing has been said.
-fn last_words(transcript: &Transcript) -> Option<SharedString> {
-    const LAST_WORDS_CHARS: usize = 160;
-    let text = transcript
-        .blocks()
-        .iter()
-        .rev()
-        .find_map(|block| match &block.body {
-            Body::Paragraph { spans } | Body::Heading { spans, .. } | Body::Bullet { spans } => {
-                let joined: String = spans.iter().map(|span| span.text.as_str()).collect();
-                let joined = joined.trim().to_string();
-                (!joined.is_empty()).then_some(joined)
+/// How many Blocks an L2 tail reaches back for.
+const L2_TAIL_BLOCKS: usize = 16;
+/// How many lines one Block may take in the tail before it is cut.
+const L2_TAIL_LINES: usize = 4;
+
+/// The compact tail of a transcript for an L2 cell: the newest Blocks as
+/// single runs — a prompt on its raised ground, prose in the reading ink,
+/// a tool row as its glyph and call, a Notice in its signal weight — each
+/// clamped to a few lines, the column anchored to its bottom and clipped
+/// at the top, so whatever height the cell has shows the newest words.
+fn l2_tail(transcript: &Transcript) -> Div {
+    let blocks = transcript.blocks();
+    let tail = &blocks[blocks.len().saturating_sub(L2_TAIL_BLOCKS)..];
+    let mut column = div()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_h_0()
+        .w_full()
+        .justify_end()
+        .overflow_hidden()
+        .gap(px(4.))
+        .text_size(px(theme::FS_MONO))
+        .line_height(relative(theme::LINE_BODY));
+    for block in tail {
+        let line = |text: String, ink: u32| {
+            div()
+                .w_full()
+                .line_clamp(L2_TAIL_LINES)
+                .text_color(rgb(ink))
+                .child(SharedString::from(text))
+        };
+        let prose = |spans: &[Span]| -> String {
+            spans
+                .iter()
+                .map(|span| span.text.as_str())
+                .collect::<String>()
+                .trim()
+                .to_string()
+        };
+        let drawn = match &block.body {
+            Body::Prompt(text) => {
+                let text = text.trim();
+                if text.is_empty() {
+                    continue;
+                }
+                line(text.to_string(), TEXT_STRONG)
+                    .px(px(theme::CHIP_PAD_X))
+                    .py(px(theme::CHIP_PAD_Y))
+                    .rounded(px(theme::R_CHIP))
+                    .bg(rgb(RAISED))
             }
-            _ => None,
-        })?;
-    let mut chars = text.chars();
-    let cut: String = chars.by_ref().take(LAST_WORDS_CHARS).collect();
-    Some(SharedString::from(if chars.next().is_some() {
-        format!("{}…", cut.trim_end())
-    } else {
-        cut
-    }))
+            Body::Paragraph { spans } | Body::Bullet { spans } => {
+                let text = prose(spans);
+                if text.is_empty() {
+                    continue;
+                }
+                line(text, TEXT_2)
+            }
+            Body::Heading { spans, .. } => {
+                let text = prose(spans);
+                if text.is_empty() {
+                    continue;
+                }
+                line(text, TEXT_STRONG).font_weight(FontWeight::SEMIBOLD)
+            }
+            Body::Code { language, .. } => line(
+                format!("```{}", language.as_deref().unwrap_or("")),
+                TEXT_MUTED,
+            ),
+            Body::Tool(tool) => {
+                let glyph = if tool.name == "TaskCreate" || tool.name == "TaskUpdate" {
+                    "●"
+                } else {
+                    "▸"
+                };
+                let ink = match tool.state {
+                    ToolState::Failed(_) => BLOCKED,
+                    _ => TEXT_MUTED,
+                };
+                line(format!("{glyph} {} {}", tool.name, tool.summary), ink).line_clamp(1)
+            }
+            Body::Notice(text) => line(text.clone(), ATTENTION).font_weight(FontWeight::SEMIBOLD),
+            Body::Meta(text) => line(text.clone(), TEXT_MUTED),
+            Body::Thinking(_) => continue,
+        };
+        column = column.child(drawn);
+    }
+    column
 }
 
 /// The Cockpit board's Decision cell body: the command, who wants it, and

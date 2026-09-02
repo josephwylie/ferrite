@@ -6923,9 +6923,9 @@ mod tests {
         });
         let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, cx| view.enter_group(group, cx));
-        // Four Panes in this window sit at Instruments (three ~246px
-        // columns beside the nav): no Composer anywhere.
-        cx.simulate_resize(gpui::size(px(980.), px(700.)));
+        // Four Panes in this window sit at Instruments (a 2×2 board of
+        // ~273px columns beside the nav): no Composer anywhere.
+        cx.simulate_resize(gpui::size(px(860.), px(500.)));
         tick(cx);
         cx.simulate_input("lost");
         let typed = view.update(cx, |view, cx| {
@@ -6945,10 +6945,10 @@ mod tests {
             );
         });
         // One Pane rendered, spanning the whole area right of the nav —
-        // a 2-column cell would be under 400px here.
+        // a 2-column cell would be under 300px here.
         let width = view.read_with(cx, |view, _| view.panes[0].scroll.bounds().size.width);
         assert!(
-            width > px(600.),
+            width > px(500.),
             "the fullscreened Pane takes the whole cockpit: {width:?}"
         );
         cx.simulate_input("hi");
