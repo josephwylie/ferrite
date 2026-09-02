@@ -12,13 +12,15 @@
 
 /// Adopt the login shell's environment when this launch had no terminal.
 /// `TERM` is the tell: every terminal sets it and launchd never does.
+/// Answers whether this was such a launch — a Dock launch, which has no
+/// directory of its own either.
 #[cfg(unix)]
-pub fn adopt_login_environment() {
+pub fn adopt_login_environment() -> bool {
     if std::env::var_os("TERM").is_some() {
-        return;
+        return false;
     }
     let Some(shell) = std::env::var_os("SHELL") else {
-        return;
+        return true;
     };
     match unix::probe(std::path::Path::new(&shell)) {
         Ok(vars) => {
@@ -28,10 +30,13 @@ pub fn adopt_login_environment() {
         }
         Err(e) => eprintln!("ferrite: the login shell's environment could not be read: {e}"),
     }
+    true
 }
 
 #[cfg(not(unix))]
-pub fn adopt_login_environment() {}
+pub fn adopt_login_environment() -> bool {
+    false
+}
 
 #[cfg(unix)]
 mod unix {

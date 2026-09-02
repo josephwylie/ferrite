@@ -17,6 +17,7 @@ mod theme;
 
 use ferrite_core::cockpit::Cockpit;
 use ferrite_core::store::{Provider, Store};
+use ferrite_core::workspace::WorkspaceBinding;
 use ferrite_core::ThreadId;
 use gpui::*;
 
@@ -43,7 +44,7 @@ static JBM_BOLD: &[u8] = include_bytes!("../assets/fonts/JetBrainsMono-Bold.ttf"
 fn main() {
     // Before the args, the store, or any spawn: a Dock launch has no PATH
     // worth the name until the login shell is asked (crate::shell).
-    shell::adopt_login_environment();
+    let dock = shell::adopt_login_environment();
     let args: Vec<String> = std::env::args().collect();
     let load = args.iter().any(|arg| arg == "--load");
     let demo = load || args.iter().any(|arg| arg == "--demo");
@@ -122,6 +123,14 @@ fn main() {
                 std::process::exit(1);
             }
         };
+        // A Dock launch has no directory of its own either: launchd starts
+        // it in `/`, which is no Project. It stands where the newest Thread
+        // works instead, so the launch project and every draft begin there.
+        if dock {
+            if let Err(e) = std::env::set_current_dir(dock_launch_dir(&core)) {
+                eprintln!("ferrite: cannot stand in the launch directory: {e}");
+            }
+        }
         core.watch_memory(Box::new(ProcessRss), RSS_LIMIT);
         for thread in adopted {
             if let Err(e) = core.revive(thread) {
@@ -213,6 +222,33 @@ fn revive_latest(cockpit: &mut Cockpit) {
     }
 }
 
+/// Where a Dock launch stands, in place of the `/` launchd starts it in:
+/// the directory the newest Thread works in — its Project's root, else its
+/// binding's repo — skipping Threads whose directory is gone, and, with
+/// none left, home, where a new terminal opens.
+fn dock_launch_dir(cockpit: &Cockpit) -> std::path::PathBuf {
+    let parked = cockpit.parked().unwrap_or_default();
+    let worked = parked
+        .iter()
+        .rev()
+        .filter_map(|thread| cockpit.peek(*thread).ok())
+        .filter_map(|meta| {
+            meta.project_id
+                .and_then(|id| cockpit.registry().project(id))
+                .map(|project| project.root.clone())
+                .or_else(|| {
+                    meta.workspace.map(|binding| match binding {
+                        WorkspaceBinding::Main { checkout } => checkout,
+                        WorkspaceBinding::Worktree { repo, .. } => repo,
+                    })
+                })
+        })
+        .find(|dir| dir.is_dir());
+    worked
+        .or_else(|| std::env::var_os("HOME").map(std::path::PathBuf::from))
+        .unwrap_or_else(|| std::path::PathBuf::from("/"))
+}
+
 fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
     let at = args.iter().position(|arg| arg == name)?;
     args.get(at + 1).map(String::as_str)
@@ -265,8 +301,10 @@ fn store_dir() -> std::path::PathBuf {
 mod tests {
     // No `use super::*`: the crate root globs `gpui::*`, whose `test` macro
     // would capture the `#[test]` this macro expands to and recurse.
-    use super::{adopt, keymap, load_bindings};
-    use ferrite_core::store::Store;
+    use super::{adopt, demo, dock_launch_dir, keymap, load_bindings};
+    use ferrite_core::cockpit::Cockpit;
+    use ferrite_core::store::{Provider, Store};
+    use ferrite_core::workspace::WorkspaceChoice;
 
     /// The keymap's action names are strings; startup rebuilds real actions
     /// from them. Without this, a renamed action would only fail at launch.
@@ -280,6 +318,38 @@ mod tests {
                 );
             }
         });
+    }
+
+    /// A Dock launch stands where the newest Thread works — launchd's `/`
+    /// is no Project — and, with no Thread at all, at home.
+    #[test]
+    fn a_dock_launch_stands_where_the_newest_thread_works() {
+        let dir = std::env::temp_dir().join(format!("ferrite-launch-{}-dock", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let home = std::path::PathBuf::from(std::env::var_os("HOME").expect("HOME is set"));
+        let store = Store::open(dir.clone()).unwrap();
+        let mut core = Cockpit::new(store, Box::new(demo::Spawn::new(false)));
+        assert_eq!(dock_launch_dir(&core), home, "an empty store: home");
+
+        let checkout = std::env::current_dir().unwrap();
+        core.open(
+            Provider::Claude,
+            WorkspaceChoice::Main {
+                checkout: checkout.clone(),
+            },
+        )
+        .unwrap();
+        // A newer Thread in a directory that is gone by the next launch.
+        let gone = dir.join("gone");
+        std::fs::create_dir_all(&gone).unwrap();
+        core.open(Provider::Claude, WorkspaceChoice::Main { checkout: gone.clone() })
+            .unwrap();
+        drop(core);
+        std::fs::remove_dir_all(&gone).unwrap();
+        // The next launch: every Thread parked, the newest whose directory
+        // still exists the one that answers.
+        let core = Cockpit::new(Store::open(dir).unwrap(), Box::new(demo::Spawn::new(false)));
+        assert_eq!(dock_launch_dir(&core), checkout);
     }
 
     /// Leg 3: a file that is not a session file is refused in the operator's
