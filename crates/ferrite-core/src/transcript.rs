@@ -344,6 +344,19 @@ impl Transcript {
             .filter(|subject| !subject.is_empty())
     }
 
+    /// #11: whether this Thread still offers adopting a CLI session — no
+    /// conversation yet (nothing here beyond Ferrite's own notices and
+    /// bookkeeping) and at rest. One predicate for every surface that
+    /// opens the door — the placeholder hint, the `/` menu's local entry,
+    /// and the pick that closes the blank Thread — so no two can disagree.
+    pub fn offers_import(&self) -> bool {
+        self.status() == Status::Idle
+            && self
+                .blocks
+                .iter()
+                .all(|block| matches!(block.body, Body::Notice(_) | Body::Meta(_)))
+    }
+
     pub fn blocks(&self) -> &[Block] {
         &self.blocks
     }

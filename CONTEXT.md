@@ -39,6 +39,13 @@ The default Cockpit view: exactly the focused Thread's Pane.
 A durable, operator-ordered set of two or more Threads from one registered
 project. Opening its header shows exactly its members in the Cockpit.
 
+**Roster**
+The Cockpit's state, headless: the open Panes in order, the one holding the
+keyboard, the view (Solo or one Group), the fullscreen, and this launch's
+park order. Changed only by the operator's acts on the Cockpit (close,
+reopen, enter a Group, drop); the window mirrors it and paints.
+_Avoid_: layout (that is what the Roster's grid computes), tab list.
+
 **Semantic zoom**
 A Pane's rendering chosen by its size: **L1** (near: transcript + prompt),
 **L2** (instruments: progress, tests, diff stats), **L3** (wall: status LED +

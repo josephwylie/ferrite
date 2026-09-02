@@ -15,7 +15,7 @@
 use ferrite_core::cockpit::{ProviderChoice, ThreadView, ToolTiming};
 use ferrite_core::store::Provider;
 use ferrite_core::docview::{is_test_run, passed_count, Instruments, Level, Tests};
-use ferrite_core::groups::GroupId;
+use ferrite_core::roster::{DraftId, PaneIdentity};
 use ferrite_core::transcript::{
     Block, BlockId, Body, Class, Diff, Span, Status, Style, Todos, Token, ToolBlock, ToolState,
     Transcript,
@@ -52,9 +52,12 @@ use crate::theme::{
 /// shows lives in core; this is the keyboard, the scrollback position, and
 /// the wall cell's cached strings.
 pub struct PaneView {
-    /// What the Pane holds (#29): a live Thread, or a draft still choosing
-    /// its provider and CWD — no Thread, no Session, nothing durable.
-    pub content: PaneContent,
+    /// Which Pane of the roster this is: a live Thread, or a draft still
+    /// choosing its provider and CWD (#29) — no Thread, no Session, nothing
+    /// durable. The roster's own identity, so the two can never disagree.
+    pub identity: PaneIdentity,
+    /// The draft's choices, while it is one.
+    draft: Option<DraftBinding>,
     /// The Thread's slug name — `thread-NN` until display names exist
     /// (sidebar-and-impl §4.2 #8) — or the draft's placeholder title.
     /// Built once; the wall must not format names per frame.
@@ -84,12 +87,6 @@ pub(crate) enum DisclosureState {
     Expanded,
 }
 
-/// A Thread, or the draft that becomes one at first send (#29).
-pub enum PaneContent {
-    Thread(ThreadId),
-    Draft(DraftBinding),
-}
-
 /// A draft Pane's whole choice, ids only — the band renders from this and
 /// the first send resolves it through the registry.
 pub struct DraftBinding {
@@ -102,11 +99,6 @@ pub struct DraftBinding {
     /// A failed bootstrap's words, shown where the band is. The Pane stays
     /// draft and the prompt stays in the Composer.
     pub error: Option<SharedString>,
-    /// Group scope awaiting a real Thread id. Never persisted as a fake id.
-    pub pending_group: Option<GroupId>,
-    /// A pair member whose durable leave waits for this Draft to become the
-    /// replacement. Closing the Draft applies the leave and dissolves.
-    pub pending_leave: Option<ThreadId>,
 }
 
 /// The band's three chips, in tab order.
@@ -143,7 +135,8 @@ pub enum DraftTarget {
 impl PaneView {
     pub fn new<T: 'static>(thread: ThreadId, cx: &mut Context<T>) -> Self {
         Self {
-            content: PaneContent::Thread(thread),
+            identity: PaneIdentity::Thread(thread),
+            draft: None,
             name: SharedString::from(format!("thread-{thread:02}")),
             composer: cx.new(Composer::new),
             scroll: ScrollHandle::new(),
@@ -161,9 +154,10 @@ impl PaneView {
 
     /// A draft Pane (#29): cmd-t's answer — a Composer and the pre-prompt
     /// band, and nothing else until the first send bootstraps a Thread.
-    pub fn new_draft<T: 'static>(binding: DraftBinding, cx: &mut Context<T>) -> Self {
+    pub fn new_draft<T: 'static>(draft: DraftId, binding: DraftBinding, cx: &mut Context<T>) -> Self {
         Self {
-            content: PaneContent::Draft(binding),
+            identity: PaneIdentity::Draft(draft),
+            draft: Some(binding),
             name: SharedString::from("new thread"),
             composer: cx.new(Composer::new),
             scroll: ScrollHandle::new(),
@@ -181,30 +175,22 @@ impl PaneView {
 
     /// The Thread this Pane shows, or None while it is still a draft.
     pub fn thread(&self) -> Option<ThreadId> {
-        match &self.content {
-            PaneContent::Thread(thread) => Some(*thread),
-            PaneContent::Draft(_) => None,
-        }
+        self.identity.thread()
     }
 
     pub fn draft(&self) -> Option<&DraftBinding> {
-        match &self.content {
-            PaneContent::Draft(binding) => Some(binding),
-            PaneContent::Thread(_) => None,
-        }
+        self.draft.as_ref()
     }
 
     pub fn draft_mut(&mut self) -> Option<&mut DraftBinding> {
-        match &mut self.content {
-            PaneContent::Draft(binding) => Some(binding),
-            PaneContent::Thread(_) => None,
-        }
+        self.draft.as_mut()
     }
 
     /// The lock's visible half (#29): the first send made a Thread of this
     /// draft, and the band disappears with the Pane's next frame.
     pub fn adopt_thread(&mut self, thread: ThreadId) {
-        self.content = PaneContent::Thread(thread);
+        self.identity = PaneIdentity::Thread(thread);
+        self.draft = None;
         self.name = SharedString::from(format!("thread-{thread:02}"));
     }
 
@@ -1734,13 +1720,7 @@ fn placeholder(pending: bool, transcript: Option<&Transcript>) -> SharedString {
 /// the door — the placeholder hint, the `/` menu's local entry, and the
 /// pick that closes the blank Thread — so no two can disagree.
 pub fn offers_import(transcript: Option<&Transcript>) -> bool {
-    transcript.is_some_and(|transcript| {
-        transcript.status() == Status::Idle
-            && transcript
-                .blocks()
-                .iter()
-                .all(|block| matches!(block.body, Body::Notice(_) | Body::Meta(_)))
-    })
+    transcript.is_some_and(Transcript::offers_import)
 }
 
 /// The meta row's mode chip text: the comp's own name for acceptEdits

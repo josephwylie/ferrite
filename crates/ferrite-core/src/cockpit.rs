@@ -15,6 +15,7 @@ use crate::groups::{Applied, ApplyError, Drag, DropTarget, GroupChange, GroupId,
 pub use crate::prompt_history::HistoryDirection;
 use crate::prompt_history::PromptHistory;
 use crate::providers::Session;
+use crate::roster::{DraftId, DraftScope, Layout, PaneIdentity, Roster, View};
 use crate::store::{LoadError, Provider, Store, ThreadWriter};
 use crate::transcript::{BlockId, Input, Lexer, Transcript, Update};
 use crate::workspace::registry::{self, ProjectId, Registry};
@@ -299,6 +300,10 @@ pub struct Cockpit {
     /// bootstrap places worktrees through it.
     registry: Registry,
     groups: Groups,
+    /// What is on screen (#28): the roster of Panes, focus, view, fullscreen
+    /// and park order. Read through `roster()`; changed only by the acts
+    /// below, which keep it showing exactly the open Threads plus drafts.
+    roster: Roster,
     spawner: Box<dyn Spawner>,
     sampler: Option<Box<dyn RssSampler>>,
     /// Bytes one Session may hold before the watchdog replaces it.
@@ -316,6 +321,7 @@ impl Cockpit {
             store,
             registry,
             groups,
+            roster: Roster::default(),
             spawner,
             sampler: None,
             limit: u64::MAX,
@@ -341,8 +347,24 @@ impl Cockpit {
         &self.groups
     }
 
+    /// A Group change (#28), and what it does to the view: the Group the
+    /// operator was looking at may just have dissolved under them. Its
+    /// survivor is the one Thread still on screen, so that is where they
+    /// land — never the Thread that left, and never a blank Cockpit.
     pub fn apply_group(&mut self, change: GroupChange) -> Result<Applied, ApplyError> {
-        self.groups.apply(change)
+        let applied = self.groups.apply(change)?;
+        if let View::Group(active) = self.roster.view() {
+            if let Some(dissolved) = applied
+                .dissolved
+                .iter()
+                .find(|dissolved| dissolved.group == active)
+            {
+                self.roster.set_view(View::Solo);
+                self.roster.focus(PaneIdentity::Thread(dissolved.survivor));
+            }
+        }
+        self.roster.heal_focus(&self.groups);
+        Ok(applied)
     }
 
     pub fn plan_group_drop(&self, drag: Drag, target: DropTarget) -> Plan {
@@ -499,6 +521,7 @@ impl Cockpit {
             id,
             Thread::fresh(session, writer, provider, model, None, Some(binding), None),
         );
+        self.roster.insert_thread(id);
         Ok(id)
     }
 
@@ -527,6 +550,7 @@ impl Cockpit {
         );
         if let Err(error) = delivered {
             self.threads.remove(&id);
+            self.roster.remove_thread(id);
             self.store.delete(id)?;
             return Err(error);
         }
@@ -560,6 +584,7 @@ impl Cockpit {
             index: None,
         }) {
             self.threads.remove(&id);
+            self.roster.remove_thread(id);
             self.store.delete(id)?;
             return Err(io::Error::other(error));
         }
@@ -580,6 +605,7 @@ impl Cockpit {
                 .apply(GroupChange::Leave { thread: id })
                 .map_err(io::Error::other)?;
             self.threads.remove(&id);
+            self.roster.remove_thread(id);
             self.store.delete(id)?;
             return Err(error);
         }
@@ -736,6 +762,7 @@ impl Cockpit {
                     // Windows, and the dirty check above already ruled out any
                     // work that Session had in flight.
                     self.threads.remove(&thread);
+                    self.roster.remove_thread(thread);
                     workspace::remove_worktree(&repo, &path).map_err(DeleteError::Git)?;
                 }
                 // The menu forgets the removed tree; the branch stays git's.
@@ -744,6 +771,7 @@ impl Cockpit {
                     .map_err(DeleteError::Io)?;
             }
             self.threads.remove(&thread);
+            self.roster.remove_thread(thread);
             self.store.delete(thread).map_err(DeleteError::Io)
         })();
 
@@ -768,6 +796,7 @@ impl Cockpit {
         let Some(mut state) = self.threads.remove(&thread) else {
             return Ok(());
         };
+        self.roster.remove_thread(thread);
         state.session = None;
         #[cfg(test)]
         if self.refuse_park.contains(&thread) {
@@ -835,6 +864,7 @@ impl Cockpit {
         state.transcript.apply(Input::Revived);
 
         self.threads.insert(thread, state);
+        self.roster.insert_thread(thread);
         Ok(())
     }
 
@@ -1264,6 +1294,386 @@ impl<'a> ThreadView<'a> {
     /// None until the Session announces one — a chip is never invented.
     pub fn permission_mode(&self) -> Option<&'a str> {
         self.state.permission_mode.as_deref()
+    }
+}
+
+/// What `Cockpit::close` can refuse: the park that ends a Solo Thread's
+/// Session — the Pane is gone either way — or the Group change that takes
+/// a member out of the view.
+#[derive(Debug)]
+pub enum CloseError {
+    Park(io::Error),
+    Group(ApplyError),
+}
+
+impl std::fmt::Display for CloseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CloseError::Park(error) => write!(f, "did not park cleanly: {error}"),
+            CloseError::Group(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+impl std::error::Error for CloseError {}
+
+/// A draft's first send, done: the Thread it became, and whether the
+/// leave the draft was holding open (see `close`) applied.
+#[derive(Debug)]
+pub struct Bootstrapped {
+    pub thread: ThreadId,
+    /// The deferred leave the Groups module refused, if it did — the Thread
+    /// is live and in its Group regardless.
+    pub refused_leave: Option<ApplyError>,
+}
+
+/// A session file adopted through `adopt_into` (#11): durable the moment
+/// this exists, and open unless `not_opened` says why not.
+#[derive(Debug)]
+pub struct Adopted {
+    pub thread: ThreadId,
+    /// The imported Thread would not open: it is durable and parked, exactly
+    /// like a launch-time import that would not open.
+    pub not_opened: Option<LoadError>,
+    /// The blank Thread the door was opened from stayed open: its deletion
+    /// was refused.
+    pub blank_kept: Option<DeleteError>,
+}
+
+/// The operator's acts on what is on screen (#28): every rule about Solo,
+/// Group, focus, fullscreen and park order runs here, against the roster,
+/// with the reviving, parking and Group changes it takes. The window only
+/// mirrors the roster and paints.
+impl Cockpit {
+    /// What is on screen: read-only. Every change is one of the acts below.
+    pub fn roster(&self) -> &Roster {
+        &self.roster
+    }
+
+    /// The Panes on screen, in order — see `Roster::visible`.
+    pub fn visible(&self) -> Vec<PaneIdentity> {
+        self.roster.visible(&self.groups)
+    }
+
+    /// The grid the visible Panes lay out on — see `Roster::layout`.
+    pub fn layout(&self) -> Layout {
+        self.roster.layout(&self.groups)
+    }
+
+    /// The one door to focus: every move — keys, clicks, nav rows — lands
+    /// here, so fullscreen re-aims with focus. False for a Pane that is not
+    /// open.
+    pub fn focus(&mut self, identity: PaneIdentity) -> bool {
+        self.roster.focus(identity)
+    }
+
+    /// A running nav row's click (#21): land on that Thread's Pane, in the
+    /// view that shows it — its Group, or Solo.
+    pub fn focus_thread(&mut self, thread: ThreadId) -> bool {
+        let identity = PaneIdentity::Thread(thread);
+        if self.roster.index_of(identity).is_none() {
+            return false;
+        }
+        self.roster.set_view(
+            self.groups
+                .of(thread)
+                .map_or(View::Solo, |group| View::Group(group.id)),
+        );
+        self.roster.focus(identity)
+    }
+
+    /// cmd-] / cmd-[: walk the visible Panes, wrapping.
+    pub fn step_focus(&mut self, delta: isize) {
+        self.roster.step(delta, &self.groups);
+    }
+
+    /// cmd-f (#20): the focused Pane takes the whole cockpit; cmd-f again
+    /// restores the grid.
+    pub fn toggle_fullscreen(&mut self) {
+        self.roster.toggle_fullscreen();
+    }
+
+    /// Jump to the next Thread waiting on the operator — the whole point of
+    /// a Group you cannot read all of at once. The Thread landed on, if any.
+    pub fn next_decision(&mut self) -> Option<ThreadId> {
+        let next = self.next_blocked(self.roster.focused_thread())?;
+        self.focus_thread(next).then_some(next)
+    }
+
+    /// Open a Group (#28): every member gets a Pane, parked ones included.
+    /// A Group *is* its membership on screen, so entering one that has a
+    /// parked member and showing the rest would be showing a different
+    /// Group. Focus stays put when the operator was already on a member,
+    /// so entering from one of its own rows does not jump them.
+    pub fn enter_group(&mut self, group: GroupId) -> Result<(), ReviveGroupError> {
+        let members = self.revive_group(group)?;
+        let retain = self
+            .roster
+            .focused_thread()
+            .filter(|thread| members.contains(thread));
+        for thread in &members {
+            self.roster.note_revived(*thread);
+        }
+        self.roster.set_view(View::Group(group));
+        if let Some(thread) = retain.or_else(|| members.first().copied()) {
+            self.roster.focus(PaneIdentity::Thread(thread));
+        }
+        Ok(())
+    }
+
+    /// Revive one parked Thread into the view that shows it (#21): a Pane,
+    /// focus, and the park order forgetting it — cmd-o must not revive it a
+    /// second time. The shared tail of cmd-o and a parked nav row's click.
+    pub fn reopen(&mut self, thread: ThreadId) -> Result<(), LoadError> {
+        self.revive(thread)?;
+        self.roster.set_view(
+            self.groups
+                .of(thread)
+                .map_or(View::Solo, |group| View::Group(group.id)),
+        );
+        self.roster.note_revived(thread);
+        self.roster.focus(PaneIdentity::Thread(thread));
+        Ok(())
+    }
+
+    /// cmd-o (#17): reopen the Thread parked most recently — the one the
+    /// operator just closed, which is the one they want back. The order is
+    /// remembered only for this launch: once it is drained — Threads parked
+    /// before a relaunch are never in it — the newest-created parked Thread
+    /// is next (accepted v1 behavior). A Thread whose revive fails keeps its
+    /// park but loses its slot in the order: cmd-o moves on rather than
+    /// jamming on it. None with nothing parked at all.
+    pub fn reopen_last(&mut self) -> Option<(ThreadId, Result<(), LoadError>)> {
+        let thread = self
+            .roster
+            .pop_park_order()
+            .or_else(|| self.parked().unwrap_or_default().last().copied())?;
+        Some((thread, self.reopen(thread)))
+    }
+
+    /// cmd-t (#29): a draft Pane in the current view's scope — a Group's
+    /// pending member, or a loose Solo draft. Nothing durable until its
+    /// first send; it takes focus.
+    pub fn open_draft(&mut self) -> DraftId {
+        let group = match self.roster.view() {
+            View::Group(group) => Some(group),
+            View::Solo => None,
+        };
+        self.roster.open_draft(DraftScope {
+            group,
+            pending_leave: None,
+        })
+    }
+
+    /// The first send (#29): bootstrap the Thread — create, worktree, spawn
+    /// — and only then let the prompt go; the Thread takes the draft's own
+    /// slot, and joins the Group the draft was pending in. The leave the
+    /// draft was holding open (see `close`) applies now, and only now: the
+    /// new member is already in, so the pair never dissolves. On any
+    /// failure nothing is half-born: no Thread, the Pane stays draft, and
+    /// the prompt stays with the caller.
+    pub fn bootstrap_draft(
+        &mut self,
+        draft: DraftId,
+        choice: ProviderChoice,
+        workspace: WorkspaceChoice,
+        prompt: &str,
+    ) -> io::Result<Bootstrapped> {
+        let scope = self
+            .roster
+            .draft_scope(draft)
+            .ok_or_else(|| io::Error::other("no such draft"))?;
+        let thread = match scope.group {
+            Some(group) => self.bootstrap_in_group(choice, workspace, prompt, group)?,
+            None => self.bootstrap(choice, workspace, prompt)?,
+        };
+        self.roster.draft_became(draft, thread);
+        let refused_leave = scope
+            .pending_leave
+            .and_then(|leaving| self.apply_group(GroupChange::Leave { thread: leaving }).err());
+        Ok(Bootstrapped {
+            thread,
+            refused_leave,
+        })
+    }
+
+    /// Discard a draft Pane (#29): nothing durable dies with it. A leave it
+    /// was holding open applies now — nothing came to replace the leaving
+    /// Thread, so the pair dissolves exactly as closing that Pane would
+    /// have done without a draft in the way.
+    pub fn discard_draft(&mut self, draft: DraftId) -> Result<(), ApplyError> {
+        let Some(scope) = self.roster.remove_draft(draft) else {
+            return Ok(());
+        };
+        if let (Some(_), Some(leaving)) = (scope.group, scope.pending_leave) {
+            self.apply_group(GroupChange::Leave { thread: leaving })?;
+        }
+        Ok(())
+    }
+
+    /// Close a Pane — cmd-w. A draft is discarded. A Thread is taken out of
+    /// whatever the operator is looking at: in Solo that is a park, plain —
+    /// the Session ends, the log stays, and reopening revives it. In a
+    /// Group it is a Leave, and the Thread stays open — and the survivor
+    /// the operator lands on is the Thread that took this one's ordinal,
+    /// not the first member: closing the middle Pane of three should leave
+    /// the pointer where it was, the way closing a browser tab does.
+    ///
+    /// The exception is a pair with a draft pending in it. A Group needs
+    /// two members, so leaving a pair dissolves it — which would tear down
+    /// the very Group the draft is waiting to join. The leave is therefore
+    /// *deferred* onto the draft, and the Group stays whole and visible
+    /// until the draft either sends (`bootstrap_draft` applies the leave;
+    /// membership never dips below two) or is discarded (the leave applies
+    /// then, and the pair dissolves as it always would).
+    pub fn close(&mut self, identity: PaneIdentity) -> Result<(), CloseError> {
+        match identity {
+            PaneIdentity::Draft(draft) => self.discard_draft(draft).map_err(CloseError::Group),
+            PaneIdentity::Thread(thread) => self.close_thread(thread),
+        }
+    }
+
+    fn close_thread(&mut self, thread: ThreadId) -> Result<(), CloseError> {
+        if let View::Group(group) = self.roster.view() {
+            let members = self
+                .groups
+                .get(group)
+                .map(|group| group.members.clone())
+                .unwrap_or_default();
+            let ordinal = members
+                .iter()
+                .position(|member| *member == thread)
+                .unwrap_or(0);
+            if members.len() == 2 {
+                if let Some(draft) = self.roster.pending_draft(group) {
+                    self.roster.defer_leave(draft, thread);
+                    let survivor = members[usize::from(members[0] == thread)];
+                    self.roster.focus(PaneIdentity::Thread(survivor));
+                    return Ok(());
+                }
+            }
+            let applied = self
+                .apply_group(GroupChange::Leave { thread })
+                .map_err(CloseError::Group)?;
+            // A dissolved Group already landed on its survivor.
+            if !applied.dissolved.iter().any(|item| item.group == group) {
+                if let Some(group) = self.groups.get(group) {
+                    let next = group.members[ordinal.min(group.members.len() - 1)];
+                    self.roster.focus(PaneIdentity::Thread(next));
+                }
+            }
+            return Ok(());
+        }
+        // Solo: park. Parked even on a flush error — the Session is gone
+        // either way, so cmd-o should still bring this Thread back first —
+        // and the clamped survivor takes focus and, while fullscreen, the
+        // screen (#20).
+        let re_aim = self.roster.fullscreen() == Some(PaneIdentity::Thread(thread));
+        let parked = self.park(thread);
+        self.roster.note_parked(thread);
+        if re_aim {
+            self.roster.fullscreen_focused();
+        }
+        parked.map_err(CloseError::Park)
+    }
+
+    /// A nav drag's drop (#28): the plan the Groups module makes of it,
+    /// applied in the View the drag started from — the row's own mouse-down
+    /// fires before the drag does, so by the time the drop lands the view
+    /// is wherever the *press* took the operator, not where they picked the
+    /// row up. Dragging a member out of a Group is the pointer's spelling
+    /// of closing its Pane, so it takes the same door — which defers the
+    /// leave when a draft is pending in a pair, and keeps the
+    /// ordinal-preserving focus. A refused or empty plan changes nothing.
+    pub fn drop(&mut self, drag: Drag, origin: View, target: DropTarget) -> Result<(), ApplyError> {
+        self.roster.set_view(origin);
+        let outcome = match self.groups.preview_drop(drag, target) {
+            Plan::Change(GroupChange::Leave { thread })
+                if matches!(drag, Drag::Thread { group: Some(_), .. }) =>
+            {
+                let Drag::Thread {
+                    group: Some(group), ..
+                } = drag
+                else {
+                    unreachable!("the guard above matched this exact shape");
+                };
+                self.roster.set_view(View::Group(group));
+                let closed = self.close_thread(thread).map_err(|error| match error {
+                    CloseError::Group(error) => error,
+                    CloseError::Park(error) => error.into(),
+                });
+                // Out of the Group for real — either the leave applied, or
+                // it is parked on a draft. Either way the dragged Thread is
+                // no longer a member, so the operator follows it to Solo.
+                if self.roster.pending_leave(group) == Some(thread)
+                    || self.groups.of(thread).is_none()
+                {
+                    self.roster.set_view(View::Solo);
+                    self.roster.focus(PaneIdentity::Thread(thread));
+                }
+                closed
+            }
+            Plan::Change(change) => self.apply_group(change).map(|_| ()),
+            Plan::Refused(_) | Plan::Nothing => Ok(()),
+        };
+        self.roster.heal_focus(&self.groups);
+        outcome
+    }
+
+    /// Adopt a CLI session file (#11) in place of the Pane it was picked
+    /// from: a draft becomes the imported Thread; a still-blank Thread
+    /// yields its slot and is deleted — clean exactly while it is blank,
+    /// which the picker's own invariant guarantees and this re-checks.
+    /// Import creates the Thread; revive opens it — the same
+    /// replay-and-resume any parked Thread gets — and it takes focus. A
+    /// refusal is the import module's, unchanged, and no Thread was
+    /// created.
+    pub fn adopt_into(
+        &mut self,
+        from: PaneIdentity,
+        path: &Path,
+    ) -> Result<Adopted, crate::import::ImportError> {
+        let thread = self.import(path)?;
+        let mut adopted = Adopted {
+            thread,
+            not_opened: None,
+            blank_kept: None,
+        };
+        match self.revive(thread) {
+            Ok(()) => {
+                match from {
+                    PaneIdentity::Draft(draft) => {
+                        self.roster.draft_became(draft, thread);
+                    }
+                    PaneIdentity::Thread(blank) => {
+                        if self
+                            .thread(blank)
+                            .is_some_and(|open| open.transcript().offers_import())
+                        {
+                            adopted.blank_kept = self.delete(blank).err();
+                        }
+                    }
+                }
+                self.roster.focus(PaneIdentity::Thread(thread));
+            }
+            Err(error) => adopted.not_opened = Some(error),
+        }
+        Ok(adopted)
+    }
+
+    /// The nav's parked rows (#21), in stable, append-only order: Threads
+    /// parked before this launch keep creation order, and this launch's
+    /// parks append below in park order — a fresh park lands at the bottom
+    /// of the section instead of re-sorting it.
+    pub fn parked_in_order(&self) -> io::Result<Vec<ThreadId>> {
+        let parked = self.parked()?;
+        let order = self.roster.park_order();
+        Ok(parked
+            .iter()
+            .filter(|thread| !order.contains(thread))
+            .copied()
+            .chain(order.iter().filter(|thread| parked.contains(thread)).copied())
+            .collect())
     }
 }
 
@@ -3395,5 +3805,262 @@ mod tests {
             !cockpit.thread(thread).unwrap().transcript().blocks().is_empty(),
             "and nothing was torn down"
         );
+    }
+
+    // ------------------------------------------- what is on screen (#28)
+
+    /// `n` open Threads on the main checkout, in open order.
+    fn opened(cockpit: &mut Cockpit, n: usize) -> Vec<ThreadId> {
+        (0..n)
+            .map(|_| cockpit.open(Provider::Claude, main_choice()).unwrap())
+            .collect()
+    }
+
+    fn pair(cockpit: &mut Cockpit, first: ThreadId, second: ThreadId) -> GroupId {
+        cockpit
+            .apply_group(GroupChange::Create { first, second })
+            .unwrap()
+            .group
+            .unwrap()
+    }
+
+    #[test]
+    fn open_threads_are_the_roster_and_solo_shows_the_focused_one() {
+        let (mut cockpit, _) = cockpit("roster-solo");
+        let threads = opened(&mut cockpit, 3);
+        let panes: Vec<ThreadId> = cockpit
+            .roster()
+            .panes()
+            .iter()
+            .filter_map(|pane| pane.thread())
+            .collect();
+        assert_eq!(panes, threads, "every open Thread has a Pane, in open order");
+        assert_eq!(cockpit.visible(), [PaneIdentity::Thread(threads[0])]);
+        assert!(cockpit.focus(PaneIdentity::Thread(threads[2])));
+        assert_eq!(cockpit.visible(), [PaneIdentity::Thread(threads[2])]);
+        assert_eq!(cockpit.layout().columns, 1);
+        cockpit.park(threads[2]).unwrap();
+        assert_eq!(cockpit.roster().panes().len(), 2, "a parked Thread has no Pane");
+        assert_eq!(
+            cockpit.roster().focused_thread(),
+            Some(threads[1]),
+            "focus clamps onto a survivor"
+        );
+    }
+
+    #[test]
+    fn closing_in_solo_parks_and_closing_in_a_group_leaves_onto_the_ordinal_survivor() {
+        let (mut cockpit, _) = cockpit("roster-close");
+        let threads = opened(&mut cockpit, 3);
+        let group = pair(&mut cockpit, threads[0], threads[1]);
+        cockpit
+            .apply_group(GroupChange::Join {
+                thread: threads[2],
+                group,
+                index: None,
+            })
+            .unwrap();
+        cockpit.enter_group(group).unwrap();
+        assert_eq!(cockpit.layout().columns, 2);
+        cockpit.focus(PaneIdentity::Thread(threads[1]));
+
+        cockpit.close(PaneIdentity::Thread(threads[1])).unwrap();
+        assert_eq!(cockpit.threads().len(), 3, "leaving never parks");
+        assert_eq!(cockpit.roster().view(), View::Group(group));
+        assert_eq!(
+            cockpit.roster().focused_thread(),
+            Some(threads[2]),
+            "the Thread that took the closed one's ordinal"
+        );
+
+        cockpit.close(PaneIdentity::Thread(threads[2])).unwrap();
+        assert_eq!(cockpit.roster().view(), View::Solo, "a pair losing a member dissolves");
+        assert_eq!(cockpit.roster().focused_thread(), Some(threads[0]), "onto the survivor");
+        assert!(cockpit.groups().get(group).is_none());
+
+        cockpit.close(PaneIdentity::Thread(threads[0])).unwrap();
+        assert!(cockpit.parked().unwrap().contains(&threads[0]), "a Solo close parks");
+        assert_eq!(cockpit.roster().park_order(), [threads[0]]);
+        assert_eq!(cockpit.roster().panes().len(), 2);
+    }
+
+    #[test]
+    fn a_pending_draft_defers_a_pairs_leave_until_it_sends_or_is_discarded() {
+        let (mut cockpit, _) = cockpit("roster-defer");
+        let threads = opened(&mut cockpit, 4);
+        let sending = pair(&mut cockpit, threads[0], threads[1]);
+        cockpit.enter_group(sending).unwrap();
+        let draft = cockpit.open_draft();
+        assert_eq!(cockpit.roster().draft_scope(draft).unwrap().group, Some(sending));
+        assert_eq!(cockpit.visible().len(), 3, "the pending draft shows");
+
+        cockpit.close(PaneIdentity::Thread(threads[0])).unwrap();
+        assert_eq!(
+            cockpit.groups().get(sending).unwrap().members,
+            threads[..2],
+            "the pair stands while the draft is pending"
+        );
+        assert_eq!(cockpit.roster().pending_leave(sending), Some(threads[0]));
+        assert_eq!(
+            cockpit.visible(),
+            [PaneIdentity::Thread(threads[1]), PaneIdentity::Draft(draft)],
+            "the leaving member is already gone from view"
+        );
+        // The operator writes in the draft, so it holds focus when it sends.
+        cockpit.focus(PaneIdentity::Draft(draft));
+        let done = cockpit
+            .bootstrap_draft(
+                draft,
+                ProviderChoice {
+                    provider: Provider::Claude,
+                    model: None,
+                },
+                main_choice(),
+                "join",
+            )
+            .unwrap();
+        assert!(done.refused_leave.is_none());
+        assert_eq!(
+            cockpit.groups().get(sending).unwrap().members,
+            [threads[1], done.thread],
+            "the deferred leave applied once the new member was in"
+        );
+        assert_eq!(
+            cockpit.roster().focused_thread(),
+            Some(done.thread),
+            "the Thread took the draft's own slot"
+        );
+        assert_eq!(cockpit.roster().draft_scope(draft), None);
+
+        // The other way out: discarding the draft dissolves the pair as a
+        // plain close would have.
+        let closing = pair(&mut cockpit, threads[2], threads[3]);
+        cockpit.enter_group(closing).unwrap();
+        let draft = cockpit.open_draft();
+        cockpit.close(PaneIdentity::Thread(threads[2])).unwrap();
+        assert_eq!(cockpit.groups().get(closing).unwrap().members.len(), 2);
+        cockpit.close(PaneIdentity::Draft(draft)).unwrap();
+        assert!(cockpit.groups().get(closing).is_none());
+        assert_eq!(cockpit.roster().view(), View::Solo);
+        assert_eq!(cockpit.roster().focused_thread(), Some(threads[3]));
+    }
+
+    #[test]
+    fn entering_a_group_revives_parked_members_and_keeps_focus_on_a_member() {
+        let (mut cockpit, _) = cockpit("roster-enter");
+        let threads = opened(&mut cockpit, 3);
+        let group = pair(&mut cockpit, threads[1], threads[2]);
+        cockpit.close(PaneIdentity::Thread(threads[2])).unwrap();
+        assert!(cockpit.parked().unwrap().contains(&threads[2]));
+        cockpit.focus(PaneIdentity::Thread(threads[1]));
+
+        cockpit.enter_group(group).unwrap();
+        assert_eq!(cockpit.roster().view(), View::Group(group));
+        assert_eq!(
+            cockpit.roster().focused_thread(),
+            Some(threads[1]),
+            "focus stays on the member the operator was on"
+        );
+        assert!(cockpit.thread(threads[2]).is_some(), "the parked member revived");
+        assert!(cockpit.roster().park_order().is_empty(), "and cmd-o forgets it");
+
+        assert!(cockpit.focus_thread(threads[0]));
+        assert_eq!(cockpit.roster().view(), View::Solo, "a loose Thread shows Solo");
+        cockpit.enter_group(group).unwrap();
+        assert_eq!(
+            cockpit.roster().focused_thread(),
+            Some(threads[1]),
+            "entering from outside lands on the first member"
+        );
+    }
+
+    #[test]
+    fn reopen_walks_this_launches_park_order_then_creation_order() {
+        let (mut cockpit, _) = cockpit("roster-reopen");
+        let threads = opened(&mut cockpit, 3);
+        // Parked before this launch, as far as the roster can know.
+        cockpit.park(threads[2]).unwrap();
+        cockpit.close(PaneIdentity::Thread(threads[0])).unwrap();
+        cockpit.close(PaneIdentity::Thread(threads[1])).unwrap();
+        assert!(cockpit.roster().panes().is_empty());
+
+        let (first, opened) = cockpit.reopen_last().unwrap();
+        opened.unwrap();
+        assert_eq!(first, threads[1], "the last park comes back first");
+        assert_eq!(cockpit.reopen_last().unwrap().0, threads[0]);
+        assert_eq!(
+            cockpit.reopen_last().unwrap().0,
+            threads[2],
+            "the order drained: creation order"
+        );
+        assert!(cockpit.reopen_last().is_none());
+        assert_eq!(cockpit.roster().focused_thread(), Some(threads[2]), "reopen focuses");
+    }
+
+    #[test]
+    fn fullscreen_follows_focus_and_survives_a_close_but_not_an_external_park() {
+        let (mut cockpit, _) = cockpit("roster-fullscreen");
+        let threads = opened(&mut cockpit, 3);
+        cockpit.toggle_fullscreen();
+        assert_eq!(cockpit.roster().fullscreen(), Some(PaneIdentity::Thread(threads[0])));
+        cockpit.step_focus(1);
+        assert_eq!(
+            cockpit.roster().fullscreen(),
+            Some(PaneIdentity::Thread(threads[0])),
+            "Solo has one visible Pane to step through"
+        );
+        cockpit.focus(PaneIdentity::Thread(threads[1]));
+        assert_eq!(cockpit.roster().fullscreen(), Some(PaneIdentity::Thread(threads[1])));
+        cockpit.close(PaneIdentity::Thread(threads[1])).unwrap();
+        assert_eq!(
+            cockpit.roster().fullscreen(),
+            Some(PaneIdentity::Thread(threads[2])),
+            "the survivor fills the screen, like the next tab"
+        );
+        cockpit.park(threads[2]).unwrap();
+        assert_eq!(
+            cockpit.roster().fullscreen(),
+            None,
+            "parked under the roster: back to the grid"
+        );
+    }
+
+    #[test]
+    fn a_drop_out_of_a_pair_tracks_its_origin_and_lands_on_the_survivor() {
+        let (mut cockpit, _) = cockpit("roster-drop");
+        let threads = opened(&mut cockpit, 3);
+        let group = pair(&mut cockpit, threads[0], threads[1]);
+        cockpit.enter_group(group).unwrap();
+        cockpit
+            .drop(
+                Drag::Thread {
+                    thread: threads[0],
+                    group: Some(group),
+                },
+                View::Group(group),
+                DropTarget::ThreadRow {
+                    thread: threads[2],
+                    group: None,
+                    index: 0,
+                },
+            )
+            .unwrap();
+        assert_eq!(cockpit.roster().view(), View::Solo);
+        assert_eq!(cockpit.roster().focused_thread(), Some(threads[1]));
+        assert!(cockpit.groups().get(group).is_none());
+    }
+
+    #[test]
+    fn the_next_decision_lands_in_the_view_that_shows_the_waiting_thread() {
+        let (mut cockpit, fake) = cockpit("roster-decision");
+        let threads = opened(&mut cockpit, 3);
+        let group = pair(&mut cockpit, threads[1], threads[2]);
+        fake.streams.borrow()[2]
+            .send(decision("perm", "Write"))
+            .unwrap();
+        cockpit.pump();
+        assert_eq!(cockpit.next_decision(), Some(threads[2]));
+        assert_eq!(cockpit.roster().view(), View::Group(group));
+        assert_eq!(cockpit.roster().focused_thread(), Some(threads[2]));
     }
 }

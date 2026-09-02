@@ -5,11 +5,10 @@
 
 use std::time::Duration;
 
-use ferrite_core::cockpit::{Cockpit, HistoryDirection, ProviderChoice};
+use ferrite_core::cockpit::{CloseError, Cockpit, HistoryDirection, ProviderChoice};
 use ferrite_core::docview::{Cell, Level};
-use ferrite_core::groups::{
-    grid as group_grid, Drag, DropTarget, GroupChange, GroupId, Groups, Plan,
-};
+use ferrite_core::groups::{Drag, DropTarget, GroupChange, GroupId, Groups, Plan};
+use ferrite_core::roster::{PaneIdentity, View};
 use ferrite_core::store::Provider;
 use ferrite_core::workspace::registry::ProjectId;
 use ferrite_core::workspace::{WorkspaceBinding, WorkspaceChoice};
@@ -75,29 +74,17 @@ const PUMP_MS: u64 = 8;
 
 pub struct CockpitView {
     cockpit: Cockpit,
+    /// One view per Pane of the Cockpit's roster, in its order — the
+    /// keyboard, the scrollback and the caches the window owns for each.
+    /// `sync_panes` is the one door: after every act on the roster the
+    /// mirror is reconciled, never edited by hand.
     panes: Vec<PaneView>,
-    focused: usize,
-    /// The Thread cmd-f fullscreened, if any: it takes the whole grid area
-    /// at Level::Transcript while every other Session keeps streaming (#20).
-    /// Deliberate moves re-aim it through `focus_pane` — cmd-w's survivor
-    /// fills the screen like the next browser tab. The Thread is named —
-    /// not `fullscreen: bool` over `focused` — so one removed by a path
-    /// that never called `focus_pane` reads as *gone* and falls back to the
-    /// grid (render's self-heal), instead of a bool silently fullscreening
-    /// whichever Pane inherited its index, or an empty cockpit rendering
-    /// blank.
-    fullscreen: Option<PaneIdentity>,
     /// The cockpit's own place in the focus tree. Key dispatch walks from the
     /// focused node up to the root, so with nothing focused inside the window
     /// the cockpit's own actions are never reached — at wall range, where no
     /// Pane holds a Composer, this handle is what keeps the keyboard alive.
     focus: FocusHandle,
     perf: Option<Perf>,
-    /// Threads the operator parked this launch, oldest first — cmd-o pops the
-    /// tail, the one just closed. In memory only, deliberately: the store
-    /// keeps no park order, so a relaunch forgets it and reopen falls back to
-    /// creation order (accepted v1 behavior).
-    park_order: Vec<ThreadId>,
     /// When the watchdog last swept. Sweeping costs a `ps`/`tasklist` per
     /// live Session, so it runs on its own slow cadence, never per frame.
     swept: std::time::Instant,
@@ -155,7 +142,6 @@ pub struct CockpitView {
     /// The launch directory's registered project (#29) — every draft's
     /// starting choice.
     launch_project: ProjectId,
-    view: View,
     /// The inline title rename in flight, if any: what is being renamed,
     /// and the one-line Composer standing in for its title. At most one —
     /// the title cell *is* the editor, so two at once would need two rows
@@ -170,16 +156,6 @@ pub struct CockpitView {
 enum RenameTarget {
     Group(GroupId),
     Thread(ThreadId),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-/// What the Cockpit is showing. There is no global wall: the operator sees
-/// exactly one Thread, or exactly one Group's ordered membership (#28).
-enum View {
-    /// The default: exactly the focused Thread's Pane.
-    Solo,
-    /// One durable Group — two or more Threads from one registered Project.
-    Group(GroupId),
 }
 
 struct NavDragPreview(SharedString);
@@ -216,24 +192,17 @@ fn drop_feedback<E: gpui::InteractiveElement>(element: E, groups: Groups, target
     })
 }
 
-/// Stable Pane identity across grid reflow.
-#[derive(Clone, Debug, PartialEq)]
-enum PaneIdentity {
-    Thread(ThreadId),
-    Draft(Entity<Composer>),
-}
-
 /// The one popover the Composer's slot can hold — the `/` or `@` menu
 /// (#23), the import file-picker (#11), the provider picker (#25) or a
 /// draft's band chip (#29) — and everything it shows. At most one for the
-/// whole cockpit, always on the focused Pane's Composer: `anchor` names
-/// that Composer, a draft's one stable identity and a Thread's too. Rows
+/// whole cockpit, always on the focused Pane's Composer: `pane` names that
+/// Pane by the roster's own identity. Rows
 /// are discovered when it opens and re-derived only by its kind's own
 /// rule, never per frame; each row carries what picking it does, so the
 /// two can never drift apart.
 struct Popover {
-    thread: Option<ThreadId>,
-    anchor: Entity<Composer>,
+    /// The Pane whose Composer holds it.
+    pane: PaneIdentity,
     kind: Kind,
     rows: Vec<Row>,
     selected: usize,
@@ -406,14 +375,11 @@ impl CockpitView {
         let mut view = Self {
             cockpit,
             panes: Vec::new(),
-            focused: 0,
-            fullscreen: None,
             focus: cx.focus_handle(),
             perf: std::env::var("FERRITE_PERF").is_ok().then(|| Perf {
                 frames: 0,
                 since: std::time::Instant::now(),
             }),
-            park_order: Vec::new(),
             swept: std::time::Instant::now(),
             selection: TranscriptSelection::default(),
             nav_collapsed: false,
@@ -428,35 +394,51 @@ impl CockpitView {
             suppress_recall_menu_once: false,
             session_file_roots: ferrite_core::import::default_roots(),
             launch_project,
-            view: View::Solo,
             rename: None,
             group_error: None,
         };
-        for thread in view.cockpit.threads() {
-            view.open_pane(thread, cx);
-        }
+        // Every Thread the launch opened is on the roster already.
+        view.sync_panes(cx);
         // Nothing revived: the cockpit starts as one draft Pane (#29) —
         // nothing spawns before the operator's choice.
         if view.panes.is_empty() {
             view.open_draft_with_provider(pane::DraftTarget::Main, launch_provider, cx);
         }
         view.refresh_parked();
-        // The first frame's wall cards — every rebuild after rides a change.
-        let threads: Vec<ThreadId> = view.panes.iter().filter_map(|pane| pane.thread()).collect();
-        for thread in threads {
-            view.refresh_wall(thread);
-        }
         view
     }
 
-    /// The one way a Pane joins the grid: built, and its Composer watched —
-    /// every edit of the line re-syncs the open `/`/`@` menu (#23).
-    fn open_pane(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        let pane = PaneView::new(thread, cx);
-        cx.subscribe(&pane.composer, Self::composer_edited).detach();
-        self.panes.push(pane);
-        self.refresh_branch(thread);
-        self.refresh_project(thread);
+    /// Mirror the roster (#28): a view for every Pane the Cockpit shows, in
+    /// the roster's order, and none for a Pane it no longer does. The one
+    /// way a Thread's Pane joins the grid — built, its Composer watched so
+    /// every edit of the line re-syncs the open menu (#23), and its caches
+    /// filled here, never per frame. Drafts are made by
+    /// `open_draft_with_choice`, which knows their binding; the roster
+    /// never holds a draft this window did not open.
+    fn sync_panes(&mut self, cx: &mut Context<Self>) {
+        let wanted = self.cockpit.roster().panes().to_vec();
+        self.panes.retain(|pane| wanted.contains(&pane.identity));
+        for identity in &wanted {
+            if self.index_of(*identity).is_some() {
+                continue;
+            }
+            let PaneIdentity::Thread(thread) = *identity else {
+                continue;
+            };
+            let pane = PaneView::new(thread, cx);
+            cx.subscribe(&pane.composer, Self::composer_edited).detach();
+            self.panes.push(pane);
+            self.refresh_branch(thread);
+            self.refresh_project(thread);
+            self.refresh_wall(thread);
+        }
+        self.panes
+            .sort_by_key(|pane| wanted.iter().position(|shown| *shown == pane.identity));
+    }
+
+    /// Where this Pane sits in the grid.
+    fn index_of(&self, identity: PaneIdentity) -> Option<usize> {
+        self.panes.iter().position(|pane| pane.identity == identity)
     }
 
     /// Refresh one Thread's cached checkout label (#29): the branch its
@@ -537,10 +519,15 @@ impl CockpitView {
         // splice that opened it leaves the line empty, and keeps it. The
         // project chip is the exception: its rows read the line as the
         // type-a-path row, so edits re-derive it instead.
+        let edited = self
+            .panes
+            .iter()
+            .find(|pane| pane.composer == composer)
+            .map(|pane| pane.identity);
         let anchored = self
             .popover
             .as_ref()
-            .filter(|open| open.anchor == composer && !open.kind.follows_text());
+            .filter(|open| Some(open.pane) == edited && !open.kind.follows_text());
         let resync = anchored
             .is_some_and(|open| matches!(open.kind, Kind::Band(pane::BandChip::Project)));
         let dismiss = anchored.is_some() && !resync;
@@ -688,29 +675,19 @@ impl CockpitView {
     /// input semantic zoom takes — there is no mode to switch, and the nav
     /// is simply part of the size: opening it can legitimately drop Panes a
     /// Level (#21).
-    fn cell(&self, window: &Window, columns: usize) -> Cell {
+    fn cell(&self, window: &Window) -> Cell {
         let viewport = window.viewport_size();
-        let rows = if self.tall_left_board() {
-            3
-        } else {
-            self.visible_indices().len().div_ceil(columns).max(1)
-        };
+        let layout = self.cockpit.layout();
         // The nav, the grid's own padding, and the gaps between cells are
         // not the Pane's to render in. Nothing sits above the board: there
         // is no title band to subtract.
         let chrome = self.nav_width() + crate::theme::GRID_PAD * 2.0;
-        let width = (f32::from(viewport.width) - chrome) / columns as f32 - crate::theme::GRID_GAP;
-        let height = (f32::from(viewport.height) - crate::theme::GRID_PAD * 2.0) / rows as f32
+        let width = (f32::from(viewport.width) - chrome) / layout.columns as f32
+            - crate::theme::GRID_GAP;
+        let height = (f32::from(viewport.height) - crate::theme::GRID_PAD * 2.0)
+            / layout.rows as f32
             - crate::theme::GRID_GAP;
         Cell::new(width.max(0.0), height.max(0.0))
-    }
-
-    /// The prototype's tall-left board: exactly four Panes on the wall, two
-    /// columns and three rows with the left Pane spanning all of them. The
-    /// prototype specifies a board for four Panes and no other count, so
-    /// every other count keeps the chunked rows (R-01).
-    fn tall_left_board(&self) -> bool {
-        matches!(self.view, View::Group(_)) && self.visible_indices().len() == 4
     }
 
     /// How much of the window the nav holds right now: the 208px column, or
@@ -730,91 +707,20 @@ impl CockpitView {
     /// not in render, so the pointer math (`block_at`) reads the same level
     /// the frame drew.
     fn level_now(&self, window: &Window) -> Level {
-        if self.fullscreen.is_some() {
+        if self.cockpit.roster().fullscreen().is_some() {
             return Level::Transcript;
         }
-        Level::for_cell(self.cell(window, self.view_columns()))
+        Level::for_cell(self.cell(window))
     }
 
+    /// The Panes on screen, as indices into the mirror — the roster's
+    /// `visible`, in its order.
     fn visible_indices(&self) -> Vec<usize> {
-        match self.view {
-            View::Solo => self
-                .panes
-                .get(self.focused)
-                .map(|_| vec![self.focused])
-                .unwrap_or_default(),
-            View::Group(group) => {
-                let Some(group) = self.cockpit.groups().get(group) else {
-                    return Vec::new();
-                };
-                // A Thread whose leave is deferred onto a pending draft is
-                // already gone as far as the operator is concerned: the
-                // draft is standing in its place, and both at once would
-                // show the pair as three.
-                let pending_leave = self.pending_leave(group.id);
-                group
-                    .members
-                    .iter()
-                    .filter(|thread| Some(**thread) != pending_leave)
-                    .filter_map(|thread| self.pane_for(*thread))
-                    .chain(self.panes.iter().enumerate().filter_map(|(index, pane)| {
-                        pane.draft()
-                            .is_some_and(|draft| draft.pending_group == Some(group.id))
-                            .then_some(index)
-                    }))
-                    .collect()
-            }
-        }
-    }
-
-    /// The member of this Group whose leave is waiting on a draft — see
-    /// `remove_thread_from_view`. At most one: a Group holds at most one
-    /// pending draft, and a draft defers at most one leave.
-    fn pending_leave(&self, group: GroupId) -> Option<ThreadId> {
-        self.panes.iter().find_map(|pane| {
-            let draft = pane.draft()?;
-            (draft.pending_group == Some(group))
-                .then_some(draft.pending_leave)
-                .flatten()
-        })
-    }
-
-    fn view_columns(&self) -> usize {
-        if self.tall_left_board() {
-            return 2;
-        }
-        match self.view {
-            View::Solo => 1,
-            View::Group(_) => group_grid(self.visible_indices().len()).1.max(1),
-        }
-    }
-
-    fn heal_view(&mut self) {
-        if let View::Group(group) = self.view {
-            if self.cockpit.groups().get(group).is_none() {
-                self.view = View::Solo;
-            }
-        }
-    }
-
-    fn heal_group_focus(&mut self) {
-        self.heal_view();
-        let View::Group(group) = self.view else {
-            return;
-        };
-        let focused_is_visible = self.focused_thread().is_some_and(|thread| {
-            self.cockpit
-                .groups()
-                .get(group)
-                .is_some_and(|group| group.members.contains(&thread))
-        });
-        if !focused_is_visible {
-            if let Some(next) = self.visible_indices().first().copied() {
-                self.focus_pane(next);
-            } else {
-                self.view = View::Solo;
-            }
-        }
+        self.cockpit
+            .visible()
+            .into_iter()
+            .filter_map(|identity| self.index_of(identity))
+            .collect()
     }
 
     /// Open the inline editor on a title, seeded with the title as it
@@ -951,45 +857,25 @@ impl CockpitView {
             .into_any_element()
     }
 
-    fn apply_group_change(&mut self, change: GroupChange) -> Option<ferrite_core::groups::Applied> {
-        match self.cockpit.apply_group(change) {
-            Ok(applied) => {
-                self.group_error = None;
-                // The Group the operator was looking at just dissolved
-                // under them. Its survivor is the one Thread still on
-                // screen, so that is where they land — never the Thread
-                // that left, and never a blank Cockpit.
-                if let View::Group(active) = self.view {
-                    if let Some(dissolved) = applied
-                        .dissolved
-                        .iter()
-                        .find(|dissolved| dissolved.group == active)
-                    {
-                        self.view = View::Solo;
-                        if let Some(index) = self.pane_for(dissolved.survivor) {
-                            self.focus_pane(index);
-                        }
-                    }
-                }
-                self.heal_group_focus();
-                Some(applied)
-            }
-            Err(error) => {
-                eprintln!("ferrite: group change refused: {error}");
-                self.group_error = Some(error.to_string().into());
-                None
-            }
-        }
-    }
-
     fn pane_for(&self, thread: ThreadId) -> Option<usize> {
         self.panes
             .iter()
             .position(|pane| pane.thread() == Some(thread))
     }
 
+    /// The grid index of the Pane holding the keyboard — the roster's.
+    fn focused(&self) -> usize {
+        self.cockpit.roster().focused_index()
+    }
+
     fn focused_thread(&self) -> Option<ThreadId> {
-        self.panes.get(self.focused)?.thread()
+        self.cockpit.roster().focused_thread()
+    }
+
+    /// The focused Pane's draft, to change — None on a Thread.
+    fn focused_draft_mut(&mut self) -> Option<&mut pane::DraftBinding> {
+        let focused = self.focused();
+        self.panes.get_mut(focused).and_then(PaneView::draft_mut)
     }
 
     fn submit(&mut self, _: &Submit, _window: &mut Window, cx: &mut Context<Self>) {
@@ -999,7 +885,7 @@ impl CockpitView {
         }
         // A draft's ↵ (#29): on a band chip it opens that chip's popover;
         // on the prompt line it is the first send — the bootstrap.
-        if let Some(draft) = self.panes.get(self.focused).and_then(PaneView::draft) {
+        if let Some(draft) = self.panes.get(self.focused()).and_then(PaneView::draft) {
             match draft.band_focus {
                 Some(chip) => self.open_band_popover(chip, cx),
                 None => self.bootstrap_draft(cx),
@@ -1009,7 +895,7 @@ impl CockpitView {
         let Some(thread) = self.focused_thread() else {
             return;
         };
-        let composer = self.panes[self.focused].composer.clone();
+        let composer = self.panes[self.focused()].composer.clone();
         let text = composer.update(cx, |composer, cx| composer.take(cx));
         let text = text.trim().to_string();
         if text.is_empty() {
@@ -1025,7 +911,7 @@ impl CockpitView {
             self.cockpit.queue(thread, text);
         } else {
             self.cockpit.send(thread, text);
-            self.panes[self.focused].scroll.scroll_to_bottom();
+            self.panes[self.focused()].scroll.scroll_to_bottom();
         }
         self.refresh_wall(thread);
         cx.notify();
@@ -1043,7 +929,7 @@ impl CockpitView {
         let Some(thread) = self.focused_thread() else {
             return;
         };
-        if !self.panes[self.focused].composer.read(cx).is_empty() {
+        if !self.panes[self.focused()].composer.read(cx).is_empty() {
             return;
         }
         if self.cockpit.unqueue(thread).is_some() {
@@ -1059,10 +945,7 @@ impl CockpitView {
         // On a draft, escape returns to the prompt (#29): the band's tab
         // focus clears. (An open band popover holds the ComposerMenu keys,
         // so escape there dismisses through `menu_dismiss` instead.)
-        if let Some(draft) = self
-            .panes
-            .get_mut(self.focused)
-            .and_then(PaneView::draft_mut)
+        if let Some(draft) = self.focused_draft_mut()
         {
             draft.band_focus = None;
             cx.notify();
@@ -1078,10 +961,7 @@ impl CockpitView {
     /// Tab walks a draft's band (#29), or an L1 Thread Pane's rendered tool
     /// disclosures before returning to the Composer.
     fn band_cycle(&mut self, _: &BandCycle, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(draft) = self
-            .panes
-            .get_mut(self.focused)
-            .and_then(PaneView::draft_mut)
+        let Some(draft) = self.focused_draft_mut()
         else {
             self.cycle_tools(false, window, cx);
             return;
@@ -1104,18 +984,19 @@ impl CockpitView {
     }
 
     fn cycle_tools(&mut self, reverse: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if self.level_now(window) != Level::Transcript || self.panes[self.focused].draft().is_some()
+        if self.level_now(window) != Level::Transcript || self.panes[self.focused()].draft().is_some()
         {
             return;
         }
-        let calls = self.expandable_tools(self.focused, Level::Transcript);
-        let targeted = self.panes[self.focused]
+        let focused = self.focused();
+        let calls = self.expandable_tools(focused, Level::Transcript);
+        let targeted = self.panes[focused]
             .cycle_tools(&calls, reverse)
             .is_some();
         let focus = if targeted {
-            self.panes[self.focused].tool_focus()
+            self.panes[focused].tool_focus()
         } else {
-            self.panes[self.focused].composer.focus_handle(cx)
+            self.panes[focused].composer.focus_handle(cx)
         };
         window.focus(&focus);
         cx.notify();
@@ -1125,7 +1006,7 @@ impl CockpitView {
         let Some(thread) = self.focused_thread() else {
             return;
         };
-        let Some(call) = self.panes[self.focused].targeted_tool().map(str::to_string) else {
+        let Some(call) = self.panes[self.focused()].targeted_tool().map(str::to_string) else {
             return;
         };
         self.toggle_tool(thread, &call, window, cx);
@@ -1169,7 +1050,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         if self.level_now(window) == Level::Transcript {
-            if let Some(pane) = self.panes.get(self.focused) {
+            if let Some(pane) = self.panes.get(self.focused()) {
                 if !pane.composer.read(cx).is_empty() {
                     pane.composer
                         .clone()
@@ -1218,27 +1099,13 @@ impl CockpitView {
     }
 
     fn next_pane(&mut self, _: &NextPane, _window: &mut Window, cx: &mut Context<Self>) {
-        let visible = self.visible_indices();
-        if !visible.is_empty() {
-            let at = visible
-                .iter()
-                .position(|index| *index == self.focused)
-                .unwrap_or(0);
-            self.focus_pane(visible[(at + 1) % visible.len()]);
-            cx.notify();
-        }
+        self.cockpit.step_focus(1);
+        cx.notify();
     }
 
     fn previous_pane(&mut self, _: &PreviousPane, _window: &mut Window, cx: &mut Context<Self>) {
-        let visible = self.visible_indices();
-        if !visible.is_empty() {
-            let at = visible
-                .iter()
-                .position(|index| *index == self.focused)
-                .unwrap_or(0);
-            self.focus_pane(visible[(at + visible.len() - 1) % visible.len()]);
-            cx.notify();
-        }
+        self.cockpit.step_focus(-1);
+        cx.notify();
     }
 
     /// cmd-f (#20): the focused Pane takes the whole cockpit; cmd-f again
@@ -1250,14 +1117,7 @@ impl CockpitView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.fullscreen.is_some() {
-            self.fullscreen = None;
-        } else if let Some(pane) = self.panes.get(self.focused) {
-            self.fullscreen = Some(match pane.thread() {
-                Some(thread) => PaneIdentity::Thread(thread),
-                None => PaneIdentity::Draft(pane.composer.clone()),
-            });
-        }
+        self.cockpit.toggle_fullscreen();
         cx.notify();
     }
 
@@ -1292,7 +1152,7 @@ impl CockpitView {
         if self.menu_muted {
             return None;
         }
-        let pane = self.panes.get(self.focused)?;
+        let pane = self.panes.get(self.focused())?;
         let thread = pane.thread();
         let (text, cursor) = {
             let composer = pane.composer.read(cx);
@@ -1306,8 +1166,7 @@ impl CockpitView {
             let Some(thread) = thread else {
                 let row = local_row(filter, "import", "adopt a CLI session file", false)?;
                 return Some(Popover {
-                    thread: None,
-                    anchor: pane.composer.clone(),
+                    pane: pane.identity,
                     kind: Kind::Commands,
                     rows: vec![Row {
                         row,
@@ -1372,8 +1231,7 @@ impl CockpitView {
                 return None;
             }
             return Some(Popover {
-                thread: Some(thread),
-                anchor: pane.composer.clone(),
+                pane: pane.identity,
                 kind: Kind::Commands,
                 rows,
                 selected: 0,
@@ -1388,7 +1246,7 @@ impl CockpitView {
         };
         // The walk runs once per open menu; keystrokes only re-filter it.
         let walked = match &self.popover {
-            Some(open) if open.anchor == pane.composer => match &open.kind {
+            Some(open) if open.pane == pane.identity => match &open.kind {
                 Kind::Files { files, .. } => Some(files.clone()),
                 _ => None,
             },
@@ -1412,8 +1270,7 @@ impl CockpitView {
             return None;
         }
         Some(Popover {
-            thread,
-            anchor: pane.composer.clone(),
+            pane: pane.identity,
             kind: Kind::Files { files, token_start },
             rows,
             selected: 0,
@@ -1445,7 +1302,7 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let index = self.focused;
+        let index = self.focused();
         if !self.history_available(index, self.level_now(window)) {
             return;
         }
@@ -1465,7 +1322,7 @@ impl CockpitView {
     }
 
     fn history_available(&self, index: usize, level: Level) -> bool {
-        if level != Level::Transcript || index != self.focused {
+        if level != Level::Transcript || index != self.focused() {
             return false;
         }
         let Some(thread) = self.panes.get(index).and_then(PaneView::thread) else {
@@ -1515,10 +1372,7 @@ impl CockpitView {
         };
         match open.kind {
             Kind::Band(_) => {
-                if let Some(draft) = self
-                    .panes
-                    .get_mut(self.focused)
-                    .and_then(PaneView::draft_mut)
+                if let Some(draft) = self.focused_draft_mut()
                 {
                     draft.band_focus = None;
                 }
@@ -1539,7 +1393,12 @@ impl CockpitView {
         let Some(row) = open.rows.get(at) else {
             return;
         };
-        let composer = open.anchor.clone();
+        let Some(composer) = self
+            .index_of(open.pane)
+            .map(|index| self.panes[index].composer.clone())
+        else {
+            return;
+        };
         // Every command pick replaces the whole line.
         let splice_line = |cx: &mut Context<Self>, text: &str| {
             composer.update(cx, |composer, cx| {
@@ -1551,16 +1410,16 @@ impl CockpitView {
             Consequence::Command(name) => splice_line(cx, &format!("/{name} ")),
             Consequence::Inert => {}
             Consequence::OpenProviderPicker => {
-                if let Some(thread) = open.thread {
+                if let Some(thread) = open.pane.thread() {
                     splice_line(cx, "");
                     self.open_provider_picker(thread, cx);
                 }
             }
             Consequence::OpenImportPicker => {
-                if open.thread.is_some() {
+                if open.pane.thread().is_some() {
                     splice_line(cx, "");
                 }
-                self.open_import_picker(open.thread, composer.clone(), cx);
+                self.open_import_picker(open.pane, cx);
             }
             Consequence::Mention(path) => {
                 let Kind::Files { token_start, .. } = &open.kind else {
@@ -1574,9 +1433,9 @@ impl CockpitView {
                     composer.stage_mention(SharedString::from(token), cx);
                 });
             }
-            Consequence::Adopt(path) => self.adopt_file(open.thread, &composer, path, cx),
+            Consequence::Adopt(path) => self.adopt_file(open.pane, path, cx),
             Consequence::Provision(choice) => {
-                if let Some(thread) = open.thread {
+                if let Some(thread) = open.pane.thread() {
                     self.pick_provider(thread, choice.clone(), cx);
                 }
             }
@@ -1588,13 +1447,9 @@ impl CockpitView {
     /// #11: discovery and the file-pick popover, run once per open — never
     /// per frame. With nothing to list it says so in the transcript instead
     /// of opening an empty popover; the Notice is Ferrite's own out-of-band
-    /// line, so the Thread keeps offering import.
-    fn open_import_picker(
-        &mut self,
-        thread: Option<ThreadId>,
-        composer: Entity<Composer>,
-        cx: &mut Context<Self>,
-    ) {
+    /// line, so the Thread keeps offering import. On a draft the words land
+    /// where the band is.
+    fn open_import_picker(&mut self, from: PaneIdentity, cx: &mut Context<Self>) {
         let candidates = ferrite_core::import::candidates(&self.session_file_roots, IMPORT_ROWS_MAX);
         if candidates.is_empty() {
             let roots = self
@@ -1604,17 +1459,7 @@ impl CockpitView {
                 .collect::<Vec<_>>()
                 .join(" or ");
             let message = format!("no CLI session files found under {roots}");
-            if let Some(thread) = thread {
-                self.cockpit
-                    .apply_input(thread, ferrite_core::transcript::Input::Notice(message));
-            } else if let Some(draft) = self
-                .panes
-                .iter_mut()
-                .find(|pane| pane.composer == composer)
-                .and_then(PaneView::draft_mut)
-            {
-                draft.error = Some(message.into());
-            }
+            self.say_to(from, message);
             cx.notify();
             return;
         }
@@ -1648,13 +1493,30 @@ impl CockpitView {
             })
             .collect();
         self.popover = Some(Popover {
-            thread,
-            anchor: composer,
+            pane: from,
             kind: Kind::ImportFile,
             rows,
             selected: 0,
         });
         cx.notify();
+    }
+
+    /// Ferrite's own words to one Pane: a Notice in a Thread's transcript,
+    /// or the error line under a draft's band.
+    fn say_to(&mut self, pane: PaneIdentity, message: String) {
+        match pane {
+            PaneIdentity::Thread(thread) => self
+                .cockpit
+                .apply_input(thread, ferrite_core::transcript::Input::Notice(message)),
+            PaneIdentity::Draft(_) => {
+                if let Some(draft) = self
+                    .index_of(pane)
+                    .and_then(|index| self.panes[index].draft_mut())
+                {
+                    draft.error = Some(message.into());
+                }
+            }
+        }
     }
 
     /// #25: the provider picker in the Composer slot — the two Providers
@@ -1730,10 +1592,7 @@ impl CockpitView {
         // The `/` menu the pick came through is already closed; a chip
         // click replaces whatever the slot held outright.
         self.popover = Some(Popover {
-            thread: Some(thread),
-            anchor: self.panes[self.pane_for(thread).expect("Thread has a Pane")]
-                .composer
-                .clone(),
+            pane: PaneIdentity::Thread(thread),
             kind: Kind::Provider,
             rows,
             selected,
@@ -1758,74 +1617,37 @@ impl CockpitView {
     }
 
     /// An import-row pick (#11): adopt the picked file through the core
-    /// door. Import creates the Thread; revive opens it — the same
-    /// replay-and-resume any parked Thread gets — and it takes focus. The
-    /// blank Thread the door was opened from goes with it: deletion is
-    /// clean exactly while it is still blank, which the picker's own
-    /// invariant guarantees and this re-checks. A refusal is the core's
-    /// readable words, surfaced in this Thread's transcript — and the
-    /// door stays open for the next try.
-    fn adopt_file(
-        &mut self,
-        blank: Option<ThreadId>,
-        composer: &Entity<Composer>,
-        path: &std::path::Path,
-        cx: &mut Context<Self>,
-    ) {
-        match self.cockpit.import(path) {
-            Ok(imported) => match self.cockpit.revive(imported) {
-                Ok(()) => {
-                    if let Some(blank) = blank {
-                        self.open_pane(imported, cx);
-                        if pane::offers_import(self.cockpit.thread(blank).map(|open| open.transcript())) {
-                            match self.cockpit.delete(blank) {
-                                Ok(()) => self.panes.retain(|pane| pane.thread() != Some(blank)),
-                                Err(e) => {
-                                    eprintln!("ferrite: the blank thread {blank} stayed open: {e}")
-                                }
-                            }
-                        }
-                    } else if let Some(index) = self
-                        .panes
-                        .iter()
-                        .position(|pane| pane.composer == *composer)
-                    {
-                        composer.update(cx, |composer, cx| {
+    /// door, in place of the Pane it was picked from — a draft becomes the
+    /// imported Thread and its line clears; a blank Thread yields its slot.
+    /// A refusal is the core's readable words, surfaced in that Pane — and
+    /// the door stays open for the next try.
+    fn adopt_file(&mut self, from: PaneIdentity, path: &std::path::Path, cx: &mut Context<Self>) {
+        match self.cockpit.adopt_into(from, path) {
+            Ok(adopted) => {
+                if let Some(error) = &adopted.not_opened {
+                    // Durable but not on screen: the Thread sits in the
+                    // nav's parked rows, exactly like a launch-time import
+                    // that would not open.
+                    eprintln!(
+                        "ferrite: imported thread {} would not open: {error:?}",
+                        adopted.thread
+                    );
+                } else if let Some(index) = from.draft().and_then(|_| self.index_of(from)) {
+                    self.panes[index]
+                        .composer
+                        .update(cx, |composer, cx| {
                             composer.take(cx);
                         });
-                        self.panes[index].adopt_thread(imported);
-                        self.focus_pane(index);
-                        self.refresh_branch(imported);
-                        self.refresh_project(imported);
-                    }
-                    if let Some(index) = self.pane_for(imported) {
-                        self.focus_pane(index);
-                    }
-                    self.refresh_wall(imported);
-                    self.refresh_parked();
+                    self.panes[index].adopt_thread(adopted.thread);
                 }
-                // Durable but not on screen: the Thread sits in the nav's
-                // parked rows, exactly like a launch-time import that
-                // would not open.
-                Err(e) => {
-                    eprintln!("ferrite: imported thread {imported} would not open: {e:?}");
-                    self.refresh_parked();
+                if let Some(error) = &adopted.blank_kept {
+                    eprintln!("ferrite: the blank thread stayed open: {error}");
                 }
-            },
-            Err(e) => {
-                let message = format!("cannot import {}: {e}", path.display());
-                if let Some(blank) = blank {
-                    self.cockpit
-                        .apply_input(blank, ferrite_core::transcript::Input::Notice(message));
-                } else if let Some(draft) = self
-                    .panes
-                    .iter_mut()
-                    .find(|pane| pane.composer == *composer)
-                    .and_then(PaneView::draft_mut)
-                {
-                    draft.error = Some(message.into());
-                }
+                self.sync_panes(cx);
+                self.refresh_wall(adopted.thread);
+                self.refresh_parked();
             }
+            Err(e) => self.say_to(from, format!("cannot import {}: {e}", path.display())),
         }
         cx.notify();
     }
@@ -1840,16 +1662,16 @@ impl CockpitView {
     fn open_draft(&mut self, target: pane::DraftTarget, cx: &mut Context<Self>) {
         let provider = self
             .panes
-            .get(self.focused)
-            .map(|pane| match &pane.content {
-                pane::PaneContent::Thread(thread) => {
-                    let open = self.cockpit.thread(*thread);
+            .get(self.focused())
+            .map(|pane| match pane.draft() {
+                Some(draft) => draft.provider.clone(),
+                None => {
+                    let open = pane.thread().and_then(|thread| self.cockpit.thread(thread));
                     ProviderChoice {
                         provider: open.map_or(Provider::Claude, |open| open.provider()),
                         model: open.and_then(|open| open.model()).map(str::to_string),
                     }
                 }
-                pane::PaneContent::Draft(draft) => draft.provider.clone(),
             })
             .unwrap_or(ProviderChoice {
                 provider: Provider::Claude,
@@ -1880,34 +1702,31 @@ impl CockpitView {
         provider: ProviderChoice,
         cx: &mut Context<Self>,
     ) {
+        // The project starts where the operator is looking: a Group's own
+        // Project, or the launch project.
+        let project = match self.cockpit.roster().view() {
+            View::Group(group) => self
+                .cockpit
+                .groups()
+                .get(group)
+                .and_then(|group| group.members.first())
+                .and_then(|thread| self.cockpit.project_id(*thread))
+                .unwrap_or(self.launch_project),
+            View::Solo => self.launch_project,
+        };
         let binding = pane::DraftBinding {
             provider,
-            project: match self.view {
-                View::Group(group) => self
-                    .cockpit
-                    .groups()
-                    .get(group)
-                    .and_then(|group| group.members.first())
-                    .and_then(|thread| self.cockpit.project_id(*thread))
-                    .unwrap_or(self.launch_project),
-                View::Solo => self.launch_project,
-            },
+            project,
             target,
             band_focus: None,
             error: None,
-            pending_group: match self.view {
-                View::Group(group) => Some(group),
-                View::Solo => None,
-            },
-            // A Draft opened from the nav replaces nobody; only the pair-swap
-            // path (a two-member Group whose member leaves as this Draft
-            // arrives) carries a leave, and it sets this itself.
-            pending_leave: None,
         };
-        let pane = PaneView::new_draft(binding, cx);
+        // The roster scopes the draft to the current view and focuses it.
+        let draft = self.cockpit.open_draft();
+        let pane = PaneView::new_draft(draft, binding, cx);
         cx.subscribe(&pane.composer, Self::composer_edited).detach();
         self.panes.push(pane);
-        self.focus_pane(self.panes.len() - 1);
+        self.sync_panes(cx);
         cx.notify();
     }
 
@@ -1916,26 +1735,25 @@ impl CockpitView {
     /// chip's popover is already up. Rows are registry reads, discovered at
     /// open — never per frame, never a filesystem scan.
     fn open_band_popover(&mut self, chip: pane::BandChip, cx: &mut Context<Self>) {
-        let Some(pane) = self.panes.get(self.focused) else {
+        let Some(pane) = self.panes.get(self.focused()) else {
             return;
         };
         let Some(draft) = pane.draft() else {
             return;
         };
         if self.popover.as_ref().is_some_and(|open| {
-            matches!(open.kind, Kind::Band(up) if up == chip) && open.anchor == pane.composer
+            matches!(open.kind, Kind::Band(up) if up == chip) && open.pane == pane.identity
         }) {
             self.popover = None;
             cx.notify();
             return;
         }
-        let composer = pane.composer.clone();
+        let identity = pane.identity;
         let rows = self.band_rows(draft, chip, cx);
         // The arrows start on the standing choice — bare ↵ re-picks it.
         let selected = rows.iter().position(|row| row.active).unwrap_or(0);
         self.popover = Some(Popover {
-            thread: None,
-            anchor: composer,
+            pane: identity,
             kind: Kind::Band(chip),
             rows,
             selected,
@@ -2008,7 +1826,7 @@ impl CockpitView {
                 // never reinterpreted or erased as registry input.
                 let typed = self
                     .panes
-                    .get(self.focused)
+                    .get(self.focused())
                     .map(|pane| pane.composer.read(cx).text().trim().to_string())
                     .unwrap_or_default();
                 if let Some(path) = typed
@@ -2066,7 +1884,7 @@ impl CockpitView {
         if !open {
             return;
         }
-        let Some(draft) = self.panes.get(self.focused).and_then(PaneView::draft) else {
+        let Some(draft) = self.panes.get(self.focused()).and_then(PaneView::draft) else {
             return;
         };
         let rows = self.band_rows(draft, pane::BandChip::Project, cx);
@@ -2082,20 +1900,14 @@ impl CockpitView {
     fn pick_band(&mut self, choice: &BandChoice, composer: &Entity<Composer>, cx: &mut Context<Self>) {
         match choice {
             BandChoice::Provider(provider) => {
-                if let Some(draft) = self
-                    .panes
-                    .get_mut(self.focused)
-                    .and_then(PaneView::draft_mut)
+                if let Some(draft) = self.focused_draft_mut()
                 {
                     draft.provider = provider.clone();
                     draft.error = None;
                 }
             }
             BandChoice::Project(project) => {
-                if let Some(draft) = self
-                    .panes
-                    .get_mut(self.focused)
-                    .and_then(PaneView::draft_mut)
+                if let Some(draft) = self.focused_draft_mut()
                 {
                     if draft.project != *project {
                         draft.project = *project;
@@ -2106,10 +1918,7 @@ impl CockpitView {
             }
             BandChoice::RegisterPath(path) => match self.cockpit.register_project(path) {
                 Ok(project) => {
-                    if let Some(draft) = self
-                        .panes
-                        .get_mut(self.focused)
-                        .and_then(PaneView::draft_mut)
+                    if let Some(draft) = self.focused_draft_mut()
                     {
                         draft.project = project;
                         draft.target = pane::DraftTarget::Main;
@@ -2123,10 +1932,7 @@ impl CockpitView {
                     });
                 }
                 Err(e) => {
-                    if let Some(draft) = self
-                        .panes
-                        .get_mut(self.focused)
-                        .and_then(PaneView::draft_mut)
+                    if let Some(draft) = self.focused_draft_mut()
                     {
                         draft.error = Some(SharedString::from(format!(
                             "cannot register {}: {e}",
@@ -2136,10 +1942,7 @@ impl CockpitView {
                 }
             },
             BandChoice::Target(target) => {
-                if let Some(draft) = self
-                    .panes
-                    .get_mut(self.focused)
-                    .and_then(PaneView::draft_mut)
+                if let Some(draft) = self.focused_draft_mut()
                 {
                     draft.target = target.clone();
                     draft.error = None;
@@ -2150,15 +1953,16 @@ impl CockpitView {
     }
 
     /// The first send (#29): resolve the draft's ids through the registry,
-    /// bootstrap the Thread — create, worktree, spawn — and only then let
-    /// the prompt go; the band is gone for the life of the Thread. On any
-    /// failure nothing is half-born: no Thread, the Pane stays draft, the
-    /// error shows where the band is, and the prompt stays in the Composer.
+    /// then the core act — create, worktree, spawn, the prompt, and the
+    /// Thread taking the draft's own slot; the band is gone for the life of
+    /// the Thread. On any failure nothing is half-born: no Thread, the Pane
+    /// stays draft, the error shows where the band is, and the prompt stays
+    /// in the Composer.
     fn bootstrap_draft(&mut self, cx: &mut Context<Self>) {
-        let Some(pane) = self.panes.get(self.focused) else {
+        let Some(pane) = self.panes.get(self.focused()) else {
             return;
         };
-        let Some(draft) = pane.draft() else {
+        let (Some(draft), Some(id)) = (pane.draft(), pane.identity.draft()) else {
             return;
         };
         let composer = pane.composer.clone();
@@ -2167,48 +1971,50 @@ impl CockpitView {
             return;
         }
         let provider = draft.provider.clone();
-        let pending_group = draft.pending_group;
-        let pending_leave = draft.pending_leave;
+        let deferred = self
+            .cockpit
+            .roster()
+            .draft_scope(id)
+            .is_some_and(|scope| scope.pending_leave.is_some());
         let resolved = self.resolve_target(draft.project, &draft.target);
         let opened = resolved.and_then(|choice| {
-            match pending_group {
-                Some(group) => self
-                    .cockpit
-                    .bootstrap_in_group(provider, choice, &text, group),
-                None => self.cockpit.bootstrap(provider, choice, &text),
-            }
-            .map_err(|e| e.to_string())
+            self.cockpit
+                .bootstrap_draft(id, provider, choice, &text)
+                .map_err(|e| e.to_string())
         });
         match opened {
-            Ok(thread) => {
+            Ok(done) => {
                 composer.update(cx, |composer, cx| {
                     composer.take(cx);
                 });
-                self.panes[self.focused].adopt_thread(thread);
-                // The leave this draft was holding open (see
-                // `remove_thread_from_view`) applies now, and only now: the
-                // new member is already in, so the pair never dissolves.
-                if let Some(leaving) = pending_leave {
-                    self.apply_group_change(GroupChange::Leave { thread: leaving });
+                let index = self.focused();
+                self.panes[index].adopt_thread(done.thread);
+                // The leave this draft was holding open (see the core's
+                // `close`) applied with the bootstrap; a refusal lands in
+                // the nav's banner like any other Group change.
+                match done.refused_leave {
+                    Some(error) => {
+                        eprintln!("ferrite: group change refused: {error}");
+                        self.group_error = Some(error.to_string().into());
+                    }
+                    None if deferred => self.group_error = None,
+                    None => {}
                 }
-                if self.fullscreen.as_ref().is_some_and(
-                    |shown| matches!(shown, PaneIdentity::Draft(open) if *open == composer),
-                ) {
-                    self.fullscreen = Some(PaneIdentity::Thread(thread));
-                }
-                if self.popover.as_ref().is_some_and(|open| matches!(open.kind, Kind::Band(_))) {
+                if self
+                    .popover
+                    .as_ref()
+                    .is_some_and(|open| matches!(open.kind, Kind::Band(_)))
+                {
                     self.popover = None;
                 }
-                self.refresh_branch(thread);
-                self.refresh_project(thread);
-                self.panes[self.focused].scroll.scroll_to_bottom();
-                self.refresh_wall(thread);
+                self.sync_panes(cx);
+                self.refresh_branch(done.thread);
+                self.refresh_project(done.thread);
+                self.panes[index].scroll.scroll_to_bottom();
+                self.refresh_wall(done.thread);
             }
             Err(message) => {
-                if let Some(draft) = self
-                    .panes
-                    .get_mut(self.focused)
-                    .and_then(PaneView::draft_mut)
+                if let Some(draft) = self.focused_draft_mut()
                 {
                     draft.error = Some(SharedString::from(message));
                 }
@@ -2352,36 +2158,6 @@ impl CockpitView {
         }
     }
 
-    /// Discard one draft Pane — cmd-w's draft half and the ✕'s shared
-    /// tail. Nothing durable dies with it; the prompt text does, which is
-    /// what closing an unsent draft means.
-    fn discard_draft(&mut self, composer: &Entity<Composer>, cx: &mut Context<Self>) {
-        let Some(at) = self
-            .panes
-            .iter()
-            .position(|pane| pane.draft().is_some() && pane.composer == *composer)
-        else {
-            return;
-        };
-        let pending = self.panes[at]
-            .draft()
-            .and_then(|draft| draft.pending_group.zip(draft.pending_leave));
-        self.panes.remove(at);
-        if self.popover.as_ref().is_some_and(|open| open.anchor == *composer) {
-            self.popover = None;
-        }
-        // Nothing came to replace the leaving Thread, so the leave it was
-        // holding open applies now — dissolving the pair, exactly as
-        // closing that Pane would have done without a draft in the way.
-        if let Some((_group, thread)) = pending {
-            self.apply_group_change(GroupChange::Leave { thread });
-            cx.notify();
-            return;
-        }
-        self.focus_pane(self.focused.min(self.panes.len().saturating_sub(1)));
-        cx.notify();
-    }
-
     /// The open popover for this Pane, rows wired to their picks —
     /// assembled here so its clicks land beside every other pointer wire
     /// (the root selector's precedent); the Pane hangs it above the line.
@@ -2392,7 +2168,7 @@ impl CockpitView {
         let open = self
             .popover
             .as_ref()
-            .filter(|open| open.anchor == self.panes[index].composer)?;
+            .filter(|open| open.pane == self.panes[index].identity)?;
         // A press on the popover's own dead space is not a press outside
         // it: swallowed, so the root's dismissal never sees it.
         let mut popover = pane::menu_popover().on_mouse_down(
@@ -2432,22 +2208,7 @@ impl CockpitView {
     /// frame: each row costs a `Store::peek`, one header line off disk, and
     /// the SharedStrings built here are what every frame after reuses.
     fn refresh_parked(&mut self) {
-        let parked = self.cockpit.parked().unwrap_or_default();
-        // Stable, append-only order: Threads parked before this launch keep
-        // creation order, and this launch's parks append below in park
-        // order — a fresh park lands at the bottom of the section instead
-        // of re-sorting it.
-        let mut ordered: Vec<ThreadId> = parked
-            .iter()
-            .filter(|thread| !self.park_order.contains(thread))
-            .copied()
-            .collect();
-        ordered.extend(
-            self.park_order
-                .iter()
-                .filter(|thread| parked.contains(thread))
-                .copied(),
-        );
+        let ordered = self.cockpit.parked_in_order().unwrap_or_default();
         let mut rows: Vec<(ThreadId, Option<Provider>)> = Vec::with_capacity(ordered.len());
         for thread in ordered {
             // An unreadable log still gets a row — the Thread exists, and a
@@ -2511,7 +2272,7 @@ impl CockpitView {
 
         // Drafts are not rows: nothing runs, nothing parks, nothing to aim
         // the nav at (#29) — the grid is where a draft lives.
-        let focused = self.panes.get(self.focused).and_then(PaneView::thread);
+        let focused = self.cockpit.roster().focused_thread();
         let groups: Vec<nav::GroupBlock> = self
             .cockpit
             .groups()
@@ -2520,7 +2281,7 @@ impl CockpitView {
                 // A member whose leave is parked on a pending draft has
                 // already left as far as the operator is concerned, here
                 // exactly as in `visible_indices`.
-                let pending_leave = self.pending_leave(group.id);
+                let pending_leave = self.cockpit.roster().pending_leave(group.id);
                 let members: Vec<nav::ThreadRow> = group
                     .members
                     .iter()
@@ -2553,7 +2314,7 @@ impl CockpitView {
             .groups()
             .iter()
             .flat_map(|group| {
-                let pending_leave = self.pending_leave(group.id);
+                let pending_leave = self.cockpit.roster().pending_leave(group.id);
                 group
                     .members
                     .iter()
@@ -2618,47 +2379,22 @@ impl CockpitView {
         }
     }
 
-    /// A running nav row's click: land on that Thread's Pane — through
-    /// `focus_pane`, the one door, so a fullscreened cockpit re-aims to the
-    /// clicked Thread like every other deliberate move.
+    /// A running nav row's click: land on that Thread's Pane, in the view
+    /// that shows it — the core's one door, so a fullscreened cockpit
+    /// re-aims to the clicked Thread like every other deliberate move.
     fn focus_thread(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        if let Some(index) = self.pane_for(thread) {
-            self.view = self
-                .cockpit
-                .groups()
-                .of(thread)
-                .map_or(View::Solo, |group| View::Group(group.id));
-            self.focus_pane(index);
+        if self.cockpit.focus_thread(thread) {
             cx.notify();
         }
     }
 
-    /// Open a Group: every member gets a Pane, parked ones included. A
-    /// Group *is* its membership on screen, so entering one that has a
-    /// parked member and showing the rest would be showing a different
-    /// Group. Focus stays put when the operator was already on a member,
-    /// so entering from one of its own rows does not jump them.
+    /// Open a Group (#28): the core revives every member and enters the
+    /// view; the mirror follows, and the parked rows forget them.
     pub(crate) fn enter_group(&mut self, group: GroupId, cx: &mut Context<Self>) {
-        match self.cockpit.revive_group(group) {
-            Ok(members) => {
-                let retain_focus = self
-                    .focused_thread()
-                    .filter(|thread| members.contains(thread));
-                for thread in &members {
-                    if self.pane_for(*thread).is_none() {
-                        self.open_pane(*thread, cx);
-                        self.refresh_wall(*thread);
-                    }
-                }
-                self.park_order.retain(|thread| !members.contains(thread));
+        match self.cockpit.enter_group(group) {
+            Ok(()) => {
+                self.sync_panes(cx);
                 self.refresh_parked();
-                self.view = View::Group(group);
-                if let Some(index) = retain_focus
-                    .or_else(|| members.first().copied())
-                    .and_then(|thread| self.pane_for(thread))
-                {
-                    self.focus_pane(index);
-                }
             }
             Err(error) => {
                 self.group_error = Some(error.to_string().into());
@@ -2667,84 +2403,38 @@ impl CockpitView {
         cx.notify();
     }
 
+    /// A nav drop: the core plans and applies it in the View the drag
+    /// started from; a refusal lands in the nav's banner.
     fn apply_drop(&mut self, drag: NavDrag, target: DropTarget, cx: &mut Context<Self>) {
-        // Undo whatever the press did on the way into the drag.
-        self.view = drag.origin;
-        match self.cockpit.plan_group_drop(drag.drag, target) {
-            // Dragging a member out of a Group is the pointer's spelling of
-            // closing its Pane, so it takes the same door — which is what
-            // defers the leave when a draft is pending in a pair, and what
-            // keeps the ordinal-preserving focus. Landing it as a plain
-            // change here would tear that pair down under the draft.
-            Plan::Change(GroupChange::Leave { thread })
-                if matches!(drag.drag, Drag::Thread { group: Some(_), .. }) =>
-            {
-                let Drag::Thread {
-                    group: Some(group), ..
-                } = drag.drag
-                else {
-                    unreachable!("the guard above matched this exact shape");
-                };
-                self.view = View::Group(group);
-                self.remove_thread_from_view(thread, cx);
-                // Out of the Group for real — either the leave applied, or
-                // it is parked on a draft. Either way the dragged Thread is
-                // no longer a member, so the operator follows it to Solo.
-                if self.pending_leave(group) == Some(thread)
-                    || self.cockpit.groups().of(thread).is_none()
-                {
-                    self.view = View::Solo;
-                    if let Some(index) = self.pane_for(thread) {
-                        self.focus_pane(index);
-                    }
-                }
+        match self.cockpit.drop(drag.drag, drag.origin, target) {
+            Ok(()) => self.group_error = None,
+            Err(error) => {
+                eprintln!("ferrite: group change refused: {error}");
+                self.group_error = Some(error.to_string().into());
             }
-            Plan::Change(change) => {
-                self.apply_group_change(change);
-            }
-            Plan::Refused(_) => self.group_error = None,
-            Plan::Nothing => self.group_error = None,
         }
-        self.heal_group_focus();
+        self.sync_panes(cx);
         cx.notify();
     }
 
-    /// Revive one parked Thread: a Pane, focus, and the park order and the
-    /// nav's cache both forgetting it — cmd-o must not revive it a second
-    /// time. The shared tail of cmd-o and a parked nav row's click (#21).
+    /// Revive one parked Thread into the view that shows it — the shared
+    /// tail of cmd-o and a parked nav row's click (#21).
     fn revive_thread(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        match self.cockpit.revive(thread) {
+        match self.cockpit.reopen(thread) {
             Ok(()) => {
-                self.view = self
-                    .cockpit
-                    .groups()
-                    .of(thread)
-                    .map_or(View::Solo, |group| View::Group(group.id));
-                self.park_order.retain(|parked| *parked != thread);
-                self.open_pane(thread, cx);
-                self.focus_pane(self.panes.len() - 1);
+                self.sync_panes(cx);
                 self.refresh_parked();
-                self.refresh_wall(thread);
                 cx.notify();
             }
             Err(e) => eprintln!("ferrite: thread {thread} could not be reopened: {e:?}"),
         }
     }
 
-    /// The one door to `focused`: every move — keys, clicks, and whatever
-    /// #21's nav rows add — lands here, so fullscreen re-aims with focus.
-    /// While fullscreen, the Thread the operator lands on is the Thread
-    /// that fills the screen (browser-tab muscle memory). Never *enters*
-    /// fullscreen, only re-aims it — and with no Thread left to aim at,
-    /// falls back to the grid. A writer that bypasses this leaves
-    /// fullscreen showing a Thread the operator already left.
+    /// Focus by grid index — the pointer's and the tests' spelling of the
+    /// core's one door.
     fn focus_pane(&mut self, index: usize) {
-        self.focused = index;
-        if self.fullscreen.is_some() {
-            self.fullscreen = self.panes.get(index).map(|pane| match pane.thread() {
-                Some(thread) => PaneIdentity::Thread(thread),
-                None => PaneIdentity::Draft(pane.composer.clone()),
-            });
+        if let Some(pane) = self.panes.get(index) {
+            self.cockpit.focus(pane.identity);
         }
     }
 
@@ -2766,135 +2456,76 @@ impl CockpitView {
     }
 
     /// Reopen the Thread parked most recently — the one the operator just
-    /// closed, which is the one they want back. The order is remembered only
-    /// for this launch: once it is drained — Threads parked before a relaunch
-    /// are never in it — the newest-created parked Thread is next (accepted
-    /// v1 behavior). Choosing among older ones wants a picker, and that is
-    /// not this ticket.
+    /// closed, which is the one they want back (#17); the core walks the
+    /// park order, then creation order.
     fn reopen_thread(&mut self, _: &ReopenThread, _window: &mut Window, cx: &mut Context<Self>) {
-        // A Thread whose revive fails below keeps its park but loses its
-        // slot in the order: cmd-o moves on rather than jamming on it, and
-        // the creation-order fallback still reaches it.
-        let Some(thread) = self
-            .park_order
-            .pop()
-            .or_else(|| self.cockpit.parked().unwrap_or_default().last().copied())
-        else {
-            return;
-        };
-        self.revive_thread(thread, cx);
-    }
-
-    /// Close a Pane: the Thread parks — its Session ends, its log stays, and
-    /// reopening it revives the Thread. A draft has nothing to park and is
-    /// simply discarded (#29).
-    fn close_thread(&mut self, _: &CloseThread, _window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(pane) = self.panes.get(self.focused) {
-            if pane.draft().is_some() {
-                let composer = pane.composer.clone();
-                self.discard_draft(&composer, cx);
-                return;
-            }
-        }
-        let Some(thread) = self.focused_thread() else {
-            return;
-        };
-        self.remove_thread_from_view(thread, cx);
-    }
-
-    /// Take one Thread out of whatever the operator is looking at. In Solo
-    /// that is a park, plain. In a Group it is a Leave — and the survivor
-    /// the operator lands on is the Thread that took this one's ordinal,
-    /// not the first member: closing the middle Pane of three should leave
-    /// the pointer where it was, the way closing a browser tab does.
-    ///
-    /// The exception is a pair with a draft pending in it. A Group needs
-    /// two members, so leaving a pair dissolves it — which would tear down
-    /// the very Group the draft is waiting to join. The leave is therefore
-    /// *deferred* onto the draft as `pending_leave`, and the Group stays
-    /// whole and visible until the draft either sends (bootstrap applies
-    /// the leave, membership never dips below two) or is discarded (the
-    /// leave applies then, and the pair dissolves as it always would).
-    fn remove_thread_from_view(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        if let View::Group(group) = self.view {
-            let members = self
-                .cockpit
-                .groups()
-                .get(group)
-                .map(|group| group.members.clone())
-                .unwrap_or_default();
-            let ordinal = members
-                .iter()
-                .position(|member| *member == thread)
-                .unwrap_or(0);
-            if members.len() == 2 {
-                if let Some(draft) = self
-                    .panes
-                    .iter_mut()
-                    .filter_map(PaneView::draft_mut)
-                    .find(|draft| draft.pending_group == Some(group))
-                {
-                    draft.pending_leave = Some(thread);
-                    let survivor = members[usize::from(members[0] == thread)];
-                    if let Some(index) = self.pane_for(survivor) {
-                        self.focus_pane(index);
-                    }
-                    cx.notify();
-                    return;
-                }
-            }
-            if let Some(applied) = self.apply_group_change(GroupChange::Leave { thread }) {
-                if let Some(dissolved) = applied.dissolved.iter().find(|item| item.group == group) {
-                    self.view = View::Solo;
-                    if let Some(index) = self.pane_for(dissolved.survivor) {
-                        self.focus_pane(index);
-                    }
-                } else if let Some(group) = self.cockpit.groups().get(group) {
-                    let next = group.members[ordinal.min(group.members.len() - 1)];
-                    if let Some(index) = self.pane_for(next) {
-                        self.focus_pane(index);
-                    }
-                }
+        match self.cockpit.reopen_last() {
+            Some((_, Ok(()))) => {
+                self.sync_panes(cx);
+                self.refresh_parked();
                 cx.notify();
             }
-            return;
+            Some((thread, Err(e))) => {
+                eprintln!("ferrite: thread {thread} could not be reopened: {e:?}")
+            }
+            None => {}
         }
-        self.park_thread(thread, cx);
     }
 
-    /// Park one Thread — cmd-w's whole body, shared with the header's ✕
-    /// control so the pointer and the keyboard close through one door.
-    fn park_thread(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        if let Err(e) = self.cockpit.park(thread) {
-            eprintln!("ferrite: thread {thread} did not park cleanly: {e}");
+    /// Close the focused Pane — cmd-w. The core decides what that means
+    /// (park, leave, defer onto a draft, discard); the mirror follows.
+    fn close_thread(&mut self, _: &CloseThread, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some(identity) = self.cockpit.roster().focused() else {
+            return;
+        };
+        self.close_pane(identity, cx);
+    }
+
+    /// Close one Pane through the core act, its refusal landing where every
+    /// other Group error does — and a park that would not flush is logged,
+    /// the Pane gone either way.
+    fn close_pane(&mut self, identity: PaneIdentity, cx: &mut Context<Self>) {
+        // Whether this close is a Group change at all: a Thread leaving
+        // the Group on screen, unless a pair defers the leave onto a
+        // pending draft; or a draft discarded with a leave to apply.
+        let roster = self.cockpit.roster();
+        let changes_group = match (roster.view(), identity) {
+            (View::Group(group), PaneIdentity::Thread(_)) => {
+                let members = self.cockpit.groups().get(group).map_or(0, |group| group.members.len());
+                !(members == 2 && roster.pending_draft(group).is_some())
+            }
+            (_, PaneIdentity::Draft(draft)) => roster
+                .draft_scope(draft)
+                .is_some_and(|scope| scope.pending_leave.is_some()),
+            (View::Solo, PaneIdentity::Thread(_)) => false,
+        };
+        match self.cockpit.close(identity) {
+            Ok(()) => {
+                if changes_group {
+                    self.group_error = None;
+                }
+            }
+            Err(CloseError::Park(e)) => {
+                eprintln!("ferrite: pane {identity:?} did not park cleanly: {e}")
+            }
+            Err(CloseError::Group(error)) => {
+                eprintln!("ferrite: group change refused: {error}");
+                self.group_error = Some(error.to_string().into());
+            }
         }
-        // Parked even on a flush error — the Session is gone either way, so
-        // cmd-o should still bring this Thread back first.
-        self.park_order.push(thread);
-        self.panes.retain(|pane| pane.thread() != Some(thread));
-        // The Thread's nav row moves down into the parked section (#21).
+        // A popover on the closed Pane goes with it.
+        if self.popover.as_ref().is_some_and(|open| open.pane == identity) {
+            self.popover = None;
+        }
+        self.sync_panes(cx);
         self.refresh_parked();
-        // The clamped survivor takes focus — and, while fullscreen, the
-        // screen (#20): closing a browser tab shows the next tab, not an
-        // overview. Parking the last Thread leaves nothing to aim at, so
-        // the setter falls back to the (empty) grid.
-        self.focus_pane(self.focused.min(self.panes.len().saturating_sub(1)));
         cx.notify();
     }
 
     /// Jump to the next Thread waiting on the operator — the whole point of
     /// a Group you cannot read all of at once.
     fn next_decision(&mut self, _: &NextDecision, _window: &mut Window, cx: &mut Context<Self>) {
-        let Some(next) = self.cockpit.next_blocked(self.focused_thread()) else {
-            return;
-        };
-        if let Some(pane) = self.pane_for(next) {
-            self.view = self
-                .cockpit
-                .groups()
-                .of(next)
-                .map_or(View::Solo, |group| View::Group(group.id));
-            self.focus_pane(pane);
+        if self.cockpit.next_decision().is_some() {
             cx.notify();
         }
     }
@@ -3147,20 +2778,14 @@ fn provider_label(provider: Provider) -> &'static str {
 impl Render for CockpitView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.measure();
-        self.heal_view();
-        // A fullscreened Thread whose Pane is gone — removed by a path that
-        // bypassed `focus_pane` — falls back to the grid, never a blank
-        // cockpit. Render is the one chokepoint every removal passes.
-        let fullscreen = self.fullscreen.as_ref().and_then(|shown| match shown {
-            PaneIdentity::Thread(thread) => self.pane_for(*thread),
-            PaneIdentity::Draft(composer) => self
-                .panes
-                .iter()
-                .position(|pane| pane.composer == *composer && pane.draft().is_some()),
-        });
-        if self.fullscreen.is_some() && fullscreen.is_none() {
-            self.fullscreen = None;
-        }
+        // The fullscreened Pane, if the roster still shows it: a Pane gone
+        // by any path is the roster's to notice, and it falls back to the
+        // grid — never a blank cockpit.
+        let fullscreen = self
+            .cockpit
+            .roster()
+            .fullscreen()
+            .and_then(|shown| self.index_of(shown));
         let level = self.level_now(window);
 
         if level == Level::Transcript {
@@ -3194,9 +2819,11 @@ impl Render for CockpitView {
         if self.selection.active_thread().is_some_and(|thread| {
             level != Level::Transcript
                 || self.pane_for(thread).is_none()
-                || self.fullscreen.as_ref().is_some_and(
-                    |shown| !matches!(shown, PaneIdentity::Thread(open) if *open == thread),
-                )
+                || self
+                    .cockpit
+                    .roster()
+                    .fullscreen()
+                    .is_some_and(|shown| shown != PaneIdentity::Thread(thread))
         }) {
             self.selection.clear();
         }
@@ -3214,16 +2841,16 @@ impl Render for CockpitView {
         // draft becoming a Thread. Render is the one chokepoint every
         // open, pick, dismissal and heal passes.
         if self.popover.as_ref().is_some_and(|open| {
-            let focused = self.panes.get(self.focused);
+            let focused = self.panes.get(self.focused());
             level != Level::Transcript
-                || focused.is_none_or(|pane| pane.composer != open.anchor)
+                || focused.is_none_or(|pane| pane.identity != open.pane)
                 || match &open.kind {
-                    Kind::ImportFile => open.thread.is_some_and(|thread| {
+                    Kind::ImportFile => open.pane.thread().is_some_and(|thread| {
                         !pane::offers_import(
                             self.cockpit.thread(thread).map(|live| live.transcript()),
                         )
                     }),
-                    Kind::Provider => open.thread.is_none_or(|thread| {
+                    Kind::Provider => open.pane.thread().is_none_or(|thread| {
                         self.cockpit
                             .thread(thread)
                             .is_some_and(|live| live.first_prompt_sent())
@@ -3241,7 +2868,7 @@ impl Render for CockpitView {
             let open = self
                 .popover
                 .as_ref()
-                .is_some_and(|open| open.anchor == pane.composer);
+                .is_some_and(|open| open.pane == pane.identity);
             pane.composer
                 .update(cx, |composer, cx| composer.set_menu_open(open, cx));
         }
@@ -3267,7 +2894,7 @@ impl Render for CockpitView {
             .as_ref()
             .map(|(_, editor)| editor.focus_handle(cx))
             .or_else(|| {
-                self.panes.get(self.focused).and_then(|pane| match level {
+                self.panes.get(self.focused()).and_then(|pane| match level {
                     // At L1 the Composer keeps the keyboard even while a
                     // Decision pends: the card is part of its stack and the
                     // input stays live (PromptBox state 04) — y/n/a answer
@@ -3298,6 +2925,7 @@ impl Render for CockpitView {
                 .p(px(crate::theme::GRID_PAD))
         };
         let visible = self.visible_indices();
+        let layout = self.cockpit.layout();
         let grid = if let Some(index) = fullscreen {
             // The fullscreened Pane takes the whole window. The other Panes
             // are not laid out at all — hidden siblings would still cost
@@ -3307,7 +2935,7 @@ impl Render for CockpitView {
                 .flex()
                 .flex_col()
                 .child(self.pane_cell(index, level, cx))
-        } else if self.tall_left_board() {
+        } else if layout.tall_left {
             // The prototype's board, and the only one it specifies: two
             // columns, three rows, the left Pane spanning all three. Every
             // other count keeps the chunked rows below (R-01).
@@ -3324,7 +2952,7 @@ impl Render for CockpitView {
                 .child(self.pane_cell(visible[2], level, cx).col_start(2))
                 .child(self.pane_cell(visible[3], level, cx).col_start(2))
         } else {
-            let columns = self.view_columns();
+            let columns = layout.columns;
             let mut grid = frame().flex().flex_col();
             for row in visible.chunks(columns) {
                 let mut line = div()
@@ -3458,7 +3086,7 @@ impl CockpitView {
     /// view; only who lays it out differs.
     fn pane_cell(&self, index: usize, level: Level, cx: &mut Context<Self>) -> Div {
         let pane = &self.panes[index];
-        let focused = index == self.focused;
+        let focused = index == self.focused();
         let cell = div()
             .relative()
             .flex()
@@ -3685,7 +3313,9 @@ impl CockpitView {
         if self
             .popover
             .as_ref()
-            .is_some_and(|open| open.thread == Some(thread) && matches!(open.kind, Kind::Provider))
+            .is_some_and(|open| {
+                open.pane == PaneIdentity::Thread(thread) && matches!(open.kind, Kind::Provider)
+            })
         {
             self.popover = None;
             cx.notify();
@@ -3764,7 +3394,7 @@ impl CockpitView {
     /// reordering costs no layout of its own.
     fn nav_tree(&self, state: &nav::NavState, cx: &mut Context<Self>) -> Stateful<Div> {
         // Every drag started from this frame started from this View.
-        let origin = self.view;
+        let origin = self.cockpit.roster().view();
         let mut tree = nav::nav_tree(&self.nav_scroll);
         if let Some(error) = &self.group_error {
             tree = tree.child(
@@ -3893,7 +3523,7 @@ impl CockpitView {
     ) -> AnyElement {
         let thread = row.thread;
         let open = self.pane_for(thread).is_some();
-        let origin = self.view;
+        let origin = self.cockpit.roster().view();
         let target = DropTarget::ThreadRow {
             thread,
             group,
@@ -3923,9 +3553,6 @@ impl CockpitView {
                         view.focus_thread(thread, cx);
                         return;
                     }
-                    if let Some(group) = group {
-                        view.view = View::Group(group);
-                    }
                     view.revive_thread(thread, cx);
                 }),
             )
@@ -3938,7 +3565,7 @@ impl CockpitView {
     /// dropdown, and this is how a 56px column reaches it.
     fn rail(&self, state: &nav::NavState, cx: &mut Context<Self>) -> Div {
         let mut items = nav::rail_items();
-        let focused = self.panes.get(self.focused).and_then(PaneView::thread);
+        let focused = self.cockpit.roster().focused_thread();
         for (row, current) in state
             .groups
             .iter()
@@ -4141,9 +3768,9 @@ mod tests {
         });
         let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
 
-        view.update(cx, |view, _| view.view = View::Group(group));
+        view.update(cx, |view, cx| view.enter_group(group, cx));
         view.read_with(cx, |view, _| {
-            assert!(matches!(view.view, View::Group(_)));
+            assert!(matches!(view.cockpit.roster().view(), View::Group(_)));
             assert_eq!(view.visible_indices().len(), 2);
         });
         cx.simulate_keystrokes("cmd-w");
@@ -4172,7 +3799,7 @@ mod tests {
             ])
         });
         let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
-        view.update(cx, |view, _| view.view = View::Group(group));
+        view.update(cx, |view, cx| view.enter_group(group, cx));
         cx.simulate_keystrokes("cmd-t");
         view.read_with(cx, |view, _| {
             assert_eq!(
@@ -4470,7 +4097,7 @@ mod tests {
         tick(cx);
         let (a, b) = created(&view, cx);
 
-        view.update(cx, |view, _| view.focused = view.pane_for(b).unwrap());
+        view.update(cx, |view, _| view.focus_pane(view.pane_for(b).unwrap()));
         cx.simulate_keystrokes("cmd-w"); // park B
         cx.simulate_keystrokes("cmd-w"); // then A — the most recent park
         cx.simulate_keystrokes("cmd-o");
@@ -4500,7 +4127,7 @@ mod tests {
         tick(cx);
         let (a, b) = created(&view, cx);
 
-        view.update(cx, |view, _| view.focused = view.pane_for(a).unwrap());
+        view.update(cx, |view, _| view.focus_pane(view.pane_for(a).unwrap()));
         cx.simulate_keystrokes("cmd-w"); // park A
         cx.simulate_keystrokes("cmd-w"); // then B
 
@@ -4584,7 +4211,7 @@ mod tests {
             cx.bind_keys([KeyBinding::new("y", Allow, Some("Wall"))]);
         });
         let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
-        view.update(cx, |view, _| view.view = View::Group(group));
+        view.update(cx, |view, cx| view.enter_group(group, cx));
         // A 24-member Group lays out on `groups::grid`, which gives 5 columns
         // here, not the 6 the old global wall's `columns()` gave — so 1440
         // now leaves ~219px cells, one band above the wall. 1200 puts the
@@ -4601,7 +4228,7 @@ mod tests {
         tick(cx);
         let flagged = view.read_with(cx, |view, _| view.panes[7].thread().unwrap());
         view.read_with(cx, |view, _| {
-            assert_eq!(view.focused, 0, "focus stays where the operator left it");
+            assert_eq!(view.focused(), 0, "focus stays where the operator left it");
             assert!(view.cockpit.thread(flagged).and_then(|open| open.pending()).is_some());
         });
 
@@ -4612,7 +4239,7 @@ mod tests {
                 view.cockpit.thread(flagged).and_then(|open| open.pending()).is_none(),
                 "the flagged Thread is the one that got answered"
             );
-            assert_eq!(view.focused, 0, "and answering did not move the operator");
+            assert_eq!(view.focused(), 0, "and answering did not move the operator");
         });
     }
 
@@ -4623,16 +4250,16 @@ mod tests {
     /// (rows, columns); the cockpit reads the second.
     #[test]
     fn the_grid_follows_the_groups_own_membership() {
-        assert_eq!(group_grid(1), (1, 1));
-        assert_eq!(group_grid(2), (1, 2));
-        assert_eq!(group_grid(6), (2, 3));
+        assert_eq!(ferrite_core::groups::grid(1), (1, 1));
+        assert_eq!(ferrite_core::groups::grid(2), (1, 2));
+        assert_eq!(ferrite_core::groups::grid(6), (2, 3));
         // The prototype's tall-left board is four Panes, laid 2×2 here and
         // overridden to 2×3 by `tall_left_board` in the cockpit itself.
-        assert_eq!(group_grid(4), (2, 2));
+        assert_eq!(ferrite_core::groups::grid(4), (2, 2));
         // Past the old wall's 24, and past its six columns: nothing clamps.
-        assert_eq!(group_grid(24), (5, 5));
-        assert_eq!(group_grid(48), (7, 7));
-        assert_eq!(group_grid(100), (10, 10));
+        assert_eq!(ferrite_core::groups::grid(24), (5, 5));
+        assert_eq!(ferrite_core::groups::grid(48), (7, 7));
+        assert_eq!(ferrite_core::groups::grid(100), (10, 10));
     }
 
     /// AC1: no mode switch — the same cockpit renders at a different altitude
@@ -4700,7 +4327,7 @@ mod tests {
 
         cx.simulate_keystrokes("cmd-shift-n");
         view.read_with(cx, |view, _| {
-            let draft = view.panes[view.focused].draft().expect("a draft Pane");
+            let draft = view.panes[view.focused()].draft().expect("a draft Pane");
             assert_eq!(draft.target, pane::DraftTarget::New, "aimed at a worktree");
             assert!(fake.streams.borrow().is_empty(), "nothing spawned yet");
         });
@@ -4709,7 +4336,7 @@ mod tests {
         cx.simulate_keystrokes("enter");
 
         view.read_with(cx, |view, _| {
-            let thread = view.panes[view.focused]
+            let thread = view.panes[view.focused()]
                 .thread()
                 .expect("the first send made a Thread of the draft");
             let binding = view.cockpit.thread(thread).and_then(|open| open.workspace()).expect("a binding");
@@ -4776,7 +4403,7 @@ mod tests {
         view.read_with(cx, |view, _| {
             let binding = view
                 .cockpit
-                .thread(view.panes[view.focused].thread().unwrap())
+                .thread(view.panes[view.focused()].thread().unwrap())
                 .and_then(|open| open.workspace())
                 .expect("a binding");
             assert!(matches!(binding, WorkspaceBinding::Main { .. }));
@@ -4851,7 +4478,7 @@ mod tests {
         tick(cx);
         view.read_with(cx, |view, _| {
             assert!(
-                view.panes[view.focused].draft().is_some(),
+                view.panes[view.focused()].draft().is_some(),
                 "an empty store launches as a draft Pane"
             );
         });
@@ -4874,7 +4501,7 @@ mod tests {
         cx.simulate_keystrokes("down");
         cx.simulate_keystrokes("enter");
         let chosen = view.read_with(cx, |view, _| {
-            let draft = view.panes[view.focused].draft().expect("still a draft");
+            let draft = view.panes[view.focused()].draft().expect("still a draft");
             assert_eq!(
                 draft.target,
                 pane::DraftTarget::Main,
@@ -4919,7 +4546,7 @@ mod tests {
         view.read_with(cx, |view, _| {
             let band = view.popover.as_ref().expect("the workspace popover again");
             assert!(matches!(band.kind, Kind::Band(pane::BandChip::Workspace)));
-            let draft = view.panes[view.focused].draft().expect("still a draft");
+            let draft = view.panes[view.focused()].draft().expect("still a draft");
             assert_ne!(draft.project, chosen, "the arrows flipped the project");
             let labels: Vec<&str> = band.rows.iter().map(|row| row.name.as_ref()).collect();
             assert_eq!(
@@ -4949,7 +4576,7 @@ mod tests {
         cx.simulate_keystrokes("enter");
 
         view.read_with(cx, |view, cx| {
-            let pane = &view.panes[view.focused];
+            let pane = &view.panes[view.focused()];
             let thread = pane.thread().expect("the draft became a Thread");
             assert!(
                 view.cockpit.thread(thread).is_some_and(|open| open.first_prompt_sent()),
@@ -4996,7 +4623,7 @@ mod tests {
         cx.simulate_keystrokes("enter");
 
         view.read_with(cx, |view, cx| {
-            let pane = &view.panes[view.focused];
+            let pane = &view.panes[view.focused()];
             let draft = pane.draft().expect("the Pane stays draft");
             assert!(
                 draft
@@ -5023,7 +4650,7 @@ mod tests {
         cx.simulate_keystrokes("enter");
         view.read_with(cx, |view, _| {
             assert!(
-                view.panes[view.focused].thread().is_some(),
+                view.panes[view.focused()].thread().is_some(),
                 "the same draft bootstraps on the retry"
             );
         });
@@ -5059,7 +4686,7 @@ mod tests {
         };
         let expected = git(&["branch", "--show-current"]);
         let thread = view.read_with(cx, |view, _| {
-            let thread = view.panes[view.focused].thread().expect("locked");
+            let thread = view.panes[view.focused()].thread().expect("locked");
             assert_eq!(
                 view.branches.get(&thread).map(|branch| branch.to_string()),
                 Some(expected.clone()),
@@ -5111,17 +4738,17 @@ mod tests {
         let (mut core, _fake) = cockpit("click-focus", 2);
         let group = group_all(&mut core);
         let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
-        view.update(cx, |view, _| view.view = View::Group(group));
+        view.update(cx, |view, cx| view.enter_group(group, cx));
         // Two Panes side by side, each big enough to hold a Composer even
         // with the 208px nav (#21) taken off the left.
         cx.simulate_resize(gpui::size(px(1800.), px(600.)));
         tick(cx);
-        view.read_with(cx, |view, _| assert_eq!(view.focused, 0));
+        view.read_with(cx, |view, _| assert_eq!(view.focused(), 0));
 
         cx.simulate_click(gpui::point(px(1200.), px(300.)), gpui::Modifiers::none());
 
         view.read_with(cx, |view, _| {
-            assert_eq!(view.focused, 1, "the click moved the focus ring");
+            assert_eq!(view.focused(), 1, "the click moved the focus ring");
         });
 
         cx.simulate_input("hi");
@@ -5787,20 +5414,20 @@ mod tests {
             ]);
         });
         let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
-        view.update(cx, |view, _| view.view = View::Group(group));
+        view.update(cx, |view, cx| view.enter_group(group, cx));
         fake.streams.borrow()[2].send(decision("perm_03")).unwrap();
         tick(cx);
-        view.read_with(cx, |view, _| assert_eq!(view.focused, 0));
+        view.read_with(cx, |view, _| assert_eq!(view.focused(), 0));
 
         cx.simulate_keystrokes("cmd-d");
 
         view.read_with(cx, |view, _| {
-            assert_eq!(view.focused, 2, "focus should land on the blocked Pane");
+            assert_eq!(view.focused(), 2, "focus should land on the blocked Pane");
         });
 
         // And plain cycling still walks the grid in order.
         cx.simulate_keystrokes("cmd-]");
-        view.read_with(cx, |view, _| assert_eq!(view.focused, 3));
+        view.read_with(cx, |view, _| assert_eq!(view.focused(), 3));
     }
 
     /// #20: cmd-t is the browser-tab spelling of a new Thread, and cmd-n —
@@ -5841,7 +5468,7 @@ mod tests {
             cx.bind_keys([KeyBinding::new("cmd-f", ToggleFullscreen, None)]);
         });
         let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
-        view.update(cx, |view, _| view.view = View::Group(group));
+        view.update(cx, |view, cx| view.enter_group(group, cx));
         // Four Panes in this window sit at Instruments (three ~246px
         // columns beside the nav): no Composer anywhere.
         cx.simulate_resize(gpui::size(px(980.), px(700.)));
@@ -5858,7 +5485,7 @@ mod tests {
 
         view.read_with(cx, |view, _| {
             assert_eq!(
-                view.fullscreen,
+                view.cockpit.roster().fullscreen(),
                 Some(PaneIdentity::Thread(view.panes[0].thread().unwrap())),
                 "cmd-f fullscreens the focused Pane"
             );
@@ -5881,7 +5508,7 @@ mod tests {
         cx.simulate_keystrokes("cmd-f");
 
         view.read_with(cx, |view, _| {
-            assert_eq!(view.fullscreen, None, "cmd-f again restores the grid");
+            assert_eq!(view.cockpit.roster().fullscreen(), None, "cmd-f again restores the grid");
         });
         cx.simulate_input("gone");
         let typed = view.update(cx, |view, cx| {
@@ -5914,9 +5541,9 @@ mod tests {
         cx.simulate_input("reachable");
 
         view.read_with(cx, |view, cx| {
-            assert!(matches!(view.fullscreen, Some(PaneIdentity::Draft(_))));
+            assert!(matches!(view.cockpit.roster().fullscreen(), Some(PaneIdentity::Draft(_))));
             assert_eq!(
-                view.panes[view.focused].composer.read(cx).text(),
+                view.panes[view.focused()].composer.read(cx).text(),
                 "reachable"
             );
         });
@@ -5984,12 +5611,12 @@ mod tests {
             ]);
         });
         let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
-        view.update(cx, |view, _| view.view = View::Group(group));
+        view.update(cx, |view, cx| view.enter_group(group, cx));
         tick(cx);
         cx.simulate_keystrokes("cmd-f");
         view.read_with(cx, |view, _| {
             assert_eq!(
-                view.fullscreen,
+                view.cockpit.roster().fullscreen(),
                 Some(PaneIdentity::Thread(view.panes[0].thread().unwrap()))
             );
         });
@@ -5997,9 +5624,9 @@ mod tests {
         cx.simulate_keystrokes("cmd-]");
 
         view.read_with(cx, |view, _| {
-            assert_eq!(view.focused, 1, "cmd-] still walks the Threads");
+            assert_eq!(view.focused(), 1, "cmd-] still walks the Threads");
             assert_eq!(
-                view.fullscreen,
+                view.cockpit.roster().fullscreen(),
                 Some(PaneIdentity::Thread(view.panes[1].thread().unwrap())),
                 "and the next Thread is the fullscreened one now"
             );
@@ -6022,7 +5649,7 @@ mod tests {
         tick(cx);
         cx.simulate_keystrokes("cmd-f");
         let closed = view.read_with(cx, |view, _| {
-            assert!(view.fullscreen.is_some(), "the premise: fullscreen is on");
+            assert!(view.cockpit.roster().fullscreen().is_some(), "the premise: fullscreen is on");
             view.panes[0].thread().unwrap()
         });
 
@@ -6031,7 +5658,7 @@ mod tests {
         view.read_with(cx, |view, _| {
             assert_eq!(view.panes.len(), 1, "the Pane is gone");
             assert_eq!(
-                view.fullscreen,
+                view.cockpit.roster().fullscreen(),
                 Some(PaneIdentity::Thread(view.panes[0].thread().unwrap())),
                 "the surviving Thread fills the screen, like the next tab"
             );
@@ -6058,14 +5685,14 @@ mod tests {
         tick(cx);
         cx.simulate_keystrokes("cmd-f");
         view.read_with(cx, |view, _| {
-            assert!(view.fullscreen.is_some(), "the premise: fullscreen is on");
+            assert!(view.cockpit.roster().fullscreen().is_some(), "the premise: fullscreen is on");
         });
 
         cx.simulate_keystrokes("cmd-w");
 
         view.read_with(cx, |view, _| {
             assert!(view.panes.is_empty(), "the last Pane is gone");
-            assert_eq!(view.fullscreen, None, "and so is the fullscreen");
+            assert_eq!(view.cockpit.roster().fullscreen(), None, "and so is the fullscreen");
         });
     }
 
@@ -6083,22 +5710,21 @@ mod tests {
         tick(cx);
         cx.simulate_keystrokes("cmd-f");
         let gone = view.read_with(cx, |view, _| {
-            assert!(view.fullscreen.is_some(), "the premise: fullscreen is on");
+            assert!(view.cockpit.roster().fullscreen().is_some(), "the premise: fullscreen is on");
             view.panes[0].thread().unwrap()
         });
 
         // Park it the way code that never heard of fullscreen would.
         view.update(cx, |view, cx| {
             view.cockpit.park(gone).unwrap();
-            view.panes.retain(|pane| pane.thread() != Some(gone));
-            view.focused = 0;
+            view.sync_panes(cx);
             cx.notify();
         });
         cx.run_until_parked();
 
         view.read_with(cx, |view, _| {
             assert_eq!(
-                view.fullscreen, None,
+                view.cockpit.roster().fullscreen(), None,
                 "a fullscreened Thread that vanished falls back to the grid"
             );
             assert_eq!(view.panes.len(), 1, "with the surviving Thread on it");
@@ -6127,7 +5753,7 @@ mod tests {
             )
         });
 
-        view.update(cx, |view, _| view.focused = 1);
+        view.update(cx, |view, _| view.focus_pane(1));
         cx.simulate_keystrokes("cmd-w");
 
         view.read_with(cx, |view, _| {
@@ -6172,7 +5798,7 @@ mod tests {
         });
         let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
         tick(cx);
-        view.read_with(cx, |view, _| assert_eq!(view.focused, 0));
+        view.read_with(cx, |view, _| assert_eq!(view.focused(), 0));
 
         // The second row: the 42px window band, the 42px nav head, the
         // tree's 8px inset, one 56.5px row and the 2px between siblings,
@@ -6185,13 +5811,13 @@ mod tests {
             gpui::Modifiers::none(),
         );
         view.read_with(cx, |view, _| {
-            assert_eq!(view.focused, 1, "the click moved focus to the row's Pane");
+            assert_eq!(view.focused(), 1, "the click moved focus to the row's Pane");
         });
 
         cx.simulate_keystrokes("cmd-f");
         view.read_with(cx, |view, _| {
             assert_eq!(
-                view.fullscreen,
+                view.cockpit.roster().fullscreen(),
                 Some(PaneIdentity::Thread(view.panes[1].thread().unwrap()))
             );
         });
@@ -6201,9 +5827,9 @@ mod tests {
             gpui::Modifiers::none(),
         );
         view.read_with(cx, |view, _| {
-            assert_eq!(view.focused, 0, "the nav still answers while fullscreen");
+            assert_eq!(view.focused(), 0, "the nav still answers while fullscreen");
             assert_eq!(
-                view.fullscreen,
+                view.cockpit.roster().fullscreen(),
                 Some(PaneIdentity::Thread(view.panes[0].thread().unwrap())),
                 "and the fullscreen re-aims with focus — the one door"
             );
@@ -6249,7 +5875,7 @@ mod tests {
                 parked,
                 "and it is the same Thread"
             );
-            assert_eq!(view.focused, 1, "focus followed the revival");
+            assert_eq!(view.focused(), 1, "focus followed the revival");
             assert!(view.parked.is_empty(), "its nav row moved up");
         });
 
@@ -6813,10 +6439,11 @@ mod tests {
                 )
                 .unwrap();
             view.cockpit.park(thread).unwrap();
-            let entry = view.panes[view.focused].draft().unwrap().project;
+            let focused = view.focused();
+            let entry = view.panes[focused].draft().unwrap().project;
             let worktree = view.cockpit.registry().worktrees(entry)[0].clone();
             std::fs::write(worktree.path.join("worktree-only.txt"), "tree\n").unwrap();
-            view.panes[view.focused].draft_mut().unwrap().target = pane::DraftTarget::Existing {
+            view.panes[focused].draft_mut().unwrap().target = pane::DraftTarget::Existing {
                 branch: SharedString::from(worktree.branch),
             };
         });
@@ -6838,10 +6465,11 @@ mod tests {
         });
 
         view.update(cx, |view, cx| {
-            view.panes[view.focused]
+            view.panes[view.focused()]
                 .composer
                 .update(cx, |composer, cx| composer.set(String::new(), cx));
-            view.panes[view.focused].draft_mut().unwrap().target = pane::DraftTarget::New;
+            let focused = view.focused();
+            view.panes[focused].draft_mut().unwrap().target = pane::DraftTarget::New;
         });
         cx.simulate_input("@");
         cx.run_until_parked();
@@ -7482,7 +7110,7 @@ mod tests {
             assert!(view.panes[0].draft().is_none());
             assert!(view.panes[0].thread().is_some());
             assert_eq!(view.panes[0].composer.read(cx).text(), "");
-            assert_eq!(view.focused, 0);
+            assert_eq!(view.focused(), 0);
         });
     }
 
@@ -7716,7 +7344,7 @@ mod tests {
         });
 
         view.read_with(cx, |view, _| {
-            let draft = view.panes[view.focused].draft().unwrap();
+            let draft = view.panes[view.focused()].draft().unwrap();
             assert_eq!(draft.provider.model.as_deref(), Some("opus"));
             let labels: Vec<&str> = view
                 .popover
@@ -7736,7 +7364,7 @@ mod tests {
             let selected = view.popover.as_ref().unwrap().selected;
             view.pick(selected, cx);
             assert_eq!(
-                view.panes[view.focused]
+                view.panes[view.focused()]
                     .draft()
                     .unwrap()
                     .provider
@@ -7944,12 +7572,12 @@ mod tests {
         let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
 
         view.read_with(cx, |view, _| {
-            assert_eq!(view.view, View::Solo);
+            assert_eq!(view.cockpit.roster().view(), View::Solo);
             assert_eq!(view.visible_indices(), [0]);
         });
         view.update(cx, |view, cx| view.enter_group(group, cx));
         view.read_with(cx, |view, _| {
-            assert_eq!(view.view, View::Group(group));
+            assert_eq!(view.cockpit.roster().view(), View::Group(group));
             let visible: Vec<_> = view
                 .visible_indices()
                 .into_iter()
@@ -7971,13 +7599,13 @@ mod tests {
 
         cx.simulate_keystrokes("cmd-w");
         view.read_with(cx, |view, _| {
-            assert_eq!(view.view, View::Group(group));
+            assert_eq!(view.cockpit.roster().view(), View::Group(group));
             assert_eq!(view.visible_indices().len(), 3);
             assert_eq!(view.cockpit.threads().len(), 4, "leaving never parks");
         });
         cx.simulate_keystrokes("cmd-w cmd-w");
         view.read_with(cx, |view, _| {
-            assert_eq!(view.view, View::Solo);
+            assert_eq!(view.cockpit.roster().view(), View::Solo);
             assert!(view.cockpit.groups().get(group).is_none());
             assert_eq!(view.visible_indices().len(), 1);
             assert_eq!(view.cockpit.threads().len(), 4);
@@ -8015,13 +7643,13 @@ mod tests {
 
         view.update(cx, |view, cx| view.enter_group(sending, cx));
         cx.simulate_keystrokes("cmd-t");
-        let sending_draft = view.read_with(cx, |view, _| view.panes[view.focused].composer.clone());
+        let sending_draft = view.read_with(cx, |view, _| view.panes[view.focused()].composer.clone());
         view.update(cx, |view, _| {
             view.focus_pane(view.pane_for(threads[0]).unwrap())
         });
         cx.simulate_keystrokes("cmd-w");
         view.read_with(cx, |view, _| {
-            assert_eq!(view.view, View::Group(sending));
+            assert_eq!(view.cockpit.roster().view(), View::Group(sending));
             assert_eq!(view.visible_indices().len(), 2, "survivor plus Draft");
             assert_eq!(view.cockpit.groups().get(sending).unwrap().members.len(), 2);
         });
@@ -8044,14 +7672,14 @@ mod tests {
 
         view.update(cx, |view, cx| view.enter_group(closing, cx));
         cx.simulate_keystrokes("cmd-t");
-        let closing_draft = view.read_with(cx, |view, _| view.panes[view.focused].composer.clone());
+        let closing_draft = view.read_with(cx, |view, _| view.panes[view.focused()].composer.clone());
         cx.simulate_input("discard only when I close");
         view.update(cx, |view, _| {
             view.focus_pane(view.pane_for(threads[2]).unwrap())
         });
         cx.simulate_keystrokes("cmd-w");
         view.read_with(cx, |view, _| {
-            assert_eq!(view.view, View::Group(closing));
+            assert_eq!(view.cockpit.roster().view(), View::Group(closing));
             assert_eq!(view.visible_indices().len(), 2);
         });
         view.update(cx, |view, _| {
@@ -8064,7 +7692,7 @@ mod tests {
         });
         cx.simulate_keystrokes("cmd-w");
         view.read_with(cx, |view, _| {
-            assert_eq!(view.view, View::Solo);
+            assert_eq!(view.cockpit.roster().view(), View::Solo);
             assert!(view.cockpit.groups().get(closing).is_none());
             assert_eq!(view.focused_thread(), Some(threads[3]));
         });
@@ -8134,7 +7762,7 @@ mod tests {
             gpui::Modifiers::none(),
         );
         view.read_with(cx, |view, _| {
-            assert_eq!(view.view, View::Group(group));
+            assert_eq!(view.cockpit.roster().view(), View::Group(group));
             assert_eq!(view.visible_indices().len(), 2);
             assert_eq!(
                 view.cockpit.thread_title(threads[1]).unwrap().as_deref(),
@@ -8214,7 +7842,7 @@ mod tests {
         let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, cx| view.enter_group(group, cx));
         cx.simulate_keystrokes("cmd-t");
-        let draft = view.read_with(cx, |view, _| view.panes[view.focused].composer.clone());
+        let draft = view.read_with(cx, |view, _| view.panes[view.focused()].composer.clone());
         cx.simulate_input("preserve this exact prompt");
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         cx.run_until_parked();
@@ -8222,7 +7850,7 @@ mod tests {
         drag_nav(cx, "nav-thread-1", "loose-zone");
 
         view.read_with(cx, |view, _| {
-            assert_eq!(view.view, View::Solo);
+            assert_eq!(view.cockpit.roster().view(), View::Solo);
             assert_eq!(view.focused_thread(), Some(threads[0]));
             assert_eq!(
                 view.cockpit.groups().get(group).unwrap().members,
@@ -8308,7 +7936,7 @@ mod tests {
             );
         });
         view.read_with(cx, |view, _| {
-            assert_eq!(view.view, View::Solo);
+            assert_eq!(view.cockpit.roster().view(), View::Solo);
             assert_eq!(view.focused_thread(), Some(threads[1]));
             assert!(view.cockpit.groups().get(group).is_none());
         });
