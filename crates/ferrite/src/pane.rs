@@ -67,10 +67,6 @@ pub struct PaneView {
     /// A pending Decision takes the keyboard: y and n are answers, not text.
     pub decision_focus: FocusHandle,
     disclosure: ToolDisclosure,
-    /// The wall cell's folded reading — everything the L3 recipe needs that
-    /// is not an O(1) transcript read. The cockpit rebuilds it whenever the
-    /// Thread's transcript changes; a frame never walks Blocks at L3.
-    pub wall: WallCard,
 }
 
 struct ToolDisclosure {
@@ -148,7 +144,6 @@ impl PaneView {
                 #[cfg(test)]
                 bounds: Rc::new(RefCell::new(HashMap::new())),
             },
-            wall: WallCard::default(),
         }
     }
 
@@ -169,7 +164,6 @@ impl PaneView {
                 #[cfg(test)]
                 bounds: Rc::new(RefCell::new(HashMap::new())),
             },
-            wall: WallCard::default(),
         }
     }
 
@@ -303,6 +297,10 @@ pub struct PaneFacts<'a> {
     pub composer_empty: bool,
     pub history_available: bool,
     pub focused: bool,
+    /// The wall cell's folded reading, cached by the cockpit's facts —
+    /// everything the L3 recipe needs that is not an O(1) transcript read.
+    /// None for a Thread the facts have not met, which draws as empty.
+    pub wall: Option<&'a WallCard>,
     /// This frame's selection seam (#27): every text run the transcript
     /// draws goes through it — registered for hit-testing and copy, and
     /// washed where the selection covers it. The cockpit owns the drag;
@@ -461,8 +459,11 @@ pub fn render_pane(
         composer_empty,
         history_available,
         focused,
+        wall,
         selection,
     } = facts;
+    let empty = WallCard::default();
+    let wall = wall.unwrap_or(&empty);
     let PaneWiring {
         menu,
         model_picker,
@@ -487,7 +488,7 @@ pub fn render_pane(
     let state = wall_state(
         status,
         decision.is_some(),
-        view.wall.tests_failing,
+        wall.tests_failing,
         transcript.and_then(|t| t.last_cost()).is_some(),
     );
     // Attention and focus are two independent channels, and they no longer
@@ -507,7 +508,7 @@ pub fn render_pane(
     // Far enough away, a Pane is one signal: no header, no transcript,
     // nothing that stops reading at a glance.
     if level == Level::Wall {
-        return focus_wrapper(shell.child(wall_cell(view, state, focused)), focused);
+        return focus_wrapper(shell.child(wall_cell(view, wall, state, focused)), focused);
     }
 
     if level == Level::Instruments {
@@ -782,8 +783,7 @@ pub fn band_chip_label(choice: &str) -> SharedString {
     SharedString::from(format!("{choice} ⌵"))
 }
 
-fn wall_cell(view: &PaneView, state: WallState, focused: bool) -> Div {
-    let card = &view.wall;
+fn wall_cell(view: &PaneView, card: &WallCard, state: WallState, focused: bool) -> Div {
     let (dot_color, hollow) = match state {
         WallState::Working | WallState::Failing | WallState::Done => (RUNNING, false),
         WallState::Decision => (ATTENTION, false),

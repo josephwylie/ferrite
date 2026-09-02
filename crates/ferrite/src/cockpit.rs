@@ -11,7 +11,7 @@ use ferrite_core::groups::{Drag, DropTarget, GroupChange, GroupId, Groups, Plan}
 use ferrite_core::roster::{PaneIdentity, View};
 use ferrite_core::store::Provider;
 use ferrite_core::workspace::registry::ProjectId;
-use ferrite_core::workspace::{WorkspaceBinding, WorkspaceChoice};
+use ferrite_core::workspace::WorkspaceChoice;
 use ferrite_core::{DecisionAnswer, ThreadId};
 use gpui::prelude::*;
 use gpui::{
@@ -21,6 +21,7 @@ use gpui::{
 };
 
 use crate::composer::{Composer, Edited};
+use crate::facts::Facts;
 use crate::nav;
 use crate::pane::{self, PaneView};
 use crate::select::TranscriptSelection;
@@ -96,16 +97,10 @@ pub struct CockpitView {
     /// cmd-b (#21): the nav folded to its 40px LED rail. In memory only —
     /// a preference store is not this ticket.
     nav_collapsed: bool,
-    /// Each open Thread's checkout label (#29): the branch of its cwd,
-    /// cached — the header's binding slot is display-only text fed from
-    /// here, refreshed on open, turn end and the watchdog cadence, never
-    /// per frame. A cwd outside any checkout has no entry and no text.
-    branches: std::collections::HashMap<ThreadId, SharedString>,
-    /// The nav's parked Threads, in stable park order, with the provider
-    /// their log declared. Each entry cost a `Store::peek`, so the cache is
-    /// rebuilt on park and revive — never per frame. `nav_state` turns
-    /// these into rows from this cache and the project/branch caches.
-    parked: Vec<(ThreadId, Option<Provider>)>,
+    /// What the nav and the Pane head say about a Thread beyond an O(1)
+    /// read — checkout, Project, a parked row's provider, the L3 card —
+    /// refreshed by moment, never per frame.
+    facts: Facts,
     /// The one Project filter navigation has (#29). `None` is
     /// `All Projects`. It filters the **navigation only** — which Panes the
     /// Cockpit flies is never touched by it.
@@ -116,12 +111,6 @@ pub struct CockpitView {
     /// The nav tree's scroll, shared with the hand-drawn scrollbar beside
     /// it — gpui 0.2.2 paints none of its own.
     nav_scroll: ScrollHandle,
-    /// Each Thread's Project (#29), cached: the id the filter matches on and
-    /// the label a row draws. `peek` is one header line off disk, so this is
-    /// filled on open, turn end and the watchdog cadence, and never per
-    /// frame. `None` on either half is honest — the row draws that line
-    /// empty and keeps its height rather than inventing a word.
-    projects: std::collections::HashMap<ThreadId, (Option<ProjectId>, Option<SharedString>)>,
     /// The one popover in the Composer's slot, or None: the `/`/`@` menu
     /// (#23), a picker (#11, #25) or a band chip (#29). Always on the
     /// focused Pane's Composer; render self-heals it shut when the operator
@@ -383,12 +372,10 @@ impl CockpitView {
             swept: std::time::Instant::now(),
             selection: TranscriptSelection::default(),
             nav_collapsed: false,
-            branches: std::collections::HashMap::new(),
-            parked: Vec::new(),
+            facts: Facts::default(),
             nav_filter: None,
             nav_filter_open: false,
             nav_scroll: ScrollHandle::new(),
-            projects: std::collections::HashMap::new(),
             popover: None,
             menu_muted: false,
             suppress_recall_menu_once: false,
@@ -404,7 +391,6 @@ impl CockpitView {
         if view.panes.is_empty() {
             view.open_draft_with_provider(pane::DraftTarget::Main, launch_provider, cx);
         }
-        view.refresh_parked();
         view
     }
 
@@ -417,7 +403,9 @@ impl CockpitView {
     /// never holds a draft this window did not open.
     fn sync_panes(&mut self, cx: &mut Context<Self>) {
         let wanted = self.cockpit.roster().panes().to_vec();
+        let before = self.panes.len();
         self.panes.retain(|pane| wanted.contains(&pane.identity));
+        let mut opened = false;
         for identity in &wanted {
             if self.index_of(*identity).is_some() {
                 continue;
@@ -428,78 +416,21 @@ impl CockpitView {
             let pane = PaneView::new(thread, cx);
             cx.subscribe(&pane.composer, Self::composer_edited).detach();
             self.panes.push(pane);
-            self.refresh_branch(thread);
-            self.refresh_project(thread);
-            self.refresh_wall(thread);
+            self.facts.opened(&self.cockpit, thread);
+            opened = true;
         }
         self.panes
             .sort_by_key(|pane| wanted.iter().position(|shown| *shown == pane.identity));
+        // A Thread that came or went moved between the grid and the nav's
+        // parked rows.
+        if opened || self.panes.len() != before {
+            self.facts.parked_changed(&self.cockpit);
+        }
     }
 
     /// Where this Pane sits in the grid.
     fn index_of(&self, identity: PaneIdentity) -> Option<usize> {
         self.panes.iter().position(|pane| pane.identity == identity)
-    }
-
-    /// Refresh one Thread's cached checkout label (#29): the branch its
-    /// effective cwd is actually on, read from git here — on open, on turn
-    /// end, and on the watchdog cadence — and nowhere near a frame. The
-    /// agent itself may switch branches, which is exactly why the header
-    /// reads the repo and not the binding.
-    fn refresh_branch(&mut self, thread: ThreadId) {
-        let open = self.cockpit.thread(thread);
-        let cwd = ferrite_core::workspace::effective_cwd(
-            open.and_then(|open| open.session_project_root()),
-            open.and_then(|open| open.workspace()),
-        )
-        .map(std::path::Path::to_path_buf);
-        match cwd.and_then(|cwd| ferrite_core::workspace::checkout_branch(&cwd)) {
-            Some(branch) => {
-                self.branches.insert(thread, SharedString::from(branch));
-            }
-            // Not a checkout: the slot has nothing honest to say.
-            None => {
-                self.branches.remove(&thread);
-            }
-        }
-    }
-
-    /// One Thread's cached Project (#29): the registry title of the Project
-    /// its CWD choice named, or the binding's own repo leaf, or nothing.
-    /// `peek` is one header line off disk — called on open, turn end and the
-    /// watchdog cadence, and nowhere near a frame.
-    fn refresh_project(&mut self, thread: ThreadId) {
-        let Ok(meta) = self.cockpit.peek(thread) else {
-            // An unreadable log claims nothing: the row still draws, with
-            // its Project line empty.
-            self.projects.insert(thread, (None, None));
-            return;
-        };
-        let label = self.project_label(meta.project_id, meta.workspace.as_ref());
-        self.projects.insert(thread, (meta.project_id, label));
-    }
-
-    /// The Project a row names, down the honest ladder (§3.5c): the
-    /// registry's title for the Project the Thread recorded; else the
-    /// binding's own repo leaf, which is the same string the registry would
-    /// have stored — `repo`, never the worktree path, whose leaf is a branch
-    /// directory; else nothing at all. Never a placeholder word.
-    fn project_label(
-        &self,
-        project: Option<ProjectId>,
-        workspace: Option<&WorkspaceBinding>,
-    ) -> Option<SharedString> {
-        if let Some(title) = project
-            .and_then(|id| self.cockpit.registry().project(id))
-            .map(|project| SharedString::from(project.title.clone()))
-        {
-            return Some(title);
-        }
-        let leaf = match workspace? {
-            WorkspaceBinding::Main { checkout } => checkout.file_name(),
-            WorkspaceBinding::Worktree { repo, .. } => repo.file_name(),
-        }?;
-        Some(SharedString::from(leaf.to_string_lossy().to_string()))
     }
 
     /// The focused Composer's line moved: unmute and re-derive the menu.
@@ -592,14 +523,7 @@ impl CockpitView {
                 );
                 restarted.push(restart.thread);
             }
-            // The header's checkout labels ride the same slow cadence
-            // (#29): the agent may have switched branches under a Pane.
-            let threads: Vec<ThreadId> =
-                self.panes.iter().filter_map(|pane| pane.thread()).collect();
-            for thread in threads {
-                self.refresh_branch(thread);
-                self.refresh_project(thread);
-            }
+            self.facts.tick(&self.cockpit);
             branch_tick = true;
         }
         // A restart writes a Notice even when no Session streamed this frame —
@@ -617,21 +541,14 @@ impl CockpitView {
                     self.panes[pane].scroll.scroll_to_bottom();
                 }
             }
-            // The wall card refolds only when the Thread actually changed —
-            // this is the seam that keeps L3 free of per-frame Block walks.
+            // The facts refold only when the Thread actually changed.
             if !update.dirty.is_empty() || !update.evicted.is_empty() {
                 self.prune_tool_disclosures(update.thread);
-                self.refresh_wall(update.thread);
-                // Turn end is the other stated refresh moment (#29): the
-                // turn that just finished may have moved the checkout.
-                if !self.cockpit.thread(update.thread).is_some_and(|open| open.busy()) {
-                    self.refresh_branch(update.thread);
-                    self.refresh_project(update.thread);
-                }
+                self.facts.streamed(&self.cockpit, update.thread);
             }
         }
         for thread in restarted {
-            self.refresh_wall(thread);
+            self.facts.acted(&self.cockpit, thread);
         }
         cx.notify();
     }
@@ -655,20 +572,6 @@ impl CockpitView {
             })
             .collect();
         self.panes[index].prune_tools(&valid);
-    }
-
-    /// Refold one Thread's wall card. Called wherever its transcript can
-    /// change — the pump, the operator's own acts — never per frame.
-    fn refresh_wall(&mut self, thread: ThreadId) {
-        let Some(index) = self.pane_for(thread) else {
-            return;
-        };
-        let open = self.cockpit.thread(thread);
-        let card = pane::wall_card(
-            open.map(|open| open.transcript()),
-            open.and_then(|open| open.pending()),
-        );
-        self.panes[index].wall = card;
     }
 
     /// One cell of the grid, as the window is right now. Size is the only
@@ -786,7 +689,7 @@ impl CockpitView {
             self.group_error = Some(error.into());
         } else {
             // A renamed Thread's parked row still carries the old name.
-            self.refresh_parked();
+            self.facts.parked_changed(&self.cockpit);
             self.group_error = None;
         }
         cx.notify();
@@ -913,7 +816,7 @@ impl CockpitView {
             self.cockpit.send(thread, text);
             self.panes[self.focused()].scroll.scroll_to_bottom();
         }
-        self.refresh_wall(thread);
+        self.facts.acted(&self.cockpit, thread);
         cx.notify();
     }
 
@@ -953,7 +856,7 @@ impl CockpitView {
         }
         if let Some(thread) = self.focused_thread() {
             self.cockpit.interrupt(thread);
-            self.refresh_wall(thread);
+            self.facts.acted(&self.cockpit, thread);
         }
         cx.notify();
     }
@@ -1094,7 +997,7 @@ impl CockpitView {
             },
         };
         self.cockpit.respond(thread, &decision, response);
-        self.refresh_wall(thread);
+        self.facts.acted(&self.cockpit, thread);
         cx.notify();
     }
 
@@ -1612,7 +1515,7 @@ impl CockpitView {
                 ferrite_core::transcript::Input::Notice(format!("provider unchanged: {e}")),
             );
         }
-        self.refresh_wall(thread);
+        self.facts.acted(&self.cockpit, thread);
         cx.notify();
     }
 
@@ -1644,8 +1547,14 @@ impl CockpitView {
                     eprintln!("ferrite: the blank thread stayed open: {error}");
                 }
                 self.sync_panes(cx);
-                self.refresh_wall(adopted.thread);
-                self.refresh_parked();
+                // A draft that became the import keeps its Pane, so the
+                // mirror saw nothing open; a Thread that would not open is
+                // a fresh parked row.
+                if adopted.not_opened.is_some() {
+                    self.facts.parked_changed(&self.cockpit);
+                } else if from.draft().is_some() {
+                    self.facts.opened(&self.cockpit, adopted.thread);
+                }
             }
             Err(e) => self.say_to(from, format!("cannot import {}: {e}", path.display())),
         }
@@ -2008,10 +1917,9 @@ impl CockpitView {
                     self.popover = None;
                 }
                 self.sync_panes(cx);
-                self.refresh_branch(done.thread);
-                self.refresh_project(done.thread);
+                // The Pane kept its slot, so the mirror saw nothing open.
+                self.facts.opened(&self.cockpit, done.thread);
                 self.panes[index].scroll.scroll_to_bottom();
-                self.refresh_wall(done.thread);
             }
             Err(message) => {
                 if let Some(draft) = self.focused_draft_mut()
@@ -2204,45 +2112,6 @@ impl CockpitView {
         Some(popover.into_any_element())
     }
 
-    /// Rebuild the nav's parked rows. Called on park and revive — never per
-    /// frame: each row costs a `Store::peek`, one header line off disk, and
-    /// the SharedStrings built here are what every frame after reuses.
-    fn refresh_parked(&mut self) {
-        let ordered = self.cockpit.parked_in_order().unwrap_or_default();
-        let mut rows: Vec<(ThreadId, Option<Provider>)> = Vec::with_capacity(ordered.len());
-        for thread in ordered {
-            // An unreadable log still gets a row — the Thread exists, and a
-            // nav that hides it would hide the problem — it just claims
-            // nothing it cannot know.
-            let Ok(meta) = self.cockpit.peek(thread) else {
-                self.projects.insert(thread, (None, None));
-                rows.push((thread, None));
-                continue;
-            };
-            rows.push((thread, Some(meta.provider)));
-            let label = self.project_label(meta.project_id, meta.workspace.as_ref());
-            self.projects.insert(thread, (meta.project_id, label));
-            // The checkout, for a parked Thread, in the order that costs
-            // least: the registry already knows a worktree's branch, and a
-            // main checkout is asked `git` exactly once, ever.
-            if !self.branches.contains_key(&thread) {
-                let branch = match meta.workspace.as_ref() {
-                    Some(WorkspaceBinding::Worktree { path, .. }) => {
-                        self.cockpit.registry().branch_for(path).map(str::to_string)
-                    }
-                    Some(WorkspaceBinding::Main { checkout }) => {
-                        ferrite_core::workspace::checkout_branch(checkout)
-                    }
-                    None => None,
-                };
-                if let Some(branch) = branch {
-                    self.branches.insert(thread, SharedString::from(branch));
-                }
-            }
-        }
-        self.parked = rows;
-    }
-
     /// The nav's per-frame state, from caches and O(1) reads only. Nothing
     /// here touches the store, and nothing here is a Pane decision: the
     /// Project filter narrows this list and nothing else.
@@ -2328,9 +2197,10 @@ impl CockpitView {
             .iter()
             .filter_map(PaneView::thread)
             .chain(
-                self.parked
+                self.facts
+                    .parked()
                     .iter()
-                    .map(|(thread, _)| *thread)
+                    .copied()
                     .filter(|thread| self.pane_for(*thread).is_none()),
             )
             .filter(|thread| !grouped.contains(thread) && self.admitted(*thread))
@@ -2355,27 +2225,24 @@ impl CockpitView {
         let Some(wanted) = self.nav_filter else {
             return true;
         };
-        self.projects.get(&thread).and_then(|(project, _)| *project) == Some(wanted)
+        self.facts.get(thread).and_then(|facts| facts.project) == Some(wanted)
     }
 
     /// One Thread's nav row, entirely from caches: the name core has (there
     /// is no display name), the cached Project and checkout, and the
     /// provider — live for an open Thread, the parked cache otherwise.
     fn thread_row(&self, thread: ThreadId) -> nav::ThreadRow {
+        let facts = self.facts.get(thread);
         nav::ThreadRow {
             thread,
             name: SharedString::from(format!("thread-{thread:02}")),
-            project: self
-                .projects
-                .get(&thread)
-                .and_then(|(_, label)| label.clone()),
-            branch: self.branches.get(&thread).cloned(),
-            provider: self.cockpit.thread(thread).map(|open| open.provider()).or_else(|| {
-                self.parked
-                    .iter()
-                    .find(|(parked, _)| *parked == thread)
-                    .and_then(|(_, provider)| *provider)
-            }),
+            project: facts.and_then(|facts| facts.project_label.clone()),
+            branch: facts.and_then(|facts| facts.branch.clone()),
+            provider: self
+                .cockpit
+                .thread(thread)
+                .map(|open| open.provider())
+                .or_else(|| facts.and_then(|facts| facts.provider)),
         }
     }
 
@@ -2394,7 +2261,6 @@ impl CockpitView {
         match self.cockpit.enter_group(group) {
             Ok(()) => {
                 self.sync_panes(cx);
-                self.refresh_parked();
             }
             Err(error) => {
                 self.group_error = Some(error.to_string().into());
@@ -2423,7 +2289,6 @@ impl CockpitView {
         match self.cockpit.reopen(thread) {
             Ok(()) => {
                 self.sync_panes(cx);
-                self.refresh_parked();
                 cx.notify();
             }
             Err(e) => eprintln!("ferrite: thread {thread} could not be reopened: {e:?}"),
@@ -2462,7 +2327,6 @@ impl CockpitView {
         match self.cockpit.reopen_last() {
             Some((_, Ok(()))) => {
                 self.sync_panes(cx);
-                self.refresh_parked();
                 cx.notify();
             }
             Some((thread, Err(e))) => {
@@ -2518,7 +2382,6 @@ impl CockpitView {
             self.popover = None;
         }
         self.sync_panes(cx);
-        self.refresh_parked();
         cx.notify();
     }
 
@@ -3127,13 +2990,15 @@ impl CockpitView {
             self.selection
                 .overlay(thread, pane::rendered_window(blocks, level))
         };
+        let cached = self.facts.get(thread);
         let facts = pane::PaneFacts {
             thread: open,
             // The cached checkout label (#29) — display-only.
-            branch: self.branches.get(&thread).cloned(),
+            branch: cached.and_then(|facts| facts.branch.clone()),
             composer_empty: pane.composer.read(cx).is_empty(),
             history_available: self.history_available(index, level),
             focused,
+            wall: cached.map(|facts| &facts.wall),
             selection,
         };
         // Only L1 draws a Composer to hang a popover over (#23), a model
@@ -4688,7 +4553,7 @@ mod tests {
         let thread = view.read_with(cx, |view, _| {
             let thread = view.panes[view.focused()].thread().expect("locked");
             assert_eq!(
-                view.branches.get(&thread).map(|branch| branch.to_string()),
+                view.facts.get(thread).and_then(|facts| facts.branch.as_ref()).map(|branch| branch.to_string()),
                 Some(expected.clone()),
                 "the bootstrap cached the checkout"
             );
@@ -4704,7 +4569,7 @@ mod tests {
         });
         view.read_with(cx, |view, _| {
             assert_eq!(
-                view.branches.get(&thread).map(|branch| branch.to_string()),
+                view.facts.get(thread).and_then(|facts| facts.branch.as_ref()).map(|branch| branch.to_string()),
                 Some("agent-moved".to_string()),
                 "the slot follows the repo, not the binding"
             );
@@ -5777,7 +5642,7 @@ mod tests {
                 Some(Provider::Claude),
                 "the provider is the logomark's own value, never a `cl` tag"
             );
-            let parked: Vec<ThreadId> = view.parked.iter().map(|(thread, _)| *thread).collect();
+            let parked: Vec<ThreadId> = view.facts.parked().to_vec();
             assert_eq!(parked, vec![parked_thread], "the parked Thread moved below");
             assert_eq!(
                 state.solos.last().unwrap().provider,
@@ -5854,7 +5719,7 @@ mod tests {
         cx.simulate_keystrokes("cmd-w");
         view.read_with(cx, |view, _| {
             assert_eq!(view.panes.len(), 1);
-            assert_eq!(view.parked.len(), 1, "the parked Thread got a row");
+            assert_eq!(view.facts.parked().len(), 1, "the parked Thread got a row");
         });
 
         // The parked row sits second in one undivided list: the 42px window
@@ -5876,7 +5741,7 @@ mod tests {
                 "and it is the same Thread"
             );
             assert_eq!(view.focused(), 1, "focus followed the revival");
-            assert!(view.parked.is_empty(), "its nav row moved up");
+            assert!(view.facts.parked().is_empty(), "its nav row moved up");
         });
 
         // cmd-o must not bring back a Thread the nav already revived.

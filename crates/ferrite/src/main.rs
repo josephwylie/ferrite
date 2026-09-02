@@ -2,6 +2,7 @@
 mod cockpit;
 mod composer;
 mod demo;
+mod facts;
 mod fuzzy;
 mod icons;
 mod keymap;
