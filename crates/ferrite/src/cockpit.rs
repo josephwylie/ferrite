@@ -384,8 +384,11 @@ impl CockpitView {
             rename: None,
             group_error: None,
         };
-        // Every Thread the launch opened is on the roster already.
+        // Every Thread the launch opened is on the roster already, and
+        // every Thread it did not open is a parked row from the first
+        // frame — a launch that opens nothing has no change to notice.
         view.sync_panes(cx);
+        view.facts.parked_changed(&view.cockpit);
         // Nothing revived: the cockpit starts as one draft Pane (#29) —
         // nothing spawns before the operator's choice.
         if view.panes.is_empty() {
@@ -5429,6 +5432,38 @@ mod tests {
                     provider: Provider::Codex,
                     model: None,
                 }
+            );
+        });
+    }
+
+    /// A launch that opens nothing — the newest Thread would not revive,
+    /// or the operator had parked everything — still lists every parked
+    /// Thread from the first frame. There is no later change to wait for.
+    #[gpui::test]
+    fn a_launch_that_opens_nothing_still_lists_the_parked_threads(cx: &mut TestAppContext) {
+        let dir = scratch("launch-parked");
+        let parked = {
+            // An earlier run: one Thread opened, then the process gone.
+            let store = Store::open(dir.clone()).unwrap();
+            let mut earlier = Cockpit::new(store, Box::new(Fake::default()));
+            earlier
+                .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
+                .unwrap();
+            earlier.threads()[0]
+        };
+        let store = Store::open(dir).unwrap();
+        let core = Cockpit::new(store, Box::new(Fake::default()));
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+
+        view.read_with(cx, |view, _| {
+            assert!(
+                view.panes[0].draft().is_some(),
+                "nothing revived: the launch is a draft"
+            );
+            assert_eq!(
+                view.facts.parked().to_vec(),
+                vec![parked],
+                "and the parked Thread has its row"
             );
         });
     }
