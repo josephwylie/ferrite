@@ -22,6 +22,7 @@ use gpui::{
 
 use crate::composer::{Composer, Edited};
 use crate::menu;
+use crate::prefs;
 use crate::facts::Facts;
 use crate::nav;
 use crate::pane::{self, PaneView};
@@ -46,6 +47,7 @@ actions!(
         CloseThread,
         ReopenThread,
         CopySelection,
+        OpenSettings,
         ToggleFullscreen,
         ToggleNav,
         MenuNext,
@@ -140,6 +142,14 @@ pub struct CockpitView {
     /// The right-click menu, if one is up: what it is about, where it was
     /// summoned, and which destructive row is armed for its second press.
     context_menu: Option<ContextMenu>,
+    /// The operator's settings and where they save; every change saves.
+    prefs: Preferences,
+    /// The Settings panel is up.
+    settings_open: bool,
+    settings_scroll: ScrollHandle,
+    /// The CLIs' versions as `--version` reports them, probed once when the
+    /// panel first opens: (claude, codex).
+    cli_versions: Option<(SharedString, SharedString)>,
     group_error: Option<SharedString>,
 }
 
@@ -153,6 +163,28 @@ enum RenameTarget {
     /// A Thread, renamed from its Pane head — the same title, a different
     /// editor site, so the two never draw one editor twice.
     PaneTitle(ThreadId),
+}
+
+/// What the window is handed at launch beyond the core: the operator's
+/// settings, where they are saved, and the Session defaults the spawner
+/// reads — shared, so a change here applies to the next Session.
+pub struct Preferences {
+    pub settings: ferrite_core::settings::Settings,
+    pub dir: std::path::PathBuf,
+    pub defaults: std::sync::Arc<std::sync::Mutex<crate::session::SessionDefaults>>,
+}
+
+impl Preferences {
+    /// Defaults saved nowhere — the test constructor's and the demo's.
+    fn ephemeral() -> Self {
+        Self {
+            settings: ferrite_core::settings::Settings::default(),
+            dir: std::env::temp_dir().join(format!("ferrite-prefs-{}", std::process::id())),
+            defaults: std::sync::Arc::new(std::sync::Mutex::new(
+                crate::session::SessionDefaults::default(),
+            )),
+        }
+    }
 }
 
 /// Where a folder the picker returns should land.
@@ -405,8 +437,17 @@ impl CockpitView {
     }
 
     pub fn new_with_provider(
+        cockpit: Cockpit,
+        launch_provider: Provider,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::new_with_settings(cockpit, launch_provider, Preferences::ephemeral(), cx)
+    }
+
+    pub fn new_with_settings(
         mut cockpit: Cockpit,
         launch_provider: Provider,
+        prefs: Preferences,
         cx: &mut Context<Self>,
     ) -> Self {
         cx.spawn(async move |this, cx| loop {
@@ -434,8 +475,6 @@ impl CockpitView {
             }),
             swept: std::time::Instant::now(),
             selection: TranscriptSelection::default(),
-            nav_collapsed: false,
-            facts: Facts::default(),
             nav_filter: None,
             nav_filter_open: false,
             nav_scroll: ScrollHandle::new(),
@@ -446,6 +485,12 @@ impl CockpitView {
             launch_project,
             rename: None,
             context_menu: None,
+            nav_collapsed: prefs.settings.nav_collapsed,
+            facts: Facts::with_auto_title(prefs.settings.auto_title),
+            prefs,
+            settings_open: false,
+            settings_scroll: ScrollHandle::new(),
+            cli_versions: None,
             group_error: None,
         };
         // Every Thread the launch opened is on the roster already, and
@@ -944,7 +989,8 @@ impl CockpitView {
             return;
         }
         let verb = *verb;
-        if item.destructive && open.armed != Some(index) {
+        let confirm = self.prefs.settings.confirm_delete || verb != MenuVerb::Delete;
+        if item.destructive && confirm && open.armed != Some(index) {
             open.armed = Some(index);
             cx.notify();
             return;
@@ -1103,6 +1149,299 @@ impl CockpitView {
         )
     }
 
+    /// cmd-, and the gear: the Settings panel, toggled. Opening it probes
+    /// the CLIs' versions once, off the UI thread.
+    fn open_settings(&mut self, _: &OpenSettings, _window: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_settings(cx);
+    }
+
+    fn toggle_settings(&mut self, cx: &mut Context<Self>) {
+        self.settings_open = !self.settings_open;
+        if self.settings_open {
+            self.popover = None;
+            self.context_menu = None;
+            self.nav_filter_open = false;
+            if self.cli_versions.is_none() {
+                cx.spawn(async move |this, cx| {
+                    let versions = cx
+                        .background_executor()
+                        .spawn(async { (cli_version("claude"), cli_version("codex")) })
+                        .await;
+                    this.update(cx, |view, cx| {
+                        view.cli_versions = Some((versions.0.into(), versions.1.into()));
+                        cx.notify();
+                    })
+                    .ok();
+                })
+                .detach();
+            }
+        }
+        cx.notify();
+    }
+
+    /// Every change to the settings goes through here: saved at once, the
+    /// Session defaults the spawner reads refreshed, and the facts that
+    /// depend on a setting re-derived.
+    fn change_settings(
+        &mut self,
+        change: impl FnOnce(&mut ferrite_core::settings::Settings),
+        cx: &mut Context<Self>,
+    ) {
+        change(&mut self.prefs.settings);
+        if let Err(e) = self.prefs.settings.save(&self.prefs.dir) {
+            self.group_error = Some(SharedString::from(format!("settings not saved: {e}")));
+        }
+        if let Ok(mut defaults) = self.prefs.defaults.lock() {
+            *defaults = crate::session::SessionDefaults::from_settings(&self.prefs.settings);
+        }
+        if self.facts.set_auto_title(self.prefs.settings.auto_title) {
+            self.facts.parked_changed(&self.cockpit);
+            for thread in self.cockpit.threads() {
+                self.facts.renamed(&self.cockpit, thread);
+            }
+            self.refresh_names();
+        }
+        cx.notify();
+    }
+
+    /// The Settings panel: a veil over the whole window (a press on it
+    /// closes the panel) and the card, sections of rows whose chips each
+    /// write one setting. Deferred so nothing paints over it.
+    fn settings_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.settings_open {
+            return None;
+        }
+        let settings = &self.prefs.settings;
+        let mut sections: Vec<AnyElement> = Vec::new();
+
+        // --- New Threads ---
+        let provider_chips: Vec<AnyElement> = [Provider::Claude, Provider::Codex]
+            .into_iter()
+            .enumerate()
+            .map(|(at, provider)| {
+                prefs::chip(
+                    ("settings-provider", at),
+                    SharedString::from(provider_title(provider)),
+                    settings.default_provider == provider,
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        view.change_settings(|settings| settings.default_provider = provider, cx);
+                    }),
+                )
+                .into_any_element()
+            })
+            .collect();
+        let mut rows = vec![prefs::row(
+            "Provider",
+            "What a new Thread starts on".into(),
+            provider_chips,
+        )
+        .into_any_element()];
+        for (slot, provider) in [Provider::Claude, Provider::Codex].into_iter().enumerate() {
+            let chosen = settings.model_for(provider).map(str::to_string);
+            let mut chips: Vec<AnyElement> = Vec::new();
+            let mut catalog = self.cockpit.model_catalog(provider);
+            if let Some(chosen) = &chosen {
+                if !catalog.iter().any(|row| row.is(chosen)) {
+                    catalog.push(ferrite_core::ModelInfo::bare(chosen));
+                }
+            }
+            for (at, model) in catalog.into_iter().enumerate() {
+                let value = Some(model.value.clone()).filter(|value| value != "default");
+                let selected = chosen == value;
+                let pick = value.clone();
+                chips.push(
+                    prefs::chip(
+                        (if provider == Provider::Claude { "settings-claude-model" } else { "settings-codex-model" }, at),
+                        SharedString::from(model.display.clone()),
+                        selected,
+                    )
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            let pick = pick.clone();
+                            view.change_settings(|settings| settings.set_model_for(provider, pick), cx);
+                        }),
+                    )
+                    .into_any_element(),
+                );
+            }
+            let _ = slot;
+            rows.push(
+                prefs::row(
+                    if provider == Provider::Claude { "Claude model" } else { "Codex model" },
+                    "Default is the CLI's own choice".into(),
+                    chips,
+                )
+                .into_any_element(),
+            );
+        }
+        sections.push(prefs::section("New Threads", rows).into_any_element());
+
+        // --- Permissions ---
+        let mode_chips = |cx: &mut Context<Self>, current: Option<&str>, options: &'static [(&'static str, Option<&'static str>)], id: &'static str, write: fn(&mut ferrite_core::settings::Settings, Option<String>)| -> Vec<AnyElement> {
+            options
+                .iter()
+                .enumerate()
+                .map(|(at, (label, value))| {
+                    let value: Option<String> = value.map(str::to_string);
+                    let pick = value.clone();
+                    prefs::chip((id, at), SharedString::from(*label), current == value.as_deref())
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                                cx.stop_propagation();
+                                let pick = pick.clone();
+                                view.change_settings(|settings| write(settings, pick), cx);
+                            }),
+                        )
+                        .into_any_element()
+                })
+                .collect()
+        };
+        const CLAUDE_MODES: &[(&str, Option<&str>)] = &[
+            ("CLI default", None),
+            ("Ask", Some("default")),
+            ("Accept edits", Some("acceptEdits")),
+            ("Plan", Some("plan")),
+            ("Bypass", Some("bypassPermissions")),
+        ];
+        const CODEX_APPROVALS: &[(&str, Option<&str>)] = &[
+            ("On request", Some("on-request")),
+            ("Untrusted", Some("untrusted")),
+            ("Never", Some("never")),
+        ];
+        const CODEX_SANDBOXES: &[(&str, Option<&str>)] = &[
+            ("Codex default", None),
+            ("Read only", Some("read-only")),
+            ("Workspace write", Some("workspace-write")),
+            ("Full access", Some("danger-full-access")),
+        ];
+        let rows = vec![
+            prefs::row(
+                "Claude permissions",
+                "Applies to the next Session".into(),
+                mode_chips(cx, settings.claude_permission_mode.as_deref(), CLAUDE_MODES, "settings-claude-mode", |s, v| s.claude_permission_mode = v),
+            )
+            .into_any_element(),
+            prefs::row(
+                "Codex approvals",
+                "When Codex asks before acting".into(),
+                mode_chips(cx, Some(settings.codex_approval_policy.as_str()), CODEX_APPROVALS, "settings-codex-approval", |s, v| s.codex_approval_policy = v.unwrap_or_else(|| "on-request".into())),
+            )
+            .into_any_element(),
+            prefs::row(
+                "Codex sandbox",
+                "What Codex may touch".into(),
+                mode_chips(cx, settings.codex_sandbox.as_deref(), CODEX_SANDBOXES, "settings-codex-sandbox", |s, v| s.codex_sandbox = v),
+            )
+            .into_any_element(),
+        ];
+        sections.push(prefs::section("Permissions", rows).into_any_element());
+
+        // --- Behaviour ---
+        let toggle = |cx: &mut Context<Self>, id: &'static str, on: bool, write: fn(&mut ferrite_core::settings::Settings, bool)| -> Vec<AnyElement> {
+            [("On", true), ("Off", false)]
+                .into_iter()
+                .enumerate()
+                .map(|(at, (label, value))| {
+                    prefs::chip((id, at), SharedString::from(label), on == value)
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                                cx.stop_propagation();
+                                view.change_settings(|settings| write(settings, value), cx);
+                            }),
+                        )
+                        .into_any_element()
+                })
+                .collect()
+        };
+        let rows = vec![
+            prefs::row(
+                "Name Threads from their first prompt",
+                "Until you rename them".into(),
+                toggle(cx, "settings-auto-title", settings.auto_title, |s, v| s.auto_title = v),
+            )
+            .into_any_element(),
+            prefs::row(
+                "Confirm before deleting a Thread",
+                "".into(),
+                toggle(cx, "settings-confirm-delete", settings.confirm_delete, |s, v| s.confirm_delete = v),
+            )
+            .into_any_element(),
+            prefs::row(
+                "Start with the sidebar collapsed",
+                "⌘B toggles it any time".into(),
+                toggle(cx, "settings-nav-collapsed", settings.nav_collapsed, |s, v| s.nav_collapsed = v),
+            )
+            .into_any_element(),
+        ];
+        sections.push(prefs::section("Behaviour", rows).into_any_element());
+
+        // --- About ---
+        let (claude, codex) = self
+            .cli_versions
+            .clone()
+            .unwrap_or_else(|| ("checking…".into(), "checking…".into()));
+        let rows = vec![
+            prefs::fact("claude CLI", claude).into_any_element(),
+            prefs::fact("codex CLI", codex).into_any_element(),
+            prefs::fact(
+                "Threads",
+                SharedString::from(self.prefs.dir.join("threads").display().to_string()),
+            )
+            .into_any_element(),
+            prefs::fact(
+                "Settings file",
+                SharedString::from(
+                    self.prefs
+                        .dir
+                        .join(ferrite_core::settings::Settings::FILE)
+                        .display()
+                        .to_string(),
+                ),
+            )
+            .into_any_element(),
+        ];
+        sections.push(prefs::section("About", rows).into_any_element());
+
+        let card = prefs::card()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
+            )
+            .child(prefs::head(prefs::close_button().on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|view, _: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    view.settings_open = false;
+                    cx.notify();
+                }),
+            )))
+            .child(prefs::body(&self.settings_scroll).children(sections));
+        Some(
+            deferred(
+                prefs::veil()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|view, _: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            view.settings_open = false;
+                            cx.notify();
+                        }),
+                    )
+                    .child(card),
+            )
+            .with_priority(3)
+            .into_any_element(),
+        )
+    }
+
     /// The Pane head's title: the live editor while this Thread is being
     /// renamed from its head, else the name — a double-click opens the
     /// editor, a single click only lands on the Pane. The press stops
@@ -1254,6 +1593,11 @@ impl CockpitView {
 
     fn interrupt(&mut self, _: &Interrupt, _window: &mut Window, cx: &mut Context<Self>) {
         if self.context_menu.take().is_some() {
+            cx.notify();
+            return;
+        }
+        if self.settings_open {
+            self.settings_open = false;
             cx.notify();
             return;
         }
@@ -2053,11 +2397,18 @@ impl CockpitView {
                     }
                 }
             })
-            .unwrap_or(ProviderChoice {
-                provider: Provider::Claude,
-                model: None,
-            });
+            .unwrap_or_else(|| self.default_choice());
         self.open_draft_with_choice(target, provider, cx);
+    }
+
+    /// What a new Thread starts on when nothing on screen says otherwise:
+    /// the settings' provider and its chosen model.
+    fn default_choice(&self) -> ProviderChoice {
+        let provider = self.prefs.settings.default_provider;
+        ProviderChoice {
+            provider,
+            model: self.prefs.settings.model_for(provider).map(str::to_string),
+        }
     }
 
     fn open_draft_with_provider(
@@ -3481,9 +3832,11 @@ impl Render for CockpitView {
                     }
                 }),
             )
+            .on_action(cx.listener(Self::open_settings))
             .child(self.nav(cx))
             .child(grid)
             .children(self.context_menu_element(cx))
+            .children(self.settings_element(cx))
     }
 }
 
@@ -3755,7 +4108,14 @@ impl CockpitView {
     /// `nav_state`'s O(1) reads or the project/branch/parked caches.
     fn nav(&self, cx: &mut Context<Self>) -> Div {
         let state = self.nav_state();
-        let column = nav::shell(state.collapsed).child(nav::win_chrome(state.collapsed).child(
+        let gear = prefs::gear_button().on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|view, _: &MouseDownEvent, _, cx| {
+                cx.stop_propagation();
+                view.toggle_settings(cx);
+            }),
+        );
+        let mut chrome = nav::win_chrome(state.collapsed).child(
             nav::collapse_button().on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|view, _: &MouseDownEvent, _, cx| {
@@ -3764,7 +4124,14 @@ impl CockpitView {
                     cx.notify();
                 }),
             ),
-        ));
+        );
+        // The gear sits hard right of the band; folded, it stacks under
+        // the collapse button.
+        if !state.collapsed {
+            chrome = chrome.child(div().flex_1());
+        }
+        chrome = chrome.child(gear);
+        let column = nav::shell(state.collapsed).child(chrome);
         if state.collapsed {
             return column.child(self.rail(&state, cx));
         }
@@ -4078,6 +4445,21 @@ pub(crate) fn here() -> std::path::PathBuf {
 
 /// A typed path with `~` spelled out — the type-a-path row accepts what an
 /// operator would type at a shell.
+/// What `<program> --version` says, in one line; the failure in words
+/// when it cannot be run — the About section never guesses.
+fn cli_version(program: &str) -> String {
+    match std::process::Command::new(program).arg("--version").output() {
+        Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_string(),
+        Ok(output) => format!("`{program} --version` {}", output.status),
+        Err(e) => format!("not found ({e})"),
+    }
+}
+
 fn expand_home(typed: &str) -> std::path::PathBuf {
     if let Some(rest) = typed.strip_prefix("~/") {
         let home = std::env::var("HOME")
@@ -8053,6 +8435,68 @@ mod tests {
             assert_eq!(view.cockpit.threads().len() + view.cockpit.parked().unwrap().len(), count - 1, "and from the store");
             assert!(view.panes.iter().all(|pane| pane.thread() != Some(thread)));
         });
+    }
+
+    /// cmd-, opens the Settings panel and escape closes it; a chip press
+    /// writes the setting and saves it to disk at once, and the Session
+    /// defaults the spawner reads follow.
+    #[gpui::test]
+    fn settings_open_on_cmd_comma_and_every_change_saves(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("settings-panel", 1);
+        bind_production_keys(cx);
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        tick(cx);
+
+        cx.simulate_keystrokes("cmd-,");
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| assert!(view.settings_open, "cmd-, opens the panel"));
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| assert!(!view.settings_open, "escape closes it"));
+
+        let dir = view.read_with(cx, |view, _| view.prefs.dir.clone());
+        let _ = std::fs::remove_dir_all(&dir);
+        view.update(cx, |view, cx| {
+            view.change_settings(
+                |settings| {
+                    settings.default_provider = Provider::Codex;
+                    settings.claude_permission_mode = Some("acceptEdits".into());
+                    settings.confirm_delete = false;
+                },
+                cx,
+            );
+        });
+        let saved = ferrite_core::settings::Settings::load(&dir);
+        assert_eq!(saved.default_provider, Provider::Codex, "saved on change");
+        assert_eq!(saved.claude_permission_mode.as_deref(), Some("acceptEdits"));
+        view.read_with(cx, |view, _| {
+            let defaults = view.prefs.defaults.lock().unwrap();
+            assert_eq!(
+                defaults.claude_permission_mode.as_deref(),
+                Some("acceptEdits"),
+                "the spawner's defaults follow"
+            );
+            assert_eq!(view.default_choice().provider, Provider::Codex, "new drafts follow");
+        });
+
+        // With confirmation off, a destructive row runs on its first press.
+        let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+        view.update(cx, |view, cx| {
+            view.open_context_menu(MenuTarget::Pane(thread), gpui::point(px(600.), px(300.)), cx);
+            let delete = view
+                .context_menu
+                .as_ref()
+                .unwrap()
+                .rows
+                .iter()
+                .position(|row| matches!(row, Some((_, MenuVerb::Delete))))
+                .unwrap();
+            view.press_menu_row(delete, cx);
+            assert!(view.context_menu.is_none());
+            assert!(view.cockpit.thread(thread).is_none(), "gone on one press");
+        });
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// #25: the mouse door — a click on the footer chip opens the picker.

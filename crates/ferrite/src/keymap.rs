@@ -136,6 +136,8 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
         // #21: fold the nav to its LED rail and back — the VS Code sidebar
         // muscle memory (cmd-t/w/f are spoken for by #20).
         (with_primary("b"), "cockpit::ToggleNav", None),
+        // The platform's own Settings chord.
+        (with_primary(","), "cockpit::OpenSettings", None),
         // Shift: the same draft, aimed straight at "new worktree" instead
         // of the checkout the operator is sitting in.
         (with_primary("shift-n"), "cockpit::NewWorktreeThread", None),
@@ -213,6 +215,7 @@ mod tests {
             ("cockpit::ToggleFullscreen", "f"),
             // #21: the nav collapses to its rail on both platforms.
             ("cockpit::ToggleNav", "b"),
+            ("cockpit::OpenSettings", ","),
             ("cockpit::NewWorktreeThread", "shift-n"),
             ("cockpit::CloseThread", "w"),
             ("cockpit::ReopenThread", "o"),

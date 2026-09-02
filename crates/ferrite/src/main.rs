@@ -11,19 +11,21 @@ mod menu;
 mod nav;
 mod pane;
 mod pointer;
+mod prefs;
 mod select;
 mod session;
 mod shell;
 mod theme;
 
 use ferrite_core::cockpit::Cockpit;
+use ferrite_core::settings::Settings;
 use ferrite_core::store::{Provider, Store};
 use ferrite_core::workspace::WorkspaceBinding;
 use ferrite_core::ThreadId;
 use gpui::*;
 
 use cockpit::CockpitView;
-use session::ProcessRss;
+use session::{ProcessRss, SessionDefaults};
 
 actions!(ferrite, [Quit]);
 
@@ -49,8 +51,12 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let load = args.iter().any(|arg| arg == "--load");
     let demo = load || args.iter().any(|arg| arg == "--demo");
+    // The operator's settings live beside the store: `~/.ferrite`.
+    let settings_dir = settings_dir();
+    let settings = Settings::load(&settings_dir);
     let provider = match flag(&args, "--provider") {
-        None | Some("claude") => Provider::Claude,
+        None => settings.default_provider,
+        Some("claude") => Provider::Claude,
         Some("codex") => Provider::Codex,
         Some(other) => {
             eprintln!("ferrite: unknown provider `{other}` (claude, codex)");
@@ -97,6 +103,7 @@ fn main() {
         let bindings = load_bindings(keymap::PLATFORM, cx);
         cx.bind_keys(bindings);
         cx.on_action(|_: &Quit, cx| cx.quit());
+        cx.set_menus(app_menus());
 
         let store = match Store::open(store_dir()) {
             Ok(store) => store,
@@ -112,10 +119,13 @@ fn main() {
 
         // The fixture adapter serves `--demo` and `--load`; every other
         // launch spawns the real provider CLIs.
+        let defaults = std::sync::Arc::new(std::sync::Mutex::new(
+            SessionDefaults::from_settings(&settings),
+        ));
         let spawner: Box<dyn ferrite_core::cockpit::Spawner> = if demo {
             Box::new(demo::Spawn::new(load))
         } else {
-            Box::new(session::Spawn)
+            Box::new(session::Spawn::new(defaults.clone()))
         };
         let mut core = match Cockpit::try_new(store, spawner) {
             Ok(core) => core,
@@ -177,7 +187,20 @@ fn main() {
                     }),
                     ..Default::default()
                 },
-                |_, cx| cx.new(|cx| CockpitView::new_with_provider(core, provider, cx)),
+                |_, cx| {
+                    cx.new(|cx| {
+                        CockpitView::new_with_settings(
+                            core,
+                            provider,
+                            cockpit::Preferences {
+                                settings: settings.clone(),
+                                dir: settings_dir.clone(),
+                                defaults: defaults.clone(),
+                            },
+                            cx,
+                        )
+                    })
+                },
             )
             .unwrap();
 
@@ -294,6 +317,72 @@ fn load_bindings(platform: keymap::Platform, cx: &mut App) -> Vec<KeyBinding> {
             .expect("the keymap keystrokes parse")
         })
         .collect()
+}
+
+/// The application menu bar: every cockpit verb the keys already run,
+/// spelled out where a person looks for it, with the platform's own edit
+/// menu so the standard cut/copy/paste/select-all reach the Composer.
+fn app_menus() -> Vec<Menu> {
+    use cockpit::{
+        CloseThread, NewThread, NewWorktreeThread, NextDecision, NextPane, OpenSettings,
+        PreviousPane, ReopenThread, ToggleFullscreen, ToggleNav,
+    };
+    vec![
+        Menu {
+            name: "Ferrite".into(),
+            items: vec![
+                MenuItem::action("Settings…", OpenSettings),
+                MenuItem::separator(),
+                MenuItem::os_submenu("Services", SystemMenuType::Services),
+                MenuItem::separator(),
+                MenuItem::action("Quit Ferrite", Quit),
+            ],
+        },
+        Menu {
+            name: "File".into(),
+            items: vec![
+                MenuItem::action("New Thread", NewThread),
+                MenuItem::action("New Thread in a Worktree", NewWorktreeThread),
+                MenuItem::separator(),
+                MenuItem::action("Close Pane", CloseThread),
+                MenuItem::action("Reopen Parked Thread", ReopenThread),
+            ],
+        },
+        Menu {
+            name: "Edit".into(),
+            items: vec![
+                MenuItem::os_action("Cut", composer::Cut, OsAction::Cut),
+                MenuItem::os_action("Copy", composer::Copy, OsAction::Copy),
+                MenuItem::os_action("Paste", composer::Paste, OsAction::Paste),
+                MenuItem::os_action("Select All", composer::SelectAll, OsAction::SelectAll),
+            ],
+        },
+        Menu {
+            name: "View".into(),
+            items: vec![
+                MenuItem::action("Toggle Sidebar", ToggleNav),
+                MenuItem::action("Toggle Pane Fullscreen", ToggleFullscreen),
+                MenuItem::separator(),
+                MenuItem::action("Next Pane", NextPane),
+                MenuItem::action("Previous Pane", PreviousPane),
+                MenuItem::action("Next Decision", NextDecision),
+            ],
+        },
+        Menu {
+            name: "Window".into(),
+            items: vec![],
+        },
+    ]
+}
+
+/// Where settings live: the store's parent (`~/.ferrite`), or beside an
+/// overridden store.
+fn settings_dir() -> std::path::PathBuf {
+    let store = store_dir();
+    store
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or(store)
 }
 
 fn store_dir() -> std::path::PathBuf {

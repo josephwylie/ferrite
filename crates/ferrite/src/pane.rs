@@ -2482,20 +2482,15 @@ fn render_block(
         // content-sized block in the strong ink — the one surface in the
         // column with a ground of its own, so a glance tells who said
         // what. No `❯`, no gutter: the ground is the whole marker.
-        Body::Prompt(line) => row
-            .flex()
-            .mb(px(theme::P_MARGIN_B))
-            .child(
-                div()
-                    .min_w_0()
-                    .max_w(px(68. * theme::FS_MD * theme::MONO_ADVANCE))
-                    .px(px(theme::CODE_PAD_X))
-                    .py(px(theme::PROMPT_PAD_Y))
-                    .rounded(px(theme::R_CONTROL))
-                    .bg(rgb(RAISED))
-                    .text_color(rgb(TEXT_STRONG))
-                    .child(selection.line(block.id, line.clone(), Vec::new())),
-            )
+        // Laid out exactly like a paragraph (stretched, capped at 68ch —
+        // see `paragraph` for why the width is dropped), so the wrap is
+        // measured at the width it is painted.
+        Body::Prompt(line) => paragraph(row, TEXT_STRONG)
+            .px(px(theme::CODE_PAD_X))
+            .py(px(theme::PROMPT_PAD_Y))
+            .rounded(px(theme::R_CONTROL))
+            .bg(rgb(RAISED))
+            .child(selection.line(block.id, line.clone(), Vec::new()))
             .into_any_element(),
         Body::Paragraph { spans } => paragraph(row, TEXT_2)
             .child(prose(block.id, spans, selection))

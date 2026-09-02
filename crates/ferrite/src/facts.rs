@@ -50,14 +50,37 @@ pub struct ThreadFacts {
     pub wall: WallCard,
 }
 
-#[derive(Default)]
 pub struct Facts {
     threads: HashMap<ThreadId, ThreadFacts>,
     /// The nav's parked Threads, in the Cockpit's stable park order (#21).
     parked: Vec<ThreadId>,
+    /// Whether an untitled Thread is named from its first prompt (a
+    /// setting), else by its number.
+    auto_title: bool,
+}
+
+impl Default for Facts {
+    fn default() -> Self {
+        Self::with_auto_title(true)
+    }
 }
 
 impl Facts {
+    pub fn with_auto_title(auto_title: bool) -> Self {
+        Self {
+            threads: HashMap::new(),
+            parked: Vec::new(),
+            auto_title,
+        }
+    }
+
+    /// Change the naming rule; answers whether it changed.
+    pub fn set_auto_title(&mut self, auto_title: bool) -> bool {
+        let changed = self.auto_title != auto_title;
+        self.auto_title = auto_title;
+        changed
+    }
+
     pub fn get(&self, thread: ThreadId) -> Option<&ThreadFacts> {
         self.threads.get(&thread)
     }
@@ -110,7 +133,7 @@ impl Facts {
         let ordered = cockpit.parked_in_order().unwrap_or_default();
         for thread in &ordered {
             let facts = self.threads.entry(*thread).or_default();
-            facts.name = SharedString::from(cockpit.display_title(*thread, true));
+            facts.name = SharedString::from(cockpit.display_title(*thread, self.auto_title));
             let Ok(meta) = cockpit.peek(*thread) else {
                 facts.provider = None;
                 facts.project = None;
@@ -158,7 +181,7 @@ impl Facts {
             ),
             Err(_) => (None, None),
         };
-        let name = SharedString::from(cockpit.display_title(thread, true));
+        let name = SharedString::from(cockpit.display_title(thread, self.auto_title));
         let facts = self.threads.entry(thread).or_default();
         facts.branch = branch;
         facts.project = project;
@@ -169,7 +192,7 @@ impl Facts {
     /// The name alone — after a first prompt or a rename, the one fact
     /// that moved.
     pub fn renamed(&mut self, cockpit: &Cockpit, thread: ThreadId) {
-        let name = SharedString::from(cockpit.display_title(thread, true));
+        let name = SharedString::from(cockpit.display_title(thread, self.auto_title));
         self.threads.entry(thread).or_default().name = name;
     }
 

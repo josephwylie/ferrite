@@ -4,15 +4,47 @@
 //! both hand the pump the same `Receiver<SessionEvent>`.
 
 use std::io;
+use std::sync::{Arc, Mutex};
 
 use ferrite_core::cockpit::{RssSampler, SpawnRequest, Spawner};
 use ferrite_core::providers::{ClaudeConfig, ClaudeSession, CodexConfig, CodexSession, Session};
+use ferrite_core::settings::Settings;
 use ferrite_core::store::Provider;
 use ferrite_core::ThreadId;
 
+/// What every new Session is started with beyond the Thread's own choice:
+/// the operator's permission and sandbox defaults, read from Settings and
+/// shared between the window (which edits them) and the spawner (which
+/// reads them at each spawn — so a change applies to the next Session).
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct SessionDefaults {
+    pub claude_permission_mode: Option<String>,
+    pub codex_approval_policy: Option<String>,
+    pub codex_sandbox: Option<String>,
+}
+
+impl SessionDefaults {
+    pub fn from_settings(settings: &Settings) -> Self {
+        Self {
+            claude_permission_mode: settings.claude_permission_mode.clone(),
+            codex_approval_policy: Some(settings.codex_approval_policy.clone())
+                .filter(|policy| !policy.is_empty()),
+            codex_sandbox: settings.codex_sandbox.clone(),
+        }
+    }
+}
+
 /// How the app starts Sessions: the Thread's stored choice becomes a
 /// provider CLI process working in its binding.
-pub struct Spawn;
+pub struct Spawn {
+    pub defaults: Arc<Mutex<SessionDefaults>>,
+}
+
+impl Spawn {
+    pub fn new(defaults: Arc<Mutex<SessionDefaults>>) -> Self {
+        Self { defaults }
+    }
+}
 
 impl Spawner for Spawn {
     fn spawn(&mut self, request: SpawnRequest) -> io::Result<Box<dyn Session>> {
@@ -24,10 +56,16 @@ impl Spawner for Spawn {
             .or_else(|| std::env::current_dir().ok());
         let model = request.model.map(|model| model.to_string());
         let resume = request.resume.map(|target| target.to_string());
+        let defaults = self
+            .defaults
+            .lock()
+            .map(|defaults| defaults.clone())
+            .unwrap_or_default();
         match request.provider {
             Provider::Claude => ClaudeSession::spawn(ClaudeConfig {
                 cwd,
                 model,
+                permission_mode: defaults.claude_permission_mode,
                 resume,
                 ..Default::default()
             })
@@ -38,7 +76,10 @@ impl Spawner for Spawn {
             Provider::Codex => CodexSession::spawn(CodexConfig {
                 cwd,
                 model,
-                approval_policy: Some("on-request".into()),
+                approval_policy: defaults
+                    .codex_approval_policy
+                    .or_else(|| Some("on-request".into())),
+                sandbox: defaults.codex_sandbox,
                 resume,
                 ..Default::default()
             })
