@@ -919,7 +919,7 @@ pub fn threads_for(cockpit: &mut Cockpit, wanted: usize, provider: Provider) -> 
         // run after its first.
         match pool
             .iter()
-            .position(|thread| cockpit.provider(*thread) == Some(want))
+            .position(|thread| cockpit.thread(*thread).map(|open| open.provider()) == Some(want))
         {
             Some(at) => {
                 let thread = pool.remove(at);

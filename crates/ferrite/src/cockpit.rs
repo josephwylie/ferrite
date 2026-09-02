@@ -449,9 +449,10 @@ impl CockpitView {
     /// agent itself may switch branches, which is exactly why the header
     /// reads the repo and not the binding.
     fn refresh_branch(&mut self, thread: ThreadId) {
+        let open = self.cockpit.thread(thread);
         let cwd = ferrite_core::workspace::effective_cwd(
-            self.cockpit.session_project_root(thread),
-            self.cockpit.workspace(thread),
+            open.and_then(|open| open.session_project_root()),
+            open.and_then(|open| open.workspace()),
         )
         .map(std::path::Path::to_path_buf);
         match cwd.and_then(|cwd| ferrite_core::workspace::checkout_branch(&cwd)) {
@@ -623,7 +624,7 @@ impl CockpitView {
                 self.refresh_wall(update.thread);
                 // Turn end is the other stated refresh moment (#29): the
                 // turn that just finished may have moved the checkout.
-                if !self.cockpit.busy(update.thread) {
+                if !self.cockpit.thread(update.thread).is_some_and(|open| open.busy()) {
                     self.refresh_branch(update.thread);
                     self.refresh_project(update.thread);
                 }
@@ -643,7 +644,7 @@ impl CockpitView {
         };
         let valid = self
             .cockpit
-            .transcript(thread)
+            .thread(thread).map(|open| open.transcript())
             .into_iter()
             .flat_map(|transcript| transcript.blocks())
             .filter_map(|block| match &block.body {
@@ -662,9 +663,10 @@ impl CockpitView {
         let Some(index) = self.pane_for(thread) else {
             return;
         };
+        let open = self.cockpit.thread(thread);
         let card = pane::wall_card(
-            self.cockpit.transcript(thread),
-            self.cockpit.pending(thread),
+            open.map(|open| open.transcript()),
+            open.and_then(|open| open.pending()),
         );
         self.panes[index].wall = card;
     }
@@ -1006,7 +1008,7 @@ impl CockpitView {
             return;
         }
         // Typing does not wait for the agent; sending does.
-        if self.cockpit.busy(thread) {
+        if self.cockpit.thread(thread).is_some_and(|open| open.busy()) {
             self.cockpit.queue(thread, text);
         } else {
             self.cockpit.send(thread, text);
@@ -1119,7 +1121,7 @@ impl CockpitView {
             return Vec::new();
         };
         self.cockpit
-            .transcript(thread)
+            .thread(thread).map(|open| open.transcript())
             .into_iter()
             .flat_map(|transcript| pane::rendered_output_tools(transcript.blocks(), level))
             .map(|tool| tool.call.clone())
@@ -1169,13 +1171,13 @@ impl CockpitView {
         // Thread the wall is flagging. Answering from across the room is the
         // point of the badge.
         let thread = match self.focused_thread() {
-            Some(thread) if self.cockpit.pending(thread).is_some() => Some(thread),
+            Some(thread) if self.cockpit.thread(thread).and_then(|open| open.pending()).is_some() => Some(thread),
             _ => self.cockpit.next_blocked(None),
         };
         let Some(thread) = thread else {
             return;
         };
-        let Some(decision) = self.cockpit.pending(thread).cloned() else {
+        let Some(decision) = self.cockpit.thread(thread).and_then(|open| open.pending()).cloned() else {
             return;
         };
         let response = match answer {
@@ -1291,7 +1293,8 @@ impl CockpitView {
                     selected: 0,
                 });
             };
-            let mut rows = command_rows(self.cockpit.commands(thread), filter);
+            let open = self.cockpit.thread(thread)?;
+            let mut rows = command_rows(open.commands(), filter);
             // Ferrite's local rows ride on top, through the same fuzzy
             // filter and under the same cap as every row. #11: `import`
             // while the Thread still offers adoption. #25: `provider`
@@ -1302,13 +1305,13 @@ impl CockpitView {
                 rows.truncate(MENU_ROWS_MAX);
             };
             let mut import = false;
-            if pane::offers_import(self.cockpit.transcript(thread)) {
+            if pane::offers_import(Some(open.transcript())) {
                 if let Some(row) = local_row(filter, "import", "adopt a CLI session file", false) {
                     push_local(&mut rows, row);
                     import = true;
                 }
             }
-            let locked = self.cockpit.first_prompt_sent(thread);
+            let locked = open.first_prompt_sent();
             let detail = if locked {
                 "locked after first prompt"
             } else {
@@ -1334,7 +1337,7 @@ impl CockpitView {
         let (token_start, filter) = mention_token(&text, cursor)?;
         // No binding → nothing to walk → no popover.
         let root = match (thread, pane.draft()) {
-            (Some(thread), _) => self.cockpit.workspace(thread)?.cwd().to_path_buf(),
+            (Some(thread), _) => self.cockpit.thread(thread)?.workspace()?.cwd().to_path_buf(),
             (None, Some(draft)) => self.draft_source_root(draft)?,
             _ => return None,
         };
@@ -1416,12 +1419,15 @@ impl CockpitView {
         let Some(thread) = self.panes.get(index).and_then(PaneView::thread) else {
             return false;
         };
-        self.cockpit.has_prompt_history(thread)
+        let Some(open) = self.cockpit.thread(thread) else {
+            return false;
+        };
+        open.has_prompt_history()
             && !self.panes[index].has_tool_target()
             && self.rename.is_none()
-            && !self.cockpit.busy(thread)
-            && self.cockpit.pending(thread).is_none()
-            && self.cockpit.queued(thread).is_none()
+            && !open.busy()
+            && open.pending().is_none()
+            && open.queued().is_none()
             && self.menu.is_none()
             && self.picker.is_none()
             && self.band.is_none()
@@ -1537,7 +1543,7 @@ impl CockpitView {
                     if at == local {
                         // The locked door's row is an explanation, not an
                         // offer: its pick dismisses and nothing else.
-                        if !self.cockpit.first_prompt_sent(thread) {
+                        if !self.cockpit.thread(thread).is_some_and(|open| open.first_prompt_sent()) {
                             splice(cx, "");
                             self.open_provider_picker(thread, cx);
                         }
@@ -1650,21 +1656,19 @@ impl CockpitView {
     /// prompt has gone out: the choice is locked, and the footer is a
     /// plain label by then anyway.
     fn open_provider_picker(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        if self.cockpit.first_prompt_sent(thread) {
-            return;
-        }
-        let Some(current) = self.cockpit.provider(thread) else {
+        let Some(open) = self.cockpit.thread(thread) else {
             return;
         };
-        let chosen = self.cockpit.model(thread).map(str::to_string);
+        if open.first_prompt_sent() {
+            return;
+        }
+        let current = open.provider();
+        let chosen = open.model().map(str::to_string);
         // The ✓ marks what is serving: the standing choice where one was
         // picked, otherwise the model the Session's own Init announced.
-        let serving = chosen.clone().or_else(|| {
-            self.cockpit
-                .transcript(thread)
-                .and_then(|transcript| transcript.model())
-                .map(str::to_string)
-        });
+        let serving = chosen
+            .clone()
+            .or_else(|| open.transcript().model().map(str::to_string));
         let label = |name: SharedString, detail: SharedString| pane::MenuRow {
             // Nothing lands in the line on ↵, exactly as the import rows.
             insert: SharedString::default(),
@@ -1696,7 +1700,7 @@ impl CockpitView {
         // a switch lets its Session speak. Their labels ride the chip's
         // own grooming: one spelling per model, wherever it shows.
         let model_detail = SharedString::from(format!("{} model", provider_label(current)));
-        for model in self.cockpit.models(thread) {
+        for model in open.models() {
             rows.push(PickRow {
                 row: label(pane::model_label(model), model_detail.clone()),
                 active: serving.as_deref() == Some(model.as_str()),
@@ -1785,7 +1789,7 @@ impl CockpitView {
                 Ok(()) => {
                     if let Some(blank) = blank {
                         self.open_pane(imported, cx);
-                        if pane::offers_import(self.cockpit.transcript(blank)) {
+                        if pane::offers_import(self.cockpit.thread(blank).map(|open| open.transcript())) {
                             match self.cockpit.delete(blank) {
                                 Ok(()) => self.panes.retain(|pane| pane.thread() != Some(blank)),
                                 Err(e) => {
@@ -1850,10 +1854,13 @@ impl CockpitView {
             .panes
             .get(self.focused)
             .map(|pane| match &pane.content {
-                pane::PaneContent::Thread(thread) => ProviderChoice {
-                    provider: self.cockpit.provider(*thread).unwrap_or(Provider::Claude),
-                    model: self.cockpit.model(*thread).map(str::to_string),
-                },
+                pane::PaneContent::Thread(thread) => {
+                    let open = self.cockpit.thread(*thread);
+                    ProviderChoice {
+                        provider: open.map_or(Provider::Claude, |open| open.provider()),
+                        model: open.and_then(|open| open.model()).map(str::to_string),
+                    }
+                }
                 pane::PaneContent::Draft(draft) => draft.provider.clone(),
             })
             .unwrap_or(ProviderChoice {
@@ -2696,7 +2703,7 @@ impl CockpitView {
                 .get(&thread)
                 .and_then(|(_, label)| label.clone()),
             branch: self.branches.get(&thread).cloned(),
-            provider: self.cockpit.provider(thread).or_else(|| {
+            provider: self.cockpit.thread(thread).map(|open| open.provider()).or_else(|| {
                 self.parked
                     .iter()
                     .find(|(parked, _)| *parked == thread)
@@ -3240,7 +3247,7 @@ impl Render for CockpitView {
                 let target_is_rendered = target.as_ref().is_none_or(|target| {
                     self.panes[index]
                         .thread()
-                        .and_then(|thread| self.cockpit.transcript(thread))
+                        .and_then(|thread| self.cockpit.thread(thread).map(|open| open.transcript()))
                         .is_some_and(|transcript| {
                             pane::rendered_output_tools(transcript.blocks(), level)
                                 .any(|tool| tool.call == *target)
@@ -3299,14 +3306,14 @@ impl Render for CockpitView {
                     PickKind::ImportFile => {
                         level != Level::Transcript
                             || picker.thread.is_some_and(|thread| {
-                                !pane::offers_import(self.cockpit.transcript(thread))
+                                !pane::offers_import(self.cockpit.thread(thread).map(|open| open.transcript()))
                             })
                     }
                     PickKind::Provider => {
                         level != Level::Transcript
                             || picker
                                 .thread
-                                .is_none_or(|thread| self.cockpit.first_prompt_sent(thread))
+                                .is_none_or(|thread| self.cockpit.thread(thread).is_some_and(|open| open.first_prompt_sent()))
                     }
                 }
         }) {
@@ -3381,7 +3388,7 @@ impl Render for CockpitView {
                     Level::Transcript => Some(pane.composer.focus_handle(cx)),
                     _ if pane
                         .thread()
-                        .is_some_and(|thread| self.cockpit.pending(thread).is_some())
+                        .is_some_and(|thread| self.cockpit.thread(thread).and_then(|open| open.pending()).is_some())
                         && level != Level::Wall =>
                     {
                         Some(pane.decision_focus.clone())
@@ -3603,7 +3610,7 @@ impl CockpitView {
         let selection = {
             let blocks = self
                 .cockpit
-                .transcript(thread)
+                .thread(thread).map(|open| open.transcript())
                 .map(|transcript| transcript.blocks())
                 .unwrap_or(&[]);
             self.selection
@@ -3612,10 +3619,10 @@ impl CockpitView {
         let rendered = cell.child(pane::render_pane(
             pane,
             pane::PaneState {
-                transcript: self.cockpit.transcript(thread),
-                decision: self.cockpit.pending(thread),
-                queued: self.cockpit.queued(thread),
-                workspace: self.cockpit.workspace(thread),
+                transcript: self.cockpit.thread(thread).map(|open| open.transcript()),
+                decision: self.cockpit.thread(thread).and_then(|open| open.pending()),
+                queued: self.cockpit.thread(thread).and_then(|open| open.queued()),
+                workspace: self.cockpit.thread(thread).and_then(|open| open.workspace()),
                 // The cached checkout label (#29) — display-only, and only
                 // where the L1 header draws its binding slot.
                 branch: (level == Level::Transcript)
@@ -3631,7 +3638,7 @@ impl CockpitView {
                 // The meta row's mode chip — only where the meta row
                 // renders.
                 permission_mode: (level == Level::Transcript)
-                    .then(|| self.cockpit.permission_mode(thread))
+                    .then(|| self.cockpit.thread(thread).and_then(|open| open.permission_mode()))
                     .flatten(),
                 // The Composer's model picker — only where the Composer
                 // renders (#25).
@@ -3649,10 +3656,10 @@ impl CockpitView {
                 running: focused
                     && self
                         .cockpit
-                        .transcript(thread)
+                        .thread(thread).map(|open| open.transcript())
                         .is_some_and(|transcript| transcript.status() == Status::Streaming),
                 selection,
-                timings: self.cockpit.tool_timings(thread),
+                timings: self.cockpit.thread(thread).map(|open| open.tool_timings()),
                 // The context ring lives on the L1 head only.
                 usage_ring: (level == Level::Transcript)
                     .then(|| self.usage_ring(index))
@@ -3680,9 +3687,10 @@ impl CockpitView {
             return std::collections::HashMap::new();
         }
         let pane = &self.panes[index];
-        let Some(transcript) = self.cockpit.transcript(thread) else {
+        let Some(open) = self.cockpit.thread(thread) else {
             return std::collections::HashMap::new();
         };
+        let transcript = open.transcript();
         let mut controls = std::collections::HashMap::new();
         for tool in pane::rendered_output_tools(transcript.blocks(), level) {
             let call = tool.call.clone();
@@ -3750,7 +3758,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let thread = self.panes[index].thread()?;
-        let decision = self.cockpit.pending(thread)?;
+        let decision = self.cockpit.thread(thread)?.pending()?;
         let offers_always = level == Level::Transcript && decision.standing_answer().is_some();
         let wire = |keycap: Stateful<Div>, answer: Answer, cx: &mut Context<Self>| {
             keycap.on_mouse_down(
@@ -3778,7 +3786,7 @@ impl CockpitView {
     /// Pane only places it. None until the provider reports a window.
     fn usage_ring(&self, index: usize) -> Option<AnyElement> {
         let thread = self.panes[index].thread()?;
-        let usage = self.cockpit.transcript(thread)?.usage()?;
+        let usage = self.cockpit.thread(thread)?.transcript().usage()?;
         let window = usage.context_window.filter(|window| *window > 0)?;
         let fraction = usage.total_tokens as f32 / window as f32;
         // The ring is the whole affordance: no hover card, no token count
@@ -3793,20 +3801,20 @@ impl CockpitView {
     /// itself rather than the control vanishing.
     fn model_picker(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
         let thread = self.panes[index].thread()?;
-        let provider = self.cockpit.provider(thread);
+        let open = self.cockpit.thread(thread)?;
+        let provider = open.provider();
         // The Session's own Init names what is serving; until it speaks the
         // picker carries the provider's own word — never an invented model.
-        let model = self.cockpit.transcript(thread).and_then(|t| t.model());
-        let label = match model {
+        let label = match open.transcript().model() {
             Some(model) => pane::model_label(model),
-            None => SharedString::from(provider.map_or("model", provider_label)),
+            None => SharedString::from(provider_label(provider)),
         };
         Some(
             div()
                 .id(("model-picker", thread.get() as usize))
                 .flex()
                 .flex_shrink_0()
-                .child(pane::model_picker(provider, label))
+                .child(pane::model_picker(Some(provider), label))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |view, _: &MouseDownEvent, _, cx| {
@@ -4373,7 +4381,7 @@ mod tests {
         view.read_with(cx, |view, _| {
             let thread = view.panes[0].thread().unwrap();
             assert!(
-                view.cockpit.pending(thread).is_some(),
+                view.cockpit.thread(thread).and_then(|open| open.pending()).is_some(),
                 "the card should be up before the key"
             );
         });
@@ -4383,7 +4391,7 @@ mod tests {
         view.read_with(cx, |view, _| {
             let thread = view.panes[0].thread().unwrap();
             assert!(
-                view.cockpit.pending(thread).is_none(),
+                view.cockpit.thread(thread).and_then(|open| open.pending()).is_none(),
                 "y must answer the Decision, not type a letter"
             );
         });
@@ -4406,7 +4414,7 @@ mod tests {
         cx.simulate_input("not yet");
         view.read_with(cx, |view, cx| {
             assert!(
-                view.cockpit.pending(thread).is_some(),
+                view.cockpit.thread(thread).and_then(|open| open.pending()).is_some(),
                 "the premise: a card up"
             );
             assert!(
@@ -4424,7 +4432,7 @@ mod tests {
                 let x = 1430. - step as f32 * 6.;
                 cx.simulate_click(gpui::point(px(x), px(y)), gpui::Modifiers::none());
                 cx.run_until_parked();
-                if view.read_with(cx, |view, _| view.cockpit.pending(thread).is_none()) {
+                if view.read_with(cx, |view, _| view.cockpit.thread(thread).and_then(|open| open.pending()).is_none()) {
                     answered = true;
                     break 'sweep;
                 }
@@ -4434,7 +4442,7 @@ mod tests {
         view.read_with(cx, |view, cx| {
             let answered_as = view
                 .cockpit
-                .transcript(thread)
+                .thread(thread).map(|open| open.transcript())
                 .unwrap()
                 .blocks()
                 .iter()
@@ -4479,12 +4487,12 @@ mod tests {
             .unwrap();
         tick(cx);
         view.read_with(cx, |view, _| {
-            assert!(view.cockpit.busy(thread), "the premise: a turn in flight");
+            assert!(view.cockpit.thread(thread).is_some_and(|open| open.busy()), "the premise: a turn in flight");
         });
         cx.simulate_input("also this");
         cx.simulate_keystrokes("enter");
         view.read_with(cx, |view, _| {
-            assert_eq!(view.cockpit.queued(thread), Some("also this"));
+            assert_eq!(view.cockpit.thread(thread).and_then(|open| open.queued()), Some("also this"));
         });
 
         // With text on the line, Backspace edits; the queue is untouched.
@@ -4495,19 +4503,19 @@ mod tests {
                 !view.panes[0].composer.read(cx).is_empty(),
                 "backspace with text is still an editing key"
             );
-            assert_eq!(view.cockpit.queued(thread), Some("also this"));
+            assert_eq!(view.cockpit.thread(thread).and_then(|open| open.queued()), Some("also this"));
         });
 
         // Emptied, the next Backspace is the advertised ⌫ unqueue.
         cx.simulate_keystrokes("backspace");
         view.read_with(cx, |view, cx| {
             assert!(view.panes[0].composer.read(cx).is_empty());
-            assert_eq!(view.cockpit.queued(thread), Some("also this"));
+            assert_eq!(view.cockpit.thread(thread).and_then(|open| open.queued()), Some("also this"));
         });
         cx.simulate_keystrokes("backspace");
         view.read_with(cx, |view, _| {
             assert_eq!(
-                view.cockpit.queued(thread),
+                view.cockpit.thread(thread).and_then(|open| open.queued()),
                 None,
                 "backspace on the empty line unqueues the held prompt"
             );
@@ -4531,7 +4539,7 @@ mod tests {
         view.read_with(cx, |view, _| {
             assert_eq!(view.panes.len(), 1, "the Pane is gone");
             assert!(
-                view.cockpit.transcript(closed).is_none(),
+                view.cockpit.thread(closed).is_none(),
                 "and so is its memory"
             );
             assert!(
@@ -4568,7 +4576,7 @@ mod tests {
             );
             let blocks = view
                 .cockpit
-                .transcript(closed)
+                .thread(closed).map(|open| open.transcript())
                 .expect("its transcript")
                 .blocks();
             assert!(
@@ -4744,14 +4752,14 @@ mod tests {
         let flagged = view.read_with(cx, |view, _| view.panes[7].thread().unwrap());
         view.read_with(cx, |view, _| {
             assert_eq!(view.focused, 0, "focus stays where the operator left it");
-            assert!(view.cockpit.pending(flagged).is_some());
+            assert!(view.cockpit.thread(flagged).and_then(|open| open.pending()).is_some());
         });
 
         cx.simulate_keystrokes("y");
 
         view.read_with(cx, |view, _| {
             assert!(
-                view.cockpit.pending(flagged).is_none(),
+                view.cockpit.thread(flagged).and_then(|open| open.pending()).is_none(),
                 "the flagged Thread is the one that got answered"
             );
             assert_eq!(view.focused, 0, "and answering did not move the operator");
@@ -4854,7 +4862,7 @@ mod tests {
             let thread = view.panes[view.focused]
                 .thread()
                 .expect("the first send made a Thread of the draft");
-            let binding = view.cockpit.workspace(thread).expect("a binding");
+            let binding = view.cockpit.thread(thread).and_then(|open| open.workspace()).expect("a binding");
             assert!(
                 matches!(binding, WorkspaceBinding::Worktree { .. }),
                 "expected a worktree, got {binding:?}"
@@ -4884,7 +4892,7 @@ mod tests {
 
         view.read_with(cx, |view, _| {
             assert!(
-                view.cockpit.pending(flagged).is_some(),
+                view.cockpit.thread(flagged).and_then(|open| open.pending()).is_some(),
                 "a Decision with nothing to adopt must still be waiting"
             );
         });
@@ -4918,7 +4926,8 @@ mod tests {
         view.read_with(cx, |view, _| {
             let binding = view
                 .cockpit
-                .workspace(view.panes[view.focused].thread().unwrap())
+                .thread(view.panes[view.focused].thread().unwrap())
+                .and_then(|open| open.workspace())
                 .expect("a binding");
             assert!(matches!(binding, WorkspaceBinding::Main { .. }));
             // The registry canonicalizes what it registers; the binding is
@@ -5093,14 +5102,14 @@ mod tests {
             let pane = &view.panes[view.focused];
             let thread = pane.thread().expect("the draft became a Thread");
             assert!(
-                view.cockpit.first_prompt_sent(thread),
+                view.cockpit.thread(thread).is_some_and(|open| open.first_prompt_sent()),
                 "the first send armed the lock"
             );
             assert!(
                 pane.composer.read(cx).is_empty(),
                 "the sent prompt left the line"
             );
-            let blocks = view.cockpit.transcript(thread).unwrap().blocks();
+            let blocks = view.cockpit.thread(thread).unwrap().transcript().blocks();
             assert!(
                 matches!(
                     &blocks[0].body,
@@ -5400,7 +5409,7 @@ mod tests {
             let thread = view.panes[0].thread().unwrap();
             let id = view
                 .cockpit
-                .transcript(thread)
+                .thread(thread).map(|open| open.transcript())
                 .expect("a transcript")
                 .blocks()[block]
                 .id;
@@ -5611,7 +5620,7 @@ mod tests {
         tick(cx);
 
         view.read_with(cx, |view, _| {
-            let transcript = view.cockpit.transcript(thread).unwrap();
+            let transcript = view.cockpit.thread(thread).unwrap().transcript();
             let id = |call: &str| {
                 transcript
                     .blocks()
@@ -6589,7 +6598,7 @@ mod tests {
         view.read_with(cx, |view, _| {
             assert_eq!(
                 view.cockpit
-                    .transcript(thread)
+                    .thread(thread).map(|open| open.transcript())
                     .unwrap()
                     .blocks()
                     .iter()
@@ -7096,8 +7105,8 @@ mod tests {
             .unwrap();
         tick(cx);
         view.read_with(cx, |view, _| {
-            assert!(view.cockpit.pending(thread).is_some(), "the card is up");
-            assert!(view.cockpit.busy(thread), "the turn is running");
+            assert!(view.cockpit.thread(thread).and_then(|open| open.pending()).is_some(), "the card is up");
+            assert!(view.cockpit.thread(thread).is_some_and(|open| open.busy()), "the turn is running");
         });
 
         // The input is still live: typing lands, enter queues behind the
@@ -7107,9 +7116,9 @@ mod tests {
         cx.simulate_keystrokes("enter");
         cx.run_until_parked();
         view.read_with(cx, |view, _| {
-            assert_eq!(view.cockpit.queued(thread), Some("fix the tests too"));
+            assert_eq!(view.cockpit.thread(thread).and_then(|open| open.queued()), Some("fix the tests too"));
             assert!(
-                view.cockpit.pending(thread).is_some(),
+                view.cockpit.thread(thread).and_then(|open| open.pending()).is_some(),
                 "typing answered nothing"
             );
         });
@@ -7119,7 +7128,7 @@ mod tests {
         cx.run_until_parked();
         view.read_with(cx, |view, _| {
             assert!(
-                view.cockpit.pending(thread).is_none(),
+                view.cockpit.thread(thread).and_then(|open| open.pending()).is_none(),
                 "y on the empty line answered the Decision"
             );
         });
@@ -7154,7 +7163,7 @@ mod tests {
         );
         view.read_with(cx, |view, _| {
             assert!(
-                view.cockpit.pending(thread).is_some(),
+                view.cockpit.thread(thread).and_then(|open| open.pending()).is_some(),
                 "the Decision is still waiting"
             );
         });
@@ -7172,7 +7181,7 @@ mod tests {
         let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
         view.read_with(cx, |view, _| {
             assert_eq!(
-                view.cockpit.permission_mode(thread),
+                view.cockpit.thread(thread).and_then(|open| open.permission_mode()),
                 None,
                 "no chip is invented before the Session speaks"
             );
@@ -7186,7 +7195,7 @@ mod tests {
         tick(cx);
 
         view.read_with(cx, |view, _| {
-            assert_eq!(view.cockpit.permission_mode(thread), Some("acceptEdits"));
+            assert_eq!(view.cockpit.thread(thread).and_then(|open| open.permission_mode()), Some("acceptEdits"));
         });
     }
 
@@ -7403,7 +7412,7 @@ mod tests {
             ));
             assert_eq!(picker.selected, 0);
             // Nothing reached the provider: no prompt, no running turn.
-            let transcript = view.cockpit.transcript(thread).unwrap();
+            let transcript = view.cockpit.thread(thread).unwrap().transcript();
             assert!(
                 !transcript
                     .blocks()
@@ -7411,7 +7420,7 @@ mod tests {
                     .any(|block| matches!(block.body, Body::Prompt(_))),
                 "picking import must not prompt the provider"
             );
-            assert!(!view.cockpit.busy(thread));
+            assert!(!view.cockpit.thread(thread).is_some_and(|open| open.busy()));
         });
 
         // The arrows walk the rows; escape dismisses with the keyboard
@@ -7472,7 +7481,7 @@ mod tests {
                 Some(adopted),
                 "the adopted Thread takes focus"
             );
-            let transcript = view.cockpit.transcript(adopted).unwrap();
+            let transcript = view.cockpit.thread(adopted).unwrap().transcript();
             assert_eq!(
                 transcript.session_id(),
                 Some("adopt-4f2a"),
@@ -7486,7 +7495,7 @@ mod tests {
                 transcript.blocks()
             );
             // The blank Thread is gone entirely — not parked clutter.
-            assert!(view.cockpit.transcript(blank).is_none());
+            assert!(view.cockpit.thread(blank).is_none());
             assert!(view.cockpit.parked().unwrap().is_empty());
         });
     }
@@ -7522,7 +7531,7 @@ mod tests {
             assert!(view.picker.is_none(), "the refusal closed the picker");
             assert_eq!(view.panes.len(), 1);
             assert_eq!(view.panes[0].thread().unwrap(), thread, "the Thread stays");
-            let transcript = view.cockpit.transcript(thread).unwrap();
+            let transcript = view.cockpit.thread(thread).unwrap().transcript();
             assert!(
                 transcript.blocks().iter().any(|block| matches!(
                     &block.body,
@@ -7570,7 +7579,7 @@ mod tests {
 
         view.read_with(cx, |view, _| {
             assert!(view.picker.is_none(), "nothing to pick from");
-            let transcript = view.cockpit.transcript(thread).unwrap();
+            let transcript = view.cockpit.thread(thread).unwrap().transcript();
             assert!(
                 transcript.blocks().iter().any(|block| matches!(
                     &block.body,
@@ -7743,11 +7752,11 @@ mod tests {
 
         view.read_with(cx, |view, _| {
             assert!(view.picker.is_none(), "the pick closed the picker");
-            assert_eq!(view.cockpit.provider(thread), Some(Provider::Codex));
+            assert_eq!(view.cockpit.thread(thread).map(|open| open.provider()), Some(Provider::Codex));
             // The switch was Ferrite's own act: no prompt, no running turn.
-            let transcript = view.cockpit.transcript(thread).unwrap();
+            let transcript = view.cockpit.thread(thread).unwrap().transcript();
             assert!(transcript.blocks().is_empty());
-            assert!(!view.cockpit.busy(thread));
+            assert!(!view.cockpit.thread(thread).is_some_and(|open| open.busy()));
         });
         assert_eq!(
             fake.spawned.borrow().last().unwrap(),
@@ -7804,7 +7813,7 @@ mod tests {
             "the model rides the spawn; the provider stands"
         );
         view.read_with(cx, |view, _| {
-            assert_eq!(view.cockpit.model(thread), Some("opus"));
+            assert_eq!(view.cockpit.thread(thread).and_then(|open| open.model()), Some("opus"));
         });
 
         // The replacement Session announces its own list — reopening the
@@ -7962,7 +7971,7 @@ mod tests {
         cx.simulate_keystrokes("down down down enter");
         cx.run_until_parked();
         view.read_with(cx, |view, _| {
-            assert_eq!(view.cockpit.model(thread), Some("opus"));
+            assert_eq!(view.cockpit.thread(thread).and_then(|open| open.model()), Some("opus"));
         });
         let spawns = fake.streams.borrow().len();
 
@@ -7984,8 +7993,8 @@ mod tests {
             "a re-pick of the standing choice must not respawn"
         );
         view.read_with(cx, |view, _| {
-            assert_eq!(view.cockpit.model(thread), Some("opus"), "the model stands");
-            assert_eq!(view.cockpit.provider(thread), Some(Provider::Claude));
+            assert_eq!(view.cockpit.thread(thread).and_then(|open| open.model()), Some("opus"), "the model stands");
+            assert_eq!(view.cockpit.thread(thread).map(|open| open.provider()), Some(Provider::Claude));
         });
     }
 
