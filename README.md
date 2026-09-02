@@ -35,6 +35,10 @@ xattr -c ferrite   # unsigned binary; clear the download quarantine
 ./ferrite
 ```
 
+From a checkout, `scripts/install-app.sh` builds the release binary and
+installs it as `/Applications/Ferrite.app`, so it opens from the Dock,
+Spotlight or Launchpad.
+
 ### Windows (x64)
 
 Unzip `ferrite-v*-x86_64-pc-windows-msvc.zip` and run `ferrite.exe`. The

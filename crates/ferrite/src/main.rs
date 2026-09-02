@@ -12,6 +12,7 @@ mod pane;
 mod pointer;
 mod select;
 mod session;
+mod shell;
 mod theme;
 
 use ferrite_core::cockpit::Cockpit;
@@ -40,6 +41,9 @@ static JBM_SEMIBOLD: &[u8] = include_bytes!("../assets/fonts/JetBrainsMono-SemiB
 static JBM_BOLD: &[u8] = include_bytes!("../assets/fonts/JetBrainsMono-Bold.ttf");
 
 fn main() {
+    // Before the args, the store, or any spawn: a Dock launch has no PATH
+    // worth the name until the login shell is asked (crate::shell).
+    shell::adopt_login_environment();
     let args: Vec<String> = std::env::args().collect();
     let load = args.iter().any(|arg| arg == "--load");
     let demo = load || args.iter().any(|arg| arg == "--demo");
