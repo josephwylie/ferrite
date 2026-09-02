@@ -87,133 +87,135 @@ fn main() {
     // The icons are registered on the application, before `run`:
     // `with_assets` replaces both the asset source and the SVG renderer,
     // and `svg()` finds neither afterwards.
-    Application::new().with_assets(icons::Assets).run(move |cx: &mut App| {
-        // First, before anything can lay out text in it: the bundled mono
-        // face. `add_fonts` returns a Result and a discarded one fails
-        // silently — you get the system font and no explanation.
-        cx.text_system()
-            .add_fonts(vec![
-                std::borrow::Cow::Borrowed(JBM_REGULAR),
-                std::borrow::Cow::Borrowed(JBM_MEDIUM),
-                std::borrow::Cow::Borrowed(JBM_SEMIBOLD),
-                std::borrow::Cow::Borrowed(JBM_BOLD),
-            ])
-            .expect("the bundled JetBrains Mono faces load");
+    Application::new()
+        .with_assets(icons::Assets)
+        .run(move |cx: &mut App| {
+            // First, before anything can lay out text in it: the bundled mono
+            // face. `add_fonts` returns a Result and a discarded one fails
+            // silently — you get the system font and no explanation.
+            cx.text_system()
+                .add_fonts(vec![
+                    std::borrow::Cow::Borrowed(JBM_REGULAR),
+                    std::borrow::Cow::Borrowed(JBM_MEDIUM),
+                    std::borrow::Cow::Borrowed(JBM_SEMIBOLD),
+                    std::borrow::Cow::Borrowed(JBM_BOLD),
+                ])
+                .expect("the bundled JetBrains Mono faces load");
 
-        let bindings = load_bindings(keymap::PLATFORM, cx);
-        cx.bind_keys(bindings);
-        cx.on_action(|_: &Quit, cx| cx.quit());
-        cx.set_menus(app_menus());
+            let bindings = load_bindings(keymap::PLATFORM, cx);
+            cx.bind_keys(bindings);
+            cx.on_action(|_: &Quit, cx| cx.quit());
+            cx.set_menus(app_menus());
 
-        let store = match Store::open(store_dir()) {
-            Ok(store) => store,
-            Err(e) => {
-                eprintln!("ferrite: cannot open the Thread store: {e}");
-                std::process::exit(1);
+            let store = match Store::open(store_dir()) {
+                Ok(store) => store,
+                Err(e) => {
+                    eprintln!("ferrite: cannot open the Thread store: {e}");
+                    std::process::exit(1);
+                }
+            };
+            let (adopted, refused) = adopt(&store, &imports);
+            for refusal in refused {
+                eprintln!("ferrite: {refusal}");
             }
-        };
-        let (adopted, refused) = adopt(&store, &imports);
-        for refusal in refused {
-            eprintln!("ferrite: {refusal}");
-        }
 
-        // The fixture adapter serves `--demo` and `--load`; every other
-        // launch spawns the real provider CLIs.
-        let defaults = std::sync::Arc::new(std::sync::Mutex::new(
-            SessionDefaults::from_settings(&settings),
-        ));
-        let spawner: Box<dyn ferrite_core::cockpit::Spawner> = if demo {
-            Box::new(demo::Spawn::new(load))
-        } else {
-            Box::new(session::Spawn::new(defaults.clone()))
-        };
-        let mut core = match Cockpit::try_new(store, spawner) {
-            Ok(core) => core,
-            Err(e) => {
-                eprintln!("ferrite: cannot open the workspace registry: {e}");
-                std::process::exit(1);
-            }
-        };
-        // A Dock launch has no directory of its own either: launchd starts
-        // it in `/`, which is no Project. It stands where the newest Thread
-        // works instead, so the launch project and every draft begin there.
-        if dock {
-            if let Err(e) = std::env::set_current_dir(dock_launch_dir(&core)) {
-                eprintln!("ferrite: cannot stand in the launch directory: {e}");
-            }
-        }
-        core.watch_memory(Box::new(ProcessRss), RSS_LIMIT);
-        for thread in adopted {
-            if let Err(e) = core.revive(thread) {
-                eprintln!("ferrite: imported thread {thread} would not open: {e}");
-            }
-        }
-        if core.threads().is_empty() {
-            if demo || panes > 1 {
-                demo::seed_panes(&mut core, panes, provider, demo);
+            // The fixture adapter serves `--demo` and `--load`; every other
+            // launch spawns the real provider CLIs.
+            let defaults = std::sync::Arc::new(std::sync::Mutex::new(
+                SessionDefaults::from_settings(&settings),
+            ));
+            let spawner: Box<dyn ferrite_core::cockpit::Spawner> = if demo {
+                Box::new(demo::Spawn::new(load))
             } else {
-                // The default launch revives the newest parked Thread; an
-                // empty store starts as a draft Pane (#29) — nothing
-                // spawns before the operator's choice.
-                revive_latest(&mut core);
+                Box::new(session::Spawn::new(defaults.clone()))
+            };
+            let mut core = match Cockpit::try_new(store, spawner) {
+                Ok(core) => core,
+                Err(e) => {
+                    eprintln!("ferrite: cannot open the workspace registry: {e}");
+                    std::process::exit(1);
+                }
+            };
+            // A Dock launch has no directory of its own either: launchd starts
+            // it in `/`, which is no Project. It stands where the newest Thread
+            // works instead, so the launch project and every draft begin there.
+            if dock {
+                if let Err(e) = std::env::set_current_dir(dock_launch_dir(&core)) {
+                    eprintln!("ferrite: cannot stand in the launch directory: {e}");
+                }
             }
-        }
+            core.watch_memory(Box::new(ProcessRss), RSS_LIMIT);
+            for thread in adopted {
+                if let Err(e) = core.revive(thread) {
+                    eprintln!("ferrite: imported thread {thread} would not open: {e}");
+                }
+            }
+            if core.threads().is_empty() {
+                if demo || panes > 1 {
+                    demo::seed_panes(&mut core, panes, provider, demo);
+                } else {
+                    // The default launch revives the newest parked Thread; an
+                    // empty store starts as a draft Pane (#29) — nothing
+                    // spawns before the operator's choice.
+                    revive_latest(&mut core);
+                }
+            }
 
-        // The demo's Group (above): the fixture opens *on* it. The default
-        // view is Solo (#28), which is right for a launch but wrong here —
-        // the board the demo exists to draw is a Group's membership, and
-        // Solo would show one Pane of it.
-        let seeded_group = demo
-            .then(|| core.groups().iter().next().map(|group| group.id))
-            .flatten();
+            // The demo's Group (above): the fixture opens *on* it. The default
+            // view is Solo (#28), which is right for a launch but wrong here —
+            // the board the demo exists to draw is a Group's membership, and
+            // Solo would show one Pane of it.
+            let seeded_group = demo
+                .then(|| core.groups().iter().next().map(|group| group.id))
+                .flatten();
 
-        let bounds = Bounds::centered(None, size(px(1440.), px(900.)), cx);
-        let window = cx
-            .open_window(
-                WindowOptions {
-                    window_bounds: Some(WindowBounds::Windowed(bounds)),
-                    // The titlebar band blends into the app: the strip is
-                    // the visible titlebar, and the traffic lights sit in
-                    // its band (#22 D24). macOS only — hiding the system
-                    // titlebar elsewhere would take the window controls
-                    // with it.
-                    titlebar: Some(TitlebarOptions {
-                        title: Some("ferrite".into()),
-                        appears_transparent: cfg!(target_os = "macos"),
-                        traffic_light_position: Some(point(
-                            px(theme::TRAFFIC_X),
-                            px(theme::TRAFFIC_Y),
-                        )),
-                    }),
-                    ..Default::default()
-                },
-                |_, cx| {
-                    cx.new(|cx| {
-                        CockpitView::new_with_settings(
-                            core,
-                            provider,
-                            cockpit::Preferences {
-                                settings: settings.clone(),
-                                dir: settings_dir.clone(),
-                                defaults: defaults.clone(),
-                            },
-                            cx,
-                        )
-                    })
-                },
-            )
-            .unwrap();
-
-        if let Some(group) = seeded_group {
-            window
-                .update(cx, |view, _window, cx| view.enter_group(group, cx))
+            let bounds = Bounds::centered(None, size(px(1440.), px(900.)), cx);
+            let window = cx
+                .open_window(
+                    WindowOptions {
+                        window_bounds: Some(WindowBounds::Windowed(bounds)),
+                        // The titlebar band blends into the app: the strip is
+                        // the visible titlebar, and the traffic lights sit in
+                        // its band (#22 D24). macOS only — hiding the system
+                        // titlebar elsewhere would take the window controls
+                        // with it.
+                        titlebar: Some(TitlebarOptions {
+                            title: Some("ferrite".into()),
+                            appears_transparent: cfg!(target_os = "macos"),
+                            traffic_light_position: Some(point(
+                                px(theme::TRAFFIC_X),
+                                px(theme::TRAFFIC_Y),
+                            )),
+                        }),
+                        ..Default::default()
+                    },
+                    |_, cx| {
+                        cx.new(|cx| {
+                            CockpitView::new_with_settings(
+                                core,
+                                provider,
+                                cockpit::Preferences {
+                                    settings: settings.clone(),
+                                    dir: settings_dir.clone(),
+                                    defaults: defaults.clone(),
+                                },
+                                cx,
+                            )
+                        })
+                    },
+                )
                 .unwrap();
-        }
 
-        window
-            .update(cx, |_, _window, cx| cx.activate(true))
-            .unwrap();
-    });
+            if let Some(group) = seeded_group {
+                window
+                    .update(cx, |view, _window, cx| view.enter_group(group, cx))
+                    .unwrap();
+            }
+
+            window
+                .update(cx, |_, _window, cx| cx.activate(true))
+                .unwrap();
+        });
 }
 
 /// Adopt CLI sessions started outside Ferrite, before the Cockpit takes the
@@ -452,8 +454,13 @@ mod tests {
         // A newer Thread in a directory that is gone by the next launch.
         let gone = dir.join("gone");
         std::fs::create_dir_all(&gone).unwrap();
-        core.open(Provider::Claude, WorkspaceChoice::Main { checkout: gone.clone() })
-            .unwrap();
+        core.open(
+            Provider::Claude,
+            WorkspaceChoice::Main {
+                checkout: gone.clone(),
+            },
+        )
+        .unwrap();
         drop(core);
         std::fs::remove_dir_all(&gone).unwrap();
         // The next launch: every Thread parked, the newest whose directory
@@ -466,7 +473,10 @@ mod tests {
     /// words, and the cockpit carries on without it.
     #[test]
     fn an_unimportable_file_is_refused_and_adopted_by_nobody() {
-        let dir = std::env::temp_dir().join(format!("ferrite-launch-{}-import-refusal", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "ferrite-launch-{}-import-refusal",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let bogus = dir.join("not-a-session.jsonl");

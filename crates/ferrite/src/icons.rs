@@ -133,7 +133,11 @@ mod tests {
             assert!(svg.starts_with("<svg "), "{key} is an svg element");
             assert!(svg.contains("viewBox="), "{key} declares a viewBox");
         }
-        assert_eq!(ICONS.len(), 11, "the nine prototype icons, plus the add and settings marks");
+        assert_eq!(
+            ICONS.len(),
+            11,
+            "the nine prototype icons, plus the add and settings marks"
+        );
     }
 
     /// The line icons must carry the `.stroke` class's attributes on the

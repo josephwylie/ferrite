@@ -35,10 +35,10 @@ use crate::icons::{self, icon};
 use crate::pointer::{Pointer, PointerPressed};
 use crate::theme::{
     FILL, FONT_UI, FS_LG, FS_MD, FS_SM, GROUP_GAP, GROUP_RAIL, GROUP_ROW_H, HOVER, ICON_BUTTON,
-    ICON_BUTTON_GLYPH, ICON_CHEVRON_LG, LINE_TIGHT, MEMBER_GAP, MEMBER_INDENT, MENU, MENU_PAD,
-    MENU_ROW_H, MENU_TOP, NAV, NAV_HEAD_H, PROVIDER_CLAUDE, PROVIDER_CODEX, PROVIDER_MARK,
-    MEMBERS_TOP, NAV_TREE_PAD, NAV_TREE_PAD_B, RAIL_INSET, RAIL_OFFSET, R_CONTROL,
-    R_MENU, R_TIGHT, ROW_GAP, ROW_ICON, ROW_ICON_GAP, ROW_PAD_X, ROW_PAD_Y, ROW_TEXT_W, SCROLLBAR, SCROLLBAR_THUMB_W,
+    ICON_BUTTON_GLYPH, ICON_CHEVRON_LG, LINE_TIGHT, MEMBERS_TOP, MEMBER_GAP, MEMBER_INDENT, MENU,
+    MENU_PAD, MENU_ROW_H, MENU_TOP, NAV, NAV_HEAD_H, NAV_TREE_PAD, NAV_TREE_PAD_B, PROVIDER_CLAUDE,
+    PROVIDER_CODEX, PROVIDER_MARK, RAIL_INSET, RAIL_OFFSET, ROW_GAP, ROW_ICON, ROW_ICON_GAP,
+    ROW_PAD_X, ROW_PAD_Y, ROW_TEXT_W, R_CONTROL, R_MENU, R_TIGHT, SCROLLBAR, SCROLLBAR_THUMB_W,
     SCROLLBAR_W, SHADOW_FAR, SHADOW_FAR_BLUR, SHADOW_FAR_SPREAD, SHADOW_FAR_Y, SHADOW_NEAR,
     SHADOW_NEAR_BLUR, SHADOW_NEAR_Y, SOLOS_TOP, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG,
     THREAD_ROW_H, TRAFFIC_RESERVE, WIN_CHROME_H,
@@ -385,7 +385,9 @@ pub fn filter_action(index: usize, label: &'static str) -> Stateful<Div> {
             div()
                 .min_w_0()
                 .truncate()
-                .group_hover(FILTER_OPTION_GROUP, |style| style.text_color(rgb(TEXT_STRONG)))
+                .group_hover(FILTER_OPTION_GROUP, |style| {
+                    style.text_color(rgb(TEXT_STRONG))
+                })
                 .child(label),
         )
 }
@@ -503,44 +505,48 @@ pub fn group_row(row: &GroupBlock) -> Stateful<Div> {
 /// makes the title truncate at all, and an editor swapped in at the row
 /// level instead would take the Project line with it.
 pub fn group_row_with_title(row: &GroupBlock, title: impl IntoElement) -> Stateful<Div> {
-    row_frame(("nav-group", row.id.get() as usize), GROUP_ROW_H, row.current)
-        .debug_selector({
-            let id = row.id;
-            move || format!("nav-group-{}", id.get())
-        })
-        // A truncating title needs a **definite** width on its very first
-        // measure. gpui caches a nowrap line's first measure permanently
-        // (gpui-0.2.2 elements/text.rs:373 — `wrap_width` is `None` for
-        // nowrap, so the early return fires on every later call), and taffy
-        // only hands a text leaf a definite width when the leaf's flex
-        // container is a **column** whose own available width is definite —
-        // which taffy derives from the child's own min/max width
-        // (taffy-0.9.0 compute/flexbox.rs:661-679). A `flex_1`, a `w_full` or
-        // even a `w(px(..))` cell is measured at max-content first, so
-        // `truncate_line` never runs and the line is only visually clipped.
-        // Hence: flex **column**, with min and max width pinned to the row's
-        // own content box.
-        .child(
-            div()
-                .w(px(ROW_TEXT_W))
-                .h(px(TITLE_LG_H))
-                .overflow_hidden()
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .min_w(px(ROW_TEXT_W + TRUNCATE_SLOP))
-                        .max_w(px(ROW_TEXT_W + TRUNCATE_SLOP))
-                        .truncate()
-                        .h(px(TITLE_LG_H))
-                        .text_size(px(FS_LG))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .line_height(relative(LINE_TIGHT))
-                        .text_color(rgb(if row.current { TEXT_STRONG } else { TEXT }))
-                        .child(title),
-                ),
-        )
-        .child(meta_line(icons::FOLDER, row.project.clone(), TEXT_2))
+    row_frame(
+        ("nav-group", row.id.get() as usize),
+        GROUP_ROW_H,
+        row.current,
+    )
+    .debug_selector({
+        let id = row.id;
+        move || format!("nav-group-{}", id.get())
+    })
+    // A truncating title needs a **definite** width on its very first
+    // measure. gpui caches a nowrap line's first measure permanently
+    // (gpui-0.2.2 elements/text.rs:373 — `wrap_width` is `None` for
+    // nowrap, so the early return fires on every later call), and taffy
+    // only hands a text leaf a definite width when the leaf's flex
+    // container is a **column** whose own available width is definite —
+    // which taffy derives from the child's own min/max width
+    // (taffy-0.9.0 compute/flexbox.rs:661-679). A `flex_1`, a `w_full` or
+    // even a `w(px(..))` cell is measured at max-content first, so
+    // `truncate_line` never runs and the line is only visually clipped.
+    // Hence: flex **column**, with min and max width pinned to the row's
+    // own content box.
+    .child(
+        div()
+            .w(px(ROW_TEXT_W))
+            .h(px(TITLE_LG_H))
+            .overflow_hidden()
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .min_w(px(ROW_TEXT_W + TRUNCATE_SLOP))
+                    .max_w(px(ROW_TEXT_W + TRUNCATE_SLOP))
+                    .truncate()
+                    .h(px(TITLE_LG_H))
+                    .text_size(px(FS_LG))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .line_height(relative(LINE_TIGHT))
+                    .text_color(rgb(if row.current { TEXT_STRONG } else { TEXT }))
+                    .child(title),
+            ),
+    )
+    .child(meta_line(icons::FOLDER, row.project.clone(), TEXT_2))
 }
 
 /// The members container, and the one line the whole Soft system draws: a
@@ -882,7 +888,10 @@ mod tests {
             Some(CursorStyle::OpenHand)
         );
         assert_eq!(cursor(group_row(&group(true))), Some(CursorStyle::OpenHand));
-        assert_eq!(cursor(group_row(&group(false))), Some(CursorStyle::OpenHand));
+        assert_eq!(
+            cursor(group_row(&group(false))),
+            Some(CursorStyle::OpenHand)
+        );
         assert_eq!(
             cursor(rail_item(&thread(Some(Provider::Codex)), true)),
             Some(CursorStyle::PointingHand),

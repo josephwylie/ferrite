@@ -22,11 +22,11 @@ use gpui::{
 };
 
 use crate::composer::{Composer, Edited};
-use crate::menu;
-use crate::prefs;
 use crate::facts::Facts;
+use crate::menu;
 use crate::nav;
 use crate::pane::{self, PaneView};
+use crate::prefs;
 use crate::select::TranscriptSelection;
 
 actions!(
@@ -618,8 +618,8 @@ impl CockpitView {
             .popover
             .as_ref()
             .filter(|open| Some(open.pane) == edited && !open.kind.follows_text());
-        let resync = anchored
-            .is_some_and(|open| matches!(open.kind, Kind::Band(pane::BandChip::Project)));
+        let resync =
+            anchored.is_some_and(|open| matches!(open.kind, Kind::Band(pane::BandChip::Project)));
         let dismiss = anchored.is_some() && !resync;
         if resync {
             self.sync_band_rows(cx);
@@ -640,7 +640,11 @@ impl CockpitView {
     /// Close the `/`/`@` menu if that is what the slot holds; a picker or
     /// a band chip is not text-derived and stays.
     fn close_text_menu(&mut self) {
-        if self.popover.as_ref().is_some_and(|open| open.kind.follows_text()) {
+        if self
+            .popover
+            .as_ref()
+            .is_some_and(|open| open.kind.follows_text())
+        {
             self.popover = None;
         }
     }
@@ -720,7 +724,8 @@ impl CockpitView {
         };
         let valid = self
             .cockpit
-            .thread(thread).map(|open| open.transcript())
+            .thread(thread)
+            .map(|open| open.transcript())
             .into_iter()
             .flat_map(|transcript| transcript.blocks())
             .filter_map(|block| match &block.body {
@@ -744,8 +749,8 @@ impl CockpitView {
         // not the Pane's to render in. Nothing sits above the board: there
         // is no title band to subtract.
         let chrome = self.nav_width() + crate::theme::GRID_PAD * 2.0;
-        let width = (f32::from(viewport.width) - chrome) / layout.columns as f32
-            - crate::theme::GRID_GAP;
+        let width =
+            (f32::from(viewport.width) - chrome) / layout.columns as f32 - crate::theme::GRID_GAP;
         let height = (f32::from(viewport.height) - crate::theme::GRID_PAD * 2.0)
             / layout.rows as f32
             - crate::theme::GRID_GAP;
@@ -986,43 +991,71 @@ impl CockpitView {
             MenuTarget::Thread(thread) | MenuTarget::Pane(thread) => {
                 let open = self.pane_for(thread).is_some();
                 let grouped = self.cockpit.groups().of(thread).is_some();
-                rows.push(Some((menu::Item::new("Rename").hint("⏎ save · esc cancel"), MenuVerb::Rename)));
+                rows.push(Some((
+                    menu::Item::new("Rename").hint("⏎ save · esc cancel"),
+                    MenuVerb::Rename,
+                )));
                 if open {
                     if self.cockpit.roster().focused_thread() != Some(thread) {
                         rows.push(Some((menu::Item::new("Focus Pane"), MenuVerb::Focus)));
                     }
-                    rows.push(Some((menu::Item::new("Toggle Fullscreen").hint("⌘F"), MenuVerb::Fullscreen)));
+                    rows.push(Some((
+                        menu::Item::new("Toggle Fullscreen").hint("⌘F"),
+                        MenuVerb::Fullscreen,
+                    )));
                 } else {
                     rows.push(Some((menu::Item::new("Open"), MenuVerb::Focus)));
                 }
                 rows.push(None);
-                rows.push(Some((menu::Item::new("New Thread in this Project").hint("⌘T"), MenuVerb::NewThread)));
-                rows.push(Some((menu::Item::new("Reveal in Finder"), MenuVerb::Reveal)));
+                rows.push(Some((
+                    menu::Item::new("New Thread in this Project").hint("⌘T"),
+                    MenuVerb::NewThread,
+                )));
+                rows.push(Some((
+                    menu::Item::new("Reveal in Finder"),
+                    MenuVerb::Reveal,
+                )));
                 rows.push(Some((menu::Item::new("Copy Path"), MenuVerb::CopyPath)));
                 rows.push(None);
                 if open {
                     rows.push(Some((
-                        menu::Item::new(if grouped { "Close Pane" } else { "Park Thread" }).hint("⌘W"),
+                        menu::Item::new(if grouped { "Close Pane" } else { "Park Thread" })
+                            .hint("⌘W"),
                         MenuVerb::Close,
                     )));
                 }
                 if grouped {
                     rows.push(Some((menu::Item::new("Leave Group"), MenuVerb::LeaveGroup)));
                 }
-                rows.push(Some((menu::Item::new("Delete Thread").destructive(), MenuVerb::Delete)));
+                rows.push(Some((
+                    menu::Item::new("Delete Thread").destructive(),
+                    MenuVerb::Delete,
+                )));
             }
             MenuTarget::Group(group) => {
                 rows.push(Some((menu::Item::new("Rename Group"), MenuVerb::Rename)));
                 if self.cockpit.roster().view() != View::Group(group) {
                     rows.push(Some((menu::Item::new("Open Group"), MenuVerb::EnterGroup)));
                 }
-                rows.push(Some((menu::Item::new("New Thread in this Group").hint("⌘T"), MenuVerb::NewThread)));
+                rows.push(Some((
+                    menu::Item::new("New Thread in this Group").hint("⌘T"),
+                    MenuVerb::NewThread,
+                )));
                 rows.push(None);
-                rows.push(Some((menu::Item::new("Dissolve Group").destructive(), MenuVerb::DissolveGroup)));
+                rows.push(Some((
+                    menu::Item::new("Dissolve Group").destructive(),
+                    MenuVerb::DissolveGroup,
+                )));
             }
             MenuTarget::Project(project) => {
-                rows.push(Some((menu::Item::new("New Thread here").hint("⌘T"), MenuVerb::NewThread)));
-                rows.push(Some((menu::Item::new("Reveal in Finder"), MenuVerb::Reveal)));
+                rows.push(Some((
+                    menu::Item::new("New Thread here").hint("⌘T"),
+                    MenuVerb::NewThread,
+                )));
+                rows.push(Some((
+                    menu::Item::new("Reveal in Finder"),
+                    MenuVerb::Reveal,
+                )));
                 rows.push(Some((menu::Item::new("Copy Path"), MenuVerb::CopyPath)));
                 rows.push(None);
                 let in_use = self.project_in_use(project);
@@ -1263,7 +1296,13 @@ impl CockpitView {
     /// the drop preview on top. Coordinates are the board's own — the
     /// frame is `relative`, its origin the nav's right edge — so the rects
     /// the tree computes for the window are shifted back by that origin.
-    fn tree_board(&self, group: GroupId, tree: Tree, window: &Window, cx: &mut Context<Self>) -> Div {
+    fn tree_board(
+        &self,
+        group: GroupId,
+        tree: Tree,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let bounds = self.board_bounds(window);
         let origin_x = self.nav_width();
         let local = |rect: layout::Rect| layout::Rect {
@@ -1396,7 +1435,12 @@ impl CockpitView {
 
     /// The pointer moved with a seam held: the ratio follows it, clamped
     /// by the tree to the 20% floor either side.
-    fn drag_seam(&mut self, position: gpui::Point<Pixels>, window: &Window, cx: &mut Context<Self>) {
+    fn drag_seam(
+        &mut self,
+        position: gpui::Point<Pixels>,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
         let bounds = self.board_bounds(window);
         let pointer = layout::Point {
             x: f32::from(position.x),
@@ -1405,9 +1449,9 @@ impl CockpitView {
         let Some(drag) = self.seam_drag.as_mut() else {
             return;
         };
-        if let Some(ratio) = drag
-            .tree
-            .ratio_for(&drag.seam, bounds, pointer, crate::theme::GRID_GAP)
+        if let Some(ratio) =
+            drag.tree
+                .ratio_for(&drag.seam, bounds, pointer, crate::theme::GRID_GAP)
         {
             if drag.tree.set_ratio(&drag.seam, ratio) {
                 cx.notify();
@@ -1475,7 +1519,13 @@ impl CockpitView {
     }
 
     /// The tree change a drop makes, persisted through the core door.
-    fn apply_pane_drop(&mut self, source: ThreadId, target: ThreadId, zone: Zone, cx: &mut Context<Self>) {
+    fn apply_pane_drop(
+        &mut self,
+        source: ThreadId,
+        target: ThreadId,
+        zone: Zone,
+        cx: &mut Context<Self>,
+    ) {
         let Some(group) = self.cockpit.groups().of(source).map(|group| group.id) else {
             return;
         };
@@ -1603,7 +1653,14 @@ impl CockpitView {
                 let pick = value.clone();
                 chips.push(
                     prefs::chip(
-                        (if provider == Provider::Claude { "settings-claude-model" } else { "settings-codex-model" }, at),
+                        (
+                            if provider == Provider::Claude {
+                                "settings-claude-model"
+                            } else {
+                                "settings-codex-model"
+                            },
+                            at,
+                        ),
                         SharedString::from(model.display.clone()),
                         selected,
                     )
@@ -1612,7 +1669,10 @@ impl CockpitView {
                         cx.listener(move |view, _: &MouseDownEvent, _, cx| {
                             cx.stop_propagation();
                             let pick = pick.clone();
-                            view.change_settings(|settings| settings.set_model_for(provider, pick), cx);
+                            view.change_settings(
+                                |settings| settings.set_model_for(provider, pick),
+                                cx,
+                            );
                         }),
                     )
                     .into_any_element(),
@@ -1621,7 +1681,11 @@ impl CockpitView {
             let _ = slot;
             rows.push(
                 prefs::row(
-                    if provider == Provider::Claude { "Claude model" } else { "Codex model" },
+                    if provider == Provider::Claude {
+                        "Claude model"
+                    } else {
+                        "Codex model"
+                    },
                     "Default is the CLI's own choice".into(),
                     chips,
                 )
@@ -1631,23 +1695,32 @@ impl CockpitView {
         sections.push(prefs::section("New Threads", rows).into_any_element());
 
         // --- Permissions ---
-        let mode_chips = |cx: &mut Context<Self>, current: Option<&str>, options: &'static [(&'static str, Option<&'static str>)], id: &'static str, write: fn(&mut ferrite_core::settings::Settings, Option<String>)| -> Vec<AnyElement> {
+        let mode_chips = |cx: &mut Context<Self>,
+                          current: Option<&str>,
+                          options: &'static [(&'static str, Option<&'static str>)],
+                          id: &'static str,
+                          write: fn(&mut ferrite_core::settings::Settings, Option<String>)|
+         -> Vec<AnyElement> {
             options
                 .iter()
                 .enumerate()
                 .map(|(at, (label, value))| {
                     let value: Option<String> = value.map(str::to_string);
                     let pick = value.clone();
-                    prefs::chip((id, at), SharedString::from(*label), current == value.as_deref())
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                                cx.stop_propagation();
-                                let pick = pick.clone();
-                                view.change_settings(|settings| write(settings, pick), cx);
-                            }),
-                        )
-                        .into_any_element()
+                    prefs::chip(
+                        (id, at),
+                        SharedString::from(*label),
+                        current == value.as_deref(),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            let pick = pick.clone();
+                            view.change_settings(|settings| write(settings, pick), cx);
+                        }),
+                    )
+                    .into_any_element()
                 })
                 .collect()
         };
@@ -1673,26 +1746,48 @@ impl CockpitView {
             prefs::row(
                 "Claude permissions",
                 "Applies to the next Session".into(),
-                mode_chips(cx, settings.claude_permission_mode.as_deref(), CLAUDE_MODES, "settings-claude-mode", |s, v| s.claude_permission_mode = v),
+                mode_chips(
+                    cx,
+                    settings.claude_permission_mode.as_deref(),
+                    CLAUDE_MODES,
+                    "settings-claude-mode",
+                    |s, v| s.claude_permission_mode = v,
+                ),
             )
             .into_any_element(),
             prefs::row(
                 "Codex approvals",
                 "When Codex asks before acting".into(),
-                mode_chips(cx, Some(settings.codex_approval_policy.as_str()), CODEX_APPROVALS, "settings-codex-approval", |s, v| s.codex_approval_policy = v.unwrap_or_else(|| "on-request".into())),
+                mode_chips(
+                    cx,
+                    Some(settings.codex_approval_policy.as_str()),
+                    CODEX_APPROVALS,
+                    "settings-codex-approval",
+                    |s, v| s.codex_approval_policy = v.unwrap_or_else(|| "on-request".into()),
+                ),
             )
             .into_any_element(),
             prefs::row(
                 "Codex sandbox",
                 "What Codex may touch".into(),
-                mode_chips(cx, settings.codex_sandbox.as_deref(), CODEX_SANDBOXES, "settings-codex-sandbox", |s, v| s.codex_sandbox = v),
+                mode_chips(
+                    cx,
+                    settings.codex_sandbox.as_deref(),
+                    CODEX_SANDBOXES,
+                    "settings-codex-sandbox",
+                    |s, v| s.codex_sandbox = v,
+                ),
             )
             .into_any_element(),
         ];
         sections.push(prefs::section("Permissions", rows).into_any_element());
 
         // --- Behaviour ---
-        let toggle = |cx: &mut Context<Self>, id: &'static str, on: bool, write: fn(&mut ferrite_core::settings::Settings, bool)| -> Vec<AnyElement> {
+        let toggle = |cx: &mut Context<Self>,
+                      id: &'static str,
+                      on: bool,
+                      write: fn(&mut ferrite_core::settings::Settings, bool)|
+         -> Vec<AnyElement> {
             [("On", true), ("Off", false)]
                 .into_iter()
                 .enumerate()
@@ -1713,19 +1808,31 @@ impl CockpitView {
             prefs::row(
                 "Name Threads from their first prompt",
                 "Until you rename them".into(),
-                toggle(cx, "settings-auto-title", settings.auto_title, |s, v| s.auto_title = v),
+                toggle(cx, "settings-auto-title", settings.auto_title, |s, v| {
+                    s.auto_title = v
+                }),
             )
             .into_any_element(),
             prefs::row(
                 "Confirm before deleting a Thread",
                 "".into(),
-                toggle(cx, "settings-confirm-delete", settings.confirm_delete, |s, v| s.confirm_delete = v),
+                toggle(
+                    cx,
+                    "settings-confirm-delete",
+                    settings.confirm_delete,
+                    |s, v| s.confirm_delete = v,
+                ),
             )
             .into_any_element(),
             prefs::row(
                 "Start with the sidebar collapsed",
                 "⌘B toggles it any time".into(),
-                toggle(cx, "settings-nav-collapsed", settings.nav_collapsed, |s, v| s.nav_collapsed = v),
+                toggle(
+                    cx,
+                    "settings-nav-collapsed",
+                    settings.nav_collapsed,
+                    |s, v| s.nav_collapsed = v,
+                ),
             )
             .into_any_element(),
         ];
@@ -1816,12 +1923,13 @@ impl CockpitView {
             // In a Group the title is the Pane's handle: drag it onto
             // another Pane to swap or split.
             .when(grouped, |title| {
-                title
-                    .cursor(gpui::CursorStyle::OpenHand)
-                    .on_drag(PaneDrag { thread }, move |_, _, _, cx| {
+                title.cursor(gpui::CursorStyle::OpenHand).on_drag(
+                    PaneDrag { thread },
+                    move |_, _, _, cx| {
                         let badge = badge.clone();
                         cx.new(|_| PaneDragPreview(badge))
-                    })
+                    },
+                )
             })
             .on_mouse_down(
                 MouseButton::Left,
@@ -1968,8 +2076,7 @@ impl CockpitView {
         // On a draft, escape returns to the prompt (#29): the band's tab
         // focus clears. (An open band popover holds the ComposerMenu keys,
         // so escape there dismisses through `menu_dismiss` instead.)
-        if let Some(draft) = self.focused_draft_mut()
-        {
+        if let Some(draft) = self.focused_draft_mut() {
             draft.band_focus = None;
             cx.notify();
             return;
@@ -1984,14 +2091,17 @@ impl CockpitView {
     /// Tab walks a draft's band (#29), or an L1 Thread Pane's rendered tool
     /// disclosures before returning to the Composer.
     fn band_cycle(&mut self, _: &BandCycle, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(draft) = self.focused_draft_mut()
-        else {
+        let Some(draft) = self.focused_draft_mut() else {
             self.cycle_tools(false, window, cx);
             return;
         };
         draft.band_focus = pane::BandChip::next(draft.band_focus);
         // The popover belongs to the chip it opened from; tab moves on.
-        if self.popover.as_ref().is_some_and(|open| matches!(open.kind, Kind::Band(_))) {
+        if self
+            .popover
+            .as_ref()
+            .is_some_and(|open| matches!(open.kind, Kind::Band(_)))
+        {
             self.popover = None;
         }
         cx.notify();
@@ -2007,15 +2117,14 @@ impl CockpitView {
     }
 
     fn cycle_tools(&mut self, reverse: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if self.level_now(window) != Level::Transcript || self.panes[self.focused()].draft().is_some()
+        if self.level_now(window) != Level::Transcript
+            || self.panes[self.focused()].draft().is_some()
         {
             return;
         }
         let focused = self.focused();
         let calls = self.expandable_tools(focused, Level::Transcript);
-        let targeted = self.panes[focused]
-            .cycle_tools(&calls, reverse)
-            .is_some();
+        let targeted = self.panes[focused].cycle_tools(&calls, reverse).is_some();
         let focus = if targeted {
             self.panes[focused].tool_focus()
         } else {
@@ -2029,7 +2138,10 @@ impl CockpitView {
         let Some(thread) = self.focused_thread() else {
             return;
         };
-        let Some(call) = self.panes[self.focused()].targeted_tool().map(str::to_string) else {
+        let Some(call) = self.panes[self.focused()]
+            .targeted_tool()
+            .map(str::to_string)
+        else {
             return;
         };
         self.toggle_tool(thread, &call, window, cx);
@@ -2040,7 +2152,8 @@ impl CockpitView {
             return Vec::new();
         };
         self.cockpit
-            .thread(thread).map(|open| open.transcript())
+            .thread(thread)
+            .map(|open| open.transcript())
             .into_iter()
             .flat_map(|transcript| pane::rendered_output_tools(transcript.blocks(), level))
             .map(|tool| tool.call.clone())
@@ -2090,13 +2203,26 @@ impl CockpitView {
         // Thread the wall is flagging. Answering from across the room is the
         // point of the badge.
         let thread = match self.focused_thread() {
-            Some(thread) if self.cockpit.thread(thread).and_then(|open| open.pending()).is_some() => Some(thread),
+            Some(thread)
+                if self
+                    .cockpit
+                    .thread(thread)
+                    .and_then(|open| open.pending())
+                    .is_some() =>
+            {
+                Some(thread)
+            }
             _ => self.cockpit.next_blocked(None),
         };
         let Some(thread) = thread else {
             return;
         };
-        let Some(decision) = self.cockpit.thread(thread).and_then(|open| open.pending()).cloned() else {
+        let Some(decision) = self
+            .cockpit
+            .thread(thread)
+            .and_then(|open| open.pending())
+            .cloned()
+        else {
             return;
         };
         let response = match answer {
@@ -2260,7 +2386,12 @@ impl CockpitView {
         let (token_start, filter) = mention_token(&text, cursor)?;
         // No binding → nothing to walk → no popover.
         let root = match (thread, pane.draft()) {
-            (Some(thread), _) => self.cockpit.thread(thread)?.workspace()?.cwd().to_path_buf(),
+            (Some(thread), _) => self
+                .cockpit
+                .thread(thread)?
+                .workspace()?
+                .cwd()
+                .to_path_buf(),
             (None, Some(draft)) => self.draft_source_root(draft)?,
             _ => return None,
         };
@@ -2404,8 +2535,7 @@ impl CockpitView {
         };
         match open.kind {
             Kind::Band(_) => {
-                if let Some(draft) = self.focused_draft_mut()
-                {
+                if let Some(draft) = self.focused_draft_mut() {
                     draft.band_focus = None;
                 }
             }
@@ -2482,7 +2612,8 @@ impl CockpitView {
     /// line, so the Thread keeps offering import. On a draft the words land
     /// where the band is.
     fn open_import_picker(&mut self, from: PaneIdentity, cx: &mut Context<Self>) {
-        let candidates = ferrite_core::import::candidates(&self.session_file_roots, IMPORT_ROWS_MAX);
+        let candidates =
+            ferrite_core::import::candidates(&self.session_file_roots, IMPORT_ROWS_MAX);
         if candidates.is_empty() {
             let roots = self
                 .session_file_roots
@@ -2566,9 +2697,13 @@ impl CockpitView {
         let chosen = open.model().map(str::to_string);
         let serving = open.transcript().model().map(str::to_string);
         let locked = open.first_prompt_sent();
-        let (rows, selected) = self.provider_rows(current, chosen.as_deref(), serving.as_deref(), locked, |choice| {
-            Consequence::Provision(choice)
-        });
+        let (rows, selected) = self.provider_rows(
+            current,
+            chosen.as_deref(),
+            serving.as_deref(),
+            locked,
+            |choice| Consequence::Provision(choice),
+        );
         // The `/` menu the pick came through is already closed; a chip
         // click replaces whatever the slot held outright.
         self.popover = Some(Popover {
@@ -2661,11 +2796,8 @@ impl CockpitView {
                 });
             }
         }
-        let selected = selected.unwrap_or_else(|| {
-            rows.iter()
-                .position(|row| !row.inert)
-                .unwrap_or(0)
-        });
+        let selected =
+            selected.unwrap_or_else(|| rows.iter().position(|row| !row.inert).unwrap_or(0));
         (rows, selected)
     }
 
@@ -2711,11 +2843,9 @@ impl CockpitView {
                         adopted.thread
                     );
                 } else if let Some(index) = from.draft().and_then(|_| self.index_of(from)) {
-                    self.panes[index]
-                        .composer
-                        .update(cx, |composer, cx| {
-                            composer.take(cx);
-                        });
+                    self.panes[index].composer.update(cx, |composer, cx| {
+                        composer.take(cx);
+                    });
                     self.panes[index].adopt_thread(adopted.thread);
                 }
                 if let Some(error) = &adopted.blank_kept {
@@ -2855,7 +2985,12 @@ impl CockpitView {
     /// One chip's rows for the focused draft. The workspace chip is scoped
     /// to the chosen project alone: `main`, that project's registered
     /// worktrees, `new worktree` — no global list anywhere.
-    fn band_rows(&self, draft: &pane::DraftBinding, chip: pane::BandChip, cx: &Context<Self>) -> Vec<Row> {
+    fn band_rows(
+        &self,
+        draft: &pane::DraftBinding,
+        chip: pane::BandChip,
+        cx: &Context<Self>,
+    ) -> Vec<Row> {
         match chip {
             pane::BandChip::Provider => {
                 let (rows, _) = self.provider_rows(
@@ -2963,18 +3098,21 @@ impl CockpitView {
     /// A band row's pick, applied to the focused draft. Changing the
     /// project resets the workspace chip to `main` — the old choice named
     /// another repo's rows.
-    fn pick_band(&mut self, choice: &BandChoice, composer: &Entity<Composer>, cx: &mut Context<Self>) {
+    fn pick_band(
+        &mut self,
+        choice: &BandChoice,
+        composer: &Entity<Composer>,
+        cx: &mut Context<Self>,
+    ) {
         match choice {
             BandChoice::Provider(provider) => {
-                if let Some(draft) = self.focused_draft_mut()
-                {
+                if let Some(draft) = self.focused_draft_mut() {
                     draft.provider = provider.clone();
                     draft.error = None;
                 }
             }
             BandChoice::Project(project) => {
-                if let Some(draft) = self.focused_draft_mut()
-                {
+                if let Some(draft) = self.focused_draft_mut() {
                     if draft.project != *project {
                         draft.project = *project;
                         draft.target = pane::DraftTarget::Main;
@@ -2984,8 +3122,7 @@ impl CockpitView {
             }
             BandChoice::RegisterPath(path) => match self.cockpit.register_project(path) {
                 Ok(project) => {
-                    if let Some(draft) = self.focused_draft_mut()
-                    {
+                    if let Some(draft) = self.focused_draft_mut() {
                         draft.project = project;
                         draft.target = pane::DraftTarget::Main;
                         draft.error = None;
@@ -2998,8 +3135,7 @@ impl CockpitView {
                     });
                 }
                 Err(e) => {
-                    if let Some(draft) = self.focused_draft_mut()
-                    {
+                    if let Some(draft) = self.focused_draft_mut() {
                         draft.error = Some(SharedString::from(format!(
                             "cannot register {}: {e}",
                             path.display()
@@ -3008,8 +3144,7 @@ impl CockpitView {
                 }
             },
             BandChoice::Target(target) => {
-                if let Some(draft) = self.focused_draft_mut()
-                {
+                if let Some(draft) = self.focused_draft_mut() {
                     draft.target = target.clone();
                     draft.error = None;
                 }
@@ -3143,8 +3278,7 @@ impl CockpitView {
                 self.panes[index].scroll.scroll_to_bottom();
             }
             Err(message) => {
-                if let Some(draft) = self.focused_draft_mut()
-                {
+                if let Some(draft) = self.focused_draft_mut() {
                     draft.error = Some(SharedString::from(message));
                 }
             }
@@ -3312,7 +3446,11 @@ impl CockpitView {
                 Kind::Commands | Kind::Files { .. } | Kind::ImportFile => {
                     pane::menu_row(&row.row, at == open.selected)
                 }
-                Kind::Provider | Kind::Band(pane::BandChip::Provider) if row.inert && row.consequence_is_inert() && provider_of_title(&row.name).is_some() => {
+                Kind::Provider | Kind::Band(pane::BandChip::Provider)
+                    if row.inert
+                        && row.consequence_is_inert()
+                        && provider_of_title(&row.name).is_some() =>
+                {
                     pane::picker_section(provider_of_title(&row.name).unwrap(), row.detail.clone())
                 }
                 Kind::Provider | Kind::Band(_) => pane::picker_row(
@@ -3578,7 +3716,11 @@ impl CockpitView {
         let roster = self.cockpit.roster();
         let changes_group = match (roster.view(), identity) {
             (View::Group(group), PaneIdentity::Thread(_)) => {
-                let members = self.cockpit.groups().get(group).map_or(0, |group| group.members.len());
+                let members = self
+                    .cockpit
+                    .groups()
+                    .get(group)
+                    .map_or(0, |group| group.members.len());
                 !(members == 2 && roster.pending_draft(group).is_some())
             }
             (_, PaneIdentity::Draft(draft)) => roster
@@ -3601,7 +3743,11 @@ impl CockpitView {
             }
         }
         // A popover on the closed Pane goes with it.
-        if self.popover.as_ref().is_some_and(|open| open.pane == identity) {
+        if self
+            .popover
+            .as_ref()
+            .is_some_and(|open| open.pane == identity)
+        {
             self.popover = None;
         }
         self.sync_panes(cx);
@@ -3900,7 +4046,9 @@ impl Render for CockpitView {
                 let target_is_rendered = target.as_ref().is_none_or(|target| {
                     self.panes[index]
                         .thread()
-                        .and_then(|thread| self.cockpit.thread(thread).map(|open| open.transcript()))
+                        .and_then(|thread| {
+                            self.cockpit.thread(thread).map(|open| open.transcript())
+                        })
                         .is_some_and(|transcript| {
                             pane::rendered_output_tools(transcript.blocks(), level)
                                 .any(|tool| tool.call == *target)
@@ -4009,10 +4157,12 @@ impl Render for CockpitView {
                     // through the region's own Decision key context (#23).
                     Level::Transcript if pane.has_tool_target() => Some(pane.tool_focus()),
                     Level::Transcript => Some(pane.composer.focus_handle(cx)),
-                    _ if pane
-                        .thread()
-                        .is_some_and(|thread| self.cockpit.thread(thread).and_then(|open| open.pending()).is_some())
-                        && level != Level::Wall =>
+                    _ if pane.thread().is_some_and(|thread| {
+                        self.cockpit
+                            .thread(thread)
+                            .and_then(|open| open.pending())
+                            .is_some()
+                    }) && level != Level::Wall =>
                     {
                         Some(pane.decision_focus.clone())
                     }
@@ -4088,9 +4238,7 @@ impl Render for CockpitView {
             // At wall range no Pane holds a Composer, so the answer keys are
             // not competing with typing: they answer whichever Thread is
             // flagged, without the operator focusing it first.
-            .when(level == Level::Wall, |wall| {
-                wall.key_context("Wall")
-            })
+            .when(level == Level::Wall, |wall| wall.key_context("Wall"))
             .on_action(cx.listener(Self::submit))
             .on_action(cx.listener(Self::unqueue_from_backspace))
             .on_action(cx.listener(Self::interrupt))
@@ -4249,7 +4397,13 @@ impl CockpitView {
                 .on_drag_move(cx.listener(
                     move |view, event: &gpui::DragMoveEvent<PaneDrag>, _, cx| {
                         let source = event.drag(cx).thread;
-                        view.preview_pane_drop(source, target, event.event.position, event.bounds, cx);
+                        view.preview_pane_drop(
+                            source,
+                            target,
+                            event.event.position,
+                            event.bounds,
+                            cx,
+                        );
                     },
                 ))
                 .on_drop(cx.listener(move |view, drag: &PaneDrag, _, cx| {
@@ -4442,10 +4596,9 @@ impl CockpitView {
         // Init said is serving; until either, the Provider's own name —
         // and always the name a person says, never the id on the wire.
         let label = match open.model().or_else(|| open.transcript().model()) {
-            Some(model) => SharedString::from(ferrite_core::providers::models::label(
-                model,
-                open.models(),
-            )),
+            Some(model) => {
+                SharedString::from(ferrite_core::providers::models::label(model, open.models()))
+            }
             None => SharedString::from(provider_title(provider)),
         };
         Some(
@@ -4474,13 +4627,9 @@ impl CockpitView {
     /// The chip's click: close an open provider picker on this Thread, or
     /// open one — the root chip's toggle grammar.
     fn toggle_provider_picker(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        if self
-            .popover
-            .as_ref()
-            .is_some_and(|open| {
-                open.pane == PaneIdentity::Thread(thread) && matches!(open.kind, Kind::Provider)
-            })
-        {
+        if self.popover.as_ref().is_some_and(|open| {
+            open.pane == PaneIdentity::Thread(thread) && matches!(open.kind, Kind::Provider)
+        }) {
             self.popover = None;
             cx.notify();
             return;
@@ -4501,16 +4650,15 @@ impl CockpitView {
                 view.toggle_settings(cx);
             }),
         );
-        let mut chrome = nav::win_chrome(state.collapsed).child(
-            nav::collapse_button().on_mouse_down(
+        let mut chrome =
+            nav::win_chrome(state.collapsed).child(nav::collapse_button().on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|view, _: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();
                     view.nav_collapsed = !view.nav_collapsed;
                     cx.notify();
                 }),
-            ),
-        );
+            ));
         // The gear sits hard right of the band; folded, it stacks under
         // the collapse button.
         if !state.collapsed {
@@ -4638,9 +4786,7 @@ impl CockpitView {
                         drag: Drag::Group(id),
                         origin,
                     },
-                    move |_, _, _, cx| {
-                        cx.new(|_| NavDragPreview("group".into()))
-                    },
+                    move |_, _, _, cx| cx.new(|_| NavDragPreview("group".into())),
                 )
                 .on_drop(cx.listener(move |view, drag: &NavDrag, _, cx| {
                     view.apply_drop(*drag, DropTarget::GroupHeader(id), cx)
@@ -4660,10 +4806,14 @@ impl CockpitView {
             // Gap 0 has no band of its own; it rides the header instead.
             if index == 0 {
                 block = block.child(
-                    drop_feedback(nav::group_gap_lead(index), self.cockpit.groups().clone(), gap)
-                        .on_drop(cx.listener(move |view, drag: &NavDrag, _, cx| {
-                            view.apply_drop(*drag, gap, cx)
-                        })),
+                    drop_feedback(
+                        nav::group_gap_lead(index),
+                        self.cockpit.groups().clone(),
+                        gap,
+                    )
+                    .on_drop(cx.listener(
+                        move |view, drag: &NavDrag, _, cx| view.apply_drop(*drag, gap, cx),
+                    )),
                 );
             }
             if !group.members.is_empty() {
@@ -4848,7 +4998,10 @@ fn leaf_identity(leaf: ThreadId) -> PaneIdentity {
 /// What `<program> --version` says, in one line; the failure in words
 /// when it cannot be run — the About section never guesses.
 fn cli_version(program: &str) -> String {
-    match std::process::Command::new(program).arg("--version").output() {
+    match std::process::Command::new(program)
+        .arg("--version")
+        .output()
+    {
         Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout)
             .lines()
             .next()
@@ -5012,9 +5165,7 @@ mod tests {
             .unwrap()
             .group
             .unwrap();
-        cx.update(|cx| {
-            cx.bind_keys([KeyBinding::new("cmd-w", CloseThread, None)])
-        });
+        cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-w", CloseThread, None)]));
         let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
 
         view.update(cx, |view, cx| view.enter_group(group, cx));
@@ -5107,7 +5258,10 @@ mod tests {
         view.read_with(cx, |view, _| {
             let thread = view.panes[0].thread().unwrap();
             assert!(
-                view.cockpit.thread(thread).and_then(|open| open.pending()).is_some(),
+                view.cockpit
+                    .thread(thread)
+                    .and_then(|open| open.pending())
+                    .is_some(),
                 "the card should be up before the key"
             );
         });
@@ -5117,7 +5271,10 @@ mod tests {
         view.read_with(cx, |view, _| {
             let thread = view.panes[0].thread().unwrap();
             assert!(
-                view.cockpit.thread(thread).and_then(|open| open.pending()).is_none(),
+                view.cockpit
+                    .thread(thread)
+                    .and_then(|open| open.pending())
+                    .is_none(),
                 "y must answer the Decision, not type a letter"
             );
         });
@@ -5140,7 +5297,10 @@ mod tests {
         cx.simulate_input("not yet");
         view.read_with(cx, |view, cx| {
             assert!(
-                view.cockpit.thread(thread).and_then(|open| open.pending()).is_some(),
+                view.cockpit
+                    .thread(thread)
+                    .and_then(|open| open.pending())
+                    .is_some(),
                 "the premise: a card up"
             );
             assert!(
@@ -5158,7 +5318,12 @@ mod tests {
                 let x = 1430. - step as f32 * 6.;
                 cx.simulate_click(gpui::point(px(x), px(y)), gpui::Modifiers::none());
                 cx.run_until_parked();
-                if view.read_with(cx, |view, _| view.cockpit.thread(thread).and_then(|open| open.pending()).is_none()) {
+                if view.read_with(cx, |view, _| {
+                    view.cockpit
+                        .thread(thread)
+                        .and_then(|open| open.pending())
+                        .is_none()
+                }) {
                     answered = true;
                     break 'sweep;
                 }
@@ -5168,7 +5333,8 @@ mod tests {
         view.read_with(cx, |view, cx| {
             let answered_as = view
                 .cockpit
-                .thread(thread).map(|open| open.transcript())
+                .thread(thread)
+                .map(|open| open.transcript())
                 .unwrap()
                 .blocks()
                 .iter()
@@ -5213,12 +5379,18 @@ mod tests {
             .unwrap();
         tick(cx);
         view.read_with(cx, |view, _| {
-            assert!(view.cockpit.thread(thread).is_some_and(|open| open.busy()), "the premise: a turn in flight");
+            assert!(
+                view.cockpit.thread(thread).is_some_and(|open| open.busy()),
+                "the premise: a turn in flight"
+            );
         });
         cx.simulate_input("also this");
         cx.simulate_keystrokes("enter");
         view.read_with(cx, |view, _| {
-            assert_eq!(view.cockpit.thread(thread).and_then(|open| open.queued()), Some("also this"));
+            assert_eq!(
+                view.cockpit.thread(thread).and_then(|open| open.queued()),
+                Some("also this")
+            );
         });
 
         // With text on the line, Backspace edits; the queue is untouched.
@@ -5229,14 +5401,20 @@ mod tests {
                 !view.panes[0].composer.read(cx).is_empty(),
                 "backspace with text is still an editing key"
             );
-            assert_eq!(view.cockpit.thread(thread).and_then(|open| open.queued()), Some("also this"));
+            assert_eq!(
+                view.cockpit.thread(thread).and_then(|open| open.queued()),
+                Some("also this")
+            );
         });
 
         // Emptied, the next Backspace is the advertised ⌫ unqueue.
         cx.simulate_keystrokes("backspace");
         view.read_with(cx, |view, cx| {
             assert!(view.panes[0].composer.read(cx).is_empty());
-            assert_eq!(view.cockpit.thread(thread).and_then(|open| open.queued()), Some("also this"));
+            assert_eq!(
+                view.cockpit.thread(thread).and_then(|open| open.queued()),
+                Some("also this")
+            );
         });
         cx.simulate_keystrokes("backspace");
         view.read_with(cx, |view, _| {
@@ -5302,7 +5480,8 @@ mod tests {
             );
             let blocks = view
                 .cockpit
-                .thread(closed).map(|open| open.transcript())
+                .thread(closed)
+                .map(|open| open.transcript())
                 .expect("its transcript")
                 .blocks();
             assert!(
@@ -5478,14 +5657,21 @@ mod tests {
         let flagged = view.read_with(cx, |view, _| view.panes[7].thread().unwrap());
         view.read_with(cx, |view, _| {
             assert_eq!(view.focused(), 0, "focus stays where the operator left it");
-            assert!(view.cockpit.thread(flagged).and_then(|open| open.pending()).is_some());
+            assert!(view
+                .cockpit
+                .thread(flagged)
+                .and_then(|open| open.pending())
+                .is_some());
         });
 
         cx.simulate_keystrokes("y");
 
         view.read_with(cx, |view, _| {
             assert!(
-                view.cockpit.thread(flagged).and_then(|open| open.pending()).is_none(),
+                view.cockpit
+                    .thread(flagged)
+                    .and_then(|open| open.pending())
+                    .is_none(),
                 "the flagged Thread is the one that got answered"
             );
             assert_eq!(view.focused(), 0, "and answering did not move the operator");
@@ -5588,7 +5774,11 @@ mod tests {
             let thread = view.panes[view.focused()]
                 .thread()
                 .expect("the first send made a Thread of the draft");
-            let binding = view.cockpit.thread(thread).and_then(|open| open.workspace()).expect("a binding");
+            let binding = view
+                .cockpit
+                .thread(thread)
+                .and_then(|open| open.workspace())
+                .expect("a binding");
             assert!(
                 matches!(binding, WorkspaceBinding::Worktree { .. }),
                 "expected a worktree, got {binding:?}"
@@ -5618,7 +5808,10 @@ mod tests {
 
         view.read_with(cx, |view, _| {
             assert!(
-                view.cockpit.thread(flagged).and_then(|open| open.pending()).is_some(),
+                view.cockpit
+                    .thread(flagged)
+                    .and_then(|open| open.pending())
+                    .is_some(),
                 "a Decision with nothing to adopt must still be waiting"
             );
         });
@@ -5772,7 +5965,10 @@ mod tests {
         cx.simulate_keystrokes("tab");
         cx.simulate_keystrokes("enter");
         view.read_with(cx, |view, _| {
-            let band = view.popover.as_ref().expect("the workspace popover is open");
+            let band = view
+                .popover
+                .as_ref()
+                .expect("the workspace popover is open");
             assert!(matches!(band.kind, Kind::Band(pane::BandChip::Workspace)));
             let labels: Vec<&str> = band.rows.iter().map(|row| row.name.as_ref()).collect();
             assert_eq!(
@@ -5828,7 +6024,9 @@ mod tests {
             let pane = &view.panes[view.focused()];
             let thread = pane.thread().expect("the draft became a Thread");
             assert!(
-                view.cockpit.thread(thread).is_some_and(|open| open.first_prompt_sent()),
+                view.cockpit
+                    .thread(thread)
+                    .is_some_and(|open| open.first_prompt_sent()),
                 "the first send armed the lock"
             );
             assert!(
@@ -5937,7 +6135,10 @@ mod tests {
         let thread = view.read_with(cx, |view, _| {
             let thread = view.panes[view.focused()].thread().expect("locked");
             assert_eq!(
-                view.facts.get(thread).and_then(|facts| facts.branch.as_ref()).map(|branch| branch.to_string()),
+                view.facts
+                    .get(thread)
+                    .and_then(|facts| facts.branch.as_ref())
+                    .map(|branch| branch.to_string()),
                 Some(expected.clone()),
                 "the bootstrap cached the checkout"
             );
@@ -5953,7 +6154,10 @@ mod tests {
         });
         view.read_with(cx, |view, _| {
             assert_eq!(
-                view.facts.get(thread).and_then(|facts| facts.branch.as_ref()).map(|branch| branch.to_string()),
+                view.facts
+                    .get(thread)
+                    .and_then(|facts| facts.branch.as_ref())
+                    .map(|branch| branch.to_string()),
                 Some("agent-moved".to_string()),
                 "the slot follows the repo, not the binding"
             );
@@ -6135,7 +6339,8 @@ mod tests {
             let thread = view.panes[0].thread().unwrap();
             let id = view
                 .cockpit
-                .thread(thread).map(|open| open.transcript())
+                .thread(thread)
+                .map(|open| open.transcript())
                 .expect("a transcript")
                 .blocks()[block]
                 .id;
@@ -6757,7 +6962,11 @@ mod tests {
         cx.simulate_keystrokes("cmd-f");
 
         view.read_with(cx, |view, _| {
-            assert_eq!(view.cockpit.roster().fullscreen(), None, "cmd-f again restores the grid");
+            assert_eq!(
+                view.cockpit.roster().fullscreen(),
+                None,
+                "cmd-f again restores the grid"
+            );
         });
         cx.simulate_input("gone");
         let typed = view.update(cx, |view, cx| {
@@ -6790,7 +6999,10 @@ mod tests {
         cx.simulate_input("reachable");
 
         view.read_with(cx, |view, cx| {
-            assert!(matches!(view.cockpit.roster().fullscreen(), Some(PaneIdentity::Draft(_))));
+            assert!(matches!(
+                view.cockpit.roster().fullscreen(),
+                Some(PaneIdentity::Draft(_))
+            ));
             assert_eq!(
                 view.panes[view.focused()].composer.read(cx).text(),
                 "reachable"
@@ -6930,7 +7142,10 @@ mod tests {
         tick(cx);
         cx.simulate_keystrokes("cmd-f");
         let closed = view.read_with(cx, |view, _| {
-            assert!(view.cockpit.roster().fullscreen().is_some(), "the premise: fullscreen is on");
+            assert!(
+                view.cockpit.roster().fullscreen().is_some(),
+                "the premise: fullscreen is on"
+            );
             view.panes[0].thread().unwrap()
         });
 
@@ -6966,14 +7181,21 @@ mod tests {
         tick(cx);
         cx.simulate_keystrokes("cmd-f");
         view.read_with(cx, |view, _| {
-            assert!(view.cockpit.roster().fullscreen().is_some(), "the premise: fullscreen is on");
+            assert!(
+                view.cockpit.roster().fullscreen().is_some(),
+                "the premise: fullscreen is on"
+            );
         });
 
         cx.simulate_keystrokes("cmd-w");
 
         view.read_with(cx, |view, _| {
             assert!(view.panes.is_empty(), "the last Pane is gone");
-            assert_eq!(view.cockpit.roster().fullscreen(), None, "and so is the fullscreen");
+            assert_eq!(
+                view.cockpit.roster().fullscreen(),
+                None,
+                "and so is the fullscreen"
+            );
         });
     }
 
@@ -6991,7 +7213,10 @@ mod tests {
         tick(cx);
         cx.simulate_keystrokes("cmd-f");
         let gone = view.read_with(cx, |view, _| {
-            assert!(view.cockpit.roster().fullscreen().is_some(), "the premise: fullscreen is on");
+            assert!(
+                view.cockpit.roster().fullscreen().is_some(),
+                "the premise: fullscreen is on"
+            );
             view.panes[0].thread().unwrap()
         });
 
@@ -7005,7 +7230,8 @@ mod tests {
 
         view.read_with(cx, |view, _| {
             assert_eq!(
-                view.cockpit.roster().fullscreen(), None,
+                view.cockpit.roster().fullscreen(),
+                None,
                 "a fullscreened Thread that vanished falls back to the grid"
             );
             assert_eq!(view.panes.len(), 1, "with the surviving Thread on it");
@@ -7355,7 +7581,8 @@ mod tests {
         view.read_with(cx, |view, _| {
             assert_eq!(
                 view.cockpit
-                    .thread(thread).map(|open| open.transcript())
+                    .thread(thread)
+                    .map(|open| open.transcript())
                     .unwrap()
                     .blocks()
                     .iter()
@@ -7390,7 +7617,10 @@ mod tests {
         tick(cx);
         assert_eq!(composer_text(&view, cx), "/");
         view.read_with(cx, |view, _| {
-            assert!(view.popover.is_none(), "recall itself must not derive a menu")
+            assert!(
+                view.popover.is_none(),
+                "recall itself must not derive a menu"
+            )
         });
         cx.simulate_keystrokes("up");
         tick(cx);
@@ -7650,7 +7880,11 @@ mod tests {
         view.read_with(cx, |view, _| {
             let menu = view.popover.as_ref().expect("@ opens the file menu");
             let names: Vec<&str> = menu.rows.iter().map(|row| row.name.as_ref()).collect();
-            assert_eq!(names, ["README.md", "src/", "lib.rs"], "the walk, breadth-first, folders too");
+            assert_eq!(
+                names,
+                ["README.md", "src/", "lib.rs"],
+                "the walk, breadth-first, folders too"
+            );
         });
 
         cx.simulate_input("li");
@@ -7872,8 +8106,17 @@ mod tests {
             .unwrap();
         tick(cx);
         view.read_with(cx, |view, _| {
-            assert!(view.cockpit.thread(thread).and_then(|open| open.pending()).is_some(), "the card is up");
-            assert!(view.cockpit.thread(thread).is_some_and(|open| open.busy()), "the turn is running");
+            assert!(
+                view.cockpit
+                    .thread(thread)
+                    .and_then(|open| open.pending())
+                    .is_some(),
+                "the card is up"
+            );
+            assert!(
+                view.cockpit.thread(thread).is_some_and(|open| open.busy()),
+                "the turn is running"
+            );
         });
 
         // The input is still live: typing lands, enter queues behind the
@@ -7883,9 +8126,15 @@ mod tests {
         cx.simulate_keystrokes("enter");
         cx.run_until_parked();
         view.read_with(cx, |view, _| {
-            assert_eq!(view.cockpit.thread(thread).and_then(|open| open.queued()), Some("fix the tests too"));
+            assert_eq!(
+                view.cockpit.thread(thread).and_then(|open| open.queued()),
+                Some("fix the tests too")
+            );
             assert!(
-                view.cockpit.thread(thread).and_then(|open| open.pending()).is_some(),
+                view.cockpit
+                    .thread(thread)
+                    .and_then(|open| open.pending())
+                    .is_some(),
                 "typing answered nothing"
             );
         });
@@ -7895,7 +8144,10 @@ mod tests {
         cx.run_until_parked();
         view.read_with(cx, |view, _| {
             assert!(
-                view.cockpit.thread(thread).and_then(|open| open.pending()).is_none(),
+                view.cockpit
+                    .thread(thread)
+                    .and_then(|open| open.pending())
+                    .is_none(),
                 "y on the empty line answered the Decision"
             );
         });
@@ -7930,7 +8182,10 @@ mod tests {
         );
         view.read_with(cx, |view, _| {
             assert!(
-                view.cockpit.thread(thread).and_then(|open| open.pending()).is_some(),
+                view.cockpit
+                    .thread(thread)
+                    .and_then(|open| open.pending())
+                    .is_some(),
                 "the Decision is still waiting"
             );
         });
@@ -7948,7 +8203,9 @@ mod tests {
         let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
         view.read_with(cx, |view, _| {
             assert_eq!(
-                view.cockpit.thread(thread).and_then(|open| open.permission_mode()),
+                view.cockpit
+                    .thread(thread)
+                    .and_then(|open| open.permission_mode()),
                 None,
                 "no chip is invented before the Session speaks"
             );
@@ -7962,7 +8219,12 @@ mod tests {
         tick(cx);
 
         view.read_with(cx, |view, _| {
-            assert_eq!(view.cockpit.thread(thread).and_then(|open| open.permission_mode()), Some("acceptEdits"));
+            assert_eq!(
+                view.cockpit
+                    .thread(thread)
+                    .and_then(|open| open.permission_mode()),
+                Some("acceptEdits")
+            );
         });
     }
 
@@ -8513,9 +8775,21 @@ mod tests {
             // catalog under the names people say — never a wire id.
             assert_eq!(names[0], "Claude");
             assert!(picker.rows[0].inert, "a section title is not a pick");
-            let codex = names.iter().position(|name| *name == "Codex").expect("a Codex section");
-            assert!(codex > 1, "Claude's models sit between the titles: {names:?}");
-            assert!(names.iter().all(|name| !name.contains("claude-") && !name.contains("gpt-5") || name.starts_with("GPT")), "{names:?}");
+            let codex = names
+                .iter()
+                .position(|name| *name == "Codex")
+                .expect("a Codex section");
+            assert!(
+                codex > 1,
+                "Claude's models sit between the titles: {names:?}"
+            );
+            assert!(
+                names
+                    .iter()
+                    .all(|name| !name.contains("claude-") && !name.contains("gpt-5")
+                        || name.starts_with("GPT")),
+                "{names:?}"
+            );
             assert!(picker.rows[1].active, "✓ on the Provider's default");
             assert_eq!(picker.selected, 1, "the arrows start on it");
             codex + 1
@@ -8526,17 +8800,28 @@ mod tests {
 
         view.read_with(cx, |view, _| {
             assert!(view.popover.is_none(), "the pick closed the picker");
-            assert_eq!(view.cockpit.thread(thread).map(|open| open.provider()), Some(Provider::Codex));
+            assert_eq!(
+                view.cockpit.thread(thread).map(|open| open.provider()),
+                Some(Provider::Codex)
+            );
             // The switch was Ferrite's own act: no prompt, no running turn.
             let transcript = view.cockpit.thread(thread).unwrap().transcript();
             assert!(transcript.blocks().is_empty());
             assert!(!view.cockpit.thread(thread).is_some_and(|open| open.busy()));
         });
         let spawned = fake.spawned.borrow().last().unwrap().clone();
-        assert_eq!(spawned.provider, Provider::Codex, "the choice drives the spawn");
+        assert_eq!(
+            spawned.provider,
+            Provider::Codex,
+            "the choice drives the spawn"
+        );
         assert_eq!(
             spawned.model.as_deref(),
-            Some(ferrite_core::providers::models::fallback(Provider::Codex)[0].value.as_str()),
+            Some(
+                ferrite_core::providers::models::fallback(Provider::Codex)[0]
+                    .value
+                    .as_str()
+            ),
             "the first Codex row is its first catalog model"
         );
     }
@@ -8574,7 +8859,10 @@ mod tests {
             // The announced list replaces the catalog for its Provider;
             // Codex, which announces none, keeps its catalog.
             assert_eq!(&names[..4], ["Claude", "Sonnet", "Opus", "Codex"]);
-            assert_eq!(picker.selected, 1, "no choice yet: the arrows start on the first model");
+            assert_eq!(
+                picker.selected, 1,
+                "no choice yet: the arrows start on the first model"
+            );
         });
 
         cx.simulate_keystrokes("down enter");
@@ -8589,7 +8877,10 @@ mod tests {
             "the model rides the spawn; the provider stands"
         );
         view.read_with(cx, |view, _| {
-            assert_eq!(view.cockpit.thread(thread).and_then(|open| open.model()), Some("opus"));
+            assert_eq!(
+                view.cockpit.thread(thread).and_then(|open| open.model()),
+                Some("opus")
+            );
         });
 
         // The replacement Session announces its own list — reopening the
@@ -8678,7 +8969,9 @@ mod tests {
     /// still opens, the other Provider's section is drawn inert and says
     /// why, and the Composer's control stays in every Pane.
     #[gpui::test]
-    fn the_first_prompt_fixes_the_provider_but_the_model_picker_stays_open(cx: &mut TestAppContext) {
+    fn the_first_prompt_fixes_the_provider_but_the_model_picker_stays_open(
+        cx: &mut TestAppContext,
+    ) {
         let (core, _fake) = cockpit("provider-lock-ui", 1);
         bind_production_keys(cx);
         let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
@@ -8698,15 +8991,27 @@ mod tests {
 
         view.update(cx, |view, cx| {
             view.open_provider_picker(thread, cx);
-            let picker = view.popover.as_ref().expect("the picker opens after the first prompt");
+            let picker = view
+                .popover
+                .as_ref()
+                .expect("the picker opens after the first prompt");
             let codex = picker
                 .rows
                 .iter()
                 .position(|row| row.name.as_ref() == "Codex")
                 .unwrap();
-            assert_eq!(picker.rows[codex].detail.as_ref(), "fixed after the first prompt");
-            assert!(picker.rows[codex + 1..].iter().all(|row| row.inert), "the other Provider's rows are dead");
-            assert!(picker.rows[1..codex].iter().all(|row| !row.inert), "this Provider's models are live");
+            assert_eq!(
+                picker.rows[codex].detail.as_ref(),
+                "fixed after the first prompt"
+            );
+            assert!(
+                picker.rows[codex + 1..].iter().all(|row| row.inert),
+                "the other Provider's rows are dead"
+            );
+            assert!(
+                picker.rows[1..codex].iter().all(|row| !row.inert),
+                "this Provider's models are live"
+            );
             assert!(
                 view.model_picker(0, cx).is_some(),
                 "and the control itself stays — every Pane draws one"
@@ -8726,9 +9031,16 @@ mod tests {
         cx.simulate_keystrokes("enter");
         cx.run_until_parked();
         view.read_with(cx, |view, _| {
-            assert!(matches!(view.popover.as_ref().expect("the picker opened").kind, Kind::Provider));
+            assert!(matches!(
+                view.popover.as_ref().expect("the picker opened").kind,
+                Kind::Provider
+            ));
         });
-        assert_eq!(composer_text(&view, cx), "", "the pick never lands as slash text");
+        assert_eq!(
+            composer_text(&view, cx),
+            "",
+            "the pick never lands as slash text"
+        );
     }
 
     /// #25 regression: reopening the picker with a standing model choice
@@ -8758,7 +9070,10 @@ mod tests {
         cx.simulate_keystrokes("down enter");
         cx.run_until_parked();
         view.read_with(cx, |view, _| {
-            assert_eq!(view.cockpit.thread(thread).and_then(|open| open.model()), Some("opus"));
+            assert_eq!(
+                view.cockpit.thread(thread).and_then(|open| open.model()),
+                Some("opus")
+            );
         });
         let spawns = fake.streams.borrow().len();
 
@@ -8770,7 +9085,11 @@ mod tests {
         cx.run_until_parked();
         view.read_with(cx, |view, _| {
             let picker = view.popover.as_ref().expect("open");
-            let standing = picker.rows.iter().position(|row| row.active).expect("✓ on the choice");
+            let standing = picker
+                .rows
+                .iter()
+                .position(|row| row.active)
+                .expect("✓ on the choice");
             assert_eq!(picker.rows[standing].name.as_ref(), "Opus");
             assert_eq!(picker.selected, standing);
         });
@@ -8783,8 +9102,15 @@ mod tests {
             "a re-pick of the standing choice must not respawn"
         );
         view.read_with(cx, |view, _| {
-            assert_eq!(view.cockpit.thread(thread).and_then(|open| open.model()), Some("opus"), "the model stands");
-            assert_eq!(view.cockpit.thread(thread).map(|open| open.provider()), Some(Provider::Claude));
+            assert_eq!(
+                view.cockpit.thread(thread).and_then(|open| open.model()),
+                Some("opus"),
+                "the model stands"
+            );
+            assert_eq!(
+                view.cockpit.thread(thread).map(|open| open.provider()),
+                Some(Provider::Claude)
+            );
         });
     }
 
@@ -8808,7 +9134,10 @@ mod tests {
         );
         cx.run_until_parked();
         let (delete, count) = view.read_with(cx, |view, _| {
-            let menu = view.context_menu.as_ref().expect("a right-click opens the menu");
+            let menu = view
+                .context_menu
+                .as_ref()
+                .expect("a right-click opens the menu");
             assert_eq!(menu.target, MenuTarget::Pane(thread));
             let labels: Vec<&str> = menu
                 .rows
@@ -8824,7 +9153,10 @@ mod tests {
                 .iter()
                 .position(|row| matches!(row, Some((_, MenuVerb::Delete))))
                 .unwrap();
-            (delete, view.cockpit.threads().len() + view.cockpit.parked().unwrap().len())
+            (
+                delete,
+                view.cockpit.threads().len() + view.cockpit.parked().unwrap().len(),
+            )
         });
 
         // Escape closes it without running anything.
@@ -8833,14 +9165,28 @@ mod tests {
         view.read_with(cx, |view, _| assert!(view.context_menu.is_none()));
 
         view.update(cx, |view, cx| {
-            view.open_context_menu(MenuTarget::Pane(thread), gpui::point(px(600.), px(300.)), cx);
+            view.open_context_menu(
+                MenuTarget::Pane(thread),
+                gpui::point(px(600.), px(300.)),
+                cx,
+            );
             view.press_menu_row(delete, cx);
             let menu = view.context_menu.as_ref().expect("armed, still up");
             assert_eq!(menu.armed, Some(delete), "the first press only arms");
             view.press_menu_row(delete, cx);
-            assert!(view.context_menu.is_none(), "the second press runs and closes");
-            assert!(view.cockpit.thread(thread).is_none(), "the Thread is gone from the grid");
-            assert_eq!(view.cockpit.threads().len() + view.cockpit.parked().unwrap().len(), count - 1, "and from the store");
+            assert!(
+                view.context_menu.is_none(),
+                "the second press runs and closes"
+            );
+            assert!(
+                view.cockpit.thread(thread).is_none(),
+                "the Thread is gone from the grid"
+            );
+            assert_eq!(
+                view.cockpit.threads().len() + view.cockpit.parked().unwrap().len(),
+                count - 1,
+                "and from the store"
+            );
             assert!(view.panes.iter().all(|pane| pane.thread() != Some(thread)));
         });
     }
@@ -8858,10 +9204,14 @@ mod tests {
 
         cx.simulate_keystrokes("cmd-,");
         cx.run_until_parked();
-        view.read_with(cx, |view, _| assert!(view.settings_open, "cmd-, opens the panel"));
+        view.read_with(cx, |view, _| {
+            assert!(view.settings_open, "cmd-, opens the panel")
+        });
         cx.simulate_keystrokes("escape");
         cx.run_until_parked();
-        view.read_with(cx, |view, _| assert!(!view.settings_open, "escape closes it"));
+        view.read_with(cx, |view, _| {
+            assert!(!view.settings_open, "escape closes it")
+        });
 
         let dir = view.read_with(cx, |view, _| view.prefs.dir.clone());
         let _ = std::fs::remove_dir_all(&dir);
@@ -8885,13 +9235,21 @@ mod tests {
                 Some("acceptEdits"),
                 "the spawner's defaults follow"
             );
-            assert_eq!(view.default_choice().provider, Provider::Codex, "new drafts follow");
+            assert_eq!(
+                view.default_choice().provider,
+                Provider::Codex,
+                "new drafts follow"
+            );
         });
 
         // With confirmation off, a destructive row runs on its first press.
         let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
         view.update(cx, |view, cx| {
-            view.open_context_menu(MenuTarget::Pane(thread), gpui::point(px(600.), px(300.)), cx);
+            view.open_context_menu(
+                MenuTarget::Pane(thread),
+                gpui::point(px(600.), px(300.)),
+                cx,
+            );
             let delete = view
                 .context_menu
                 .as_ref()
@@ -8937,18 +9295,38 @@ mod tests {
                 .collect()
         });
         assert_eq!(rects.len(), 2, "both members have a rect");
-        assert!((rects[0].w - rects[1].w).abs() < 1.0, "an even split: {rects:?}");
-        assert!(rects[1].x > rects[0].x + rects[0].w, "side by side, a gap between");
+        assert!(
+            (rects[0].w - rects[1].w).abs() < 1.0,
+            "an even split: {rects:?}"
+        );
+        assert!(
+            rects[1].x > rects[0].x + rects[0].w,
+            "side by side, a gap between"
+        );
 
         // Grab the seam (the gap between the two rects) and drag it right.
         let seam_x = rects[0].x + rects[0].w + crate::theme::GRID_GAP / 2.0;
         let seam_y = rects[0].y + rects[0].h / 2.0;
-        cx.simulate_mouse_down(gpui::point(px(seam_x), px(seam_y)), gpui::MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_mouse_down(
+            gpui::point(px(seam_x), px(seam_y)),
+            gpui::MouseButton::Left,
+            gpui::Modifiers::none(),
+        );
         cx.run_until_parked();
-        view.read_with(cx, |view, _| assert!(view.seam_drag.is_some(), "the seam is held"));
-        cx.simulate_mouse_move(gpui::point(px(seam_x + 200.), px(seam_y)), gpui::MouseButton::Left, gpui::Modifiers::none());
+        view.read_with(cx, |view, _| {
+            assert!(view.seam_drag.is_some(), "the seam is held")
+        });
+        cx.simulate_mouse_move(
+            gpui::point(px(seam_x + 200.), px(seam_y)),
+            gpui::MouseButton::Left,
+            gpui::Modifiers::none(),
+        );
         cx.run_until_parked();
-        cx.simulate_mouse_up(gpui::point(px(seam_x + 200.), px(seam_y)), gpui::MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_mouse_up(
+            gpui::point(px(seam_x + 200.), px(seam_y)),
+            gpui::MouseButton::Left,
+            gpui::Modifiers::none(),
+        );
         cx.run_until_parked();
         view.read_with(cx, |view, _| {
             assert!(view.seam_drag.is_none(), "released");
@@ -8973,7 +9351,11 @@ mod tests {
                 }
                 _ => panic!("still a split"),
             }
-            assert_eq!(tree.leaves(), vec![threads[0], threads[1]], "the source sits above");
+            assert_eq!(
+                tree.leaves(),
+                vec![threads[0], threads[1]],
+                "the source sits above"
+            );
         });
     }
 
@@ -9144,7 +9526,8 @@ mod tests {
 
         view.update(cx, |view, cx| view.enter_group(sending, cx));
         cx.simulate_keystrokes("cmd-t");
-        let sending_draft = view.read_with(cx, |view, _| view.panes[view.focused()].composer.clone());
+        let sending_draft =
+            view.read_with(cx, |view, _| view.panes[view.focused()].composer.clone());
         view.update(cx, |view, _| {
             view.focus_pane(view.pane_for(threads[0]).unwrap())
         });
@@ -9173,7 +9556,8 @@ mod tests {
 
         view.update(cx, |view, cx| view.enter_group(closing, cx));
         cx.simulate_keystrokes("cmd-t");
-        let closing_draft = view.read_with(cx, |view, _| view.panes[view.focused()].composer.clone());
+        let closing_draft =
+            view.read_with(cx, |view, _| view.panes[view.focused()].composer.clone());
         cx.simulate_input("discard only when I close");
         view.update(cx, |view, _| {
             view.focus_pane(view.pane_for(threads[2]).unwrap())

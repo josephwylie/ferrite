@@ -13,9 +13,9 @@
 //! prototype specifies only L1 — and take the new palette and scale.
 
 use ferrite_core::cockpit::{ProviderChoice, ThreadView, ToolTiming};
-use ferrite_core::store::Provider;
 use ferrite_core::docview::{is_test_run, passed_count, Instruments, Level, Tests};
 use ferrite_core::roster::{DraftId, PaneIdentity};
+use ferrite_core::store::Provider;
 use ferrite_core::transcript::{
     Block, BlockId, Body, Class, Diff, Span, Status, Style, Todos, Token, ToolBlock, ToolState,
     Transcript,
@@ -25,9 +25,9 @@ use ferrite_core::workspace::WorkspaceBinding;
 use ferrite_core::{Decision, ThreadId};
 use gpui::prelude::*;
 use gpui::{
-    canvas, deferred, div, point, px, relative, rgb, rgba, AnyElement, BoxShadow, Context,
-    Div, Entity, FocusHandle, FontFeatures, FontWeight, HighlightStyle, PathBuilder,
-    ScrollHandle, SharedString, Stateful, Styled, StyledText,
+    canvas, deferred, div, point, px, relative, rgb, rgba, AnyElement, BoxShadow, Context, Div,
+    Entity, FocusHandle, FontFeatures, FontWeight, HighlightStyle, PathBuilder, ScrollHandle,
+    SharedString, Stateful, Styled, StyledText,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -149,7 +149,11 @@ impl PaneView {
 
     /// A draft Pane (#29): cmd-t's answer — a Composer and the pre-prompt
     /// band, and nothing else until the first send bootstraps a Thread.
-    pub fn new_draft<T: 'static>(draft: DraftId, binding: DraftBinding, cx: &mut Context<T>) -> Self {
+    pub fn new_draft<T: 'static>(
+        draft: DraftId,
+        binding: DraftBinding,
+        cx: &mut Context<T>,
+    ) -> Self {
         Self {
             identity: PaneIdentity::Draft(draft),
             draft: Some(binding),
@@ -276,7 +280,9 @@ impl PaneView {
     }
 
     #[cfg(test)]
-    pub(crate) fn tool_bounds_sink(&self) -> Rc<RefCell<HashMap<String, gpui::Bounds<gpui::Pixels>>>> {
+    pub(crate) fn tool_bounds_sink(
+        &self,
+    ) -> Rc<RefCell<HashMap<String, gpui::Bounds<gpui::Pixels>>>> {
         self.disclosure.bounds.clone()
     }
 }
@@ -634,9 +640,9 @@ fn focus_wrapper(shell: Div, focused: bool) -> Div {
             div()
                 .absolute()
                 .inset(px(-(theme::FOCUS_RING_OFFSET + theme::FOCUS_RING_W)))
-                .rounded(px(
-                    theme::R_SURFACE + theme::FOCUS_RING_OFFSET + theme::FOCUS_RING_W,
-                ))
+                .rounded(px(theme::R_SURFACE
+                    + theme::FOCUS_RING_OFFSET
+                    + theme::FOCUS_RING_W))
                 .border(px(theme::FOCUS_RING_W))
                 .border_color(rgb(FOCUS))
         }))
@@ -867,11 +873,7 @@ fn wall_cell(view: &PaneView, card: &WallCard, state: WallState, focused: bool) 
             ));
         }
         WallState::Failing => {
-            cell = cell.child(status_line(
-                card.failing.clone(),
-                theme::FS_MONO,
-                BLOCKED,
-            ));
+            cell = cell.child(status_line(card.failing.clone(), theme::FS_MONO, BLOCKED));
         }
         WallState::Decision => {
             cell = cell.child(status_line(
@@ -1196,14 +1198,18 @@ fn l2_cell(
 /// the Thread is without a transcript. None when nothing has been said.
 fn last_words(transcript: &Transcript) -> Option<SharedString> {
     const LAST_WORDS_CHARS: usize = 160;
-    let text = transcript.blocks().iter().rev().find_map(|block| match &block.body {
-        Body::Paragraph { spans } | Body::Heading { spans, .. } | Body::Bullet { spans } => {
-            let joined: String = spans.iter().map(|span| span.text.as_str()).collect();
-            let joined = joined.trim().to_string();
-            (!joined.is_empty()).then_some(joined)
-        }
-        _ => None,
-    })?;
+    let text = transcript
+        .blocks()
+        .iter()
+        .rev()
+        .find_map(|block| match &block.body {
+            Body::Paragraph { spans } | Body::Heading { spans, .. } | Body::Bullet { spans } => {
+                let joined: String = spans.iter().map(|span| span.text.as_str()).collect();
+                let joined = joined.trim().to_string();
+                (!joined.is_empty()).then_some(joined)
+            }
+            _ => None,
+        })?;
     let mut chars = text.chars();
     let cut: String = chars.by_ref().take(LAST_WORDS_CHARS).collect();
     Some(SharedString::from(if chars.next().is_some() {
@@ -1445,11 +1451,7 @@ pub fn model_label(model: &str) -> SharedString {
 /// Render-only; the cockpit gives it its id and its click.
 pub fn model_picker(provider: Option<Provider>, label: SharedString) -> Div {
     let mark = provider.map(|provider| match provider {
-        Provider::Codex => icon(
-            icons::CODEX,
-            theme::PROVIDER_MARK_SM,
-            theme::PROVIDER_CODEX,
-        ),
+        Provider::Codex => icon(icons::CODEX, theme::PROVIDER_MARK_SM, theme::PROVIDER_CODEX),
         Provider::Claude => icon(
             icons::CLAUDE,
             theme::PROVIDER_MARK_SM,
@@ -1469,11 +1471,7 @@ pub fn model_picker(provider: Option<Provider>, label: SharedString) -> Div {
         .text_color(rgb(TEXT_2))
         .children(mark)
         .child(div().flex_shrink_0().child(label))
-        .child(icon(
-            icons::CHEVRON_DOWN,
-            theme::ICON_CHEVRON,
-            TEXT_MUTED,
-        ))
+        .child(icon(icons::CHEVRON_DOWN, theme::ICON_CHEVRON, TEXT_MUTED))
         .hover_control()
 }
 
@@ -1957,7 +1955,12 @@ fn queued_line(held: &str) -> impl IntoElement {
         .gap(px(theme::EVENT_GAP))
         .h(px(theme::CELL_HEADER_H))
         .text_size(px(theme::FS_SM))
-        .child(div().flex_shrink_0().text_color(rgb(TEXT_MUTED)).child("⏳"))
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_color(rgb(TEXT_MUTED))
+                .child("⏳"),
+        )
         .child(
             div()
                 .min_w_0()
@@ -2487,7 +2490,11 @@ pub fn picker_row(
 pub fn picker_section(provider: Provider, note: SharedString) -> Div {
     let mark = match provider {
         Provider::Codex => icon(icons::CODEX, theme::PROVIDER_MARK_SM, theme::PROVIDER_CODEX),
-        Provider::Claude => icon(icons::CLAUDE, theme::PROVIDER_MARK_SM, theme::PROVIDER_CLAUDE),
+        Provider::Claude => icon(
+            icons::CLAUDE,
+            theme::PROVIDER_MARK_SM,
+            theme::PROVIDER_CLAUDE,
+        ),
     };
     let title = match provider {
         Provider::Claude => "Claude",
@@ -2602,27 +2609,26 @@ fn render_block(
         // explicit 4px disc, gpui drawing no list markers. The disc sits
         // 15px left of the text and 8.3px below the line box's top (§E.3,
         // pixel-measured).
-        Body::Bullet { spans } => {
-            row.relative()
-                .pl(px(theme::UL_INDENT))
-                .mb(px(if flow.next_is_bullet {
-                    theme::LI_GAP
-                } else {
-                    theme::P_MARGIN_B
-                }))
-                .child(
-                    div()
-                        .absolute()
-                        .left(px(theme::UL_INDENT - theme::BULLET_OFFSET))
-                        .top(px(8.3))
-                        .w(px(theme::BULLET_D))
-                        .h(px(theme::BULLET_D))
-                        .rounded_full()
-                        .bg(rgb(TEXT_2)),
-                )
-                .child(prose(block.id, spans, selection))
-                .into_any_element()
-        }
+        Body::Bullet { spans } => row
+            .relative()
+            .pl(px(theme::UL_INDENT))
+            .mb(px(if flow.next_is_bullet {
+                theme::LI_GAP
+            } else {
+                theme::P_MARGIN_B
+            }))
+            .child(
+                div()
+                    .absolute()
+                    .left(px(theme::UL_INDENT - theme::BULLET_OFFSET))
+                    .top(px(8.3))
+                    .w(px(theme::BULLET_D))
+                    .h(px(theme::BULLET_D))
+                    .rounded_full()
+                    .bg(rgb(TEXT_2)),
+            )
+            .child(prose(block.id, spans, selection))
+            .into_any_element(),
         // Thinking has no prototype counterpart (R-09): it reads as a
         // `.note` paragraph rather than growing a class of its own.
         // A provider ends a thinking run with a trailing newline; drawing it
@@ -2807,12 +2813,14 @@ fn render_tool(
                 .child(selection.piece(block, piece, Vec::new()))
         };
         call = call
-            .child(div().flex_shrink_0().ml(px(theme::EVENT_GAP)).child(
-                div()
-                    .text_size(px(theme::FS_MONO))
-                    .line_height(relative(theme::LINE_BODY))
-                    .child(selection.piece(block, "(", Vec::new())),
-            ))
+            .child(
+                div().flex_shrink_0().ml(px(theme::EVENT_GAP)).child(
+                    div()
+                        .text_size(px(theme::FS_MONO))
+                        .line_height(relative(theme::LINE_BODY))
+                        .child(selection.piece(block, "(", Vec::new())),
+                ),
+            )
             .child(args(tool.summary.clone().into()).min_w_0().truncate())
             .child(args(")".into()).flex_shrink_0());
     }
@@ -2922,44 +2930,38 @@ fn render_tool(
             } else {
                 TEXT_MUTED
             };
-            card = card.child(
-                result_line(ink).child(
-                    div()
-                        .min_w_0()
-                        .child(selection.line(block, output.text.clone(), Vec::new())),
-                ),
-            );
+            card = card.child(result_line(ink).child(div().min_w_0().child(selection.line(
+                block,
+                output.text.clone(),
+                Vec::new(),
+            ))));
             if output.omitted_bytes > 0 {
-                card = card.child(
-                    result_line(TEXT_MUTED).child(div().min_w_0().child(format!(
-                        "… {} bytes omitted from inline view",
-                        output.omitted_bytes
-                    ))),
-                );
+                card = card.child(result_line(TEXT_MUTED).child(div().min_w_0().child(format!(
+                    "… {} bytes omitted from inline view",
+                    output.omitted_bytes
+                ))));
             }
         }
     } else if !promoted {
         if let Some(line) = &tool.result_line {
             card = card.child(
-                result_line(TEXT_MUTED).child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .child(selection.line(block, line.clone(), Vec::new())),
-                ),
+                result_line(TEXT_MUTED).child(div().min_w_0().truncate().child(selection.line(
+                    block,
+                    line.clone(),
+                    Vec::new(),
+                ))),
             );
         }
     }
     if !expanded {
         if let ToolState::Failed(message) = &tool.state {
-            card = card.child(
-                result_line(BLOCKED).child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .child(selection.line(block, message.clone(), Vec::new())),
-                ),
-            );
+            card = card.child(result_line(BLOCKED).child(
+                div().min_w_0().truncate().child(selection.line(
+                    block,
+                    message.clone(),
+                    Vec::new(),
+                )),
+            ));
         }
     }
     if let Some(diff) = &tool.diff {
@@ -3138,7 +3140,6 @@ fn render_diff(block: BlockId, diff: &Diff, selection: &SelectionOverlay) -> imp
     lines
 }
 
-
 /// Markdown spans flattened to one wrapping run — its text and highlight
 /// runs, for the selection overlay to wash and register (#27) — so inline
 /// code keeps its place in the sentence instead of becoming its own box.
@@ -3226,14 +3227,10 @@ fn prose(block: BlockId, spans: &[Span], selection: &SelectionOverlay) -> AnyEle
                     .bg(rgb(RAISED))
                     .child(run),
             ),
-            style => row.child(
-                div()
-                    .min_w_0()
-                    .child(match span_style(style) {
-                        Some(highlight) => run.with_highlights(vec![(0..span.text.len(), highlight)]),
-                        None => run,
-                    }),
-            ),
+            style => row.child(div().min_w_0().child(match span_style(style) {
+                Some(highlight) => run.with_highlights(vec![(0..span.text.len(), highlight)]),
+                None => run,
+            })),
         };
     }
     row.into_any_element()
@@ -3270,9 +3267,8 @@ fn code_lines(
                 .filter_map(|(range, style)| {
                     let start = range.start.max(span.start + from);
                     let end = range.end.min(span.end);
-                    (start < end).then(|| {
-                        (start - span.start - from..end - span.start - from, *style)
-                    })
+                    (start < end)
+                        .then(|| (start - span.start - from..end - span.start - from, *style))
                 })
                 .collect()
         };
@@ -3580,11 +3576,23 @@ mod tests {
 
         // The ✓-row both selectors share follows the same rule.
         assert_eq!(
-            cursor(picker_row("workspace root".into(), "".into(), false, false, false)),
+            cursor(picker_row(
+                "workspace root".into(),
+                "".into(),
+                false,
+                false,
+                false
+            )),
             Some(CursorStyle::PointingHand)
         );
         assert_eq!(
-            cursor(picker_row("workspace root".into(), "".into(), true, true, false)),
+            cursor(picker_row(
+                "workspace root".into(),
+                "".into(),
+                true,
+                true,
+                false
+            )),
             Some(CursorStyle::PointingHand)
         );
 

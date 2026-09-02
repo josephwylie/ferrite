@@ -46,6 +46,22 @@ park order. Changed only by the operator's acts on the Cockpit (close,
 reopen, enter a Group, drop); the window mirrors it and paints.
 _Avoid_: layout (that is what the Roster's grid computes), tab list.
 
+**Layout**
+A Group's arrangement of its Panes: a binary split tree (each split a row
+or a column with a share for its first side), persisted with the Group.
+Seams between Panes resize it; dropping a Pane on another swaps them (the
+centre) or splits that slot (an edge).
+_Avoid_: grid (that is what an even Layout happens to be), mosaic.
+
+**Title**
+What a Thread is called: the operator's own name for it, else the first
+line of its first prompt, else its number.
+
+**Settings**
+The operator's defaults for new Threads (Provider, model, permissions) and
+for the app's behaviour, in one file beside the store. Never history: a
+Thread's header remains the durable truth about that Thread.
+
 **Semantic zoom**
 A Pane's rendering chosen by its size: **L1** (near: transcript + prompt),
 **L2** (instruments: progress, tests, diff stats), **L3** (wall: status LED +

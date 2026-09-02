@@ -636,7 +636,13 @@ mod tests {
         // a trailing slash, dotfiles and noise never.
         assert_eq!(
             mention_files(&root, 100),
-            ["README.md", "src/", "src/lib.rs", "src/nested/", "src/nested/deep.rs"]
+            [
+                "README.md",
+                "src/",
+                "src/lib.rs",
+                "src/nested/",
+                "src/nested/deep.rs"
+            ]
         );
         // The cap bounds the walk — a monorepo cannot stall a keystroke.
         assert_eq!(mention_files(&root, 2), ["README.md", "src/"]);

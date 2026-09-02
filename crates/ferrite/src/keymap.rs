@@ -62,16 +62,40 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
         // time backwards and forwards, the line halves, word steps, and
         // shift-selection — all scoped to the Composer so nothing else
         // ever sees them.
-        (with_word("backspace"), "composer::DeleteWordLeft", Some("Composer")),
-        (with_word("delete"), "composer::DeleteWordRight", Some("Composer")),
-        (with_edge("backspace"), "composer::DeleteToStart", Some("Composer")),
-        (with_edge("delete"), "composer::DeleteToEnd", Some("Composer")),
+        (
+            with_word("backspace"),
+            "composer::DeleteWordLeft",
+            Some("Composer"),
+        ),
+        (
+            with_word("delete"),
+            "composer::DeleteWordRight",
+            Some("Composer"),
+        ),
+        (
+            with_edge("backspace"),
+            "composer::DeleteToStart",
+            Some("Composer"),
+        ),
+        (
+            with_edge("delete"),
+            "composer::DeleteToEnd",
+            Some("Composer"),
+        ),
         (with_word("left"), "composer::WordLeft", Some("Composer")),
         (with_word("right"), "composer::WordRight", Some("Composer")),
         (with_edge("left"), "composer::Home", Some("Composer")),
         (with_edge("right"), "composer::End", Some("Composer")),
-        ("shift-left".into(), "composer::SelectLeft", Some("Composer")),
-        ("shift-right".into(), "composer::SelectRight", Some("Composer")),
+        (
+            "shift-left".into(),
+            "composer::SelectLeft",
+            Some("Composer"),
+        ),
+        (
+            "shift-right".into(),
+            "composer::SelectRight",
+            Some("Composer"),
+        ),
         (
             format!("shift-{word}-left"),
             "composer::SelectWordLeft",
@@ -92,7 +116,11 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
             "composer::SelectEnd",
             Some("Composer"),
         ),
-        ("shift-home".into(), "composer::SelectHome", Some("Composer")),
+        (
+            "shift-home".into(),
+            "composer::SelectHome",
+            Some("Composer"),
+        ),
         ("shift-end".into(), "composer::SelectEnd", Some("Composer")),
         (with_primary("a"), "composer::SelectAll", Some("Composer")),
         // The Composer's own copy and cut. Bound BEFORE the cockpit's cmd-c
@@ -107,7 +135,11 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
         // line's ends, ctrl-w kills the word before the caret.
         ("ctrl-a".into(), "composer::Home", Some("Composer")),
         ("ctrl-e".into(), "composer::End", Some("Composer")),
-        ("ctrl-w".into(), "composer::DeleteWordLeft", Some("Composer")),
+        (
+            "ctrl-w".into(),
+            "composer::DeleteWordLeft",
+            Some("Composer"),
+        ),
         // Copy the transcript selection a drag made; with nothing selected
         // the key does nothing (the Composer has no selection of its own).
         (with_primary("c"), "cockpit::CopySelection", None),
