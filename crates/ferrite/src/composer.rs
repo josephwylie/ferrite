@@ -5,16 +5,48 @@ use std::ops::Range;
 
 use gpui::prelude::*;
 use gpui::{
-    actions, div, fill, point, px, relative, rgb, App, Bounds, Context, Element, ElementId,
-    ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable,
-    GlobalElementId, LayoutId, PaintQuad, Pixels, ShapedLine, SharedString, Style, TextRun,
+    actions, div, fill, point, px, relative, rgb, App, Bounds, ClipboardItem, Context,
+    DispatchPhase, Element, ElementId, ElementInputHandler, Entity, EntityInputHandler,
+    EventEmitter, FocusHandle, Focusable, GlobalElementId, LayoutId, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, ShapedLine, SharedString, Style, TextRun,
     UTF16Selection, UnderlineStyle, Window,
 };
 
 use crate::line::Line;
 use crate::pointer::Pointer;
 
-actions!(composer, [Backspace, Delete, Left, Right, Home, End, Paste]);
+actions!(
+    composer,
+    [
+        Backspace,
+        Delete,
+        Left,
+        Right,
+        Home,
+        End,
+        Paste,
+        // Word-wise editing (alt on macOS, ctrl on Windows) and the line
+        // halves (cmd-backspace / cmd-delete).
+        DeleteWordLeft,
+        DeleteWordRight,
+        DeleteToStart,
+        DeleteToEnd,
+        WordLeft,
+        WordRight,
+        // Shift-motions grow a selection from the caret.
+        SelectLeft,
+        SelectRight,
+        SelectWordLeft,
+        SelectWordRight,
+        SelectHome,
+        SelectEnd,
+        SelectAll,
+        // The selection's own clipboard verbs. With nothing selected they
+        // propagate, so cmd-c still copies a transcript selection.
+        Copy,
+        Cut,
+    ]
+);
 
 /// The line moved — text or cursor. The cockpit listens to keep the `/` and
 /// `@` menus following what the operator is typing (#23).
@@ -42,6 +74,9 @@ pub struct Composer {
     history_available: bool,
     last_layout: Option<ShapedLine>,
     last_bounds: Option<Bounds<Pixels>>,
+    /// A press landed in the line and has not been released: moves extend
+    /// the selection from where it landed.
+    dragging: bool,
 }
 
 impl EventEmitter<Edited> for Composer {}
@@ -56,6 +91,7 @@ impl Composer {
             history_available: false,
             last_layout: None,
             last_bounds: None,
+            dragging: false,
         }
     }
 
@@ -178,6 +214,143 @@ impl Composer {
         }
     }
 
+    fn delete_word_left(&mut self, _: &DeleteWordLeft, _: &mut Window, cx: &mut Context<Self>) {
+        if self.line.text().is_empty() {
+            cx.propagate();
+            return;
+        }
+        self.line.delete_word_left();
+        self.edited(cx);
+    }
+
+    fn delete_word_right(&mut self, _: &DeleteWordRight, _: &mut Window, cx: &mut Context<Self>) {
+        self.line.delete_word_right();
+        self.edited(cx);
+    }
+
+    fn delete_to_start(&mut self, _: &DeleteToStart, _: &mut Window, cx: &mut Context<Self>) {
+        if self.line.text().is_empty() {
+            cx.propagate();
+            return;
+        }
+        self.line.delete_to_start();
+        self.edited(cx);
+    }
+
+    fn delete_to_end(&mut self, _: &DeleteToEnd, _: &mut Window, cx: &mut Context<Self>) {
+        self.line.delete_to_end();
+        self.edited(cx);
+    }
+
+    fn word_left(&mut self, _: &WordLeft, _: &mut Window, cx: &mut Context<Self>) {
+        self.line.move_word_left();
+        self.edited(cx);
+    }
+
+    fn word_right(&mut self, _: &WordRight, _: &mut Window, cx: &mut Context<Self>) {
+        self.line.move_word_right();
+        self.edited(cx);
+    }
+
+    fn select_left(&mut self, _: &SelectLeft, _: &mut Window, cx: &mut Context<Self>) {
+        self.line.select_left();
+        self.edited(cx);
+    }
+
+    fn select_right(&mut self, _: &SelectRight, _: &mut Window, cx: &mut Context<Self>) {
+        self.line.select_right();
+        self.edited(cx);
+    }
+
+    fn select_word_left(&mut self, _: &SelectWordLeft, _: &mut Window, cx: &mut Context<Self>) {
+        self.line.select_word_left();
+        self.edited(cx);
+    }
+
+    fn select_word_right(&mut self, _: &SelectWordRight, _: &mut Window, cx: &mut Context<Self>) {
+        self.line.select_word_right();
+        self.edited(cx);
+    }
+
+    fn select_home(&mut self, _: &SelectHome, _: &mut Window, cx: &mut Context<Self>) {
+        self.line.select_home();
+        self.edited(cx);
+    }
+
+    fn select_end(&mut self, _: &SelectEnd, _: &mut Window, cx: &mut Context<Self>) {
+        self.line.select_end();
+        self.edited(cx);
+    }
+
+    fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
+        self.line.select_all();
+        self.edited(cx);
+    }
+
+    /// Copy the line's own selection; with none, let the key reach the
+    /// cockpit, whose cmd-c copies the transcript selection.
+    fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
+        match self.line.selected_text() {
+            Some(text) => cx.write_to_clipboard(ClipboardItem::new_string(text.to_string())),
+            None => cx.propagate(),
+        }
+    }
+
+    fn cut(&mut self, _: &Cut, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(text) = self.line.selected_text() else {
+            cx.propagate();
+            return;
+        };
+        cx.write_to_clipboard(ClipboardItem::new_string(text.to_string()));
+        self.line.replace(None, "");
+        self.edited(cx);
+    }
+
+    /// Where a window point falls in the line, as a byte offset — past the
+    /// end when it is right of the text.
+    fn offset_at(&self, position: gpui::Point<Pixels>) -> Option<usize> {
+        let bounds = self.last_bounds?;
+        let layout = self.last_layout.as_ref()?;
+        let x = position.x - bounds.left();
+        Some(layout.index_for_x(x).unwrap_or(self.line.text().len()))
+    }
+
+    /// A press in the line: the caret lands under the pointer, a double
+    /// click takes the word, a triple click the whole line — and the press
+    /// arms a drag that extends from there.
+    pub(crate) fn press(&mut self, event: &MouseDownEvent, cx: &mut Context<Self>) {
+        let Some(offset) = self.offset_at(event.position) else {
+            return;
+        };
+        match event.click_count {
+            1 => {
+                if event.modifiers.shift {
+                    self.line.select_to(offset);
+                } else {
+                    self.line.place_caret(offset);
+                }
+            }
+            2 => self.line.select_word_at(offset),
+            _ => self.line.select_all(),
+        }
+        self.dragging = event.click_count == 1;
+        self.edited(cx);
+    }
+
+    fn drag(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
+        if !self.dragging || !event.dragging() {
+            return;
+        }
+        if let Some(offset) = self.offset_at(event.position) {
+            self.line.select_to(offset);
+            self.edited(cx);
+        }
+    }
+
+    fn release(&mut self, _: &MouseUpEvent, _cx: &mut Context<Self>) {
+        self.dragging = false;
+    }
+
     fn range_from_utf16(&self, range: &Range<usize>) -> Range<usize> {
         self.line.offset_from_utf16(range.start)..self.line.offset_from_utf16(range.end)
     }
@@ -208,7 +381,7 @@ impl EntityInputHandler for Composer {
     ) -> Option<UTF16Selection> {
         Some(UTF16Selection {
             range: self.range_to_utf16(&self.line.selection()),
-            reversed: false,
+            reversed: self.line.reversed(),
         })
     }
 
@@ -316,6 +489,21 @@ impl Render for Composer {
             .on_action(cx.listener(Self::home))
             .on_action(cx.listener(Self::end))
             .on_action(cx.listener(Self::paste))
+            .on_action(cx.listener(Self::delete_word_left))
+            .on_action(cx.listener(Self::delete_word_right))
+            .on_action(cx.listener(Self::delete_to_start))
+            .on_action(cx.listener(Self::delete_to_end))
+            .on_action(cx.listener(Self::word_left))
+            .on_action(cx.listener(Self::word_right))
+            .on_action(cx.listener(Self::select_left))
+            .on_action(cx.listener(Self::select_right))
+            .on_action(cx.listener(Self::select_word_left))
+            .on_action(cx.listener(Self::select_word_right))
+            .on_action(cx.listener(Self::select_home))
+            .on_action(cx.listener(Self::select_end))
+            .on_action(cx.listener(Self::select_all))
+            .on_action(cx.listener(Self::copy))
+            .on_action(cx.listener(Self::cut))
             .child(LineElement {
                 composer: cx.entity(),
             })
@@ -560,6 +748,35 @@ impl Element for LineElement {
             ElementInputHandler::new(bounds, self.composer.clone()),
             cx,
         );
+        // The pointer edits the caret too: a press lands it, a drag grows
+        // the selection, a release ends the drag wherever it went.
+        let composer = self.composer.clone();
+        window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
+            if phase != DispatchPhase::Bubble
+                || event.button != MouseButton::Left
+                || !bounds.contains(&event.position)
+            {
+                return;
+            }
+            composer.update(cx, |composer, cx| {
+                window.focus(&composer.focus_handle);
+                composer.press(event, cx);
+            });
+        });
+        let composer = self.composer.clone();
+        window.on_mouse_event(move |event: &MouseMoveEvent, phase, _window, cx| {
+            if phase != DispatchPhase::Bubble {
+                return;
+            }
+            composer.update(cx, |composer, cx| composer.drag(event, cx));
+        });
+        let composer = self.composer.clone();
+        window.on_mouse_event(move |event: &MouseUpEvent, phase, _window, cx| {
+            if phase != DispatchPhase::Bubble {
+                return;
+            }
+            composer.update(cx, |composer, cx| composer.release(event, cx));
+        });
         if let Some(selection) = prepaint.selection.take() {
             window.paint_quad(selection);
         }

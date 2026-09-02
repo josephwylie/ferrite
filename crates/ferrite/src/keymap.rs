@@ -32,6 +32,23 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
         Platform::Mac => "cmd",
         Platform::Windows => "ctrl",
     };
+    // The word modifier: alt on macOS (alt-backspace, alt-left), ctrl on
+    // Windows (ctrl-backspace, ctrl-left) — each platform's own text-field
+    // grammar. On Windows ctrl-left is a word step and home is the line
+    // edge; on macOS cmd-left is the line edge and there is no other.
+    let word = match platform {
+        Platform::Mac => "alt",
+        Platform::Windows => "ctrl",
+    };
+    let with_word = |key: &str| format!("{word}-{key}");
+    // The line-edge modifier for deleting and jumping: cmd on macOS. Windows
+    // has no native spelling for "delete to line start", so ctrl-shift
+    // carries it there.
+    let edge = match platform {
+        Platform::Mac => "cmd",
+        Platform::Windows => "ctrl-shift",
+    };
+    let with_edge = |key: &str| format!("{edge}-{key}");
     let with_primary = |key: &str| format!("{primary}-{key}");
     vec![
         ("backspace".into(), "composer::Backspace", None),
@@ -41,6 +58,54 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
         ("home".into(), "composer::Home", None),
         ("end".into(), "composer::End", None),
         (with_primary("v"), "composer::Paste", None),
+        // Word-wise editing, the basic text-field grammar: one word at a
+        // time backwards and forwards, the line halves, word steps, and
+        // shift-selection — all scoped to the Composer so nothing else
+        // ever sees them.
+        (with_word("backspace"), "composer::DeleteWordLeft", Some("Composer")),
+        (with_word("delete"), "composer::DeleteWordRight", Some("Composer")),
+        (with_edge("backspace"), "composer::DeleteToStart", Some("Composer")),
+        (with_edge("delete"), "composer::DeleteToEnd", Some("Composer")),
+        (with_word("left"), "composer::WordLeft", Some("Composer")),
+        (with_word("right"), "composer::WordRight", Some("Composer")),
+        (with_edge("left"), "composer::Home", Some("Composer")),
+        (with_edge("right"), "composer::End", Some("Composer")),
+        ("shift-left".into(), "composer::SelectLeft", Some("Composer")),
+        ("shift-right".into(), "composer::SelectRight", Some("Composer")),
+        (
+            format!("shift-{word}-left"),
+            "composer::SelectWordLeft",
+            Some("Composer"),
+        ),
+        (
+            format!("shift-{word}-right"),
+            "composer::SelectWordRight",
+            Some("Composer"),
+        ),
+        (
+            format!("shift-{edge}-left"),
+            "composer::SelectHome",
+            Some("Composer"),
+        ),
+        (
+            format!("shift-{edge}-right"),
+            "composer::SelectEnd",
+            Some("Composer"),
+        ),
+        ("shift-home".into(), "composer::SelectHome", Some("Composer")),
+        ("shift-end".into(), "composer::SelectEnd", Some("Composer")),
+        (with_primary("a"), "composer::SelectAll", Some("Composer")),
+        // The Composer's own copy and cut. Bound BEFORE the cockpit's cmd-c
+        // below and scoped to the Composer: the deeper context wins while
+        // the line has a selection, and an empty selection propagates so
+        // the transcript's copy still answers.
+        (with_primary("c"), "composer::Copy", Some("Composer")),
+        (with_primary("x"), "composer::Cut", Some("Composer")),
+        // Emacs muscle memory every shell honours: ctrl-a / ctrl-e to the
+        // line's ends, ctrl-w kills the word before the caret.
+        ("ctrl-a".into(), "composer::Home", Some("Composer")),
+        ("ctrl-e".into(), "composer::End", Some("Composer")),
+        ("ctrl-w".into(), "composer::DeleteWordLeft", Some("Composer")),
         // Copy the transcript selection a drag made; with nothing selected
         // the key does nothing (the Composer has no selection of its own).
         (with_primary("c"), "cockpit::CopySelection", None),
@@ -135,6 +200,9 @@ mod tests {
     fn primary_shortcuts_are_cmd_on_mac_and_ctrl_on_windows() {
         let expected = [
             ("composer::Paste", "v"),
+            ("composer::SelectAll", "a"),
+            ("composer::Copy", "c"),
+            ("composer::Cut", "x"),
             ("cockpit::CopySelection", "c"),
             ("cockpit::NextPane", "]"),
             ("cockpit::PreviousPane", "["),
@@ -294,6 +362,53 @@ mod tests {
                 .unwrap();
             assert!(history < menu, "menu arrows must retain precedence");
         }
+    }
+
+    /// The word grammar follows each platform's own text fields: alt on
+    /// macOS, ctrl on Windows; the line halves are cmd on macOS.
+    #[test]
+    fn word_editing_follows_each_platforms_text_field_grammar() {
+        let table = bindings(Platform::Mac);
+        for (key, action) in [
+            ("alt-backspace", "composer::DeleteWordLeft"),
+            ("alt-delete", "composer::DeleteWordRight"),
+            ("cmd-backspace", "composer::DeleteToStart"),
+            ("cmd-delete", "composer::DeleteToEnd"),
+            ("alt-left", "composer::WordLeft"),
+            ("alt-right", "composer::WordRight"),
+            ("cmd-left", "composer::Home"),
+            ("cmd-right", "composer::End"),
+            ("shift-alt-left", "composer::SelectWordLeft"),
+            ("shift-cmd-right", "composer::SelectEnd"),
+            ("shift-left", "composer::SelectLeft"),
+        ] {
+            assert!(
+                table.contains(&(key.into(), action, Some("Composer"))),
+                "mac is missing {key} for {action}"
+            );
+        }
+        let table = bindings(Platform::Windows);
+        for (key, action) in [
+            ("ctrl-backspace", "composer::DeleteWordLeft"),
+            ("ctrl-delete", "composer::DeleteWordRight"),
+            ("ctrl-left", "composer::WordLeft"),
+            ("ctrl-right", "composer::WordRight"),
+            ("shift-ctrl-left", "composer::SelectWordLeft"),
+        ] {
+            assert!(
+                table.contains(&(key.into(), action, Some("Composer"))),
+                "windows is missing {key} for {action}"
+            );
+        }
+        // The Composer's copy sits before the cockpit's, so the tie inside
+        // the deeper context resolves toward the line's own selection.
+        let mac = bindings(Platform::Mac);
+        let at = |wanted: &str| {
+            mac.iter()
+                .position(|(_, action, _)| *action == wanted)
+                .unwrap()
+        };
+        assert!(at("composer::Copy") < at("cockpit::CopySelection"));
     }
 
     /// A keystroke gpui cannot parse would panic at startup on one platform
