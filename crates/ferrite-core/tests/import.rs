@@ -11,7 +11,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use ferrite_core::import::{import, ImportError};
+use ferrite_core::import::{candidates, import, ImportError};
 use ferrite_core::store::{Provider, Store};
 use ferrite_core::transcript::{Input, Transcript};
 use ferrite_core::{SessionEvent, TurnOutcome};
@@ -630,4 +630,89 @@ fn arbitrary_junk_never_panics_the_importer() {
         }
     }
     assert_eq!(store.thread_ids().unwrap(), vec![]);
+}
+
+/// A session file `age_secs` old: written, then stamped with the mtime
+/// discovery orders by.
+fn write_session_file(path: &std::path::Path, contents: &str, age_secs: u64) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, contents).unwrap();
+    let modified = std::time::SystemTime::now() - std::time::Duration::from_secs(age_secs);
+    fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(modified)
+        .unwrap();
+}
+
+fn session_roots(base: &std::path::Path) -> Vec<(Provider, PathBuf)> {
+    vec![
+        (Provider::Claude, base.join("claude-projects")),
+        (Provider::Codex, base.join("codex-sessions")),
+    ]
+}
+
+/// Discovery is a bounded, ordered walk: both roots, `.jsonl` only,
+/// newest first, capped — and a missing root lists nothing rather than
+/// erroring.
+#[test]
+fn session_file_discovery_walks_both_roots_newest_first_and_capped() {
+    let base = std::env::temp_dir().join(format!(
+        "ferrite-import-discovery-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&base);
+    let roots = session_roots(&base);
+    write_session_file(
+        &roots[0].1.join("-workspace-alpha").join("old.jsonl"),
+        "x\n",
+        3600,
+    );
+    write_session_file(
+        &roots[0].1.join("-workspace-beta").join("new.jsonl"),
+        "x\n",
+        10,
+    );
+    write_session_file(
+        &roots[1].1.join("2026").join("08").join("rollout-mid.jsonl"),
+        "x\n",
+        600,
+    );
+    // Not a session file shape: ignored by extension.
+    write_session_file(
+        &roots[0].1.join("-workspace-alpha").join("notes.txt"),
+        "x\n",
+        5,
+    );
+
+    let all = candidates(&roots, 8);
+    let names: Vec<String> = all
+        .iter()
+        .map(|candidate| {
+            candidate
+                .path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    assert_eq!(names, ["new.jsonl", "rollout-mid.jsonl", "old.jsonl"]);
+    assert_eq!(
+        all.iter()
+            .map(|candidate| candidate.provider)
+            .collect::<Vec<_>>(),
+        [Provider::Claude, Provider::Codex, Provider::Claude]
+    );
+
+    let capped = candidates(&roots, 2);
+    assert_eq!(capped.len(), 2, "the cap holds");
+    assert_eq!(
+        capped[0].path.file_name().unwrap().to_string_lossy(),
+        "new.jsonl"
+    );
+
+    let missing = session_roots(&base.join("nowhere"));
+    assert!(candidates(&missing, 8).is_empty());
 }

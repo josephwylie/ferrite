@@ -1,6 +1,7 @@
 // Ferrite: the cockpit window and the pump behind it.
 mod cockpit;
 mod composer;
+mod demo;
 mod fuzzy;
 mod icons;
 mod keymap;
@@ -14,11 +15,11 @@ mod theme;
 
 use ferrite_core::cockpit::Cockpit;
 use ferrite_core::store::{Provider, Store};
-use ferrite_core::workspace::WorkspaceChoice;
+use ferrite_core::ThreadId;
 use gpui::*;
 
 use cockpit::CockpitView;
-use session::{ProcessRss, Spawn};
+use session::ProcessRss;
 
 actions!(ferrite, [Quit]);
 
@@ -97,12 +98,19 @@ fn main() {
                 std::process::exit(1);
             }
         };
-        let (adopted, refused) = cockpit::adopt(&store, &imports);
+        let (adopted, refused) = adopt(&store, &imports);
         for refusal in refused {
             eprintln!("ferrite: {refusal}");
         }
 
-        let mut core = match Cockpit::try_new(store, Box::new(Spawn::new(demo, load))) {
+        // The fixture adapter serves `--demo` and `--load`; every other
+        // launch spawns the real provider CLIs.
+        let spawner: Box<dyn ferrite_core::cockpit::Spawner> = if demo {
+            Box::new(demo::Spawn::new(load))
+        } else {
+            Box::new(session::Spawn)
+        };
+        let mut core = match Cockpit::try_new(store, spawner) {
             Ok(core) => core,
             Err(e) => {
                 eprintln!("ferrite: cannot open the workspace registry: {e}");
@@ -117,12 +125,12 @@ fn main() {
         }
         if core.threads().is_empty() {
             if demo || panes > 1 {
-                seed_panes(&mut core, panes, provider, demo);
+                demo::seed_panes(&mut core, panes, provider, demo);
             } else {
                 // The default launch revives the newest parked Thread; an
                 // empty store starts as a draft Pane (#29) — nothing
                 // spawns before the operator's choice.
-                cockpit::revive_latest(&mut core);
+                revive_latest(&mut core);
             }
         }
 
@@ -170,77 +178,33 @@ fn main() {
     });
 }
 
-/// The multi-Pane seed (`--demo`, `--panes N`): revive whatever this store
-/// already parked — newest first, which `cockpit::threads_for` does — and
-/// open new Threads for the room that is left.
-///
-/// Those new Threads alternate the two providers, starting at `first`. A
-/// Cockpit opened on one provider draws the same logomark down the whole
-/// nav; the design shows both marks mixed, so the seed has to deal both.
-fn seed_panes(core: &mut Cockpit, panes: usize, first: Provider, demo: bool) {
-    // The seeded Panes are a Group's members: with no global wall (#28) a
-    // Group is the only view that shows more than one Pane. The nav's
-    // selected fill is carried by the current Group too — the one holding
-    // the focused Pane's Thread — so a seed of nothing but solo Threads
-    // leaves that fill unpainted and every Group title at `TEXT` instead of
-    // `TEXT_STRONG`. A store that already holds
-    // Groups (any run after the first) is therefore revived from the first
-    // Group's members before anything else; a fresh store has no Group to
-    // revive from and gets one from `cockpit::seed_groups`, over the Threads
-    // opened below. Panes open in ThreadId order, so the first member taken
-    // here is the focused Pane's Thread.
-    let members: Vec<ferrite_core::ThreadId> = core
-        .groups()
-        .iter()
-        .next()
-        .map(|group| group.members.clone())
-        .unwrap_or_default();
-    // ...but only into the leading Panes. The Cockpit is a census, not a
-    // monoculture: a Decision waits in one Pane and a Session has closed in
-    // the last, which is what paints the two coloured `.signal` lines and
-    // the attention and blocked borders. A revived Thread replays its log,
-    // and a log carries neither a pending Decision nor an exit — both are
-    // Session state — so those Panes have to be freshly dealt. The demo
-    // spawner deals its seeds in open order and a revived Thread takes
-    // none, so the three Panes held back here get seeds 0, 1 and 2:
-    // the Decision the interactive script stops on, a working Thread, and
-    // a Session that closed.
-    let revivable = panes.saturating_sub(3).max(1);
-    let mut open = 0;
-    for thread in members.into_iter().take(revivable) {
-        match core.revive(thread) {
-            Ok(()) => open += 1,
-            Err(e) => eprintln!("ferrite: thread {thread} could not be revived: {e:?}"),
+/// Adopt CLI sessions started outside Ferrite, before the Cockpit takes the
+/// store. Each Thread is durable the moment import returns, so it opens like
+/// any parked one. A refusal is the operator's to read: the file is named and
+/// the provider's own words are shown, and the run carries on without it.
+fn adopt(store: &Store, paths: &[String]) -> (Vec<ThreadId>, Vec<String>) {
+    let mut adopted = Vec::new();
+    let mut refused = Vec::new();
+    for path in paths {
+        match ferrite_core::import::import(store, std::path::Path::new(path)) {
+            Ok(thread) => adopted.push(thread),
+            // Reported, not printed: the caller decides where an operator
+            // reads it, and a test can read it too.
+            Err(e) => refused.push(format!("cannot import {path}: {e}")),
         }
     }
-    let parked = core.parked().map(|threads| threads.len()).unwrap_or(0);
-    open += cockpit::threads_for(core, revivable.saturating_sub(open).min(parked), first).len();
-    let checkout = std::env::current_dir().unwrap_or_else(|_| ".".into());
-    while open < panes {
-        let provider = match (open % 2 == 0, first) {
-            (true, first) => first,
-            (false, Provider::Claude) => Provider::Codex,
-            (false, Provider::Codex) => Provider::Claude,
-        };
-        let choice = WorkspaceChoice::Main {
-            checkout: checkout.clone(),
-        };
-        match core.open(provider, choice) {
-            Ok(_) => open += 1,
-            Err(e) => {
-                eprintln!("ferrite: could not open a thread: {e}");
-                break;
-            }
-        }
-    }
-    // The Group tier the demo shows off, and only the demo: its titles are
-    // written copy and it opens Threads of its own to fill a second Group.
-    // That is fixture, exactly like the scripted transcripts around it, and
-    // it may never reach a store an operator keeps work in — `--panes N`
-    // alone spawns real Sessions, so it does not qualify.
-    if demo {
-        let seeded: Vec<ferrite_core::ThreadId> = core.threads().to_vec();
-        cockpit::seed_groups(core, &seeded, first);
+    (adopted, refused)
+}
+
+/// Revive the newest parked Thread for launch, if the store holds any. An
+/// empty store starts as a draft Pane instead (#29): nothing spawns before
+/// the operator's choice.
+fn revive_latest(cockpit: &mut Cockpit) {
+    let Some(thread) = cockpit.parked().unwrap_or_default().last().copied() else {
+        return;
+    };
+    if let Err(e) = cockpit.revive(thread) {
+        eprintln!("ferrite: thread {thread} could not be revived: {e:?}");
     }
 }
 
@@ -296,7 +260,8 @@ fn store_dir() -> std::path::PathBuf {
 mod tests {
     // No `use super::*`: the crate root globs `gpui::*`, whose `test` macro
     // would capture the `#[test]` this macro expands to and recurse.
-    use super::{keymap, load_bindings};
+    use super::{adopt, keymap, load_bindings};
+    use ferrite_core::store::Store;
 
     /// The keymap's action names are strings; startup rebuilds real actions
     /// from them. Without this, a renamed action would only fail at launch.
@@ -310,5 +275,31 @@ mod tests {
                 );
             }
         });
+    }
+
+    /// Leg 3: a file that is not a session file is refused in the operator's
+    /// words, and the cockpit carries on without it.
+    #[test]
+    fn an_unimportable_file_is_refused_and_adopted_by_nobody() {
+        let dir = std::env::temp_dir().join(format!("ferrite-launch-{}-import-refusal", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let bogus = dir.join("not-a-session.jsonl");
+        std::fs::write(&bogus, "this is not a session file\n").unwrap();
+        let store = Store::open(dir.join("threads")).unwrap();
+
+        let (adopted, refused) = adopt(&store, &[bogus.to_string_lossy().to_string()]);
+
+        assert!(adopted.is_empty());
+        // The operator is told what was refused and why, in the provider's
+        // own words — not left with a launch that quietly did nothing.
+        assert_eq!(refused.len(), 1);
+        assert!(
+            refused[0].contains("not-a-session.jsonl") && refused[0].contains("not an importable"),
+            "unhelpful refusal: {}",
+            refused[0]
+        );
+        // Nothing half-made was left in the store either.
+        assert!(store.thread_ids().unwrap().is_empty());
     }
 }

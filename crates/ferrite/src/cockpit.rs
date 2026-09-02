@@ -409,7 +409,7 @@ impl CockpitView {
             menu_muted: false,
             suppress_recall_menu_once: false,
             picker: None,
-            session_file_roots: default_session_roots(),
+            session_file_roots: ferrite_core::import::default_roots(),
             launch_project,
             band: None,
             view: View::Solo,
@@ -1581,7 +1581,7 @@ impl CockpitView {
         composer: Entity<crate::composer::Composer>,
         cx: &mut Context<Self>,
     ) {
-        let candidates = session_file_candidates(&self.session_file_roots, IMPORT_ROWS_MAX);
+        let candidates = ferrite_core::import::candidates(&self.session_file_roots, IMPORT_ROWS_MAX);
         if candidates.is_empty() {
             let roots = self
                 .session_file_roots
@@ -3186,74 +3186,6 @@ fn local_row(
     })
 }
 
-/// Where the vendors write session files, per the layouts the import
-/// fixtures capture: `~/.claude/projects/<slug>/<session>.jsonl` and
-/// `~/.codex/sessions/<date dirs>/rollout-*.jsonl`. Windows spells the
-/// home directory USERPROFILE, not HOME.
-fn default_session_roots() -> Vec<(Provider, std::path::PathBuf)> {
-    let home = std::path::PathBuf::from(
-        std::env::var("HOME")
-            .or_else(|_| std::env::var("USERPROFILE"))
-            .unwrap_or_else(|_| ".".into()),
-    );
-    vec![
-        (Provider::Claude, home.join(".claude").join("projects")),
-        (Provider::Codex, home.join(".codex").join("sessions")),
-    ]
-}
-
-/// One session file discovery found: which vendor's root it was under, and
-/// when the vendor last wrote it.
-struct ImportCandidate {
-    provider: Provider,
-    path: std::path::PathBuf,
-    modified: Option<std::time::SystemTime>,
-}
-
-/// Candidate session files under the vendors' roots: every `.jsonl` in
-/// either tree — the layouts differ (per-project slugs vs per-date
-/// directories), so the walk recurses instead of assuming a depth, the
-/// same read the live import probes use — newest first, capped. A missing
-/// root lists nothing: that vendor was simply never run here. Whether a
-/// candidate really is an adoptable session stays the import parser's
-/// verdict, not the filename's.
-fn session_file_candidates(
-    roots: &[(Provider, std::path::PathBuf)],
-    cap: usize,
-) -> Vec<ImportCandidate> {
-    fn walk(provider: Provider, dir: &std::path::Path, into: &mut Vec<ImportCandidate>) {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                walk(provider, &path, into);
-            } else if path
-                .extension()
-                .is_some_and(|extension| extension == "jsonl")
-            {
-                into.push(ImportCandidate {
-                    provider,
-                    modified: std::fs::metadata(&path)
-                        .and_then(|metadata| metadata.modified())
-                        .ok(),
-                    path,
-                });
-            }
-        }
-    }
-    let mut found = Vec::new();
-    for (provider, root) in roots {
-        walk(*provider, root, &mut found);
-    }
-    // Newest first; a file with no readable mtime sorts oldest rather than
-    // vanishing.
-    found.sort_by_key(|candidate| std::cmp::Reverse(candidate.modified));
-    found.truncate(cap);
-    found
-}
-
 /// A file's age as the operator scans it — the picker row's meta.
 fn age_label(modified: Option<std::time::SystemTime>, now: std::time::SystemTime) -> String {
     let Some(modified) = modified else {
@@ -4188,7 +4120,7 @@ impl CockpitView {
 }
 
 /// Where Ferrite was started: the launch project every draft begins on.
-fn here() -> std::path::PathBuf {
+pub(crate) fn here() -> std::path::PathBuf {
     std::env::current_dir().unwrap_or_else(|_| ".".into())
 }
 
@@ -4209,183 +4141,6 @@ fn rss_mb() -> f64 {
     crate::session::rss_bytes(std::process::id())
         .map(|bytes| bytes as f64 / (1024.0 * 1024.0))
         .unwrap_or(0.0)
-}
-
-/// Adopt CLI sessions started outside Ferrite, before the Cockpit takes the
-/// store. Each Thread is durable the moment import returns, so it opens like
-/// any parked one. A refusal is the operator's to read: the file is named and
-/// the provider's own words are shown, and the run carries on without it.
-pub fn adopt(store: &ferrite_core::store::Store, paths: &[String]) -> (Vec<ThreadId>, Vec<String>) {
-    let mut adopted = Vec::new();
-    let mut refused = Vec::new();
-    for path in paths {
-        match ferrite_core::import::import(store, std::path::Path::new(path)) {
-            Ok(thread) => adopted.push(thread),
-            // Reported, not printed: the caller decides where an operator
-            // reads it, and a test can read it too.
-            Err(e) => refused.push(format!("cannot import {path}: {e}")),
-        }
-    }
-    (adopted, refused)
-}
-
-/// Revive the newest parked Thread for launch, if the store holds any. An
-/// empty store starts as a draft Pane instead (#29): nothing spawns before
-/// the operator's choice.
-pub fn revive_latest(cockpit: &mut Cockpit) {
-    let Some(thread) = cockpit.parked().unwrap_or_default().last().copied() else {
-        return;
-    };
-    if let Err(e) = cockpit.revive(thread) {
-        eprintln!("ferrite: thread {thread} could not be revived: {e:?}");
-    }
-}
-
-/// Fill the cockpit for a multi-pane run (`--panes N`, the perf load).
-///
-/// The seed deals the two Providers alternately, because the nav is meant
-/// to carry both logomarks and a single-Provider seed draws one mark down
-/// the whole tree. Each slot takes the newest parked Thread of the Provider
-/// it is owed — newest, because that is what the operator was last looking
-/// at — and opens a new one only when the store has none.
-pub fn threads_for(cockpit: &mut Cockpit, wanted: usize, provider: Provider) -> Vec<ThreadId> {
-    // A Group's members must share one Project (§3.5f), so the launch
-    // directory is registered up front and the seed is built inside it.
-    let project = cockpit.register_project(&here()).ok();
-    let mut parked = cockpit.parked().unwrap_or_default();
-    parked.reverse();
-    // Only this Project's parked Threads come back: one left over from
-    // another checkout could not join the seeded Group, and a mixed seed
-    // would leave the nav with no Group at all.
-    let mut pool: Vec<ThreadId> = parked
-        .into_iter()
-        .filter(|thread| project.is_none() || cockpit.project_id(*thread) == project)
-        .collect();
-    let mut shown = Vec::new();
-    while shown.len() < wanted {
-        let want = deal(provider, shown.len());
-        // Taking whichever parked Thread is simply newest is what left a
-        // store that only ever held one Provider drawing one mark for every
-        // run after its first.
-        match pool
-            .iter()
-            .position(|thread| cockpit.provider(*thread) == Some(want))
-        {
-            Some(at) => {
-                let thread = pool.remove(at);
-                match cockpit.revive(thread) {
-                    Ok(()) => shown.push(thread),
-                    Err(e) => eprintln!("ferrite: thread {thread} could not be revived: {e:?}"),
-                }
-            }
-            None => match cockpit.open(want, WorkspaceChoice::Main { checkout: here() }) {
-                Ok(id) => shown.push(id),
-                Err(e) => {
-                    eprintln!("ferrite: could not open a thread: {e}");
-                    break;
-                }
-            },
-        }
-    }
-    shown
-}
-
-/// The provider for the `nth` Thread of a seeded run: `first`, then the
-/// other, then `first` again. Every seeding loop deals from this so the nav
-/// tree carries both logomarks instead of one.
-fn deal(first: Provider, nth: usize) -> Provider {
-    match (nth % 2 == 0, first) {
-        (true, first) => first,
-        (false, Provider::Claude) => Provider::Codex,
-        (false, Provider::Codex) => Provider::Claude,
-    }
-}
-
-/// The Group tier the **demo** shows: the seeded Threads are the first
-/// Group and three Threads it opens and parks are the second, so the nav's
-/// selected fill has a Group to land on. Both titles are written copy and
-/// the second Group's members are Threads nothing asked for — fixture, like
-/// the scripted transcripts, and callable only from the `--demo` launch. A
-/// store that already holds a Group is the operator's own and is left
-/// untouched.
-pub fn seed_groups(cockpit: &mut Cockpit, seeded: &[ThreadId], provider: Provider) {
-    if cockpit.groups().iter().next().is_some() {
-        return;
-    }
-    let first_group = &seeded[..seeded.len().min(FIRST_GROUP)];
-    form_group(cockpit, first_group, "Project-scoped navigation prototype");
-    let mut parked = Vec::new();
-    while parked.len() < SECOND_GROUP {
-        // Dealt on from where the first Group left off, so the second
-        // Group's rows mix both logomarks too instead of repeating one.
-        let provider = deal(provider, first_group.len() + parked.len());
-        match cockpit.open(provider, WorkspaceChoice::Main { checkout: here() }) {
-            Ok(id) => {
-                // A member is a Thread, not a Pane: the Session ends the
-                // moment it exists, so the Cockpit stays the size it was
-                // asked for and the row is parked like the prototype's.
-                if let Err(e) = cockpit.park(id) {
-                    eprintln!("ferrite: thread {id} would not park: {e}");
-                }
-                parked.push(id);
-            }
-            Err(e) => {
-                eprintln!("ferrite: could not open a thread: {e}");
-                break;
-            }
-        }
-    }
-    form_group(
-        cockpit,
-        &parked,
-        "Durable provider stream hardening & replay",
-    );
-}
-
-/// How many of the seeded Threads the first Group holds, and how many
-/// parked Threads the second holds.
-const FIRST_GROUP: usize = 4;
-const SECOND_GROUP: usize = 3;
-
-/// One Group over these Threads, in this order, under this title. Core has
-/// no "create with members": a Group is born from two Threads and the rest
-/// join it.
-fn form_group(cockpit: &mut Cockpit, members: &[ThreadId], title: &str) {
-    let (Some(seed), Some(with), rest) = (
-        members.first().copied(),
-        members.get(1).copied(),
-        members.get(2..).unwrap_or_default(),
-    ) else {
-        return;
-    };
-    let group = match cockpit.apply_group(GroupChange::Create {
-        first: seed,
-        second: with,
-    }) {
-        Ok(applied) => applied.group,
-        Err(e) => {
-            eprintln!("ferrite: could not group threads {seed} and {with}: {e}");
-            return;
-        }
-    };
-    let Some(group) = group else {
-        return;
-    };
-    for thread in rest {
-        if let Err(e) = cockpit.apply_group(GroupChange::Join {
-            thread: *thread,
-            group,
-            index: None,
-        }) {
-            eprintln!("ferrite: thread {thread} would not join the group: {e}");
-        }
-    }
-    if let Err(e) = cockpit.apply_group(GroupChange::Rename {
-        group,
-        title: title.to_string(),
-    }) {
-        eprintln!("ferrite: could not name the group: {e}");
-    }
 }
 
 #[cfg(test)]
@@ -5107,31 +4862,6 @@ mod tests {
             // And it is somewhere of its own, not the operator's checkout.
             assert_ne!(binding.cwd(), repo);
         });
-    }
-
-    /// Leg 3: a file that is not a session file is refused in the operator's
-    /// words, and the cockpit carries on without it.
-    #[test]
-    fn an_unimportable_file_is_refused_and_adopted_by_nobody() {
-        let dir = scratch("import-refusal");
-        std::fs::create_dir_all(&dir).unwrap();
-        let bogus = dir.join("not-a-session.jsonl");
-        std::fs::write(&bogus, "this is not a session file\n").unwrap();
-        let store = Store::open(dir.join("threads")).unwrap();
-
-        let (adopted, refused) = adopt(&store, &[bogus.to_string_lossy().to_string()]);
-
-        assert!(adopted.is_empty());
-        // The operator is told what was refused and why, in the provider's
-        // own words — not left with a launch that quietly did nothing.
-        assert_eq!(refused.len(), 1);
-        assert!(
-            refused[0].contains("not-a-session.jsonl") && refused[0].contains("not an importable"),
-            "unhelpful refusal: {}",
-            refused[0]
-        );
-        // Nothing half-made was left in the store either.
-        assert!(store.thread_ids().unwrap().is_empty());
     }
 
     /// The standing-answer rule holds at wall range too: a request that
@@ -7966,66 +7696,6 @@ mod tests {
         view.read_with(cx, |view, _| {
             assert!(view.picker.is_none(), "the press dismissed it");
         });
-    }
-
-    /// Discovery is a bounded, ordered walk: both roots, `.jsonl` only,
-    /// newest first, capped — and a missing root lists nothing rather than
-    /// erroring.
-    #[test]
-    fn session_file_discovery_walks_both_roots_newest_first_and_capped() {
-        let base = scratch("import-discovery");
-        let roots = session_roots(&base);
-        write_session_file(
-            &roots[0].1.join("-workspace-alpha").join("old.jsonl"),
-            "x\n",
-            3600,
-        );
-        write_session_file(
-            &roots[0].1.join("-workspace-beta").join("new.jsonl"),
-            "x\n",
-            10,
-        );
-        write_session_file(
-            &roots[1].1.join("2026").join("08").join("rollout-mid.jsonl"),
-            "x\n",
-            600,
-        );
-        // Not a session file shape: ignored by extension.
-        write_session_file(
-            &roots[0].1.join("-workspace-alpha").join("notes.txt"),
-            "x\n",
-            5,
-        );
-
-        let all = session_file_candidates(&roots, 8);
-        let names: Vec<String> = all
-            .iter()
-            .map(|candidate| {
-                candidate
-                    .path
-                    .file_name()
-                    .unwrap()
-                    .to_string_lossy()
-                    .into_owned()
-            })
-            .collect();
-        assert_eq!(names, ["new.jsonl", "rollout-mid.jsonl", "old.jsonl"]);
-        assert_eq!(
-            all.iter()
-                .map(|candidate| candidate.provider)
-                .collect::<Vec<_>>(),
-            [Provider::Claude, Provider::Codex, Provider::Claude]
-        );
-
-        let capped = session_file_candidates(&roots, 2);
-        assert_eq!(capped.len(), 2, "the cap holds");
-        assert_eq!(
-            capped[0].path.file_name().unwrap().to_string_lossy(),
-            "new.jsonl"
-        );
-
-        let missing = session_roots(&base.join("nowhere"));
-        assert!(session_file_candidates(&missing, 8).is_empty());
     }
 
     // ------------------------------------------------- Provider choice (#25)

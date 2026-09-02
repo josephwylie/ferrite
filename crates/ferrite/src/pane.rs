@@ -3622,7 +3622,7 @@ mod tests {
 
     #[gpui::test]
     fn a_blocked_thread_paints_its_decision_card(cx: &mut TestAppContext) {
-        let event = crate::session::script()
+        let event = crate::demo::script()
             .into_iter()
             .map(|step| step.event)
             .find(|event| matches!(event, SessionEvent::DecisionRequested { .. }))
