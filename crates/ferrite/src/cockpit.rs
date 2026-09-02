@@ -260,6 +260,12 @@ struct Row {
     consequence: Consequence,
 }
 
+impl Row {
+    fn consequence_is_inert(&self) -> bool {
+        matches!(self.consequence, Consequence::Inert)
+    }
+}
+
 impl std::ops::Deref for Row {
     type Target = pane::MenuRow;
 
@@ -1112,23 +1118,20 @@ impl CockpitView {
                     );
                 }
             }
-            let locked = open.first_prompt_sent();
-            let detail = if locked {
-                "locked after first prompt"
+            // The model can change at any time; the provider only before
+            // the first prompt, which the picker itself explains.
+            let detail = if open.first_prompt_sent() {
+                "switch model"
             } else {
                 "switch provider / model"
             };
-            if let Some(row) = local_row(filter, "provider", detail, locked) {
+            if let Some(row) = local_row(filter, "model", detail, false) {
                 push_local(
                     &mut rows,
                     Row {
                         row,
                         active: false,
-                        consequence: if locked {
-                            Consequence::Inert
-                        } else {
-                            Consequence::OpenProviderPicker
-                        },
+                        consequence: Consequence::OpenProviderPicker,
                     },
                 );
             }
@@ -1251,10 +1254,22 @@ impl CockpitView {
         let Some(open) = &mut self.popover else {
             return;
         };
-        let stepped = open
-            .selected
-            .saturating_add_signed(delta)
-            .min(open.rows.len().saturating_sub(1));
+        // Inert rows (a picker's section headers) are skipped over: the
+        // arrows land only where ↵ would do something.
+        let mut stepped = open.selected;
+        loop {
+            let next = stepped.saturating_add_signed(delta);
+            if next >= open.rows.len() || (delta < 0 && stepped == 0) {
+                break;
+            }
+            stepped = next;
+            if !open.rows[stepped].inert {
+                break;
+            }
+        }
+        if open.rows.get(stepped).is_some_and(|row| row.inert) {
+            stepped = open.selected;
+        }
         if stepped != open.selected {
             open.selected = stepped;
             cx.notify();
@@ -1425,76 +1440,24 @@ impl CockpitView {
         }
     }
 
-    /// #25: the provider picker in the Composer slot — the two Providers
-    /// (✓ on the current one), then the current Provider's announced
-    /// models, ✓ on the model actually serving. Discovery is core state
-    /// read once at open, never per frame. Refuses to open once the first
-    /// prompt has gone out: the choice is locked, and the footer is a
-    /// plain label by then anyway.
+    /// The model picker in the Composer slot: one section per Provider —
+    /// its logomark row, then its models under the names the Provider's
+    /// own menu shows — with the ✓ on what is serving. Claude's rows come
+    /// from its handshake; Codex's from the catalog. Opens before and after
+    /// the first prompt: the model can always change (the conversation is
+    /// resumed under the new one), and once the prompt has gone out the
+    /// other Provider's section is drawn inert and says why.
     fn open_provider_picker(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
         let Some(open) = self.cockpit.thread(thread) else {
             return;
         };
-        if open.first_prompt_sent() {
-            return;
-        }
         let current = open.provider();
         let chosen = open.model().map(str::to_string);
-        // The ✓ marks what is serving: the standing choice where one was
-        // picked, otherwise the model the Session's own Init announced.
-        let serving = chosen
-            .clone()
-            .or_else(|| open.transcript().model().map(str::to_string));
-        let label = |name: SharedString, detail: SharedString| pane::MenuRow {
-            // Nothing lands in the line on ↵, exactly as the import rows.
-            insert: SharedString::default(),
-            name,
-            matched: Vec::new(),
-            detail,
-            prose_detail: false,
-            inert: false,
-        };
-        let mut rows: Vec<Row> = [Provider::Claude, Provider::Codex]
-            .into_iter()
-            .map(|provider| Row {
-                row: label(
-                    SharedString::from(provider_label(provider)),
-                    SharedString::from("provider"),
-                ),
-                active: current == provider,
-                consequence: Consequence::Provision(ProviderChoice {
-                    provider,
-                    // The current provider's row IS the standing choice,
-                    // so a bare ↵ re-picks it as a true no-op; the other
-                    // provider starts on its own default.
-                    model: (current == provider).then(|| chosen.clone()).flatten(),
-                }),
-            })
-            .collect();
-        // Model rows come only from the Session's announcement — never
-        // invented, so the other provider's models are simply absent until
-        // a switch lets its Session speak. Their labels ride the chip's
-        // own grooming: one spelling per model, wherever it shows.
-        let model_detail = SharedString::from(format!("{} model", provider_label(current)));
-        for model in open.models() {
-            rows.push(Row {
-                row: label(pane::model_label(model), model_detail.clone()),
-                active: serving.as_deref() == Some(model.as_str()),
-                consequence: Consequence::Provision(ProviderChoice {
-                    provider: current,
-                    model: Some(model.clone()),
-                }),
-            });
-        }
-        // The arrows start on the current provider's row — bare ↵ keeps
-        // everything as it is.
-        let selected = rows
-            .iter()
-            .position(|row| {
-                matches!(&row.consequence, Consequence::Provision(choice) if choice.provider == current
-                    && choice.model == chosen)
-            })
-            .unwrap_or(0);
+        let serving = open.transcript().model().map(str::to_string);
+        let locked = open.first_prompt_sent();
+        let (rows, selected) = self.provider_rows(current, chosen.as_deref(), serving.as_deref(), locked, |choice| {
+            Consequence::Provision(choice)
+        });
         // The `/` menu the pick came through is already closed; a chip
         // click replaces whatever the slot held outright.
         self.popover = Some(Popover {
@@ -1506,16 +1469,114 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// A provider-row pick (#25): through the core's one deep setter —
-    /// lock check, spawn-new-first, durable header, fresh Transcript —
-    /// and the footer relabels when the new Session's Init arrives. A
-    /// refusal changed nothing: the old Session kept serving, and the
-    /// provider's own words land in this Thread's transcript.
+    /// The sectioned rows every model picker shows — the Composer's and
+    /// the draft band's alike. `chosen` is the standing choice (None = the
+    /// Provider's default), `serving` what the Session's Init named. The
+    /// ✓ lands on the chosen row, else on the row serving; the arrows
+    /// start there, so a bare ↵ keeps everything as it is.
+    fn provider_rows(
+        &self,
+        current: Provider,
+        chosen: Option<&str>,
+        serving: Option<&str>,
+        locked: bool,
+        consequence: impl Fn(ProviderChoice) -> Consequence,
+    ) -> (Vec<Row>, usize) {
+        let mut rows: Vec<Row> = Vec::new();
+        let mut selected = None;
+        for provider in [Provider::Claude, Provider::Codex] {
+            let fixed = locked && provider != current;
+            rows.push(Row {
+                row: pane::MenuRow {
+                    insert: SharedString::default(),
+                    name: SharedString::from(provider_title(provider)),
+                    matched: Vec::new(),
+                    detail: SharedString::from(if fixed {
+                        "fixed after the first prompt"
+                    } else {
+                        ""
+                    }),
+                    prose_detail: true,
+                    inert: true,
+                },
+                active: false,
+                consequence: Consequence::Inert,
+            });
+            let mut catalog = self.cockpit.model_catalog(provider);
+            if provider == current {
+                if let Some(chosen) = chosen {
+                    if !catalog.iter().any(|row| row.is(chosen)) {
+                        catalog.push(ferrite_core::ModelInfo::bare(chosen));
+                    }
+                }
+            }
+            for model in catalog {
+                let active = provider == current
+                    && match chosen {
+                        Some(chosen) => model.value == chosen,
+                        None => {
+                            model.value == "default"
+                                || (serving.is_some_and(|serving| model.is(serving))
+                                    && !self
+                                        .cockpit
+                                        .model_catalog(provider)
+                                        .iter()
+                                        .any(|row| row.value == "default"))
+                        }
+                    };
+                if active {
+                    selected = Some(rows.len());
+                }
+                rows.push(Row {
+                    row: pane::MenuRow {
+                        insert: SharedString::default(),
+                        name: SharedString::from(model.display.clone()),
+                        matched: Vec::new(),
+                        detail: SharedString::from(model.detail.clone()),
+                        prose_detail: true,
+                        inert: fixed,
+                    },
+                    active,
+                    consequence: if fixed {
+                        Consequence::Inert
+                    } else {
+                        consequence(ProviderChoice {
+                            provider,
+                            // The Provider's own default is the absence of
+                            // a choice, never the word on the wire.
+                            model: Some(model.value.clone()).filter(|value| value != "default"),
+                        })
+                    },
+                });
+            }
+        }
+        let selected = selected.unwrap_or_else(|| {
+            rows.iter()
+                .position(|row| !row.inert)
+                .unwrap_or(0)
+        });
+        (rows, selected)
+    }
+
+    /// A model-row pick: the same Provider re-aims the model — before the
+    /// first prompt eagerly, after it by resuming the conversation under
+    /// the new model; another Provider is `set_provider`'s pre-prompt swap.
+    /// A refusal changed nothing, and the core's own words land in this
+    /// Thread's transcript.
     fn pick_provider(&mut self, thread: ThreadId, choice: ProviderChoice, cx: &mut Context<Self>) {
-        if let Err(e) = self.cockpit.set_provider(thread, choice) {
+        let same_provider = self
+            .cockpit
+            .thread(thread)
+            .is_some_and(|open| open.provider() == choice.provider);
+        let result = if same_provider {
+            self.cockpit.set_model(thread, choice.model)
+        } else {
+            self.cockpit.set_provider(thread, choice)
+        };
+        if let Err(e) = result {
             self.cockpit.apply_input(
                 thread,
-                ferrite_core::transcript::Input::Notice(format!("provider unchanged: {e}")),
+                ferrite_core::transcript::Input::Notice(format!("model unchanged: {e}")),
             );
         }
         self.facts.acted(&self.cockpit, thread);
@@ -1679,45 +1740,14 @@ impl CockpitView {
     fn band_rows(&self, draft: &pane::DraftBinding, chip: pane::BandChip, cx: &Context<Self>) -> Vec<Row> {
         match chip {
             pane::BandChip::Provider => {
-                let mut choices = vec![
-                    ProviderChoice {
-                        provider: Provider::Claude,
-                        model: None,
-                    },
-                    ProviderChoice {
-                        provider: Provider::Codex,
-                        model: None,
-                    },
-                ];
-                for model in self.cockpit.announced_models(draft.provider.provider) {
-                    choices.push(ProviderChoice {
-                        provider: draft.provider.provider,
-                        model: Some(model),
-                    });
-                }
-                if draft.provider.model.is_some() && !choices.contains(&draft.provider) {
-                    choices.push(draft.provider.clone());
-                }
-                choices
-                    .into_iter()
-                    .map(|choice| {
-                        band_row(
-                            SharedString::from(
-                                choice
-                                    .model
-                                    .clone()
-                                    .unwrap_or_else(|| provider_label(choice.provider).into()),
-                            ),
-                            SharedString::from(if choice.model.is_some() {
-                                format!("{} model", provider_label(choice.provider))
-                            } else {
-                                "provider".into()
-                            }),
-                            draft.provider == choice,
-                            BandChoice::Provider(choice),
-                        )
-                    })
-                    .collect()
+                let (rows, _) = self.provider_rows(
+                    draft.provider.provider,
+                    draft.provider.model.as_deref(),
+                    None,
+                    false,
+                    |choice| Consequence::Band(BandChoice::Provider(choice)),
+                );
+                rows
             }
             pane::BandChip::Project => {
                 let mut rows: Vec<Row> = self
@@ -2011,8 +2041,11 @@ impl CockpitView {
                 // The provider's own word until a model is chosen; the
                 // groomed model name after — one spelling, wherever it shows.
                 match draft.provider.model.as_deref() {
-                    Some(model) => pane::model_label(model),
-                    None => SharedString::from(provider_label(draft.provider.provider)),
+                    Some(model) => SharedString::from(ferrite_core::providers::models::label(
+                        model,
+                        &self.cockpit.model_catalog(draft.provider.provider),
+                    )),
+                    None => SharedString::from(provider_title(draft.provider.provider)),
                 },
                 true,
             ),
@@ -2091,11 +2124,15 @@ impl CockpitView {
                 Kind::Commands | Kind::Files { .. } | Kind::ImportFile => {
                     pane::menu_row(&row.row, at == open.selected)
                 }
+                Kind::Provider | Kind::Band(pane::BandChip::Provider) if row.inert && row.consequence_is_inert() && provider_of_title(&row.name).is_some() => {
+                    pane::picker_section(provider_of_title(&row.name).unwrap(), row.detail.clone())
+                }
                 Kind::Provider | Kind::Band(_) => pane::picker_row(
                     row.name.clone(),
                     row.detail.clone(),
                     at == open.selected,
                     row.active,
+                    row.inert,
                 ),
             };
             popover = popover.child(drawn.on_mouse_down(
@@ -2105,11 +2142,6 @@ impl CockpitView {
                     view.pick(at, cx);
                 }),
             ));
-        }
-        // A model section still empty is said out loud: the list is
-        // short because the Session has not spoken, not broken (#25).
-        if matches!(open.kind, Kind::Provider) && open.rows.len() == 2 {
-            popover = popover.child(pane::picker_hint("models arrive with the handshake"));
         }
         popover = popover.child(pane::popover_footer(open.kind.hints()));
         Some(popover.into_any_element())
@@ -2641,6 +2673,23 @@ fn provider_label(provider: Provider) -> &'static str {
     }
 }
 
+/// The Provider's name as a person says it — the picker's section titles
+/// and the chip before any model is known.
+fn provider_title(provider: Provider) -> &'static str {
+    match provider {
+        Provider::Claude => "Claude",
+        Provider::Codex => "Codex",
+    }
+}
+
+fn provider_of_title(title: &str) -> Option<Provider> {
+    match title {
+        "Claude" => Some(Provider::Claude),
+        "Codex" => Some(Provider::Codex),
+        _ => None,
+    }
+}
+
 impl Render for CockpitView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.measure();
@@ -2716,11 +2765,13 @@ impl Render for CockpitView {
                             self.cockpit.thread(thread).map(|live| live.transcript()),
                         )
                     }),
-                    Kind::Provider => open.pane.thread().is_none_or(|thread| {
-                        self.cockpit
-                            .thread(thread)
-                            .is_some_and(|live| live.first_prompt_sent())
-                    }),
+                    // The model picker outlives the first prompt (the
+                    // model can always change); only its Thread going
+                    // away closes it.
+                    Kind::Provider => open
+                        .pane
+                        .thread()
+                        .is_none_or(|thread| self.cockpit.thread(thread).is_none()),
                     Kind::Band(_) => focused.is_some_and(|pane| pane.draft().is_none()),
                     Kind::Commands | Kind::Files { .. } => false,
                 }
@@ -3146,11 +3197,15 @@ impl CockpitView {
         let thread = self.panes[index].thread()?;
         let open = self.cockpit.thread(thread)?;
         let provider = open.provider();
-        // The Session's own Init names what is serving; until it speaks the
-        // picker carries the provider's own word — never an invented model.
-        let label = match open.transcript().model() {
-            Some(model) => pane::model_label(model),
-            None => SharedString::from(provider_label(provider)),
+        // The standing choice names the chip; else what the Session's own
+        // Init said is serving; until either, the Provider's own name —
+        // and always the name a person says, never the id on the wire.
+        let label = match open.model().or_else(|| open.transcript().model()) {
+            Some(model) => SharedString::from(ferrite_core::providers::models::label(
+                model,
+                open.models(),
+            )),
+            None => SharedString::from(provider_title(provider)),
         };
         Some(
             div()
@@ -6016,9 +6071,9 @@ mod tests {
         assert_eq!(composer_text(&view, cx), "older");
 
         cx.simulate_keystrokes("down");
-        cx.simulate_input("p");
+        cx.simulate_input("m");
         tick(cx);
-        assert_eq!(composer_text(&view, cx), "/p");
+        assert_eq!(composer_text(&view, cx), "/m");
         view.read_with(cx, |view, _| {
             assert!(
                 view.popover.is_some(),
@@ -6652,7 +6707,7 @@ mod tests {
         tick(cx);
 
         // No provider menu yet: the local entries are the whole list —
-        // #25's provider door on top, then the import door.
+        // #25's model door on top, then the import door.
         cx.simulate_input("/");
         cx.run_until_parked();
         view.read_with(cx, |view, _| {
@@ -6661,7 +6716,7 @@ mod tests {
                 .as_ref()
                 .expect("/ offers import on a fresh Thread");
             let names: Vec<&str> = menu.rows.iter().map(|row| row.name.as_ref()).collect();
-            assert_eq!(names, ["/provider", "/import"]);
+            assert_eq!(names, ["/model", "/import"]);
             assert_eq!(menu.rows[0].detail.as_ref(), "switch provider / model");
             assert_eq!(menu.rows[1].detail.as_ref(), "adopt a CLI session file");
         });
@@ -6689,7 +6744,7 @@ mod tests {
             assert_eq!(
                 names,
                 [
-                    "/provider",
+                    "/model",
                     "/import",
                     "/code-review",
                     "/commit",
@@ -6700,8 +6755,9 @@ mod tests {
             );
         });
 
-        // A conversation starts: the import door closes; the provider row
-        // stays visible but inert, saying why it no longer opens (#25).
+        // A conversation starts: the import door closes; the model row
+        // stays live — the model can change any time — and says what it
+        // does now that the provider is fixed.
         cx.simulate_keystrokes("backspace");
         cx.simulate_input("hello");
         cx.simulate_keystrokes("enter");
@@ -6709,14 +6765,14 @@ mod tests {
         cx.simulate_input("/");
         cx.run_until_parked();
         view.read_with(cx, |view, _| {
-            let menu = view.popover.as_ref().expect("the provider menu still lists");
+            let menu = view.popover.as_ref().expect("the model menu still lists");
             assert!(
                 menu.rows.iter().all(|row| row.name.as_ref() != "/import"),
                 "a Thread with history offers no import"
             );
-            assert_eq!(menu.rows[0].name.as_ref(), "/provider");
-            assert!(menu.rows[0].inert, "the locked door is an explanation");
-            assert_eq!(menu.rows[0].detail.as_ref(), "locked after first prompt");
+            assert_eq!(menu.rows[0].name.as_ref(), "/model");
+            assert!(!menu.rows[0].inert, "the model door stays open");
+            assert_eq!(menu.rows[0].detail.as_ref(), "switch model");
             assert_eq!(menu.rows.len(), 5);
         });
     }
@@ -7111,7 +7167,7 @@ mod tests {
             "",
             "the pick never lands as slash text"
         );
-        view.read_with(cx, |view, _| {
+        let first_codex = view.read_with(cx, |view, _| {
             let picker = view.popover.as_ref().expect("the provider picker is open");
             assert!(matches!(picker.kind, Kind::Provider));
             let names: Vec<&str> = picker
@@ -7119,13 +7175,19 @@ mod tests {
                 .iter()
                 .map(|pick| pick.row.name.as_ref())
                 .collect();
-            assert_eq!(names, ["claude", "codex"], "no model row is invented");
-            assert!(picker.rows[0].active, "✓ on the current provider");
-            assert!(!picker.rows[1].active);
-            assert_eq!(picker.selected, 0, "the arrows start on it");
+            // Two sections, each headed by its Provider, each listing the
+            // catalog under the names people say — never a wire id.
+            assert_eq!(names[0], "Claude");
+            assert!(picker.rows[0].inert, "a section title is not a pick");
+            let codex = names.iter().position(|name| *name == "Codex").expect("a Codex section");
+            assert!(codex > 1, "Claude's models sit between the titles: {names:?}");
+            assert!(names.iter().all(|name| !name.contains("claude-") && !name.contains("gpt-5") || name.starts_with("GPT")), "{names:?}");
+            assert!(picker.rows[1].active, "✓ on the Provider's default");
+            assert_eq!(picker.selected, 1, "the arrows start on it");
+            codex + 1
         });
 
-        cx.simulate_keystrokes("down enter");
+        view.update(cx, |view, cx| view.pick(first_codex, cx));
         cx.run_until_parked();
 
         view.read_with(cx, |view, _| {
@@ -7136,13 +7198,12 @@ mod tests {
             assert!(transcript.blocks().is_empty());
             assert!(!view.cockpit.thread(thread).is_some_and(|open| open.busy()));
         });
+        let spawned = fake.spawned.borrow().last().unwrap().clone();
+        assert_eq!(spawned.provider, Provider::Codex, "the choice drives the spawn");
         assert_eq!(
-            fake.spawned.borrow().last().unwrap(),
-            &ProviderChoice {
-                provider: Provider::Codex,
-                model: None,
-            },
-            "the choice drives the spawn"
+            spawned.model.as_deref(),
+            Some(ferrite_core::providers::models::fallback(Provider::Codex)[0].value.as_str()),
+            "the first Codex row is its first catalog model"
         );
     }
 
@@ -7176,10 +7237,13 @@ mod tests {
                 .iter()
                 .map(|pick| pick.row.name.as_ref())
                 .collect();
-            assert_eq!(names, ["claude", "codex", "sonnet", "opus"]);
+            // The announced list replaces the catalog for its Provider;
+            // Codex, which announces none, keeps its catalog.
+            assert_eq!(&names[..4], ["Claude", "Sonnet", "Opus", "Codex"]);
+            assert_eq!(picker.selected, 1, "no choice yet: the arrows start on the first model");
         });
 
-        cx.simulate_keystrokes("down down down enter");
+        cx.simulate_keystrokes("down enter");
         cx.run_until_parked();
 
         assert_eq!(
@@ -7211,9 +7275,9 @@ mod tests {
         cx.run_until_parked();
         view.read_with(cx, |view, _| {
             let picker = view.popover.as_ref().expect("reopened");
-            assert!(picker.rows[0].active, "✓ on the current provider");
-            assert!(picker.rows[3].active, "✓ on the standing model choice");
-            assert!(!picker.rows[2].active);
+            assert!(picker.rows[2].active, "✓ on the standing model choice");
+            assert!(!picker.rows[1].active);
+            assert_eq!(picker.selected, 2, "and the arrows start there");
         });
     }
 
@@ -7254,11 +7318,12 @@ mod tests {
                 .iter()
                 .map(|row| row.name.as_ref())
                 .collect();
-            assert_eq!(labels, ["claude", "codex", "sonnet", "opus"]);
+            // Announced once (deduplicated), the standing choice appended
+            // where the list did not name it, then the Codex section.
+            assert_eq!(&labels[..4], ["Claude", "Sonnet", "Opus", "Codex"]);
             let rows = &view.popover.as_ref().unwrap().rows;
-            assert_eq!(rows[2].detail.as_ref(), "claude model");
-            assert_eq!(rows[3].detail.as_ref(), "claude model");
-            assert_eq!(view.popover.as_ref().unwrap().selected, 3);
+            assert!(rows[2].active, "✓ on the inherited choice");
+            assert_eq!(view.popover.as_ref().unwrap().selected, 2);
         });
         view.update(cx, |view, cx| {
             let selected = view.popover.as_ref().unwrap().selected;
@@ -7275,12 +7340,11 @@ mod tests {
         });
     }
 
-    /// #25: the first prompt locks the door. The picker refuses to open.
-    /// The Composer's model picker is **not** retired with it — the
-    /// prototype draws one in every Pane, before and after the lock — so
-    /// the control survives and only the picker it opens says no.
+    /// The first prompt fixes the Provider, never the model: the picker
+    /// still opens, the other Provider's section is drawn inert and says
+    /// why, and the Composer's control stays in every Pane.
     #[gpui::test]
-    fn the_first_prompt_retires_the_picker_but_never_the_model_control(cx: &mut TestAppContext) {
+    fn the_first_prompt_fixes_the_provider_but_the_model_picker_stays_open(cx: &mut TestAppContext) {
         let (core, _fake) = cockpit("provider-lock-ui", 1);
         bind_production_keys(cx);
         let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
@@ -7300,26 +7364,37 @@ mod tests {
 
         view.update(cx, |view, cx| {
             view.open_provider_picker(thread, cx);
-            assert!(view.popover.is_none(), "the picker refuses to open");
+            let picker = view.popover.as_ref().expect("the picker opens after the first prompt");
+            let codex = picker
+                .rows
+                .iter()
+                .position(|row| row.name.as_ref() == "Codex")
+                .unwrap();
+            assert_eq!(picker.rows[codex].detail.as_ref(), "fixed after the first prompt");
+            assert!(picker.rows[codex + 1..].iter().all(|row| row.inert), "the other Provider's rows are dead");
+            assert!(picker.rows[1..codex].iter().all(|row| !row.inert), "this Provider's models are live");
             assert!(
                 view.model_picker(0, cx).is_some(),
                 "and the control itself stays — every Pane draws one"
             );
+            view.popover = None;
         });
 
-        // The inert `/provider` row's pick dismisses and nothing else.
+        // The `/model` row stays live and opens the same picker.
         cx.simulate_input("/");
         cx.run_until_parked();
         view.read_with(cx, |view, _| {
-            assert!(view.popover.as_ref().expect("open").rows[0].inert);
+            let row = &view.popover.as_ref().expect("open").rows[0];
+            assert_eq!(row.name.as_ref(), "/model");
+            assert!(!row.inert);
+            assert_eq!(row.detail.as_ref(), "switch model");
         });
         cx.simulate_keystrokes("enter");
         cx.run_until_parked();
         view.read_with(cx, |view, _| {
-            assert!(view.popover.is_none(), "the pick dismissed the menu");
-            assert!(view.popover.is_none(), "and opened nothing");
+            assert!(matches!(view.popover.as_ref().expect("the picker opened").kind, Kind::Provider));
         });
-        assert_eq!(composer_text(&view, cx), "/", "the line is left alone");
+        assert_eq!(composer_text(&view, cx), "", "the pick never lands as slash text");
     }
 
     /// #25 regression: reopening the picker with a standing model choice
@@ -7346,21 +7421,24 @@ mod tests {
         cx.run_until_parked();
         cx.simulate_keystrokes("enter");
         cx.run_until_parked();
-        cx.simulate_keystrokes("down down down enter");
+        cx.simulate_keystrokes("down enter");
         cx.run_until_parked();
         view.read_with(cx, |view, _| {
             assert_eq!(view.cockpit.thread(thread).and_then(|open| open.model()), Some("opus"));
         });
         let spawns = fake.streams.borrow().len();
 
-        // Reopen; the arrows start on the current provider's row, whose
-        // choice carries the standing model — bare ↵ re-picks it whole.
+        // Reopen; the arrows start on the standing choice — bare ↵
+        // re-picks it whole.
         cx.simulate_input("/");
         cx.run_until_parked();
         cx.simulate_keystrokes("enter");
         cx.run_until_parked();
         view.read_with(cx, |view, _| {
-            assert_eq!(view.popover.as_ref().expect("open").selected, 0);
+            let picker = view.popover.as_ref().expect("open");
+            let standing = picker.rows.iter().position(|row| row.active).expect("✓ on the choice");
+            assert_eq!(picker.rows[standing].name.as_ref(), "Opus");
+            assert_eq!(picker.selected, standing);
         });
         cx.simulate_keystrokes("enter");
         cx.run_until_parked();

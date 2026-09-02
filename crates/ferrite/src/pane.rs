@@ -1313,23 +1313,13 @@ fn meter_run(done: usize, total: usize) -> String {
     run
 }
 
-/// The bare model name the picker shows: `claude-sonnet-4-5` →
-/// `sonnet-4-5`, `gpt-5.6` → `gpt-5.6`. The provider is the logomark
-/// beside it, so the label never repeats it and never carries a `·` seam.
-/// Public because the picker's model rows must spell a model exactly as
-/// the control does (#25) — one grooming, never two.
+/// The name a model shows under, from any spelling the wire uses:
+/// `claude-sonnet-4-5` → `Sonnet 4.5`, `gpt-5.4-mini` → `GPT-5.4 Mini`.
+/// Public because every chip and row must spell a model exactly one way —
+/// one grooming, never two; the catalog's own display names win where a
+/// Session announced them (see `providers::models::label`).
 pub fn model_label(model: &str) -> SharedString {
-    for provider in ["claude", "codex"] {
-        if let Some(rest) = model
-            .strip_prefix(provider)
-            .and_then(|rest| rest.strip_prefix('-'))
-        {
-            if !rest.is_empty() {
-                return SharedString::from(rest.to_string());
-            }
-        }
-    }
-    SharedString::from(model.to_string())
+    SharedString::from(ferrite_core::providers::models::display_name(model))
 }
 
 /// The Composer's model picker (§D.7): a 20px, 4px-radius control on no
@@ -2324,7 +2314,13 @@ fn popover_shell() -> Div {
 /// band popovers (#29) — so "what this Pane is on right now" can never be
 /// spelled two ways. `detail` is the muted section tag riding the right
 /// edge ("provider", "worktree"); empty draws nothing.
-pub fn picker_row(label: SharedString, detail: SharedString, selected: bool, active: bool) -> Div {
+pub fn picker_row(
+    label: SharedString,
+    detail: SharedString,
+    selected: bool,
+    active: bool,
+    inert: bool,
+) -> Div {
     let mut row = div()
         .flex()
         .flex_shrink_0()
@@ -2334,12 +2330,21 @@ pub fn picker_row(label: SharedString, detail: SharedString, selected: bool, act
         .px(px(8.))
         .rounded(px(theme::R_CONTROL))
         .text_size(px(theme::FS_MD))
-        .text_color(rgb(if selected { TEXT_STRONG } else { TEXT_2 }))
+        .text_color(rgb(if inert {
+            TEXT_MUTED
+        } else if selected {
+            TEXT_STRONG
+        } else {
+            TEXT_2
+        }))
         .child(div().min_w_0().truncate().child(label))
         .child(div().flex_1());
     // The Row role (#26), the menu rows' skip rule: the selected row's
-    // EDGE ground outranks the wash, so it keeps only the cursor.
-    row = if selected {
+    // EDGE ground outranks the wash, so it keeps only the cursor. An
+    // inert row is dead: no wash, no cursor — it explains, it never acts.
+    row = if inert {
+        row
+    } else if selected {
         row.bg(rgb(HOVER)).hover_carried()
     } else {
         row.hover_row()
@@ -2359,8 +2364,47 @@ pub fn picker_row(label: SharedString, detail: SharedString, selected: bool, act
     row
 }
 
+/// A picker's section title: the Provider's logomark in its brand colour
+/// and its name, with an optional muted note after it (why the section is
+/// fixed). Non-interactive — the arrows skip it, a press does nothing.
+pub fn picker_section(provider: Provider, note: SharedString) -> Div {
+    let mark = match provider {
+        Provider::Codex => icon(icons::CODEX, theme::PROVIDER_MARK_SM, theme::PROVIDER_CODEX),
+        Provider::Claude => icon(icons::CLAUDE, theme::PROVIDER_MARK_SM, theme::PROVIDER_CLAUDE),
+    };
+    let title = match provider {
+        Provider::Claude => "Claude",
+        Provider::Codex => "Codex",
+    };
+    let mut row = div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(theme::KEYS_GAP))
+        .h(px(theme::MENU_ROW_H))
+        .px(px(8.))
+        .mt(px(2.))
+        .text_size(px(theme::FS_SM))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(rgb(TEXT))
+        .child(mark)
+        .child(div().child(title));
+    if !note.is_empty() {
+        row = row.child(
+            div()
+                .ml(px(theme::KEYS_GAP))
+                .font_weight(FontWeight::NORMAL)
+                .text_size(px(theme::FS_MONO))
+                .text_color(rgb(TEXT_MUTED))
+                .child(note),
+        );
+    }
+    row
+}
+
 /// A muted, non-interactive picker line — why a section is short, said out
 /// loud (#25: the other rows only arrive with the Session's handshake).
+#[allow(dead_code)]
 pub fn picker_hint(text: &'static str) -> Div {
     div()
         .flex()
@@ -3368,10 +3412,10 @@ mod tests {
     /// rather than being guessed apart.
     #[test]
     fn the_model_label_strips_the_provider_the_logomark_already_names() {
-        assert_eq!(model_label("claude-sonnet-4-5").as_ref(), "sonnet-4-5");
-        assert_eq!(model_label("codex-gpt-5.4-mini").as_ref(), "gpt-5.4-mini");
-        assert_eq!(model_label("gpt-5.6").as_ref(), "gpt-5.6");
-        assert_eq!(model_label("claude").as_ref(), "claude");
+        assert_eq!(model_label("claude-sonnet-4-5").as_ref(), "Sonnet 4.5");
+        assert_eq!(model_label("codex-gpt-5.4-mini").as_ref(), "GPT-5.4 Mini");
+        assert_eq!(model_label("gpt-5.6").as_ref(), "GPT-5.6");
+        assert_eq!(model_label("claude-fable-5-1").as_ref(), "Fable 5.1");
     }
 
     /// #26, the Row rule from the pointer's side: rows that answer clicks
@@ -3410,11 +3454,11 @@ mod tests {
 
         // The ✓-row both selectors share follows the same rule.
         assert_eq!(
-            cursor(picker_row("workspace root".into(), "".into(), false, false)),
+            cursor(picker_row("workspace root".into(), "".into(), false, false, false)),
             Some(CursorStyle::PointingHand)
         );
         assert_eq!(
-            cursor(picker_row("workspace root".into(), "".into(), true, true)),
+            cursor(picker_row("workspace root".into(), "".into(), true, true, false)),
             Some(CursorStyle::PointingHand)
         );
 
