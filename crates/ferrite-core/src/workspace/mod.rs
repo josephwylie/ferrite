@@ -114,56 +114,80 @@ fn scan(dir: &Path, depth: usize, found: &mut Vec<PathBuf>) {
     }
 }
 
-/// The files under `root` the Composer's `@` menu completes over (#23):
-/// relative paths with `/` separators, deterministic (each directory read in
-/// name order, depth-first), the noise directories of `SCAN_SKIP` skipped
-/// wholesale, symlinks never followed, and the whole answer capped at `cap`
-/// so a monorepo cannot stall a keystroke. A root that cannot be read is an
-/// empty menu, not an error — the walk is a menu, not an audit.
+/// The files and directories under `root` the Composer's `@` menu
+/// completes over (#23): relative paths with `/` separators, a directory
+/// with a trailing `/`, breadth-first — everything at the top before
+/// anything nested, so a deep tree cannot bury the root's own files under
+/// the cap — each directory read in name order, dotfiles and the noise
+/// directories of `MENTION_SKIP` skipped wholesale, symlinks never
+/// followed, and the whole answer capped at `cap` so a monorepo cannot
+/// stall a keystroke. A root that cannot be read is an empty menu, not an
+/// error — the walk is a menu, not an audit.
 pub fn mention_files(root: &Path, cap: usize) -> Vec<String> {
     let mut found = Vec::new();
-    walk_files(root, "", cap, &mut found);
+    let mut queue = std::collections::VecDeque::new();
+    queue.push_back((root.to_path_buf(), String::new()));
+    while let Some((dir, prefix)) = queue.pop_front() {
+        if found.len() >= cap {
+            break;
+        }
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut entries: Vec<_> = entries.flatten().collect();
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            if found.len() >= cap {
+                break;
+            }
+            // `file_type` over `path().is_dir()`: it does not follow
+            // symlinks, so a link cannot loop the walk or reach outside.
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                // A path the menu could not insert as text is not offered.
+                continue;
+            };
+            if name.starts_with('.') {
+                continue;
+            }
+            let relative = if prefix.is_empty() {
+                name.to_string()
+            } else {
+                format!("{prefix}/{name}")
+            };
+            if kind.is_dir() {
+                if MENTION_SKIP.contains(&name) {
+                    continue;
+                }
+                found.push(format!("{relative}/"));
+                queue.push_back((entry.path(), relative));
+            } else if kind.is_file() {
+                found.push(relative);
+            }
+        }
+    }
     found
 }
 
-fn walk_files(dir: &Path, prefix: &str, cap: usize, found: &mut Vec<String>) {
-    if found.len() >= cap {
-        return;
-    }
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-    let mut entries: Vec<_> = entries.flatten().collect();
-    entries.sort_by_key(|entry| entry.file_name());
-    for entry in entries {
-        if found.len() >= cap {
-            return;
-        }
-        // `file_type` over `path().is_dir()`: it does not follow symlinks,
-        // so a link cannot loop the walk or reach outside the root.
-        let Ok(kind) = entry.file_type() else {
-            continue;
-        };
-        let name = entry.file_name();
-        let Some(name) = name.to_str() else {
-            // A path the menu could not insert as text is not offered.
-            continue;
-        };
-        let relative = if prefix.is_empty() {
-            name.to_string()
-        } else {
-            format!("{prefix}/{name}")
-        };
-        if kind.is_dir() {
-            if SCAN_SKIP.contains(&name) {
-                continue;
-            }
-            walk_files(&entry.path(), &relative, cap, found);
-        } else if kind.is_file() {
-            found.push(relative);
-        }
-    }
-}
+/// Directories the `@` menu never lists: build output, dependencies,
+/// caches — bulk nobody mentions on purpose.
+const MENTION_SKIP: [&str; 12] = [
+    "node_modules",
+    "dist",
+    "target",
+    "build",
+    "out",
+    "coverage",
+    "vendor",
+    "venv",
+    "__pycache__",
+    "DerivedData",
+    "Pods",
+    "tmp",
+];
 
 /// A git operation failed, or could not be run at all.
 #[derive(Debug)]
@@ -608,12 +632,14 @@ mod tests {
             file(noise);
         }
 
+        // Breadth-first: the root's own entries first, directories with
+        // a trailing slash, dotfiles and noise never.
         assert_eq!(
             mention_files(&root, 100),
-            ["README.md", "src/lib.rs", "src/nested/deep.rs"]
+            ["README.md", "src/", "src/lib.rs", "src/nested/", "src/nested/deep.rs"]
         );
         // The cap bounds the walk — a monorepo cannot stall a keystroke.
-        assert_eq!(mention_files(&root, 2).len(), 2);
+        assert_eq!(mention_files(&root, 2), ["README.md", "src/"]);
         // An unreadable or missing root is an empty menu, not an error.
         assert!(mention_files(&root.join("nowhere"), 100).is_empty());
     }

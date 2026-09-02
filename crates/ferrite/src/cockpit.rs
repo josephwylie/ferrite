@@ -3755,7 +3755,10 @@ fn mention_rows(files: &[String], filter: &str) -> Vec<pane::MenuRow> {
         .iter()
         .filter_map(|file| {
             let (score, matched) = crate::fuzzy::matches(filter, file)?;
-            let split = file.rfind('/').map(|at| at + 1).unwrap_or(0);
+            // A directory ends in `/`: its name is the last segment with
+            // that slash, its directory everything before.
+            let stem = file.strip_suffix('/').unwrap_or(file);
+            let split = stem.rfind('/').map(|at| at + 1).unwrap_or(0);
             let matched = matched
                 .into_iter()
                 .filter_map(|range| {
@@ -7522,6 +7525,14 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].insert.as_ref(), "src/lib.rs");
         assert_eq!(rows[0].matched, [0..3], "highlights land inside the name");
+
+        // A directory row keeps its trailing slash in the name and inserts
+        // whole, so `@src/nested/ ` reads as the folder it is.
+        let dirs = vec!["src/".to_string(), "src/nested/".to_string()];
+        let rows = mention_rows(&dirs, "nest");
+        assert_eq!(rows[0].name.as_ref(), "nested/");
+        assert_eq!(rows[0].detail.as_ref(), "src");
+        assert_eq!(rows[0].insert.as_ref(), "src/nested/");
     }
 
     /// #23: `/` at the line's start opens the Session's own menu, typing
@@ -7639,7 +7650,7 @@ mod tests {
         view.read_with(cx, |view, _| {
             let menu = view.popover.as_ref().expect("@ opens the file menu");
             let names: Vec<&str> = menu.rows.iter().map(|row| row.name.as_ref()).collect();
-            assert_eq!(names, ["README.md", "lib.rs"], "the walk, in order");
+            assert_eq!(names, ["README.md", "src/", "lib.rs"], "the walk, breadth-first, folders too");
         });
 
         cx.simulate_input("li");

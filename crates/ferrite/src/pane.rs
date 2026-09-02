@@ -519,7 +519,14 @@ pub fn render_pane(
     if level == Level::Instruments {
         return focus_wrapper(
             shell.child(l2_cell(
-                view, transcript, decision, workspace, state, timings, decide,
+                view,
+                transcript,
+                decision,
+                workspace,
+                branch.as_ref(),
+                state,
+                timings,
+                decide,
             )),
             focused,
         );
@@ -929,6 +936,7 @@ fn l2_cell(
     transcript: Option<&Transcript>,
     decision: Option<&Decision>,
     workspace: Option<&WorkspaceBinding>,
+    branch: Option<&SharedString>,
     state: WallState,
     timings: Option<&HashMap<String, ToolTiming>>,
     decide: Option<AnyElement>,
@@ -1008,7 +1016,43 @@ fn l2_cell(
         .p(px(theme::CELL_PAD))
         .gap(px(8.));
 
+    // The facts the head has no room for at this size: the model serving
+    // and the checkout, one muted line — the two things an operator
+    // running nine of these asks first.
+    let meta: Vec<String> = [
+        transcript
+            .model()
+            .map(ferrite_core::providers::models::display_name),
+        branch.map(|branch| branch.to_string()),
+    ]
+    .into_iter()
+    .flatten()
+    .filter(|part| !part.is_empty())
+    .collect();
+    if !meta.is_empty() {
+        body = body.child(
+            div()
+                .w_full()
+                .truncate()
+                .text_size(px(theme::FS_MONO))
+                .text_color(rgb(TEXT_MUTED))
+                .child(SharedString::from(meta.join(" · "))),
+        );
+    }
+
     if state == WallState::Idle {
+        // Idle still says what was last said: the newest line of the
+        // answer, so a glance tells where the Thread stopped.
+        if let Some(last) = last_words(transcript) {
+            body = body.child(
+                div()
+                    .w_full()
+                    .text_size(px(theme::FS_MONO))
+                    .line_height(relative(theme::LINE_BODY))
+                    .text_color(rgb(TEXT_2))
+                    .child(last),
+            );
+        }
         body = body.child(
             div()
                 .flex()
@@ -1082,8 +1126,35 @@ fn l2_cell(
         );
         any_badge = true;
     }
+    if read.files() > 0 {
+        badges = badges.child(
+            div()
+                .text_size(px(theme::FS_MONO))
+                .text_color(rgb(TEXT_MUTED))
+                .child(SharedString::from(format!(
+                    "{} file{}",
+                    read.files(),
+                    if read.files() == 1 { "" } else { "s" }
+                ))),
+        );
+        any_badge = true;
+    }
     if any_badge {
         body = body.child(badges);
+    }
+    // The newest words of the answer so far, a few lines at most: what
+    // the Thread is saying, not only that it is saying something.
+    if let Some(last) = last_words(transcript) {
+        body = body.child(
+            div()
+                .w_full()
+                .min_h_0()
+                .overflow_hidden()
+                .text_size(px(theme::FS_MONO))
+                .line_height(relative(theme::LINE_BODY))
+                .text_color(rgb(TEXT_2))
+                .child(last),
+        );
     }
 
     body = body.child(div().flex_1());
@@ -1118,6 +1189,28 @@ fn l2_cell(
         content = content.opacity(theme::DONE_CELL_OPACITY);
     }
     content
+}
+
+/// The newest prose the answer holds — the last paragraph, heading or
+/// bullet — cut to `LAST_WORDS_CHARS` characters so a cell shows where
+/// the Thread is without a transcript. None when nothing has been said.
+fn last_words(transcript: &Transcript) -> Option<SharedString> {
+    const LAST_WORDS_CHARS: usize = 160;
+    let text = transcript.blocks().iter().rev().find_map(|block| match &block.body {
+        Body::Paragraph { spans } | Body::Heading { spans, .. } | Body::Bullet { spans } => {
+            let joined: String = spans.iter().map(|span| span.text.as_str()).collect();
+            let joined = joined.trim().to_string();
+            (!joined.is_empty()).then_some(joined)
+        }
+        _ => None,
+    })?;
+    let mut chars = text.chars();
+    let cut: String = chars.by_ref().take(LAST_WORDS_CHARS).collect();
+    Some(SharedString::from(if chars.next().is_some() {
+        format!("{}…", cut.trim_end())
+    } else {
+        cut
+    }))
 }
 
 /// The Cockpit board's Decision cell body: the command, who wants it, and
