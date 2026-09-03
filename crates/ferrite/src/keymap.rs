@@ -133,6 +133,9 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
         (with_primary("shift-z"), "composer::Redo", Some("Composer")),
         // Emacs muscle memory every shell honours: ctrl-a / ctrl-e to the
         // line's ends, ctrl-w kills the word before the caret.
+        // A hard line break in the draft: the box grows a row and enter
+        // still sends the whole thing.
+        ("shift-enter".into(), "composer::Newline", Some("Composer")),
         ("ctrl-a".into(), "composer::Home", Some("Composer")),
         ("ctrl-e".into(), "composer::End", Some("Composer")),
         (
@@ -196,6 +199,13 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
             "cockpit::HistoryNewer",
             Some("ComposerHistory"),
         ),
+        // On a draft of more than one visual row the arrows walk the
+        // caret between rows. Bound AFTER the history rows: gpui tries
+        // the later same-depth binding first, so the Composer sees the
+        // key and hands it on (propagates) only from the first or last
+        // row — where history recall keeps its single-line meaning.
+        ("up".into(), "composer::Up", Some("Composer")),
+        ("down".into(), "composer::Down", Some("Composer")),
         // #23: the Composer's `/` and `@` popovers (and #29's band
         // popovers, which ride the same keys). These sit BELOW the bare
         // enter and escape rows, because gpui breaks a same-depth tie
@@ -400,6 +410,33 @@ mod tests {
                 .position(|(_, action, _)| *action == "cockpit::MenuPrevious")
                 .unwrap();
             assert!(history < menu, "menu arrows must retain precedence");
+        }
+    }
+
+    /// The Composer's own row walk sits between history and the menu:
+    /// the menu still owns the arrows while it is up, and a row step that
+    /// propagates from the first or last row reaches history next.
+    #[test]
+    fn row_arrows_sit_between_history_and_the_menu() {
+        for platform in [Platform::Mac, Platform::Windows] {
+            let table = bindings(platform);
+            let at = |wanted: &str| {
+                table
+                    .iter()
+                    .position(|(_, action, _)| *action == wanted)
+                    .unwrap_or_else(|| panic!("{wanted} is not in the table"))
+            };
+            for (key, action) in [("up", "composer::Up"), ("down", "composer::Down")] {
+                assert!(
+                    table.contains(&(key.into(), action, Some("Composer"))),
+                    "{platform:?} is missing {key} for {action}"
+                );
+            }
+            assert!(at("cockpit::HistoryOlder") < at("composer::Up"));
+            assert!(at("composer::Up") < at("cockpit::MenuPrevious"));
+            assert!(at("cockpit::HistoryNewer") < at("composer::Down"));
+            assert!(at("composer::Down") < at("cockpit::MenuNext"));
+            assert!(table.contains(&("shift-enter".into(), "composer::Newline", Some("Composer"))));
         }
     }
 

@@ -1663,8 +1663,13 @@ struct ComposerStack<'a> {
 }
 
 /// The Composer (§D.7): `--raised` ground, `padding: 7px 12px 8px`, two
-/// 20px rows 3px apart — 58px in every Pane. No top border: Soft draws no
-/// separators, and the ground change is the whole separation.
+/// rows 3px apart — the text row and the controls row. The controls row is
+/// 20px; the text row is 20px per visual row of the draft (one row, 58px
+/// in all, until the text wraps or breaks), growing upward to
+/// `composer::MAX_ROWS` rows and then scrolling. The Pane lays the region
+/// out `flex_shrink_0` below the body, so the transcript above gives way.
+/// No top border: Soft draws no separators, and the ground change is the
+/// whole separation.
 ///
 /// Above the two rows, still inside the region, stack the draft band (#29)
 /// and the queued row — neither of which the prototype draws (R-09). The
@@ -1712,13 +1717,16 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
     if let Some(held) = queued {
         region = region.child(queued_line(held));
     }
-    // The one line that grows. The idle placeholder overlays it in every
-    // Pane that does not hold the keyboard — the prototype keeps it under a
-    // running turn (§D.7) and shows the focused Pane its caret alone.
+    // The one line that grows: the Composer's element is `COMPOSER_ROW_H`
+    // per visual row, so the line height here IS the row pitch. The idle
+    // placeholder overlays its first row in every Pane that does not hold
+    // the keyboard — the prototype keeps it under a running turn (§D.7)
+    // and shows the focused Pane its caret alone.
     let mut line = div()
         .relative()
         .flex_1()
         .min_w_0()
+        .line_height(px(theme::COMPOSER_ROW_H))
         .child(view.composer.clone());
     if empty && !focused {
         line = line.child(
@@ -1726,7 +1734,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
                 .absolute()
                 .left_0()
                 .top_0()
-                .bottom_0()
+                .h(px(theme::COMPOSER_ROW_H))
                 .flex()
                 .items_center()
                 .text_color(rgb(TEXT_2))
@@ -1735,17 +1743,22 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
     }
     // `.composer-prompt`: the `›` mark when the Pane is not focused — the
     // Composer paints its own 2 × 14 caret when it is, and the two are
-    // mutually exclusive. No `◐`, no `❯`.
+    // mutually exclusive. No `◐`, no `❯`. The row aligns to its top: the
+    // mark and the hint each sit centred in the first 20px row while the
+    // line grows below them.
     let mut input = div()
         .flex()
-        .items_center()
+        .items_start()
         .gap(px(theme::EVENT_GAP))
         .min_h(px(theme::COMPOSER_ROW_H))
         .min_w_0();
     if !focused {
         input = input.child(
             div()
+                .flex()
                 .flex_shrink_0()
+                .items_center()
+                .h(px(theme::COMPOSER_ROW_H))
                 .text_color(rgb(TEXT_MUTED))
                 .child("\u{203a}"),
         );
@@ -1755,7 +1768,10 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         // already `flex_1`, so it takes the free space and no auto margin
         // is needed — one would collapse the row's gap.
         div()
+            .flex()
             .flex_shrink_0()
+            .items_center()
+            .h(px(theme::COMPOSER_ROW_H))
             .whitespace_nowrap()
             .text_size(px(theme::FS_MONO))
             .text_color(rgb(TEXT_MUTED))
