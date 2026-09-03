@@ -1,15 +1,20 @@
-//! The Composer: one shell-style prompt line. This is the window half —
+//! The Composer: the shell-style prompt box. This is the window half —
 //! focus, key actions, and painting; the editing state lives in `Line`.
+//!
+//! The text soft-wraps at the box's width and the box grows a row per
+//! visual line, up to `MAX_ROWS`; past that it scrolls to keep the caret
+//! in view. Every pointer and caret question goes through one `Layout`
+//! table of visual rows, so wrapped and hard-broken lines read alike.
 
 use std::ops::Range;
 
 use gpui::prelude::*;
 use gpui::{
-    actions, div, fill, point, px, relative, rgb, App, Bounds, ClipboardItem, Context,
-    DispatchPhase, Element, ElementId, ElementInputHandler, Entity, EntityInputHandler,
-    EventEmitter, FocusHandle, Focusable, GlobalElementId, LayoutId, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, ShapedLine, SharedString, Style, TextRun,
-    UTF16Selection, UnderlineStyle, Window,
+    actions, div, fill, point, px, relative, rgb, size, App, AvailableSpace, Bounds, ClipboardItem,
+    ContentMask, Context, DispatchPhase, Element, ElementId, ElementInputHandler, Entity,
+    EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId, LayoutId,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, SharedString,
+    Style, TextAlign, TextRun, TextStyle, UTF16Selection, UnderlineStyle, Window, WrappedLine,
 };
 
 use crate::line::Line;
@@ -47,8 +52,18 @@ actions!(
         Cut,
         Undo,
         Redo,
+        // A hard line break (shift-enter); enter stays Submit.
+        Newline,
+        // A visual row up or down. From the first or last row the key
+        // propagates, so history recall keeps its single-line meaning.
+        Up,
+        Down,
     ]
 );
+
+/// The most visual rows the box grows to before it scrolls: the prompt
+/// grows with its text, but the transcript above keeps most of the Pane.
+pub const MAX_ROWS: usize = 8;
 
 /// The line moved — text or cursor. The cockpit listens to keep the `/` and
 /// `@` menus following what the operator is typing (#23).
@@ -74,8 +89,15 @@ pub struct Composer {
     /// derives this alongside the footer hint; this flag only arms the
     /// focused node's key context.
     history_available: bool,
-    last_layout: Option<ShapedLine>,
+    last_layout: Option<Layout>,
     last_bounds: Option<Bounds<Pixels>>,
+    /// The first visual row painted. Zero until the text passes `MAX_ROWS`;
+    /// then prepaint slides it so the caret's row stays in view.
+    scroll: usize,
+    /// The x a row step keeps aiming at across successive ↑/↓ presses —
+    /// a short row in between does not lose the column. Any other edit
+    /// clears it.
+    goal_x: Option<Pixels>,
     /// A press landed in the line and has not been released: moves extend
     /// the selection from where it landed.
     dragging: bool,
@@ -93,6 +115,8 @@ impl Composer {
             history_available: false,
             last_layout: None,
             last_bounds: None,
+            scroll: 0,
+            goal_x: None,
             dragging: false,
         }
     }
@@ -168,7 +192,23 @@ impl Composer {
         &self.mentions
     }
 
+    /// How many visual rows the text last painted as — the box's height in
+    /// rows, before the `MAX_ROWS` clamp.
+    #[cfg(test)]
+    pub(crate) fn rows(&self) -> usize {
+        self.last_layout.as_ref().map_or(1, Layout::rows)
+    }
+
+    /// The visual row the caret sits on, as last painted.
+    #[cfg(test)]
+    pub(crate) fn caret_row(&self) -> usize {
+        self.last_layout
+            .as_ref()
+            .map_or(0, |layout| layout.row_of(self.line.cursor()))
+    }
+
     fn edited(&mut self, cx: &mut Context<Self>) {
+        self.goal_x = None;
         cx.emit(Edited);
         cx.notify();
     }
@@ -211,9 +251,49 @@ impl Composer {
 
     fn paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            self.line.replace(None, &text.replace('\n', " "));
+            // The draft holds hard newlines now, so pasted ones stay —
+            // only the carriage returns go.
+            self.line
+                .replace(None, &text.replace("\r\n", "\n").replace('\r', "\n"));
             self.edited(cx);
         }
+    }
+
+    fn newline(&mut self, _: &Newline, _: &mut Window, cx: &mut Context<Self>) {
+        self.line.insert_newline();
+        self.edited(cx);
+    }
+
+    fn up(&mut self, _: &Up, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.step_row(-1, cx) {
+            cx.propagate();
+        }
+    }
+
+    fn down(&mut self, _: &Down, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.step_row(1, cx) {
+            cx.propagate();
+        }
+    }
+
+    /// Move the caret one visual row up or down, keeping its column; false
+    /// when there is no such row — the key is then someone else's (history
+    /// recall on a one-row draft, or from its first or last row).
+    fn step_row(&mut self, delta: isize, cx: &mut Context<Self>) -> bool {
+        let Some(layout) = &self.last_layout else {
+            return false;
+        };
+        let cursor = self.line.cursor();
+        let target = layout.row_of(cursor) as isize + delta;
+        if target < 0 || target >= layout.rows() as isize {
+            return false;
+        }
+        let x = self.goal_x.unwrap_or_else(|| layout.position(cursor).x);
+        let offset = layout.offset_in_row(target as usize, x);
+        self.line.place_caret(offset);
+        self.edited(cx);
+        self.goal_x = Some(x);
+        true
     }
 
     fn delete_word_left(&mut self, _: &DeleteWordLeft, _: &mut Window, cx: &mut Context<Self>) {
@@ -320,17 +400,19 @@ impl Composer {
         }
     }
 
-    /// Where a window point falls in the line, as a byte offset — past the
-    /// end when it is right of the text.
+    /// Where a window point falls in the text, as a byte offset — the
+    /// nearest row's nearest boundary when it is outside the rows, so a
+    /// drag that leaves the box still selects to an end.
     fn offset_at(&self, position: gpui::Point<Pixels>) -> Option<usize> {
         let bounds = self.last_bounds?;
         let layout = self.last_layout.as_ref()?;
-        let x = position.x - bounds.left();
-        Some(layout.index_for_x(x).unwrap_or(self.line.text().len()))
+        let mut local = position - bounds.origin;
+        local.y += layout.line_height * self.scroll;
+        Some(layout.offset_at(local))
     }
 
-    /// A press in the line: the caret lands under the pointer, a double
-    /// click takes the word, a triple click the whole line — and the press
+    /// A press in the box: the caret lands under the pointer, a double
+    /// click takes the word, a triple click the whole draft — and the press
     /// arms a drag that extends from there.
     pub(crate) fn press(&mut self, event: &MouseDownEvent, cx: &mut Context<Self>) {
         let Some(offset) = self.offset_at(event.position) else {
@@ -444,17 +526,15 @@ impl EntityInputHandler for Composer {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
-        let last_layout = self.last_layout.as_ref()?;
+        let layout = self.last_layout.as_ref()?;
         let range = self.range_from_utf16(&range_utf16);
+        // The IME candidate window hangs off the range's first row.
+        let start = layout.position(range.start);
+        let end = layout.position(range.end);
+        let top = bounds.top() + start.y - layout.line_height * self.scroll;
         Some(Bounds::from_corners(
-            point(
-                bounds.left() + last_layout.x_for_index(range.start),
-                bounds.top(),
-            ),
-            point(
-                bounds.left() + last_layout.x_for_index(range.end),
-                bounds.bottom(),
-            ),
+            point(bounds.left() + start.x, top),
+            point(bounds.left() + end.x, top + layout.line_height),
         ))
     }
 
@@ -464,11 +544,8 @@ impl EntityInputHandler for Composer {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<usize> {
-        let line_point = self.last_bounds?.localize(&point)?;
-        let index = self
-            .last_layout
-            .as_ref()?
-            .index_for_x(point.x - line_point.x)?;
+        self.last_bounds?.localize(&point)?;
+        let index = self.offset_at(point)?;
         Some(self.line.offset_to_utf16(index))
     }
 }
@@ -520,6 +597,9 @@ impl Render for Composer {
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::undo))
             .on_action(cx.listener(Self::redo))
+            .on_action(cx.listener(Self::newline))
+            .on_action(cx.listener(Self::up))
+            .on_action(cx.listener(Self::down))
             .child(LineElement {
                 composer: cx.entity(),
             })
@@ -620,15 +700,193 @@ fn runs_for(
     runs
 }
 
-/// Paints the line itself: shaped text, caret, and any IME selection.
+/// One visual row of the wrapped text: the hard line it is cut from, where
+/// that line starts in the whole text, and the whole-text byte range the
+/// row shows. Rows of one line meet at their ends — a wrap boundary closes
+/// one row and opens the next — so a lookup takes the last row that starts
+/// at or before an offset: a caret on the boundary paints at the start of
+/// the later row, where what it types will land, and the earlier row's
+/// trailing space is its last caret stop.
+#[derive(Clone, Copy, Debug)]
+struct Row {
+    line: usize,
+    line_start: usize,
+    start: usize,
+    end: usize,
+}
+
+/// The shaped text as last laid out: the hard lines, each wrapped at the
+/// box's width, flattened into visual rows. Positions are local to the
+/// text's own origin, unscrolled — the element applies `scroll`.
+pub(crate) struct Layout {
+    lines: Vec<WrappedLine>,
+    rows: Vec<Row>,
+    line_height: Pixels,
+}
+
+impl Layout {
+    /// Shape `composer`'s text at `wrap_width` — `None` measures it
+    /// unwrapped — in the text `style` the element was requested under.
+    fn shape(
+        composer: &Composer,
+        style: &TextStyle,
+        line_height: Pixels,
+        wrap_width: Option<Pixels>,
+        window: &Window,
+    ) -> Self {
+        let content = SharedString::from(composer.line.text().to_string());
+        let selected = composer.line.selection();
+        let pills = pill_ranges(&content, composer.mentions());
+        let run = TextRun {
+            len: content.len(),
+            font: style.font(),
+            color: style.color,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let runs = runs_for(
+            &run,
+            content.len(),
+            composer.line.marked(),
+            &pills,
+            (!selected.is_empty()).then(|| selected.clone()),
+        );
+        let font_size = style.font_size.to_pixels(window.rem_size());
+        let lines: Vec<WrappedLine> = window
+            .text_system()
+            .shape_text(content, font_size, &runs, wrap_width, None)
+            .map(|lines| lines.into_vec())
+            .unwrap_or_default();
+        let mut rows = Vec::new();
+        let mut line_start = 0;
+        for (index, line) in lines.iter().enumerate() {
+            let mut start = 0;
+            for boundary in line.wrap_boundaries() {
+                let end = line.runs()[boundary.run_ix].glyphs[boundary.glyph_ix].index;
+                rows.push(Row {
+                    line: index,
+                    line_start,
+                    start: line_start + start,
+                    end: line_start + end,
+                });
+                start = end;
+            }
+            rows.push(Row {
+                line: index,
+                line_start,
+                start: line_start + start,
+                end: line_start + line.len(),
+            });
+            line_start += line.len() + 1;
+        }
+        Self {
+            lines,
+            rows,
+            line_height,
+        }
+    }
+
+    fn rows(&self) -> usize {
+        self.rows.len().max(1)
+    }
+
+    /// The widest row, unwrapped — what the box measures as when no width
+    /// is known.
+    fn width(&self) -> Pixels {
+        self.lines
+            .iter()
+            .map(|line| line.width())
+            .fold(Pixels::ZERO, Pixels::max)
+    }
+
+    /// The last row starting at or before `offset`.
+    fn row_of(&self, offset: usize) -> usize {
+        self.rows
+            .iter()
+            .rposition(|row| row.start <= offset)
+            .unwrap_or(0)
+    }
+
+    /// The last offset a caret on row `index` can stand at: the row's end,
+    /// or — when the row wraps into another — before its last character,
+    /// since the wrap boundary itself belongs to the next row.
+    fn caret_end(&self, index: usize) -> usize {
+        let row = self.rows[index];
+        let wraps = self
+            .rows
+            .get(index + 1)
+            .is_some_and(|next| next.line == row.line);
+        if !wraps {
+            return row.end;
+        }
+        let text = &self.lines[row.line].text;
+        let last = text[..row.end - row.line_start]
+            .chars()
+            .next_back()
+            .map_or(0, char::len_utf8);
+        (row.end - last).max(row.start)
+    }
+
+    /// The x of `offset` within row `index`.
+    fn x_in_row(&self, index: usize, offset: usize) -> Pixels {
+        let Some(row) = self.rows.get(index) else {
+            return Pixels::ZERO;
+        };
+        let layout = &self.lines[row.line].unwrapped_layout;
+        let offset = offset.clamp(row.start, row.end) - row.line_start;
+        layout.x_for_index(offset) - layout.x_for_index(row.start - row.line_start)
+    }
+
+    /// Where `offset` paints: its row's top-left plus its x.
+    fn position(&self, offset: usize) -> gpui::Point<Pixels> {
+        let row = self.row_of(offset);
+        point(self.x_in_row(row, offset), self.line_height * row)
+    }
+
+    /// The boundary nearest `x` on row `index`, clamped to the row's ends.
+    fn offset_in_row(&self, index: usize, x: Pixels) -> usize {
+        let Some(row) = self.rows.get(index) else {
+            return 0;
+        };
+        let layout = &self.lines[row.line].unwrapped_layout;
+        let row_start = row.start - row.line_start;
+        let nearest = layout.closest_index_for_x(x + layout.x_for_index(row_start));
+        (row.line_start + nearest).clamp(row.start, self.caret_end(index))
+    }
+
+    /// The offset under an unscrolled local point: above the rows is the
+    /// first, below them the last, and each row clamps to its ends.
+    fn offset_at(&self, local: gpui::Point<Pixels>) -> usize {
+        let row = if local.y < Pixels::ZERO {
+            0
+        } else {
+            ((local.y / self.line_height) as usize).min(self.rows().saturating_sub(1))
+        };
+        self.offset_in_row(row, local.x)
+    }
+
+    /// The first row of hard line `line`.
+    fn first_row_of_line(&self, line: usize) -> usize {
+        self.rows
+            .iter()
+            .position(|row| row.line == line)
+            .unwrap_or(0)
+    }
+}
+
+/// Paints the text itself: the wrapped rows, caret, selection, and any IME
+/// mark. Its height follows its width — a row per visual line.
 struct LineElement {
     composer: Entity<Composer>,
 }
 
 struct PrepaintState {
-    line: Option<ShapedLine>,
+    layout: Option<Layout>,
+    /// The first row painted; rows above it are scrolled off.
+    scroll: usize,
     cursor: Option<PaintQuad>,
-    selection: Option<PaintQuad>,
+    selection: Vec<PaintQuad>,
 }
 
 impl IntoElement for LineElement {
@@ -656,12 +914,29 @@ impl Element for LineElement {
         _id: Option<&GlobalElementId>,
         _inspector_id: Option<&gpui::InspectorElementId>,
         window: &mut Window,
-        cx: &mut App,
+        _cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         let mut style = Style::default();
         style.size.width = relative(1.).into();
-        style.size.height = window.line_height().into();
-        (window.request_layout(style, [], cx), ())
+        // The measure runs later, under whatever text style the layout pass
+        // is in, so the element's own is captured now.
+        let text_style = window.text_style();
+        let line_height = window.line_height();
+        let composer = self.composer.clone();
+        let layout_id =
+            window.request_measured_layout(style, move |known, available, window, cx| {
+                let width = known.width.or(match available.width {
+                    AvailableSpace::Definite(width) => Some(width),
+                    _ => None,
+                });
+                let layout =
+                    Layout::shape(composer.read(cx), &text_style, line_height, width, window);
+                size(
+                    width.unwrap_or_else(|| layout.width()),
+                    line_height * layout.rows().min(MAX_ROWS),
+                )
+            });
+        (layout_id, ())
     }
 
     fn prepaint(
@@ -673,76 +948,73 @@ impl Element for LineElement {
         window: &mut Window,
         cx: &mut App,
     ) -> Self::PrepaintState {
+        let line_height = window.line_height();
         let composer = self.composer.read(cx);
-        let content = SharedString::from(composer.line.text().to_string());
         let selected = composer.line.selection();
         let cursor = composer.line.cursor();
-        let marked = composer.line.marked();
-        let pills = pill_ranges(&content, composer.mentions());
-        let style = window.text_style();
-
-        let run = TextRun {
-            len: content.len(),
-            font: style.font(),
-            color: style.color,
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        };
-        let runs = runs_for(
-            &run,
-            content.len(),
-            marked,
-            &pills,
-            (!selected.is_empty()).then(|| selected.clone()),
+        let layout = Layout::shape(
+            composer,
+            &window.text_style(),
+            line_height,
+            Some(bounds.size.width),
+            window,
         );
 
-        let font_size = style.font_size.to_pixels(window.rem_size());
-        let line = window
-            .text_system()
-            .shape_line(content, font_size, &runs, None);
+        // Scroll only as far as it takes to show the caret's row, and never
+        // past the last row.
+        let visible = ((bounds.size.height / line_height).round() as usize).max(1);
+        let caret_row = layout.row_of(cursor);
+        let mut scroll = composer.scroll.min(layout.rows().saturating_sub(visible));
+        if caret_row < scroll {
+            scroll = caret_row;
+        } else if caret_row >= scroll + visible {
+            scroll = caret_row + 1 - visible;
+        }
+        let row_top = |row: usize| bounds.top() + line_height * row - line_height * scroll;
 
         let (selection, cursor) = if selected.is_empty() {
-            let x = line.x_for_index(cursor);
+            let at = layout.position(cursor);
             // The Soft caret: a 2 × 14 `--text-2` bar, square, no radius, no
-            // blink. The prototype centres it in the 20px prompt row (y = row
-            // top + 3); this element is the shaped line's own box, centred in
-            // that row by `items_center`, so centring in `bounds` lands on the
-            // same pixel whatever the line height resolves to.
-            let inset = ((bounds.bottom() - bounds.top()) - px(crate::theme::CARET_H)) / 2.;
+            // blink, centred in its row (y = row top + 3 in the 20px row).
+            let inset = (line_height - px(crate::theme::CARET_H)) / 2.;
             (
-                None,
+                Vec::new(),
                 Some(fill(
                     Bounds::new(
-                        point(bounds.left() + x, bounds.top() + inset),
-                        gpui::size(px(crate::theme::CARET_W), px(crate::theme::CARET_H)),
+                        point(bounds.left() + at.x, row_top(caret_row) + inset),
+                        size(px(crate::theme::CARET_W), px(crate::theme::CARET_H)),
                     ),
                     rgb(crate::theme::TEXT_2),
                 )),
             )
         } else {
-            (
-                Some(fill(
-                    Bounds::from_corners(
-                        point(
-                            bounds.left() + line.x_for_index(selected.start),
-                            bounds.top(),
+            // One quad per row the selection crosses, from where it enters
+            // the row to where it leaves.
+            let quads = layout
+                .rows
+                .iter()
+                .enumerate()
+                .filter(|(_, row)| row.start < selected.end && selected.start < row.end)
+                .map(|(index, row)| {
+                    let from = layout.x_in_row(index, selected.start.max(row.start));
+                    let to = layout.x_in_row(index, selected.end.min(row.end));
+                    fill(
+                        Bounds::from_corners(
+                            point(bounds.left() + from, row_top(index)),
+                            point(bounds.left() + to, row_top(index) + line_height),
                         ),
-                        point(
-                            bounds.left() + line.x_for_index(selected.end),
-                            bounds.bottom(),
-                        ),
-                    ),
-                    // One selection colour everywhere, whoever paints it —
-                    // opaque `#3f3f3f`, with `TEXT_STRONG` runs over it.
-                    rgb(crate::theme::SELECTION),
-                )),
-                None,
-            )
+                        // One selection colour everywhere, whoever paints it —
+                        // opaque `#3f3f3f`, with `TEXT_STRONG` runs over it.
+                        rgb(crate::theme::SELECTION),
+                    )
+                })
+                .collect();
+            (quads, None)
         };
 
         PrepaintState {
-            line: Some(line),
+            layout: Some(layout),
+            scroll,
             cursor,
             selection,
         }
@@ -793,20 +1065,42 @@ impl Element for LineElement {
             }
             composer.update(cx, |composer, cx| composer.release(event, cx));
         });
-        if let Some(selection) = prepaint.selection.take() {
-            window.paint_quad(selection);
-        }
-        let line = prepaint.line.take().unwrap();
-        line.paint(bounds.origin, window.line_height(), window, cx)
-            .unwrap();
-        if focus_handle.is_focused(window) {
-            if let Some(cursor) = prepaint.cursor.take() {
-                window.paint_quad(cursor);
+        let layout = prepaint.layout.take().unwrap();
+        let scroll = prepaint.scroll;
+        let line_height = layout.line_height;
+        // Rows scrolled off the top or bottom are clipped, not skipped: the
+        // mask is the box, and a hard line is painted whole.
+        window.with_content_mask(Some(ContentMask { bounds }), |window| {
+            for quad in prepaint.selection.drain(..) {
+                window.paint_quad(quad);
             }
-        }
+            for (index, line) in layout.lines.iter().enumerate() {
+                let first_row = layout.first_row_of_line(index);
+                let top = bounds.top() + line_height * first_row - line_height * scroll;
+                let rows = line.wrap_boundaries().len() + 1;
+                if top + line_height * rows <= bounds.top() || top >= bounds.bottom() {
+                    continue;
+                }
+                line.paint(
+                    point(bounds.left(), top),
+                    line_height,
+                    TextAlign::Left,
+                    None,
+                    window,
+                    cx,
+                )
+                .unwrap();
+            }
+            if focus_handle.is_focused(window) {
+                if let Some(cursor) = prepaint.cursor.take() {
+                    window.paint_quad(cursor);
+                }
+            }
+        });
         self.composer.update(cx, |composer, _cx| {
-            composer.last_layout = Some(line);
+            composer.last_layout = Some(layout);
             composer.last_bounds = Some(bounds);
+            composer.scroll = scroll;
         });
     }
 }
@@ -893,5 +1187,322 @@ mod tests {
         assert_eq!(lens, [5, 2, 4]);
         assert_eq!(runs[1].color, rgb(crate::theme::TEXT_STRONG).into());
         assert_eq!(runs[0].color, base.color);
+    }
+
+    // ------------------------------------------------------- in a window
+
+    use gpui::{KeyBinding, Modifiers, TestAppContext, VisualTestContext};
+
+    /// A stand-in for the Pane: a fixed-width column holding one focused
+    /// Composer, answering Submit and HistoryOlder the way the cockpit
+    /// does — by taking the draft, and by counting the recall.
+    struct Host {
+        composer: Entity<Composer>,
+        width: Pixels,
+        sent: Vec<String>,
+        recalls: usize,
+    }
+
+    impl Host {
+        fn submit(&mut self, _: &crate::cockpit::Submit, _: &mut Window, cx: &mut Context<Self>) {
+            let text = self.composer.update(cx, |composer, cx| composer.take(cx));
+            self.sent.push(text);
+        }
+
+        fn history_older(
+            &mut self,
+            _: &crate::cockpit::HistoryOlder,
+            _: &mut Window,
+            _cx: &mut Context<Self>,
+        ) {
+            self.recalls += 1;
+        }
+    }
+
+    impl Render for Host {
+        fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .w(self.width)
+                .line_height(px(crate::theme::COMPOSER_ROW_H))
+                .on_action(cx.listener(Self::submit))
+                .on_action(cx.listener(Self::history_older))
+                .child(self.composer.clone())
+        }
+    }
+
+    /// The test text system draws every character 0.6em wide at the
+    /// window's 16px default, so a 200px box wraps after ~20 characters.
+    const BOX_W: f32 = 200.;
+
+    fn host(cx: &mut TestAppContext) -> (Entity<Host>, &mut VisualTestContext) {
+        cx.update(|cx| {
+            cx.bind_keys([
+                KeyBinding::new("enter", crate::cockpit::Submit, None),
+                KeyBinding::new("shift-enter", Newline, Some("Composer")),
+                KeyBinding::new("left", Left, None),
+                KeyBinding::new("home", Home, None),
+                // The production order: history first in the table, the
+                // row walk after it, so the walk is tried first.
+                KeyBinding::new("up", crate::cockpit::HistoryOlder, Some("ComposerHistory")),
+                KeyBinding::new("up", Up, Some("Composer")),
+                KeyBinding::new("down", Down, Some("Composer")),
+            ]);
+        });
+        let (host, cx) = cx.add_window_view(|window, cx| {
+            let composer = cx.new(Composer::new);
+            window.focus(&composer.read(cx).focus_handle);
+            Host {
+                composer,
+                width: px(BOX_W),
+                sent: Vec::new(),
+                recalls: 0,
+            }
+        });
+        cx.simulate_resize(size(px(800.), px(600.)));
+        (host, cx)
+    }
+
+    fn composer(host: &Entity<Host>, cx: &mut VisualTestContext) -> Entity<Composer> {
+        host.read_with(cx, |host, _| host.composer.clone())
+    }
+
+    /// The box's painted bounds and row pitch.
+    fn geometry(
+        composer: &Entity<Composer>,
+        cx: &mut VisualTestContext,
+    ) -> (Bounds<Pixels>, Pixels) {
+        composer.read_with(cx, |composer, _| {
+            (
+                composer.last_bounds.unwrap(),
+                composer.last_layout.as_ref().unwrap().line_height,
+            )
+        })
+    }
+
+    /// A window point `x` pixels into visual row `row` of the box.
+    fn at(
+        composer: &Entity<Composer>,
+        row: usize,
+        x: f32,
+        cx: &mut VisualTestContext,
+    ) -> gpui::Point<Pixels> {
+        let (bounds, pitch) = geometry(composer, cx);
+        point(
+            bounds.left() + px(x),
+            bounds.top() + pitch * row + pitch / 2.,
+        )
+    }
+
+    const LONG: &str = "one two three four five six seven eight nine ten";
+
+    /// The box is one row tall while the text fits and grows a row per
+    /// wrapped line, to `MAX_ROWS`; past that it scrolls to the caret.
+    #[gpui::test]
+    fn the_box_grows_with_its_text_and_scrolls_past_eight_rows(cx: &mut TestAppContext) {
+        let (host, cx) = host(cx);
+        let composer = composer(&host, cx);
+        let (bounds, pitch) = geometry(&composer, cx);
+        assert_eq!(bounds.size.width, px(BOX_W));
+        assert_eq!(pitch, px(crate::theme::COMPOSER_ROW_H));
+        assert_eq!(bounds.size.height, pitch, "empty: one row");
+
+        cx.simulate_input("short");
+        let (bounds, _) = geometry(&composer, cx);
+        assert_eq!(bounds.size.height, pitch);
+        composer.read_with(cx, |composer, _| assert_eq!(composer.rows(), 1));
+
+        cx.simulate_input(" and then some more words to wrap");
+        let rows = composer.read_with(cx, |composer, _| composer.rows());
+        assert!(rows >= 2, "the text wrapped: {rows} rows");
+        let (bounds, _) = geometry(&composer, cx);
+        assert_eq!(bounds.size.height, pitch * rows, "a row per visual line");
+
+        // Hard breaks count as rows too, and the box stops at MAX_ROWS.
+        for _ in 0..12 {
+            cx.simulate_keystrokes("shift-enter");
+        }
+        let (rows, scroll, caret_row) = composer.read_with(cx, |composer, _| {
+            (composer.rows(), composer.scroll, composer.caret_row())
+        });
+        assert!(rows > MAX_ROWS, "{rows} rows");
+        let (bounds, _) = geometry(&composer, cx);
+        assert_eq!(bounds.size.height, pitch * MAX_ROWS, "clamped");
+        assert_eq!(caret_row, rows - 1, "the caret is on the last row");
+        assert_eq!(scroll, rows - MAX_ROWS, "scrolled so the caret's row shows");
+
+        // Home takes the caret back to the top, and the view follows it.
+        cx.simulate_keystrokes("home");
+        composer.read_with(cx, |composer, _| {
+            assert_eq!(composer.caret_row(), 0);
+            assert_eq!(composer.scroll, 0);
+        });
+    }
+
+    /// A click on the second row lands the caret there; shift-click and a
+    /// drag select across the wrap; a double click still takes one word.
+    #[gpui::test]
+    fn the_pointer_places_and_selects_across_wrapped_rows(cx: &mut TestAppContext) {
+        let (host, cx) = host(cx);
+        let composer = composer(&host, cx);
+        cx.simulate_input(LONG);
+        let rows = composer.read_with(cx, |composer, _| composer.rows());
+        assert!(rows >= 2, "the premise: the text wrapped ({rows} rows)");
+
+        let second_row = at(&composer, 1, 2., cx);
+        cx.simulate_click(second_row, Modifiers::none());
+        let (cursor, row) =
+            composer.read_with(cx, |composer, _| (composer.cursor(), composer.caret_row()));
+        assert_eq!(row, 1, "the caret is on the second row");
+        assert!(cursor > 0 && cursor < LONG.len());
+        assert_eq!(
+            &LONG[cursor - 1..cursor],
+            " ",
+            "a row starts after a wrap's space"
+        );
+        let second_row_start = cursor;
+
+        // Shift-click from the top extends the selection over the wrap.
+        let first_row = at(&composer, 0, 2., cx);
+        cx.simulate_click(first_row, Modifiers::none());
+        let shift_to = at(&composer, 1, 30., cx);
+        cx.simulate_event(MouseDownEvent {
+            position: shift_to,
+            modifiers: Modifiers::shift(),
+            button: MouseButton::Left,
+            click_count: 1,
+            first_mouse: false,
+        });
+        cx.simulate_mouse_up(second_row, MouseButton::Left, Modifiers::none());
+        composer.read_with(cx, |composer, _| {
+            let selection = composer.line.selection();
+            assert_eq!(selection.start, 0);
+            assert!(selection.end > second_row_start, "{selection:?}");
+        });
+
+        // A drag does the same from a press, following the pointer.
+        cx.simulate_click(first_row, Modifiers::none());
+        cx.simulate_mouse_down(first_row, MouseButton::Left, Modifiers::none());
+        let drag_to = at(&composer, 1, 60., cx);
+        cx.simulate_mouse_move(drag_to, MouseButton::Left, Modifiers::none());
+        composer.read_with(cx, |composer, _| {
+            let selection = composer.line.selection();
+            assert_eq!(selection.start, 0);
+            assert!(selection.end > second_row_start, "{selection:?}");
+            assert!(composer.dragging);
+        });
+        cx.simulate_mouse_up(drag_to, MouseButton::Left, Modifiers::none());
+        composer.read_with(cx, |composer, _| assert!(!composer.dragging));
+
+        // Double click on the second row: that row's word, no more.
+        cx.simulate_event(MouseDownEvent {
+            position: second_row,
+            modifiers: Modifiers::none(),
+            button: MouseButton::Left,
+            click_count: 2,
+            first_mouse: false,
+        });
+        composer.read_with(cx, |composer, _| {
+            let word = composer.line.selected_text().unwrap();
+            assert!(LONG.split(' ').any(|w| w == word), "{word:?}");
+            assert_eq!(composer.line.selection().start, second_row_start);
+        });
+        // Triple: everything.
+        cx.simulate_event(MouseDownEvent {
+            position: second_row,
+            modifiers: Modifiers::none(),
+            button: MouseButton::Left,
+            click_count: 3,
+            first_mouse: false,
+        });
+        composer.read_with(cx, |composer, _| {
+            assert_eq!(composer.line.selected_text(), Some(LONG));
+        });
+    }
+
+    /// shift-enter breaks the line and grows the box; enter still sends,
+    /// newline and all.
+    #[gpui::test]
+    fn shift_enter_breaks_the_line_and_enter_still_submits(cx: &mut TestAppContext) {
+        let (host, cx) = host(cx);
+        let composer = composer(&host, cx);
+        cx.simulate_input("one");
+        cx.simulate_keystrokes("shift-enter");
+        cx.simulate_input("two");
+        composer.read_with(cx, |composer, _| {
+            assert_eq!(composer.text(), "one\ntwo");
+            assert_eq!(composer.rows(), 2);
+            assert_eq!(composer.caret_row(), 1);
+        });
+        host.read_with(cx, |host, _| assert!(host.sent.is_empty()));
+        cx.simulate_keystrokes("enter");
+        host.read_with(cx, |host, _| assert_eq!(host.sent, ["one\ntwo"]));
+        composer.read_with(cx, |composer, _| {
+            assert!(composer.is_empty());
+            assert_eq!(composer.rows(), 1);
+        });
+    }
+
+    /// ↑ walks the rows of a multi-row draft and only recalls history from
+    /// the first row; on a one-row draft it recalls at once, as before.
+    #[gpui::test]
+    fn up_walks_rows_before_it_recalls_history(cx: &mut TestAppContext) {
+        let (host, cx) = host(cx);
+        let composer = composer(&host, cx);
+        composer.update(cx, |composer, cx| composer.set_history_available(true, cx));
+
+        cx.simulate_input("one row");
+        cx.simulate_keystrokes("up");
+        host.read_with(cx, |host, _| {
+            assert_eq!(host.recalls, 1, "one row: history")
+        });
+        composer.update(cx, |composer, cx| composer.set("".into(), cx));
+
+        cx.simulate_input(LONG);
+        let rows = composer.read_with(cx, |composer, _| composer.rows());
+        assert!(rows >= 2);
+        let end_x = composer.read_with(cx, |composer, _| {
+            composer
+                .last_layout
+                .as_ref()
+                .unwrap()
+                .position(LONG.len())
+                .x
+        });
+        cx.simulate_keystrokes("up");
+        let (row, cursor) =
+            composer.read_with(cx, |composer, _| (composer.caret_row(), composer.cursor()));
+        assert_eq!(row, rows - 2, "one row up");
+        assert!(cursor < LONG.len());
+        host.read_with(cx, |host, _| assert_eq!(host.recalls, 1, "no recall yet"));
+        // The column is kept, near enough: the caret's x on the row above
+        // is the nearest boundary to where it was.
+        let x = composer.read_with(cx, |composer, _| {
+            composer
+                .last_layout
+                .as_ref()
+                .unwrap()
+                .position(composer.cursor())
+                .x
+        });
+        assert!((x - end_x).abs() < px(10.), "x {x:?} vs {end_x:?}");
+
+        for _ in 1..rows - 1 {
+            cx.simulate_keystrokes("up");
+        }
+        composer.read_with(cx, |composer, _| assert_eq!(composer.caret_row(), 0));
+        host.read_with(cx, |host, _| assert_eq!(host.recalls, 1));
+        cx.simulate_keystrokes("up");
+        host.read_with(cx, |host, _| {
+            assert_eq!(host.recalls, 2, "first row: history")
+        });
+        composer.read_with(cx, |composer, _| {
+            assert_eq!(composer.text(), LONG, "the draft stands")
+        });
+
+        // ↓ walks back down and stops at the last row.
+        for _ in 0..rows {
+            cx.simulate_keystrokes("down");
+        }
+        composer.read_with(cx, |composer, _| assert_eq!(composer.caret_row(), rows - 1));
     }
 }

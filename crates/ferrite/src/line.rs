@@ -1,4 +1,6 @@
-//! The Composer's editing state: one text line, no window attached.
+//! The Composer's editing state: one draft, no window attached. The text
+//! may hold hard newlines (`shift-enter`); the window wraps it visually,
+//! and the wire receives it as typed.
 //!
 //! The selection is a byte range plus which end the caret sits on. Every
 //! motion has a plain form that collapses the selection and a `select_`
@@ -117,6 +119,12 @@ impl Line {
         self.redo.clear();
         self.typing = false;
         std::mem::take(&mut self.content)
+    }
+
+    /// A hard line break at the caret — what shift-enter types. It is
+    /// whitespace to the word motions and its own undo step.
+    pub fn insert_newline(&mut self) {
+        self.replace(None, "\n");
     }
 
     /// Take back the last edit; false when there is none.
@@ -757,6 +765,30 @@ mod tests {
         assert_eq!(line.text(), "");
         line.take();
         assert!(!line.undo(), "a sent line is not undone");
+    }
+
+    /// shift-enter puts a hard newline in the draft; it is sent as typed,
+    /// undone as its own step, and stepped over like any other whitespace.
+    #[test]
+    fn a_hard_newline_is_held_and_sent_as_typed() {
+        let mut line = of("one");
+        line.insert_newline();
+        for c in "two".chars() {
+            line.replace(None, &c.to_string());
+        }
+        assert_eq!(line.text(), "one\ntwo");
+        assert_eq!(line.cursor(), 7);
+        line.move_word_left();
+        assert_eq!(line.cursor(), 4);
+        line.move_word_left();
+        assert_eq!(line.cursor(), 0, "the newline is whitespace to a word step");
+        line.move_end();
+        assert!(line.undo());
+        assert_eq!(line.text(), "one\n", "the typed word is one step");
+        assert!(line.undo());
+        assert_eq!(line.text(), "one", "the newline is its own step");
+        line.insert_newline();
+        assert_eq!(line.take(), "one\n");
     }
 
     // U+1F312 is 4 bytes of UTF-8 and a 2-unit surrogate pair in UTF-16, which

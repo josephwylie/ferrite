@@ -11,9 +11,11 @@ pub mod import;
 pub mod layout;
 mod prompt_history;
 pub mod providers;
+pub mod questions;
 pub mod roster;
 pub mod settings;
 pub mod store;
+pub mod titler;
 pub mod transcript;
 pub mod workspace;
 
