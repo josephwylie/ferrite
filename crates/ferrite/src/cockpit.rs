@@ -786,14 +786,15 @@ impl CockpitView {
         let viewport = window.viewport_size();
         let layout = self.cockpit.layout();
         // The nav, the grid's own padding, and the gaps between cells are
-        // not the Pane's to render in. Nothing sits above the board: there
-        // is no title band to subtract.
+        // not the Pane's to render in. Above the board sits the titlebar
+        // band (see `board_bounds`).
         let chrome = self.nav_width() + crate::theme::GRID_PAD * 2.0;
         let width =
             (f32::from(viewport.width) - chrome) / layout.columns as f32 - crate::theme::GRID_GAP;
-        let height = (f32::from(viewport.height) - crate::theme::GRID_PAD * 2.0)
-            / layout.rows as f32
-            - crate::theme::GRID_GAP;
+        let height =
+            (f32::from(viewport.height) - crate::theme::WIN_CHROME_H - crate::theme::GRID_PAD)
+                / layout.rows as f32
+                - crate::theme::GRID_GAP;
         Cell::new(width.max(0.0), height.max(0.0))
     }
 
@@ -822,14 +823,19 @@ impl CockpitView {
 
     /// The board the Panes lay out in, in window coordinates: right of the
     /// nav, inset by the grid padding.
+    /// The board starts under the titlebar band, the same `WIN_CHROME_H`
+    /// the nav reserves: with a transparent macOS titlebar AppKit still
+    /// drags the window from that strip, and a Pane head drawn inside it
+    /// could not be dragged onto another Pane — the window moved instead.
     fn board_bounds(&self, window: &Window) -> layout::Rect {
         let viewport = window.viewport_size();
         let pad = crate::theme::GRID_PAD;
+        let top = crate::theme::WIN_CHROME_H;
         layout::Rect {
             x: self.nav_width() + pad,
-            y: pad,
+            y: top,
             w: (f32::from(viewport.width) - self.nav_width() - pad * 2.0).max(0.0),
-            h: (f32::from(viewport.height) - pad * 2.0).max(0.0),
+            h: (f32::from(viewport.height) - top - pad).max(0.0),
         }
     }
 
@@ -4492,6 +4498,8 @@ impl Render for CockpitView {
                 .min_h_0()
                 .gap(px(crate::theme::GRID_GAP))
                 .p(px(crate::theme::GRID_PAD))
+                // The titlebar band stays the window's own drag strip.
+                .pt(px(crate::theme::WIN_CHROME_H))
         };
         let visible = self.visible_indices();
         let layout = self.cockpit.layout();
