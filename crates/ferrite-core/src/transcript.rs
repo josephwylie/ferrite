@@ -383,6 +383,21 @@ impl Transcript {
     }
 
     pub fn apply(&mut self, input: Input) -> Update {
+        let update = self.apply_inner(input);
+        // The turn's clock starts with the prompt — or, for a Thread revived
+        // mid-turn with no prompt of this turn in its window, with the
+        // first thing that streams.
+        match self.status {
+            Status::Streaming if self.turn_started.is_none() => {
+                self.turn_started = Some(std::time::Instant::now());
+            }
+            Status::Idle => self.turn_started = None,
+            _ => {}
+        }
+        update
+    }
+
+    fn apply_inner(&mut self, input: Input) -> Update {
         let mut update = self.fold(input);
         update.evicted = self.evict();
         update
@@ -1611,6 +1626,12 @@ mod tests {
             0,
             "a new turn starts at nothing"
         );
+
+        // A revived Thread mid-turn: no prompt in the window, but the
+        // first streamed word starts the clock.
+        let mut revived = Transcript::new(std::sync::Arc::new(Unhighlighted));
+        revived.apply(Input::Event(SessionEvent::TextDelta { text: "…".into() }));
+        assert!(revived.turn_elapsed().is_some());
     }
 
     /// Claude's redacted thinking arrives as empty deltas — one per
