@@ -614,6 +614,52 @@ fn parse_version(reported: &str) -> Option<(String, [u64; 3])> {
     Some((token.to_string(), version))
 }
 
+/// Claude Code's way of titling a Thread: `claude -p` in print mode.
+pub mod title {
+    use crate::titler::TitleForm;
+
+    /// The cheapest alias, so a Thread's name costs nothing an operator
+    /// would notice.
+    pub const MODEL: &str = "haiku";
+    pub const EFFORT: &str = "low";
+
+    /// Print mode, the cheap model, text output, no tools (the title must
+    /// not be a Bash call), no saved session (a title turn is not a
+    /// conversation to resume), no settings sources (so no project or user
+    /// hooks run in the throwaway directory), and nobody to answer prompts
+    /// (`--tools ""` should leave none, but one that did appear must be
+    /// denied rather than hang). Each flag verified against `claude --help`
+    /// of 2.1.259; `--max-turns` does not exist there, and the tool-less
+    /// turn is single anyway. The prompt is the positional argument.
+    pub fn fill(program: &str, prompt: &str) -> TitleForm {
+        TitleForm {
+            program: program.to_string(),
+            args: [
+                "-p",
+                "--model",
+                MODEL,
+                "--effort",
+                EFFORT,
+                "--output-format",
+                "text",
+                "--tools",
+                "",
+                "--no-session-persistence",
+                "--setting-sources",
+                "",
+                "--permission-prompts",
+                "none",
+                prompt,
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+            model: MODEL,
+            effort: EFFORT,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

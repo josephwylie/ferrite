@@ -193,96 +193,10 @@ fn run(form: &TitleForm, timeout: Duration) -> Option<String> {
     }
 }
 
-/// Claude Code's way of titling a Thread: `claude -p` in print mode.
-pub mod claude {
-    use super::TitleForm;
-
-    /// The cheapest alias, so a Thread's name costs nothing an operator
-    /// would notice.
-    pub const MODEL: &str = "haiku";
-    pub const EFFORT: &str = "low";
-
-    /// Print mode, the cheap model, text output, no tools (the title must
-    /// not be a Bash call), no saved session (a title turn is not a
-    /// conversation to resume), no settings sources (so no project or user
-    /// hooks run in the throwaway directory), and nobody to answer prompts
-    /// (`--tools ""` should leave none, but one that did appear must be
-    /// denied rather than hang). Each flag verified against `claude --help`
-    /// of 2.1.259; `--max-turns` does not exist there, and the tool-less
-    /// turn is single anyway. The prompt is the positional argument.
-    pub fn fill(program: &str, prompt: &str) -> TitleForm {
-        TitleForm {
-            program: program.to_string(),
-            args: [
-                "-p",
-                "--model",
-                MODEL,
-                "--effort",
-                EFFORT,
-                "--output-format",
-                "text",
-                "--tools",
-                "",
-                "--no-session-persistence",
-                "--setting-sources",
-                "",
-                "--permission-prompts",
-                "none",
-                prompt,
-            ]
-            .into_iter()
-            .map(str::to_string)
-            .collect(),
-            model: MODEL,
-            effort: EFFORT,
-        }
-    }
-}
-
-/// Codex's way of titling a Thread: `codex exec`, whose stdout is the
-/// final message alone (the banner goes to stderr).
-pub mod codex {
-    use super::TitleForm;
-
-    /// The small model in Codex's own catalogue.
-    pub const MODEL: &str = "gpt-5.4-mini";
-    pub const EFFORT: &str = "low";
-
-    /// Non-interactive, the cheap model at low reasoning, no session files
-    /// (`--ephemeral`), no user config or rules (so the operator's own
-    /// model, hooks and policies stay out of it), a read-only sandbox in
-    /// case the model reaches for a shell anyway, no colour codes in the
-    /// reply, and no git-repo requirement for the throwaway cwd. Each flag
-    /// verified against `codex exec --help` of 0.144.4. The prompt is the
-    /// positional argument.
-    pub fn fill(program: &str, prompt: &str) -> TitleForm {
-        let effort = format!("model_reasoning_effort=\"{EFFORT}\"");
-        TitleForm {
-            program: program.to_string(),
-            args: [
-                "exec",
-                "--model",
-                MODEL,
-                "-c",
-                effort.as_str(),
-                "--ephemeral",
-                "--ignore-user-config",
-                "--ignore-rules",
-                "--skip-git-repo-check",
-                "--sandbox",
-                "read-only",
-                "--color",
-                "never",
-                prompt,
-            ]
-            .into_iter()
-            .map(str::to_string)
-            .collect(),
-            model: MODEL,
-            effort: EFFORT,
-        }
-    }
-}
+/// Each Provider's own filler lives beside its Session; the titler only
+/// runs the filled form.
+pub use crate::providers::claude_title as claude;
+pub use crate::providers::codex_title as codex;
 
 #[cfg(test)]
 mod tests {

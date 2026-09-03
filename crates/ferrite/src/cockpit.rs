@@ -197,10 +197,10 @@ pub struct Preferences {
     pub settings: ferrite_core::settings::Settings,
     pub dir: std::path::PathBuf,
     pub defaults: std::sync::Arc<std::sync::Mutex<crate::session::SessionDefaults>>,
-    /// The program that writes Thread titles (`claude`), or None to title
-    /// from the first prompt alone — the test and demo constructors, so no
-    /// suite ever spawns a real CLI for a name.
-    pub titler: Option<String>,
+    /// Whether a model writes Thread titles (each Provider's own CLI, the
+    /// cheap model, one turn). False in the test and demo constructors,
+    /// so no suite ever spawns a real CLI for a name.
+    pub titler: bool,
 }
 
 impl Preferences {
@@ -212,7 +212,7 @@ impl Preferences {
             defaults: std::sync::Arc::new(std::sync::Mutex::new(
                 crate::session::SessionDefaults::default(),
             )),
-            titler: None,
+            titler: false,
         }
     }
 }
@@ -1976,8 +1976,15 @@ impl CockpitView {
         };
         let rows = vec![
             prefs::row(
-                "Name Threads from their first prompt",
-                "Until you rename them".into(),
+                "Name Threads by their first prompt",
+                format!(
+                    "Then a short title its own Provider writes (Claude {} at {} effort, Codex {} at {}) — until you rename it",
+                    ferrite_core::titler::claude::MODEL,
+                    ferrite_core::titler::claude::EFFORT,
+                    ferrite_core::titler::codex::MODEL,
+                    ferrite_core::titler::codex::EFFORT,
+                )
+                .into(),
                 toggle(cx, "settings-auto-title", settings.auto_title, |s, v| {
                     s.auto_title = v
                 }),
@@ -5121,26 +5128,32 @@ impl CockpitView {
     /// turned auto-titles off. No titler configured (tests, the demo)
     /// means the prompt-derived name stands.
     fn start_titling(&mut self, thread: ThreadId, prompt: String, cx: &mut Context<Self>) {
-        if !self.prefs.settings.auto_title {
+        if !self.prefs.settings.auto_title || !self.prefs.titler {
             return;
         }
-        let Some(program) = self.prefs.titler.clone() else {
-            return;
-        };
-        if self
+        let Some(provider) = self
             .cockpit
             .thread(thread)
-            .is_none_or(|open| open.title().is_some())
-        {
+            .filter(|open| open.title().is_none())
+            .map(|open| open.provider())
+        else {
             return;
-        }
-        let rx = ferrite_core::titler::spawn(
-            &program,
-            ferrite_core::titler::TitleRequest {
+        };
+        // The Thread's own Provider writes its title, through the one form
+        // each adapter fills: Claude's `claude -p`, Codex's `codex exec`.
+        let program = match provider {
+            Provider::Claude => "claude",
+            Provider::Codex => "codex",
+        };
+        let form = ferrite_core::titler::form(
+            provider,
+            program,
+            &ferrite_core::titler::TitleRequest {
                 prompt,
                 reply: None,
             },
         );
+        let rx = ferrite_core::titler::spawn(form);
         cx.spawn(async move |this, cx| {
             let title = cx
                 .background_executor()

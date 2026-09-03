@@ -843,6 +843,51 @@ fn parse_version_token(token: &str) -> Option<(String, [u64; 3])> {
     Some((token.to_string(), version))
 }
 
+/// Codex's way of titling a Thread: `codex exec`, whose stdout is the
+/// final message alone (the banner goes to stderr).
+pub mod title {
+    use crate::titler::TitleForm;
+
+    /// The small model in Codex's own catalogue.
+    pub const MODEL: &str = "gpt-5.4-mini";
+    pub const EFFORT: &str = "low";
+
+    /// Non-interactive, the cheap model at low reasoning, no session files
+    /// (`--ephemeral`), no user config or rules (so the operator's own
+    /// model, hooks and policies stay out of it), a read-only sandbox in
+    /// case the model reaches for a shell anyway, no colour codes in the
+    /// reply, and no git-repo requirement for the throwaway cwd. Each flag
+    /// verified against `codex exec --help` of 0.144.4. The prompt is the
+    /// positional argument.
+    pub fn fill(program: &str, prompt: &str) -> TitleForm {
+        let effort = format!("model_reasoning_effort=\"{EFFORT}\"");
+        TitleForm {
+            program: program.to_string(),
+            args: [
+                "exec",
+                "--model",
+                MODEL,
+                "-c",
+                effort.as_str(),
+                "--ephemeral",
+                "--ignore-user-config",
+                "--ignore-rules",
+                "--skip-git-repo-check",
+                "--sandbox",
+                "read-only",
+                "--color",
+                "never",
+                prompt,
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+            model: MODEL,
+            effort: EFFORT,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

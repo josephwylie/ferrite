@@ -137,10 +137,14 @@ impl Session for CodexSession {
         CodexSession::pid(self)
     }
 }
+/// Each Provider's title filler, beside its Session — the titler runs
+/// whichever the Thread's Provider is.
+pub use claude::title as claude_title;
 pub use claude::{
     ClaudeCapabilities, ClaudeConfig, ClaudeSession, ClaudeSpawnError,
     CLAUDE_CLI_MAX_VERSION_EXCLUSIVE, CLAUDE_CLI_MIN_VERSION,
 };
+pub use codex::title as codex_title;
 pub use codex::{
     CodexCapabilities, CodexConfig, CodexSession, CodexSpawnError, CODEX_CLI_MAX_VERSION_EXCLUSIVE,
     CODEX_CLI_MIN_VERSION,
