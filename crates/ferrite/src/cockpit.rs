@@ -2212,6 +2212,28 @@ impl CockpitView {
         }
         let text = composer.update(cx, |composer, cx| composer.take(cx));
         let text = text.trim().to_string();
+        // `/effort max` and `/model sonnet` typed out are Ferrite's own
+        // acts, the same as the pickers: the chip stays truthful, Codex
+        // (which has no such command) gets them too, and a level or model
+        // Ferrite does not know goes to the provider as text.
+        if let Some(handled) = self.typed_tuning(thread, &text) {
+            match handled {
+                Tuning::Effort(effort) => self.pick_effort(thread, effort, cx),
+                Tuning::Model(model) => self.pick_provider(
+                    thread,
+                    ProviderChoice {
+                        provider: self
+                            .cockpit
+                            .thread(thread)
+                            .map(|open| open.provider())
+                            .unwrap_or(Provider::Claude),
+                        model,
+                    },
+                    cx,
+                ),
+            }
+            return;
+        }
         if text.is_empty() {
             // Enter on an empty line takes a held prompt back to edit it.
             if let Some(held) = self.cockpit.unqueue(thread) {
@@ -2550,7 +2572,12 @@ impl CockpitView {
             // while the Thread still offers adoption. #25: `provider`
             // always — live before the first prompt, and kept visible but
             // inert after it, so the door's absence never reads as a bug.
+            // A local row replaces a provider command of the same name
+            // (Claude lists its own `effort`): Ferrite's opens the picker,
+            // and the typed form (`/effort max`) still works — `submit`
+            // reads it.
             let push_local = |rows: &mut Vec<Row>, row: Row| {
+                rows.retain(|existing| existing.row.name != row.row.name);
                 rows.insert(0, row);
                 rows.truncate(MENU_ROWS_MAX);
             };
@@ -4110,6 +4137,12 @@ impl CockpitView {
     }
 }
 
+/// What a typed `/effort` or `/model` line asked for.
+enum Tuning {
+    Effort(Option<String>),
+    Model(Option<String>),
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Answer {
     Allow,
@@ -4728,14 +4761,28 @@ impl CockpitView {
             Some(target) => cell
                 .on_drag_move(cx.listener(
                     move |view, event: &gpui::DragMoveEvent<PaneDrag>, _, cx| {
+                        // gpui hands every drag move to every listener, not
+                        // just the one under the pointer: a Pane only
+                        // previews while the pointer is inside it, and
+                        // drops its own preview once the pointer has left
+                        // — else the first Pane crossed keeps saying
+                        // "split left" while the drag is somewhere else.
                         let source = event.drag(cx).thread;
-                        view.preview_pane_drop(
-                            source,
-                            target,
-                            event.event.position,
-                            event.bounds,
-                            cx,
-                        );
+                        if event.bounds.contains(&event.event.position) {
+                            view.preview_pane_drop(
+                                source,
+                                target,
+                                event.event.position,
+                                event.bounds,
+                                cx,
+                            );
+                        } else if view
+                            .drop_preview
+                            .is_some_and(|(previewed, _)| previewed == target)
+                        {
+                            view.drop_preview = None;
+                            cx.notify();
+                        }
                     },
                 ))
                 .on_drop(cx.listener(move |view, drag: &PaneDrag, _, cx| {
@@ -5116,6 +5163,52 @@ impl CockpitView {
         keys = keys.child(wire(pane::keycap_deny(), Answer::Deny, cx));
         card = card.child(pane::question_footer(hint, Some(keys.into_any_element())));
         Some(card.into_any_element())
+    }
+
+    /// A typed `/effort <level>` or `/model <name>` the cockpit itself can
+    /// honour: the level is on the model's ladder (or `default`), the name
+    /// matches a catalog row by value or display name. Anything else is
+    /// None and goes to the provider as text.
+    fn typed_tuning(&self, thread: ThreadId, text: &str) -> Option<Tuning> {
+        let open = self.cockpit.thread(thread)?;
+        let mut words = text.split_whitespace();
+        let command = words.next()?;
+        let argument = words.next()?;
+        if words.next().is_some() {
+            return None;
+        }
+        let argument = argument.to_ascii_lowercase();
+        match command {
+            "/effort" => {
+                if argument == "default" {
+                    return Some(Tuning::Effort(None));
+                }
+                let ladder = ferrite_core::providers::models::efforts_for(
+                    open.provider(),
+                    open.model(),
+                    open.models(),
+                );
+                ladder
+                    .into_iter()
+                    .find(|level| level.eq_ignore_ascii_case(&argument))
+                    .map(|level| Tuning::Effort(Some(level)))
+            }
+            "/model" => {
+                if argument == "default" {
+                    return Some(Tuning::Model(None));
+                }
+                self.cockpit
+                    .model_catalog(open.provider())
+                    .into_iter()
+                    .find(|row| {
+                        row.value.eq_ignore_ascii_case(&argument)
+                            || row.display.eq_ignore_ascii_case(&argument)
+                            || row.is(&argument)
+                    })
+                    .map(|row| Tuning::Model(Some(row.value).filter(|value| value != "default")))
+            }
+            _ => None,
+        }
     }
 
     /// Whether `thread`'s transcript holds exactly one prompt — the moment
@@ -10420,6 +10513,60 @@ mod tests {
             assert!(high.active, "✓ on the level in force");
         });
         assert_eq!(composer_text(&view, cx), "", "the /effort line is cleared");
+    }
+
+    /// Claude lists its own `effort` command; Ferrite's row of that name
+    /// replaces it, so the menu shows one `/effort` and it opens the
+    /// picker. Typed out with a level, `/effort high` is honoured by the
+    /// cockpit itself and never sent as text; an unknown level is.
+    #[gpui::test]
+    fn ferrites_effort_row_replaces_the_providers_and_a_typed_level_is_honoured(
+        cx: &mut TestAppContext,
+    ) {
+        let (core, fake) = cockpit("effort-typed", 1);
+        bind_production_keys(cx);
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+        fake.streams.borrow()[0]
+            .send(SessionEvent::Commands {
+                commands: vec![ferrite_core::SessionCommand {
+                    name: "effort".into(),
+                    description: "Set effort level for model usage".into(),
+                    path: None,
+                }],
+            })
+            .unwrap();
+        tick(cx);
+        cx.simulate_input("/eff");
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            let menu = view.popover.as_ref().expect("the / menu");
+            let names: Vec<&str> = menu.rows.iter().map(|row| row.name.as_ref()).collect();
+            assert_eq!(names, ["/effort"], "one row, Ferrite's");
+            assert!(matches!(
+                menu.rows[0].consequence,
+                Consequence::OpenEffortPicker
+            ));
+        });
+        cx.simulate_input("ort high");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.cockpit.thread(thread).unwrap().effort(), Some("high"));
+        });
+        assert!(
+            fake.sent.borrow().is_empty(),
+            "a known level is not a prompt"
+        );
+
+        cx.simulate_input("/effort turbo");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(
+            fake.sent.borrow().last().map(String::as_str),
+            Some("/effort turbo"),
+            "an unknown level goes to the provider as text"
+        );
     }
     /// #25: the mouse door — a click on the footer chip opens the picker.
     /// The sweep covers the meta row's right side so the test does not
