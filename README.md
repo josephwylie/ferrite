@@ -62,34 +62,57 @@ Shortcuts are spelled with `cmd` below; on Windows the same shortcuts use
 - `escape` — interrupt the running Session
 - `y` / `n` / `a` — answer a Decision (allow / deny / always), from the
   focused Pane or from any Pane at wall range
+- When Claude asks a question (`AskUserQuestion`), the Pane draws it as a
+  form: click an option or press `1`–`4`, or type your own answer; `enter`
+  sends. While a question is up the letters only type.
 - `cmd-]` / `cmd-[` — next / previous Pane; `cmd-d` — jump to the next Decision
 - `cmd-f` — the focused Pane fullscreen, and back; `cmd-b` — fold the nav
 - `cmd-w` — park a Thread; `cmd-o` — revive the newest parked one
-- `cmd-,` — Settings: the Provider and model new Threads start on, Claude's
-  permission mode, Codex's approval policy and sandbox, naming and
+- `cmd-,` — Settings: the Provider, model and effort new Threads start on,
+  Claude's permission mode, Codex's approval policy and sandbox, naming and
   confirmation behaviour. Saved to `~/.ferrite/settings.json`.
+- `cmd-v` — paste into the focused Pane's Composer from anywhere in the
+  window; `cmd-c` copies a transcript selection.
 
 In the Composer: `alt-backspace` / `alt-delete` take a word,
 `cmd-backspace` / `cmd-delete` the line halves, `alt-←` / `alt-→` step by
 word, `cmd-←` / `cmd-→` jump to the ends, shift with any of those selects,
-`cmd-a` selects all, `cmd-z` / `cmd-shift-z` undo and redo. `/` opens the
-Session's own command menu, `@` completes files and folders under the
-Thread's checkout, `↑` recalls earlier prompts.
+`cmd-a` selects all, `cmd-z` / `cmd-shift-z` undo and redo. The box wraps
+and grows a row per line (up to eight, then scrolls); `shift-enter` breaks
+a line, `enter` sends. `/` opens the Session's own command menu (plus
+Ferrite's `/model`, `/effort` and `/import`), `@` completes files and
+folders under the Thread's checkout, `↑` recalls earlier prompts (or, on a
+multi-line draft, moves between rows).
 
 With the pointer:
 
-- **Right-click** a Thread, Group or Project in the nav, or anywhere in a
-  Pane, for its menu: rename, focus, fullscreen, new Thread in the same
-  Project, reveal in Finder, copy path, park, leave or dissolve a Group,
-  delete (two presses).
+- **Right-click** a Thread, Group or Project in the nav for its menu:
+  rename, open or resume, fullscreen, new Thread in the same Project,
+  reveal in Finder, copy path, park, leave or dissolve a Group, delete
+  (two presses). Right-click a transcript for the Pane's own menu: copy
+  the selection or the whole transcript, rename, fullscreen, reveal, copy
+  path, park or close.
 - **Double-click** a Pane's title, or click a nav row's title, to rename
-  it. Untitled Threads are named from their first prompt.
+  it. An untitled Thread is named from its first prompt at once, then —
+  with *Titles* on in Settings — by a 3–6 word title the Claude CLI writes
+  in the background (haiku, low effort, one turn, no tools). Your own
+  rename always wins. The title reaches the Session too: Codex's thread
+  name, Claude's `--name`.
+- Every nav row carries a **status dot**: green working, amber waiting on
+  you, red closed, dim idle, hollow parked.
 - In a **Group**, drag the seam between two Panes to resize them, and
-  drag a Pane's title onto another Pane to swap (the centre) or to split
-  its slot (an edge). The arrangement is remembered per Group.
+  drag a Pane's title — at any size, L2 and L3 cells included — onto
+  another Pane to swap (the centre) or to split its slot (an edge). The
+  arrangement is remembered per Group. L2 cells keep a Composer, so a
+  small Pane can still be told what to do.
 - The **model picker** at the Composer's right edge lists each Provider's
-  models by name; the model can change mid-conversation (the Session
-  resumes under it); the Provider is fixed once the first prompt is sent.
+  models by their versioned names ("Fable 5.1", "GPT-5.6 Sol"); the model
+  can change mid-conversation (the Session resumes under it). Picking the
+  other Provider after the first prompt hands the conversation over: a
+  fresh Session there, with a digest of the earlier exchanges sent ahead
+  of your next prompt. The **effort chip** beside it lists the reasoning
+  ladder the model takes (from the Provider's own announcement), with
+  your Settings default on top.
 
 Flags:
 

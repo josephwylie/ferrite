@@ -54,12 +54,26 @@ centre) or splits that slot (an edge).
 _Avoid_: grid (that is what an even Layout happens to be), mosaic.
 
 **Title**
-What a Thread is called: the operator's own name for it, else the first
-line of its first prompt, else its number.
+What a Thread is called: the operator's own name for it, else a short
+title a small model wrote from the first prompt (the titler, off by
+turning *Titles* off), else the first line of its first prompt, else its
+number. Told to the Session where the Provider takes one.
+
+**Effort**
+A Thread's reasoning depth, one rung of the ladder its model announces
+(Claude: low…max; Codex: low…ultra, per model). Chosen per Thread by the
+effort chip or `/effort`, defaulting to Settings; changing it re-aims the
+Session like a model change.
+
+**Handover**
+Switching a Thread to the other Provider after its first prompt: a fresh
+Session there, the Transcript kept, and a digest of the earlier exchanges
+carried ahead of the next prompt, once. Not a resume — the new Provider
+never saw the old conversation.
 
 **Settings**
-The operator's defaults for new Threads (Provider, model, permissions) and
-for the app's behaviour, in one file beside the store. Never history: a
+The operator's defaults for new Threads (Provider, model, effort,
+permissions) and for the app's behaviour, in one file beside the store. Never history: a
 Thread's header remains the durable truth about that Thread.
 
 **Semantic zoom**
@@ -68,14 +82,20 @@ A Pane's rendering chosen by its size: **L1** (near: transcript + prompt),
 one signal). No user mode-switch; size decides.
 
 **Composer**
-The prompt line at the bottom of a focused Pane: one growing text line,
-keyboard-driven menus, queue-while-busy.
+The prompt box at the bottom of a Pane (L1 and L2): text that wraps and
+grows a row per line, keyboard-driven menus, queue-while-busy.
 _Avoid_: chat box, input field.
 
 **Decision**
 Anything a Thread is blocked on that only the operator can answer (tool
-permission, plan approval). Decisions are answerable from Pane, wall badge,
-and (planned) Remote.
+permission, plan approval, a question). Decisions are answerable from
+Pane, wall badge, and (planned) Remote.
+
+**Question**
+A Decision whose input is a form — Claude's `AskUserQuestion`. The Pane
+draws the questions and their options; the answer is the tool allowed
+with the picks (and any typed words) folded into its input, the shape
+Claude Code's own UI sends.
 
 **Workspace binding**
 The checkout a Thread works in: a per-Thread worktree or the main checkout —
