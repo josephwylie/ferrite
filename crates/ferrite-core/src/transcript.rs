@@ -256,6 +256,14 @@ pub struct Transcript {
     session_id: Option<String>,
     last_cost: Option<f64>,
     usage: Option<Usage>,
+    /// When the running turn began — the operator's prompt went out — for
+    /// the working line's clock. None between turns.
+    turn_started: Option<std::time::Instant>,
+    /// Output tokens the running turn has produced, summed across the
+    /// messages it streams (Claude reports each message's own count and
+    /// Codex a running total; `last_report` tells the two apart).
+    turn_output_tokens: u64,
+    last_report: u64,
     /// Which reasoning summary part the tail Block belongs to.
     summary_index: Option<u64>,
     /// The Thread's plan: every step's subject in creation order, and which
@@ -294,6 +302,9 @@ impl Transcript {
             session_id: None,
             last_cost: None,
             usage: None,
+            turn_started: None,
+            turn_output_tokens: 0,
+            last_report: 0,
             summary_index: None,
             subjects: Vec::new(),
             completed: std::collections::BTreeSet::new(),
@@ -318,6 +329,16 @@ impl Transcript {
 
     pub fn usage(&self) -> Option<Usage> {
         self.usage
+    }
+
+    /// How long the running turn has been going; None between turns.
+    pub fn turn_elapsed(&self) -> Option<std::time::Duration> {
+        self.turn_started.map(|started| started.elapsed())
+    }
+
+    /// Output tokens the running (or last) turn produced.
+    pub fn turn_output_tokens(&self) -> u64 {
+        self.turn_output_tokens
     }
 
     /// The Thread's plan, once it has made one.
@@ -416,12 +437,21 @@ impl Transcript {
             Input::Event(SessionEvent::TokenUsage {
                 total_tokens,
                 context_window,
+                output_tokens,
                 ..
             }) => {
                 self.usage = Some(Usage {
                     total_tokens,
                     context_window,
                 });
+                // A report that grew continues the last message (a running
+                // total); one that shrank is a new message's own count.
+                if output_tokens >= self.last_report {
+                    self.turn_output_tokens += output_tokens - self.last_report;
+                } else {
+                    self.turn_output_tokens += output_tokens;
+                }
+                self.last_report = output_tokens;
                 Update::default()
             }
             Input::Answered { allowed, tool_name } => {
@@ -447,6 +477,9 @@ impl Transcript {
                 // blocked: nothing is streaming in either.
                 if let Status::Idle | Status::Streaming = self.status {
                     self.status = Status::Streaming;
+                    self.turn_started = Some(std::time::Instant::now());
+                    self.turn_output_tokens = 0;
+                    self.last_report = 0;
                 }
                 Update {
                     dirty: vec![self.push(Body::Prompt(line))],
@@ -508,6 +541,7 @@ impl Transcript {
             Input::Event(SessionEvent::TurnEnded { outcome, cost_usd }) => {
                 self.status = Status::Idle;
                 self.last_cost = cost_usd;
+                self.turn_started = None;
                 let mut dirty = Vec::new();
                 match outcome {
                     // The cost is kept (`last_cost`) but never rendered —
@@ -1533,6 +1567,50 @@ mod tests {
             transcript.blocks()[1].body,
             Body::Paragraph { .. }
         ));
+    }
+
+    /// The working line's clock runs from the prompt to the turn's end,
+    /// and its token count sums the turn's messages whether the provider
+    /// reports each message's own count or a running total.
+    #[test]
+    fn a_turn_has_a_clock_and_a_token_count() {
+        let mut transcript = Transcript::new(std::sync::Arc::new(Unhighlighted));
+        assert_eq!(transcript.turn_elapsed(), None);
+        transcript.apply(Input::Prompt("go".into()));
+        assert!(transcript.turn_elapsed().is_some());
+        let usage = |output| {
+            Input::Event(SessionEvent::TokenUsage {
+                total_tokens: 100,
+                input_tokens: 90,
+                cached_input_tokens: 0,
+                output_tokens: output,
+                reasoning_output_tokens: 0,
+                context_window: None,
+            })
+        };
+        // A running total: 10, then 25 — the turn has 25.
+        transcript.apply(usage(10));
+        transcript.apply(usage(25));
+        assert_eq!(transcript.turn_output_tokens(), 25);
+        // A new message's own count of 8 — the turn has 33.
+        transcript.apply(usage(8));
+        assert_eq!(transcript.turn_output_tokens(), 33);
+        transcript.apply(Input::Event(SessionEvent::TurnEnded {
+            outcome: crate::TurnOutcome::Completed,
+            cost_usd: None,
+        }));
+        assert_eq!(transcript.turn_elapsed(), None);
+        assert_eq!(
+            transcript.turn_output_tokens(),
+            33,
+            "the count outlives the turn"
+        );
+        transcript.apply(Input::Prompt("again".into()));
+        assert_eq!(
+            transcript.turn_output_tokens(),
+            0,
+            "a new turn starts at nothing"
+        );
     }
 
     /// Claude's redacted thinking arrives as empty deltas — one per

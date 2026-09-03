@@ -5977,12 +5977,12 @@ fn transcript_text(blocks: &[ferrite_core::transcript::Block]) -> String {
                 language.as_deref().unwrap_or_default()
             ),
             Body::Tool(tool) => {
-                let mut line = format!("▸ {}", tool.name);
+                let mut line = format!("● {}", tool.name);
                 if !tool.summary.is_empty() {
                     line.push_str(&format!(" ({})", tool.summary));
                 }
                 if let Some(result) = &tool.result_line {
-                    line.push_str(&format!("\n  └ {result}"));
+                    line.push_str(&format!("\n  ⎿ {result}"));
                 }
                 line
             }

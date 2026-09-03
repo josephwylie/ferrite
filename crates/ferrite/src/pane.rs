@@ -1296,11 +1296,7 @@ fn l2_tail(transcript: &Transcript) -> Div {
                 TEXT_MUTED,
             ),
             Body::Tool(tool) => {
-                let glyph = if tool.name == "TaskCreate" || tool.name == "TaskUpdate" {
-                    "●"
-                } else {
-                    "▸"
-                };
+                let glyph = "●";
                 let ink = match tool.state {
                     ToolState::Failed(_) => BLOCKED,
                     _ => TEXT_MUTED,
@@ -1674,7 +1670,100 @@ fn body(
             flow,
         ));
     }
+    // The working line, the way Claude Code's own ends its transcript
+    // while a turn runs: what the agent is doing, the turn's clock, and
+    // the tokens it has produced.
+    if transcript.status() == Status::Streaming {
+        body = body.child(working_line(transcript));
+    }
     body
+}
+
+/// `◐ Running 6 shell commands… (2m 6s · ↓ 8.0k tokens)`: the phrase names
+/// the calls in flight (several of one kind counted together), else the
+/// model's own thinking or answering; the clock is the turn's, the count
+/// the turn's output tokens when the provider has reported any.
+fn working_line(transcript: &Transcript) -> Div {
+    let mut facts: Vec<String> = Vec::new();
+    if let Some(elapsed) = transcript.turn_elapsed() {
+        facts.push(duration_label(elapsed).to_string());
+    }
+    let tokens = transcript.turn_output_tokens();
+    if tokens > 0 {
+        facts.push(format!("↓ {} tokens", tokens_label(tokens)));
+    }
+    let mut text = format!("◐ {}", working_phrase(transcript.blocks()));
+    if !facts.is_empty() {
+        text.push_str(&format!(" ({})", facts.join(" · ")));
+    }
+    div()
+        .flex_shrink_0()
+        .w_full()
+        .truncate()
+        .mt(px(theme::P_MARGIN_B))
+        .text_size(px(theme::FS_SM))
+        .line_height(relative(theme::LINE_BODY))
+        .text_color(rgb(TEXT_MUTED))
+        .child(SharedString::from(text))
+}
+
+/// The phrase for the working line, from the turn's tail: the running
+/// tool calls since the last prompt, counted by kind, else what the model
+/// is doing with its own words.
+pub fn working_phrase(blocks: &[Block]) -> String {
+    let turn = blocks
+        .iter()
+        .rposition(|block| matches!(block.body, Body::Prompt(_)))
+        .map(|at| &blocks[at..])
+        .unwrap_or(blocks);
+    let running: Vec<&ToolBlock> = turn
+        .iter()
+        .filter_map(|block| match &block.body {
+            Body::Tool(tool) if matches!(tool.state, ToolState::Running) => Some(tool),
+            _ => None,
+        })
+        .collect();
+    if let Some(last) = running.last() {
+        let same = running.iter().filter(|tool| tool.name == last.name).count();
+        return if same > 1 {
+            format!("Running {same} {}…", tool_noun(&last.name))
+        } else if last.summary.is_empty() {
+            format!("Running {}…", last.name)
+        } else {
+            format!("Running {}: {}…", last.name, last.summary)
+        };
+    }
+    match turn.last().map(|block| &block.body) {
+        Some(Body::Thinking(_)) => "Thinking…".to_string(),
+        Some(
+            Body::Paragraph { .. } | Body::Heading { .. } | Body::Bullet { .. } | Body::Code { .. },
+        ) => "Answering…".to_string(),
+        _ => "Inferring…".to_string(),
+    }
+}
+
+/// What several calls of one tool are called together.
+fn tool_noun(name: &str) -> &'static str {
+    match name {
+        "Bash" | "commandExecution" => "shell commands",
+        "Read" => "file reads",
+        "Edit" | "Write" | "MultiEdit" | "fileChange" => "edits",
+        "Grep" | "Glob" => "searches",
+        "WebFetch" | "WebSearch" => "web requests",
+        "Agent" | "Task" => "agents",
+        _ => "tool calls",
+    }
+}
+
+/// `8.0k`, `12k`, `340` — the token count the way Claude Code prints it.
+fn tokens_label(tokens: u64) -> String {
+    if tokens >= 10_000 {
+        format!("{}k", tokens / 1000)
+    } else if tokens >= 1000 {
+        format!("{:.1}k", tokens as f64 / 1000.0)
+    } else {
+        tokens.to_string()
+    }
 }
 
 /// What CSS collapsing needs to know about a Block's neighbours — gpui adds
@@ -3077,13 +3166,20 @@ fn render_tool(
     expanded: bool,
     disclosure: Option<AnyElement>,
 ) -> AnyElement {
-    // A task event wears the `●` glyph and a medium, muted verb; every
-    // other tool call wears `▸` and a semibold verb in `--text`.
+    // Every call wears the `●` Claude Code's own transcript uses, in the
+    // call's state: green once it ran, red when it failed, muted while it
+    // runs. A task event keeps its medium, muted verb.
     let task = matches!(tool.name.as_str(), "TaskCreate" | "TaskUpdate");
-    let (glyph, verb_weight, verb_ink) = if task {
-        ("●", FontWeight::MEDIUM, TEXT_MUTED)
+    let (verb_weight, verb_ink) = if task {
+        (FontWeight::MEDIUM, TEXT_MUTED)
     } else {
-        ("▸", FontWeight::SEMIBOLD, TEXT)
+        (FontWeight::SEMIBOLD, TEXT)
+    };
+    let glyph = "●";
+    let glyph_ink = match tool.state {
+        ToolState::Ok if !task => RUNNING,
+        ToolState::Failed(_) => BLOCKED,
+        _ => SEP,
     };
     let mut call = div().flex().min_w_0().items_baseline().gap(px(0.)).child(
         div()
@@ -3122,7 +3218,7 @@ fn render_tool(
         .relative()
         .flex_shrink_0()
         .w(px(theme::GUTTER_W))
-        .text_color(rgb(SEP))
+        .text_color(rgb(glyph_ink))
         .child(glyph)
         .children(disclosure);
     let mut line = div()
@@ -3286,7 +3382,7 @@ fn output_block(block: BlockId, text: &str, ink: u32, selection: &SelectionOverl
                 .flex_shrink_0()
                 .w(px(theme::FS_MONO * theme::MONO_ADVANCE))
                 .text_color(rgb(SEP))
-                .child(if index == 0 { "└" } else { " " }),
+                .child(if index == 0 { "⎿" } else { " " }),
         );
         let mut body = div().flex_1().min_w_0().child(run);
         body.style().size.width = None;
@@ -3316,7 +3412,7 @@ fn result_line(ink: u32) -> Div {
         .text_size(px(theme::FS_MONO))
         .line_height(relative(theme::LINE_BODY))
         .text_color(rgb(ink))
-        .child(div().flex_shrink_0().text_color(rgb(SEP)).child("└"))
+        .child(div().flex_shrink_0().text_color(rgb(SEP)).child("⎿"))
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -3652,6 +3748,45 @@ fn code(source: &str, tokens: Option<&[Token]>) -> Vec<(std::ops::Range<usize>, 
 
 #[cfg(test)]
 mod tests {
+
+    /// The working line names what runs: several calls of one tool count
+    /// together, one names itself, and with none running the model's own
+    /// tail says whether it is thinking or answering.
+    #[test]
+    fn the_working_phrase_counts_the_calls_in_flight() {
+        let (lexer, _) = Lexer::new();
+        let mut transcript = Transcript::new(Arc::new(lexer));
+        transcript.apply(Input::Prompt("go".into()));
+        assert_eq!(working_phrase(transcript.blocks()), "Inferring…");
+        transcript.apply(Input::Event(SessionEvent::ThinkingDelta {
+            text: "hmm".into(),
+        }));
+        assert_eq!(working_phrase(transcript.blocks()), "Thinking…");
+        let start = |id: &str, name: &str| {
+            Input::Event(SessionEvent::ToolStarted {
+                id: id.into(),
+                name: name.into(),
+                input: serde_json::json!({ "command": "ls" }),
+            })
+        };
+        transcript.apply(start("toolu_1", "Read"));
+        assert!(working_phrase(transcript.blocks()).starts_with("Running Read"));
+        transcript.apply(Input::Event(SessionEvent::ToolCompleted {
+            id: "toolu_1".into(),
+            output: "x".into(),
+            is_error: false,
+            result: ToolResult::Opaque,
+        }));
+        transcript.apply(start("toolu_2", "Bash"));
+        transcript.apply(start("toolu_3", "Bash"));
+        assert_eq!(
+            working_phrase(transcript.blocks()),
+            "Running 2 shell commands…"
+        );
+        assert_eq!(tokens_label(340), "340");
+        assert_eq!(tokens_label(8_040), "8.0k");
+        assert_eq!(tokens_label(12_400), "12k");
+    }
     use super::*;
 
     #[test]
