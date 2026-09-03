@@ -19,6 +19,7 @@ fn live_config() -> CodexConfig {
         program: std::env::var("FERRITE_CODEX_BIN").unwrap_or_else(|_| "codex".into()),
         cwd: Some(std::env::temp_dir()),
         model: Some("gpt-5.4-mini".into()),
+        effort: None,
         approval_policy: Some("never".into()),
         sandbox: Some("read-only".into()),
         resume: None,

@@ -19,6 +19,8 @@ fn live_config() -> ClaudeConfig {
         program: std::env::var("FERRITE_CLAUDE_BIN").unwrap_or_else(|_| "claude".into()),
         cwd: Some(std::env::temp_dir()),
         model: Some("haiku".into()),
+        effort: None,
+        name: None,
         permission_mode: None,
         resume: None,
     }

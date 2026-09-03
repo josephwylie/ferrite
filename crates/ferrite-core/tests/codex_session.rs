@@ -419,11 +419,11 @@ fn answering(fixture_name: &str, tag: &str, answer: impl Fn(&Decision) -> Decisi
         }
     }
 
-    // The first four lines are spawn's own handshake and its skills/list
-    // request (#23); the answer follows.
-    let written = read_lines(&log, 5);
+    // The first five lines are spawn's own handshake and its skills/list
+    // and model/list requests (#23, #25); the answer follows.
+    let written = read_lines(&log, 6);
     drop(session);
-    serde_json::from_str(&written[4]).expect("one JSON object per line")
+    serde_json::from_str(&written[5]).expect("one JSON object per line")
 }
 
 /// What the recording sent back for the same Decision.
@@ -574,13 +574,13 @@ fn a_listed_skill_is_sent_as_the_typed_item_never_as_slash_text() {
 
     session.send("/probe-body follow the skill").unwrap();
 
-    // Four handshake lines (initialize, initialized, thread/start,
-    // skills/list), then the turn.
-    let recorded = read_lines(&log, 5);
+    // Five handshake lines (initialize, initialized, thread/start,
+    // skills/list, model/list), then the turn.
+    let recorded = read_lines(&log, 6);
     drop(session);
     let skills_request: Value = serde_json::from_str(&recorded[3]).unwrap();
     assert_eq!(skills_request["method"], "skills/list");
-    let turn: Value = serde_json::from_str(&recorded[4]).unwrap();
+    let turn: Value = serde_json::from_str(&recorded[5]).unwrap();
     assert_eq!(turn["method"], "turn/start");
     assert_eq!(
         turn["params"]["input"],
@@ -621,9 +621,9 @@ fn a_mentioned_file_rides_as_a_mention_item_beside_the_text() {
         .send("what is the magic word in @notes.txt ?")
         .unwrap();
 
-    let recorded = read_lines(&log, 5);
+    let recorded = read_lines(&log, 6);
     drop(session);
-    let turn: Value = serde_json::from_str(&recorded[4]).unwrap();
+    let turn: Value = serde_json::from_str(&recorded[5]).unwrap();
     assert_eq!(
         turn["params"]["input"],
         serde_json::json!([
@@ -780,6 +780,7 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
         program,
         cwd: Some(std::env::temp_dir()),
         model: Some("gpt-5.4-mini".into()),
+        effort: Some("high".into()),
         approval_policy: Some("on-request".into()),
         sandbox: Some("read-only".into()),
         resume: None,
@@ -787,8 +788,9 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
     .unwrap();
     session.send("hi").unwrap();
     session.interrupt().unwrap();
+    session.set_name("CI flake").unwrap();
 
-    let recorded = read_lines(&log, 7);
+    let recorded = read_lines(&log, 9);
     drop(session);
     assert_eq!(recorded[0], "app-server");
     let sent: Vec<Value> = recorded[1..]
@@ -814,10 +816,12 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
                 "model": "gpt-5.4-mini",
                 "approvalPolicy": "on-request",
                 "sandbox": "read-only",
+                "config": {"model_reasoning_effort": "high"},
             },
         })
     );
-    // The `/` menu is asked for as soon as the thread is up (#23).
+    // The `/` menu is asked for as soon as the thread is up (#23), and
+    // the model menu right after it (#25).
     assert_eq!(
         sent[3],
         serde_json::json!({
@@ -832,6 +836,15 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
         serde_json::json!({
             "jsonrpc": "2.0",
             "id": 4,
+            "method": "model/list",
+            "params": {},
+        })
+    );
+    assert_eq!(
+        sent[5],
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 5,
             "method": "turn/start",
             "params": {
                 "threadId": "stub-thread",
@@ -841,12 +854,99 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
     );
     // The interrupt names the turn the stub announced.
     assert_eq!(
-        sent[5],
+        sent[6],
         serde_json::json!({
             "jsonrpc": "2.0",
-            "id": 5,
+            "id": 6,
             "method": "turn/interrupt",
             "params": {"threadId": "stub-thread", "turnId": "stub-turn"},
+        })
+    );
+    // A rename names the thread server-side.
+    assert_eq!(
+        sent[7],
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "thread/name/set",
+            "params": {"threadId": "stub-thread", "name": "CI flake"},
+        })
+    );
+}
+
+/// #25: spawn asks for the model menu (model/list) and the reader announces
+/// the answer on the event stream — the picker's rows, with each model's
+/// own effort ladder, hidden rows left out.
+#[test]
+fn the_model_list_is_announced_on_the_event_stream() {
+    // The PRELUDE answers the handshake; the committed capture answers the
+    // model/list request it provokes (the skills/list goes unanswered,
+    // which must not hold the models back).
+    let program = stub(
+        "codex-models",
+        &format!(
+            "{PRELUDE}\ncat '{}'\nexec cat > /dev/null",
+            fixture("models-0.144.4").display()
+        ),
+    );
+    let session = CodexSession::spawn(config(program)).unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let models = loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match session.events().recv_timeout(left) {
+            Ok(SessionEvent::Models { models }) => break models,
+            Ok(SessionEvent::Init { .. }) => continue,
+            Ok(other) => panic!("unexpected event before the menu: {other:?}"),
+            Err(e) => panic!("no menu arrived: {e}"),
+        }
+    };
+    let values: Vec<&str> = models.iter().map(|row| row.value.as_str()).collect();
+    assert_eq!(
+        values,
+        [
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-5.6-luna",
+            "gpt-5.5",
+            "gpt-5.4",
+            "gpt-5.4-mini",
+            "gpt-5.3-codex-spark",
+        ]
+    );
+    assert_eq!(models[0].display, "GPT-5.6 Sol");
+    assert_eq!(
+        models[0].efforts,
+        ["low", "medium", "high", "xhigh", "max", "ultra"]
+    );
+    assert_eq!(models[0].default_effort.as_deref(), Some("low"));
+}
+
+/// A resume carries the effort the same way a start does.
+#[test]
+fn a_resume_passes_the_effort_in_its_config() {
+    let log = log_path("resume-effort.log");
+    let _ = fs::remove_file(&log);
+    let program = stub(
+        "codex-resume-effort",
+        &format!("{PRELUDE}\ncat >> '{}'", log.display()),
+    );
+    let session = CodexSession::spawn(CodexConfig {
+        program,
+        effort: Some("xhigh".into()),
+        resume: Some("stub-thread".into()),
+        ..Default::default()
+    })
+    .unwrap();
+    let recorded = read_lines(&log, 3);
+    drop(session);
+    let resume: Value = serde_json::from_str(&recorded[2]).unwrap();
+    assert_eq!(resume["method"], "thread/resume");
+    assert_eq!(
+        resume["params"],
+        serde_json::json!({
+            "threadId": "stub-thread",
+            "config": {"model_reasoning_effort": "xhigh"},
         })
     );
 }

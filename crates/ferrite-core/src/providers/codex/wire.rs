@@ -16,7 +16,7 @@ use std::path::Path;
 use serde_json::Value;
 
 use super::CodexCapabilities;
-use crate::{Decision, SessionCommand, SessionEvent, ToolResult, TurnOutcome};
+use crate::{Decision, ModelInfo, SessionCommand, SessionEvent, ToolResult, TurnOutcome};
 
 /// The item types Ferrite reads as tool runs. Everything else the server
 /// wraps in an item — user messages, agent messages, reasoning — either
@@ -222,6 +222,54 @@ pub(super) fn parse_skills(result: &Value) -> Vec<SessionCommand> {
     commands
 }
 
+/// The model/list result as picker rows (#25): `{data: [{id, model,
+/// displayName, description, hidden, supportedReasoningEfforts:
+/// [{reasoningEffort, description}], defaultReasoningEffort, isDefault,
+/// …}]}` on 0.144.4. The id is what thread/start's `model` accepts. The
+/// server's displayName is hyphenated ("GPT-5.6-Sol"), so the row shows
+/// the id groomed instead ("GPT-5.6 Sol"). Hidden rows are the server's
+/// own business and stay off the menu; the default row leads, so a
+/// Thread on the provider's default reads its ladder off the first row.
+pub(super) fn parse_models(result: &Value) -> Vec<ModelInfo> {
+    let mut models = Vec::new();
+    let Some(data) = result.get("data").and_then(Value::as_array) else {
+        return models;
+    };
+    for entry in data {
+        if entry.get("hidden").and_then(Value::as_bool) == Some(true) {
+            continue;
+        }
+        let Some(id) = entry.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        let text = |key: &str| entry.get(key).and_then(Value::as_str).map(str::to_string);
+        let row = ModelInfo {
+            display: super::super::models::display_name(id),
+            detail: text("description").unwrap_or_default(),
+            resolved: text("model").filter(|model| model != id),
+            efforts: entry
+                .get("supportedReasoningEfforts")
+                .and_then(Value::as_array)
+                .map(|efforts| {
+                    efforts
+                        .iter()
+                        .filter_map(|effort| effort.get("reasoningEffort")?.as_str())
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            default_effort: text("defaultReasoningEffort"),
+            value: id.to_string(),
+        };
+        if entry.get("isDefault").and_then(Value::as_bool) == Some(true) {
+            models.insert(0, row);
+        } else {
+            models.push(row);
+        }
+    }
+    models
+}
+
 /// One operator prompt as turn/start input items (#23). The server never
 /// intercepts slash text — the wire study proved `/name args` goes to the
 /// model as prose — so the translation is Ferrite's:
@@ -399,6 +447,74 @@ mod tests {
     /// (per-cwd entries; `{name, description, shortDescription?, path, scope,
     /// enabled, interface?}`), paths neutralised like every other fixture.
     const SKILLS: &str = include_str!("../../../tests/fixtures/codex-skills-0.149.1.jsonl");
+
+    /// The model/list response, as `codex app-server` 0.144.4 answered the
+    /// probe (Ferrite's pin is later, but the shape is the schema's).
+    const MODELS: &str = include_str!("../../../tests/fixtures/codex-models-0.144.4.jsonl");
+
+    /// The model/list result as the reader correlates it: request id 4 is
+    /// the one the session numbers it with.
+    fn models_result() -> Value {
+        MODELS
+            .lines()
+            .find_map(|line| parse_response(line, 4))
+            .expect("the fixture answers request 4")
+            .expect("with a result, not an error")
+    }
+
+    /// The captured menu, row for row: the default leads, names are the ids
+    /// groomed, each row's own effort ladder and default ride along, and a
+    /// hidden row never reaches the picker.
+    #[test]
+    fn the_model_list_becomes_picker_rows_with_their_effort_ladders() {
+        let models = parse_models(&models_result());
+        let values: Vec<&str> = models.iter().map(|row| row.value.as_str()).collect();
+        assert_eq!(
+            values,
+            [
+                "gpt-5.6-sol",
+                "gpt-5.6-terra",
+                "gpt-5.6-luna",
+                "gpt-5.5",
+                "gpt-5.4",
+                "gpt-5.4-mini",
+                "gpt-5.3-codex-spark",
+            ]
+        );
+        let sol = &models[0];
+        assert_eq!(sol.display, "GPT-5.6 Sol");
+        assert_eq!(sol.detail, "Reliable agentic workhorse for everyday tasks.");
+        assert_eq!(
+            sol.efforts,
+            ["low", "medium", "high", "xhigh", "max", "ultra"]
+        );
+        assert_eq!(sol.default_effort.as_deref(), Some("low"));
+        assert_eq!(sol.resolved, None, "id and model agree");
+        let luna = &models[2];
+        assert_eq!(luna.display, "GPT-5.6 Luna");
+        assert_eq!(luna.efforts, ["low", "medium", "high", "xhigh", "max"]);
+        let mini = &models[5];
+        assert_eq!(mini.display, "GPT-5.4 Mini");
+        assert_eq!(mini.efforts, ["low", "medium", "high", "xhigh"]);
+        assert_eq!(mini.default_effort.as_deref(), Some("medium"));
+
+        // A hidden row and a nameless one stay off the menu; a non-leading
+        // default is moved to the front.
+        let doctored = serde_json::json!({"data": [
+            {"id": "gpt-x", "hidden": true},
+            {"model": "nameless"},
+            {"id": "gpt-5.4", "hidden": false},
+            {"id": "gpt-5.6-sol", "isDefault": true},
+        ]});
+        let rows = parse_models(&doctored);
+        let values: Vec<&str> = rows.iter().map(|row| row.value.as_str()).collect();
+        assert_eq!(values, ["gpt-5.6-sol", "gpt-5.4"]);
+        assert!(rows[1].efforts.is_empty());
+        assert_eq!(
+            parse_models(&serde_json::json!({})),
+            Vec::<ModelInfo>::new()
+        );
+    }
 
     /// The skills/list result as the reader correlates it: request id 3 is
     /// the one the session numbers it with.

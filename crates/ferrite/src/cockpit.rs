@@ -9090,7 +9090,7 @@ mod tests {
                 .iter()
                 .position(|row| row.active)
                 .expect("✓ on the choice");
-            assert_eq!(picker.rows[standing].name.as_ref(), "Opus");
+            assert_eq!(picker.rows[standing].name.as_ref(), "Opus 5");
             assert_eq!(picker.selected, standing);
         });
         cx.simulate_keystrokes("enter");

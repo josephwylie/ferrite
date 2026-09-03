@@ -30,6 +30,13 @@ pub struct Settings {
     pub claude_model: Option<String>,
     /// The Codex model to ask for. `None` is the codex config default.
     pub codex_model: Option<String>,
+    /// The reasoning effort a new Claude Thread starts with (`"low"` …
+    /// `"max"`). `None` is the CLI's own default.
+    pub claude_effort: Option<String>,
+    /// The reasoning effort a new Codex Thread starts with (`"low"` …
+    /// `"ultra"` where the model takes it). `None` is the codex config
+    /// default.
+    pub codex_effort: Option<String>,
     /// Claude's permission mode. `None` is the CLI default; otherwise
     /// "default" | "acceptEdits" | "plan" | "bypassPermissions".
     pub claude_permission_mode: Option<String>,
@@ -53,6 +60,8 @@ impl Default for Settings {
             default_provider: Provider::Claude,
             claude_model: None,
             codex_model: None,
+            claude_effort: None,
+            codex_effort: None,
             claude_permission_mode: None,
             codex_approval_policy: "on-request".to_string(),
             codex_sandbox: None,
@@ -109,6 +118,22 @@ impl Settings {
             Provider::Codex => self.codex_model = model,
         }
     }
+
+    /// The reasoning effort a new Thread on `provider` starts with; `None`
+    /// is that provider's own default.
+    pub fn effort_for(&self, provider: Provider) -> Option<&str> {
+        match provider {
+            Provider::Claude => self.claude_effort.as_deref(),
+            Provider::Codex => self.codex_effort.as_deref(),
+        }
+    }
+
+    pub fn set_effort_for(&mut self, provider: Provider, effort: Option<String>) {
+        match provider {
+            Provider::Claude => self.claude_effort = effort,
+            Provider::Codex => self.codex_effort = effort,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -132,6 +157,8 @@ mod tests {
             default_provider: Provider::Codex,
             claude_model: Some("claude-fable-5-1".to_string()),
             codex_model: Some("gpt-5.4".to_string()),
+            claude_effort: Some("max".to_string()),
+            codex_effort: Some("high".to_string()),
             claude_permission_mode: Some("acceptEdits".to_string()),
             codex_approval_policy: "never".to_string(),
             codex_sandbox: Some("workspace-write".to_string()),
@@ -174,6 +201,8 @@ mod tests {
         assert_eq!(settings.default_provider, Provider::Claude);
         assert_eq!(settings.claude_model, None);
         assert_eq!(settings.codex_model, None);
+        assert_eq!(settings.claude_effort, None);
+        assert_eq!(settings.codex_effort, None);
         assert_eq!(settings.claude_permission_mode, None);
         assert_eq!(settings.codex_approval_policy, "on-request");
         assert_eq!(settings.codex_sandbox, None);
@@ -295,5 +324,22 @@ mod tests {
         settings.set_model_for(Provider::Claude, None);
         assert_eq!(settings.model_for(Provider::Claude), None);
         assert_eq!(settings.model_for(Provider::Codex), Some("gpt-5.4"));
+    }
+
+    #[test]
+    fn effort_is_kept_per_provider() {
+        let mut settings = Settings::default();
+        assert_eq!(settings.effort_for(Provider::Claude), None);
+        assert_eq!(settings.effort_for(Provider::Codex), None);
+
+        settings.set_effort_for(Provider::Claude, Some("high".to_string()));
+        assert_eq!(settings.effort_for(Provider::Claude), Some("high"));
+        assert_eq!(settings.effort_for(Provider::Codex), None);
+        assert_eq!(settings.claude_effort.as_deref(), Some("high"));
+
+        settings.set_effort_for(Provider::Codex, Some("ultra".to_string()));
+        settings.set_effort_for(Provider::Claude, None);
+        assert_eq!(settings.effort_for(Provider::Claude), None);
+        assert_eq!(settings.effort_for(Provider::Codex), Some("ultra"));
     }
 }

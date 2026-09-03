@@ -82,9 +82,10 @@ pub enum SessionEvent {
     PermissionMode { mode: String },
     /// The models this install offers, each with the name the provider's
     /// own menu shows — the model picker's rows (#25). Claude lifts the
-    /// list from the same initialize handshake; Codex announces no list,
-    /// so its picker falls back to the catalog in `providers::models`.
-    /// Session state exactly like the command menu: gone with the Session.
+    /// list from the same initialize handshake; Codex asks `model/list`
+    /// once its thread is up. Until either speaks the picker falls back
+    /// to the catalog in `providers::models`. Session state exactly like
+    /// the command menu: gone with the Session.
     Models { models: Vec<ModelInfo> },
     /// The session process exited; no further events will arrive.
     Closed { reason: String },
@@ -106,16 +107,27 @@ pub struct ModelInfo {
     /// The full id the value resolves to, when the provider says — how the
     /// model a Session's Init names is matched back to its row.
     pub resolved: Option<String>,
+    /// The effort levels this model accepts, in the provider's own words
+    /// and order (`low` … `max`, Codex adds `ultra` on some). Empty means
+    /// the model takes no effort setting — Haiku, for one — and the picker
+    /// offers none.
+    pub efforts: Vec<String>,
+    /// The effort the provider applies when none is asked for, when it
+    /// says (Codex does; Claude does not).
+    pub default_effort: Option<String>,
 }
 
 impl ModelInfo {
-    /// A model known only by its value: the display is groomed from it.
+    /// A model known only by its value: the display is groomed from it,
+    /// and nothing is known about its efforts.
     pub fn bare(value: impl Into<String>) -> Self {
         let value = value.into();
         Self {
             display: crate::providers::models::display_name(&value),
             detail: String::new(),
             resolved: None,
+            efforts: Vec::new(),
+            default_effort: None,
             value,
         }
     }

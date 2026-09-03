@@ -46,12 +46,17 @@ use crate::{transcript::Input, ThreadId};
 ///   Thread without one loses nothing but a grouping key.
 /// - **7** — an optional operator-chosen Thread title. Older Threads keep
 ///   their generated `thread-NN` label until renamed.
+/// - **8** — the chosen reasoning effort in the header, beside the model,
+///   and the `handover` record: a provider switch after the first prompt,
+///   which tells a revive that the last Init belongs to a provider no
+///   longer serving. A v1–v7 log loads with no effort — the provider's
+///   default, which is also what absent means — and no handovers.
 /// How far `peek_first_prompt` reads before giving up: the first prompt
 /// is normally the second line, and a log whose first prompt sits past
 /// this much preamble is named by its number instead.
 const FIRST_PROMPT_SCAN: usize = 64 * 1024;
 
-const SCHEMA_VERSION: u32 = 7;
+const SCHEMA_VERSION: u32 = 8;
 
 /// Which agent backend serves this Thread — persisted so a restart knows
 /// which provider to revive the Thread on.
@@ -60,6 +65,16 @@ const SCHEMA_VERSION: u32 = 7;
 pub enum Provider {
     Claude,
     Codex,
+}
+
+impl std::fmt::Display for Provider {
+    /// The provider's name as a Notice says it.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Provider::Claude => "Claude",
+            Provider::Codex => "Codex",
+        })
+    }
 }
 
 /// Loading one Thread failed. Errors are per-Thread by design: one damaged
@@ -132,6 +147,10 @@ struct Header {
     /// Schema 7+; absent means the generated `thread-NN` label.
     #[serde(default)]
     title: Option<String>,
+    /// Schema 8+; the reasoning effort this Thread chose. `None` — and
+    /// every v1–v7 header — means the provider's default.
+    #[serde(default)]
+    effort: Option<String>,
 }
 
 /// The persisted form of a Thread's workspace binding, mirroring
@@ -231,6 +250,23 @@ enum Record {
     Closed {
         reason: String,
     },
+    /// The Thread moved to another provider after its first prompt (schema
+    /// 8+). Everything before this line was said to `from`; the Session
+    /// that follows is `to`'s, started fresh, so the Init before this line
+    /// is nobody's to resume and the conversation before it travels as
+    /// context in the next prompt instead.
+    Handover {
+        from: Provider,
+        to: Provider,
+        model: Option<String>,
+    },
+}
+
+/// The Notice a provider switch leaves in the transcript, live and on
+/// replay alike.
+pub(crate) fn handover_notice(to: Provider, model: Option<&str>) -> String {
+    let label = crate::providers::models::label(model.unwrap_or("default"), &[]);
+    format!("continued on {to} · {label} — the earlier conversation is handed over as context")
 }
 
 /// How a persisted turn ended: `"completed"`, `"interrupted"`, or
@@ -456,13 +492,20 @@ impl Record {
             Record::Closed { reason } => Input::Event(SessionEvent::Closed {
                 reason: reason.clone(),
             }),
+            Record::Handover { to, model, .. } => {
+                Input::Notice(handover_notice(*to, model.as_deref()))
+            }
         }
     }
 
     /// Whether the log is consistent here — the transcript's boundary marks,
-    /// seen from the store's side of the conversion.
+    /// seen from the store's side of the conversion. A handover is one too:
+    /// the header rewrite that follows it must find it on disk.
     fn is_boundary(&self) -> bool {
-        matches!(self, Record::TurnEnded { .. } | Record::Closed { .. })
+        matches!(
+            self,
+            Record::TurnEnded { .. } | Record::Closed { .. } | Record::Handover { .. }
+        )
     }
 
     /// Extend this record with a later delta of the same kind, if the two
@@ -594,6 +637,8 @@ impl Store {
             model,
             project_id: project,
             title: None,
+            // And on its default effort.
+            effort: None,
         };
         file.write_all(line(&header)?.as_bytes())?;
         file.sync_data()?;
@@ -665,6 +710,7 @@ impl Store {
             model: header.model,
             project_id: header.project_id,
             title: header.title,
+            effort: header.effort,
         })
     }
 
@@ -735,6 +781,7 @@ impl Store {
             model: header.model,
             project_id: header.project_id,
             title: header.title,
+            effort: header.effort,
             records,
         })
     }
@@ -772,17 +819,18 @@ impl Store {
         Ok(())
     }
 
-    /// Record which provider serves this Thread, and the model it chose —
-    /// or `None` for the provider's default (#25). The same header rewrite
-    /// as `set_session_project_root`, with the same writer contract: the
-    /// Thread's open writer, if one exists, is flushed before and swapped
-    /// onto the new file after, and on any error it is untouched and still
-    /// valid on the old one.
+    /// Record which provider serves this Thread, and the model and effort
+    /// it chose — `None` for the provider's default of either (#25). The
+    /// same header rewrite as `set_session_project_root`, with the same
+    /// writer contract: the Thread's open writer, if one exists, is flushed
+    /// before and swapped onto the new file after, and on any error it is
+    /// untouched and still valid on the old one.
     pub fn set_provider(
         &self,
         id: ThreadId,
         provider: Provider,
         model: Option<String>,
+        effort: Option<String>,
         mut writer: Option<&mut ThreadWriter>,
     ) -> Result<(), LoadError> {
         if let Some(w) = writer.as_mut() {
@@ -791,6 +839,7 @@ impl Store {
         let mut snapshot = self.load(id)?;
         snapshot.provider = provider;
         snapshot.model = model;
+        snapshot.effort = effort;
         let file = self.rewrite(&snapshot)?;
         if let Some(w) = writer {
             *w = ThreadWriter {
@@ -870,6 +919,7 @@ impl Store {
             model: snapshot.model.clone(),
             project_id: snapshot.project_id,
             title: snapshot.title.clone(),
+            effort: snapshot.effort.clone(),
         })?;
         for record in &snapshot.records {
             contents.push_str(&line(record)?);
@@ -905,6 +955,9 @@ pub struct ThreadMeta {
     /// binding's resolved paths still say where work happens.
     pub project_id: Option<ProjectId>,
     pub title: Option<String>,
+    /// `None` — including every pre-v8 log — means the provider's default
+    /// reasoning effort.
+    pub effort: Option<String>,
 }
 
 /// One Thread as loaded from disk: everything a restart needs.
@@ -919,7 +972,21 @@ pub struct ThreadSnapshot {
     model: Option<String>,
     project_id: Option<ProjectId>,
     title: Option<String>,
+    effort: Option<String>,
     records: Vec<Record>,
+}
+
+/// The last provider switch a log records, and what the next prompt on
+/// the new provider owes it.
+pub(crate) struct Handover {
+    /// The provider the conversation before the switch was held with.
+    pub from: Provider,
+    /// Every prompt before the switch with the answer text that followed
+    /// it — the material of the carry digest.
+    pub exchanges: Vec<(String, String)>,
+    /// Whether a prompt has gone out since the switch: the carry travelled
+    /// with it, and a revive must not send it again.
+    pub delivered: bool,
 }
 
 impl ThreadSnapshot {
@@ -957,13 +1024,55 @@ impl ThreadSnapshot {
         self.title.as_deref()
     }
 
+    /// The reasoning effort this Thread chose. `None` — including every
+    /// log from before schema 8 — means the provider's default.
+    pub fn effort(&self) -> Option<String> {
+        self.effort.clone()
+    }
+
     /// The provider-native id the next Session resumes with — the latest the
     /// provider announced, so a provider that renames its session on resume
-    /// still resumes from the newest name. `None` before any Session spoke.
+    /// still resumes from the newest name. `None` before any Session spoke,
+    /// and `None` again after a handover the new provider has not yet
+    /// spoken past: the Init before the switch is the old provider's.
     pub fn resume_target(&self) -> Option<&str> {
         self.records.iter().rev().find_map(|record| match record {
-            Record::Init { session_id, .. } => Some(session_id.as_str()),
+            Record::Init { session_id, .. } => Some(Some(session_id.as_str())),
+            Record::Handover { .. } => Some(None),
             _ => None,
+        })?
+    }
+
+    /// The last provider switch in this log, with the conversation before
+    /// it as prompt/answer pairs (answer = the assistant text that followed
+    /// the prompt, tool runs and reasoning left out). `None` for a Thread
+    /// that never switched.
+    pub(crate) fn last_handover(&self) -> Option<Handover> {
+        let at = self
+            .records
+            .iter()
+            .rposition(|record| matches!(record, Record::Handover { .. }))?;
+        let Record::Handover { from, .. } = &self.records[at] else {
+            unreachable!("rposition matched a handover");
+        };
+        let mut exchanges: Vec<(String, String)> = Vec::new();
+        for record in &self.records[..at] {
+            match record {
+                Record::Prompt { text } => exchanges.push((text.clone(), String::new())),
+                Record::Text { text } => {
+                    if let Some((_, answer)) = exchanges.last_mut() {
+                        answer.push_str(text);
+                    }
+                }
+                _ => {}
+            }
+        }
+        Some(Handover {
+            from: *from,
+            exchanges,
+            delivered: self.records[at + 1..]
+                .iter()
+                .any(|record| matches!(record, Record::Prompt { .. })),
         })
     }
 
@@ -1033,6 +1142,17 @@ impl ThreadWriter {
     /// Ferrite's own act, and no provider will ever echo it back.
     pub fn record_prompt(&mut self, text: &str) -> io::Result<()> {
         self.push(Record::Prompt { text: text.into() })
+    }
+
+    /// Record a provider switch after the first prompt: a boundary, so it
+    /// is on disk before the header rewrite that follows reads the log.
+    pub fn record_handover(
+        &mut self,
+        from: Provider,
+        to: Provider,
+        model: Option<String>,
+    ) -> io::Result<()> {
+        self.push(Record::Handover { from, to, model })
     }
 
     /// Everything buffered, durably on disk. The caller's lever for the
@@ -1434,6 +1554,38 @@ mod tests {
         assert_eq!(thread.resume_target(), Some("v5-era-4f2a"));
     }
 
+    /// The frozen contract for schema 7, byte for byte what its writer
+    /// produced: the title in the header, but no effort and no handovers.
+    const V7_LOG: &str = concat!(
+        r#"{"schema":7,"provider":"claude","workspace":{"kind":"main","checkout":"/repos/project"},"session_project_root":null,"model":"sonnet","project_id":null,"title":"Old title"}"#,
+        "\n",
+        r#"{"type":"init","session_id":"v7-era-4f2a","model":"claude-sonnet-5"}"#,
+        "\n",
+        r#"{"type":"prompt","text":"hello"}"#,
+        "\n",
+        r#"{"type":"turn_ended","outcome":"completed","cost_usd":null}"#,
+        "\n",
+    );
+
+    /// AC (schema story): loading a log written at schema v7 succeeds after
+    /// the bump to v8 — title and model intact, no effort (the provider's
+    /// default) and no handover, exactly what v7 recorded.
+    #[test]
+    fn a_log_written_at_schema_v7_still_loads_after_the_bump() {
+        let dir = scratch("v7");
+        plant_log(&dir, "19", V7_LOG);
+
+        let store = Store::open(&dir).unwrap();
+        let thread = store.load(ThreadId::new(19)).unwrap();
+        assert_eq!(thread.provider(), Provider::Claude);
+        assert_eq!(thread.model(), Some("sonnet".into()));
+        assert_eq!(thread.title(), Some("Old title"));
+        assert_eq!(thread.effort(), None);
+        assert!(thread.last_handover().is_none());
+        assert_eq!(thread.resume_target(), Some("v7-era-4f2a"));
+        assert_eq!(store.peek(ThreadId::new(19)).unwrap().effort, None);
+    }
+
     /// AC (#25): the provider and model choice survives restart. Setting it
     /// rewrites the header; the Thread's open writer rides the rewrite the
     /// same way the root setter's does. Clearing the model hands back None,
@@ -1450,6 +1602,7 @@ mod tests {
                 id,
                 Provider::Codex,
                 Some("gpt-5.4-mini".into()),
+                Some("high".into()),
                 Some(&mut writer),
             )
             .unwrap();
@@ -1463,6 +1616,7 @@ mod tests {
         let thread = reopened.load(id).unwrap();
         assert_eq!(thread.provider(), Provider::Codex);
         assert_eq!(thread.model(), Some("gpt-5.4-mini".into()));
+        assert_eq!(thread.effort(), Some("high".into()));
         assert!(
             thread
                 .inputs()
@@ -1473,12 +1627,132 @@ mod tests {
         let meta = reopened.peek(id).unwrap();
         assert_eq!(meta.provider, Provider::Codex);
         assert_eq!(meta.model, Some("gpt-5.4-mini".into()));
+        assert_eq!(meta.effort, Some("high".into()));
 
-        // Back on the provider's default — no writer open this time.
+        // Back on the provider's defaults — no writer open this time.
         reopened
-            .set_provider(id, Provider::Codex, None, None)
+            .set_provider(id, Provider::Codex, None, None, None)
             .unwrap();
         assert_eq!(reopened.load(id).unwrap().model(), None);
+        assert_eq!(reopened.load(id).unwrap().effort(), None);
+        assert_eq!(reopened.peek(id).unwrap().effort, None);
+    }
+
+    /// A handover is durable history: it replays as its Notice, it hides
+    /// the old provider's Init from the resume target until the new one
+    /// speaks, and it carries the conversation before it as exchanges —
+    /// marked delivered once a prompt follows it.
+    #[test]
+    fn a_handover_is_replayed_and_shadows_the_old_providers_init() {
+        let dir = scratch("handover");
+        let store = Store::open(&dir).unwrap();
+        let (id, mut writer) = store.create(Provider::Claude, None, main_choice()).unwrap();
+        writer
+            .record_event(
+                &SessionEvent::Init {
+                    session_id: "claude-sess".into(),
+                    model: "claude-opus-5".into(),
+                },
+                None,
+            )
+            .unwrap();
+        writer.record_prompt("first question").unwrap();
+        writer
+            .record_event(
+                &SessionEvent::TextDelta {
+                    text: "first ".into(),
+                },
+                None,
+            )
+            .unwrap();
+        writer
+            .record_event(
+                &SessionEvent::TextDelta {
+                    text: "answer".into(),
+                },
+                None,
+            )
+            .unwrap();
+        writer
+            .record_event(
+                &SessionEvent::ToolCompleted {
+                    id: "t1".into(),
+                    output: "tool noise".into(),
+                    is_error: false,
+                    result: crate::ToolResult::Opaque,
+                },
+                None,
+            )
+            .unwrap();
+        writer.record_prompt("second question").unwrap();
+        writer
+            .record_handover(
+                Provider::Claude,
+                Provider::Codex,
+                Some("gpt-5.6-sol".into()),
+            )
+            .unwrap();
+        assert!(!dir.join("1").join("log.jsonl.tmp").exists());
+        assert_eq!(
+            store.load(id).unwrap().resume_target(),
+            None,
+            "a boundary: on disk already"
+        );
+        store
+            .set_provider(
+                id,
+                Provider::Codex,
+                Some("gpt-5.6-sol".into()),
+                None,
+                Some(&mut writer),
+            )
+            .unwrap();
+
+        let thread = store.load(id).unwrap();
+        assert_eq!(thread.provider(), Provider::Codex);
+        assert_eq!(
+            thread.resume_target(),
+            None,
+            "the Init before the switch belongs to Claude"
+        );
+        let handover = thread.last_handover().expect("recorded");
+        assert_eq!(handover.from, Provider::Claude);
+        assert_eq!(
+            handover.exchanges,
+            [
+                ("first question".to_string(), "first answer".to_string()),
+                ("second question".to_string(), String::new()),
+            ]
+        );
+        assert!(!handover.delivered);
+        assert!(thread.inputs().contains(&Input::Notice(
+            "continued on Codex · GPT-5.6 Sol — the earlier conversation is handed over as context"
+                .into()
+        )));
+
+        // The new provider speaks and a prompt goes out: resume is its own
+        // id again and the carry is spent.
+        writer.record_prompt("third question").unwrap();
+        writer
+            .record_event(
+                &SessionEvent::Init {
+                    session_id: "codex-thread".into(),
+                    model: "gpt-5.6-sol".into(),
+                },
+                None,
+            )
+            .unwrap();
+        writer.flush().unwrap();
+        let thread = Store::open(&dir).unwrap().load(id).unwrap();
+        assert_eq!(thread.resume_target(), Some("codex-thread"));
+        assert!(thread.last_handover().unwrap().delivered);
+        assert!(store.create(Provider::Claude, None, main_choice()).is_ok());
+        assert!(Store::open(&dir)
+            .unwrap()
+            .load(ThreadId::new(2))
+            .unwrap()
+            .last_handover()
+            .is_none());
     }
 
     /// A realistic Claude-shaped turn: identity, thinking, markdown streamed
@@ -1902,7 +2176,7 @@ mod tests {
             &dir,
             "3",
             concat!(
-                r#"{"schema":8,"provider":"claude"}"#,
+                r#"{"schema":9,"provider":"claude"}"#,
                 "\n",
                 r#"{"type":"init","session_id":"from-the-future","model":"m"}"#,
                 "\n",
@@ -1912,7 +2186,7 @@ mod tests {
         let store = Store::open(&dir).unwrap();
         match store.load(ThreadId::new(3)) {
             Err(LoadError::FutureSchema { found, supported }) => {
-                assert_eq!(found, 8);
+                assert_eq!(found, 9);
                 assert_eq!(supported, SCHEMA_VERSION);
             }
             Ok(_) => panic!("a future schema must not load"),

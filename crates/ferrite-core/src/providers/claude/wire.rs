@@ -32,8 +32,12 @@ pub(super) fn parse_capabilities(line: &str, request_id: &str) -> Option<ClaudeC
             .unwrap_or_default()
             .to_string(),
         // Each entry: `{value, resolvedModel, displayName, description,
-        // …}`. The value is what `--model` accepts; the display name is
-        // what the CLI's own menu shows and so what Ferrite shows.
+        // supportsEffort, supportedEffortLevels, …}`. The value is what
+        // `--model` accepts. The CLI's own displayName is unversioned
+        // ("Fable", "Opus (1M context)"), so the row shows the resolved id
+        // groomed instead ("Fable 5.1", "Opus 5 (1M)") — the `default` alias
+        // says what it stands for. The description repeats that name up
+        // front, and a row that shows it once drops the repeat.
         models: body
             .get("models")
             .and_then(Value::as_array)
@@ -44,12 +48,37 @@ pub(super) fn parse_capabilities(line: &str, request_id: &str) -> Option<ClaudeC
                         let value = model.get("value")?.as_str()?.to_string();
                         let text =
                             |key: &str| model.get(key).and_then(Value::as_str).map(str::to_string);
+                        let resolved = text("resolvedModel").filter(|id| !id.is_empty());
+                        let name = resolved
+                            .as_deref()
+                            .map(super::super::models::display_name)
+                            .or_else(|| text("displayName").filter(|name| !name.is_empty()))
+                            .unwrap_or_else(|| super::super::models::display_name(&value));
+                        let display = if value == "default" && resolved.is_some() {
+                            format!("Default · {name}")
+                        } else {
+                            name.clone()
+                        };
+                        let efforts = model
+                            .get("supportedEffortLevels")
+                            .and_then(Value::as_array)
+                            .map(|levels| {
+                                levels
+                                    .iter()
+                                    .filter_map(Value::as_str)
+                                    .map(str::to_string)
+                                    .collect()
+                            })
+                            .unwrap_or_default();
                         Some(crate::ModelInfo {
-                            display: text("displayName")
-                                .filter(|name| !name.is_empty())
-                                .unwrap_or_else(|| super::super::models::display_name(&value)),
-                            detail: text("description").unwrap_or_default(),
-                            resolved: text("resolvedModel"),
+                            display,
+                            detail: super::super::models::detail_without_name(
+                                &text("description").unwrap_or_default(),
+                                &name,
+                            ),
+                            resolved,
+                            efforts,
+                            default_effort: None,
                             value,
                         })
                     })
@@ -644,16 +673,59 @@ mod tests {
         .expect("the capture answers req_1");
         assert_eq!(capabilities.permission_mode, "bypassPermissions");
         assert!(capabilities.models.iter().any(|model| model == "haiku"));
-        // The CLI's own names ride the rows, and the value resolves to a
-        // full id the Init can be matched back to.
+        // The row is named by its resolved id, versioned; the description
+        // loses the name it repeated; and the value resolves to a full id
+        // the Init can be matched back to.
         let haiku = capabilities
             .models
             .iter()
             .find(|model| model.value == "haiku")
             .unwrap();
-        assert_eq!(haiku.display, "Haiku");
-        assert!(haiku.detail.contains("Haiku 4.5"), "{}", haiku.detail);
+        assert_eq!(haiku.display, "Haiku 4.5");
+        assert_eq!(haiku.detail, "Fastest for quick answers");
         assert!(haiku.is("claude-haiku-4-5-20251001"));
+        assert!(haiku.efforts.is_empty(), "Haiku announces no effort levels");
+    }
+
+    /// The 2.1.259 handshake: every row's effort ladder rides
+    /// `supportedEffortLevels`, the names are the resolved ids groomed, and
+    /// the `default` alias says what it stands for.
+    #[test]
+    fn the_capability_response_carries_versioned_names_and_effort_ladders() {
+        let capabilities = parse_capabilities(
+            include_str!("../../../tests/fixtures/claude-initialize-2.1.259.jsonl").trim_end(),
+            "req_1",
+        )
+        .expect("the capture answers req_1");
+        let row = |value: &str| {
+            capabilities
+                .models
+                .iter()
+                .find(|model| model.value == value)
+                .unwrap_or_else(|| panic!("{value} is announced"))
+        };
+        let ladder = ["low", "medium", "high", "xhigh", "max"];
+
+        let default = row("default");
+        assert_eq!(default.display, "Default · Opus 5 (1M)");
+        assert_eq!(default.detail, "Best for everyday, complex tasks");
+        assert_eq!(default.efforts, ladder);
+        assert_eq!(default.default_effort, None);
+
+        let fable = row("claude-fable-5-1[1m]");
+        assert_eq!(fable.display, "Fable 5.1");
+        assert_eq!(
+            fable.detail,
+            "Most capable for your hardest and longest-running tasks"
+        );
+        assert_eq!(fable.efforts, ladder);
+        assert!(fable.is("claude-fable-5-1"));
+
+        assert_eq!(row("opus[1m]").display, "Opus 5 (1M)");
+        assert_eq!(row("sonnet").display, "Sonnet 5");
+        assert_eq!(row("sonnet").efforts, ladder);
+        assert_eq!(row("haiku").display, "Haiku 4.5");
+        assert!(row("haiku").efforts.is_empty());
     }
 
     /// #23: the same handshake line carries the CLI's whole effective slash

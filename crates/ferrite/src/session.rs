@@ -13,14 +13,18 @@ use ferrite_core::store::Provider;
 use ferrite_core::ThreadId;
 
 /// What every new Session is started with beyond the Thread's own choice:
-/// the operator's permission and sandbox defaults, read from Settings and
-/// shared between the window (which edits them) and the spawner (which
-/// reads them at each spawn — so a change applies to the next Session).
+/// the operator's permission, sandbox and effort defaults, read from
+/// Settings and shared between the window (which edits them) and the
+/// spawner (which reads them at each spawn — so a change applies to the
+/// next Session). A Thread's own effort, once chosen, wins over the
+/// default.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct SessionDefaults {
     pub claude_permission_mode: Option<String>,
     pub codex_approval_policy: Option<String>,
     pub codex_sandbox: Option<String>,
+    pub claude_effort: Option<String>,
+    pub codex_effort: Option<String>,
 }
 
 impl SessionDefaults {
@@ -30,6 +34,16 @@ impl SessionDefaults {
             codex_approval_policy: Some(settings.codex_approval_policy.clone())
                 .filter(|policy| !policy.is_empty()),
             codex_sandbox: settings.codex_sandbox.clone(),
+            claude_effort: settings.claude_effort.clone(),
+            codex_effort: settings.codex_effort.clone(),
+        }
+    }
+
+    /// The effort a spawn on `provider` gets when the Thread chose none.
+    fn effort_for(&self, provider: Provider) -> Option<String> {
+        match provider {
+            Provider::Claude => self.claude_effort.clone(),
+            Provider::Codex => self.codex_effort.clone(),
         }
     }
 }
@@ -56,15 +70,24 @@ impl Spawner for Spawn {
             .or_else(|| std::env::current_dir().ok());
         let model = request.model.map(|model| model.to_string());
         let resume = request.resume.map(|target| target.to_string());
+        let name = request.name.map(|name| name.to_string());
         let defaults = self
             .defaults
             .lock()
             .map(|defaults| defaults.clone())
             .unwrap_or_default();
+        // The Thread's own effort, else the operator's default for the
+        // provider, else nothing — the provider's own.
+        let effort = request
+            .effort
+            .map(|effort| effort.to_string())
+            .or_else(|| defaults.effort_for(request.provider));
         match request.provider {
             Provider::Claude => ClaudeSession::spawn(ClaudeConfig {
                 cwd,
                 model,
+                effort,
+                name,
                 permission_mode: defaults.claude_permission_mode,
                 resume,
                 ..Default::default()
@@ -76,6 +99,7 @@ impl Spawner for Spawn {
             Provider::Codex => CodexSession::spawn(CodexConfig {
                 cwd,
                 model,
+                effort,
                 approval_policy: defaults
                     .codex_approval_policy
                     .or_else(|| Some("on-request".into())),
@@ -135,6 +159,28 @@ fn tasklist_rss(row: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The Thread's effort wins; the Settings default fills in only when
+    /// the Thread chose none; and each provider reads its own.
+    #[test]
+    fn the_settings_effort_is_the_default_when_the_thread_chose_none() {
+        let mut settings = Settings::default();
+        settings.claude_effort = Some("high".into());
+        let defaults = SessionDefaults::from_settings(&settings);
+        assert_eq!(
+            defaults.effort_for(Provider::Claude).as_deref(),
+            Some("high")
+        );
+        assert_eq!(defaults.effort_for(Provider::Codex), None);
+        assert_eq!(
+            Some("max".to_string()).or_else(|| defaults.effort_for(Provider::Claude)),
+            Some("max".into())
+        );
+        assert_eq!(
+            None.or_else(|| defaults.effort_for(Provider::Claude)),
+            Some("high".into())
+        );
+    }
 
     /// Runs against whichever process table this platform has — `ps` here,
     /// `tasklist` when the suite runs on Windows.
