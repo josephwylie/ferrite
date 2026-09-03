@@ -422,6 +422,13 @@ pub const GUTTER_W: f32 = 9.0;
 #[allow(dead_code)]
 pub const EVENT_GAP: f32 = 8.0;
 pub const INDENT: f32 = 17.0;
+/// A tool row's vertical padding. The prototype's 3px each side put 43px
+/// between consecutive calls; a run of shell commands reads as a list only
+/// when they sit as close as Claude Code's own `●`/`⎿` pairs do.
+pub const EVENT_PAD_Y: f32 = 1.0;
+/// The result line's padding: hugging its call above, a hair under.
+pub const RESULT_PAD_T: f32 = 0.0;
+pub const RESULT_PAD_B: f32 = 1.0;
 /// An invisible hit area, not a drawn thing: the tool-disclosure target.
 pub const TOOL_DISCLOSURE_HIT: f32 = 20.0;
 /// Paragraph and list rhythm: 10px below a paragraph, a list or a code

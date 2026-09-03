@@ -519,10 +519,35 @@ pub fn render_pane(
     // Far enough away, a Pane is one signal: no header, no transcript,
     // nothing that stops reading at a glance.
     if level == Level::Wall {
-        return focus_wrapper(shell.child(wall_cell(view, wall, state, focused)), focused);
+        return focus_wrapper(
+            shell.child(wall_cell(view, wall, state, focused, title)),
+            focused,
+        );
     }
 
     if level == Level::Instruments {
+        // An L2 cell keeps its Composer: the operator types into a small
+        // Pane as into a big one — a cell too small to read a transcript
+        // is not too small to be told what to do next. No menu, picker
+        // or band at this size; the keys still work.
+        let composer = transcript.map(|transcript| {
+            composer_region(
+                view,
+                Some(transcript),
+                ComposerStack {
+                    decision,
+                    queued,
+                    running,
+                    empty: composer_empty,
+                    history_available,
+                    menu: None,
+                    mode: permission_mode,
+                    model_picker: None,
+                    band: None,
+                    focused,
+                },
+            )
+        });
         return focus_wrapper(
             shell.child(l2_cell(
                 view,
@@ -533,6 +558,8 @@ pub fn render_pane(
                 state,
                 timings,
                 decide,
+                title,
+                composer,
             )),
             focused,
         );
@@ -801,7 +828,13 @@ pub fn band_chip_label(choice: &str) -> SharedString {
     SharedString::from(format!("{choice} ⌵"))
 }
 
-fn wall_cell(view: &PaneView, card: &WallCard, state: WallState, focused: bool) -> Div {
+fn wall_cell(
+    view: &PaneView,
+    card: &WallCard,
+    state: WallState,
+    focused: bool,
+    title: Option<AnyElement>,
+) -> Div {
     let (dot_color, hollow) = match state {
         WallState::Working | WallState::Failing | WallState::Done => (RUNNING, false),
         WallState::Decision => (ATTENTION, false),
@@ -836,7 +869,10 @@ fn wall_cell(view: &PaneView, card: &WallCard, state: WallState, focused: bool) 
                         .text_size(px(theme::FS_MONO))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(rgb(if focused { TEXT_STRONG } else { TEXT_2 }))
-                        .child(view.name.clone()),
+                        .child(match title {
+                            Some(title) => title,
+                            None => div().truncate().child(view.name.clone()).into_any_element(),
+                        }),
                 ),
         );
     // The meter survives on working cells only; alert cells trade it for
@@ -942,6 +978,8 @@ fn l2_cell(
     state: WallState,
     timings: Option<&HashMap<String, ToolTiming>>,
     decide: Option<AnyElement>,
+    title: Option<AnyElement>,
+    composer: Option<Div>,
 ) -> Div {
     let hot = matches!(
         state,
@@ -970,7 +1008,10 @@ fn l2_cell(
                 .text_size(px(theme::FS_SM))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(rgb(if hot { TEXT_STRONG } else { TEXT_2 }))
-                .child(view.name.clone()),
+                .child(match title {
+                    Some(title) => title,
+                    None => div().truncate().child(view.name.clone()).into_any_element(),
+                }),
         )
         .child(div().flex_1());
     // The amber ring is the chip (#22 D17): a Decision cell's right meta
@@ -1056,7 +1097,7 @@ fn l2_cell(
                 .text_color(rgb(TEXT_MUTED))
                 .child("❯ idle — waiting for work"),
         );
-        return cell.child(header).child(body);
+        return cell.child(header).child(body).children(composer);
     }
 
     if state == WallState::Done {
@@ -1165,7 +1206,7 @@ fn l2_cell(
         );
     }
 
-    let mut content = cell.child(header).child(body);
+    let mut content = cell.child(header).child(body).children(composer);
     if state == WallState::Done {
         content = content.opacity(theme::DONE_CELL_OPACITY);
     }
@@ -2751,26 +2792,19 @@ fn render_block(
     }
 }
 
-/// `p` (§E.1): `margin: 0 0 10px`, `max-inline-size: 68ch`, colour from the
-/// caller — `--text-2` for prose, `--text-muted` for a `.note`. The measure
-/// is 68 JetBrains Mono advances at `--fs-md`, narrower than the content
-/// column at a full-width Pane, so prose breaks where the prototype breaks.
-/// Headings, list items and hunks stay uncapped, as the prototype leaves
-/// them.
+/// `p` (§E.1): `margin: 0 0 10px`, colour from the caller — `--text-2`
+/// for prose, `--text-muted` for a `.note`. The prototype capped prose at
+/// 68ch; the operator ruled that out — a wide Pane left half its width
+/// empty while tool rows ran the whole column — so prose runs the full
+/// content column like everything else in it.
 fn paragraph(mut row: Div, ink: u32) -> Div {
-    // The width has to be dropped before the cap goes on. taffy resolves a
-    // flex item's `width: 100%` against the container and hands that
-    // *unclamped* figure to the measure function when it works out the
-    // item's flex base size, so a `w_full` paragraph is measured at the
-    // full content column (six lines) and only painted at the 68ch cap
-    // (seven) — the Block below it then lands on top of the last line.
-    // With no width of its own the item stretches instead, and taffy
-    // clamps a stretched cross size by `max_size`, so the width it is
-    // measured at is the width it is painted at.
+    // No width of its own: taffy resolves a flex item's `width: 100%`
+    // against the container and hands that figure to the measure function
+    // as the item's flex base size, which is fine while nothing clamps it
+    // — but a stretched item is the shape every other Block takes, and the
+    // width it is measured at is then the width it is painted at.
     row.style().size.width = None;
-    row.mb(px(theme::P_MARGIN_B))
-        .max_w(px(68. * theme::FS_MD * theme::MONO_ADVANCE))
-        .text_color(rgb(ink))
+    row.mb(px(theme::P_MARGIN_B)).text_color(rgb(ink))
 }
 
 /// `.signal .sep` (§E.8): the interpunct joining a signal's state to its
@@ -2886,7 +2920,7 @@ fn render_tool(
         .items_baseline()
         .min_w_0()
         .gap(px(theme::EVENT_GAP))
-        .py(px(3.))
+        .py(px(theme::EVENT_PAD_Y))
         .text_size(px(theme::FS_SM))
         .line_height(relative(theme::LINE_BODY))
         .text_color(rgb(TEXT_MUTED))
@@ -2974,11 +3008,11 @@ fn render_tool(
             } else {
                 TEXT_MUTED
             };
-            card = card.child(result_line(ink).child(div().min_w_0().child(selection.line(
-                block,
-                output.text.clone(),
-                Vec::new(),
-            ))));
+            // One row per hard line, each a stretched block under the
+            // elbow — the prompt block's lesson (see `paragraph`): a run
+            // handed to a flex row is measured at min-content and wraps a
+            // character per line.
+            card = card.child(output_block(block, &output.text, ink, selection));
             if output.omitted_bytes > 0 {
                 card = card.child(result_line(TEXT_MUTED).child(div().min_w_0().child(format!(
                     "… {} bytes omitted from inline view",
@@ -3014,6 +3048,42 @@ fn render_tool(
     card.into_any_element()
 }
 
+/// An expanded tool's output: the `└` elbow on the first line, then every
+/// hard line stretched to the column under it, each wrapping at the
+/// column's width. Blank lines keep their height so the shape of the
+/// output survives.
+fn output_block(block: BlockId, text: &str, ink: u32, selection: &SelectionOverlay) -> Div {
+    let mut rows = div()
+        .flex()
+        .flex_col()
+        .w_full()
+        .min_w_0()
+        .pl(px(theme::INDENT))
+        .pt(px(1.))
+        .text_size(px(theme::FS_MONO))
+        .line_height(relative(theme::LINE_BODY))
+        .text_color(rgb(ink));
+    for (index, line) in text.split('\n').enumerate() {
+        let run = if line.is_empty() {
+            selection.line(block, " ", Vec::new())
+        } else {
+            selection.line(block, line.to_string(), Vec::new())
+        };
+        let mut row = div().flex().w_full().min_w_0().gap(px(theme::EVENT_GAP));
+        row = row.child(
+            div()
+                .flex_shrink_0()
+                .w(px(theme::FS_MONO * theme::MONO_ADVANCE))
+                .text_color(rgb(SEP))
+                .child(if index == 0 { "└" } else { " " }),
+        );
+        let mut body = div().flex_1().min_w_0().child(run);
+        body.style().size.width = None;
+        rows = rows.child(row.child(body));
+    }
+    rows
+}
+
 /// `.result` (§E.10): `padding: 1px 0 3px 17px`, an 8px gap, 10.5px muted
 /// — with the `└` elbow in `--sep`. The 17px inset is exactly the event's
 /// glyph column plus its gap, so the elbow lands under the verb's first
@@ -3030,8 +3100,8 @@ fn result_line(ink: u32) -> Div {
         // padding is swapped end for end: the 20.275px box — and the 43px
         // event-to-event span — are unchanged, the ink lands 19px under
         // the tool row's.
-        .pt(px(3.))
-        .pb(px(1.))
+        .pt(px(theme::RESULT_PAD_T))
+        .pb(px(theme::RESULT_PAD_B))
         .text_size(px(theme::FS_MONO))
         .line_height(relative(theme::LINE_BODY))
         .text_color(rgb(ink))

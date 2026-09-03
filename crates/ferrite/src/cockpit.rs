@@ -48,6 +48,7 @@ actions!(
         CloseThread,
         ReopenThread,
         CopySelection,
+        Paste,
         OpenSettings,
         ToggleFullscreen,
         ToggleNav,
@@ -248,6 +249,13 @@ enum MenuVerb {
     Focus,
     Fullscreen,
     Close,
+    /// Drop the Session of a Thread that is open but not on screen (Solo
+    /// view shows one Pane; the rest still run). `Close` is the on-screen
+    /// Pane's own door, with its Group semantics.
+    Park,
+    /// The transcript menu's own verbs: what is highlighted, or all of it.
+    CopySelection,
+    CopyTranscript,
     LeaveGroup,
     EnterGroup,
     DissolveGroup,
@@ -988,23 +996,27 @@ impl CockpitView {
     fn context_rows(&self, target: MenuTarget) -> Vec<Option<(menu::Item, MenuVerb)>> {
         let mut rows: Vec<Option<(menu::Item, MenuVerb)>> = Vec::new();
         match target {
-            MenuTarget::Thread(thread) | MenuTarget::Pane(thread) => {
-                let open = self.pane_for(thread).is_some();
+            // The nav row: where a Thread lives in the roster — open it,
+            // park it, move it between Groups, delete it.
+            MenuTarget::Thread(thread) => {
+                let shown = self.pane_for(thread).is_some();
+                let live = self.cockpit.thread(thread).is_some();
                 let grouped = self.cockpit.groups().of(thread).is_some();
                 rows.push(Some((
                     menu::Item::new("Rename").hint("⏎ save · esc cancel"),
                     MenuVerb::Rename,
                 )));
-                if open {
-                    if self.cockpit.roster().focused_thread() != Some(thread) {
-                        rows.push(Some((menu::Item::new("Focus Pane"), MenuVerb::Focus)));
-                    }
+                if self.cockpit.roster().focused_thread() != Some(thread) {
+                    rows.push(Some((
+                        menu::Item::new(if live { "Open" } else { "Resume" }),
+                        MenuVerb::Focus,
+                    )));
+                }
+                if shown {
                     rows.push(Some((
                         menu::Item::new("Toggle Fullscreen").hint("⌘F"),
                         MenuVerb::Fullscreen,
                     )));
-                } else {
-                    rows.push(Some((menu::Item::new("Open"), MenuVerb::Focus)));
                 }
                 rows.push(None);
                 rows.push(Some((
@@ -1017,11 +1029,14 @@ impl CockpitView {
                 )));
                 rows.push(Some((menu::Item::new("Copy Path"), MenuVerb::CopyPath)));
                 rows.push(None);
-                if open {
+                if live {
                     rows.push(Some((
-                        menu::Item::new(if grouped { "Close Pane" } else { "Park Thread" })
-                            .hint("⌘W"),
-                        MenuVerb::Close,
+                        menu::Item::new("Park Thread").hint(if shown { "⌘W" } else { "" }),
+                        if shown && !grouped {
+                            MenuVerb::Close
+                        } else {
+                            MenuVerb::Park
+                        },
                     )));
                 }
                 if grouped {
@@ -1031,6 +1046,45 @@ impl CockpitView {
                     menu::Item::new("Delete Thread").destructive(),
                     MenuVerb::Delete,
                 )));
+            }
+            // The transcript: what is on screen — copy it, name it, size
+            // it, and the Pane's own park/close. Deleting a Thread is the
+            // nav's act; the transcript never offers it.
+            MenuTarget::Pane(thread) => {
+                let grouped = self.cockpit.groups().of(thread).is_some();
+                let selected = self.selection.copied_text().is_some();
+                rows.push(Some((
+                    menu::Item::new("Copy").hint("⌘C").disabled(!selected),
+                    MenuVerb::CopySelection,
+                )));
+                rows.push(Some((
+                    menu::Item::new("Copy Transcript"),
+                    MenuVerb::CopyTranscript,
+                )));
+                rows.push(None);
+                rows.push(Some((
+                    menu::Item::new("Rename").hint("⏎ save · esc cancel"),
+                    MenuVerb::Rename,
+                )));
+                rows.push(Some((
+                    menu::Item::new("Toggle Fullscreen").hint("⌘F"),
+                    MenuVerb::Fullscreen,
+                )));
+                rows.push(None);
+                rows.push(Some((
+                    menu::Item::new("Reveal in Finder"),
+                    MenuVerb::Reveal,
+                )));
+                rows.push(Some((menu::Item::new("Copy Path"), MenuVerb::CopyPath)));
+                rows.push(None);
+                rows.push(Some((
+                    menu::Item::new(if grouped { "Close Pane" } else { "Park Thread" }).hint("⌘W"),
+                    MenuVerb::Close,
+                )));
+                if grouped {
+                    rows.push(Some((menu::Item::new("Park Thread"), MenuVerb::Park)));
+                    rows.push(Some((menu::Item::new("Leave Group"), MenuVerb::LeaveGroup)));
+                }
             }
             MenuTarget::Group(group) => {
                 rows.push(Some((menu::Item::new("Rename Group"), MenuVerb::Rename)));
@@ -1168,6 +1222,33 @@ impl CockpitView {
             }
             (MenuTarget::Thread(thread) | MenuTarget::Pane(thread), MenuVerb::Close) => {
                 self.close_pane(PaneIdentity::Thread(thread), cx);
+            }
+            (MenuTarget::Thread(thread) | MenuTarget::Pane(thread), MenuVerb::Park) => {
+                if let Err(e) = self.cockpit.park(thread) {
+                    self.group_error = Some(format!("park refused: {e}").into());
+                }
+                if self
+                    .popover
+                    .as_ref()
+                    .is_some_and(|open| open.pane == PaneIdentity::Thread(thread))
+                {
+                    self.popover = None;
+                }
+                self.sync_panes(cx);
+                self.facts.parked_changed(&self.cockpit);
+            }
+            (MenuTarget::Pane(_), MenuVerb::CopySelection) => {
+                if let Some(text) = self.selection.copied_text() {
+                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                }
+            }
+            (MenuTarget::Pane(thread), MenuVerb::CopyTranscript) => {
+                if let Some(open) = self.cockpit.thread(thread) {
+                    let text = transcript_text(open.transcript().blocks());
+                    if !text.is_empty() {
+                        cx.write_to_clipboard(ClipboardItem::new_string(text));
+                    }
+                }
             }
             (MenuTarget::Thread(thread) | MenuTarget::Pane(thread), MenuVerb::LeaveGroup) => {
                 match self.cockpit.apply_group(GroupChange::Leave { thread }) {
@@ -3275,6 +3356,9 @@ impl CockpitView {
                 self.sync_panes(cx);
                 // The Pane kept its slot, so the mirror saw nothing open.
                 self.facts.opened(&self.cockpit, done.thread);
+                // The first prompt named the Thread; the head and the nav
+                // row must say so now, not at the next naming moment.
+                self.refresh_names();
                 self.panes[index].scroll.scroll_to_bottom();
             }
             Err(message) => {
@@ -3594,9 +3678,30 @@ impl CockpitView {
     /// provider — live for an open Thread, the parked cache otherwise.
     fn thread_row(&self, thread: ThreadId) -> nav::ThreadRow {
         let facts = self.facts.get(thread);
+        let open = self.cockpit.thread(thread);
+        let status = match open {
+            None => nav::RowStatus::Parked,
+            Some(open) => {
+                let failing = facts.is_some_and(|facts| facts.wall.tests_failing);
+                match pane::wall_state(
+                    Some(open.transcript().status()),
+                    open.pending().is_some(),
+                    failing,
+                    false,
+                ) {
+                    pane::WallState::Working => nav::RowStatus::Working,
+                    pane::WallState::Failing => nav::RowStatus::Failing,
+                    pane::WallState::Decision => nav::RowStatus::Attention,
+                    pane::WallState::Blocked => nav::RowStatus::Blocked,
+                    pane::WallState::Parked => nav::RowStatus::Parked,
+                    pane::WallState::Idle | pane::WallState::Done => nav::RowStatus::Idle,
+                }
+            }
+        };
         nav::ThreadRow {
             thread,
             name: self.facts.name(thread),
+            status,
             project: facts.and_then(|facts| facts.project_label.clone()),
             branch: facts.and_then(|facts| facts.branch.clone()),
             provider: self
@@ -3821,6 +3926,28 @@ impl CockpitView {
         if let Some(text) = self.selection.copied_text() {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
         }
+    }
+
+    /// ⌘V anywhere in the window lands in the focused Pane's Composer.
+    /// The Composer's own Paste runs first while it holds the keyboard;
+    /// this is the fallback for when a click in the transcript — a drag
+    /// to select, a tool row — took the keyboard away: the text goes
+    /// where the operator is about to type, and the keyboard follows it.
+    fn paste_into_composer(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
+            return;
+        };
+        let index = self.focused();
+        let Some(pane) = self.panes.get(index) else {
+            return;
+        };
+        if self.rename.is_some() {
+            return;
+        }
+        let composer = pane.composer.clone();
+        composer.update(cx, |composer, cx| composer.insert(&text, cx));
+        window.focus(&composer.focus_handle(cx));
+        cx.notify();
     }
 }
 
@@ -4156,7 +4283,9 @@ impl Render for CockpitView {
                     // input stays live (PromptBox state 04) — y/n/a answer
                     // through the region's own Decision key context (#23).
                     Level::Transcript if pane.has_tool_target() => Some(pane.tool_focus()),
-                    Level::Transcript => Some(pane.composer.focus_handle(cx)),
+                    // An L2 cell draws a Composer too, and the keys go
+                    // where the caret is.
+                    Level::Transcript | Level::Instruments => Some(pane.composer.focus_handle(cx)),
                     _ if pane.thread().is_some_and(|thread| {
                         self.cockpit
                             .thread(thread)
@@ -4256,6 +4385,7 @@ impl Render for CockpitView {
             .on_action(cx.listener(Self::close_thread))
             .on_action(cx.listener(Self::reopen_thread))
             .on_action(cx.listener(Self::copy_selection))
+            .on_action(cx.listener(Self::paste_into_composer))
             .on_action(cx.listener(Self::toggle_fullscreen))
             .on_action(cx.listener(Self::toggle_nav))
             .on_action(cx.listener(Self::menu_next))
@@ -4460,7 +4590,10 @@ impl CockpitView {
                 .then(|| self.decide_keycaps(index, level, cx))
                 .flatten(),
             tool_controls: self.tool_disclosures(index, thread, level, cx),
-            title: l1.then(|| self.pane_title(index, thread, cx)),
+            // The title is the Pane's handle at every size: a drag moves a
+            // grouped Pane, a double-click renames it — an L2 cell with no
+            // handle could not be rearranged at all.
+            title: Some(self.pane_title(index, thread, cx)),
         };
         cell.child(pane::render_pane(pane, facts, wiring, level))
     }
@@ -5028,6 +5161,49 @@ fn rss_mb() -> f64 {
     crate::session::rss_bytes(std::process::id())
         .map(|bytes| bytes as f64 / (1024.0 * 1024.0))
         .unwrap_or(0.0)
+}
+
+/// A transcript as plain text, the way the operator would paste it
+/// somewhere else: prompts quoted, prose flat, code fenced, tool rows as
+/// their one line plus the result line. Thinking stays out — it is not the
+/// conversation.
+fn transcript_text(blocks: &[ferrite_core::transcript::Block]) -> String {
+    use ferrite_core::transcript::Body;
+    let flat = |spans: &[ferrite_core::transcript::Span]| -> String {
+        spans.iter().map(|span| span.text.as_str()).collect()
+    };
+    let mut out = String::new();
+    for block in blocks {
+        let piece = match &block.body {
+            Body::Prompt(text) => format!("> {text}"),
+            Body::Paragraph { spans } => flat(spans),
+            Body::Heading { spans, .. } => format!("## {}", flat(spans)),
+            Body::Bullet { spans } => format!("• {}", flat(spans)),
+            Body::Code {
+                language, source, ..
+            } => format!(
+                "```{}\n{source}\n```",
+                language.as_deref().unwrap_or_default()
+            ),
+            Body::Tool(tool) => {
+                let mut line = format!("▸ {}", tool.name);
+                if !tool.summary.is_empty() {
+                    line.push_str(&format!(" ({})", tool.summary));
+                }
+                if let Some(result) = &tool.result_line {
+                    line.push_str(&format!("\n  └ {result}"));
+                }
+                line
+            }
+            Body::Thinking(_) => continue,
+            Body::Notice(text) | Body::Meta(text) => text.clone(),
+        };
+        if !out.is_empty() {
+            out.push_str("\n\n");
+        }
+        out.push_str(&piece);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -6590,10 +6766,30 @@ mod tests {
         view.read_with(cx, |view, _| {
             assert!(view.panes[0].tool_expanded("toolu_9"));
             let runs = view.selection.registered(thread);
-            assert!(runs.iter().any(|(_, _, _, text)| {
-                text.starts_with("first line\n") && text.len() == 64 * 1024
-            }));
-            assert!(!runs.iter().any(|(_, _, _, text)| text == "first line"));
+            // Every hard line of the output is its own run starting a
+            // line, so a drag across them copies back with the newlines
+            // the output had.
+            let tool_block = view
+                .cockpit
+                .thread(thread)
+                .unwrap()
+                .transcript()
+                .blocks()
+                .iter()
+                .find_map(|block| match &block.body {
+                    Body::Tool(tool) if tool.call == "toolu_9" => Some(block.id),
+                    _ => None,
+                })
+                .unwrap();
+            let lines: Vec<&(_, _, _, String)> = runs
+                .iter()
+                .filter(|(block, _, _, _)| *block == tool_block)
+                .collect();
+            assert!(lines
+                .iter()
+                .any(|(_, _, starts, text)| *starts && text == "first line"));
+            let total: usize = lines.iter().map(|(_, _, _, text)| text.len() + 1).sum();
+            assert!(total >= 64 * 1024, "{total}");
             assert!(!runs
                 .iter()
                 .any(|(_, _, _, text)| text.contains('▾') || text.contains("bytes omitted")));
@@ -6924,16 +7120,18 @@ mod tests {
         let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, cx| view.enter_group(group, cx));
         // Four Panes in this window sit at Instruments (a 2×2 board of
-        // ~273px columns beside the nav): no Composer anywhere.
+        // ~273px columns beside the nav). An L2 cell keeps its Composer,
+        // so the keys already land — the premise is the level, not the
+        // absence of a prompt line.
         cx.simulate_resize(gpui::size(px(860.), px(500.)));
         tick(cx);
-        cx.simulate_input("lost");
+        cx.simulate_input("kept");
         let typed = view.update(cx, |view, cx| {
             view.panes[0]
                 .composer
                 .update(cx, |composer, cx| composer.take(cx))
         });
-        assert_eq!(typed, "", "the premise: no Composer at grid level");
+        assert_eq!(typed, "kept", "an L2 cell's Composer takes the keys");
 
         cx.simulate_keystrokes("cmd-f");
 
@@ -6968,13 +7166,16 @@ mod tests {
                 "cmd-f again restores the grid"
             );
         });
-        cx.simulate_input("gone");
+        cx.simulate_input("still");
         let typed = view.update(cx, |view, cx| {
             view.panes[0]
                 .composer
                 .update(cx, |composer, cx| composer.take(cx))
         });
-        assert_eq!(typed, "", "back on the grid, back at Instruments");
+        assert_eq!(
+            typed, "still",
+            "back on the grid, the L2 Composer still takes the keys"
+        );
     }
 
     #[gpui::test]
@@ -9147,12 +9348,15 @@ mod tests {
                 .collect();
             assert!(labels.contains(&"Rename"), "{labels:?}");
             assert!(labels.contains(&"Park Thread"), "{labels:?}");
-            assert!(labels.contains(&"Delete Thread"), "{labels:?}");
-            let delete = menu
-                .rows
+            assert!(labels.contains(&"Copy Transcript"), "{labels:?}");
+            // The transcript's menu is about what is on screen; deleting
+            // a Thread is the nav row's act.
+            assert!(!labels.contains(&"Delete Thread"), "{labels:?}");
+            let delete = view
+                .context_rows(MenuTarget::Thread(thread))
                 .iter()
                 .position(|row| matches!(row, Some((_, MenuVerb::Delete))))
-                .unwrap();
+                .expect("the nav row's menu deletes");
             (
                 delete,
                 view.cockpit.threads().len() + view.cockpit.parked().unwrap().len(),
@@ -9166,7 +9370,7 @@ mod tests {
 
         view.update(cx, |view, cx| {
             view.open_context_menu(
-                MenuTarget::Pane(thread),
+                MenuTarget::Thread(thread),
                 gpui::point(px(600.), px(300.)),
                 cx,
             );
@@ -9246,7 +9450,7 @@ mod tests {
         let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
         view.update(cx, |view, cx| {
             view.open_context_menu(
-                MenuTarget::Pane(thread),
+                MenuTarget::Thread(thread),
                 gpui::point(px(600.), px(300.)),
                 cx,
             );

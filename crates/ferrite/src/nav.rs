@@ -34,14 +34,14 @@ use gpui::{
 use crate::icons::{self, icon};
 use crate::pointer::{Pointer, PointerPressed};
 use crate::theme::{
-    FILL, FONT_UI, FS_LG, FS_MD, FS_SM, GROUP_GAP, GROUP_RAIL, GROUP_ROW_H, HOVER, ICON_BUTTON,
-    ICON_BUTTON_GLYPH, ICON_CHEVRON_LG, LINE_TIGHT, MEMBERS_TOP, MEMBER_GAP, MEMBER_INDENT, MENU,
-    MENU_PAD, MENU_ROW_H, MENU_TOP, NAV, NAV_HEAD_H, NAV_TREE_PAD, NAV_TREE_PAD_B, PROVIDER_CLAUDE,
-    PROVIDER_CODEX, PROVIDER_MARK, RAIL_INSET, RAIL_OFFSET, ROW_GAP, ROW_ICON, ROW_ICON_GAP,
-    ROW_PAD_X, ROW_PAD_Y, ROW_TEXT_W, R_CONTROL, R_MENU, R_TIGHT, SCROLLBAR, SCROLLBAR_THUMB_W,
-    SCROLLBAR_W, SHADOW_FAR, SHADOW_FAR_BLUR, SHADOW_FAR_SPREAD, SHADOW_FAR_Y, SHADOW_NEAR,
-    SHADOW_NEAR_BLUR, SHADOW_NEAR_Y, SOLOS_TOP, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG,
-    THREAD_ROW_H, TRAFFIC_RESERVE, WIN_CHROME_H,
+    ATTENTION, BLOCKED, FILL, FONT_UI, FS_LG, FS_MD, FS_SM, GROUP_GAP, GROUP_RAIL, GROUP_ROW_H,
+    HOVER, ICON_BUTTON, ICON_BUTTON_GLYPH, ICON_CHEVRON_LG, IDLE, LINE_TIGHT, MEMBERS_TOP,
+    MEMBER_GAP, MEMBER_INDENT, MENU, MENU_PAD, MENU_ROW_H, MENU_TOP, NAV, NAV_HEAD_H, NAV_TREE_PAD,
+    NAV_TREE_PAD_B, PROVIDER_CLAUDE, PROVIDER_CODEX, PROVIDER_MARK, RAIL_INSET, RAIL_OFFSET,
+    ROW_GAP, ROW_ICON, ROW_ICON_GAP, ROW_PAD_X, ROW_PAD_Y, ROW_TEXT_W, RUNNING, R_CONTROL, R_MENU,
+    R_TIGHT, SCROLLBAR, SCROLLBAR_THUMB_W, SCROLLBAR_W, SEP, SHADOW_FAR, SHADOW_FAR_BLUR,
+    SHADOW_FAR_SPREAD, SHADOW_FAR_Y, SHADOW_NEAR, SHADOW_NEAR_BLUR, SHADOW_NEAR_Y, SOLOS_TOP,
+    STATUS_DOT, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG, THREAD_ROW_H, TRAFFIC_RESERVE, WIN_CHROME_H,
 };
 
 /// The nav's two widths — 286px, and the 56px rail cmd-b folds it to.
@@ -145,12 +145,51 @@ pub struct GroupBlock {
 pub struct ThreadRow {
     pub thread: ThreadId,
     pub name: SharedString,
+    /// What the Thread is doing right now — the one glance the operator
+    /// asked for from the tree: which agents are working, which wait.
+    pub status: RowStatus,
     /// `None` → line 2 draws neither icon nor label, and keeps its height.
     pub project: Option<SharedString>,
     /// `None` → line 3 draws neither icon nor label, and keeps its height.
     pub branch: Option<SharedString>,
     /// `None` → no logomark. Never a `cl`/`cx` string.
     pub provider: Option<Provider>,
+}
+
+/// A Thread row's state, for its dot. The nav's original no-dot ruling
+/// gave way to the operator's need to see, from the tree, which Threads
+/// are working and which sit idle or wait on them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RowStatus {
+    Working,
+    /// Working with a red test suite.
+    Failing,
+    /// A Decision waits on the operator.
+    Attention,
+    /// The Session closed under it.
+    Blocked,
+    #[default]
+    Idle,
+    Parked,
+}
+
+/// The status dot before a row's title: the Pane head's own colours, so
+/// the tree and the Pane can never disagree. An idle Thread keeps a dim
+/// dot — it is alive, just quiet — and a parked one a hollow ring.
+fn status_dot(status: RowStatus) -> Div {
+    let dot = div()
+        .flex_shrink_0()
+        .w(px(STATUS_DOT))
+        .h(px(STATUS_DOT))
+        .rounded_full();
+    match status {
+        RowStatus::Working => dot.bg(rgb(RUNNING)),
+        RowStatus::Failing => dot.bg(rgb(RUNNING)).border_1().border_color(rgb(BLOCKED)),
+        RowStatus::Attention => dot.bg(rgb(ATTENTION)),
+        RowStatus::Blocked => dot.bg(rgb(BLOCKED)),
+        RowStatus::Idle => dot.bg(rgb(IDLE)),
+        RowStatus::Parked => dot.border_1().border_color(rgb(SEP)),
+    }
 }
 
 /// The nav column itself: full height, the `--nav` ground, and **no border
@@ -603,6 +642,7 @@ pub fn thread_row_with_title(row: &ThreadRow, title: impl IntoElement) -> Statef
             .flex()
             .items_center()
             .gap(px(ROW_PAD_X))
+            .child(status_dot(row.status))
             .child(
                 div()
                     .flex_1()
@@ -841,6 +881,7 @@ mod tests {
     fn thread(provider: Option<Provider>) -> ThreadRow {
         ThreadRow {
             thread: ThreadId::new(8),
+            status: RowStatus::Idle,
             name: "thread-08".into(),
             project: Some("ferrite".into()),
             branch: Some("codex/prototype-32".into()),
@@ -906,6 +947,7 @@ mod tests {
     fn an_unresolved_row_keeps_its_height() {
         let bare = ThreadRow {
             thread: ThreadId::new(9),
+            status: RowStatus::Idle,
             name: "thread-09".into(),
             project: None,
             branch: None,

@@ -58,6 +58,9 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
         ("home".into(), "composer::Home", None),
         ("end".into(), "composer::End", None),
         (with_primary("v"), "composer::Paste", None),
+        // ⌘V with the keyboard anywhere but a Composer still pastes into
+        // the focused Pane's Composer, and moves the keyboard there.
+        (with_primary("v"), "cockpit::Paste", None),
         // Word-wise editing, the basic text-field grammar: one word at a
         // time backwards and forwards, the line halves, word steps, and
         // shift-selection — all scoped to the Composer so nothing else
