@@ -2719,6 +2719,9 @@ fn render_block(
         // A provider ends a thinking run with a trailing newline; drawing it
         // would add a fourth, empty line box and push the next Block a whole
         // line too far. A `p` has no trailing blank line (§E.1).
+        // A blank thought from an older log (redacted thinking, before the
+        // fold learned to drop it) draws nothing — not even its margin.
+        Body::Thinking(thought) if thought.trim().is_empty() => div().into_any_element(),
         Body::Thinking(thought) => paragraph(row, TEXT_MUTED)
             .child(selection.line(
                 block.id,

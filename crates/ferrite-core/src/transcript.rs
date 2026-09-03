@@ -382,6 +382,13 @@ impl Transcript {
             Input::Event(SessionEvent::ThinkingDelta { text }) => {
                 self.status = Status::Streaming;
                 self.summary_index = None;
+                // Claude sends an empty thinking delta for every redacted
+                // thinking block — a signature with no words. It is a sign
+                // the model is working, not a paragraph: no Block, or the
+                // transcript fills with blank gaps between tool rows.
+                if text.is_empty() {
+                    return Update::default();
+                }
                 Update {
                     dirty: vec![self.grow_thinking(&text)],
                     ..Update::default()
@@ -1526,6 +1533,26 @@ mod tests {
             transcript.blocks()[1].body,
             Body::Paragraph { .. }
         ));
+    }
+
+    /// Claude's redacted thinking arrives as empty deltas — one per
+    /// signature-only block. They must not become Blocks: a run of tool
+    /// calls with a blank paragraph between each read as gaps.
+    #[test]
+    fn an_empty_thinking_delta_makes_no_block() {
+        let mut transcript = Transcript::new(std::sync::Arc::new(Unhighlighted));
+        transcript.apply(Input::Event(SessionEvent::ThinkingDelta {
+            text: String::new(),
+        }));
+        transcript.apply(Input::Event(SessionEvent::ThinkingDelta {
+            text: String::new(),
+        }));
+        assert!(transcript.blocks().is_empty());
+        assert_eq!(transcript.status(), Status::Streaming);
+        transcript.apply(Input::Event(SessionEvent::ThinkingDelta {
+            text: "now words".into(),
+        }));
+        assert_eq!(transcript.blocks().len(), 1);
     }
 
     #[test]
