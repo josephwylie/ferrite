@@ -30,9 +30,16 @@ pub struct SpawnRequest<'a> {
     /// The Thread's chosen model, verbatim as the provider announced it.
     /// `None` is the provider's own default.
     pub model: Option<&'a str>,
+    /// The Thread's chosen reasoning effort, in the provider's own word.
+    /// `None` is the operator's default for the provider (Settings), which
+    /// the spawner applies — or the provider's own when there is none.
+    pub effort: Option<&'a str>,
     /// The provider-native id of a Thread being revived, which the provider
     /// reloads its own history from.
     pub resume: Option<&'a str>,
+    /// The Thread's title, for the provider's own session list. `None`
+    /// until the operator names the Thread.
+    pub name: Option<&'a str>,
     /// The Thread's workspace binding resolved to the directory the Session
     /// works in; `None` only for a Thread from before bindings were
     /// recorded.
@@ -89,11 +96,15 @@ pub struct ProviderChoice {
     pub model: Option<String>,
 }
 
-/// Re-aiming a Thread's provider failed — and changed nothing: the old
-/// Session keeps serving and the header on disk is untouched.
+/// Re-aiming a Thread's provider, model or effort failed — and changed
+/// nothing: the old Session keeps serving and the header on disk is
+/// untouched.
 #[derive(Debug)]
 pub enum ProvisionError {
-    /// The first prompt has gone out; nothing re-aims after it (#25, #29).
+    /// The first prompt has gone out and the Thread is parked: a switch
+    /// needs the live conversation to hand over, so it waits for a revive.
+    /// A live Thread is never locked — its provider switches with the
+    /// earlier conversation carried as context (#25, #29).
     Locked,
     /// A turn is running: changing the Session now would cut it short.
     Busy,
@@ -108,7 +119,10 @@ impl std::fmt::Display for ProvisionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ProvisionError::Locked => {
-                write!(f, "the first prompt was sent; the provider is fixed")
+                write!(
+                    f,
+                    "the first prompt was sent; reopen the Thread to switch its provider"
+                )
             }
             ProvisionError::Busy => write!(f, "a turn is running; change the model when it ends"),
             ProvisionError::Spawn(e) => write!(f, "{e}"),
@@ -190,6 +204,10 @@ struct Thread {
     /// provider's default. Every respawn reads it, so the choice holds for
     /// the Thread's whole life.
     model: Option<String>,
+    /// The reasoning effort this Thread chose, in the provider's own word.
+    /// `None` is the operator's default for the provider. Read by every
+    /// respawn, like the model.
+    effort: Option<String>,
     title: Option<String>,
     pending: Option<Decision>,
     /// A prompt the operator wrote while the turn was still running.
@@ -213,6 +231,12 @@ struct Thread {
     /// out, which is the one that carries the hidden session-context
     /// preface when a root is set.
     preface_pending: bool,
+    /// The earlier conversation, digested, owed to a Provider this Thread
+    /// switched to after its first prompt: the next prompt out carries it
+    /// once, ahead of the operator's text. Set by the switch (and by a
+    /// revive that finds the switch's carry undelivered), taken by the
+    /// first prompt that goes out.
+    carry: Option<String>,
     /// The live Session's command menu (#23) — what the Composer's `/`
     /// popover lists. Announced by the Session itself at start; empty until
     /// it speaks, and Session state only: a parked Thread keeps none.
@@ -246,6 +270,7 @@ impl Thread {
         writer: ThreadWriter,
         provider: Provider,
         model: Option<String>,
+        effort: Option<String>,
         resume: Option<String>,
         workspace: Option<WorkspaceBinding>,
         session_project_root: Option<PathBuf>,
@@ -258,6 +283,7 @@ impl Thread {
             writer,
             provider,
             model,
+            effort,
             title: None,
             pending: None,
             queued: None,
@@ -267,6 +293,7 @@ impl Thread {
             workspace,
             session_project_root,
             preface_pending: true,
+            carry: None,
             commands: Vec::new(),
             models: Vec::new(),
             first_prompt_sent: false,
@@ -458,8 +485,10 @@ impl Cockpit {
             let spawned = self.spawner.spawn(SpawnRequest {
                 provider: thread.provider,
                 model: thread.model.as_deref(),
+                effort: thread.effort.as_deref(),
                 resume: resume.as_deref(),
                 cwd: cwd.as_deref(),
+                name: thread.title.as_deref(),
             });
             let note = match spawned {
                 Ok(session) => {
@@ -547,8 +576,10 @@ impl Cockpit {
         let session = match self.spawner.spawn(SpawnRequest {
             provider,
             model: model.as_deref(),
+            effort: None,
             resume: None,
             cwd: workspace::effective_cwd(None, Some(&binding)),
+            name: None,
         }) {
             Ok(session) => session,
             // The bootstrap's failure contract: no Thread. The worktree, if
@@ -560,7 +591,16 @@ impl Cockpit {
         };
         self.threads.insert(
             id,
-            Thread::fresh(session, writer, provider, model, None, Some(binding), None),
+            Thread::fresh(
+                session,
+                writer,
+                provider,
+                model,
+                None,
+                None,
+                Some(binding),
+                None,
+            ),
         );
         self.roster.insert_thread(id);
         Ok(id)
@@ -685,17 +725,28 @@ impl Cockpit {
         Ok(())
     }
 
-    /// Re-aim a Thread onto a provider (and optionally a model) before its
-    /// first prompt (#25). Refused whole once `first_prompt_sent` — nothing
-    /// re-aims a Thread the operator has spoken in. Spawn-new-first, swap
-    /// second: a CLI that fails to spawn leaves the old Session serving and
-    /// the header untouched, and the error carries the provider's words.
-    /// The swap is a fresh Transcript — nothing operator-authored exists
-    /// pre-lock, so the old Init and model must not linger — and an eager
-    /// respawn: the new Provider's commands and models arrive while the
-    /// operator is still choosing. Durable before anything in memory
-    /// changes, so a parked-never-prompted Thread revives onto its choice.
-    /// Works on a parked Thread too: only the store is touched.
+    /// Re-aim a Thread onto a provider (and optionally a model) (#25).
+    /// Spawn-new-first, swap second: a CLI that fails to spawn leaves the
+    /// old Session serving and the header untouched, and the error carries
+    /// the provider's words. Durable before anything in memory changes, so
+    /// a parked-never-prompted Thread revives onto its choice.
+    ///
+    /// Before the first prompt the swap is a fresh Transcript — nothing
+    /// operator-authored exists pre-lock, so the old Init and model must
+    /// not linger — and an eager respawn: the new Provider's commands and
+    /// models arrive while the operator is still choosing. Works on a
+    /// parked Thread too: only the store is touched.
+    ///
+    /// After the first prompt the Transcript and history stay: the new
+    /// Provider starts fresh (the old one's id means nothing to it) and the
+    /// next prompt carries the earlier conversation, digested, ahead of the
+    /// operator's text — once. The switch is a `handover` record in the
+    /// log, so a revive knows the last Init is nobody's to resume and
+    /// whether the carry still owes. Mid-turn the switch is refused rather
+    /// than cutting the turn; a parked Thread that has spoken waits for its
+    /// revive (`Locked`), because the carry needs the live conversation.
+    /// The effort resets to the new Provider's default: the old one's word
+    /// may mean nothing to it.
     pub fn set_provider(
         &mut self,
         thread: ThreadId,
@@ -709,15 +760,37 @@ impl Cockpit {
             }
             return self
                 .store
-                .set_provider(thread, choice.provider, choice.model, None)
+                .set_provider(thread, choice.provider, choice.model, None, None)
                 .map_err(ProvisionError::Store);
         };
-        if state.first_prompt_sent {
-            return Err(ProvisionError::Locked);
-        }
         if state.provider == choice.provider && state.model == choice.model {
             return Ok(());
         }
+        if state.first_prompt_sent {
+            return self.hand_over(thread, choice);
+        }
+        // The effort is a word of the provider's: it stays across a model
+        // change and resets across a provider change.
+        let effort = if state.provider == choice.provider {
+            state.effort.clone()
+        } else {
+            None
+        };
+        self.provision(thread, choice.provider, choice.model, effort)
+    }
+
+    /// The pre-lock swap `set_provider` and `retune` share: spawn the new
+    /// Session first, persist the header, then replace everything the old
+    /// Session owned. Nothing operator-authored exists yet, so the
+    /// Transcript starts over.
+    fn provision(
+        &mut self,
+        thread: ThreadId,
+        provider: Provider,
+        model: Option<String>,
+        effort: Option<String>,
+    ) -> Result<(), ProvisionError> {
+        let state = self.threads.get(&thread).expect("checked by the caller");
         let cwd = workspace::effective_cwd(
             state.session_project_root.as_deref(),
             state.workspace.as_ref(),
@@ -728,10 +801,12 @@ impl Cockpit {
         let session = self
             .spawner
             .spawn(SpawnRequest {
-                provider: choice.provider,
-                model: choice.model.as_deref(),
+                provider,
+                model: model.as_deref(),
+                effort: effort.as_deref(),
                 resume: None,
                 cwd: cwd.as_deref(),
+                name: state.title.as_deref(),
             })
             .map_err(ProvisionError::Spawn)?;
         let state = self.threads.get_mut(&thread).expect("checked above");
@@ -740,8 +815,9 @@ impl Cockpit {
         self.store
             .set_provider(
                 thread,
-                choice.provider,
-                choice.model.clone(),
+                provider,
+                model.clone(),
+                effort.clone(),
                 Some(&mut state.writer),
             )
             .map_err(ProvisionError::Store)?;
@@ -753,8 +829,79 @@ impl Cockpit {
         state.transcript = Transcript::new(std::sync::Arc::new(lexer));
         state.highlights = highlights;
         state.session = Some(session);
+        state.provider = provider;
+        state.model = model;
+        state.effort = effort;
+        state.pending = None;
+        state.busy = false;
+        state.resume = None;
+        state.preface_pending = true;
+        state.carry = None;
+        state.commands.clear();
+        state.models.clear();
+        state.permission_mode = None;
+        state.timings.clear();
+        Ok(())
+    }
+
+    /// The post-lock half of `set_provider`: a live, spoken-in Thread moves
+    /// to another Provider with its conversation handed over as context.
+    fn hand_over(
+        &mut self,
+        thread: ThreadId,
+        choice: ProviderChoice,
+    ) -> Result<(), ProvisionError> {
+        let state = self.threads.get(&thread).expect("checked by the caller");
+        if state.busy {
+            return Err(ProvisionError::Busy);
+        }
+        let cwd = workspace::effective_cwd(
+            state.session_project_root.as_deref(),
+            state.workspace.as_ref(),
+        )
+        .map(Path::to_path_buf);
+        let session = self
+            .spawner
+            .spawn(SpawnRequest {
+                provider: choice.provider,
+                model: choice.model.as_deref(),
+                effort: None,
+                resume: None,
+                cwd: cwd.as_deref(),
+                name: state.title.as_deref(),
+            })
+            .map_err(ProvisionError::Spawn)?;
+        let from = state.provider;
+        let state = self.threads.get_mut(&thread).expect("checked above");
+        // The handover goes into the log before the header changes, so the
+        // rewrite carries it and a crash between the two still leaves a
+        // log whose last Init is marked as the old provider's.
+        state
+            .writer
+            .record_handover(from, choice.provider, choice.model.clone())
+            .map_err(|e| ProvisionError::Store(LoadError::Io(e)))?;
+        self.store
+            .set_provider(
+                thread,
+                choice.provider,
+                choice.model.clone(),
+                None,
+                Some(&mut state.writer),
+            )
+            .map_err(ProvisionError::Store)?;
+        // The digest reads the log, not the Transcript: the Transcript
+        // shows a bounded tail, the log has the whole conversation.
+        let handover = self
+            .store
+            .load(thread)
+            .map_err(ProvisionError::Store)?
+            .last_handover()
+            .expect("just recorded");
+        state.carry = Some(carry_digest(handover.from, &handover.exchanges));
+        state.session = Some(session);
         state.provider = choice.provider;
-        state.model = choice.model;
+        state.model = choice.model.clone();
+        state.effort = None;
         state.pending = None;
         state.busy = false;
         state.resume = None;
@@ -762,7 +909,12 @@ impl Cockpit {
         state.commands.clear();
         state.models.clear();
         state.permission_mode = None;
-        state.timings.clear();
+        state
+            .transcript
+            .apply(Input::Notice(crate::store::handover_notice(
+                choice.provider,
+                choice.model.as_deref(),
+            )));
         Ok(())
     }
 
@@ -863,14 +1015,17 @@ impl Cockpit {
         let cwd = workspace::effective_cwd(session_project_root.as_deref(), workspace.as_ref())
             .map(Path::to_path_buf);
         let model = snapshot.model();
+        let effort = snapshot.effort();
         let title = snapshot.title().map(str::to_string);
         let session = self
             .spawner
             .spawn(SpawnRequest {
                 provider,
                 model: model.as_deref(),
+                effort: effort.as_deref(),
                 resume: snapshot.resume_target(),
                 cwd: cwd.as_deref(),
+                name: title.as_deref(),
             })
             .map_err(LoadError::Io)?;
         let writer = self.store.writer(thread)?;
@@ -881,11 +1036,17 @@ impl Cockpit {
             writer,
             provider,
             model,
+            effort,
             resume,
             workspace,
             session_project_root,
         );
         state.title = title;
+        // A switch whose carry never went out (parked before the next
+        // prompt) still owes it: the new Provider has heard nothing yet.
+        if let Some(handover) = snapshot.last_handover().filter(|h| !h.delivered) {
+            state.carry = Some(carry_digest(handover.from, &handover.exchanges));
+        }
         state.prompt_history = PromptHistory::new(snapshot.prompt_texts());
         // The clocks come back with the history: a settled call's duration
         // was measured when it ran and written down, so the replayed rows
@@ -978,8 +1139,10 @@ impl Cockpit {
             match self.spawner.spawn(SpawnRequest {
                 provider: state.provider,
                 model: state.model.as_deref(),
+                effort: state.effort.as_deref(),
                 resume: resume.as_deref(),
                 cwd: cwd.as_deref(),
+                name: state.title.as_deref(),
             }) {
                 Ok(session) => {
                     state.session = Some(session);
@@ -1141,6 +1304,12 @@ impl Cockpit {
             .map_err(io::Error::other)?;
         if let Some(state) = state {
             state.title = Some(title.to_string());
+            // The live Session's own list follows, where its wire allows;
+            // a refusal is cosmetic and the next spawn carries the title
+            // anyway.
+            if let Some(session) = &mut state.session {
+                let _ = session.set_name(title);
+            }
         }
         Ok(())
     }
@@ -1266,35 +1435,67 @@ impl Cockpit {
         crate::providers::models::catalog(provider, &self.announced_models(provider))
     }
 
-    /// Re-aim one Thread's model, whenever. Before the first prompt this is
-    /// `set_provider`'s own eager swap. After it the running Session is
-    /// replaced by one resuming the same conversation under the new model
-    /// — the transcript and history stay, the header on disk changes, and
-    /// the provider is fixed (a Claude conversation cannot continue on
-    /// Codex). Mid-turn the change is refused rather than cutting the turn.
+    /// Re-aim one Thread's model, whenever (#25). Before the first prompt
+    /// this is `set_provider`'s own eager swap. After it the running
+    /// Session is replaced by one resuming the same conversation under the
+    /// new model — the transcript and history stay, the header on disk
+    /// changes, and the provider is fixed. Mid-turn the change is refused
+    /// rather than cutting the turn.
     pub fn set_model(
         &mut self,
         thread: ThreadId,
         model: Option<String>,
     ) -> Result<(), ProvisionError> {
+        let effort = self.tuning(thread)?.1;
+        self.retune(thread, model, effort)
+    }
+
+    /// Re-aim one Thread's reasoning effort, whenever, by the same path as
+    /// `set_model`: eager pre-lock, a resume post-lock, refused mid-turn.
+    /// `None` is the operator's default for the provider.
+    pub fn set_effort(
+        &mut self,
+        thread: ThreadId,
+        effort: Option<String>,
+    ) -> Result<(), ProvisionError> {
+        let model = self.tuning(thread)?.0;
+        self.retune(thread, model, effort)
+    }
+
+    /// A Thread's current model and effort, live or off the header.
+    fn tuning(&self, thread: ThreadId) -> Result<(Option<String>, Option<String>), ProvisionError> {
+        match self.threads.get(&thread) {
+            Some(state) => Ok((state.model.clone(), state.effort.clone())),
+            None => {
+                let meta = self.store.peek(thread).map_err(ProvisionError::Store)?;
+                Ok((meta.model, meta.effort))
+            }
+        }
+    }
+
+    /// The one path both tunings share: the header always; pre-lock the
+    /// eager respawn; post-lock a respawn resuming the same conversation,
+    /// refused mid-turn (`Busy`) and when the Session never named itself
+    /// (`Locked` — nothing to resume). The transcript says what changed.
+    fn retune(
+        &mut self,
+        thread: ThreadId,
+        model: Option<String>,
+        effort: Option<String>,
+    ) -> Result<(), ProvisionError> {
         let Some(state) = self.threads.get(&thread) else {
             let meta = self.store.peek(thread).map_err(ProvisionError::Store)?;
             return self
                 .store
-                .set_provider(thread, meta.provider, model, None)
+                .set_provider(thread, meta.provider, model, effort, None)
                 .map_err(ProvisionError::Store);
         };
-        if !state.first_prompt_sent {
-            return self.set_provider(
-                thread,
-                ProviderChoice {
-                    provider: state.provider,
-                    model,
-                },
-            );
-        }
-        if state.model == model {
+        if state.model == model && state.effort == effort {
             return Ok(());
+        }
+        if !state.first_prompt_sent {
+            let provider = state.provider;
+            return self.provision(thread, provider, model, effort);
         }
         if state.busy {
             return Err(ProvisionError::Busy);
@@ -1314,8 +1515,10 @@ impl Cockpit {
             .spawn(SpawnRequest {
                 provider: state.provider,
                 model: model.as_deref(),
+                effort: effort.as_deref(),
                 resume: Some(&resume),
                 cwd: cwd.as_deref(),
+                name: state.title.as_deref(),
             })
             .map_err(ProvisionError::Spawn)?;
         let state = self.threads.get_mut(&thread).expect("checked above");
@@ -1324,6 +1527,7 @@ impl Cockpit {
                 thread,
                 state.provider,
                 model.clone(),
+                effort.clone(),
                 Some(&mut state.writer),
             )
             .map_err(ProvisionError::Store)?;
@@ -1331,14 +1535,25 @@ impl Cockpit {
         // the conversation and stays. The new process has not been told the
         // workspace yet, so the next prompt carries the preface again.
         state.session = Some(session);
-        state.model = model.clone();
         state.preface_pending = true;
         state.pending = None;
-        let label =
-            crate::providers::models::label(model.as_deref().unwrap_or("default"), &state.models);
-        state
-            .transcript
-            .apply(Input::Notice(format!("model changed to {label}")));
+        if state.model != model {
+            let label = crate::providers::models::label(
+                model.as_deref().unwrap_or("default"),
+                &state.models,
+            );
+            state
+                .transcript
+                .apply(Input::Notice(format!("model changed to {label}")));
+        }
+        if state.effort != effort {
+            state.transcript.apply(Input::Notice(format!(
+                "effort changed to {}",
+                effort.as_deref().unwrap_or("default")
+            )));
+        }
+        state.model = model;
+        state.effort = effort;
         Ok(())
     }
 
@@ -1389,6 +1604,12 @@ impl<'a> ThreadView<'a> {
     /// the provider picker. `None` is the provider's default.
     pub fn model(&self) -> Option<&'a str> {
         self.state.model.as_deref()
+    }
+
+    /// The reasoning effort this Thread chose, in the provider's own word.
+    /// `None` is the operator's default for the provider.
+    pub fn effort(&self) -> Option<&'a str> {
+        self.state.effort.as_deref()
     }
 
     /// The durable operator title, as this open Thread holds it.
@@ -1921,7 +2142,15 @@ fn deliver(state: &mut Thread, text: String) -> io::Result<Update> {
         )),
         _ => None,
     };
-    session.send(prefaced.as_deref().unwrap_or(&text))?;
+    // A Provider switched to mid-Thread is owed the earlier conversation:
+    // it rides between the preface and the operator's text, this once.
+    let mut wire = prefaced.unwrap_or_else(|| text.clone());
+    if let Some(carry) = &state.carry {
+        let operator = wire.len() - text.len();
+        wire.insert_str(operator, &format!("{carry}\n\n"));
+    }
+    session.send(&wire)?;
+    state.carry = None;
     // The Session's first prompt has gone out; every later one is bare.
     state.preface_pending = false;
     // And the Thread's first locks its provider for good (#25, #29).
@@ -1929,6 +2158,53 @@ fn deliver(state: &mut Thread, text: String) -> io::Result<Update> {
     let _ = state.writer.record_prompt(&text);
     state.prompt_history.append(text.clone());
     Ok(state.transcript.apply(Input::Prompt(text)))
+}
+
+/// How much of the earlier conversation a Provider switch hands over:
+/// the last `CARRY_PAIRS` prompt/answer pairs, within `CARRY_CHARS`
+/// characters — enough to continue, never the whole log.
+const CARRY_PAIRS: usize = 12;
+const CARRY_CHARS: usize = 6_000;
+
+/// The earlier conversation as the next Provider reads it: the newest
+/// pairs that fit the budget, oldest first, each `User:`/`Assistant:`
+/// pair as it was said (an answer that never came is left out). One pair
+/// too long for the whole budget keeps its head and says so.
+fn carry_digest(from: Provider, exchanges: &[(String, String)]) -> String {
+    let mut entries: Vec<String> = exchanges
+        .iter()
+        .rev()
+        .take(CARRY_PAIRS)
+        .map(|(prompt, answer)| {
+            let mut entry = format!("User: {}", prompt.trim());
+            let answer = answer.trim();
+            if !answer.is_empty() {
+                entry.push_str("\nAssistant: ");
+                entry.push_str(answer);
+            }
+            entry
+        })
+        .collect();
+    let mut total: usize = entries.iter().map(|entry| entry.len() + 2).sum();
+    while entries.len() > 1 && total > CARRY_CHARS {
+        let dropped = entries.pop().expect("more than one");
+        total -= dropped.len() + 2;
+    }
+    if let Some(only) = entries.first_mut() {
+        if only.len() > CARRY_CHARS {
+            let mut cut = CARRY_CHARS;
+            while !only.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            only.truncate(cut);
+            only.push_str("…");
+        }
+    }
+    entries.reverse();
+    format!(
+        "Earlier in this Thread (on {from}):\n\n{}",
+        entries.join("\n\n")
+    )
 }
 
 /// The workspace a binding names, made real; the main checkout is the
@@ -2060,6 +2336,7 @@ mod tests {
         rx: Receiver<SessionEvent>,
         sent: Rc<RefCell<Vec<String>>>,
         fail_send: Rc<RefCell<bool>>,
+        named: Rc<RefCell<Vec<String>>>,
     }
 
     impl crate::providers::Session for Scripted {
@@ -2086,6 +2363,11 @@ mod tests {
         ) -> std::io::Result<()> {
             Ok(())
         }
+
+        fn set_name(&mut self, name: &str) -> std::io::Result<()> {
+            self.named.borrow_mut().push(name.to_string());
+            Ok(())
+        }
     }
 
     /// Hands out Scripted Sessions and keeps the handles the test drives them
@@ -2096,8 +2378,13 @@ mod tests {
         sent: Rc<RefCell<Vec<String>>>,
         providers: Rc<RefCell<Vec<Provider>>>,
         models: Rc<RefCell<Vec<Option<String>>>>,
+        efforts: Rc<RefCell<Vec<Option<String>>>>,
         resumed: Rc<RefCell<Vec<Option<String>>>>,
         cwds: Rc<RefCell<Vec<Option<std::path::PathBuf>>>>,
+        /// The title each spawn was handed.
+        names: Rc<RefCell<Vec<Option<String>>>>,
+        /// Every rename a live Session was told.
+        named: Rc<RefCell<Vec<String>>>,
         /// Every spawn call, successes and refusals alike.
         attempts: Rc<RefCell<usize>>,
         /// While set, spawn refuses — how a test makes a restart fail.
@@ -2137,16 +2424,23 @@ mod tests {
             self.models
                 .borrow_mut()
                 .push(request.model.map(|model| model.to_string()));
+            self.efforts
+                .borrow_mut()
+                .push(request.effort.map(|effort| effort.to_string()));
             self.resumed
                 .borrow_mut()
                 .push(request.resume.map(|target| target.to_string()));
             self.cwds
                 .borrow_mut()
                 .push(request.cwd.map(|path| path.to_path_buf()));
+            self.names
+                .borrow_mut()
+                .push(request.name.map(|name| name.to_string()));
             Ok(Box::new(Scripted {
                 rx,
                 sent: self.sent.clone(),
                 fail_send: self.fail_send.clone(),
+                named: self.named.clone(),
             }))
         }
     }
@@ -3997,40 +4291,193 @@ mod tests {
         assert_eq!(fake.sent.borrow().as_slice(), ["first prompt"]);
     }
 
-    /// AC (#25): the first prompt locks the Thread. `send` arms the one
-    /// predicate, and the setter refuses whole — no spawn attempt, no
-    /// header rewrite.
+    /// After the first prompt a provider switch is a handover: the new
+    /// Provider spawns fresh (the old id means nothing to it), the
+    /// Transcript and history stay, the header changes, the lock stays
+    /// armed, and the next prompt — exactly the next one — carries the
+    /// earlier conversation digested ahead of the operator's text. Mid-turn
+    /// it is refused.
     #[test]
-    fn the_first_prompt_locks_the_provider_for_good() {
-        let (mut cockpit, fake) = cockpit("provider-lock");
+    fn a_provider_switch_after_the_first_prompt_hands_the_conversation_over() {
+        let (mut cockpit, fake) = cockpit("provider-handover");
         let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        assert!(!cockpit
-            .thread(thread)
-            .is_some_and(|open| open.first_prompt_sent()));
-
         cockpit.send(thread, "hello".into());
+        let stream = fake.streams.borrow()[0].clone();
+        stream
+            .send(SessionEvent::Init {
+                session_id: "sess-1".into(),
+                model: "claude-opus-5".into(),
+            })
+            .unwrap();
+        stream.send(text("hi ")).unwrap();
+        stream.send(text("there")).unwrap();
+        stream.send(ended()).unwrap();
+        cockpit.pump();
+        cockpit.send(thread, "second".into());
+        stream.send(text("again")).unwrap();
+        stream.send(ended()).unwrap();
+        cockpit.pump();
+        let blocks_before = cockpit.thread(thread).unwrap().transcript().blocks().len();
+
+        cockpit
+            .set_provider(
+                thread,
+                ProviderChoice {
+                    provider: Provider::Codex,
+                    model: Some("gpt-5.6-sol".into()),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(fake.streams.borrow().len(), 2, "the new Provider spawned");
+        assert_eq!(
+            fake.spawn_pairs().last().unwrap(),
+            &ProviderChoice {
+                provider: Provider::Codex,
+                model: Some("gpt-5.6-sol".into()),
+            }
+        );
+        assert_eq!(
+            fake.resumed.borrow().last().unwrap(),
+            &None,
+            "fresh, no resume"
+        );
+        assert_eq!(
+            fake.efforts.borrow().last().unwrap(),
+            &None,
+            "the effort resets"
+        );
+        let open = cockpit.thread(thread).unwrap();
+        assert_eq!(open.provider(), Provider::Codex);
+        assert_eq!(open.model(), Some("gpt-5.6-sol"));
+        assert!(open.first_prompt_sent(), "the lock stays armed");
+        let blocks = open.transcript().blocks();
+        assert_eq!(blocks.len(), blocks_before + 1, "the conversation stays");
+        assert!(matches!(
+            &blocks.last().unwrap().body,
+            Body::Notice(line)
+                if line == "continued on Codex · GPT-5.6 Sol — the earlier conversation is handed over as context"
+        ));
+        let meta = cockpit.peek(thread).unwrap();
+        assert_eq!(meta.provider, Provider::Codex);
+        assert_eq!(meta.model, Some("gpt-5.6-sol".into()));
+
+        cockpit.send(thread, "third".into());
+        cockpit.send(thread, "fourth".into());
+        assert_eq!(
+            &fake.sent.borrow()[2..],
+            [
+                "Earlier in this Thread (on Claude):\n\n\
+                 User: hello\nAssistant: hi there\n\n\
+                 User: second\nAssistant: again\n\n\
+                 third"
+                    .to_string(),
+                "fourth".to_string(),
+            ],
+            "the carry goes out once, ahead of the next prompt only"
+        );
+        // The log has the operator's raw prompt, not the carry.
         assert!(cockpit
             .thread(thread)
-            .is_some_and(|open| open.first_prompt_sent()));
-        let attempts = *fake.attempts.borrow();
+            .unwrap()
+            .transcript()
+            .blocks()
+            .iter()
+            .any(|b| matches!(&b.body, Body::Prompt(line) if line == "third")));
 
-        let refused = cockpit.set_provider(
-            thread,
-            ProviderChoice {
-                provider: Provider::Codex,
-                model: None,
-            },
-        );
-        assert!(
-            matches!(refused, Err(ProvisionError::Locked)),
-            "{refused:?}"
-        );
-        assert_eq!(*fake.attempts.borrow(), attempts, "no spawn was tried");
+        // Mid-turn: refused, nothing spawned.
+        fake.streams.borrow()[1].send(text("working")).unwrap();
+        cockpit.pump();
+        let attempts = *fake.attempts.borrow();
+        assert!(matches!(
+            cockpit.set_provider(
+                thread,
+                ProviderChoice {
+                    provider: Provider::Claude,
+                    model: None,
+                },
+            ),
+            Err(ProvisionError::Busy)
+        ));
+        assert_eq!(*fake.attempts.borrow(), attempts);
+        assert_eq!(cockpit.peek(thread).unwrap().provider, Provider::Codex);
+    }
+
+    /// The carry rides between the session-context preface and the
+    /// operator's text, so the new Provider reads where it works before
+    /// what was said.
+    #[test]
+    fn the_carry_rides_between_the_preface_and_the_prompt() {
+        let (mut cockpit, fake) = cockpit("handover-preface");
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        let root = existing_root("handover-preface-root");
+        cockpit
+            .set_session_project_root(thread, Some(root.clone()))
+            .unwrap();
+        cockpit.send(thread, "hello".into());
+        let stream = fake.streams.borrow().last().unwrap().clone();
+        stream.send(text("hi")).unwrap();
+        stream.send(ended()).unwrap();
+        cockpit.pump();
+
+        cockpit
+            .set_provider(
+                thread,
+                ProviderChoice {
+                    provider: Provider::Codex,
+                    model: None,
+                },
+            )
+            .unwrap();
+        cockpit.send(thread, "next".into());
+
+        let binding = std::env::temp_dir();
         assert_eq!(
-            cockpit.thread(thread).map(|open| open.provider()),
-            Some(Provider::Claude)
+            fake.sent.borrow().last().unwrap(),
+            &format!(
+                "{}Earlier in this Thread (on Claude):\n\nUser: hello\nAssistant: hi\n\nnext",
+                preface(&binding, &root)
+            )
         );
-        assert_eq!(cockpit.peek(thread).unwrap().provider, Provider::Claude);
+    }
+
+    /// The digest is bounded: the newest dozen pairs, within the character
+    /// budget, oldest first; an answer that never came is left out; one
+    /// pair too long for the whole budget keeps its head.
+    #[test]
+    fn the_carry_digest_keeps_the_newest_pairs_within_budget() {
+        let exchanges: Vec<(String, String)> = (1..=14)
+            .map(|n| (format!("q{n}"), format!("a{n}")))
+            .collect();
+        let digest = carry_digest(Provider::Codex, &exchanges);
+        assert!(
+            digest.starts_with("Earlier in this Thread (on Codex):\n\nUser: q3\nAssistant: a3\n\n")
+        );
+        assert!(digest.ends_with("User: q14\nAssistant: a14"));
+        assert!(!digest.contains("q2\n"), "only the newest twelve");
+
+        let unanswered = vec![("just asked".to_string(), String::new())];
+        assert_eq!(
+            carry_digest(Provider::Claude, &unanswered),
+            "Earlier in this Thread (on Claude):\n\nUser: just asked"
+        );
+
+        let long = "x".repeat(4_000);
+        let heavy = vec![
+            ("old".to_string(), long.clone()),
+            ("mid".to_string(), long.clone()),
+            ("new".to_string(), "short".to_string()),
+        ];
+        let digest = carry_digest(Provider::Claude, &heavy);
+        assert!(digest.len() <= CARRY_CHARS + 64, "{}", digest.len());
+        assert!(!digest.contains("User: old"), "the oldest goes first");
+        assert!(digest.contains("User: mid"));
+        assert!(digest.ends_with("User: new\nAssistant: short"));
+
+        let huge = vec![("one".to_string(), "y".repeat(20_000))];
+        let digest = carry_digest(Provider::Claude, &huge);
+        assert!(digest.len() < 7_000);
+        assert!(digest.ends_with('…'));
     }
 
     /// The model, unlike the provider, is never locked: after the first
@@ -4146,17 +4593,29 @@ mod tests {
         assert_eq!(title_from_prompt("   \n\n  "), "");
     }
 
-    /// The lock arms from replayed history too: a revived Thread whose log
-    /// holds an operator prompt is as locked as the live one was — and so
-    /// is a parked Thread, judged straight off its log.
+    /// A parked Thread that has spoken cannot switch off its log alone —
+    /// the handover needs the live conversation — but revived it can, and
+    /// a switch parked before its next prompt still owes the carry on
+    /// revive: the new Provider spawns without the old Init, the Notice is
+    /// replayed, and the digest goes out with the first prompt.
     #[test]
-    fn a_thread_with_a_prompt_in_its_history_is_locked_on_revive_and_parked() {
-        let (mut cockpit, _fake) = cockpit("provider-lock-history");
+    fn a_parked_switch_waits_for_revive_and_a_revived_switch_still_carries() {
+        let (mut cockpit, fake) = cockpit("provider-handover-parked");
         let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
         cockpit.send(thread, "hello".into());
+        let stream = fake.streams.borrow()[0].clone();
+        stream
+            .send(SessionEvent::Init {
+                session_id: "sess-1".into(),
+                model: "claude-opus-5".into(),
+            })
+            .unwrap();
+        stream.send(text("hi")).unwrap();
+        stream.send(ended()).unwrap();
+        cockpit.pump();
         cockpit.park(thread).unwrap();
 
-        // Parked: the store-only path reads the log for the lock.
+        // Parked: the store-only path refuses.
         assert!(matches!(
             cockpit.set_provider(
                 thread,
@@ -4167,24 +4626,197 @@ mod tests {
             ),
             Err(ProvisionError::Locked)
         ));
+        assert_eq!(cockpit.peek(thread).unwrap().provider, Provider::Claude);
 
         cockpit.revive(thread).unwrap();
-        assert!(
-            cockpit
-                .thread(thread)
-                .is_some_and(|open| open.first_prompt_sent()),
-            "history armed the lock"
-        );
-        assert!(matches!(
-            cockpit.set_provider(
+        assert!(cockpit
+            .thread(thread)
+            .is_some_and(|open| open.first_prompt_sent()));
+        cockpit
+            .set_provider(
                 thread,
                 ProviderChoice {
                     provider: Provider::Codex,
                     model: None,
                 },
-            ),
-            Err(ProvisionError::Locked)
+            )
+            .unwrap();
+        // Parked again before any prompt reached Codex.
+        cockpit.park(thread).unwrap();
+        cockpit.revive(thread).unwrap();
+
+        assert_eq!(fake.providers.borrow().last().unwrap(), &Provider::Codex);
+        assert_eq!(
+            fake.resumed.borrow().last().unwrap(),
+            &None,
+            "the Init before the switch is Claude's, not Codex's to resume"
+        );
+        let blocks = cockpit.thread(thread).unwrap().transcript().blocks();
+        assert!(
+            blocks.iter().any(|b| matches!(
+                &b.body,
+                Body::Notice(line) if line.starts_with("continued on Codex · Default")
+            )),
+            "the handover replays: {blocks:?}"
+        );
+        cockpit.send(thread, "next".into());
+        cockpit.send(thread, "after".into());
+        let sent = fake.sent.borrow();
+        assert_eq!(
+            sent[sent.len() - 2],
+            "Earlier in this Thread (on Claude):\n\nUser: hello\nAssistant: hi\n\nnext"
+        );
+        assert_eq!(sent[sent.len() - 1], "after");
+    }
+
+    /// The effort is tuned like the model, by the one path: eagerly before
+    /// the first prompt, by resuming after it, refused mid-turn, the header
+    /// following every time, and a model change keeping it. A provider
+    /// change resets it — the old provider's word may mean nothing.
+    #[test]
+    fn the_effort_is_tuned_like_the_model_and_persists() {
+        let (mut cockpit, fake) = cockpit("effort");
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        assert_eq!(cockpit.thread(thread).and_then(|open| open.effort()), None);
+        assert_eq!(fake.efforts.borrow().last().unwrap(), &None);
+
+        cockpit.set_effort(thread, Some("high".into())).unwrap();
+        assert_eq!(fake.streams.borrow().len(), 2, "eager respawn pre-lock");
+        assert_eq!(
+            fake.efforts.borrow().last().unwrap().as_deref(),
+            Some("high")
+        );
+        assert_eq!(fake.resumed.borrow().last().unwrap(), &None);
+        assert_eq!(
+            cockpit.thread(thread).and_then(|open| open.effort()),
+            Some("high")
+        );
+        assert_eq!(
+            cockpit.peek(thread).unwrap().effort.as_deref(),
+            Some("high")
+        );
+
+        cockpit.send(thread, "hello".into());
+        let stream = fake.streams.borrow()[1].clone();
+        stream
+            .send(SessionEvent::Init {
+                session_id: "sess-1".into(),
+                model: "claude-opus-5".into(),
+            })
+            .unwrap();
+        stream.send(text("working")).unwrap();
+        cockpit.pump();
+        let attempts = *fake.attempts.borrow();
+        assert!(matches!(
+            cockpit.set_effort(thread, Some("max".into())),
+            Err(ProvisionError::Busy)
         ));
+        assert_eq!(*fake.attempts.borrow(), attempts);
+        stream.send(ended()).unwrap();
+        cockpit.pump();
+
+        cockpit.set_effort(thread, Some("max".into())).unwrap();
+        assert_eq!(
+            fake.efforts.borrow().last().unwrap().as_deref(),
+            Some("max")
+        );
+        assert_eq!(
+            fake.resumed.borrow().last().unwrap().as_deref(),
+            Some("sess-1")
+        );
+        assert_eq!(cockpit.peek(thread).unwrap().effort.as_deref(), Some("max"));
+        let blocks = cockpit.thread(thread).unwrap().transcript().blocks();
+        assert!(matches!(
+            &blocks.last().unwrap().body,
+            Body::Notice(line) if line == "effort changed to max"
+        ));
+        // The same choice again is a no-op.
+        let attempts = *fake.attempts.borrow();
+        cockpit.set_effort(thread, Some("max".into())).unwrap();
+        assert_eq!(*fake.attempts.borrow(), attempts);
+
+        // A model change keeps the effort.
+        cockpit
+            .set_model(thread, Some("claude-fable-5-1".into()))
+            .unwrap();
+        assert_eq!(
+            fake.efforts.borrow().last().unwrap().as_deref(),
+            Some("max")
+        );
+        assert_eq!(
+            fake.models.borrow().last().unwrap().as_deref(),
+            Some("claude-fable-5-1")
+        );
+        let blocks = cockpit.thread(thread).unwrap().transcript().blocks();
+        assert!(matches!(
+            &blocks.last().unwrap().body,
+            Body::Notice(line) if line == "model changed to Fable 5.1"
+        ));
+
+        // Parked: the header alone changes, and a revive reads it.
+        cockpit.park(thread).unwrap();
+        cockpit.set_effort(thread, None).unwrap();
+        assert_eq!(cockpit.peek(thread).unwrap().effort, None);
+        assert_eq!(
+            cockpit.peek(thread).unwrap().model.as_deref(),
+            Some("claude-fable-5-1")
+        );
+        cockpit.revive(thread).unwrap();
+        assert_eq!(fake.efforts.borrow().last().unwrap(), &None);
+        assert_eq!(cockpit.thread(thread).and_then(|open| open.effort()), None);
+
+        // A provider change pre-lock resets the effort.
+        let fresh = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        cockpit.set_effort(fresh, Some("xhigh".into())).unwrap();
+        cockpit
+            .set_provider(
+                fresh,
+                ProviderChoice {
+                    provider: Provider::Codex,
+                    model: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(fake.efforts.borrow().last().unwrap(), &None);
+        assert_eq!(cockpit.peek(fresh).unwrap().effort, None);
+        assert_eq!(cockpit.thread(fresh).and_then(|open| open.effort()), None);
+    }
+
+    /// The Thread's title reaches its Session: a rename is told to the live
+    /// one, and every later spawn — revive, retune — is handed it.
+    #[test]
+    fn a_thread_s_title_reaches_its_session_and_every_respawn() {
+        let (mut cockpit, fake) = cockpit("thread-name");
+        let thread = cockpit.open(Provider::Codex, main_choice()).unwrap();
+        assert_eq!(fake.names.borrow().last().unwrap(), &None);
+
+        cockpit.rename_thread(thread, "CI flake").unwrap();
+        assert_eq!(fake.named.borrow().as_slice(), ["CI flake"]);
+
+        cockpit.park(thread).unwrap();
+        cockpit.revive(thread).unwrap();
+        assert_eq!(
+            fake.names.borrow().last().unwrap().as_deref(),
+            Some("CI flake")
+        );
+
+        cockpit
+            .set_model(thread, Some("gpt-5.6-sol".into()))
+            .unwrap();
+        assert_eq!(
+            fake.names.borrow().last().unwrap().as_deref(),
+            Some("CI flake")
+        );
+        // A parked Thread's rename has no Session to tell; the next spawn
+        // carries it.
+        cockpit.park(thread).unwrap();
+        cockpit.rename_thread(thread, "CI flake, again").unwrap();
+        assert_eq!(fake.named.borrow().len(), 1);
+        cockpit.revive(thread).unwrap();
+        assert_eq!(
+            fake.names.borrow().last().unwrap().as_deref(),
+            Some("CI flake, again")
+        );
     }
 
     /// AC (#25): a parked-never-prompted Thread revives onto its chosen

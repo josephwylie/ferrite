@@ -72,6 +72,14 @@ pub trait Session {
     fn interrupt(&mut self) -> io::Result<()>;
     fn respond_to_decision(&mut self, id: &str, answer: DecisionAnswer) -> io::Result<()>;
 
+    /// Tell the provider what the Thread is now called, so its own session
+    /// list agrees with Ferrite's. A provider with no rename on its wire
+    /// (Claude names a session at spawn only) accepts silently: the title
+    /// is Ferrite's truth either way, and the next spawn carries it.
+    fn set_name(&mut self, _name: &str) -> io::Result<()> {
+        Ok(())
+    }
+
     /// The process whoever is watching memory should meter. `None` when
     /// there is no process — a scripted Session in a test, for instance.
     /// Providers answer the process worth metering: under a Windows `.cmd`
@@ -119,6 +127,10 @@ impl Session for CodexSession {
 
     fn respond_to_decision(&mut self, id: &str, answer: DecisionAnswer) -> io::Result<()> {
         CodexSession::respond_to_decision(self, id, answer)
+    }
+
+    fn set_name(&mut self, name: &str) -> io::Result<()> {
+        CodexSession::set_name(self, name)
     }
 
     fn pid(&self) -> Option<u32> {

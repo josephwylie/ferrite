@@ -618,6 +618,8 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
         program,
         cwd: Some(std::env::temp_dir()),
         model: Some("haiku".into()),
+        effort: Some("high".into()),
+        name: Some("CI flake".into()),
         permission_mode: Some("default".into()),
         resume: None,
     })
@@ -625,6 +627,9 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
     session.send("hi").unwrap();
     session.interrupt().unwrap();
     session.interrupt().unwrap();
+    // The CLI names a session at spawn only: a rename is accepted and
+    // writes nothing.
+    ferrite_core::providers::Session::set_name(&mut session, "renamed").unwrap();
 
     let recorded = read_lines(&log, 5);
     drop(session);
@@ -640,8 +645,9 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
         recorded[0],
         "-p --input-format stream-json --output-format stream-json \
          --include-partial-messages --verbose --permission-prompt-tool stdio \
-         --model haiku --permission-mode default"
+         --model haiku --effort high --permission-mode default --name CI flake"
     );
+    assert_eq!(sent.len(), 4, "the rename wrote nothing");
     // Feature detection comes first, before a word of the Thread.
     assert_eq!(
         sent[0],

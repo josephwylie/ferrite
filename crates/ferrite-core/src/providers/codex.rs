@@ -54,6 +54,12 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 /// the answer without a shared table (#23).
 const SKILLS_REQUEST_ID: u64 = 3;
 
+/// And the one after it: the model/list the picker's rows come from. Sent
+/// after the thread is up rather than between initialize and thread/start
+/// so the handshake's own ids (1, 2) stay what every committed capture
+/// answers.
+const MODELS_REQUEST_ID: u64 = 4;
+
 /// How to spawn a Codex Session.
 #[derive(Debug, Clone)]
 pub struct CodexConfig {
@@ -64,6 +70,11 @@ pub struct CodexConfig {
     pub cwd: Option<PathBuf>,
     /// Model override passed through in thread/start.
     pub model: Option<String>,
+    /// Reasoning effort (`"low"` … `"xhigh"`, `"max"`, `"ultra"` where the
+    /// model takes it), passed as `config.model_reasoning_effort` on
+    /// thread/start and thread/resume. `None` leaves the server's own
+    /// default; `capabilities().reasoning_effort` reports what took effect.
+    pub effort: Option<String>,
     /// Approval posture for this Thread (`"untrusted"`, `"on-request"`,
     /// `"never"`). `None` leaves the server's own configuration alone — which
     /// on a machine configured to never ask means no Decision will ever
@@ -85,6 +96,7 @@ impl Default for CodexConfig {
             program: "codex".into(),
             cwd: None,
             model: None,
+            effort: None,
             approval_policy: None,
             sandbox: None,
             resume: None,
@@ -307,6 +319,17 @@ impl CodexSession {
             "method": "skills/list",
             "params": params,
         }));
+        // And the model menu (#25), answered the same way and announced as
+        // `SessionEvent::Models`; a server without the method, or one that
+        // never answers, just leaves the picker on the fallback catalog.
+        let id = session.take_request_id();
+        debug_assert_eq!(id, MODELS_REQUEST_ID);
+        let _ = session.write_line(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "model/list",
+            "params": {},
+        }));
         Ok(session)
     }
 
@@ -353,6 +376,12 @@ impl CodexSession {
         }
         if let Some(sandbox) = &config.sandbox {
             params["sandbox"] = serde_json::json!(sandbox);
+        }
+        if let Some(effort) = &config.effort {
+            // Probed on 0.144.4: both thread/start and thread/resume take
+            // the config override, and the response echoes it back as
+            // `reasoningEffort`.
+            params["config"] = serde_json::json!({"model_reasoning_effort": effort});
         }
         self.write_line(&serde_json::json!({
             "jsonrpc": "2.0",
@@ -413,6 +442,19 @@ impl CodexSession {
     /// spawn — never assumed.
     pub fn capabilities(&self) -> &CodexCapabilities {
         &self.capabilities
+    }
+
+    /// Rename the thread server-side (`thread/name/set`), so the server's
+    /// own thread list carries the Thread's title. The acknowledgement is
+    /// an empty result nothing waits on.
+    pub fn set_name(&mut self, name: &str) -> io::Result<()> {
+        let id = self.take_request_id();
+        self.write_line(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "thread/name/set",
+            "params": {"threadId": self.thread_id, "name": name},
+        }))
     }
 
     /// Answer a `DecisionRequested`, quoting the id it arrived with.
@@ -539,10 +581,12 @@ fn read_stdout(
         // Which handshake response is awaited: request 1, then request 2,
         // then none.
         let mut handshake = Some((step_sender, 1u64));
-        // Once the thread is up, the skills/list answer (request 3) is still
-        // owed; correlated here like the handshake, but never blocking —
-        // a server without the method just leaves the menu empty.
+        // Once the thread is up, the skills/list answer (request 3) and the
+        // model/list answer (request 4) are still owed; correlated here like
+        // the handshake, but never blocking — a server without either
+        // method just leaves that menu empty.
         let mut menu_pending = false;
+        let mut models_pending = false;
         loop {
             line.clear();
             match reader.read_until(b'\n', &mut line) {
@@ -571,6 +615,7 @@ fn read_stdout(
                             });
                             let _ = step_sender.send(Ok(HandshakeStep::Thread(Box::new(thread))));
                             menu_pending = true;
+                            models_pending = true;
                             continue;
                         }
                         None => {
@@ -597,6 +642,22 @@ fn read_stdout(
                         // skills announces nothing.
                         if !commands.is_empty()
                             && sender.send(SessionEvent::Commands { commands }).is_err()
+                        {
+                            return;
+                        }
+                    }
+                    continue;
+                }
+            }
+            if models_pending {
+                if let Some(response) = wire::parse_response(text, MODELS_REQUEST_ID) {
+                    models_pending = false;
+                    if let Ok(result) = response {
+                        let models = wire::parse_models(&result);
+                        // The picker's rows (#25); a server listing none
+                        // announces nothing and the fallback catalog stands.
+                        if !models.is_empty()
+                            && sender.send(SessionEvent::Models { models }).is_err()
                         {
                             return;
                         }

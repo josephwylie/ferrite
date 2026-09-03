@@ -60,6 +60,14 @@ pub struct ClaudeConfig {
     pub cwd: Option<PathBuf>,
     /// Model override passed through to the CLI.
     pub model: Option<String>,
+    /// Reasoning effort (`"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`)
+    /// passed through as `--effort`. `None` leaves the CLI's own default.
+    pub effort: Option<String>,
+    /// The Thread's title, handed to the CLI as the session's display name
+    /// (`--name`) so its own session list reads like Ferrite's. Spawn-time
+    /// only: the CLI takes no rename over the wire, so a later title waits
+    /// for the next Session.
+    pub name: Option<String>,
     /// Permission posture for this Thread (`"default"`, `"acceptEdits"`,
     /// `"plan"`, …). `None` leaves the CLI's own configuration alone — which
     /// on a machine configured to bypass permissions means no Decision will
@@ -79,6 +87,8 @@ impl Default for ClaudeConfig {
             program: "claude".into(),
             cwd: None,
             model: None,
+            effort: None,
+            name: None,
             permission_mode: None,
             resume: None,
         }
@@ -216,8 +226,19 @@ impl ClaudeSession {
         if let Some(model) = &config.model {
             command.args(["--model", model.as_str()]);
         }
+        if let Some(effort) = &config.effort {
+            command.args(["--effort", effort.as_str()]);
+        }
         if let Some(mode) = &config.permission_mode {
             command.args(["--permission-mode", mode.as_str()]);
+        }
+        if let Some(name) = config
+            .name
+            .as_deref()
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+        {
+            command.args(["--name", name]);
         }
         if let Some(cwd) = &config.cwd {
             command.current_dir(cwd);

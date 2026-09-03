@@ -1182,8 +1182,10 @@ mod tests {
             .spawn(SpawnRequest {
                 provider: Provider::Claude,
                 model: None,
+                effort: None,
                 resume: Some("4f2a"),
                 cwd: None,
+                name: None,
             })
             .expect("demo spawns never fail");
         let events = revived.events();
