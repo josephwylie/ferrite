@@ -49,6 +49,10 @@ actions!(
         ReopenThread,
         CopySelection,
         Paste,
+        PickOption1,
+        PickOption2,
+        PickOption3,
+        PickOption4,
         OpenSettings,
         ToggleFullscreen,
         ToggleNav,
@@ -159,6 +163,19 @@ pub struct CockpitView {
     /// panel first opens: (claude, codex).
     cli_versions: Option<(SharedString, SharedString)>,
     group_error: Option<SharedString>,
+    /// The operator's answers-in-progress to each Thread's question
+    /// Decision (Claude's `AskUserQuestion`), keyed to the Decision they
+    /// answer so a new question starts clean and a stale draft never
+    /// answers the wrong one.
+    questions: std::collections::HashMap<ThreadId, QuestionDraft>,
+}
+
+/// Where the operator has got to answering one question Decision.
+struct QuestionDraft {
+    /// The Decision's own id — the draft dies with it.
+    decision: String,
+    questions: Vec<ferrite_core::questions::Question>,
+    answers: Vec<ferrite_core::questions::Answer>,
 }
 
 /// What an inline rename is aimed at. Both are titles the operator owns:
@@ -180,6 +197,10 @@ pub struct Preferences {
     pub settings: ferrite_core::settings::Settings,
     pub dir: std::path::PathBuf,
     pub defaults: std::sync::Arc<std::sync::Mutex<crate::session::SessionDefaults>>,
+    /// The program that writes Thread titles (`claude`), or None to title
+    /// from the first prompt alone — the test and demo constructors, so no
+    /// suite ever spawns a real CLI for a name.
+    pub titler: Option<String>,
 }
 
 impl Preferences {
@@ -191,6 +212,7 @@ impl Preferences {
             defaults: std::sync::Arc::new(std::sync::Mutex::new(
                 crate::session::SessionDefaults::default(),
             )),
+            titler: None,
         }
     }
 }
@@ -536,6 +558,7 @@ impl CockpitView {
             settings_scroll: ScrollHandle::new(),
             cli_versions: None,
             group_error: None,
+            questions: std::collections::HashMap::new(),
         };
         // Every Thread the launch opened is on the roster already, and
         // every Thread it did not open is a parked row from the first
@@ -683,6 +706,7 @@ impl CockpitView {
     /// changed are worth a repaint; a frame where nothing moved costs nothing.
     fn pump(&mut self, cx: &mut Context<Self>) {
         let frame = self.cockpit.pump();
+        self.sync_question_drafts();
         let mut restarted = Vec::new();
         let mut branch_tick = false;
         if self.swept.elapsed() >= SWEEP_INTERVAL {
@@ -2096,6 +2120,18 @@ impl CockpitView {
             return;
         };
         let composer = self.panes[self.focused()].composer.clone();
+        // A question waits: ↵ sends the picks, and whatever is on the
+        // line goes with them as the operator's own answer.
+        if self.pending_questions(thread).is_some() {
+            let text = composer.read(cx).text().trim().to_string();
+            let other = Some(text).filter(|text| !text.is_empty());
+            if self.submit_questions(thread, other, cx) {
+                composer.update(cx, |composer, cx| {
+                    composer.take(cx);
+                });
+            }
+            return;
+        }
         let text = composer.update(cx, |composer, cx| composer.take(cx));
         let text = text.trim().to_string();
         if text.is_empty() {
@@ -2108,15 +2144,18 @@ impl CockpitView {
         }
         // Typing does not wait for the agent; sending does.
         if self.cockpit.thread(thread).is_some_and(|open| open.busy()) {
-            self.cockpit.queue(thread, text);
+            self.cockpit.queue(thread, text.clone());
         } else {
-            self.cockpit.send(thread, text);
+            self.cockpit.send(thread, text.clone());
             self.panes[self.focused()].scroll.scroll_to_bottom();
         }
         self.facts.acted(&self.cockpit, thread);
         // A first prompt names an untitled Thread.
         self.facts.renamed(&self.cockpit, thread);
         self.refresh_names();
+        if self.is_first_prompt(thread) {
+            self.start_titling(thread, text, cx);
+        }
         cx.notify();
     }
 
@@ -2268,7 +2307,14 @@ impl CockpitView {
     ) {
         if self.level_now(window) == Level::Transcript {
             if let Some(pane) = self.panes.get(self.focused()) {
-                if !pane.composer.read(cx).is_empty() {
+                // A question is answered in words as often as by a pick,
+                // and "no, the second one" starts with the deny key: while
+                // a question pends the letters only ever type. Denying a
+                // question is the keycap's job.
+                let asking = pane
+                    .thread()
+                    .is_some_and(|thread| self.pending_questions(thread).is_some());
+                if asking || !pane.composer.read(cx).is_empty() {
                     pane.composer
                         .clone()
                         .update(cx, |composer, cx| composer.insert(letter, cx));
@@ -2306,6 +2352,12 @@ impl CockpitView {
         else {
             return;
         };
+        // A question is answered by its form, never by a bare "allow" —
+        // allowing an unanswered question would send the model nothing.
+        if pane::question_of(&decision).is_some() && answer != Answer::Deny {
+            self.submit_questions(thread, None, cx);
+            return;
+        }
         let response = match answer {
             Answer::Allow => DecisionAnswer::Allow {
                 input: decision.input.clone(),
@@ -3359,6 +3411,7 @@ impl CockpitView {
                 // The first prompt named the Thread; the head and the nav
                 // row must say so now, not at the next naming moment.
                 self.refresh_names();
+                self.start_titling(done.thread, text.clone(), cx);
                 self.panes[index].scroll.scroll_to_bottom();
             }
             Err(message) => {
@@ -3951,7 +4004,7 @@ impl CockpitView {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum Answer {
     Allow,
     Deny,
@@ -4386,6 +4439,18 @@ impl Render for CockpitView {
             .on_action(cx.listener(Self::reopen_thread))
             .on_action(cx.listener(Self::copy_selection))
             .on_action(cx.listener(Self::paste_into_composer))
+            .on_action(cx.listener(|view, _: &PickOption1, window, cx| {
+                view.pick_or_type(0, "1", window, cx)
+            }))
+            .on_action(cx.listener(|view, _: &PickOption2, window, cx| {
+                view.pick_or_type(1, "2", window, cx)
+            }))
+            .on_action(cx.listener(|view, _: &PickOption3, window, cx| {
+                view.pick_or_type(2, "3", window, cx)
+            }))
+            .on_action(cx.listener(|view, _: &PickOption4, window, cx| {
+                view.pick_or_type(3, "4", window, cx)
+            }))
             .on_action(cx.listener(Self::toggle_fullscreen))
             .on_action(cx.listener(Self::toggle_nav))
             .on_action(cx.listener(Self::menu_next))
@@ -4594,6 +4659,7 @@ impl CockpitView {
             // grouped Pane, a double-click renames it — an L2 cell with no
             // handle could not be rearranged at all.
             title: Some(self.pane_title(index, thread, cx)),
+            question_form: l1.then(|| self.question_form(index, cx)).flatten(),
         };
         cell.child(pane::render_pane(pane, facts, wiring, level))
     }
@@ -4664,6 +4730,325 @@ impl CockpitView {
         self.panes[index].toggle_tool(call);
         window.focus(&self.panes[index].tool_focus());
         cx.notify();
+    }
+
+    /// The pending Decision of `thread` when it is a question — parsed
+    /// fresh, which is cheap: a Decision's input is a few hundred bytes.
+    fn pending_questions(
+        &self,
+        thread: ThreadId,
+    ) -> Option<(String, Vec<ferrite_core::questions::Question>)> {
+        let decision = self.cockpit.thread(thread)?.pending()?;
+        let questions = pane::question_of(decision)?;
+        Some((decision.id.clone(), questions))
+    }
+
+    /// Every open Thread's draft follows its pending Decision: a new
+    /// question gets a clean draft, an answered or vanished one loses it.
+    fn sync_question_drafts(&mut self) {
+        let threads: Vec<ThreadId> = self.cockpit.threads();
+        for thread in threads {
+            match self.pending_questions(thread) {
+                Some((decision, questions)) => {
+                    let stale = self
+                        .questions
+                        .get(&thread)
+                        .is_none_or(|draft| draft.decision != decision);
+                    if stale {
+                        let answers = vec![Default::default(); questions.len()];
+                        self.questions.insert(
+                            thread,
+                            QuestionDraft {
+                                decision,
+                                questions,
+                                answers,
+                            },
+                        );
+                    }
+                }
+                None => {
+                    self.questions.remove(&thread);
+                }
+            }
+        }
+        self.questions
+            .retain(|thread, _| self.cockpit.thread(*thread).is_some());
+    }
+
+    /// A press on an option: a pick-any question toggles it, a pick-one
+    /// question moves its mark there.
+    fn pick_option(&mut self, thread: ThreadId, question: usize, option: usize) {
+        self.sync_question_drafts();
+        let Some(draft) = self.questions.get_mut(&thread) else {
+            return;
+        };
+        let (Some(asked), Some(answer)) = (
+            draft.questions.get(question),
+            draft.answers.get_mut(question),
+        ) else {
+            return;
+        };
+        if option >= asked.options.len() {
+            return;
+        }
+        if asked.multi_select {
+            match answer.picks.iter().position(|pick| *pick == option) {
+                Some(at) => {
+                    answer.picks.remove(at);
+                }
+                None => answer.picks.push(option),
+            }
+        } else {
+            answer.picks = vec![option];
+        }
+    }
+
+    /// The number keys 1–4 pick on the question the operator is up to —
+    /// the first one still unanswered, else the last. With text on the
+    /// Composer line they are digits, the y/n/a rule.
+    fn pick_or_type(
+        &mut self,
+        option: usize,
+        digit: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(thread) = self.focused_thread() else {
+            return;
+        };
+        if self.pending_questions(thread).is_none() {
+            if let Some(pane) = self.panes.get(self.focused()) {
+                pane.composer
+                    .clone()
+                    .update(cx, |composer, cx| composer.insert(digit, cx));
+            }
+            return;
+        }
+        if self.level_now(window) == Level::Transcript {
+            if let Some(pane) = self.panes.get(self.focused()) {
+                if !pane.composer.read(cx).is_empty() {
+                    pane.composer
+                        .clone()
+                        .update(cx, |composer, cx| composer.insert(digit, cx));
+                    return;
+                }
+            }
+        }
+        self.sync_question_drafts();
+        let Some(draft) = self.questions.get(&thread) else {
+            return;
+        };
+        let question = draft
+            .answers
+            .iter()
+            .position(|answer| answer.picks.is_empty())
+            .unwrap_or(draft.questions.len().saturating_sub(1));
+        self.pick_option(thread, question, option);
+        cx.notify();
+    }
+
+    /// Send the form: the picks, plus `other` — the typed line — on the
+    /// first question without a pick (else the last). Nothing picked and
+    /// nothing typed sends nothing; the question stays up. The answer is
+    /// the tool's own allow with the answers folded into its input, which
+    /// is exactly how Claude Code's own UI answers it.
+    fn submit_questions(
+        &mut self,
+        thread: ThreadId,
+        other: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.sync_question_drafts();
+        let Some(decision) = self
+            .cockpit
+            .thread(thread)
+            .and_then(|open| open.pending())
+            .cloned()
+        else {
+            return false;
+        };
+        let Some(draft) = self.questions.get_mut(&thread) else {
+            return false;
+        };
+        if let Some(other) = other {
+            let at = draft
+                .answers
+                .iter()
+                .position(|answer| answer.picks.is_empty())
+                .unwrap_or(draft.questions.len().saturating_sub(1));
+            if let Some(answer) = draft.answers.get_mut(at) {
+                answer.other = Some(other);
+            }
+        }
+        let answered = draft.answers.iter().any(|answer| {
+            !answer.picks.is_empty() || answer.other.as_deref().is_some_and(|o| !o.is_empty())
+        });
+        if !answered {
+            return false;
+        }
+        let input = ferrite_core::questions::answered_input(
+            &decision.input,
+            &draft.answers,
+            &draft.questions,
+        );
+        self.questions.remove(&thread);
+        self.cockpit
+            .respond(thread, &decision, DecisionAnswer::Allow { input });
+        self.facts.acted(&self.cockpit, thread);
+        cx.notify();
+        true
+    }
+
+    /// The question card (L1): one block per question, its options wired
+    /// to their picks, and the keys — ↵ sends once something is picked or
+    /// typed, n denies.
+    fn question_form(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let thread = self.panes[index].thread()?;
+        let (decision_id, questions) = self.pending_questions(thread)?;
+        let draft = self
+            .questions
+            .get(&thread)
+            .filter(|draft| draft.decision == decision_id);
+        let mut card = pane::question_card();
+        for (qi, question) in questions.iter().enumerate() {
+            let picks: &[usize] = draft
+                .and_then(|draft| draft.answers.get(qi))
+                .map(|answer| answer.picks.as_slice())
+                .unwrap_or(&[]);
+            card = card.child(pane::question_head(
+                SharedString::from(question.header.clone()),
+                SharedString::from(question.question.clone()),
+                question.multi_select,
+            ));
+            for (oi, option) in question.options.iter().enumerate() {
+                let row = pane::question_option(
+                    ("question-option", qi * 8 + oi),
+                    oi + 1,
+                    SharedString::from(option.label.clone()),
+                    SharedString::from(option.description.clone()),
+                    picks.contains(&oi),
+                    question.multi_select,
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        if let Some(index) = view.pane_for(thread) {
+                            view.focus_pane(index);
+                        }
+                        view.pick_option(thread, qi, oi);
+                        cx.notify();
+                    }),
+                );
+                card = card.child(row);
+            }
+        }
+        let answered =
+            draft.is_some_and(|draft| draft.answers.iter().any(|answer| !answer.picks.is_empty()));
+        let typed = !self.panes[index].composer.read(cx).is_empty();
+        let hint = SharedString::from(if answered || typed {
+            "↵ sends · type below to answer in your own words"
+        } else {
+            "1–4 or click to pick · or type an answer below and press ↵"
+        });
+        let wire = |keycap: Stateful<Div>, answer: Answer, cx: &mut Context<Self>| {
+            keycap.on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    if let Some(index) = view.pane_for(thread) {
+                        view.focus_pane(index);
+                    }
+                    view.answer(answer, cx);
+                }),
+            )
+        };
+        let mut keys = pane::decide_row(Level::Transcript);
+        if answered || typed {
+            keys = keys.child(pane::keycap_send().on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |view, _: &MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    if let Some(index) = view.pane_for(thread) {
+                        view.focus_pane(index);
+                    }
+                    view.submit(&Submit, window, cx);
+                }),
+            ));
+        }
+        keys = keys.child(wire(pane::keycap_deny(), Answer::Deny, cx));
+        card = card.child(pane::question_footer(hint, Some(keys.into_any_element())));
+        Some(card.into_any_element())
+    }
+
+    /// Whether `thread`'s transcript holds exactly one prompt — the moment
+    /// a title is asked for.
+    fn is_first_prompt(&self, thread: ThreadId) -> bool {
+        self.cockpit.thread(thread).is_some_and(|open| {
+            open.transcript()
+                .blocks()
+                .iter()
+                .filter(|block| matches!(block.body, ferrite_core::transcript::Body::Prompt(_)))
+                .count()
+                == 1
+        })
+    }
+
+    /// Ask the titler for a name, off the UI thread, and adopt it when it
+    /// arrives — unless the operator has named the Thread meanwhile, or
+    /// turned auto-titles off. No titler configured (tests, the demo)
+    /// means the prompt-derived name stands.
+    fn start_titling(&mut self, thread: ThreadId, prompt: String, cx: &mut Context<Self>) {
+        if !self.prefs.settings.auto_title {
+            return;
+        }
+        let Some(program) = self.prefs.titler.clone() else {
+            return;
+        };
+        if self
+            .cockpit
+            .thread(thread)
+            .is_none_or(|open| open.title().is_some())
+        {
+            return;
+        }
+        let rx = ferrite_core::titler::spawn(
+            &program,
+            ferrite_core::titler::TitleRequest {
+                prompt,
+                reply: None,
+            },
+        );
+        cx.spawn(async move |this, cx| {
+            let title = cx
+                .background_executor()
+                .spawn(async move { rx.recv().ok().flatten() })
+                .await;
+            this.update(cx, |view, cx| view.adopt_title(thread, title, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    /// The titler's answer lands only on a Thread still untitled: an
+    /// operator's rename in the meantime wins, and a parked Thread keeps
+    /// its prompt-derived name.
+    fn adopt_title(&mut self, thread: ThreadId, title: Option<String>, cx: &mut Context<Self>) {
+        let Some(title) = title else {
+            return;
+        };
+        if self
+            .cockpit
+            .thread(thread)
+            .is_none_or(|open| open.title().is_some())
+        {
+            return;
+        }
+        if self.cockpit.rename_thread(thread, &title).is_ok() {
+            self.facts.renamed(&self.cockpit, thread);
+            self.refresh_names();
+            cx.notify();
+        }
     }
 
     /// The pending Decision's keycaps (#26), each press wired to the exact
@@ -5225,6 +5610,7 @@ mod tests {
         rx: Receiver<SessionEvent>,
         fail_send: Rc<RefCell<bool>>,
         sent: Rc<RefCell<Vec<String>>>,
+        answered: Rc<RefCell<Vec<(String, DecisionAnswer)>>>,
     }
 
     impl Session for Scripted {
@@ -5241,11 +5627,8 @@ mod tests {
         fn interrupt(&mut self) -> std::io::Result<()> {
             Ok(())
         }
-        fn respond_to_decision(
-            &mut self,
-            _id: &str,
-            _answer: DecisionAnswer,
-        ) -> std::io::Result<()> {
+        fn respond_to_decision(&mut self, id: &str, answer: DecisionAnswer) -> std::io::Result<()> {
+            self.answered.borrow_mut().push((id.to_string(), answer));
             Ok(())
         }
     }
@@ -5260,6 +5643,8 @@ mod tests {
         fail: Rc<RefCell<bool>>,
         fail_send: Rc<RefCell<bool>>,
         sent: Rc<RefCell<Vec<String>>>,
+        /// Every Decision answer that went out, with the Decision's id.
+        answered: Rc<RefCell<Vec<(String, DecisionAnswer)>>>,
     }
 
     impl Spawner for Fake {
@@ -5280,6 +5665,7 @@ mod tests {
                 rx,
                 fail_send: self.fail_send.clone(),
                 sent: self.sent.clone(),
+                answered: self.answered.clone(),
             }))
         }
     }
@@ -5453,6 +5839,150 @@ mod tests {
                     .is_none(),
                 "y must answer the Decision, not type a letter"
             );
+        });
+    }
+
+    fn question(id: &str) -> SessionEvent {
+        SessionEvent::DecisionRequested {
+            decision: Decision {
+                id: id.into(),
+                tool_use_id: "toolu_q".into(),
+                tool_name: "AskUserQuestion".into(),
+                description: String::new(),
+                input: serde_json::json!({
+                    "questions": [{
+                        "question": "Which approach?",
+                        "header": "Approach",
+                        "multiSelect": false,
+                        "options": [
+                            {"label": "Rewrite", "description": "Start over"},
+                            {"label": "Patch", "description": "Smallest change"}
+                        ]
+                    }]
+                }),
+                suggestions: vec![],
+            },
+        }
+    }
+
+    /// Claude's `AskUserQuestion` arrives as a Decision whose input is a
+    /// form. The Pane draws the form, not the y/n card: a digit picks an
+    /// option on the empty line, ↵ sends the pick folded into the tool's
+    /// input as `answers` — the shape Claude Code's own UI sends — and a
+    /// bare y sends nothing, because an unanswered question is not an
+    /// approval.
+    #[gpui::test]
+    fn a_question_decision_is_answered_by_its_form(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("question-form", 1);
+        bind_production_keys(cx);
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+        fake.streams.borrow()[0].send(question("q_01")).unwrap();
+        tick(cx);
+        view.read_with(cx, |view, _| {
+            let draft = view.questions.get(&thread).expect("a draft per question");
+            assert_eq!(draft.questions.len(), 1);
+            assert!(draft.answers[0].picks.is_empty());
+        });
+
+        cx.simulate_keystrokes("y");
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert!(
+                view.cockpit.thread(thread).unwrap().pending().is_some(),
+                "y cannot approve an unanswered question"
+            );
+        });
+        // …and while a question pends the letters type: "y" landed on
+        // the line, and the digit is a digit with text on it.
+        assert_eq!(composer_text(&view, cx), "y");
+        cx.simulate_keystrokes("backspace");
+        cx.run_until_parked();
+
+        cx.simulate_keystrokes("2");
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.questions[&thread].answers[0].picks, vec![1]);
+        });
+
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert!(
+                view.cockpit.thread(thread).unwrap().pending().is_none(),
+                "↵ sends the answer"
+            );
+            assert!(
+                view.questions.get(&thread).is_none(),
+                "the draft dies with it"
+            );
+        });
+        let answered = fake.answered.borrow();
+        let (id, answer) = answered.last().expect("the answer went out");
+        assert_eq!(id, "q_01");
+        let DecisionAnswer::Allow { input } = answer else {
+            panic!("a question is answered by allowing with answers: {answer:?}");
+        };
+        assert_eq!(input["answers"]["Which approach?"], "Patch");
+        assert!(input["questions"].is_array(), "the original input is kept");
+    }
+
+    /// Text on the line is the operator's own answer: ↵ with "neither,
+    /// wait" typed sends it as the answer and clears the line.
+    #[gpui::test]
+    fn a_typed_line_answers_a_question_in_the_operators_words(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("question-typed", 1);
+        bind_production_keys(cx);
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+        fake.streams.borrow()[0].send(question("q_02")).unwrap();
+        tick(cx);
+        cx.simulate_input("neither, wait 2 days");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert!(view.cockpit.thread(thread).unwrap().pending().is_none());
+        });
+        assert_eq!(
+            composer_text(&view, cx),
+            "",
+            "the line went with the answer"
+        );
+        let answered = fake.answered.borrow();
+        let DecisionAnswer::Allow { input } = &answered.last().unwrap().1 else {
+            panic!("allow with answers");
+        };
+        assert_eq!(input["answers"]["Which approach?"], "neither, wait 2 days");
+        assert!(
+            fake.sent.borrow().is_empty(),
+            "nothing was sent as a prompt"
+        );
+    }
+
+    /// A model-written title lands only on a Thread nobody has named: the
+    /// operator's own rename in the meantime wins, and None changes
+    /// nothing.
+    #[gpui::test]
+    fn a_titlers_answer_names_only_an_untitled_thread(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("titler-adopt", 2);
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (first, second) = view.read_with(cx, |view, _| {
+            let threads = view.cockpit.threads();
+            (threads[0], threads[1])
+        });
+        view.update(cx, |view, cx| {
+            view.adopt_title(first, None, cx);
+            assert!(view.cockpit.thread(first).unwrap().title().is_none());
+            view.adopt_title(first, Some("Wire the titler".into()), cx);
+            assert_eq!(
+                view.cockpit.thread(first).unwrap().title(),
+                Some("Wire the titler")
+            );
+            assert_eq!(view.facts.name(first).as_ref(), "Wire the titler");
+
+            view.cockpit.rename_thread(second, "Mine").unwrap();
+            view.adopt_title(second, Some("Model's idea".into()), cx);
+            assert_eq!(view.cockpit.thread(second).unwrap().title(), Some("Mine"));
         });
     }
 

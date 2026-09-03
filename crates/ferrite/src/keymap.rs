@@ -156,6 +156,12 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
         ("y".into(), "cockpit::Allow", Some("Decision")),
         ("n".into(), "cockpit::Deny", Some("Decision")),
         ("a".into(), "cockpit::Always", Some("Decision")),
+        // A question Decision's options, by number — digits again with
+        // text on the line, the y/n/a rule.
+        ("1".into(), "cockpit::PickOption1", Some("Decision")),
+        ("2".into(), "cockpit::PickOption2", Some("Decision")),
+        ("3".into(), "cockpit::PickOption3", Some("Decision")),
+        ("4".into(), "cockpit::PickOption4", Some("Decision")),
         // At wall range no Pane holds a Composer, so the same keys answer
         // whichever Thread is flagged without focusing it first.
         ("y".into(), "cockpit::Allow", Some("Wall")),

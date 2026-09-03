@@ -198,6 +198,7 @@ fn main() {
                                     settings: settings.clone(),
                                     dir: settings_dir.clone(),
                                     defaults: defaults.clone(),
+                                    titler: Some("claude".into()),
                                 },
                                 cx,
                             )

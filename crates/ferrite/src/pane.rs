@@ -340,6 +340,11 @@ pub struct PaneWiring {
     /// opens the rename editor, or the editor itself while renaming. None
     /// draws the plain name (L2, L3, drafts).
     pub title: Option<AnyElement>,
+    /// A pending question Decision's form, wired — the options as rows a
+    /// press picks, the keys that send. Some only at L1 and only while the
+    /// pending Decision is Claude's `AskUserQuestion`; it stands in for
+    /// the y/n card, which cannot answer a question.
+    pub question_form: Option<AnyElement>,
 }
 
 /// The wall's state matrix (glance.md §4), selected from O(1) reads plus the
@@ -481,6 +486,7 @@ pub fn render_pane(
         mut decide,
         mut tool_controls,
         title,
+        question_form,
     } = wiring;
     let transcript = thread.map(|thread| thread.transcript());
     let decision = thread.and_then(|thread| thread.pending());
@@ -588,7 +594,9 @@ pub fn render_pane(
             // Composer's 12px padding would inset it twice. The child
             // order §D.1 pins is head · tasks · body · decision · changed
             // · composer.
-            if let Some(decision) = decision {
+            if let Some(form) = question_form {
+                pane = pane.child(form);
+            } else if let Some(decision) = decision {
                 pane = pane.child(decision_card(decision, decide.take()));
             }
             // The CHANGED strip rides above the Composer whenever the
@@ -2138,6 +2146,9 @@ fn decision_card(decision: &Decision, decide: Option<AnyElement>) -> Div {
 /// description, else the honest unreadable fallback. Every surface that
 /// names a Decision (L1 card, L2 cell, wall alert) goes through here.
 fn decision_subject(decision: &Decision) -> SharedString {
+    if let Some(questions) = question_of(decision) {
+        return SharedString::from(ferrite_core::questions::summary(&questions));
+    }
     match (
         decision.tool_name.is_empty(),
         decision.description.is_empty(),
@@ -2155,6 +2166,9 @@ fn decision_subject(decision: &Decision) -> SharedString {
 /// request's cwd when it names one — or the unreadable fallback when the
 /// provider named no tool.
 fn decision_wants(decision: &Decision) -> SharedString {
+    if question_of(decision).is_some() {
+        return SharedString::from("the agent asks · answer in the Pane");
+    }
     if decision.tool_name.is_empty() {
         return SharedString::from("the provider sent a request Ferrite could not read");
     }
@@ -2222,6 +2236,161 @@ pub fn decide_row(level: Level) -> Div {
         } else {
             4.
         }))
+}
+
+// -------------------------------------------------------------- questions
+
+/// The questions a Decision carries, when it is Claude's question tool.
+pub fn question_of(decision: &Decision) -> Option<Vec<ferrite_core::questions::Question>> {
+    ferrite_core::questions::is_question_tool(&decision.tool_name)
+        .then(|| ferrite_core::questions::parse(&decision.input))
+        .flatten()
+}
+
+/// The question card: the Decision card's ground and ring grown into a
+/// column — one block per question, its options as rows, the keys last.
+/// The same margins as the y/n card, so the Composer sits where it always
+/// sits and the transcript above gives way by exactly the card's height.
+pub fn question_card() -> Div {
+    div()
+        .relative()
+        .flex()
+        .flex_col()
+        .flex_shrink_0()
+        .min_w_0()
+        .gap(px(theme::DECISION_GAP))
+        .mx(px(theme::DECISION_MARGIN_X))
+        .mb(px(theme::DECISION_MARGIN_B))
+        .px(px(theme::DECISION_PAD_X))
+        .py(px(theme::DECISION_PAD_Y))
+        .rounded(px(theme::R_CHIP))
+        .bg(rgba(ATTENTION_WASH))
+        .child(ring_overlay(ATTENTION_EDGE, theme::R_CHIP))
+}
+
+/// One question's head: the model's short label as an amber tag, the
+/// question itself in the strong ink, wrapping, and "pick any" when more
+/// than one option may be taken.
+pub fn question_head(header: SharedString, text: SharedString, multi: bool) -> Div {
+    let mut head = div().flex().flex_col().min_w_0().gap(px(2.)).pt(px(2.));
+    let mut tags = div()
+        .flex()
+        .items_center()
+        .gap(px(theme::KEYS_GAP))
+        .text_size(px(theme::FS_MONO))
+        .line_height(relative(theme::LINE_UI));
+    if !header.is_empty() {
+        tags = tags.child(
+            div()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(ATTENTION))
+                .child(header),
+        );
+    }
+    if multi {
+        tags = tags.child(div().text_color(rgb(TEXT_MUTED)).child("pick any"));
+    }
+    head = head.child(tags);
+    let mut question = div()
+        .text_size(px(theme::FS_MD))
+        .line_height(relative(theme::LINE_BODY))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(rgb(TEXT_STRONG))
+        .child(text);
+    question.style().size.width = None;
+    head.child(question)
+}
+
+/// One option row: the mark (`◉`/`○`, or `☑`/`☐` for pick-any), the
+/// number key that picks it, the label, and the model's one-line reason
+/// under it in the muted ink. Picked rows carry the amber mark and the
+/// strong label; the whole row is the press target.
+pub fn question_option(
+    id: (&'static str, usize),
+    number: usize,
+    label: SharedString,
+    description: SharedString,
+    picked: bool,
+    multi: bool,
+) -> Stateful<Div> {
+    let mark = match (multi, picked) {
+        (true, true) => "☑",
+        (true, false) => "☐",
+        (false, true) => "◉",
+        (false, false) => "○",
+    };
+    let mut column = div().flex().flex_col().flex_1().min_w_0().child(
+        div()
+            .text_size(px(theme::FS_SM))
+            .line_height(relative(theme::LINE_UI))
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(rgb(if picked { TEXT_STRONG } else { TEXT_2 }))
+            .child(label),
+    );
+    if !description.is_empty() {
+        let mut reason = div()
+            .text_size(px(theme::FS_MONO))
+            .line_height(relative(theme::LINE_BODY))
+            .text_color(rgb(TEXT_MUTED))
+            .child(description);
+        reason.style().size.width = None;
+        column = column.child(reason);
+    }
+    div()
+        .id(id)
+        .flex()
+        .items_start()
+        .min_w_0()
+        .gap(px(theme::EVENT_GAP))
+        .px(px(6.))
+        .py(px(3.))
+        .rounded(px(theme::R_CONTROL))
+        .child(
+            div()
+                .flex_shrink_0()
+                .w(px(12.))
+                .text_size(px(theme::FS_SM))
+                .line_height(relative(theme::LINE_UI))
+                .text_color(rgb(if picked { ATTENTION } else { TEXT_MUTED }))
+                .child(mark),
+        )
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_size(px(theme::FS_MONO))
+                .line_height(relative(theme::LINE_UI))
+                .text_color(rgb(TEXT_MUTED))
+                .child(SharedString::from(number.to_string())),
+        )
+        .child(column)
+        .hover_row()
+}
+
+/// The card's last row: how to answer, in the muted ink, and the keys.
+pub fn question_footer(hint: SharedString, keys: Option<AnyElement>) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .min_w_0()
+        .gap(px(theme::DECISION_GAP))
+        .pt(px(2.))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_size(px(theme::FS_MONO))
+                .line_height(relative(theme::LINE_UI))
+                .text_color(rgb(TEXT_MUTED))
+                .child(hint),
+        )
+        .children(keys)
+}
+
+/// The question card's send key — ↵, the Composer's own key, because the
+/// typed line is part of the answer.
+pub fn keycap_send() -> Stateful<Div> {
+    keycap("enter send", "↵", " send answers", TEXT_2)
 }
 
 // ------------------------------------------------------------ shared bits
