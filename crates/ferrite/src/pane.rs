@@ -87,6 +87,8 @@ pub(crate) enum DisclosureState {
 /// the first send resolves it through the registry.
 pub struct DraftBinding {
     pub provider: ProviderChoice,
+    /// The effort chip's choice; None is the operator's default.
+    pub effort: Option<String>,
     pub project: ProjectId,
     pub target: DraftTarget,
     /// The band chip tab has parked on; None with the keyboard in the
@@ -97,10 +99,11 @@ pub struct DraftBinding {
     pub error: Option<SharedString>,
 }
 
-/// The band's three chips, in tab order.
+/// The band's four chips, in tab order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BandChip {
     Provider,
+    Effort,
     Project,
     Workspace,
 }
@@ -110,7 +113,8 @@ impl BandChip {
     pub fn next(current: Option<BandChip>) -> Option<BandChip> {
         match current {
             None => Some(BandChip::Provider),
-            Some(BandChip::Provider) => Some(BandChip::Project),
+            Some(BandChip::Provider) => Some(BandChip::Effort),
+            Some(BandChip::Effort) => Some(BandChip::Project),
             Some(BandChip::Project) => Some(BandChip::Workspace),
             Some(BandChip::Workspace) => None,
         }

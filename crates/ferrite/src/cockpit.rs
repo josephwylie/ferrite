@@ -462,6 +462,8 @@ enum Consequence {
 /// What picking a band row does to the focused draft.
 enum BandChoice {
     Provider(ProviderChoice),
+    /// The effort chip: a rung, or None for the operator's default.
+    Effort(Option<String>),
     Project(ProjectId),
     /// The type-a-path row: register the typed path as a project, then
     /// choose it.
@@ -3206,6 +3208,7 @@ impl CockpitView {
         };
         let binding = pane::DraftBinding {
             provider,
+            effort: None,
             project,
             target,
             band_focus: None,
@@ -3269,6 +3272,32 @@ impl CockpitView {
                     false,
                     |choice| Consequence::Band(BandChoice::Provider(choice)),
                 );
+                rows
+            }
+            pane::BandChip::Effort => {
+                let provider = draft.provider.provider;
+                let default = self.prefs.settings.effort_for(provider);
+                let mut rows = vec![band_row(
+                    SharedString::from("Default"),
+                    SharedString::from(match default {
+                        Some(default) => format!("{} · from Settings", effort_title(default)),
+                        None => "the CLI's own choice".to_string(),
+                    }),
+                    draft.effort.is_none(),
+                    BandChoice::Effort(None),
+                )];
+                for effort in ferrite_core::providers::models::efforts_for(
+                    provider,
+                    draft.provider.model.as_deref(),
+                    &self.cockpit.announced_models(provider),
+                ) {
+                    rows.push(band_row(
+                        SharedString::from(effort_title(&effort)),
+                        SharedString::from(effort_detail(&effort)),
+                        draft.effort.as_deref() == Some(effort.as_str()),
+                        BandChoice::Effort(Some(effort)),
+                    ));
+                }
                 rows
             }
             pane::BandChip::Project => {
@@ -3375,8 +3404,28 @@ impl CockpitView {
     ) {
         match choice {
             BandChoice::Provider(provider) => {
+                // A rung the new model does not have is dropped, not sent
+                // to a CLI that would refuse it.
+                let ladder = ferrite_core::providers::models::efforts_for(
+                    provider.provider,
+                    provider.model.as_deref(),
+                    &self.cockpit.announced_models(provider.provider),
+                );
                 if let Some(draft) = self.focused_draft_mut() {
                     draft.provider = provider.clone();
+                    if draft
+                        .effort
+                        .as_ref()
+                        .is_some_and(|effort| !ladder.contains(effort))
+                    {
+                        draft.effort = None;
+                    }
+                    draft.error = None;
+                }
+            }
+            BandChoice::Effort(effort) => {
+                if let Some(draft) = self.focused_draft_mut() {
+                    draft.effort = effort.clone();
                     draft.error = None;
                 }
             }
@@ -3505,6 +3554,7 @@ impl CockpitView {
             return;
         }
         let provider = draft.provider.clone();
+        let effort = draft.effort.clone();
         let deferred = self
             .cockpit
             .roster()
@@ -3513,7 +3563,7 @@ impl CockpitView {
         let resolved = self.resolve_target(draft.project, &draft.target);
         let opened = resolved.and_then(|choice| {
             self.cockpit
-                .bootstrap_draft(id, provider, choice, &text)
+                .bootstrap_draft(id, provider, choice, &text, effort.clone())
                 .map_err(|e| e.to_string())
         });
         match opened {
@@ -3630,6 +3680,13 @@ impl CockpitView {
             pane::DraftTarget::Existing { branch } => branch.clone(),
             pane::DraftTarget::New => SharedString::from("new worktree"),
         };
+        let effort_label = match draft.effort.as_deref() {
+            Some(effort) => SharedString::from(effort_title(effort)),
+            None => match self.prefs.settings.effort_for(draft.provider.provider) {
+                Some(effort) => SharedString::from(effort_title(effort)),
+                None => SharedString::from("effort"),
+            },
+        };
         let chips = [
             (
                 pane::BandChip::Provider,
@@ -3643,6 +3700,11 @@ impl CockpitView {
                     None => SharedString::from(provider_title(draft.provider.provider)),
                 },
                 true,
+            ),
+            (
+                pane::BandChip::Effort,
+                pane::band_chip_label(&effort_label),
+                false,
             ),
             (
                 pane::BandChip::Project,
@@ -6975,8 +7037,10 @@ mod tests {
             );
         });
 
-        // tab tab: the project chip; ↵ opens its popover (bare enter — no
-        // popover is up yet, so Submit routes it to the focused chip).
+        // tab tab tab: provider, effort, then the project chip; ↵ opens
+        // its popover (bare enter — no popover is up yet, so Submit routes
+        // it to the focused chip).
+        cx.simulate_keystrokes("tab");
         cx.simulate_keystrokes("tab");
         cx.simulate_keystrokes("tab");
         cx.simulate_keystrokes("enter");
@@ -7032,6 +7096,7 @@ mod tests {
         // list anywhere.
         cx.simulate_keystrokes("escape");
         cx.simulate_keystrokes("tab"); // prompt → provider
+        cx.simulate_keystrokes("tab"); // → effort
         cx.simulate_keystrokes("tab"); // → project
         cx.simulate_keystrokes("enter");
         cx.simulate_keystrokes("up");
@@ -10560,6 +10625,36 @@ mod tests {
             Some("/effort turbo"),
             "an unknown level goes to the provider as text"
         );
+    }
+
+    /// The draft band's effort chip: its rows are the model's ladder under
+    /// the operator's default, a pick names the chip, and the first send
+    /// starts the Thread on that effort.
+    #[gpui::test]
+    fn the_effort_chip_starts_the_thread_on_its_pick(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("draft-effort", 0);
+        bind_production_keys(cx);
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        tick(cx);
+        view.update(cx, |view, cx| {
+            view.open_band_popover(pane::BandChip::Effort, cx);
+            let band = view.popover.as_ref().expect("the effort popover");
+            assert!(matches!(band.kind, Kind::Band(pane::BandChip::Effort)));
+            let names: Vec<&str> = band.rows.iter().map(|row| row.name.as_ref()).collect();
+            assert_eq!(names[0], "Default");
+            assert!(names.contains(&"High"), "{names:?}");
+            let high = names.iter().position(|name| *name == "High").unwrap();
+            view.pick(high, cx);
+            let draft = view.panes[view.focused()].draft().expect("still a draft");
+            assert_eq!(draft.effort.as_deref(), Some("high"));
+        });
+        cx.simulate_input("go");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            let thread = view.panes[0].thread().expect("bootstrapped");
+            assert_eq!(view.cockpit.thread(thread).unwrap().effort(), Some("high"));
+        });
     }
     /// #25: the mouse door — a click on the footer chip opens the picker.
     /// The sweep covers the meta row's right side so the test does not

@@ -523,13 +523,17 @@ impl Cockpit {
                 model: None,
             },
             workspace,
+            None,
         )
     }
 
+    /// `effort` is the Thread's own reasoning level from its first breath
+    /// (a draft's chip); None is the operator's default for the provider.
     fn open_choice(
         &mut self,
         choice: ProviderChoice,
         workspace: WorkspaceChoice,
+        effort: Option<String>,
     ) -> io::Result<ThreadId> {
         let ProviderChoice { provider, model } = choice;
         let root = match &workspace {
@@ -557,7 +561,7 @@ impl Cockpit {
         let created =
             self.store
                 .create_with_model(provider, model.clone(), Some(project), binding.clone());
-        let (id, writer) = match created {
+        let (id, mut writer) = match created {
             Ok(created) => created,
             Err(error) => {
                 if fresh_branch.is_some() {
@@ -573,10 +577,24 @@ impl Cockpit {
             let _ = self.store.delete(id);
             return Err(io::Error::other(e));
         }
+        // The chosen effort goes into the header beside the model, so a
+        // revive spawns on it too.
+        if effort.is_some() {
+            if let Err(e) = self.store.set_provider(
+                id,
+                provider,
+                model.clone(),
+                effort.clone(),
+                Some(&mut writer),
+            ) {
+                let _ = self.store.delete(id);
+                return Err(io::Error::other(e.to_string()));
+            }
+        }
         let session = match self.spawner.spawn(SpawnRequest {
             provider,
             model: model.as_deref(),
-            effort: None,
+            effort: effort.as_deref(),
             resume: None,
             cwd: workspace::effective_cwd(None, Some(&binding)),
             name: None,
@@ -596,7 +614,7 @@ impl Cockpit {
                 writer,
                 provider,
                 model,
-                None,
+                effort,
                 None,
                 Some(binding),
                 None,
@@ -616,7 +634,18 @@ impl Cockpit {
         workspace: WorkspaceChoice,
         prompt: &str,
     ) -> io::Result<ThreadId> {
-        let id = self.open_choice(choice, workspace)?;
+        self.bootstrap_with(choice, workspace, prompt, None)
+    }
+
+    /// `bootstrap` with the Thread's own effort from the start.
+    fn bootstrap_with(
+        &mut self,
+        choice: ProviderChoice,
+        workspace: WorkspaceChoice,
+        prompt: &str,
+        effort: Option<String>,
+    ) -> io::Result<ThreadId> {
+        let id = self.open_choice(choice, workspace, effort)?;
         if let Some(binding) = self.thread(id).and_then(|open| open.workspace()) {
             let notice = format!("opened in {}", binding.cwd().display());
             self.threads
@@ -648,6 +677,18 @@ impl Cockpit {
         prompt: &str,
         group: GroupId,
     ) -> io::Result<ThreadId> {
+        self.bootstrap_in_group_with(choice, workspace, prompt, group, None)
+    }
+
+    /// `bootstrap_in_group` with the Thread's own effort from the start.
+    fn bootstrap_in_group_with(
+        &mut self,
+        choice: ProviderChoice,
+        workspace: WorkspaceChoice,
+        prompt: &str,
+        group: GroupId,
+        effort: Option<String>,
+    ) -> io::Result<ThreadId> {
         let root = match &workspace {
             WorkspaceChoice::Main { checkout } => checkout,
             WorkspaceChoice::NewWorktree { repo } => repo,
@@ -658,7 +699,7 @@ impl Cockpit {
             .validate_join_project(group, Some(project))
             .map_err(io::Error::other)?;
 
-        let id = self.open_choice(choice, workspace)?;
+        let id = self.open_choice(choice, workspace, effort)?;
         if let Err(error) = self.groups.apply(GroupChange::Join {
             thread: id,
             group,
@@ -1863,14 +1904,17 @@ impl Cockpit {
         choice: ProviderChoice,
         workspace: WorkspaceChoice,
         prompt: &str,
+        effort: Option<String>,
     ) -> io::Result<Bootstrapped> {
         let scope = self
             .roster
             .draft_scope(draft)
             .ok_or_else(|| io::Error::other("no such draft"))?;
         let thread = match scope.group {
-            Some(group) => self.bootstrap_in_group(choice, workspace, prompt, group)?,
-            None => self.bootstrap(choice, workspace, prompt)?,
+            Some(group) => {
+                self.bootstrap_in_group_with(choice, workspace, prompt, group, effort)?
+            }
+            None => self.bootstrap_with(choice, workspace, prompt, effort)?,
         };
         self.roster.draft_became(draft, thread);
         let refused_leave = scope.pending_leave.and_then(|leaving| {
@@ -5059,6 +5103,7 @@ mod tests {
                 },
                 main_choice(),
                 "join",
+                None,
             )
             .unwrap();
         assert!(done.refused_leave.is_none());
