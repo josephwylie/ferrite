@@ -1568,6 +1568,25 @@ pub fn model_picker(provider: Option<Provider>, label: SharedString) -> Div {
         .hover_control()
 }
 
+/// The effort chip beside the model picker: the level in force and a
+/// chevron, the picker's own recipe minus the logomark.
+pub fn effort_picker(label: SharedString) -> Div {
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(theme::KEYS_GAP))
+        .h(px(theme::CHIP_H))
+        .pl(px(theme::PICKER_PAD_R))
+        .pr(px(theme::PICKER_PAD_R))
+        .rounded(px(theme::R_CHIP))
+        .text_size(px(theme::FS_SM))
+        .text_color(rgb(TEXT_2))
+        .child(div().flex_shrink_0().child(label))
+        .child(icon(icons::CHEVRON_DOWN, theme::ICON_CHEVRON, TEXT_MUTED))
+        .hover_control()
+}
+
 /// The rendered tail of a transcript at one level — the window `body`
 /// draws and the selection overlay resolves against (#27). One function,
 /// two callers, so the wash can never resolve against a different window

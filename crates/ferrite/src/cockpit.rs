@@ -370,6 +370,10 @@ enum Kind {
     ImportFile,
     /// #25: re-aim the Thread's provider / model before its first prompt.
     Provider,
+    /// The Composer's effort picker: the reasoning ladder the Thread's
+    /// model takes, from the provider's own announcement, with the
+    /// operator's default on top. Opened by the chip or `/effort`.
+    Effort,
     /// #29: one band chip's choices on the focused draft — registry reads,
     /// never a filesystem scan — except the project chip's type-a-path row,
     /// which re-derives from the Composer line per edit.
@@ -394,7 +398,7 @@ impl Kind {
             Kind::Band(pane::BandChip::Project) => {
                 "type path <dir> · ↑↓ move · ↵ pick · esc dismiss"
             }
-            Kind::Provider | Kind::Band(_) => "↑↓ move · ↵ pick · esc dismiss",
+            Kind::Provider | Kind::Effort | Kind::Band(_) => "↑↓ move · ↵ pick · esc dismiss",
         }
     }
 }
@@ -434,6 +438,10 @@ enum Consequence {
     /// The local `provider` row pre-lock (#25): clear the line and open
     /// the picker in the menu's place.
     OpenProviderPicker,
+    /// The local `effort` row: clear the line and open the effort picker.
+    OpenEffortPicker,
+    /// An effort-row pick: this level, or None for the operator's default.
+    Effort(Option<String>),
     /// The local `import` row (#11): open the file picker — clearing the
     /// line on a Thread, and leaving it alone on a draft, whose typed
     /// command must survive a refused adoption.
@@ -1796,6 +1804,63 @@ impl CockpitView {
                 )
                 .into_any_element(),
             );
+            // The effort default: the ladder the chosen model takes.
+            let chosen_effort = settings.effort_for(provider).map(str::to_string);
+            let ladder = ferrite_core::providers::models::efforts_for(
+                provider,
+                chosen.as_deref(),
+                &self.cockpit.announced_models(provider),
+            );
+            let mut effort_chips: Vec<AnyElement> = Vec::new();
+            for (at, effort) in std::iter::once(None)
+                .chain(ladder.into_iter().map(Some))
+                .enumerate()
+            {
+                let selected = chosen_effort == effort;
+                let pick = effort.clone();
+                let label = match &effort {
+                    Some(effort) => SharedString::from(effort_title(effort)),
+                    None => SharedString::from("Default"),
+                };
+                effort_chips.push(
+                    prefs::chip(
+                        (
+                            if provider == Provider::Claude {
+                                "settings-claude-effort"
+                            } else {
+                                "settings-codex-effort"
+                            },
+                            at,
+                        ),
+                        label,
+                        selected,
+                    )
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            let pick = pick.clone();
+                            view.change_settings(
+                                |settings| settings.set_effort_for(provider, pick),
+                                cx,
+                            );
+                        }),
+                    )
+                    .into_any_element(),
+                );
+            }
+            rows.push(
+                prefs::row(
+                    if provider == Provider::Claude {
+                        "Claude effort"
+                    } else {
+                        "Codex effort"
+                    },
+                    "Reasoning depth a new Thread starts at; each Thread can change its own".into(),
+                    effort_chips,
+                )
+                .into_any_element(),
+            );
         }
         sections.push(prefs::section("New Threads", rows).into_any_element());
 
@@ -2488,13 +2553,25 @@ impl CockpitView {
                     );
                 }
             }
-            // The model can change at any time; the provider only before
-            // the first prompt, which the picker itself explains.
+            // The model can change at any time, and so can the provider:
+            // after the first prompt the other one starts a fresh
+            // conversation with the earlier one handed over as context,
+            // which the picker itself explains.
             let detail = if open.first_prompt_sent() {
-                "switch model"
+                "switch model · hand over to the other provider"
             } else {
                 "switch provider / model"
             };
+            if let Some(row) = local_row(filter, "effort", "switch reasoning effort", false) {
+                push_local(
+                    &mut rows,
+                    Row {
+                        row,
+                        active: false,
+                        consequence: Consequence::OpenEffortPicker,
+                    },
+                );
+            }
             if let Some(row) = local_row(filter, "model", detail, false) {
                 push_local(
                     &mut rows,
@@ -2673,7 +2750,7 @@ impl CockpitView {
                 }
             }
             Kind::Commands | Kind::Files { .. } => self.menu_muted = true,
-            Kind::ImportFile | Kind::Provider => {}
+            Kind::ImportFile | Kind::Provider | Kind::Effort => {}
         }
         cx.notify();
     }
@@ -2732,6 +2809,17 @@ impl CockpitView {
             Consequence::Provision(choice) => {
                 if let Some(thread) = open.pane.thread() {
                     self.pick_provider(thread, choice.clone(), cx);
+                }
+            }
+            Consequence::OpenEffortPicker => {
+                if let Some(thread) = open.pane.thread() {
+                    splice_line(cx, "");
+                    self.open_effort_picker(thread, cx);
+                }
+            }
+            Consequence::Effort(effort) => {
+                if let Some(thread) = open.pane.thread() {
+                    self.pick_effort(thread, effort.clone(), cx);
                 }
             }
             Consequence::Band(choice) => self.pick_band(choice, &composer, cx),
@@ -2864,14 +2952,19 @@ impl CockpitView {
         let mut rows: Vec<Row> = Vec::new();
         let mut selected = None;
         for provider in [Provider::Claude, Provider::Codex] {
-            let fixed = locked && provider != current;
+            // After the first prompt the other Provider is a handover, not
+            // a swap: its rows stay live and its section says what a pick
+            // does — a fresh conversation there, the earlier one carried
+            // over as context.
+            let handover = locked && provider != current;
+            let fixed = false;
             rows.push(Row {
                 row: pane::MenuRow {
                     insert: SharedString::default(),
                     name: SharedString::from(provider_title(provider)),
                     matched: Vec::new(),
-                    detail: SharedString::from(if fixed {
-                        "fixed after the first prompt"
+                    detail: SharedString::from(if handover {
+                        "hands the conversation over"
                     } else {
                         ""
                     }),
@@ -3590,7 +3683,7 @@ impl CockpitView {
                 {
                     pane::picker_section(provider_of_title(&row.name).unwrap(), row.detail.clone())
                 }
-                Kind::Provider | Kind::Band(_) => pane::picker_row(
+                Kind::Provider | Kind::Effort | Kind::Band(_) => pane::picker_row(
                     row.name.clone(),
                     row.detail.clone(),
                     at == open.selected,
@@ -4199,6 +4292,35 @@ fn provider_title(provider: Provider) -> &'static str {
     }
 }
 
+/// An effort level as a person says it: `xhigh` is "Extra high", the
+/// rest capitalized.
+fn effort_title(effort: &str) -> String {
+    match effort {
+        "xhigh" => "Extra high".to_string(),
+        other => {
+            let mut chars = other.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        }
+    }
+}
+
+/// What each rung buys, in the words the providers' own menus use.
+fn effort_detail(effort: &str) -> &'static str {
+    match effort {
+        "minimal" => "the least reasoning the model allows",
+        "low" => "fast responses, lighter reasoning",
+        "medium" => "balances speed and depth for everyday tasks",
+        "high" => "greater depth for complex problems",
+        "xhigh" => "extra depth for the hardest problems",
+        "max" => "maximum depth, slowest",
+        "ultra" => "maximum reasoning with automatic delegation",
+        _ => "",
+    }
+}
+
 fn provider_of_title(title: &str) -> Option<Provider> {
     match title {
         "Claude" => Some(Provider::Claude),
@@ -4287,7 +4409,7 @@ impl Render for CockpitView {
                     // The model picker outlives the first prompt (the
                     // model can always change); only its Thread going
                     // away closes it.
-                    Kind::Provider => open
+                    Kind::Provider | Kind::Effort => open
                         .pane
                         .thread()
                         .is_none_or(|thread| self.cockpit.thread(thread).is_none()),
@@ -5119,27 +5241,142 @@ impl CockpitView {
             }
             None => SharedString::from(provider_title(provider)),
         };
-        Some(
+        let model_chip = div()
+            .id(("model-picker", thread.get() as usize))
+            .flex()
+            .flex_shrink_0()
+            .child(pane::model_picker(Some(provider), label))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                    // The control is this Pane's: land on it first, then
+                    // toggle — and stop the press so the root's
+                    // dismissal cannot close what this just opened.
+                    cx.stop_propagation();
+                    if let Some(index) = view.pane_for(thread) {
+                        view.focus_pane(index);
+                    }
+                    view.toggle_provider_picker(thread, cx);
+                }),
+            );
+        // The effort chip beside it — only when the model takes one; a
+        // model with no ladder (haiku) draws no chip rather than a dead one.
+        let ladder =
+            ferrite_core::providers::models::efforts_for(provider, open.model(), open.models());
+        let effort_chip = (!ladder.is_empty()).then(|| {
+            let label = match open.effort() {
+                Some(effort) => SharedString::from(effort_title(effort)),
+                None => match self.prefs.settings.effort_for(provider) {
+                    Some(effort) => SharedString::from(effort_title(effort)),
+                    None => SharedString::from("effort"),
+                },
+            };
             div()
-                .id(("model-picker", thread.get() as usize))
+                .id(("effort-picker", thread.get() as usize))
                 .flex()
                 .flex_shrink_0()
-                .child(pane::model_picker(Some(provider), label))
+                .child(pane::effort_picker(label))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                        // The control is this Pane's: land on it first, then
-                        // toggle — and stop the press so the root's
-                        // dismissal cannot close what this just opened.
                         cx.stop_propagation();
                         if let Some(index) = view.pane_for(thread) {
                             view.focus_pane(index);
                         }
-                        view.toggle_provider_picker(thread, cx);
+                        view.toggle_effort_picker(thread, cx);
                     }),
                 )
+        });
+        Some(
+            div()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .gap(px(crate::theme::KEYS_GAP))
+                .child(model_chip)
+                .children(effort_chip)
                 .into_any_element(),
         )
+    }
+
+    /// The effort chip's click: the root chip's toggle grammar.
+    fn toggle_effort_picker(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+        if self.popover.as_ref().is_some_and(|open| {
+            open.pane == PaneIdentity::Thread(thread) && matches!(open.kind, Kind::Effort)
+        }) {
+            self.popover = None;
+            cx.notify();
+            return;
+        }
+        self.open_effort_picker(thread, cx);
+    }
+
+    /// The effort picker in the Composer slot: the operator's default for
+    /// the provider on top (what it resolves to, named), then the ladder
+    /// the Thread's model takes — from the provider's own announcement
+    /// (Claude's handshake, Codex's model/list), else the catalog. The ✓
+    /// sits on the level in force.
+    fn open_effort_picker(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
+        let Some(open) = self.cockpit.thread(thread) else {
+            return;
+        };
+        let provider = open.provider();
+        let chosen = open.effort().map(str::to_string);
+        let default = self.prefs.settings.effort_for(provider).map(str::to_string);
+        let ladder =
+            ferrite_core::providers::models::efforts_for(provider, open.model(), open.models());
+        let mut rows: Vec<Row> = Vec::new();
+        rows.push(Row {
+            row: pane::MenuRow {
+                insert: SharedString::default(),
+                name: SharedString::from("Default"),
+                matched: Vec::new(),
+                detail: SharedString::from(match &default {
+                    Some(default) => format!("{} · from Settings", effort_title(default)),
+                    None => "the CLI's own choice".to_string(),
+                }),
+                prose_detail: true,
+                inert: false,
+            },
+            active: chosen.is_none(),
+            consequence: Consequence::Effort(None),
+        });
+        for effort in ladder {
+            rows.push(Row {
+                row: pane::MenuRow {
+                    insert: SharedString::default(),
+                    name: SharedString::from(effort_title(&effort)),
+                    matched: Vec::new(),
+                    detail: SharedString::from(effort_detail(&effort)),
+                    prose_detail: true,
+                    inert: false,
+                },
+                active: chosen.as_deref() == Some(effort.as_str()),
+                consequence: Consequence::Effort(Some(effort)),
+            });
+        }
+        let selected = rows.iter().position(|row| row.active).unwrap_or(0);
+        self.popover = Some(Popover {
+            pane: PaneIdentity::Thread(thread),
+            kind: Kind::Effort,
+            rows,
+            selected,
+        });
+        cx.notify();
+    }
+
+    /// An effort-row pick: the core re-aims the Thread (eagerly before the
+    /// first prompt, by resuming after it, refused mid-turn — its own
+    /// words land in the transcript either way).
+    fn pick_effort(&mut self, thread: ThreadId, effort: Option<String>, cx: &mut Context<Self>) {
+        if let Err(e) = self.cockpit.set_effort(thread, effort) {
+            self.cockpit.apply_input(
+                thread,
+                ferrite_core::transcript::Input::Notice(format!("effort unchanged: {e}")),
+            );
+        }
+        self.facts.acted(&self.cockpit, thread);
+        cx.notify();
     }
 
     /// The chip's click: close an open provider picker on this Thread, or
@@ -8524,9 +8761,9 @@ mod tests {
         view.read_with(cx, |view, _| {
             let menu = view.popover.as_ref().expect("/ opens the menu");
             // Everything the Session listed — plus, on this still-fresh
-            // Thread, Ferrite's own provider (#25) and import (#11)
+            // Thread, Ferrite's own model (#25), effort and import (#11)
             // entries on top.
-            assert_eq!(menu.rows.len(), 6);
+            assert_eq!(menu.rows.len(), 7);
             assert_eq!(menu.selected, 0);
         });
 
@@ -9043,9 +9280,9 @@ mod tests {
                 .as_ref()
                 .expect("/ offers import on a fresh Thread");
             let names: Vec<&str> = menu.rows.iter().map(|row| row.name.as_ref()).collect();
-            assert_eq!(names, ["/model", "/import"]);
+            assert_eq!(names, ["/model", "/effort", "/import"]);
             assert_eq!(menu.rows[0].detail.as_ref(), "switch provider / model");
-            assert_eq!(menu.rows[1].detail.as_ref(), "adopt a CLI session file");
+            assert_eq!(menu.rows[2].detail.as_ref(), "adopt a CLI session file");
         });
 
         // The Session announces its own commands: import rides on top, and
@@ -9072,6 +9309,7 @@ mod tests {
                 names,
                 [
                     "/model",
+                    "/effort",
                     "/import",
                     "/code-review",
                     "/commit",
@@ -9099,8 +9337,12 @@ mod tests {
             );
             assert_eq!(menu.rows[0].name.as_ref(), "/model");
             assert!(!menu.rows[0].inert, "the model door stays open");
-            assert_eq!(menu.rows[0].detail.as_ref(), "switch model");
-            assert_eq!(menu.rows.len(), 5);
+            assert_eq!(
+                menu.rows[0].detail.as_ref(),
+                "switch model · hand over to the other provider"
+            );
+            assert_eq!(menu.rows[1].name.as_ref(), "/effort");
+            assert_eq!(menu.rows.len(), 6);
         });
     }
 
@@ -9731,13 +9973,15 @@ mod tests {
                 .iter()
                 .position(|row| row.name.as_ref() == "Codex")
                 .unwrap();
+            // The other Provider is a handover now, not a dead door: its
+            // section says so and its rows stay live.
             assert_eq!(
                 picker.rows[codex].detail.as_ref(),
-                "fixed after the first prompt"
+                "hands the conversation over"
             );
             assert!(
-                picker.rows[codex + 1..].iter().all(|row| row.inert),
-                "the other Provider's rows are dead"
+                picker.rows[codex + 1..].iter().all(|row| !row.inert),
+                "the other Provider's rows are live"
             );
             assert!(
                 picker.rows[1..codex].iter().all(|row| !row.inert),
@@ -9757,7 +10001,10 @@ mod tests {
             let row = &view.popover.as_ref().expect("open").rows[0];
             assert_eq!(row.name.as_ref(), "/model");
             assert!(!row.inert);
-            assert_eq!(row.detail.as_ref(), "switch model");
+            assert_eq!(
+                row.detail.as_ref(),
+                "switch model · hand over to the other provider"
+            );
         });
         cx.simulate_keystrokes("enter");
         cx.run_until_parked();
@@ -10093,6 +10340,66 @@ mod tests {
         });
     }
 
+    /// The effort chip opens a ladder from the provider's own announcement
+    /// with the operator's default on top; a pick re-aims the Thread and
+    /// the chip names the level. `/effort` opens the same picker.
+    #[gpui::test]
+    fn the_effort_picker_lists_the_models_ladder_and_a_pick_reaims_it(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("effort-picker", 1);
+        bind_production_keys(cx);
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+        fake.streams.borrow()[0]
+            .send(SessionEvent::Models {
+                models: vec![ferrite_core::ModelInfo {
+                    value: "sonnet".into(),
+                    display: "Sonnet 5".into(),
+                    detail: String::new(),
+                    resolved: None,
+                    efforts: vec!["low".into(), "high".into()],
+                    default_effort: Some("high".into()),
+                }],
+            })
+            .unwrap();
+        tick(cx);
+
+        view.update(cx, |view, cx| {
+            view.open_effort_picker(thread, cx);
+            let picker = view.popover.as_ref().expect("the effort picker opens");
+            assert!(matches!(picker.kind, Kind::Effort));
+            let names: Vec<&str> = picker.rows.iter().map(|row| row.name.as_ref()).collect();
+            assert_eq!(names, ["Default", "Low", "High"]);
+            assert!(
+                picker.rows[0].active,
+                "no choice yet: the default is in force"
+            );
+            view.pick(2, cx);
+            assert!(view.popover.is_none(), "a pick closes the picker");
+            assert_eq!(view.cockpit.thread(thread).unwrap().effort(), Some("high"));
+        });
+
+        cx.simulate_input("/eff");
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            let menu = view.popover.as_ref().expect("the / menu");
+            assert_eq!(menu.rows[0].name.as_ref(), "/effort");
+        });
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            let picker = view.popover.as_ref().expect("/effort opens the picker");
+            assert!(matches!(picker.kind, Kind::Effort));
+            // The pick respawned the Session (pre-lock, eagerly), so the
+            // ladder is the catalog's again; the ✓ still sits on High.
+            let high = picker
+                .rows
+                .iter()
+                .find(|row| row.name.as_ref() == "High")
+                .expect("the ladder has High");
+            assert!(high.active, "✓ on the level in force");
+        });
+        assert_eq!(composer_text(&view, cx), "", "the /effort line is cleared");
+    }
     /// #25: the mouse door — a click on the footer chip opens the picker.
     /// The sweep covers the meta row's right side so the test does not
     /// encode the chip's exact position.
@@ -10120,9 +10427,11 @@ mod tests {
             }
         }
         assert!(opened, "the sweep never found the chip");
+        // The sweep runs right to left and the effort chip sits right of
+        // the model chip: either picker proves the mouse door.
         view.read_with(cx, |view, _| {
             let picker = view.popover.as_ref().expect("open");
-            assert!(matches!(picker.kind, Kind::Provider));
+            assert!(matches!(picker.kind, Kind::Provider | Kind::Effort));
         });
     }
 
