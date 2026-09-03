@@ -3,10 +3,19 @@
 //! The first line of the first prompt is a poor name for a Thread once the
 //! wall holds a dozen of them ("hey can you look at", "ok so"). So after
 //! the first exchange, a small model is asked for a 3–6 word title in the
-//! background. Ferrite never calls model APIs itself (CONTEXT.md), so this
-//! runs the Claude CLI in print mode — the same official harness a Session
-//! uses — on a throwaway std thread, and hands back Some(title) or, on any
-//! failure, None. The prompt-derived title stays in place until then.
+//! background. Ferrite never calls model APIs itself (CONTEXT.md), so the
+//! Thread's own Provider CLI is run in its non-interactive mode — the same
+//! official harness a Session uses — on a throwaway std thread, and hands
+//! back Some(title) or, on any failure, None. The prompt-derived title
+//! stays in place until then.
+//!
+//! The provider-agnostic part lives here: what to ask, how to run a CLI
+//! with a kill deadline, how to clean its reply. What differs per provider
+//! — which program, which flags, which cheap model — is a [`TitleForm`]
+//! that each provider fills in ([`claude::fill`], [`codex::fill`]); the
+//! cockpit picks the filler by the Thread's Provider. Those fillers belong
+//! beside their Sessions in `providers/`; they sit here only until that
+//! module is free to take them.
 
 use std::io::Read;
 use std::path::PathBuf;
@@ -15,11 +24,8 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
 
-/// The model alias the title is asked of — the cheapest one, so a Thread's
-/// name costs nothing an operator would notice.
-pub const MODEL: &str = "haiku";
-/// The effort level passed with the model, for the same reason.
-pub const EFFORT: &str = "low";
+use crate::providers::spawnable_program;
+use crate::store::Provider;
 
 /// Longest title kept; longer replies mean the model ignored the ask.
 const TITLE_CHARS: usize = 60;
@@ -41,7 +47,25 @@ pub struct TitleRequest {
     pub reply: Option<String>,
 }
 
-/// The instruction text sent as the CLI's positional prompt.
+/// The form a provider fills in so the titler can run its CLI: everything
+/// the agnostic runner needs and nothing it has to understand. The
+/// instruction text is already inside `args`, wherever that CLI wants it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TitleForm {
+    /// The CLI to run — the provider's configured program, as the Session
+    /// would spawn it.
+    pub program: String,
+    /// Everything after the program. The reply is read from stdout, so the
+    /// flags must put the model's final text there and nothing else.
+    pub args: Vec<String>,
+    /// The model the title is asked of, for a UI that says what a title
+    /// costs. A provider's own alias ("haiku", "gpt-5.4-mini").
+    pub model: &'static str,
+    /// The effort level sent with the model, in the provider's own words.
+    pub effort: &'static str,
+}
+
+/// The instruction text a provider puts in its form.
 pub fn title_prompt(req: &TitleRequest) -> String {
     let mut text = String::from(
         "Write a title for the task below: 3 to 6 words, sentence case, \
@@ -82,78 +106,53 @@ pub fn clean(raw: &str) -> Option<String> {
     Some(collapsed.chars().take(TITLE_CHARS).collect::<String>())
 }
 
-/// Ask `program` (the Claude CLI) for a title on a background thread. The
-/// receiver yields exactly one value: Some(title), or None when the CLI is
-/// missing, exits non-zero, prints nothing usable, or outlives `TIMEOUT`
-/// (it is killed). The receiver is dropped without a value only if the
-/// thread panics.
-pub fn spawn(program: &str, req: TitleRequest) -> Receiver<Option<String>> {
-    spawn_with_timeout(program, req, TIMEOUT)
+/// The filled form for a Thread on `provider`, whose Session runs
+/// `program`. The one place that knows which filler goes with which
+/// Provider, so the cockpit does not.
+pub fn form(provider: Provider, program: &str, req: &TitleRequest) -> TitleForm {
+    let prompt = title_prompt(req);
+    match provider {
+        Provider::Claude => claude::fill(program, &prompt),
+        Provider::Codex => codex::fill(program, &prompt),
+    }
+}
+
+/// Ask for a title on a background thread. The receiver yields exactly one
+/// value: Some(title), or None when the CLI is missing, exits non-zero,
+/// prints nothing usable, or outlives `TIMEOUT` (it is killed). The
+/// receiver is dropped without a value only if the thread panics.
+pub fn spawn(form: TitleForm) -> Receiver<Option<String>> {
+    spawn_with_timeout(form, TIMEOUT)
 }
 
 /// [`spawn`] with the kill deadline chosen by the caller, so a test can
 /// prove the kill without waiting thirty seconds.
-pub fn spawn_with_timeout(
-    program: &str,
-    req: TitleRequest,
-    timeout: Duration,
-) -> Receiver<Option<String>> {
+pub fn spawn_with_timeout(form: TitleForm, timeout: Duration) -> Receiver<Option<String>> {
     let (tx, rx) = mpsc::channel();
-    let program = program.to_string();
     thread::Builder::new()
         .name("ferrite-titler".into())
         .spawn(move || {
-            let title = run(&program, &req, timeout);
+            let title = run(&form, timeout);
             let _ = tx.send(title);
         })
         .expect("spawn titler thread");
     rx
 }
 
-/// The CLI arguments after the program: print mode, the cheap model, text
-/// output, no tools (the title must not be a Bash call), no saved session
-/// (a title turn is not a conversation to resume), no settings sources (so
-/// no project or user hooks run in the throwaway directory), and nobody to
-/// answer prompts (`--tools ""` should leave none, but a prompt that did
-/// appear must be denied rather than hang). Each flag verified against
-/// `claude --help` of 2.1.259; `--max-turns` does not exist there, and the
-/// tool-less turn is single anyway.
-fn args(prompt: &str) -> Vec<String> {
-    [
-        "-p",
-        "--model",
-        MODEL,
-        "--effort",
-        EFFORT,
-        "--output-format",
-        "text",
-        "--tools",
-        "",
-        "--no-session-persistence",
-        "--setting-sources",
-        "",
-        "--permission-prompts",
-        "none",
-        prompt,
-    ]
-    .into_iter()
-    .map(str::to_string)
-    .collect()
-}
-
-/// An empty directory for the CLI's cwd, so no project CLAUDE.md or
-/// `.claude/` settings are discovered. One per process; the CLI writes
-/// nothing there with persistence off.
+/// An empty directory for the CLI's cwd, so no project instructions or
+/// settings are discovered. One per process; both CLIs are told not to
+/// persist, so nothing accumulates there.
 fn scratch_dir() -> PathBuf {
     let dir = std::env::temp_dir().join(format!("ferrite-titler-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     dir
 }
 
-fn run(program: &str, req: &TitleRequest, timeout: Duration) -> Option<String> {
-    let mut child = Command::new(program)
-        .args(args(&title_prompt(req)))
+fn run(form: &TitleForm, timeout: Duration) -> Option<String> {
+    let mut child = Command::new(spawnable_program(&form.program))
+        .args(&form.args)
         .current_dir(scratch_dir())
+        // Closed, not inherited: Codex reads a piped stdin as more prompt.
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -191,6 +190,97 @@ fn run(program: &str, req: &TitleRequest, timeout: Duration) -> Option<String> {
         clean(&output)
     } else {
         None
+    }
+}
+
+/// Claude Code's way of titling a Thread: `claude -p` in print mode.
+pub mod claude {
+    use super::TitleForm;
+
+    /// The cheapest alias, so a Thread's name costs nothing an operator
+    /// would notice.
+    pub const MODEL: &str = "haiku";
+    pub const EFFORT: &str = "low";
+
+    /// Print mode, the cheap model, text output, no tools (the title must
+    /// not be a Bash call), no saved session (a title turn is not a
+    /// conversation to resume), no settings sources (so no project or user
+    /// hooks run in the throwaway directory), and nobody to answer prompts
+    /// (`--tools ""` should leave none, but one that did appear must be
+    /// denied rather than hang). Each flag verified against `claude --help`
+    /// of 2.1.259; `--max-turns` does not exist there, and the tool-less
+    /// turn is single anyway. The prompt is the positional argument.
+    pub fn fill(program: &str, prompt: &str) -> TitleForm {
+        TitleForm {
+            program: program.to_string(),
+            args: [
+                "-p",
+                "--model",
+                MODEL,
+                "--effort",
+                EFFORT,
+                "--output-format",
+                "text",
+                "--tools",
+                "",
+                "--no-session-persistence",
+                "--setting-sources",
+                "",
+                "--permission-prompts",
+                "none",
+                prompt,
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+            model: MODEL,
+            effort: EFFORT,
+        }
+    }
+}
+
+/// Codex's way of titling a Thread: `codex exec`, whose stdout is the
+/// final message alone (the banner goes to stderr).
+pub mod codex {
+    use super::TitleForm;
+
+    /// The small model in Codex's own catalogue.
+    pub const MODEL: &str = "gpt-5.4-mini";
+    pub const EFFORT: &str = "low";
+
+    /// Non-interactive, the cheap model at low reasoning, no session files
+    /// (`--ephemeral`), no user config or rules (so the operator's own
+    /// model, hooks and policies stay out of it), a read-only sandbox in
+    /// case the model reaches for a shell anyway, no colour codes in the
+    /// reply, and no git-repo requirement for the throwaway cwd. Each flag
+    /// verified against `codex exec --help` of 0.144.4. The prompt is the
+    /// positional argument.
+    pub fn fill(program: &str, prompt: &str) -> TitleForm {
+        let effort = format!("model_reasoning_effort=\"{EFFORT}\"");
+        TitleForm {
+            program: program.to_string(),
+            args: [
+                "exec",
+                "--model",
+                MODEL,
+                "-c",
+                effort.as_str(),
+                "--ephemeral",
+                "--ignore-user-config",
+                "--ignore-rules",
+                "--skip-git-repo-check",
+                "--sandbox",
+                "read-only",
+                "--color",
+                "never",
+                prompt,
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+            model: MODEL,
+            effort: EFFORT,
+        }
     }
 }
 
@@ -261,27 +351,64 @@ mod tests {
         assert_eq!(clean(&long).unwrap().chars().count(), TITLE_CHARS);
     }
 
+    #[test]
+    fn claude_fills_a_print_mode_form_with_the_prompt_last() {
+        let form = form(Provider::Claude, "/opt/claude", &req("Ship it", None));
+        assert_eq!(form.program, "/opt/claude");
+        assert_eq!(form.model, claude::MODEL);
+        assert_eq!(form.effort, claude::EFFORT);
+        assert_eq!(form.args[0], "-p");
+        for flag in ["--tools", "--no-session-persistence", "--setting-sources"] {
+            assert!(form.args.contains(&flag.to_string()), "{flag}");
+        }
+        assert!(form.args.last().unwrap().starts_with("Write a title"));
+        assert!(form.args.last().unwrap().contains("Ship it"));
+    }
+
+    #[test]
+    fn codex_fills_an_exec_form_with_the_prompt_last() {
+        let form = form(Provider::Codex, "codex", &req("Ship it", None));
+        assert_eq!(form.program, "codex");
+        assert_eq!(form.model, codex::MODEL);
+        assert_eq!(form.effort, codex::EFFORT);
+        assert_eq!(form.args[0], "exec");
+        for flag in [
+            "--ephemeral",
+            "--ignore-user-config",
+            "--skip-git-repo-check",
+        ] {
+            assert!(form.args.contains(&flag.to_string()), "{flag}");
+        }
+        assert!(form.args.last().unwrap().starts_with("Write a title"));
+        assert!(form.args.last().unwrap().contains("Ship it"));
+    }
+
     #[cfg(unix)]
     mod with_stub_programs {
         use super::*;
         use std::os::unix::fs::PermissionsExt;
 
-        /// A shell script standing in for the CLI. It ignores its flags and
-        /// runs `body`, so a test controls output, exit code and duration.
-        fn stub(name: &str, body: &str) -> PathBuf {
+        /// A shell script standing in for a CLI, run through a form that
+        /// passes only the prompt. It ignores its arguments and runs
+        /// `body`, so a test controls output, exit code and duration.
+        fn stub(name: &str, body: &str) -> TitleForm {
             let dir = std::env::temp_dir()
                 .join(format!("ferrite-titler-stub-{}-{name}", std::process::id()));
             std::fs::create_dir_all(&dir).unwrap();
-            let path = dir.join("claude");
+            let path = dir.join("cli");
             std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-            path
+            TitleForm {
+                program: path.to_string_lossy().into_owned(),
+                args: vec![title_prompt(&req("anything", None))],
+                model: "stub",
+                effort: "none",
+            }
         }
 
         #[test]
         fn a_printing_stub_yields_the_cleaned_title() {
-            let path = stub("ok", "echo '\"Retry with backoff.\"'");
-            let rx = spawn(path.to_str().unwrap(), req("anything", None));
+            let rx = spawn(stub("ok", "echo '\"Retry with backoff.\"'"));
             assert_eq!(
                 rx.recv_timeout(Duration::from_secs(10)).unwrap().as_deref(),
                 Some("Retry with backoff")
@@ -289,45 +416,45 @@ mod tests {
         }
 
         #[test]
-        fn the_stub_receives_the_prompt_as_the_last_argument() {
-            // Print the final argument so the test can see the CLI got the
-            // instruction text positionally, after the flags.
-            let path = stub(
+        fn the_stub_receives_the_forms_arguments() {
+            // Print the final argument so the test can see the form's args
+            // reach the CLI as given.
+            let rx = spawn(stub(
                 "args",
                 "for a in \"$@\"; do last=\"$a\"; done; echo \"$last\"",
-            );
-            let rx = spawn(path.to_str().unwrap(), req("Ship the widget", None));
+            ));
             let echoed = rx.recv_timeout(Duration::from_secs(10)).unwrap().unwrap();
             assert!(echoed.starts_with("Write a title"), "{echoed}");
         }
 
         #[test]
         fn a_failing_stub_yields_none() {
-            let path = stub("fail", "echo 'Looks fine'; exit 1");
-            let rx = spawn(path.to_str().unwrap(), req("x", None));
+            let rx = spawn(stub("fail", "echo 'Looks fine'; exit 1"));
             assert_eq!(rx.recv_timeout(Duration::from_secs(10)).unwrap(), None);
         }
 
         #[test]
         fn a_silent_stub_yields_none() {
-            let path = stub("silent", "exit 0");
-            let rx = spawn(path.to_str().unwrap(), req("x", None));
+            let rx = spawn(stub("silent", "exit 0"));
             assert_eq!(rx.recv_timeout(Duration::from_secs(10)).unwrap(), None);
         }
 
         #[test]
         fn a_missing_program_yields_none() {
-            let rx = spawn("/nonexistent/ferrite-no-such-cli", req("x", None));
+            let rx = spawn(TitleForm {
+                program: "/nonexistent/ferrite-no-such-cli".into(),
+                args: vec![],
+                model: "stub",
+                effort: "none",
+            });
             assert_eq!(rx.recv_timeout(Duration::from_secs(10)).unwrap(), None);
         }
 
         #[test]
         fn a_hanging_stub_is_killed_at_the_deadline() {
-            let path = stub("hang", "sleep 20; echo 'Too late'");
             let started = Instant::now();
             let rx = spawn_with_timeout(
-                path.to_str().unwrap(),
-                req("x", None),
+                stub("hang", "sleep 20; echo 'Too late'"),
                 Duration::from_millis(300),
             );
             assert_eq!(rx.recv_timeout(Duration::from_secs(10)).unwrap(), None);
@@ -335,29 +462,46 @@ mod tests {
         }
     }
 
-    /// The real CLI, once, by hand: `cargo test -p ferrite-core titler -- --ignored`.
+    /// The real CLIs, by hand: `cargo test -p ferrite-core titler -- --ignored --nocapture`.
     /// Asserts only that some title came back, since the wording is the
     /// model's; the observed title and elapsed time go in the test output.
-    #[test]
-    #[ignore = "runs the installed claude CLI and costs a model call"]
-    fn the_real_cli_titles_a_thread() {
-        let home = std::env::var("HOME").unwrap();
-        let program = format!("{home}/.local/bin/claude");
-        let started = Instant::now();
-        let rx = spawn(
-            &program,
+    mod real_clis {
+        use super::*;
+
+        fn realistic() -> TitleRequest {
             req(
                 "Add a retry with exponential backoff to the HTTP client in net.rs and \
                  cover it with tests. Keep the public API unchanged.",
                 Some(
-                    "I'll add a `retry` wrapper around `send` with jittered exponential backoff, \
-                      then unit-test the delay schedule and the give-up path.",
+                    "I'll add a `retry` wrapper around `send` with jittered exponential \
+                     backoff, then unit-test the delay schedule and the give-up path.",
                 ),
-            ),
-        );
-        let title = rx.recv_timeout(Duration::from_secs(60)).unwrap();
-        eprintln!("observed title: {title:?} in {:?}", started.elapsed());
-        let title = title.expect("the real CLI produced a title");
-        assert!(title.split_whitespace().count() >= 2);
+            )
+        }
+
+        fn observe(provider: Provider, program: &str) {
+            let started = Instant::now();
+            let rx = spawn(form(provider, program, &realistic()));
+            let title = rx.recv_timeout(Duration::from_secs(60)).unwrap();
+            eprintln!(
+                "{provider:?} observed title: {title:?} in {:?}",
+                started.elapsed()
+            );
+            let title = title.expect("the real CLI produced a title");
+            assert!(title.split_whitespace().count() >= 2);
+        }
+
+        #[test]
+        #[ignore = "runs the installed claude CLI and costs a model call"]
+        fn claude_titles_a_thread() {
+            let home = std::env::var("HOME").unwrap();
+            observe(Provider::Claude, &format!("{home}/.local/bin/claude"));
+        }
+
+        #[test]
+        #[ignore = "runs the installed codex CLI and costs a model call"]
+        fn codex_titles_a_thread() {
+            observe(Provider::Codex, "codex");
+        }
     }
 }
