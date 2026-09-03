@@ -11,6 +11,7 @@ use crate::{DecisionAnswer, SessionEvent};
 
 mod claude;
 mod codex;
+pub mod discover;
 pub mod models;
 // The Win32 calls are cfg(windows); the pid-selection logic inside is pure
 // and part of the host suite, like `cmd_shim` below.

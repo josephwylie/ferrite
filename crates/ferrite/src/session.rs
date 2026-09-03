@@ -301,8 +301,12 @@ impl Spawn {
             .effort
             .map(|effort| effort.to_string())
             .or_else(|| defaults.effort_for(request.provider));
+        // The newest installed copy of the CLI, wherever it is — not
+        // whichever a bare name happens to hit on this launch's PATH.
+        let program = ferrite_core::providers::discover::program(request.provider);
         match request.provider {
             Provider::Claude => SessionConfig::Claude(ClaudeConfig {
+                program: program.clone(),
                 cwd,
                 model,
                 effort,
@@ -312,6 +316,7 @@ impl Spawn {
                 ..Default::default()
             }),
             Provider::Codex => SessionConfig::Codex(CodexConfig {
+                program: program.clone(),
                 cwd,
                 model,
                 effort,

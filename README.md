@@ -22,6 +22,13 @@ clicks, drags, selects, right-clicks and resizes as well.
   including) 3.0.0, `codex` 0.149.1 up to 1.0.0.
 - macOS on Apple silicon, or Windows x64.
 
+Ferrite runs the **newest** copy of each CLI it can find: every `claude`
+and `codex` on PATH and in the usual install directories (`~/.local/bin`,
+Homebrew, nvm's node versions, volta, bun) is asked its version once, and
+the highest wins — so a terminal with nvm loaded and an app launched from
+the Finder never disagree about which CLI is "the" one. Settings › About
+names the copy in use.
+
 ## Install
 
 Download the latest archive from

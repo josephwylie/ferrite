@@ -1682,7 +1682,10 @@ impl CockpitView {
                 cx.spawn(async move |this, cx| {
                     let versions = cx
                         .background_executor()
-                        .spawn(async { (cli_version("claude"), cli_version("codex")) })
+                        .spawn(async {
+                            ferrite_core::providers::discover::rediscover();
+                            (cli_version(Provider::Claude), cli_version(Provider::Codex))
+                        })
                         .await;
                     this.update(cx, |view, cx| {
                         view.cli_versions = Some((versions.0.into(), versions.1.into()));
@@ -5241,14 +5244,12 @@ impl CockpitView {
             return;
         };
         // The Thread's own Provider writes its title, through the one form
-        // each adapter fills: Claude's `claude -p`, Codex's `codex exec`.
-        let program = match provider {
-            Provider::Claude => "claude",
-            Provider::Codex => "codex",
-        };
+        // each adapter fills: Claude's `claude -p`, Codex's `codex exec` —
+        // the same copy of the CLI the Session runs.
+        let program = ferrite_core::providers::discover::program(provider);
         let form = ferrite_core::titler::form(
             provider,
-            program,
+            &program,
             &ferrite_core::titler::TitleRequest {
                 prompt,
                 reply: None,
@@ -5864,21 +5865,13 @@ fn leaf_identity(leaf: ThreadId) -> PaneIdentity {
     }
 }
 
-/// What `<program> --version` says, in one line; the failure in words
-/// when it cannot be run — the About section never guesses.
-fn cli_version(program: &str) -> String {
-    match std::process::Command::new(program)
-        .arg("--version")
-        .output()
-    {
-        Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .next()
-            .unwrap_or("")
-            .trim()
-            .to_string(),
-        Ok(output) => format!("`{program} --version` {}", output.status),
-        Err(e) => format!("not found ({e})"),
+/// The copy of a Provider's CLI Ferrite runs — the newest it found — as
+/// "version · path", or where it looked when none answered. The About
+/// section never guesses.
+fn cli_version(provider: Provider) -> String {
+    match ferrite_core::providers::discover::located(provider) {
+        Some(found) => format!("{} · {}", found.version, found.path.display()),
+        None => "not found on PATH or in the usual install directories".to_string(),
     }
 }
 

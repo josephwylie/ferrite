@@ -599,7 +599,7 @@ fn check_version(program: &str) -> Result<(), ClaudeSpawnError> {
 
 /// `--version` prints `2.1.243 (Claude Code)`; only the leading semver is
 /// meaningful, and a pre-release suffix on any component is ignored.
-fn parse_version(reported: &str) -> Option<(String, [u64; 3])> {
+pub(crate) fn parse_version(reported: &str) -> Option<(String, [u64; 3])> {
     let token = reported.split_whitespace().next()?;
     let mut components = token.split('.');
     let mut version = [0u64; 3];

@@ -825,7 +825,7 @@ fn check_version(program: &str) -> Result<(), CodexSpawnError> {
 /// `--version` prints `codex-cli 0.149.1`: the semver is not the first token,
 /// so the first token that reads as one is taken, and a pre-release suffix on
 /// any component is ignored.
-fn parse_version(reported: &str) -> Option<(String, [u64; 3])> {
+pub(crate) fn parse_version(reported: &str) -> Option<(String, [u64; 3])> {
     reported.split_whitespace().find_map(parse_version_token)
 }
 
