@@ -123,6 +123,40 @@ pub const PROVIDER_CODEX: u32 = 0x10a37f;
 #[allow(dead_code)]
 pub const PROVIDER_CLAUDE: u32 = 0xd97757;
 
+// ------------------------------------------------- transcript colour (app)
+
+// The prototype keeps its transcript nearly monochrome: one syntax class,
+// grey diff bodies, inherited-ink inline code, a `--sep` underline. The
+// operator overruled that (2026-09) — a cockpit reads faster with the
+// transcript's structure coloured — so the tokens below are Ferrite's own,
+// not transcriptions. Each stays close to the palette it joins.
+
+/// `#9fd4b1` — an added diff line's code. `--running` lifted a step so a
+/// whole line of it reads on the green wash; the sign column keeps
+/// `--running` itself.
+pub const DIFF_ADDED_INK: u32 = 0x9fd4b1;
+/// `#eda59d` — a removed diff line's code: `--blocked` lifted the same step.
+pub const DIFF_REMOVED_INK: u32 = 0xeda59d;
+/// `#a9b4f5` — a keyword in a fenced block. The one hue the palette lacks,
+/// a soft blue-violet, so keywords never read as a state.
+pub const SYN_KEYWORD: u32 = 0xa9b4f5;
+/// `#8fcda3` — a string literal: the palette's green a shade lighter than
+/// `--running`, so a quoted run does not read as a pass verdict.
+pub const SYN_STRING: u32 = 0x8fcda3;
+/// `#d9b872` — a number literal: `--attention` in a type role.
+pub const SYN_NUMBER: u32 = ATTENTION;
+/// `#e3c88f` — inline code's ink on its `--raised` chip: a light amber, so
+/// a path or a flag stands out of the prose it sits in.
+pub const INLINE_CODE_INK: u32 = 0xe3c88f;
+/// `#8ab4f8` — a link's ink, and its underline. Inert still — nothing opens.
+pub const LINK_INK: u32 = 0x8ab4f8;
+/// `rgba(217,119,87,0.10)` — the operator's prompt block on a Claude Thread.
+pub const PROMPT_WASH_CLAUDE: u32 = 0xd977571a;
+/// `rgba(16,163,127,0.10)` — the operator's prompt block on a Codex Thread.
+pub const PROMPT_WASH_CODEX: u32 = 0x10a37f1a;
+/// 2px — the prompt block's left edge in the provider's colour.
+pub const PROMPT_EDGE_W: f32 = 2.0;
+
 /// `#7fbf95` at 1px inset — a nav row that will accept the drag.
 #[allow(dead_code)]
 pub const DROP_VALID: u32 = RUNNING;
@@ -462,8 +496,9 @@ pub const CODE_PRE_PAD_B: f32 = 8.0;
 pub const INLINE_CODE_PAD_X: f32 = 4.0;
 #[allow(dead_code)]
 pub const INLINE_CODE_PAD_Y: f32 = 1.0;
-/// 5px — the operator's prompt block's block padding: the `--raised`
-/// ground the line stands on, so a prompt reads apart from an answer.
+/// 5px — the operator's prompt block's block padding: the ground the line
+/// stands on (`--raised`, or the provider's wash on a Thread), so a prompt
+/// reads apart from an answer.
 pub const PROMPT_PAD_Y: f32 = 5.0;
 /// A hunk row: 8px inline padding, a 24px right-aligned number column, a
 /// 7px sign column, 10px between columns. A hunk sits 4px below the event

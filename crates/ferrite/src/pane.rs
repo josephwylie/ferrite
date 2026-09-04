@@ -43,8 +43,10 @@ use crate::select::SelectionOverlay;
 // survives in render code, which is #22's grep-able law.
 use crate::theme;
 use crate::theme::{
-    ATTENTION, ATTENTION_EDGE, ATTENTION_WASH, BLOCKED, BLOCKED_WASH, FOCUS, HOVER, IDLE,
-    METER_OFF, PANE, RAISED, RUNNING, RUNNING_WASH, SELECTION, SEP, TEXT, TEXT_2, TEXT_MUTED,
+    ATTENTION, ATTENTION_EDGE, ATTENTION_WASH, BLOCKED, BLOCKED_WASH, DIFF_ADDED_INK,
+    DIFF_REMOVED_INK, FOCUS, HOVER, IDLE, INLINE_CODE_INK, LINK_INK, METER_OFF, PANE,
+    PROMPT_WASH_CLAUDE, PROMPT_WASH_CODEX, PROVIDER_CLAUDE, PROVIDER_CODEX, RAISED, RUNNING,
+    RUNNING_WASH, SELECTION, SEP, SYN_KEYWORD, SYN_NUMBER, SYN_STRING, TEXT, TEXT_2, TEXT_MUTED,
     TEXT_STRONG, TRANSPARENT,
 };
 
@@ -591,6 +593,7 @@ pub fn render_pane(
                 &selection,
                 timings,
                 &mut tool_controls,
+                thread.map(|thread| thread.provider()),
             ));
             // The Decision card is a **sibling of the body**, not a child
             // of the Composer (§D.5): its `margin: 0 12px 8px` is measured
@@ -1615,6 +1618,7 @@ fn body(
     selection: &SelectionOverlay,
     timings: Option<&HashMap<String, ToolTiming>>,
     tool_controls: &mut HashMap<String, AnyElement>,
+    provider: Option<Provider>,
 ) -> impl IntoElement {
     // Only Thread Panes have a transcript body; a draft never lands here.
     let thread = view.thread().map(|thread| thread.get()).unwrap_or(0);
@@ -1668,6 +1672,7 @@ fn body(
             },
             signal,
             flow,
+            provider,
         ));
     }
     // The working line, the way Claude Code's own ends its transcript
@@ -2957,23 +2962,35 @@ fn render_block(
     disclosure: Option<AnyElement>,
     signal: u32,
     flow: Flow,
+    provider: Option<Provider>,
 ) -> AnyElement {
     let row = div().w_full().flex_shrink_0();
     match &block.body {
-        // The operator's own line stands apart from the answer: a raised,
-        // content-sized block in the strong ink — the one surface in the
-        // column with a ground of its own, so a glance tells who said
-        // what. No `❯`, no gutter: the ground is the whole marker.
+        // The operator's own line stands apart from the answer: a
+        // content-sized block in the strong ink on a ground of its own, so
+        // a glance tells who said what. No `❯`, no gutter: the ground is
+        // the whole marker. The prototype's ground is `--raised`; on a
+        // Thread the operator asked for the Provider's own colour instead
+        // — a faint wash and a 2px left edge — so the prompt also says who
+        // is answering it. A Pane with no Thread keeps `--raised`.
         // Laid out exactly like a paragraph (stretched, capped at 68ch —
         // see `paragraph` for why the width is dropped), so the wrap is
         // measured at the width it is painted.
-        Body::Prompt(line) => paragraph(row, TEXT_STRONG)
-            .px(px(theme::CODE_PAD_X))
-            .py(px(theme::PROMPT_PAD_Y))
-            .rounded(px(theme::R_CONTROL))
-            .bg(rgb(RAISED))
-            .child(selection.line(block.id, line.clone(), Vec::new()))
-            .into_any_element(),
+        Body::Prompt(line) => {
+            let mut row = paragraph(row, TEXT_STRONG)
+                .px(px(theme::CODE_PAD_X))
+                .py(px(theme::PROMPT_PAD_Y))
+                .rounded(px(theme::R_CONTROL));
+            row = match prompt_paint(provider) {
+                Some((wash, edge)) => row
+                    .bg(rgba(wash))
+                    .border_l(px(theme::PROMPT_EDGE_W))
+                    .border_color(rgb(edge)),
+                None => row.bg(rgb(RAISED)),
+            };
+            row.child(selection.line(block.id, line.clone(), Vec::new()))
+                .into_any_element()
+        }
         Body::Paragraph { spans } => paragraph(row, TEXT_2)
             .child(prose(block.id, spans, selection))
             .into_any_element(),
@@ -3107,6 +3124,15 @@ fn paragraph(mut row: Div, ink: u32) -> Div {
     row.mb(px(theme::P_MARGIN_B)).text_color(rgb(ink))
 }
 
+/// A prompt block's `(wash, edge)` on a Thread of the given Provider, or
+/// `None` where there is no Thread and the block keeps `--raised`.
+fn prompt_paint(provider: Option<Provider>) -> Option<(u32, u32)> {
+    match provider? {
+        Provider::Claude => Some((PROMPT_WASH_CLAUDE, PROVIDER_CLAUDE)),
+        Provider::Codex => Some((PROMPT_WASH_CODEX, PROVIDER_CODEX)),
+    }
+}
+
 /// `.signal .sep` (§E.8): the interpunct joining a signal's state to its
 /// detail is `--sep` at weight 400, dimmer than the semibold run either
 /// side of it. Highlighted in place so the line stays one run and copies
@@ -3168,13 +3194,17 @@ fn render_tool(
 ) -> AnyElement {
     // Every call wears the `●` Claude Code's own transcript uses, in the
     // call's state: green once it ran, red when it failed, muted while it
-    // runs. A task event keeps its medium, muted verb.
+    // runs — and the verb takes the same state (the prototype's is plain
+    // `--text`; the operator asked for the outcome to read from the name
+    // too), so a failed row is red before the chip is reached. A task
+    // event keeps its medium, muted verb.
     let task = matches!(tool.name.as_str(), "TaskCreate" | "TaskUpdate");
-    let (verb_weight, verb_ink) = if task {
-        (FontWeight::MEDIUM, TEXT_MUTED)
+    let verb_weight = if task {
+        FontWeight::MEDIUM
     } else {
-        (FontWeight::SEMIBOLD, TEXT)
+        FontWeight::SEMIBOLD
     };
+    let verb_ink = verb_ink(&tool.state, task);
     let glyph = "●";
     let glyph_ink = match tool.state {
         ToolState::Ok if !task => RUNNING,
@@ -3277,14 +3307,11 @@ fn render_tool(
                 SharedString::from("exit 0")
             };
             // The prototype draws exactly one verdict chip, `.pass`. A
-            // command that merely exited 0 has no prototype form (R-09):
-            // it takes the same chip on the quiet `--raised` ground.
-            let (ink, ground) = if is_test_run(tool) {
-                (RUNNING, rgba(RUNNING_WASH).into())
-            } else {
-                (TEXT_MUTED, rgb(RAISED).into())
-            };
-            verdicts.push(chip(label, ink, ground).into_any_element());
+            // command that merely exited 0 has no prototype form (R-09);
+            // it used to take the chip in muted ink on `--raised`, and now
+            // takes `.pass` itself — the operator wants a clean exit to
+            // read green at a glance, like the `●` beside it.
+            verdicts.push(chip(label, RUNNING, rgba(RUNNING_WASH).into()).into_any_element());
         }
     }
     // `.trail`: `margin-inline-start: auto`, an 8px gap, hard right.
@@ -3310,11 +3337,7 @@ fn render_tool(
     let mut card = row.flex().flex_col().child(line);
     if expanded {
         if let Some(output) = &tool.output {
-            let ink = if matches!(tool.state, ToolState::Failed(_)) {
-                BLOCKED
-            } else {
-                TEXT_MUTED
-            };
+            let ink = result_ink(&tool.state);
             // One row per hard line, each a stretched block under the
             // elbow — the prompt block's lesson (see `paragraph`): a run
             // handed to a flex row is measured at min-content and wraps a
@@ -3328,14 +3351,17 @@ fn render_tool(
             }
         }
     } else if !promoted {
+        // A failed call's result is the failure: it reads in the blocked
+        // ink, as its expanded output and its message line do.
         if let Some(line) = &tool.result_line {
-            card = card.child(
-                result_line(TEXT_MUTED).child(div().min_w_0().truncate().child(selection.line(
-                    block,
-                    line.clone(),
-                    Vec::new(),
-                ))),
-            );
+            card =
+                card.child(result_line(result_ink(&tool.state)).child(
+                    div().min_w_0().truncate().child(selection.line(
+                        block,
+                        line.clone(),
+                        Vec::new(),
+                    )),
+                ));
         }
     }
     if !expanded {
@@ -3353,6 +3379,26 @@ fn render_tool(
         card = card.child(render_diff(block, diff, selection));
     }
     card.into_any_element()
+}
+
+/// A tool row's verb ink: the call's state, as the `●` beside it — green
+/// once it ran, red when it failed, `--text` while it runs. A task event
+/// stays muted whatever its state.
+fn verb_ink(state: &ToolState, task: bool) -> u32 {
+    match state {
+        _ if task => TEXT_MUTED,
+        ToolState::Ok => RUNNING,
+        ToolState::Failed(_) => BLOCKED,
+        _ => TEXT,
+    }
+}
+
+/// A tool's result and output ink: blocked once it failed, muted otherwise.
+fn result_ink(state: &ToolState) -> u32 {
+    match state {
+        ToolState::Failed(_) => BLOCKED,
+        _ => TEXT_MUTED,
+    }
 }
 
 /// An expanded tool's output: the `└` elbow on the first line, then every
@@ -3502,27 +3548,34 @@ fn render_diff(block: BlockId, diff: &Diff, selection: &SelectionOverlay) -> imp
             // code cell. The prototype's cells are flex items, so their
             // leading indent collapses away too and every row's code starts
             // on the same column.
-            let (number, sign, sign_color, code_color, wash) = match line.chars().next() {
-                Some('+') => {
+            let kind = DiffKind::of(line);
+            let number = match kind {
+                DiffKind::Added => {
                     let n = new;
                     new += 1;
-                    (n, "+", RUNNING, TEXT_2, Some(RUNNING_WASH))
+                    n
                 }
-                Some('-') => {
+                DiffKind::Removed => {
                     let n = old;
                     old += 1;
-                    (n, "\u{2212}", BLOCKED, TEXT_2, Some(BLOCKED_WASH))
+                    n
                 }
-                _ => {
+                DiffKind::Context => {
                     let n = new;
                     old += 1;
                     new += 1;
-                    (n, "", TEXT_MUTED, TEXT_MUTED, None)
+                    n
                 }
             };
-            let body = match line.chars().next() {
-                Some('+') | Some('-') => line[1..].trim_start(),
-                _ => line.trim_start(),
+            let DiffPaint {
+                sign,
+                sign_color,
+                code_color,
+                wash,
+            } = kind.paint();
+            let body = match kind {
+                DiffKind::Added | DiffKind::Removed => line[1..].trim_start(),
+                DiffKind::Context => line.trim_start(),
             }
             .to_string();
             let mut row = div()
@@ -3561,6 +3614,62 @@ fn render_diff(block: BlockId, diff: &Diff, selection: &SelectionOverlay) -> imp
     lines
 }
 
+/// What a unified-diff line is, read from its first byte.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DiffKind {
+    Added,
+    Removed,
+    Context,
+}
+
+/// A hunk row's colours: the sign column, the code, and the row's wash.
+#[derive(Debug, PartialEq, Eq)]
+struct DiffPaint {
+    sign: &'static str,
+    sign_color: u32,
+    code_color: u32,
+    wash: Option<u32>,
+}
+
+impl DiffKind {
+    fn of(line: &str) -> Self {
+        match line.chars().next() {
+            Some('+') => Self::Added,
+            Some('-') => Self::Removed,
+            _ => Self::Context,
+        }
+    }
+
+    /// The prototype signs a removal with U+2212 MINUS SIGN, never a
+    /// hyphen, and keeps every body in `--text-2` with only the sign and
+    /// the wash saying which way the line went. The operator asked for the
+    /// code itself to carry the colour — green added, red removed, a step
+    /// lighter than the sign so a whole line stays readable on its wash —
+    /// and a context line stays muted.
+    fn paint(self) -> DiffPaint {
+        match self {
+            Self::Added => DiffPaint {
+                sign: "+",
+                sign_color: RUNNING,
+                code_color: DIFF_ADDED_INK,
+                wash: Some(RUNNING_WASH),
+            },
+            Self::Removed => DiffPaint {
+                sign: "\u{2212}",
+                sign_color: BLOCKED,
+                code_color: DIFF_REMOVED_INK,
+                wash: Some(BLOCKED_WASH),
+            },
+            Self::Context => DiffPaint {
+                sign: "",
+                sign_color: TEXT_MUTED,
+                code_color: TEXT_MUTED,
+                wash: None,
+            },
+        }
+    }
+}
+
 /// Markdown spans flattened to one wrapping run — its text and highlight
 /// runs, for the selection overlay to wash and register (#27) — so inline
 /// code keeps its place in the sentence instead of becoming its own box.
@@ -3583,12 +3692,13 @@ fn inline(spans: &[Span]) -> (String, Vec<(std::ops::Range<usize>, HighlightStyl
 fn span_style(style: Style) -> Option<HighlightStyle> {
     match style {
         Style::Plain => None,
-        // Inline `code` (§E.4): a `--raised` chip, colour **inherited** —
-        // the prototype does not promote it to strong ink. A gpui highlight
-        // carries no padding or radius, so the chip's `1px 4px` inset and
-        // 3px corners come from `prose` wrapping it in an element instead;
-        // this background is the fallback for the runs that stay flat.
+        // Inline `code` (§E.4): a `--raised` chip. The prototype leaves the
+        // ink inherited; the operator asked for an ink of its own, so a
+        // path or a flag stands out of the sentence and not only its
+        // ground. A gpui highlight carries no padding or radius — see
+        // `prose` for why the run is flat.
         Style::Code => Some(HighlightStyle {
+            color: Some(rgb(INLINE_CODE_INK).into()),
             background_color: Some(rgb(RAISED).into()),
             ..Default::default()
         }),
@@ -3598,13 +3708,15 @@ fn span_style(style: Style) -> Option<HighlightStyle> {
             font_weight: Some(FontWeight::SEMIBOLD),
             ..Default::default()
         }),
-        // `a` (§E.6): `--text`, underlined 1px in `--sep`. Inert — paths
+        // `a` (§E.6): underlined 1px. The prototype sets it in `--text`
+        // over a `--sep` rule; the operator asked for a link to read as
+        // one, so ink and underline are the same blue. Inert — paths
         // render, nothing opens.
         Style::Link => Some(HighlightStyle {
-            color: Some(rgb(TEXT).into()),
+            color: Some(rgb(LINK_INK).into()),
             underline: Some(gpui::UnderlineStyle {
                 thickness: px(1.),
-                color: Some(rgb(SEP).into()),
+                color: Some(rgb(LINK_INK).into()),
                 wavy: false,
             }),
             ..Default::default()
@@ -3686,6 +3798,21 @@ fn code_lines(
     rows
 }
 
+/// A syntax class's ink. The prototype's code blocks have exactly one
+/// class, `.comment` (§E.7), everything else in the body's own `--text-2`
+/// (R-08); the operator overruled that loss of colour, so the highlighter's
+/// whole vocabulary now paints — each in a hue that keeps clear of the
+/// Pane's state signals where it can.
+fn class_ink(class: Class) -> u32 {
+    match class {
+        Class::Plain => TEXT_2,
+        Class::Keyword => SYN_KEYWORD,
+        Class::Str => SYN_STRING,
+        Class::Comment => TEXT_MUTED,
+        Class::Number => SYN_NUMBER,
+    }
+}
+
 /// Syntax highlight runs for a code Block, or none while the highlighter is
 /// still thinking.
 fn code(source: &str, tokens: Option<&[Token]>) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
@@ -3701,13 +3828,7 @@ fn code(source: &str, tokens: Option<&[Token]>) -> Vec<(std::ops::Range<usize>, 
         if end > source.len() {
             return Vec::new();
         }
-        // The prototype's code blocks have exactly one syntax class,
-        // `.comment` (§E.7). Everything else is the body's own `--text-2`
-        // (R-08 — this is a deliberate loss of colour, not an oversight).
-        let color = match token.class {
-            Class::Comment => TEXT_MUTED,
-            _ => TEXT_2,
-        };
+        let color = class_ink(token.class);
         highlights.push((
             at..end,
             HighlightStyle {
@@ -3857,6 +3978,8 @@ mod tests {
         selection: crate::select::TranscriptSelection,
         blocks: Vec<Block>,
         expanded: HashSet<String>,
+        /// The Thread's Provider, which colours the prompt block.
+        provider: Option<Provider>,
     }
 
     impl Render for ShowsBlocks {
@@ -3885,6 +4008,7 @@ mod tests {
                         None,
                         TEXT_MUTED,
                         Flow::default(),
+                        self.provider,
                     )
                 }))
         }
@@ -3896,6 +4020,7 @@ mod tests {
             selection: crate::select::TranscriptSelection::default(),
             blocks,
             expanded: HashSet::new(),
+            provider: Some(Provider::Claude),
         }
     }
 
@@ -4419,6 +4544,134 @@ mod tests {
     }
 
     /// #22 amendment: durations read in the comps' grammar at every scale.
+    /// The transcript's colour (2026-09): each pure helper hands the site
+    /// the ink the operator approved, and the state inks stay the palette's.
+    #[test]
+    fn a_hunk_row_colours_its_code_by_which_way_it_went() {
+        assert_eq!(DiffKind::of("+let x = 1;"), DiffKind::Added);
+        assert_eq!(DiffKind::of("-let x = 1;"), DiffKind::Removed);
+        assert_eq!(DiffKind::of(" let x = 1;"), DiffKind::Context);
+        assert_eq!(DiffKind::of(""), DiffKind::Context);
+        assert_eq!(
+            DiffKind::Added.paint(),
+            DiffPaint {
+                sign: "+",
+                sign_color: RUNNING,
+                code_color: DIFF_ADDED_INK,
+                wash: Some(RUNNING_WASH),
+            }
+        );
+        assert_eq!(
+            DiffKind::Removed.paint(),
+            DiffPaint {
+                sign: "\u{2212}",
+                sign_color: BLOCKED,
+                code_color: DIFF_REMOVED_INK,
+                wash: Some(BLOCKED_WASH),
+            }
+        );
+        assert_eq!(
+            DiffKind::Context.paint(),
+            DiffPaint {
+                sign: "",
+                sign_color: TEXT_MUTED,
+                code_color: TEXT_MUTED,
+                wash: None,
+            }
+        );
+    }
+
+    #[test]
+    fn a_fenced_block_paints_every_syntax_class() {
+        let tokens = |pairs: &[(&str, Class)]| -> Vec<Token> {
+            pairs
+                .iter()
+                .map(|(text, class)| Token {
+                    text: text.to_string(),
+                    class: *class,
+                })
+                .collect()
+        };
+        let source = "let s = \"hi\"; // 42";
+        let runs = code(
+            source,
+            Some(&tokens(&[
+                ("let", Class::Keyword),
+                (" s = ", Class::Plain),
+                ("\"hi\"", Class::Str),
+                ("; ", Class::Plain),
+                ("// 42", Class::Comment),
+            ])),
+        );
+        let inks: Vec<(std::ops::Range<usize>, gpui::Hsla)> = runs
+            .iter()
+            .map(|(range, style)| (range.clone(), style.color.unwrap()))
+            .collect();
+        assert_eq!(
+            inks,
+            vec![
+                (0..3, rgb(SYN_KEYWORD).into()),
+                (3..8, rgb(TEXT_2).into()),
+                (8..12, rgb(SYN_STRING).into()),
+                (12..14, rgb(TEXT_2).into()),
+                (14..19, rgb(TEXT_MUTED).into()),
+            ]
+        );
+        assert_eq!(class_ink(Class::Number), SYN_NUMBER);
+        assert!(
+            code(
+                source,
+                Some(&tokens(&[("far too long a token", Class::Plain)]))
+            )
+            .is_empty(),
+            "a highlighter that disagrees with the source is ignored"
+        );
+        assert!(code(source, None).is_empty());
+    }
+
+    #[test]
+    fn inline_code_and_links_carry_their_own_ink() {
+        let code = span_style(Style::Code).unwrap();
+        assert_eq!(code.color, Some(rgb(INLINE_CODE_INK).into()));
+        assert_eq!(code.background_color, Some(rgb(RAISED).into()));
+        let link = span_style(Style::Link).unwrap();
+        assert_eq!(link.color, Some(rgb(LINK_INK).into()));
+        assert_eq!(
+            link.underline.unwrap().color,
+            Some(rgb(LINK_INK).into()),
+            "the underline is the link's own ink, not the seam"
+        );
+        assert!(span_style(Style::Plain).is_none());
+    }
+
+    #[test]
+    fn a_tool_row_reads_its_outcome_from_the_verb_and_the_result() {
+        let failed = ToolState::Failed("boom".into());
+        assert_eq!(verb_ink(&ToolState::Ok, false), RUNNING);
+        assert_eq!(verb_ink(&failed, false), BLOCKED);
+        assert_eq!(verb_ink(&ToolState::Running, false), TEXT);
+        assert_eq!(
+            verb_ink(&ToolState::Ok, true),
+            TEXT_MUTED,
+            "a task event stays muted"
+        );
+        assert_eq!(result_ink(&ToolState::Ok), TEXT_MUTED);
+        assert_eq!(result_ink(&failed), BLOCKED);
+    }
+
+    #[test]
+    fn a_prompt_wears_its_threads_provider_or_stays_raised() {
+        assert_eq!(
+            prompt_paint(Some(Provider::Claude)),
+            Some((PROMPT_WASH_CLAUDE, PROVIDER_CLAUDE))
+        );
+        assert_eq!(
+            prompt_paint(Some(Provider::Codex)),
+            Some((PROMPT_WASH_CODEX, PROVIDER_CODEX))
+        );
+        assert_eq!(prompt_paint(None), None);
+    }
+
     #[test]
     fn durations_read_at_the_comps_grammar() {
         assert_eq!(duration_label(Duration::from_millis(340)).as_ref(), "0.3s");
