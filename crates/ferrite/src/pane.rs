@@ -1873,7 +1873,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         .pt(px(theme::COMPOSER_PAD_T))
         .px(px(theme::PANE_PAD_X))
         .pb(px(theme::COMPOSER_PAD_B))
-        .text_size(px(theme::FS_SM))
+        .text_size(px(theme::FS_MD))
         .line_height(relative(theme::LINE_UI))
         .text_color(rgb(TEXT_2))
         .when(decision.is_some(), |region| region.key_context("Decision"));
@@ -3072,7 +3072,7 @@ fn render_block(
                     .bg(rgb(RAISED))
                     .rounded(px(theme::R_CHIP))
                     .overflow_hidden()
-                    .text_size(px(theme::FS_MONO))
+                    .text_size(px(theme::FS_MD))
                     .line_height(relative(theme::LINE_BODY))
                     .children(language.as_ref().map(|language| {
                         div()
@@ -3223,7 +3223,7 @@ fn render_tool(
         // literal parentheses. There is no file/command split any more.
         let args = |piece: SharedString| {
             div()
-                .text_size(px(theme::FS_MONO))
+                .text_size(px(theme::FS_MD))
                 .line_height(relative(theme::LINE_BODY))
                 .child(selection.piece(block, piece, Vec::new()))
         };
@@ -3231,7 +3231,7 @@ fn render_tool(
             .child(
                 div().flex_shrink_0().ml(px(theme::EVENT_GAP)).child(
                     div()
-                        .text_size(px(theme::FS_MONO))
+                        .text_size(px(theme::FS_MD))
                         .line_height(relative(theme::LINE_BODY))
                         .child(selection.piece(block, "(", Vec::new())),
                 ),
@@ -3258,7 +3258,7 @@ fn render_tool(
         .min_w_0()
         .gap(px(theme::EVENT_GAP))
         .py(px(theme::EVENT_PAD_Y))
-        .text_size(px(theme::FS_SM))
+        .text_size(px(theme::FS_MD))
         .line_height(relative(theme::LINE_BODY))
         .text_color(rgb(TEXT_MUTED))
         .child(gutter)
@@ -3413,7 +3413,7 @@ fn output_block(block: BlockId, text: &str, ink: u32, selection: &SelectionOverl
         .min_w_0()
         .pl(px(theme::INDENT))
         .pt(px(1.))
-        .text_size(px(theme::FS_MONO))
+        .text_size(px(theme::FS_MD))
         .line_height(relative(theme::LINE_BODY))
         .text_color(rgb(ink));
     for (index, line) in text.split('\n').enumerate() {
@@ -3426,7 +3426,7 @@ fn output_block(block: BlockId, text: &str, ink: u32, selection: &SelectionOverl
         row = row.child(
             div()
                 .flex_shrink_0()
-                .w(px(theme::FS_MONO * theme::MONO_ADVANCE))
+                .w(px(theme::FS_MD * theme::MONO_ADVANCE))
                 .text_color(rgb(SEP))
                 .child(if index == 0 { "⎿" } else { " " }),
         );
@@ -3455,7 +3455,7 @@ fn result_line(ink: u32) -> Div {
         // the tool row's.
         .pt(px(theme::RESULT_PAD_T))
         .pb(px(theme::RESULT_PAD_B))
-        .text_size(px(theme::FS_MONO))
+        .text_size(px(theme::FS_MD))
         .line_height(relative(theme::LINE_BODY))
         .text_color(rgb(ink))
         .child(div().flex_shrink_0().text_color(rgb(SEP)).child("⎿"))
@@ -3530,12 +3530,12 @@ fn render_diff(block: BlockId, diff: &Diff, selection: &SelectionOverlay) -> imp
         .ml(px(theme::INDENT))
         .rounded(px(theme::R_CHIP))
         .overflow_hidden()
-        .text_size(px(theme::FS_MONO))
+        .text_size(px(theme::FS_MD))
         // Pinned to a whole pixel. At `relative(LINE_HUNK)` each row box is
         // 17.325px, so consecutive rows round their origin and their height
         // independently and the added/removed washes can leave a 1px
         // unpainted seam between them.
-        .line_height(px((theme::FS_MONO * theme::LINE_HUNK).round()))
+        .line_height(px((theme::FS_MD * theme::LINE_HUNK).round()))
         .text_color(rgb(TEXT_MUTED));
     for hunk in &diff.hunks {
         let mut old = hunk.old_start;
@@ -3789,7 +3789,7 @@ fn code_lines(
                 .child(
                     div()
                         .flex_shrink_0()
-                        .w(px((indent as f32 * theme::FS_MONO * MONO_ADVANCE).round()))
+                        .w(px((indent as f32 * theme::FS_MD * MONO_ADVANCE).round()))
                         .child(selection.line(block, line[..indent].to_string(), Vec::new())),
                 )
                 .child(selection.piece(block, line[indent..].to_string(), runs(indent))),

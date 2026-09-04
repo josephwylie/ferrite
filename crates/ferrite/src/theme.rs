@@ -208,16 +208,21 @@ pub const SCROLLBAR: u32 = 0x3a3a3a;
 /// Thread id.
 #[allow(dead_code)]
 pub const FS_LG: f32 = 13.0;
-/// 12px — `--fs-md`: a Thread row's title, filter options, Pane body prose,
-/// body headings, a Decision's subject.
+/// 12px — `--fs-md`: a Thread row's title, filter options, everything read
+/// or typed in a Pane (prose, prompts, tool rows, results, code, diffs,
+/// the Composer), body headings, a Decision's subject.
 pub const FS_MD: f32 = 12.0;
 /// 11px — `--fs-sm`: the Project and checkout lines, the tasks strip, tool
 /// events, the pass chip, the Composer and its controls.
 pub const FS_SM: f32 = 11.0;
-/// 10.5px — `--fs-mono`: the Pane head's checkout, code blocks, tool
-/// arguments and durations, result lines, diff stats, hunks, keycaps, the
-/// changed strip, the Composer hint.
-pub const FS_MONO: f32 = 10.5;
+/// 11px — `--fs-mono`, retuned: the prototype set 10.5px here and used it
+/// for code, arguments and results too. The operator ruled the half-pixel
+/// step out — on a 12px mono face it read as a third, smaller text — so
+/// everything read in a Pane (prose, prompts, tool rows, results, code,
+/// diffs, the Composer) now sits on `FS_MD`, and this size is for meta
+/// only: durations, chips, hints, keycaps, the head's checkout, the
+/// changed strip, and the L2/L3 cells' lines.
+pub const FS_MONO: f32 = 11.0;
 
 /// 1.25 — nav row titles and the Project/checkout lines.
 #[allow(dead_code)]
