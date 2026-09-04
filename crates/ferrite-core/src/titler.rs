@@ -185,8 +185,13 @@ fn run(form: &TitleForm, timeout: Duration) -> Option<String> {
             }
         }
     };
+    // A killed CLI's own children (a shell's `sleep`, a node wrapper's
+    // binary) may still hold the pipe: joining the reader would wait for
+    // them, so a timed-out run is None without waiting — the reader thread
+    // ends by itself when the pipe finally closes.
+    let status = status?;
     let output = reader.join().ok()?;
-    if status?.success() {
+    if status.success() {
         clean(&output)
     } else {
         None

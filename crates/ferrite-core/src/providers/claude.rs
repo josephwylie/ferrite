@@ -469,6 +469,14 @@ fn read_stdout(
                     continue;
                 }
             }
+            // The token count a line carries goes first, so the context
+            // ring has moved by the time the line's own event lands — and
+            // the result's count is in before the turn is over.
+            if let Some(usage) = wire::parse_usage(text) {
+                if sender.send(usage).is_err() {
+                    return;
+                }
+            }
             if let Some(event) = wire::parse_line(text) {
                 // A full channel parks this thread, the OS pipe fills, and the
                 // CLI blocks on its own write. Backpressure, never loss.

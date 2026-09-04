@@ -128,6 +128,82 @@ pub(super) fn parse_line(line: &str) -> Option<SessionEvent> {
     }
 }
 
+/// The token count a line carries beside its event, if any: every
+/// `assistant` message reports its own `usage` (the prompt it was given —
+/// input plus cache reads and writes — is the context in use at that
+/// point), and the `result` line reports the turn's totals with the
+/// model's `contextWindow`. Between results the window is read off the
+/// model id: Claude's 1M models carry `[1m]` (or `-1m`), the rest are 200k.
+/// The reader sends this after the line's own event, so a turn's ring
+/// moves with every message and lands exactly at the result.
+pub(super) fn parse_usage(line: &str) -> Option<SessionEvent> {
+    let value: Value = serde_json::from_str(line).ok()?;
+    let count = |usage: &Value, key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
+    match value.get("type")?.as_str()? {
+        "assistant" => {
+            let message = value.get("message")?;
+            let usage = message.get("usage")?;
+            let input = count(usage, "input_tokens");
+            let cached = count(usage, "cache_read_input_tokens");
+            let created = count(usage, "cache_creation_input_tokens");
+            let output = count(usage, "output_tokens");
+            let model = message.get("model").and_then(Value::as_str).unwrap_or("");
+            Some(SessionEvent::TokenUsage {
+                total_tokens: input + cached + created + output,
+                input_tokens: input,
+                cached_input_tokens: cached,
+                output_tokens: output,
+                reasoning_output_tokens: 0,
+                context_window: Some(window_of_model(model)),
+            })
+        }
+        "result" => {
+            let usage = value.get("usage")?;
+            // The turn's last message is the context in use now; the
+            // top-level counts are sums over every message of the turn.
+            let last = usage
+                .get("iterations")
+                .and_then(Value::as_array)
+                .and_then(|iterations| iterations.last())
+                .unwrap_or(usage);
+            let input = count(last, "input_tokens");
+            let cached = count(last, "cache_read_input_tokens");
+            let created = count(last, "cache_creation_input_tokens");
+            let output = count(last, "output_tokens");
+            let window = value
+                .get("modelUsage")
+                .and_then(Value::as_object)
+                .and_then(|models| {
+                    models
+                        .values()
+                        .find_map(|model| model.get("contextWindow").and_then(Value::as_u64))
+                });
+            Some(SessionEvent::TokenUsage {
+                total_tokens: input + cached + created + output,
+                input_tokens: input,
+                cached_input_tokens: cached,
+                output_tokens: count(usage, "output_tokens"),
+                reasoning_output_tokens: usage
+                    .get("output_tokens_details")
+                    .map(|details| count(details, "thinking_tokens"))
+                    .unwrap_or(0),
+                context_window: window,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// The context window a Claude model id implies, until a result says.
+fn window_of_model(model: &str) -> u64 {
+    let lower = model.to_ascii_lowercase();
+    if lower.contains("[1m]") || lower.ends_with("-1m") {
+        1_000_000
+    } else {
+        200_000
+    }
+}
+
 /// The CLI emits one `assistant` line per completed content block, so a line
 /// carrying a `tool_use` carries exactly one — probed against 2.1.243 with two
 /// parallel Bash calls, which arrived as two separate lines. That is what lets
@@ -380,6 +456,51 @@ mod tests {
         FIXTURE.lines().filter_map(parse_line).collect()
     }
 
+    /// Every assistant message reports the context it was given, with the
+    /// window read off its model id; the result reports the turn's last
+    /// message with the window the CLI states — which is what the ring
+    /// draws.
+    #[test]
+    fn every_message_and_the_result_report_the_context_in_use() {
+        let usages: Vec<SessionEvent> = FIXTURE.lines().filter_map(parse_usage).collect();
+        assert!(usages.len() >= 2, "{usages:?}");
+        let SessionEvent::TokenUsage {
+            total_tokens,
+            context_window,
+            ..
+        } = &usages[0]
+        else {
+            panic!("{:?}", usages[0]);
+        };
+        assert_eq!(
+            *total_tokens,
+            10 + 18865 + 4,
+            "input + cache writes + output"
+        );
+        assert_eq!(*context_window, Some(200_000), "haiku's window, off the id");
+        let SessionEvent::TokenUsage {
+            total_tokens,
+            context_window,
+            output_tokens,
+            reasoning_output_tokens,
+            ..
+        } = usages.last().unwrap()
+        else {
+            panic!("{:?}", usages.last());
+        };
+        assert_eq!(*total_tokens, 10 + 18865 + 48);
+        assert_eq!(
+            *context_window,
+            Some(200_000),
+            "the result's own contextWindow"
+        );
+        assert_eq!(*output_tokens, 48);
+        assert_eq!(*reasoning_output_tokens, 39);
+        assert_eq!(window_of_model("claude-opus-5[1m]"), 1_000_000);
+        assert_eq!(window_of_model("claude-fable-5-1"), 200_000);
+        assert_eq!(parse_usage(r#"{"type":"user"}"#), None);
+    }
+
     fn events_of(name: &str) -> Vec<SessionEvent> {
         let (_, text) = FIXTURES
             .iter()
@@ -410,11 +531,11 @@ mod tests {
             SessionEvent::Commands { .. } => return None,
             SessionEvent::PermissionMode { .. } => return None,
             SessionEvent::Models { .. } => return None,
-            // Codex's own concepts (#9). The superset carries them; the Claude
-            // CLI never emits one, so they are proved by Codex's fixtures.
-            SessionEvent::ReasoningSummaryDelta { .. } | SessionEvent::TokenUsage { .. } => {
-                return None
-            }
+            // Codex's own concept (#9); the Claude CLI never emits one.
+            SessionEvent::ReasoningSummaryDelta { .. } => return None,
+            // Rides beside a line's own event (`parse_usage`), proved by
+            // `every_message_and_the_result_report_the_context_in_use`.
+            SessionEvent::TokenUsage { .. } => return None,
         })
     }
 

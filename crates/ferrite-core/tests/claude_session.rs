@@ -185,7 +185,28 @@ fn the_reader_thread_delivers_the_captured_stream() {
         ),
     );
     let session = ClaudeSession::spawn(config(program)).unwrap();
-    let events = drain(session.events());
+    let all = drain(session.events());
+    // Every assistant line and the result carry a token count beside their
+    // event; the ring reads those, the stream below is the rest.
+    let usages = all
+        .iter()
+        .filter(|event| matches!(event, SessionEvent::TokenUsage { .. }))
+        .count();
+    assert_eq!(usages, 3, "two messages and the result: {all:?}");
+    assert!(
+        matches!(
+            all.iter().rev().nth(1),
+            Some(SessionEvent::TokenUsage {
+                context_window: Some(200_000),
+                ..
+            })
+        ),
+        "the result's count lands before the turn ends: {all:?}"
+    );
+    let events: Vec<SessionEvent> = all
+        .into_iter()
+        .filter(|event| !matches!(event, SessionEvent::TokenUsage { .. }))
+        .collect();
 
     assert_eq!(events.len(), 10, "unexpected stream: {events:?}");
     let inits: Vec<_> = events
