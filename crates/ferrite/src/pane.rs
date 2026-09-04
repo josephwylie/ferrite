@@ -3621,40 +3621,14 @@ fn span_style(style: Style) -> Option<HighlightStyle> {
 /// with the chip as its own padded element; a Block that does not — nearly
 /// every one — keeps the single run untouched.
 fn prose(block: BlockId, spans: &[Span], selection: &SelectionOverlay) -> AnyElement {
-    if !spans.iter().any(|span| span.style == Style::Code) {
-        let (text, highlights) = inline(spans);
-        return selection.line(block, text, highlights).into_any_element();
-    }
-    let mut row = div().flex().flex_wrap().items_baseline();
-    for (index, span) in spans.iter().enumerate() {
-        let text = SharedString::from(span.text.clone());
-        let run = if index == 0 {
-            selection.line(block, text, Vec::new())
-        } else {
-            selection.piece(block, text, Vec::new())
-        };
-        row = match span.style {
-            Style::Code => row.child(
-                div()
-                    .flex_shrink_0()
-                    // An inline background box is the font's content area
-                    // tall, not the line box — 14px on this 12px face, so
-                    // the chip measures the prototype's 16 (§E.4) rather
-                    // than the 18.6px reading line it sits on.
-                    .line_height(px(14.))
-                    .px(px(theme::INLINE_CODE_PAD_X))
-                    .py(px(theme::INLINE_CODE_PAD_Y))
-                    .rounded(px(theme::R_TIGHT))
-                    .bg(rgb(RAISED))
-                    .child(run),
-            ),
-            style => row.child(div().min_w_0().child(match span_style(style) {
-                Some(highlight) => run.with_highlights(vec![(0..span.text.len(), highlight)]),
-                None => run,
-            })),
-        };
-    }
-    row.into_any_element()
+    // One shaped run for the whole paragraph, whatever it holds. Inline
+    // code used to be its own chip element in a wrapping flex row, which
+    // gave it padding and corners — and broke every paragraph that held
+    // one: a long text piece became a wrapping box of its own, and the
+    // pieces staggered down the column. The code wash is a highlight now;
+    // the text wraps as text.
+    let (text, highlights) = inline(spans);
+    selection.line(block, text, highlights).into_any_element()
 }
 
 /// A fenced block's rows, one element per hard line, each carrying that

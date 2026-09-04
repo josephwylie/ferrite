@@ -929,11 +929,42 @@ fn heading(line: &str) -> Option<(u8, &str)> {
     Some((hashes as u8, trimmed.trim()))
 }
 
-/// Split a line on backticks: the odd runs are inline code. The plain runs
-/// then split again on `**bold**` and `[text](url)` — the other two inline
-/// styles the comps draw.
+/// Fold a line into spans. `**bold**` is found first, over the whole line
+/// — a bold run may hold inline code (`**drop the `MARK` lines**`), and
+/// splitting on backticks first left its markers literal. Backticked code
+/// is then cut out of each run, bold or plain; the plain runs split once
+/// more on `[text](url)`. A code span's own `**` never opens bold: the
+/// scan steps over code whole.
 fn spans(text: &str) -> Vec<Span> {
     let mut spans = Vec::new();
+    let mut plain = 0;
+    let mut at = 0;
+    while at < text.len() {
+        let rest = &text[at..];
+        if let Some(code) = rest.strip_prefix('`') {
+            // Step over a closed code span; an unclosed backtick is text.
+            at += match code.find('`') {
+                Some(end) => end + 2,
+                None => 1,
+            };
+            continue;
+        }
+        if let Some((body, used)) = bold_at(rest) {
+            code_split(&text[plain..at], Style::Plain, &mut spans);
+            code_split(body, Style::Bold, &mut spans);
+            at += used;
+            plain = at;
+            continue;
+        }
+        at += rest.chars().next().map_or(1, char::len_utf8);
+    }
+    code_split(&text[plain..], Style::Plain, &mut spans);
+    spans
+}
+
+/// Cut the backticked code out of one run: the odd pieces are Code, the
+/// even ones wear `style` — and a plain piece still folds its links.
+fn code_split(text: &str, style: Style, spans: &mut Vec<Span>) {
     for (i, run) in text.split('`').enumerate() {
         if run.is_empty() {
             continue;
@@ -943,11 +974,15 @@ fn spans(text: &str) -> Vec<Span> {
                 text: run.to_string(),
                 style: Style::Code,
             });
+        } else if style == Style::Plain {
+            styled(run, spans);
         } else {
-            styled(run, &mut spans);
+            spans.push(Span {
+                text: run.to_string(),
+                style,
+            });
         }
     }
-    spans
 }
 
 /// Fold one plain run into Plain/Bold/Link spans. An unclosed marker stays
@@ -1632,6 +1667,54 @@ mod tests {
         let mut revived = Transcript::new(std::sync::Arc::new(Unhighlighted));
         revived.apply(Input::Event(SessionEvent::TextDelta { text: "…".into() }));
         assert!(revived.turn_elapsed().is_some());
+    }
+
+    /// Bold that wraps inline code stays bold on both sides of it, and a
+    /// `**` inside code never opens bold.
+    #[test]
+    fn bold_may_wrap_inline_code() {
+        assert_eq!(
+            spans("1. **Drop the `// MARK:` lines** in X."),
+            vec![
+                Span {
+                    text: "1. ".into(),
+                    style: Style::Plain
+                },
+                Span {
+                    text: "Drop the ".into(),
+                    style: Style::Bold
+                },
+                Span {
+                    text: "// MARK:".into(),
+                    style: Style::Code
+                },
+                Span {
+                    text: " lines".into(),
+                    style: Style::Bold
+                },
+                Span {
+                    text: " in X.".into(),
+                    style: Style::Plain
+                },
+            ]
+        );
+        assert_eq!(
+            spans("use `**kwargs` here"),
+            vec![
+                Span {
+                    text: "use ".into(),
+                    style: Style::Plain
+                },
+                Span {
+                    text: "**kwargs".into(),
+                    style: Style::Code
+                },
+                Span {
+                    text: " here".into(),
+                    style: Style::Plain
+                },
+            ]
+        );
     }
 
     /// Claude's redacted thinking arrives as empty deltas — one per

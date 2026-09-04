@@ -377,7 +377,7 @@ fn tasklist_rss(row: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::mpsc::{channel, Receiver, Sender};
+    use std::sync::mpsc::{channel, Receiver};
 
     /// A scripted Session the lazy one can wrap: records sends, forwards
     /// whatever the test pushes.
