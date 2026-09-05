@@ -210,7 +210,7 @@ fn toast(row: &Row, handle: Handle) -> Notification {
 /// newest first, on the same floating-menu surface every other menu here
 /// stands on.
 fn panel(rows: &Rc<Vec<Row>>, handle: Handle) -> Div {
-    let mut panel = surface().child(head(!rows.is_empty(), handle.clone()));
+    let panel = surface().child(head(!rows.is_empty(), handle.clone()));
     if rows.is_empty() {
         return panel.child(
             div()
@@ -221,10 +221,20 @@ fn panel(rows: &Rc<Vec<Row>>, handle: Handle) -> Div {
                 .child("No agent has finished yet."),
         );
     }
-    for (index, row) in rows.iter().enumerate() {
-        panel = panel.child(row_element(index, row, handle.clone()));
-    }
-    panel
+    panel.child(
+        div()
+            .id("notifications-list")
+            .flex()
+            .flex_col()
+            .min_h_0()
+            .overflow_y_scroll()
+            .gap(px(ROW_GAP))
+            .children(
+                rows.iter()
+                    .enumerate()
+                    .map(|(index, row)| row_element(index, row, handle.clone())),
+            ),
+    )
 }
 
 fn head(clearable: bool, handle: Handle) -> Div {
@@ -233,6 +243,7 @@ fn head(clearable: bool, handle: Handle) -> Div {
         .items_center()
         .justify_between()
         .h(px(MENU_ROW_H))
+        .flex_shrink_0()
         .pl(px(ROW_PAD_X))
         .pr(px(MENU_PAD))
         .child(
@@ -274,6 +285,7 @@ fn row_element(index: usize, row: &Row, handle: Handle) -> Stateful<Div> {
         });
     div()
         .id(("notice-row", index))
+        .debug_selector(move || format!("notice-row-{index}"))
         .flex()
         .items_center()
         .w_full()

@@ -4837,8 +4837,12 @@ impl Render for CockpitView {
                     && !pane.controls_focus.is_focused(window)
                     && (!pane.is_main() || !pane.transcript_focus.is_focused(window)))
         });
-        if window.has_active_dialog(cx) || native_text_focused || pane_control_focused {
-            // Native text and dialogs keep their own keyboard focus.
+        if window.has_active_dialog(cx)
+            || self.bell.open
+            || native_text_focused
+            || pane_control_focused
+        {
+            // Native text, dialogs, and the bell keep their own keyboard focus.
         } else if self.settings_open {
             // The pump must not steal focus from Settings search or controls.
             if !self.settings_focus.contains_focused(window, cx) {
@@ -6506,6 +6510,7 @@ mod tests {
 
     struct Scripted {
         rx: Receiver<SessionEvent>,
+        interrupts: Rc<RefCell<usize>>,
         fail_send: Rc<RefCell<bool>>,
         sent: Rc<RefCell<Vec<String>>>,
         answered: Rc<RefCell<Vec<(String, DecisionAnswer)>>>,
@@ -6526,6 +6531,7 @@ mod tests {
             Ok(())
         }
         fn interrupt(&mut self) -> std::io::Result<()> {
+            *self.interrupts.borrow_mut() += 1;
             Ok(())
         }
         fn respond_to_decision(&mut self, id: &str, answer: DecisionAnswer) -> std::io::Result<()> {
@@ -6536,6 +6542,7 @@ mod tests {
 
     #[derive(Clone, Default)]
     struct Fake {
+        interrupts: Rc<RefCell<usize>>,
         model_discovery: Rc<RefCell<Option<Receiver<(Provider, Vec<ferrite_core::ModelInfo>)>>>>,
         streams: Rc<RefCell<Vec<Sender<SessionEvent>>>>,
         /// Every spawn's choice, in call order — what the provider-picker
@@ -6571,6 +6578,7 @@ mod tests {
             });
             Ok(Box::new(Scripted {
                 rx,
+                interrupts: self.interrupts.clone(),
                 fail_send: self.fail_send.clone(),
                 sent: self.sent.clone(),
                 answered: self.answered.clone(),
@@ -13197,6 +13205,74 @@ mod tests {
                     .history_available(0, view.read(cx).level_now(window)),
                 "the visible Thread Composer must not advertise or arm history while rename owns focus"
             )
+        });
+    }
+
+    #[gpui::test]
+    fn notifications_keep_focus_until_escape_dismisses_the_bell(cx: &mut TestAppContext) {
+        let (mut core, fake) = cockpit("bell-escape", 1);
+        core.send(core.threads()[0], "keep working".into());
+        bind_production_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        tick(cx);
+        cx.simulate_keystrokes("cmd-i");
+        tick(cx);
+        // An unrelated render must leave the Popover's dismiss handler focused.
+        view.update(cx, |_, cx| cx.notify());
+        tick(cx);
+        view.read_with(cx, |view, _| assert!(view.bell.open));
+        cx.simulate_keystrokes("escape");
+        tick(cx);
+        assert_eq!(
+            *fake.interrupts.borrow(),
+            0,
+            "Escape only dismisses the bell"
+        );
+        view.read_with(cx, |view, _| assert!(!view.bell.open));
+        cx.simulate_keystrokes("escape");
+        assert_eq!(
+            *fake.interrupts.borrow(),
+            1,
+            "Composer regains its interrupt key"
+        );
+    }
+
+    #[gpui::test]
+    fn notifications_scroll_to_and_open_the_oldest_row(cx: &mut TestAppContext) {
+        let (mut core, fake) = cockpit("bell-scroll", 1);
+        for _ in 0..50 {
+            core.send(core.threads()[0], "go".into());
+            fake.streams.borrow()[0]
+                .send(SessionEvent::TurnEnded {
+                    outcome: ferrite_core::TurnOutcome::Completed,
+                    cost_usd: None,
+                })
+                .unwrap();
+            core.pump();
+        }
+        bind_production_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1440.), px(1080.)));
+        tick(cx);
+        cx.simulate_keystrokes("cmd-i");
+        tick(cx);
+        let first = cx.debug_bounds("notice-row-0").unwrap();
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: first.center(),
+            delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-10000.))),
+            modifiers: gpui::Modifiers::none(),
+            touch_phase: gpui::TouchPhase::default(),
+        });
+        cx.run_until_parked();
+        let last = cx.debug_bounds("notice-row-49").unwrap();
+        assert!(
+            last.bottom() < px(1080.),
+            "oldest Notice must scroll into the window: {last:?}"
+        );
+        cx.simulate_click(last.center(), gpui::Modifiers::none());
+        tick(cx);
+        view.read_with(cx, |view, _| {
+            assert!(!view.bell.open, "oldest Notice is clickable")
         });
     }
 

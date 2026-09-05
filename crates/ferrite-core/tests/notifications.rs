@@ -208,6 +208,87 @@ fn a_finish_on_the_focused_thread_is_born_read() {
 }
 
 #[test]
+fn notifications_wait_for_a_child_permission_before_finishing() {
+    let mut h = Harness::new("waiting-permission", 1);
+    let thread = h.threads[0];
+    h.cockpit.send(thread, "go".into());
+    let child = h.child(0, "blocked");
+    h.control.activity(
+        0,
+        ActivityEvent::Decision {
+            subject: Some(Subject::Subagent(child.clone())),
+            decision: ferrite_core::Decision {
+                delivery: Default::default(),
+                id: "approval".into(),
+                tool_use_id: "tool".into(),
+                tool_name: "Write".into(),
+                description: "file.txt".into(),
+                input: serde_json::Value::Null,
+                suggestions: vec![],
+            },
+        },
+    );
+    h.control.emit(0, ended());
+    h.cockpit.pump();
+    let activity = h.cockpit.thread(thread).unwrap().activity();
+    assert_eq!(activity.children()[0].status(), AgentStatus::Waiting);
+    assert_eq!(activity.pending_decisions().len(), 1);
+    assert_eq!(h.count(), 0, "a child awaiting permission has not finished");
+    h.cockpit.pump();
+    h.cockpit.pump();
+    assert_eq!(h.count(), 0, "permission must also hold off the grace");
+
+    h.control.activity(
+        0,
+        ActivityEvent::DecisionCancelled {
+            id: "approval".into(),
+        },
+    );
+    h.control.activity(
+        0,
+        ActivityEvent::Status {
+            key: child,
+            state: AgentStatus::Idle,
+        },
+    );
+    h.cockpit.pump();
+    h.cockpit.pump();
+    assert_eq!(
+        h.count(),
+        1,
+        "settling the child permits the deferred finish"
+    );
+}
+
+#[test]
+fn notifications_discard_a_parked_deferral_but_keep_existing_notices() {
+    let mut h = Harness::new("park-deferred", 1);
+    let thread = h.threads[0];
+    h.cockpit.send(thread, "first".into());
+    h.control.emit(0, ended());
+    h.cockpit.pump();
+    let notice = h.cockpit.notifications().newest().unwrap();
+
+    h.cockpit.send(thread, "delegate".into());
+    h.child(0, "worker");
+    h.control.emit(0, ended());
+    h.cockpit.pump();
+    assert_eq!(h.count(), 1, "the new finish is deferred");
+    h.cockpit.park(thread).unwrap();
+    assert!(h.cockpit.notifications().get(notice).is_some());
+    h.cockpit.reopen(thread).unwrap();
+    for _ in 0..3 {
+        h.cockpit.pump();
+    }
+    assert_eq!(h.count(), 1, "reopening history is not a new live finish");
+
+    h.cockpit.send(thread, "new live turn".into());
+    h.control.emit(1, ended());
+    h.cockpit.pump();
+    assert_eq!(h.count(), 2, "a new live finish still notifies");
+}
+
+#[test]
 fn a_held_prompt_going_out_at_turn_end_is_not_a_finish() {
     let mut h = Harness::new("held", 2);
     let second = h.threads[1];

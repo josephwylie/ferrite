@@ -6,8 +6,9 @@ date: 2026-09-06
 # Notifications: one headless module says when a Thread finished
 
 A Thread's Main has finished for good when the provider's own turn end
-arrives and no descendant is still working. That judgement lives in one
-deep module, `ferrite_core::notifications`, behind a small interface:
+arrives and no descendant is still working, pending, or awaiting a Decision.
+That judgement lives in one deep module, `ferrite_core::notifications`,
+behind a small interface:
 `observe` folds one Thread's frame, `attention` says whether its Pane wants
 the operator's eye, `open`/`acknowledge`/`dismiss`/`clear` are the verbs.
 It reads only what the adapters already normalised into `Activity` — Main's
@@ -32,6 +33,9 @@ operator queued, not a finish they wait on.
 A Notice is unread until the operator lands on its Thread or opens it from
 the bell. The Cockpit acknowledges the focused Thread on every pump and at
 its focus doors, so no window bookkeeping decides what has been seen.
+Parking ends live completion tracking and discards any deferral; existing
+Notices remain available to reopen the Thread. Replaying its history never
+counts as a new live finish.
 
 The window shows Notices three ways, all through GPUI Kit: the bell in the
 nav's chrome band with a `Badge` count and a `Popover` panel; a toast per

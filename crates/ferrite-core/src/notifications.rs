@@ -7,8 +7,8 @@
 //! Cockpit hands it `now`), no window.
 //!
 //! The rule: a Notice is born when a live Main turn ends and no descendant
-//! is still working. A Main that ended its turn while children run is
-//! **deferred** — a Claude Main whose background agents are still busy
+//! is still working or awaiting permission. A Main that ended its turn
+//! while children run is **deferred** — a Claude Main with busy background agents
 //! will be resumed by their completions, and a Codex parent waiting on
 //! `wait` never ended its turn at all. The deferral resolves when Main is
 //! resumed (the Notice waits for that turn's end) or, if the provider
@@ -23,7 +23,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::time::{Duration, Instant, SystemTime};
 
-use crate::activity::ActivityView;
+use crate::activity::{ActivityView, AgentStatus};
 use crate::{ThreadId, TurnOutcome};
 
 /// How long Main may sit idle after its last child settles before the
@@ -121,12 +121,21 @@ impl Notifications {
     ) -> Option<NoticeId> {
         let view = frame.activity;
         if !view.connected() {
-            self.phases.remove(&thread);
+            self.disconnect(thread);
             return None;
         }
         let main = view.main();
         let busy = main.busy() || view.main_operator_turn();
-        let children = view.working_descendants();
+        // A child awaiting a Decision is unfinished even though it is
+        // Waiting rather than Working. Retained history is never live work.
+        let unfinished = !view.pending_decisions().is_empty()
+            || view.children().iter().any(|child| {
+                child.fresh()
+                    && matches!(
+                        child.status(),
+                        AgentStatus::Pending | AgentStatus::Working | AgentStatus::Waiting
+                    )
+            });
         let phase = self.phases.entry(thread).or_insert(Phase::Quiet);
         let settle = |outcome: Option<&TurnOutcome>| {
             // A provider that says the turn ended but reports Main as
@@ -143,7 +152,7 @@ impl Notifications {
         let born = match *phase {
             Phase::Quiet | Phase::Working => {
                 if frame.settled && !frame.resumed && !busy {
-                    if children == 0 {
+                    if !unfinished {
                         *phase = Phase::Quiet;
                         settle(main.last_outcome())
                     } else {
@@ -160,7 +169,7 @@ impl Notifications {
             Phase::Deferred => {
                 if busy {
                     *phase = Phase::Working;
-                } else if children == 0 {
+                } else if !unfinished {
                     *phase = Phase::Grace(now);
                 }
                 None
@@ -169,7 +178,7 @@ impl Notifications {
                 if busy {
                     *phase = Phase::Working;
                     None
-                } else if children > 0 {
+                } else if unfinished {
                     *phase = Phase::Deferred;
                     None
                 } else if frame.settled || now.saturating_duration_since(since) >= self.grace {
@@ -264,10 +273,16 @@ impl Notifications {
         self.notices.clear();
     }
 
+    /// The live Session ended: discard any deferred finish, but keep its
+    /// existing Notices so the operator can still open the parked Thread.
+    pub fn disconnect(&mut self, thread: ThreadId) {
+        self.phases.remove(&thread);
+    }
+
     /// The Thread is gone: nothing about it is worth keeping.
     pub fn forget(&mut self, thread: ThreadId) {
         self.notices.retain(|notice| notice.thread != thread);
-        self.phases.remove(&thread);
+        self.disconnect(thread);
     }
 }
 
@@ -520,18 +535,34 @@ mod tests {
     }
 
     #[test]
-    fn a_child_still_working_at_the_grace_holds_the_deferral() {
-        let mut b = Bench::new(Duration::from_secs(3));
-        b.prompt();
-        let first = b.child("first");
-        assert_eq!(b.turn_ended(done()), None);
-        assert_eq!(b.child_done(&first), None);
-        // Another child appears before the grace runs out — Main is still
-        // waiting on its swarm.
-        let second = b.child("second");
-        assert_eq!(b.wait(Duration::from_secs(10)), None);
-        assert_eq!(b.child_done(&second), None);
-        assert!(b.wait(Duration::from_secs(4)).is_some());
+    fn an_unfinished_child_at_the_grace_holds_the_deferral() {
+        for state in [
+            AgentStatus::Working,
+            AgentStatus::Pending,
+            AgentStatus::Waiting,
+        ] {
+            let mut b = Bench::new(Duration::from_secs(3));
+            b.prompt();
+            let first = b.child("first");
+            assert_eq!(b.turn_ended(done()), None);
+            assert_eq!(b.child_done(&first), None);
+            // The provider reports another child during the grace, even
+            // if it is waiting and no Decision has been attributed yet.
+            let key = AgentKey::new(Provider::Claude, "root", "second");
+            let mut info = AgentInfo::new(key.clone());
+            info.parent = Some(Subject::Main);
+            assert_eq!(b.event(ActivityEvent::Discovered(info)), None);
+            assert_eq!(
+                b.event(ActivityEvent::Status {
+                    key: key.clone(),
+                    state
+                }),
+                None
+            );
+            assert_eq!(b.wait(Duration::from_secs(10)), None, "{state:?}");
+            assert_eq!(b.child_done(&key), None);
+            assert!(b.wait(Duration::from_secs(4)).is_some());
+        }
     }
 
     #[test]

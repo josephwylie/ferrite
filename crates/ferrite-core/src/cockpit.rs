@@ -1232,6 +1232,7 @@ impl Cockpit {
             return Err(error);
         }
         let mut state = self.threads.remove(&thread).expect("checked");
+        self.notifications.disconnect(thread);
         self.roster.remove_thread(thread);
         state.session = None;
         state.replacement = None;
