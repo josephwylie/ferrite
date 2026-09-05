@@ -2351,7 +2351,50 @@ mod tests {
         assert_eq!(restored.session_id(), live.session_id());
         assert_eq!(restored.model(), live.model());
         assert_eq!(restored.last_cost(), live.last_cost());
+        assert_eq!(restored.turn_outcome(), live.turn_outcome());
+        assert_eq!(restored.turn_completed(), live.turn_completed());
         assert_eq!(restored.status(), live.status());
+    }
+
+    #[test]
+    fn persisted_turn_outcomes_and_next_prompts_restore_the_completion_reading() {
+        let dir = scratch("turn-outcomes");
+        let store = Store::open(&dir).unwrap();
+        for cost_usd in [None, Some(0.038)] {
+            for outcome in [
+                TurnOutcome::Completed,
+                TurnOutcome::Interrupted,
+                TurnOutcome::Error("model overloaded".into()),
+            ] {
+                let (id, mut writer) = store.create(Provider::Codex, None, main_choice()).unwrap();
+                writer.record_prompt("go").unwrap();
+                writer
+                    .record_event(
+                        &SessionEvent::TurnEnded {
+                            outcome: outcome.clone(),
+                            cost_usd,
+                        },
+                        None,
+                    )
+                    .unwrap();
+
+                let reopened = Store::open(&dir).unwrap();
+                let mut restored = restore(&reopened.load(id).unwrap());
+                restored.apply(Input::Revived);
+                assert_eq!(restored.turn_outcome(), Some(&outcome));
+                assert_eq!(restored.last_cost(), cost_usd);
+                assert_eq!(restored.turn_completed(), outcome == TurnOutcome::Completed);
+
+                writer.record_prompt("next turn").unwrap();
+                writer.flush().unwrap();
+                let mut active = restore(&reopened.load(id).unwrap());
+                active.apply(Input::Revived);
+                assert_eq!(active.turn_outcome(), None);
+                assert!(!active.turn_completed());
+                assert_eq!(active.status(), crate::transcript::Status::Streaming);
+                assert!(active.turn_elapsed().is_some());
+            }
+        }
     }
 
     #[test]

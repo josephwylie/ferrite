@@ -371,19 +371,17 @@ pub enum WallState {
     Parked,
 }
 
-/// glance.md's matrix, one row per state. `finished` is the honest v1 test
-/// for "done": an idle Thread whose last turn recorded a cost. The cost is
-/// data only — no surface renders a dollar figure; the done cell reads a
-/// plain "turn complete".
+/// glance.md's matrix, one row per state. Transcript owns the turn's meaning;
+/// the Pane chooses its presentation alongside Decisions and test results.
 pub fn wall_state(
-    status: Option<Status>,
+    transcript: Option<&Transcript>,
     pending: bool,
     tests_failing: bool,
-    finished: bool,
 ) -> WallState {
-    let Some(status) = status else {
+    let Some(transcript) = transcript else {
         return WallState::Parked;
     };
+    let status = transcript.status();
     if pending || status == Status::Blocked {
         return WallState::Decision;
     }
@@ -391,7 +389,7 @@ pub fn wall_state(
         Status::Closed => WallState::Blocked,
         Status::Streaming if tests_failing => WallState::Failing,
         Status::Streaming => WallState::Working,
-        _ if finished => WallState::Done,
+        _ if transcript.turn_completed() => WallState::Done,
         _ => WallState::Idle,
     }
 }
@@ -508,12 +506,7 @@ pub fn render_pane(
     // offers no way out. The focus half is here because the prototype's
     // running-but-unfocused Pane draws no hint.
     let running = focused && status == Some(Status::Streaming);
-    let state = wall_state(
-        status,
-        decision.is_some(),
-        wall.tests_failing,
-        transcript.and_then(|t| t.last_cost()).is_some(),
-    );
+    let state = wall_state(transcript, decision.is_some(), wall.tests_failing);
     // Attention and focus are two independent channels, and they no longer
     // nest (§D.1): the state edge is the Pane's own 1px border — always in
     // layout, only ever recoloured, so nothing reflows when a Decision
@@ -4372,40 +4365,60 @@ mod tests {
         cx.run_until_parked();
     }
 
+    #[test]
+    fn the_wall_reads_turn_completion_without_a_cost() {
+        let mut transcript = Transcript::default();
+        transcript.apply(Input::Prompt("finish the task".into()));
+        transcript.apply(Input::Event(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        }));
+        assert_eq!(wall_state(Some(&transcript), false, false), WallState::Done);
+    }
+
     /// glance.md §4's wall matrix, one assertion per row — the selection
     /// logic the wall cell renders from.
     #[test]
     fn the_wall_state_matrix_reads_exactly_as_the_glance_spec() {
         use WallState::*;
+        let mut transcript = Transcript::default();
+        assert_eq!(wall_state(Some(&transcript), false, false), Idle);
+        transcript.apply(Input::Prompt("go".into()));
         // Working, focused or not, is the streaming Thread.
-        assert_eq!(
-            wall_state(Some(Status::Streaming), false, false, false),
-            Working
-        );
+        assert_eq!(wall_state(Some(&transcript), false, false), Working);
         // Failing tests stay a working Thread — red text, not a ring.
-        assert_eq!(
-            wall_state(Some(Status::Streaming), true, false, false),
-            Decision
-        );
-        assert_eq!(
-            wall_state(Some(Status::Streaming), false, true, false),
-            Failing
-        );
+        assert_eq!(wall_state(Some(&transcript), true, false), Decision);
+        assert_eq!(wall_state(Some(&transcript), false, true), Failing);
         // A Decision waits: pending flag or Blocked status, either way.
-        assert_eq!(
-            wall_state(Some(Status::Blocked), false, false, false),
-            Decision
-        );
+        let decision = crate::demo::script()
+            .into_iter()
+            .map(|step| step.event)
+            .find(|event| matches!(event, SessionEvent::DecisionRequested { .. }))
+            .unwrap();
+        transcript.apply(Input::Event(decision));
+        assert_eq!(wall_state(Some(&transcript), false, false), Decision);
+        // Only successful outcomes read Done, regardless of cost.
+        for cost_usd in [None, Some(0.038)] {
+            for (outcome, expected) in [
+                (ferrite_core::TurnOutcome::Completed, Done),
+                (ferrite_core::TurnOutcome::Interrupted, Idle),
+                (ferrite_core::TurnOutcome::Error("failed".into()), Idle),
+            ] {
+                transcript.apply(Input::Event(SessionEvent::TurnEnded { outcome, cost_usd }));
+                assert_eq!(wall_state(Some(&transcript), false, false), expected);
+            }
+        }
         // A closed Session is the red hard-blocker.
-        assert_eq!(
-            wall_state(Some(Status::Closed), false, false, true),
-            Blocked
-        );
-        // Idle with a recorded turn cost is done; without one, idle.
-        assert_eq!(wall_state(Some(Status::Idle), false, false, true), Done);
-        assert_eq!(wall_state(Some(Status::Idle), false, false, false), Idle);
+        transcript.apply(Input::Event(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        }));
+        transcript.apply(Input::Event(SessionEvent::Closed {
+            reason: "Session exited".into(),
+        }));
+        assert_eq!(wall_state(Some(&transcript), false, false), Blocked);
         // No transcript at all — the cockpit could not open the Thread.
-        assert_eq!(wall_state(None, false, false, false), Parked);
+        assert_eq!(wall_state(None, false, false), Parked);
     }
 
     /// The wall card folds everything the L3 recipe needs that is not an
