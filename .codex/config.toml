@@ -1,0 +1,3 @@
+# Run Codex without sandbox restrictions or interactive approval prompts.
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
