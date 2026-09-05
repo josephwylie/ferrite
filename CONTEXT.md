@@ -101,6 +101,10 @@ Claude Code's own UI sends.
 The checkout a Thread works in: a per-Thread worktree or the main checkout —
 chosen at Thread creation. Nothing else in v1.
 
+**Draft**
+A Pane's pending Provider, Effort, Project, and Workspace choices before its
+first prompt creates a Thread. It has no durable history or Session.
+
 **Remote**
 Following and answering Decisions away from the desktop. Wanted soon;
 scope under discussion.

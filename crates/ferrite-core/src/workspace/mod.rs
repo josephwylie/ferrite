@@ -52,6 +52,18 @@ pub enum WorkspaceChoice {
     ExistingWorktree { repo: PathBuf, path: PathBuf },
 }
 
+impl WorkspaceChoice {
+    /// The source files available before Thread creation. A new worktree
+    /// starts from its repo; an existing one exposes its own checkout.
+    pub fn source_root(&self) -> &Path {
+        match self {
+            Self::Main { checkout } => checkout,
+            Self::NewWorktree { repo } => repo,
+            Self::ExistingWorktree { path, .. } => path,
+        }
+    }
+}
+
 /// The one cwd chain every spawn reads (#29): `session_project_root ??
 /// worktree_path ?? project_root` — the last two being what `cwd` already
 /// collapses a binding to. Open, revive, send-respawn, sweep and re-aim all

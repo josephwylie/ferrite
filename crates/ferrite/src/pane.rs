@@ -12,7 +12,7 @@
 //! L2 (Instruments) and L3 (Wall) keep the metrics they have — the
 //! prototype specifies only L1 — and take the new palette and scale.
 
-use ferrite_core::cockpit::{ProviderChoice, ThreadView, ToolTiming};
+use ferrite_core::cockpit::{ThreadView, ToolTiming};
 use ferrite_core::docview::{is_test_run, passed_count, Instruments, Level, Tests};
 use ferrite_core::roster::{DraftId, PaneIdentity};
 use ferrite_core::store::Provider;
@@ -20,7 +20,6 @@ use ferrite_core::transcript::{
     Block, BlockId, Body, Class, Diff, Span, Status, Style, Todos, Token, ToolBlock, ToolState,
     Transcript,
 };
-use ferrite_core::workspace::registry::ProjectId;
 use ferrite_core::workspace::WorkspaceBinding;
 use ferrite_core::{Decision, ThreadId};
 use gpui::prelude::*;
@@ -85,14 +84,9 @@ pub(crate) enum DisclosureState {
     Expanded,
 }
 
-/// A draft Pane's whole choice, ids only — the band renders from this and
-/// the first send resolves it through the registry.
+/// A draft Pane's presentation state around its headless choices.
 pub struct DraftBinding {
-    pub provider: ProviderChoice,
-    /// The effort chip's choice; None is the operator's default.
-    pub effort: Option<String>,
-    pub project: ProjectId,
-    pub target: DraftTarget,
+    pub binding: ferrite_core::draft::DraftBinding,
     /// The band chip tab has parked on; None with the keyboard in the
     /// prompt line — the zero-keystroke default path.
     pub band_focus: Option<BandChip>,
@@ -121,17 +115,6 @@ impl BandChip {
             Some(BandChip::Workspace) => None,
         }
     }
-}
-
-/// The workspace chip's choice, scoped to the draft's project.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DraftTarget {
-    /// The project checkout itself.
-    Main,
-    /// A registered worktree of the project, named by its branch.
-    Existing { branch: SharedString },
-    /// A fresh worktree, created at first send.
-    New,
 }
 
 impl PaneView {

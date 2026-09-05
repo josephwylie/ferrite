@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use ferrite_core::cockpit::{CloseError, Cockpit, HistoryDirection, ProviderChoice};
 use ferrite_core::docview::{Cell, Level};
+use ferrite_core::draft::DraftTarget;
 use ferrite_core::groups::{Drag, DropTarget, GroupChange, GroupId, Groups, Plan};
 use ferrite_core::layout::{self, Edge, SeamId, Tree, Zone};
 use ferrite_core::roster::{PaneIdentity, View};
@@ -468,7 +469,7 @@ enum BandChoice {
     /// The type-a-path row: register the typed path as a project, then
     /// choose it.
     RegisterPath(std::path::PathBuf),
-    Target(pane::DraftTarget),
+    Target(DraftTarget),
     /// Open the platform's folder picker; the folder picked registers
     /// and becomes the draft's Project.
     Browse,
@@ -578,7 +579,7 @@ impl CockpitView {
         // Nothing revived: the cockpit starts as one draft Pane (#29) —
         // nothing spawns before the operator's choice.
         if view.panes.is_empty() {
-            view.open_draft_with_provider(pane::DraftTarget::Main, launch_provider, cx);
+            view.open_draft_with_provider(DraftTarget::Main, launch_provider, cx);
         }
         view
     }
@@ -1330,10 +1331,9 @@ impl CockpitView {
                         .and_then(|group| group.members.first().copied())
                         .and_then(|thread| self.cockpit.project_id(thread)),
                 };
-                self.open_draft(pane::DraftTarget::Main, cx);
+                self.open_draft(DraftTarget::Main, cx);
                 if let (Some(project), Some(draft)) = (project, self.focused_draft_mut()) {
-                    draft.project = project;
-                    draft.target = pane::DraftTarget::Main;
+                    draft.binding.choose_checkout(project);
                 }
             }
             (_, MenuVerb::Reveal) => {
@@ -2647,7 +2647,12 @@ impl CockpitView {
                 .workspace()?
                 .cwd()
                 .to_path_buf(),
-            (None, Some(draft)) => self.draft_source_root(draft)?,
+            (None, Some(draft)) => draft
+                .binding
+                .resolve(self.cockpit.registry())
+                .ok()?
+                .source_root()
+                .to_path_buf(),
             _ => return None,
         };
         // The walk runs once per open menu; keystrokes only re-filter it.
@@ -3144,12 +3149,12 @@ impl CockpitView {
     /// The provider follows the Pane the operator is on; the project starts
     /// on the launch project; `target` is the caller's (cmd-shift-n drafts
     /// straight onto "new worktree").
-    fn open_draft(&mut self, target: pane::DraftTarget, cx: &mut Context<Self>) {
+    fn open_draft(&mut self, target: DraftTarget, cx: &mut Context<Self>) {
         let provider = self
             .panes
             .get(self.focused())
             .map(|pane| match pane.draft() {
-                Some(draft) => draft.provider.clone(),
+                Some(draft) => draft.binding.provider().clone(),
                 None => {
                     let open = pane.thread().and_then(|thread| self.cockpit.thread(thread));
                     ProviderChoice {
@@ -3174,7 +3179,7 @@ impl CockpitView {
 
     fn open_draft_with_provider(
         &mut self,
-        target: pane::DraftTarget,
+        target: DraftTarget,
         provider: Provider,
         cx: &mut Context<Self>,
     ) {
@@ -3190,7 +3195,7 @@ impl CockpitView {
 
     fn open_draft_with_choice(
         &mut self,
-        target: pane::DraftTarget,
+        target: DraftTarget,
         provider: ProviderChoice,
         cx: &mut Context<Self>,
     ) {
@@ -3207,10 +3212,7 @@ impl CockpitView {
             View::Solo => self.launch_project,
         };
         let binding = pane::DraftBinding {
-            provider,
-            effort: None,
-            project,
-            target,
+            binding: ferrite_core::draft::DraftBinding::new(provider, project, target),
             band_focus: None,
             error: None,
         };
@@ -3266,8 +3268,8 @@ impl CockpitView {
         match chip {
             pane::BandChip::Provider => {
                 let (rows, _) = self.provider_rows(
-                    draft.provider.provider,
-                    draft.provider.model.as_deref(),
+                    draft.binding.provider().provider,
+                    draft.binding.provider().model.as_deref(),
                     None,
                     false,
                     |choice| Consequence::Band(BandChoice::Provider(choice)),
@@ -3275,7 +3277,7 @@ impl CockpitView {
                 rows
             }
             pane::BandChip::Effort => {
-                let provider = draft.provider.provider;
+                let provider = draft.binding.provider().provider;
                 let default = self.prefs.settings.effort_for(provider);
                 let mut rows = vec![band_row(
                     SharedString::from("Default"),
@@ -3283,18 +3285,18 @@ impl CockpitView {
                         Some(default) => format!("{} · from Settings", effort_title(default)),
                         None => "the CLI's own choice".to_string(),
                     }),
-                    draft.effort.is_none(),
+                    draft.binding.effort().is_none(),
                     BandChoice::Effort(None),
                 )];
                 for effort in ferrite_core::providers::models::efforts_for(
                     provider,
-                    draft.provider.model.as_deref(),
+                    draft.binding.provider().model.as_deref(),
                     &self.cockpit.announced_models(provider),
                 ) {
                     rows.push(band_row(
                         SharedString::from(effort_title(&effort)),
                         SharedString::from(effort_detail(&effort)),
-                        draft.effort.as_deref() == Some(effort.as_str()),
+                        draft.binding.effort() == Some(effort.as_str()),
                         BandChoice::Effort(Some(effort)),
                     ));
                 }
@@ -3310,7 +3312,7 @@ impl CockpitView {
                         band_row(
                             SharedString::from(project.title.clone()),
                             SharedString::from(project.root.display().to_string()),
-                            draft.project == project.id,
+                            draft.binding.project() == project.id,
                             BandChoice::Project(project.id),
                         )
                     })
@@ -3346,26 +3348,26 @@ impl CockpitView {
                 let mut rows = vec![band_row(
                     SharedString::from("main"),
                     SharedString::from("the project checkout"),
-                    draft.target == pane::DraftTarget::Main,
-                    BandChoice::Target(pane::DraftTarget::Main),
+                    *draft.binding.target() == DraftTarget::Main,
+                    BandChoice::Target(DraftTarget::Main),
                 )];
-                for entry in self.cockpit.registry().worktrees(draft.project) {
-                    let branch = SharedString::from(entry.branch.clone());
+                for entry in self.cockpit.registry().worktrees(draft.binding.project()) {
+                    let branch = entry.branch.clone();
                     rows.push(band_row(
-                        branch.clone(),
+                        SharedString::from(branch.clone()),
                         SharedString::from("worktree"),
                         matches!(
-                            &draft.target,
-                            pane::DraftTarget::Existing { branch: chosen } if *chosen == branch
+                            draft.binding.target(),
+                            DraftTarget::Existing { branch: chosen } if *chosen == branch
                         ),
-                        BandChoice::Target(pane::DraftTarget::Existing { branch }),
+                        BandChoice::Target(DraftTarget::Existing { branch }),
                     ));
                 }
                 rows.push(band_row(
                     SharedString::from("new worktree"),
                     SharedString::from("created at first send"),
-                    draft.target == pane::DraftTarget::New,
-                    BandChoice::Target(pane::DraftTarget::New),
+                    *draft.binding.target() == DraftTarget::New,
+                    BandChoice::Target(DraftTarget::New),
                 ));
                 rows
             }
@@ -3404,45 +3406,28 @@ impl CockpitView {
     ) {
         match choice {
             BandChoice::Provider(provider) => {
-                // A rung the new model does not have is dropped, not sent
-                // to a CLI that would refuse it.
-                let ladder = ferrite_core::providers::models::efforts_for(
-                    provider.provider,
-                    provider.model.as_deref(),
-                    &self.cockpit.announced_models(provider.provider),
-                );
+                let announced = self.cockpit.announced_models(provider.provider);
                 if let Some(draft) = self.focused_draft_mut() {
-                    draft.provider = provider.clone();
-                    if draft
-                        .effort
-                        .as_ref()
-                        .is_some_and(|effort| !ladder.contains(effort))
-                    {
-                        draft.effort = None;
-                    }
+                    draft.binding.choose_provider(provider.clone(), &announced);
                     draft.error = None;
                 }
             }
             BandChoice::Effort(effort) => {
                 if let Some(draft) = self.focused_draft_mut() {
-                    draft.effort = effort.clone();
+                    draft.binding.choose_effort(effort.clone());
                     draft.error = None;
                 }
             }
             BandChoice::Project(project) => {
                 if let Some(draft) = self.focused_draft_mut() {
-                    if draft.project != *project {
-                        draft.project = *project;
-                        draft.target = pane::DraftTarget::Main;
-                    }
+                    draft.binding.choose_project(*project);
                     draft.error = None;
                 }
             }
             BandChoice::RegisterPath(path) => match self.cockpit.register_project(path) {
                 Ok(project) => {
                     if let Some(draft) = self.focused_draft_mut() {
-                        draft.project = project;
-                        draft.target = pane::DraftTarget::Main;
+                        draft.binding.choose_checkout(project);
                         draft.error = None;
                     }
                     // The typed path was the pick's input, not a prompt:
@@ -3463,7 +3448,7 @@ impl CockpitView {
             },
             BandChoice::Target(target) => {
                 if let Some(draft) = self.focused_draft_mut() {
-                    draft.target = target.clone();
+                    draft.binding.choose_target(target.clone());
                     draft.error = None;
                 }
             }
@@ -3510,8 +3495,7 @@ impl CockpitView {
             Ok(project) => match then {
                 BrowseThen::Draft => {
                     if let Some(draft) = self.focused_draft_mut() {
-                        draft.project = project;
-                        draft.target = pane::DraftTarget::Main;
+                        draft.binding.choose_checkout(project);
                         draft.error = None;
                     }
                 }
@@ -3553,14 +3537,17 @@ impl CockpitView {
         if text.is_empty() {
             return;
         }
-        let provider = draft.provider.clone();
-        let effort = draft.effort.clone();
+        let provider = draft.binding.provider().clone();
+        let effort = draft.binding.effort().map(str::to_owned);
         let deferred = self
             .cockpit
             .roster()
             .draft_scope(id)
             .is_some_and(|scope| scope.pending_leave.is_some());
-        let resolved = self.resolve_target(draft.project, &draft.target);
+        let resolved = draft
+            .binding
+            .resolve(self.cockpit.registry())
+            .map_err(|e| e.to_string());
         let opened = resolved.and_then(|choice| {
             self.cockpit
                 .bootstrap_draft(id, provider, choice, &text, effort.clone())
@@ -3609,57 +3596,6 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// A draft's ids resolved to the core's choice: the registry answers
-    /// the project's root and an existing worktree's path.
-    fn resolve_target(
-        &self,
-        project: ProjectId,
-        target: &pane::DraftTarget,
-    ) -> Result<WorkspaceChoice, String> {
-        let Some(entry) = self.cockpit.registry().project(project) else {
-            return Err("the chosen project is no longer registered — re-pick it".into());
-        };
-        let repo = entry.root.clone();
-        Ok(match target {
-            pane::DraftTarget::Main => WorkspaceChoice::Main { checkout: repo },
-            pane::DraftTarget::New => WorkspaceChoice::NewWorktree { repo },
-            pane::DraftTarget::Existing { branch } => {
-                let Some(worktree) = self
-                    .cockpit
-                    .registry()
-                    .worktrees(project)
-                    .iter()
-                    .find(|entry| entry.branch == branch.as_ref())
-                else {
-                    return Err(format!(
-                        "worktree {branch} is no longer registered — re-pick the workspace"
-                    ));
-                };
-                WorkspaceChoice::ExistingWorktree {
-                    repo,
-                    path: worktree.path.clone(),
-                }
-            }
-        })
-    }
-
-    /// The only source-root law for draft file completion: main and a new
-    /// worktree both start from the project checkout; an existing choice
-    /// walks that registered worktree itself.
-    fn draft_source_root(&self, draft: &pane::DraftBinding) -> Option<std::path::PathBuf> {
-        let project = self.cockpit.registry().project(draft.project)?;
-        match &draft.target {
-            pane::DraftTarget::Main | pane::DraftTarget::New => Some(project.root.clone()),
-            pane::DraftTarget::Existing { branch } => self
-                .cockpit
-                .registry()
-                .worktrees(draft.project)
-                .iter()
-                .find(|entry| entry.branch == branch.as_ref())
-                .map(|entry| entry.path.clone()),
-        }
-    }
-
     /// The focused draft's band — chips wired to their popovers (#29). A
     /// chip click shares `open_band_popover` with ↵ on a tab-focused chip;
     /// the closure re-finds the Pane by its Composer, a draft's one stable
@@ -3672,17 +3608,21 @@ impl CockpitView {
         let project_title = self
             .cockpit
             .registry()
-            .project(draft.project)
+            .project(draft.binding.project())
             .map(|project| project.title.clone())
             .unwrap_or_else(|| "project".into());
-        let workspace_label = match &draft.target {
-            pane::DraftTarget::Main => SharedString::from("main"),
-            pane::DraftTarget::Existing { branch } => branch.clone(),
-            pane::DraftTarget::New => SharedString::from("new worktree"),
+        let workspace_label = match draft.binding.target() {
+            DraftTarget::Main => SharedString::from("main"),
+            DraftTarget::Existing { branch } => SharedString::from(branch.clone()),
+            DraftTarget::New => SharedString::from("new worktree"),
         };
-        let effort_label = match draft.effort.as_deref() {
+        let effort_label = match draft.binding.effort() {
             Some(effort) => SharedString::from(effort_title(effort)),
-            None => match self.prefs.settings.effort_for(draft.provider.provider) {
+            None => match self
+                .prefs
+                .settings
+                .effort_for(draft.binding.provider().provider)
+            {
                 Some(effort) => SharedString::from(effort_title(effort)),
                 None => SharedString::from("effort"),
             },
@@ -3692,12 +3632,14 @@ impl CockpitView {
                 pane::BandChip::Provider,
                 // The provider's own word until a model is chosen; the
                 // groomed model name after — one spelling, wherever it shows.
-                match draft.provider.model.as_deref() {
+                match draft.binding.provider().model.as_deref() {
                     Some(model) => SharedString::from(ferrite_core::providers::models::label(
                         model,
-                        &self.cockpit.model_catalog(draft.provider.provider),
+                        &self
+                            .cockpit
+                            .model_catalog(draft.binding.provider().provider),
                     )),
-                    None => SharedString::from(provider_title(draft.provider.provider)),
+                    None => SharedString::from(provider_title(draft.binding.provider().provider)),
                 },
                 true,
             ),
@@ -3754,7 +3696,7 @@ impl CockpitView {
             .expect("the scratch repo registers");
         for pane in &mut self.panes {
             if let Some(draft) = pane.draft_mut() {
-                draft.project = self.launch_project;
+                draft.binding.choose_project(self.launch_project);
             }
         }
     }
@@ -4028,13 +3970,13 @@ impl CockpitView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.open_draft(pane::DraftTarget::New, cx);
+        self.open_draft(DraftTarget::New, cx);
     }
 
     /// cmd-t / cmd-n (#29): a draft Pane, not a Thread. The band chooses;
     /// the first send bootstraps.
     fn new_thread(&mut self, _: &NewThread, _window: &mut Window, cx: &mut Context<Self>) {
-        self.open_draft(pane::DraftTarget::Main, cx);
+        self.open_draft(DraftTarget::Main, cx);
     }
 
     /// Reopen the Thread parked most recently — the one the operator just
@@ -6875,7 +6817,11 @@ mod tests {
         cx.simulate_keystrokes("cmd-shift-n");
         view.read_with(cx, |view, _| {
             let draft = view.panes[view.focused()].draft().expect("a draft Pane");
-            assert_eq!(draft.target, pane::DraftTarget::New, "aimed at a worktree");
+            assert_eq!(
+                *draft.binding.target(),
+                DraftTarget::New,
+                "aimed at a worktree"
+            );
             assert!(fake.streams.borrow().is_empty(), "nothing spawned yet");
         });
 
@@ -7059,19 +7005,19 @@ mod tests {
         let chosen = view.read_with(cx, |view, _| {
             let draft = view.panes[view.focused()].draft().expect("still a draft");
             assert_eq!(
-                draft.target,
-                pane::DraftTarget::Main,
+                *draft.binding.target(),
+                DraftTarget::Main,
                 "changing the project resets the workspace chip"
             );
             assert_eq!(
                 view.cockpit
                     .registry()
-                    .project(draft.project)
+                    .project(draft.binding.project())
                     .unwrap()
                     .title,
                 "second"
             );
-            draft.project
+            draft.binding.project()
         });
 
         // tab: the workspace chip; ↵ opens its popover, scoped to the
@@ -7107,7 +7053,11 @@ mod tests {
             let band = view.popover.as_ref().expect("the workspace popover again");
             assert!(matches!(band.kind, Kind::Band(pane::BandChip::Workspace)));
             let draft = view.panes[view.focused()].draft().expect("still a draft");
-            assert_ne!(draft.project, chosen, "the arrows flipped the project");
+            assert_ne!(
+                draft.binding.project(),
+                chosen,
+                "the arrows flipped the project"
+            );
             let labels: Vec<&str> = band.rows.iter().map(|row| row.name.as_ref()).collect();
             assert_eq!(
                 labels,
@@ -8129,7 +8079,7 @@ mod tests {
         let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, cx| {
             for _ in 0..5 {
-                view.open_draft(pane::DraftTarget::Main, cx);
+                view.open_draft(DraftTarget::Main, cx);
             }
         });
         cx.simulate_resize(gpui::size(px(500.), px(320.)));
@@ -8160,7 +8110,7 @@ mod tests {
 
         view.read_with(cx, |view, _| {
             assert_eq!(
-                view.panes[0].draft().unwrap().provider,
+                *view.panes[0].draft().unwrap().binding.provider(),
                 ProviderChoice {
                     provider: Provider::Codex,
                     model: None,
@@ -9103,12 +9053,16 @@ mod tests {
                 .unwrap();
             view.cockpit.park(thread).unwrap();
             let focused = view.focused();
-            let entry = view.panes[focused].draft().unwrap().project;
+            let entry = view.panes[focused].draft().unwrap().binding.project();
             let worktree = view.cockpit.registry().worktrees(entry)[0].clone();
             std::fs::write(worktree.path.join("worktree-only.txt"), "tree\n").unwrap();
-            view.panes[focused].draft_mut().unwrap().target = pane::DraftTarget::Existing {
-                branch: SharedString::from(worktree.branch),
-            };
+            view.panes[focused]
+                .draft_mut()
+                .unwrap()
+                .binding
+                .choose_target(DraftTarget::Existing {
+                    branch: worktree.branch,
+                });
         });
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         tick(cx);
@@ -9132,7 +9086,11 @@ mod tests {
                 .composer
                 .update(cx, |composer, cx| composer.set(String::new(), cx));
             let focused = view.focused();
-            view.panes[focused].draft_mut().unwrap().target = pane::DraftTarget::New;
+            view.panes[focused]
+                .draft_mut()
+                .unwrap()
+                .binding
+                .choose_target(DraftTarget::New);
         });
         cx.simulate_input("@");
         cx.run_until_parked();
@@ -9148,6 +9106,71 @@ mod tests {
             assert!(names.contains(&"main-only.txt"), "rows: {names:?}");
             assert!(!names.contains(&"worktree-only.txt"), "rows: {names:?}");
         });
+
+        // Pick the existing worktree through its band row, complete its
+        // unique file, and send: the resulting Thread keeps that same
+        // directory, not the Project checkout.
+        view.update(cx, |view, cx| {
+            view.panes[view.focused()]
+                .composer
+                .update(cx, |composer, cx| composer.set(String::new(), cx));
+            view.open_band_popover(pane::BandChip::Workspace, cx);
+            view.pick(1, cx);
+        });
+        cx.simulate_input("@worktree-only");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter");
+        assert_eq!(composer_text(&view, cx), "@worktree-only.txt ");
+        cx.simulate_keystrokes("enter");
+        tick(cx);
+        view.read_with(cx, |view, _| {
+            let thread = view.panes[view.focused()]
+                .thread()
+                .expect("first send bound the Thread");
+            let cwd = view
+                .cockpit
+                .thread(thread)
+                .unwrap()
+                .workspace()
+                .unwrap()
+                .cwd();
+            assert!(cwd.join("worktree-only.txt").is_file());
+            assert!(!cwd.join("main-only.txt").exists());
+        });
+    }
+
+    #[gpui::test]
+    fn a_stale_draft_workspace_neither_completes_nor_sends_from_main(cx: &mut TestAppContext) {
+        let base = scratch("draft-stale-workspace");
+        let repo = repo_in(&base);
+        std::fs::write(repo.join("main-only.txt"), "main\n").unwrap();
+        let fake = Fake::default();
+        let core = Cockpit::new(
+            Store::open(base.join("threads")).unwrap(),
+            Box::new(fake.clone()),
+        );
+        bind_production_keys(cx);
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, _| {
+            view.aim_launch(&repo);
+            view.focused_draft_mut()
+                .unwrap()
+                .binding
+                .choose_target(DraftTarget::Existing {
+                    branch: "removed-worktree".into(),
+                });
+        });
+        tick(cx);
+        cx.simulate_input("@main-only");
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| assert!(view.popover.is_none()));
+        cx.simulate_keystrokes("enter");
+        view.read_with(cx, |view, _| {
+            let draft = view.panes[view.focused()].draft().expect("still a draft");
+            assert!(draft.error.as_ref().unwrap().contains("removed-worktree"));
+        });
+        assert_eq!(composer_text(&view, cx), "@main-only");
+        assert!(fake.streams.borrow().is_empty());
     }
 
     /// A Thread with no binding has nothing to walk: `@` opens nothing and
@@ -10073,13 +10096,13 @@ mod tests {
                     },
                 )
                 .unwrap();
-            view.open_draft(pane::DraftTarget::Main, cx);
+            view.open_draft(DraftTarget::Main, cx);
             view.open_band_popover(pane::BandChip::Provider, cx);
         });
 
         view.read_with(cx, |view, _| {
             let draft = view.panes[view.focused()].draft().unwrap();
-            assert_eq!(draft.provider.model.as_deref(), Some("opus"));
+            assert_eq!(draft.binding.provider().model.as_deref(), Some("opus"));
             let labels: Vec<&str> = view
                 .popover
                 .as_ref()
@@ -10102,7 +10125,8 @@ mod tests {
                 view.panes[view.focused()]
                     .draft()
                     .unwrap()
-                    .provider
+                    .binding
+                    .provider()
                     .model
                     .as_deref(),
                 Some("opus")
@@ -10646,7 +10670,7 @@ mod tests {
             let high = names.iter().position(|name| *name == "High").unwrap();
             view.pick(high, cx);
             let draft = view.panes[view.focused()].draft().expect("still a draft");
-            assert_eq!(draft.effort.as_deref(), Some("high"));
+            assert_eq!(draft.binding.effort(), Some("high"));
         });
         cx.simulate_input("go");
         cx.simulate_keystrokes("enter");
