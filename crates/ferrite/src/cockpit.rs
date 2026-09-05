@@ -820,8 +820,11 @@ impl CockpitView {
                     self.retry_subject_history(index, cx);
                 }
             }
-            if !update.dirty.is_empty() || !update.evicted.is_empty() {
-                self.facts.streamed(&self.cockpit, update.thread);
+            // Native progress can change without appending a transcript row.
+            self.facts.streamed(&self.cockpit, update.thread);
+            if let Some(index) = self.pane_for(update.thread) {
+                self.facts
+                    .selected(&self.cockpit, update.thread, &self.panes[index].selected);
             }
         }
         for thread in restarted {
@@ -4771,7 +4774,11 @@ impl Render for CockpitView {
             })
             .unwrap_or_else(|| self.focus.clone());
         use gpui::component::WindowExt as _;
-        let native_text_focused = gpui::base::TextSelection::has_selection(window, cx)
+        let native_text_focused = (gpui::base::TextSelection::has_selection(window, cx)
+            || self
+                .panes
+                .get(self.focused())
+                .is_some_and(|pane| pane.rich.output_focused(&pane.text_namespace(), window, cx)))
             && self
                 .panes
                 .get(self.focused())
@@ -5144,7 +5151,7 @@ impl CockpitView {
             composer_empty: pane.composer.read(cx).is_empty(),
             history_available: self.history_available(index, level),
             focused,
-            wall: cached.map(|facts| &facts.wall),
+            wall: cached.and_then(|facts| facts.wall_for(&pane.selected)),
             selection,
         };
         // Only L1 draws a Composer to hang a popover over (#23), a model
@@ -5243,6 +5250,9 @@ impl CockpitView {
         };
         self.focus_pane(index);
         gpui::base::TextSelection::clear(window, cx);
+        self.panes[index]
+            .rich
+            .clear_output_selection(&self.panes[index].text_namespace(), cx);
         self.panes[index].toggle_tool(call);
         window.focus(&self.panes[index].tool_focus(), cx);
         cx.notify();
@@ -8987,10 +8997,11 @@ mod tests {
         cx: &mut TestAppContext,
     ) {
         let (core, fake) = cockpit("tool-disclosure-pointer", 1);
+        cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-c", CopySelection, None)]));
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-        let output = format!("first line\n{}TAIL", "x".repeat(65_540));
+        let output = format!("first line\n\nλ🙂\t{}TAIL", "x".repeat(65_540));
         let stream = fake.streams.borrow();
         stream[0]
             .send(SessionEvent::ToolStarted {
@@ -9060,9 +9071,8 @@ mod tests {
         view.read_with(cx, |view, _| {
             assert!(view.panes[0].tool_expanded("toolu_9"));
             let runs = view.selection.registered(thread);
-            // Every hard line of the output is its own run starting a
-            // line, so a drag across them copies back with the newlines
-            // the output had.
+            // Large output is one native read-only document, retaining exact
+            // hard lines and Unicode without per-character Markdown layout.
             let tool_block = view
                 .cockpit
                 .thread(thread)
@@ -9081,7 +9091,7 @@ mod tests {
                 .collect();
             assert!(lines
                 .iter()
-                .any(|(_, _, starts, text)| *starts && text == "first line"));
+                .any(|(_, _, starts, text)| *starts && text.starts_with("first line\n\nλ🙂\t")));
             let total: usize = lines.iter().map(|(_, _, _, text)| text.len() + 1).sum();
             assert!(total >= 64 * 1024, "{total}");
             assert!(!runs
@@ -9089,6 +9099,61 @@ mod tests {
                 .any(|(_, _, _, text)| text.contains('▾') || text.contains("bytes omitted")));
         });
 
+        let (output_state, expected) = view.read_with(cx, |view, cx| {
+            let block = view
+                .cockpit
+                .thread(thread)
+                .unwrap()
+                .transcript()
+                .blocks()
+                .iter()
+                .find(|block| matches!(&block.body, Body::Tool(tool) if tool.call == "toolu_9"))
+                .unwrap();
+            let Body::Tool(tool) = &block.body else {
+                unreachable!()
+            };
+            let id = format!(
+                "output-{}-{:?}-result",
+                view.panes[0].text_namespace(),
+                block.id
+            );
+            (
+                crate::rich::testing::output(&id, cx).unwrap(),
+                tool.output.as_ref().unwrap().text.clone(),
+            )
+        });
+        let bounds = output_state.read_with(cx, |state, _| state.text_bounds().unwrap());
+        assert!(
+            bounds.size.height < px(350.),
+            "large output has a bounded native viewport"
+        );
+        cx.simulate_click(bounds.center(), gpui::Modifiers::none());
+        tick(cx);
+        cx.update(|window, cx| {
+            assert!(
+                output_state.focus_handle(cx).is_focused(window),
+                "progress pumps preserve native output focus"
+            )
+        });
+        cx.simulate_keystrokes("cmd-down");
+        cx.run_until_parked();
+        output_state.read_with(cx, |state, _| {
+            assert_eq!(
+                state.cursor(),
+                expected.len(),
+                "native navigation reaches the retained tail"
+            );
+            assert!(
+                state.scroll_offset().y < px(0.),
+                "the native viewer scrolls to its tail"
+            );
+        });
+        cx.simulate_keystrokes("cmd-a cmd-c");
+        assert_eq!(clipboard(cx).as_deref(), Some(expected.as_str()));
+        cx.simulate_keystrokes("backspace");
+        output_state.read_with(cx, |state, _| {
+            assert_eq!(state.value().as_ref(), expected.as_str());
+        });
         // Expanding long output can scroll the header out of view while
         // following the tail. Bring it back before clicking its disclosure.
         view.update(cx, |view, cx| {
@@ -9123,6 +9188,180 @@ mod tests {
                 assert!(view.panes[0].composer.focus_handle(cx).is_focused(window));
             });
         });
+    }
+
+    #[gpui::test]
+    fn streaming_output_preserves_native_selection_scroll_and_command_identity(
+        cx: &mut TestAppContext,
+    ) {
+        let (core, fake) = cockpit("streaming-output-view", 1);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(900.)));
+        let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+        let command = format!("cat <<'EOF'\n{}\nEOF", "command ".repeat(1200));
+        let original = "a line of exact output λ🙂 with spaces\n".repeat(300);
+        fake.streams.borrow()[0]
+            .send(SessionEvent::ToolStarted {
+                id: "stream".into(),
+                name: "Bash".into(),
+                input: serde_json::json!({"command": command}),
+            })
+            .unwrap();
+        fake.streams.borrow()[0]
+            .send(SessionEvent::ToolOutputDelta {
+                id: "stream".into(),
+                text: original.clone(),
+            })
+            .unwrap();
+        tick(cx);
+        let chevron = view.read_with(cx, |view, _| {
+            view.panes[0].tool_bounds("stream").unwrap().center()
+        });
+        cx.simulate_click(chevron, gpui::Modifiers::none());
+        cx.run_until_parked();
+        let (command_state, result_state) = view.read_with(cx, |view, cx| {
+            let block = view
+                .cockpit
+                .thread(thread)
+                .unwrap()
+                .transcript()
+                .blocks()
+                .iter()
+                .find(|block| matches!(&block.body, Body::Tool(tool) if tool.call == "stream"))
+                .unwrap();
+            let prefix = format!("output-{}-{:?}", view.panes[0].text_namespace(), block.id);
+            (
+                crate::rich::testing::output(&format!("{prefix}-command"), cx).unwrap(),
+                crate::rich::testing::output(&format!("{prefix}-result"), cx).unwrap(),
+            )
+        });
+        assert_ne!(command_state.entity_id(), result_state.entity_id());
+        command_state.read_with(cx, |state, _| assert_eq!(state.value().as_ref(), command));
+        let bounds = result_state.read_with(cx, |state, _| state.text_bounds().unwrap());
+        cx.simulate_click(bounds.center(), gpui::Modifiers::none());
+        cx.simulate_keystrokes("cmd-down shift-up");
+        cx.run_until_parked();
+        let (selected, cursor, scroll) = result_state.read_with(cx, |state, _| {
+            (
+                state.selected_value(),
+                state.cursor(),
+                state.scroll_offset(),
+            )
+        });
+        assert!(!selected.is_empty());
+        assert!(scroll.y < px(0.));
+        fake.streams.borrow()[0]
+            .send(SessionEvent::ToolOutputDelta {
+                id: "stream".into(),
+                text: "new output\n".into(),
+            })
+            .unwrap();
+        tick(cx);
+        result_state.read_with(cx, |state, _| {
+            assert_eq!(state.value().as_ref(), format!("{original}new output\n"));
+            assert_eq!(state.selected_value(), selected);
+            assert_eq!(state.cursor(), cursor);
+            assert_eq!(state.scroll_offset(), scroll);
+        });
+        command_state.read_with(cx, |state, _| assert_eq!(state.value().as_ref(), command));
+        // A final replacement may be shorter. Native clipping keeps the
+        // retained selection on character boundaries without invalid offsets.
+        fake.streams.borrow()[0]
+            .send(SessionEvent::ToolCompleted {
+                id: "stream".into(),
+                output: "λ🙂\n".repeat(1500),
+                is_error: false,
+                result: ferrite_core::ToolResult::Opaque,
+            })
+            .unwrap();
+        tick(cx);
+        result_state.read_with(cx, |state, _| {
+            let value = state.value();
+            let range = state.selected_range();
+            assert!(value.is_char_boundary(range.start) && value.is_char_boundary(range.end));
+        });
+    }
+
+    #[gpui::test]
+    fn native_progress_stays_visible_while_scrolling_and_metadata_refreshes_the_wall(
+        cx: &mut TestAppContext,
+    ) {
+        use ferrite_core::progress::{Phase, ProgressEvent};
+        let (mut core, fake) = cockpit("native-progress", 1);
+        let thread = core.threads()[0];
+        core.send(thread, "Inspect progress".into());
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        for index in 0..70 {
+            fake.streams.borrow()[0]
+                .send(SessionEvent::TextDelta {
+                    text: format!("Earlier answer {index}.\n\n"),
+                })
+                .unwrap();
+        }
+        fake.streams.borrow()[0]
+            .send(SessionEvent::ReasoningSummaryDelta {
+                text: "**Checking fold call sites**".into(),
+                summary_index: 0,
+            })
+            .unwrap();
+        tick(cx);
+        let before = cx
+            .debug_bounds("progress-caption-Checking fold call sites")
+            .expect("native heading is pinned above the composer");
+        view.update(cx, |view, cx| {
+            view.panes[0].follow_tail.set(false);
+            view.panes[0].scroll.set_offset(gpui::point(px(0.), px(0.)));
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            cx.debug_bounds("progress-caption-Checking fold call sites")
+                .unwrap(),
+            before,
+            "scrollback cannot move the progress component"
+        );
+        // Working-phase detail appends no transcript block. Its wall caption
+        // must still change, or the smallest panes freeze on the old heading.
+        fake.streams.borrow()[0]
+            .send(SessionEvent::Progress {
+                event: ProgressEvent::Phase {
+                    phase: Phase::Compacting,
+                    detail: String::new(),
+                },
+            })
+            .unwrap();
+        tick(cx);
+        fake.streams.borrow()[0]
+            .send(SessionEvent::Progress {
+                event: ProgressEvent::Phase {
+                    phase: Phase::Working,
+                    detail: "Context compacted".into(),
+                },
+            })
+            .unwrap();
+        tick(cx);
+        view.read_with(cx, |view, _| {
+            assert!(view
+                .facts
+                .get(thread)
+                .unwrap()
+                .wall
+                .working
+                .contains("Checking fold call sites"));
+        });
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TurnEnded {
+                outcome: ferrite_core::TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+        tick(cx);
+        assert!(
+            cx.debug_bounds("progress-caption-Checking fold call sites")
+                .is_none(),
+            "completed turns stop their live indication"
+        );
     }
 
     #[gpui::test]

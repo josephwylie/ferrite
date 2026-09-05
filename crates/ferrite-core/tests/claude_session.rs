@@ -205,7 +205,14 @@ fn the_reader_thread_delivers_the_captured_stream() {
     );
     let events: Vec<SessionEvent> = all
         .into_iter()
-        .filter(|event| !matches!(event, SessionEvent::TokenUsage { .. }))
+        .filter(|event| {
+            !matches!(
+                event,
+                SessionEvent::TokenUsage { .. }
+                    | SessionEvent::Progress { .. }
+                    | SessionEvent::ContentBoundary
+            )
+        })
         .collect();
 
     assert_eq!(events.len(), 11, "unexpected stream: {events:?}");

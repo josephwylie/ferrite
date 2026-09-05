@@ -225,7 +225,19 @@ fn the_reader_thread_delivers_the_captured_stream() {
     let session = CodexSession::spawn(config(program)).unwrap();
     let events = drain(session.events());
 
-    assert_eq!(events.len(), 8, "unexpected stream: {events:?}");
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| !matches!(
+                e,
+                SessionEvent::Progress { .. }
+                    | SessionEvent::ContentBoundary
+                    | SessionEvent::ReasoningSummaryPart { snapshot: true, .. }
+            ))
+            .count(),
+        8,
+        "unexpected content stream: {events:?}"
+    );
     let SessionEvent::Init { session_id, model } = &events[0] else {
         panic!("the Session must announce itself first: {events:?}");
     };
@@ -240,9 +252,10 @@ fn the_reader_thread_delivers_the_captured_stream() {
         })
         .collect();
     assert_eq!(text, "hello ferrite");
-    assert!(events
-        .iter()
-        .any(|e| matches!(e, SessionEvent::ReasoningSummaryDelta { .. })));
+    assert!(events.iter().any(|e| matches!(
+        e,
+        SessionEvent::ReasoningSummaryDelta { .. } | SessionEvent::ReasoningSummaryPart { .. }
+    )));
     assert!(events
         .iter()
         .any(|e| matches!(e, SessionEvent::TokenUsage { .. })));
@@ -862,6 +875,7 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
             "params": {
                 "threadId": "stub-thread",
                 "input": [{"type": "text", "text": "hi"}],
+                "summary": "concise",
                 "effort": "high",
             },
         })

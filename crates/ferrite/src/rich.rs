@@ -1,15 +1,21 @@
 //! Native rich text with a stable parser per answer run. Appending tokens
 //! advances the toolkit parser; unrelated pane renders do not parse again.
 use gpui::base::text::{TextView, TextViewState, TextViewStyle};
-use gpui::{prelude::*, px, rems, rgb, rgba, App, Entity, SharedString, Window};
-
+use gpui::component::input::{Textarea, TextareaState};
+use gpui::{prelude::*, px, rems, rgb, rgba, App, Entity, Focusable, SharedString, Window};
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use crate::theme;
 
+#[derive(Clone)]
+enum NativeText {
+    Rich(Entity<TextViewState>),
+    Output(Entity<TextareaState>),
+}
+
 struct CachedText {
     source: String,
-    state: Entity<TextViewState>,
+    state: NativeText,
     touched: u64,
 }
 
@@ -19,16 +25,42 @@ struct CachedText {
 pub struct TextCache(Rc<RefCell<(u64, HashMap<SharedString, CachedText>, usize)>>);
 
 impl TextCache {
+    pub fn output_focused(&self, namespace: &str, window: &Window, cx: &App) -> bool {
+        let prefix = format!("output-{namespace}-");
+        self.0.borrow().1.iter().any(|(id, text)| {
+            id.starts_with(&prefix)
+                && matches!(&text.state,
+                NativeText::Output(state) if state.focus_handle(cx).is_focused(window))
+        })
+    }
+
+    pub fn clear_output_selection(&self, namespace: &str, cx: &mut App) {
+        let prefix = format!("output-{namespace}-");
+        for (id, text) in &self.0.borrow().1 {
+            if let NativeText::Output(state) = &text.state {
+                if id.starts_with(&prefix) && !state.read(cx).selected_range().is_empty() {
+                    state.update(cx, |state, cx| {
+                        let cursor = state.cursor();
+                        state.set_selected_range(cursor..cursor, cx);
+                    });
+                }
+            }
+        }
+    }
+
     pub fn redirect_namespace(&self, from: &str, to: &str) {
         let mut cache = self.0.borrow_mut();
         let keys: Vec<_> = cache
             .1
             .keys()
             .filter_map(|key| {
-                ["markdown-", "literal-"].into_iter().find_map(|kind| {
-                    key.strip_prefix(&format!("{kind}{from}"))
-                        .map(|tail| (key.clone(), SharedString::from(format!("{kind}{to}{tail}"))))
-                })
+                ["markdown-", "literal-", "thinking-", "output-"]
+                    .into_iter()
+                    .find_map(|kind| {
+                        key.strip_prefix(&format!("{kind}{from}")).map(|tail| {
+                            (key.clone(), SharedString::from(format!("{kind}{to}{tail}")))
+                        })
+                    })
             })
             .collect();
         for (from, to) in keys {
@@ -40,7 +72,14 @@ impl TextCache {
         }
     }
 
-    fn state(&self, id: SharedString, source: &str, cx: &mut App) -> Entity<TextViewState> {
+    fn cached(
+        &self,
+        id: SharedString,
+        source: &str,
+        output: bool,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> NativeText {
         let mut cache = self.0.borrow_mut();
         cache.0 += 1;
         let touched = cache.0;
@@ -64,21 +103,58 @@ impl TextCache {
         cache.2 = cache.2.saturating_sub(prior_bytes) + source.len();
         let text = cache.1.entry(id).or_insert_with(|| CachedText {
             source: source.to_string(),
-            state: cx.new(|cx| TextViewState::markdown(source, cx)),
+            state: if output {
+                NativeText::Output(cx.new(|cx| {
+                    let mut state = TextareaState::new(window, cx).auto_grow(1, 12);
+                    state.set_value(source.to_string(), window, cx);
+                    state
+                }))
+            } else {
+                NativeText::Rich(cx.new(|cx| TextViewState::markdown(source, cx)))
+            },
             touched,
         });
         if text.source != source {
-            text.state.update(cx, |state, cx| {
-                if let Some(suffix) = source.strip_prefix(&text.source) {
-                    state.push_str(suffix, cx);
-                } else {
-                    state.set_text(source, cx);
-                }
-            });
+            match &text.state {
+                NativeText::Rich(state) => state.update(cx, |state, cx| {
+                    if let Some(suffix) = source.strip_prefix(&text.source) {
+                        state.push_str(suffix, cx);
+                    } else {
+                        state.set_text(source, cx);
+                    }
+                }),
+                NativeText::Output(state) => state.update(cx, |state, cx| {
+                    let mut selected = state.selected_range();
+                    // The native range setter accepts anchor → caret order.
+                    // Keep backward selections backward across new chunks.
+                    if !selected.is_empty() && state.cursor() == selected.start {
+                        selected = selected.end..selected.start;
+                    }
+                    let scroll = state.scroll_offset();
+                    state.set_value(source.to_string(), window, cx);
+                    // Native setters clip replacement offsets to UTF-8 and
+                    // defer scroll clamping until the new layout is ready.
+                    state.set_selected_range(selected, cx);
+                    state.set_scroll_offset(scroll, cx);
+                }),
+            }
             text.source = source.to_string();
         }
         text.touched = touched;
         text.state.clone()
+    }
+
+    fn state(
+        &self,
+        id: SharedString,
+        source: &str,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Entity<TextViewState> {
+        let NativeText::Rich(state) = self.cached(id, source, false, window, cx) else {
+            unreachable!("rich text and output have separate namespaces")
+        };
+        state
     }
 }
 
@@ -87,31 +163,40 @@ pub struct Markdown {
     id: SharedString,
     source: String,
     cache: TextCache,
+    muted: bool,
 }
 
 impl Markdown {
+    pub fn muted(mut self) -> Self {
+        self.muted = true;
+        self
+    }
     pub fn new(id: impl Into<SharedString>, source: String, cache: TextCache) -> Self {
         Self {
             id: id.into(),
             source,
             cache,
+            muted: false,
         }
     }
 }
 
 impl gpui::RenderOnce for Markdown {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let state = self.cache.state(self.id.clone(), &self.source, cx);
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let state = self.cache.state(self.id.clone(), &self.source, _window, cx);
         #[cfg(test)]
-        testing::record(self.id, state.clone(), window.text_style().clone(), cx);
+        testing::record(self.id, state.clone(), _window.text_style().clone(), cx);
+        let text_style = if self.muted {
+            style().with_foreground(rgb(theme::TEXT_MUTED).into())
+        } else {
+            style()
+        };
         TextView::new(&state)
             .w_full()
             .min_w_0()
-            // GPUI 0.6 otherwise gives the document h_full inside an auto-height
-            // transcript, creating circular sizing. An unbounded line cap opts
-            // into its natural-height path without truncating the document.
+            // Use natural height inside the transcript's own scroll container.
             .max_lines(usize::MAX)
-            .style(style())
+            .style(text_style)
             .code_block_actions(|block, _, _| {
                 if !block
                     .lang()
@@ -226,13 +311,50 @@ impl gpui::RenderOnce for Literal {
                     .text_size(inherited.font_size.to_pixels(window.rem_size()))
                     .line_height(inherited.line_height_in_pixels(window.rem_size())),
             );
-        let state = self.cache.state(self.id.clone(), &source, cx);
+        let state = self.cache.state(self.id.clone(), &source, window, cx);
         #[cfg(test)]
         testing::record(self.id, state.clone(), inherited.clone(), cx);
         TextView::new(&state)
+            .w_full()
+            .min_w_0()
+            // Use natural height inside the transcript's own scroll container.
             .max_lines(usize::MAX)
             .style(style)
             .code_block_highlighter(move |_| highlights.clone())
+    }
+}
+
+/// Large tool disclosures use the toolkit's virtualized text input layout.
+/// One exact source preserves Unicode/newlines and avoids Markdown's per-glyph
+/// selection hit regions for very long lines. The native control owns copying.
+#[derive(IntoElement)]
+pub struct Output {
+    pub id: SharedString,
+    pub text: SharedString,
+    pub cache: TextCache,
+}
+
+impl gpui::RenderOnce for Output {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let NativeText::Output(state) =
+            self.cache
+                .cached(self.id.clone(), &self.text, true, window, cx)
+        else {
+            unreachable!("output has its own namespace")
+        };
+        #[cfg(test)]
+        testing::record_output(self.id, state.clone(), cx);
+        Textarea::new(&state)
+            .readonly(true)
+            .appearance(false)
+            .bordered(false)
+            .aria_label("Tool output")
+            .w_full()
+            .min_w_0()
+            .p_0()
+            .font_family(window.text_style().font_family.clone())
+            .text_size(window.text_style().font_size.to_pixels(window.rem_size()))
+            .text_color(window.text_style().color)
     }
 }
 
@@ -244,6 +366,21 @@ pub mod testing {
     #[derive(Default)]
     struct Views(HashMap<SharedString, (Entity<TextViewState>, gpui::TextStyle)>);
     impl gpui::Global for Views {}
+
+    #[derive(Default)]
+    struct Outputs(HashMap<SharedString, Entity<TextareaState>>);
+    impl gpui::Global for Outputs {}
+
+    pub fn record_output(id: SharedString, state: Entity<TextareaState>, cx: &mut App) {
+        if cx.try_global::<Outputs>().is_none() {
+            cx.set_global(Outputs::default());
+        }
+        cx.global_mut::<Outputs>().0.insert(id, state);
+    }
+
+    pub fn output(id: &str, cx: &App) -> Option<Entity<TextareaState>> {
+        cx.try_global::<Outputs>()?.0.get(id).cloned()
+    }
 
     pub fn first_entity(prefix: &str, cx: &App) -> Option<gpui::EntityId> {
         cx.global::<Views>()

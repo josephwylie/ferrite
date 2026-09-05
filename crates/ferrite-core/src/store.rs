@@ -59,7 +59,9 @@ mod activity_tests;
 ///   default, which is also what absent means — and no handovers.
 /// - **9** — attributed subagent facts, kept separate from Main records.
 ///   Old logs remain Main-only; live Decision handles are never persisted.
-const SCHEMA_VERSION: u32 = 9;
+/// - **10** — native progress, identified summary sections, and live tool output
+///   in both Main and attributed execution records.
+const SCHEMA_VERSION: u32 = 10;
 
 /// How far `peek_first_prompt` reads before giving up: the first prompt
 /// is normally the second line, and a log whose first prompt sits past
@@ -205,6 +207,20 @@ impl PersistedBinding {
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Record {
+    SummaryPart {
+        item_id: String,
+        summary_index: u64,
+        text: String,
+        snapshot: bool,
+    },
+    Progress {
+        event: PersistedProgress,
+    },
+    ToolOutput {
+        id: String,
+        text: String,
+    },
+    ContentBoundary,
     /// Schema 9: a durable attributed fact, never a pending request handle.
     Activity {
         observation: PersistedActivity,
@@ -366,6 +382,252 @@ impl PersistedToolResult {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum PersistedProgress {
+    Phase {
+        phase: StoredPhase,
+        detail: String,
+    },
+    Tool {
+        id: String,
+        message: String,
+        elapsed_ms: Option<u64>,
+    },
+    Plan {
+        steps: Vec<StoredStep>,
+        explanation: String,
+    },
+    Task {
+        id: String,
+        subject: String,
+        status: Option<StoredStepStatus>,
+        deleted: bool,
+    },
+    Background {
+        id: String,
+        label: String,
+        status: StoredTaskStatus,
+        detail: String,
+    },
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct StoredStep {
+    text: String,
+    status: StoredStepStatus,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum StoredPhase {
+    Working,
+    Thinking,
+    Answering,
+    Compacting,
+    Retrying,
+    Waiting,
+}
+impl StoredPhase {
+    fn from_live(value: crate::progress::Phase) -> Self {
+        match value {
+            crate::progress::Phase::Working => Self::Working,
+            crate::progress::Phase::Thinking => Self::Thinking,
+            crate::progress::Phase::Answering => Self::Answering,
+            crate::progress::Phase::Compacting => Self::Compacting,
+            crate::progress::Phase::Retrying => Self::Retrying,
+            crate::progress::Phase::Waiting => Self::Waiting,
+        }
+    }
+    fn live(self) -> crate::progress::Phase {
+        match self {
+            Self::Working => crate::progress::Phase::Working,
+            Self::Thinking => crate::progress::Phase::Thinking,
+            Self::Answering => crate::progress::Phase::Answering,
+            Self::Compacting => crate::progress::Phase::Compacting,
+            Self::Retrying => crate::progress::Phase::Retrying,
+            Self::Waiting => crate::progress::Phase::Waiting,
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum StoredStepStatus {
+    Pending,
+    InProgress,
+    Completed,
+}
+impl StoredStepStatus {
+    fn from_live(value: crate::progress::StepStatus) -> Self {
+        match value {
+            crate::progress::StepStatus::Pending => Self::Pending,
+            crate::progress::StepStatus::InProgress => Self::InProgress,
+            crate::progress::StepStatus::Completed => Self::Completed,
+        }
+    }
+    fn live(self) -> crate::progress::StepStatus {
+        match self {
+            Self::Pending => crate::progress::StepStatus::Pending,
+            Self::InProgress => crate::progress::StepStatus::InProgress,
+            Self::Completed => crate::progress::StepStatus::Completed,
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum StoredTaskStatus {
+    Working,
+    Completed,
+    Failed,
+    Stopped,
+    Unknown,
+}
+impl StoredTaskStatus {
+    fn from_live(value: crate::progress::TaskStatus) -> Self {
+        match value {
+            crate::progress::TaskStatus::Working => Self::Working,
+            crate::progress::TaskStatus::Completed => Self::Completed,
+            crate::progress::TaskStatus::Failed => Self::Failed,
+            crate::progress::TaskStatus::Stopped => Self::Stopped,
+            crate::progress::TaskStatus::Unknown => Self::Unknown,
+        }
+    }
+    fn live(self) -> crate::progress::TaskStatus {
+        match self {
+            Self::Working => crate::progress::TaskStatus::Working,
+            Self::Completed => crate::progress::TaskStatus::Completed,
+            Self::Failed => crate::progress::TaskStatus::Failed,
+            Self::Stopped => crate::progress::TaskStatus::Stopped,
+            Self::Unknown => crate::progress::TaskStatus::Unknown,
+        }
+    }
+}
+impl PersistedProgress {
+    fn coalesce(&mut self, next: &Self) -> bool {
+        match (self, next) {
+            (
+                Self::Tool {
+                    id,
+                    message,
+                    elapsed_ms,
+                },
+                Self::Tool {
+                    id: next,
+                    message: more,
+                    elapsed_ms: elapsed,
+                },
+            ) if id == next => {
+                if !more.is_empty() {
+                    *message = more.clone();
+                }
+                if let Some(elapsed) = elapsed {
+                    *elapsed_ms = Some(elapsed_ms.unwrap_or(0).max(*elapsed));
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+    fn from_live(event: &crate::progress::ProgressEvent) -> Self {
+        use crate::progress::ProgressEvent as E;
+        match event {
+            E::Phase { phase, detail } => Self::Phase {
+                phase: StoredPhase::from_live(*phase),
+                detail: detail.clone(),
+            },
+            E::Tool {
+                id,
+                message,
+                elapsed_ms,
+            } => Self::Tool {
+                id: id.clone(),
+                message: message.clone(),
+                elapsed_ms: *elapsed_ms,
+            },
+            E::Plan { steps, explanation } => Self::Plan {
+                steps: steps
+                    .iter()
+                    .map(|step| StoredStep {
+                        text: step.text.clone(),
+                        status: StoredStepStatus::from_live(step.status),
+                    })
+                    .collect(),
+                explanation: explanation.clone(),
+            },
+            E::Task {
+                id,
+                subject,
+                status,
+                deleted,
+            } => Self::Task {
+                id: id.clone(),
+                subject: subject.clone(),
+                status: status.map(StoredStepStatus::from_live),
+                deleted: *deleted,
+            },
+            E::Background {
+                id,
+                label,
+                status,
+                detail,
+            } => Self::Background {
+                id: id.clone(),
+                label: label.clone(),
+                status: StoredTaskStatus::from_live(*status),
+                detail: detail.clone(),
+            },
+        }
+    }
+    fn live(&self) -> crate::progress::ProgressEvent {
+        use crate::progress::ProgressEvent as E;
+        match self {
+            Self::Phase { phase, detail } => E::Phase {
+                phase: phase.live(),
+                detail: detail.clone(),
+            },
+            Self::Tool {
+                id,
+                message,
+                elapsed_ms,
+            } => E::Tool {
+                id: id.clone(),
+                message: message.clone(),
+                elapsed_ms: *elapsed_ms,
+            },
+            Self::Plan { steps, explanation } => E::Plan {
+                steps: steps
+                    .iter()
+                    .map(|step| crate::progress::PlanStep {
+                        text: step.text.clone(),
+                        status: step.status.live(),
+                    })
+                    .collect(),
+                explanation: explanation.clone(),
+            },
+            Self::Task {
+                id,
+                subject,
+                status,
+                deleted,
+            } => E::Task {
+                id: id.clone(),
+                subject: subject.clone(),
+                status: status.map(StoredStepStatus::live),
+                deleted: *deleted,
+            },
+            Self::Background {
+                id,
+                label,
+                status,
+                detail,
+            } => E::Background {
+                id: id.clone(),
+                label: label.clone(),
+                status: status.live(),
+                detail: detail.clone(),
+            },
+        }
+    }
+}
+
 impl Record {
     /// The persisted form of one live event, or `None` for events that are
     /// Session state rather than durable history (a pending Decision dies
@@ -374,6 +636,25 @@ impl Record {
     /// thing in the record no event carries.
     fn from_event(event: &SessionEvent, duration: Option<std::time::Duration>) -> Option<Record> {
         Some(match event {
+            SessionEvent::ReasoningSummaryPart {
+                item_id,
+                summary_index,
+                text,
+                snapshot,
+            } => Record::SummaryPart {
+                item_id: item_id.clone(),
+                summary_index: *summary_index,
+                text: text.clone(),
+                snapshot: *snapshot,
+            },
+            SessionEvent::Progress { event } => Record::Progress {
+                event: PersistedProgress::from_live(event),
+            },
+            SessionEvent::ToolOutputDelta { id, text } => Record::ToolOutput {
+                id: id.clone(),
+                text: text.clone(),
+            },
+            SessionEvent::ContentBoundary => Record::ContentBoundary,
             SessionEvent::Activity(observation) => Record::Activity {
                 observation: PersistedActivity::from_live(observation, duration)?,
             },
@@ -447,6 +728,25 @@ impl Record {
     /// Replay this record as the transcript input it stands for.
     fn input(&self) -> Input {
         match self {
+            Record::SummaryPart {
+                item_id,
+                summary_index,
+                text,
+                snapshot,
+            } => Input::Event(SessionEvent::ReasoningSummaryPart {
+                item_id: item_id.clone(),
+                summary_index: *summary_index,
+                text: text.clone(),
+                snapshot: *snapshot,
+            }),
+            Record::Progress { event } => Input::Event(SessionEvent::Progress {
+                event: event.live(),
+            }),
+            Record::ToolOutput { id, text } => Input::Event(SessionEvent::ToolOutputDelta {
+                id: id.clone(),
+                text: text.clone(),
+            }),
+            Record::ContentBoundary => Input::Event(SessionEvent::ContentBoundary),
             Record::Activity { observation } => {
                 Input::Event(SessionEvent::Activity(observation.live()))
             }
@@ -532,6 +832,42 @@ impl Record {
     /// coalesce. A run of deltas is one record; anything else keeps its line.
     fn coalesce(&mut self, next: &Record) -> bool {
         match (self, next) {
+            (
+                Record::SummaryPart {
+                    item_id,
+                    summary_index,
+                    text,
+                    snapshot: false,
+                },
+                Record::SummaryPart {
+                    item_id: next,
+                    summary_index: part,
+                    text: more,
+                    snapshot: false,
+                },
+            ) if item_id == next && summary_index == part => {
+                text.push_str(more);
+                true
+            }
+
+            (
+                Record::ToolOutput { id, text },
+                Record::ToolOutput {
+                    id: next,
+                    text: more,
+                },
+            ) if id == next => {
+                text.push_str(more);
+                true
+            }
+            (
+                Record::Progress {
+                    event: event @ PersistedProgress::Tool { .. },
+                },
+                Record::Progress {
+                    event: next @ PersistedProgress::Tool { .. },
+                },
+            ) => event.coalesce(next),
             (Record::Text { text }, Record::Text { text: more }) => {
                 text.push_str(more);
                 true
@@ -2492,7 +2828,7 @@ mod tests {
             &dir,
             "3",
             concat!(
-                r#"{"schema":10,"provider":"claude"}"#,
+                r#"{"schema":999,"provider":"claude"}"#,
                 "\n",
                 r#"{"type":"init","session_id":"from-the-future","model":"m"}"#,
                 "\n",
@@ -2502,7 +2838,7 @@ mod tests {
         let store = Store::open(&dir).unwrap();
         match store.load(ThreadId::new(3)) {
             Err(LoadError::FutureSchema { found, supported }) => {
-                assert_eq!(found, 10);
+                assert_eq!(found, 999);
                 assert_eq!(supported, SCHEMA_VERSION);
             }
             Ok(_) => panic!("a future schema must not load"),
@@ -2707,8 +3043,11 @@ mod tests {
                 active.apply(Input::Revived);
                 assert_eq!(active.turn_outcome(), None);
                 assert!(!active.turn_completed());
-                assert_eq!(active.status(), crate::transcript::Status::Streaming);
-                assert!(active.turn_elapsed().is_some());
+                assert_eq!(active.status(), crate::transcript::Status::Idle);
+                assert!(
+                    active.turn_elapsed().is_none(),
+                    "replayed activity has no live clock"
+                );
             }
         }
     }

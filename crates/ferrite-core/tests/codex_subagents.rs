@@ -82,8 +82,8 @@ while IFS= read -r line; do
       fi ;;
     *'"text":"finish"'*)
       echo '{"method":"turn/completed","params":{"threadId":"main","turn":{"id":"main-turn","status":"completed"}}}'
-      echo '{"method":"item/agentMessage/delta","params":{"threadId":"main","turnId":"main-turn","itemId":"checkpoint","delta":"FINISHED"}}' ;;
-    *'"text":"flush"'*) echo '{"method":"item/agentMessage/delta","params":{"threadId":"main","turnId":"main-turn","itemId":"checkpoint","delta":"FLUSHED"}}' ;;
+      echo '{"method":"thread/tokenUsage/updated","params":{"threadId":"main","tokenUsage":{"last":{"totalTokens":3331},"total":{"totalTokens":3331,"inputTokens":0,"cachedInputTokens":0,"outputTokens":0,"reasoningOutputTokens":0},"modelContextWindow":200000}}}' ;;
+    *'"text":"flush"'*) echo '{"method":"thread/tokenUsage/updated","params":{"threadId":"main","tokenUsage":{"last":{"totalTokens":3332},"total":{"totalTokens":3332,"inputTokens":0,"cachedInputTokens":0,"outputTokens":0,"reasoningOutputTokens":0},"modelContextWindow":200000}}}' ;;
   esac
 done
 "#.replace("__LOG__",&self.0.join("host.jsonl").display().to_string());
@@ -111,7 +111,16 @@ fn collect_until(session: &dyn Session, events: &mut Vec<SessionEvent>, checkpoi
             .events()
             .recv_timeout(deadline.saturating_duration_since(Instant::now()))
             .expect("stub checkpoint");
-        let done = matches!(&event,SessionEvent::TextDelta{text} if text==checkpoint);
+        // Transport barriers after completion must remain metadata: late prose
+        // for a completed turn is correctly rejected by the production Router.
+        let done = match &event {
+            SessionEvent::TextDelta { text } => text == checkpoint,
+            SessionEvent::TokenUsage { total_tokens, .. } => matches!(
+                (checkpoint, *total_tokens),
+                ("FINISHED", 3331) | ("FLUSHED", 3332)
+            ),
+            _ => false,
+        };
         assert!(
             !matches!(event, SessionEvent::Closed { .. }),
             "stub unexpectedly closed: {event:?}"
@@ -187,8 +196,7 @@ fn descendants_read_history_on_parent_connection_and_answer_the_exact_child_requ
     );
     assert!(!events.iter().any(|event| matches!(
         event,
-        SessionEvent::TokenUsage { .. }
-            | SessionEvent::ToolStarted { .. }
+        SessionEvent::ToolStarted { .. }
             | SessionEvent::ToolCompleted { .. }
             | SessionEvent::DecisionRequested { .. }
     )));
@@ -199,7 +207,18 @@ fn descendants_read_history_on_parent_connection_and_answer_the_exact_child_requ
             _ => None,
         })
         .collect();
-    assert_eq!(main, "READYACKFINISHEDFLUSHED");
+    assert_eq!(main, "READYACK");
+    assert_eq!(
+        events
+            .iter()
+            .filter_map(|event| match event {
+                SessionEvent::TokenUsage { total_tokens, .. } => Some(*total_tokens),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        vec![3331, 3332],
+        "only Main transport checkpoints, never child token usage"
+    );
     let mut activity = Activity::default();
     activity.apply(ActivityInput::Connect { generation: 1 });
     for event in events {

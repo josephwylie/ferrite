@@ -87,6 +87,12 @@ impl Decoder {
         match string(&value, "type") {
             Some("system") if string(&value, "subtype") != Some("init") => {
                 self.task(&value, &mut events);
+                if !matches!(
+                    string(&value, "subtype"),
+                    Some("task_started" | "task_progress" | "task_updated" | "task_notification")
+                ) {
+                    self.progress(&value, &mut events);
+                }
             }
             Some("control_request") => self.decision(&value, &mut events),
             Some("control_cancel_request") => {
@@ -107,9 +113,7 @@ impl Decoder {
                 // Only the null/absent Main stream is part of Claude's current
                 // contract. An unexpected child stream must never become Main.
                 if matches!(value.get("parent_tool_use_id"), None | Some(Value::Null)) {
-                    if let Some(event) = wire::parse_value(&value) {
-                        events.push(event);
-                    }
+                    events.extend(wire::parse_events_value(&value));
                 }
             }
             Some("result") => {
@@ -144,9 +148,48 @@ impl Decoder {
                 if let Some(event) = wire::parse_value(&value) {
                     events.push(event);
                 }
+                self.progress(&value, &mut events);
             }
         }
         events
+    }
+
+    /// Extra SDK observations share the execution path and attribution used
+    /// for tools. Completed message snapshots are already decoded by message().
+    fn progress(&mut self, value: &Value, events: &mut Vec<SessionEvent>) {
+        let extras: Vec<_> = wire::parse_events_value(value)
+            .into_iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    SessionEvent::Progress { .. } | SessionEvent::ContentBoundary
+                )
+            })
+            .collect();
+        if extras.is_empty() {
+            return;
+        }
+        let owner = string(value, "tool_use_id").and_then(|id| self.tool_owner(id));
+        if value["owned_by_subagent"] == true
+            && owner.is_none()
+            && matches!(value.get("parent_tool_use_id"), None | Some(Value::Null))
+        {
+            return;
+        }
+
+        let Some(subject) = owner.or_else(|| self.scope(value, events)) else {
+            return;
+        };
+        for event in extras {
+            match &subject {
+                Subject::Main => events.push(event),
+                Subject::Subagent(key) => {
+                    if let Some(event) = ExecutionEvent::from_session(&event) {
+                        self.content(key, None, event, events);
+                    }
+                }
+            }
+        }
     }
 
     fn native_key(&self, native: &str) -> AgentKey {
@@ -335,6 +378,7 @@ impl Decoder {
         let Some(subject) = self.scope(value, events) else {
             return;
         };
+        self.progress(value, events);
         let child = match &subject {
             Subject::Main => None,
             Subject::Subagent(key) => Some(key.clone()),
@@ -606,6 +650,7 @@ impl Decoder {
         // Bash jobs have task IDs too. Classification or an existing agent
         // alias is necessary; owned_by_subagent means a child tool, not a child.
         if string(value, "task_type").is_some_and(|kind| kind != "local_agent") {
+            self.progress(value, events);
             return;
         }
         let invocation = string(value, "tool_use_id");
@@ -617,7 +662,10 @@ impl Decoder {
             None if string(value, "task_type") == Some("local_agent") => invocation
                 .and_then(|id| self.aliases.get(&Alias::Invocation(id.to_owned())).cloned())
                 .unwrap_or_else(|| self.native_key(&format!("task:{task_id}"))),
-            None => return,
+            None => {
+                self.progress(value, events);
+                return;
+            }
         };
         self.link(Alias::Task(task_id.to_owned()), &key, events);
         if let Some(id) = invocation {
@@ -635,6 +683,23 @@ impl Decoder {
                 .or(info.description);
         }
         self.discover(info, events);
+        if matches!(subtype, "task_started" | "task_progress") && !self.waiting(&key) {
+            let detail = string(value, "summary")
+                .or_else(|| string(value, "description"))
+                .or_else(|| string(value, "last_tool_name"))
+                .unwrap_or("");
+            self.content(
+                &key,
+                None,
+                ExecutionEvent::Progress {
+                    event: crate::progress::ProgressEvent::Phase {
+                        phase: crate::progress::Phase::Working,
+                        detail: detail.into(),
+                    },
+                },
+                events,
+            );
+        }
         let state = match subtype {
             "task_started" => Some(AgentStatus::Working),
             "task_progress" => (!self.waiting(&key)).then_some(AgentStatus::Working),
@@ -774,7 +839,18 @@ mod tests {
                 })
                 .collect();
             let (_, new) = replay(fixture);
-            assert_eq!(new, old);
+            // Added native metadata does not change the existing prose,
+            // tool, usage, approval, or turn-result projection.
+            let old_projection: Vec<_> = new
+                .into_iter()
+                .filter(|event| {
+                    !matches!(
+                        event,
+                        SessionEvent::Progress { .. } | SessionEvent::ContentBoundary
+                    )
+                })
+                .collect();
+            assert_eq!(old_projection, old);
         }
     }
 

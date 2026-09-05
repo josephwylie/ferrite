@@ -93,6 +93,7 @@ impl Instruments {
                 }
                 // The newest run wins: a Pane flying a stale red flag is
                 // worse than one flying none.
+                ToolState::Unavailable if is_test_run(tool) => instruments.tests = None,
                 state if is_test_run(tool) => {
                     instruments.tests = Some(match state {
                         ToolState::Failed(message) => Tests::Failed {
@@ -105,6 +106,9 @@ impl Instruments {
                 }
                 _ => {}
             }
+        }
+        if instruments.activity.is_none() {
+            instruments.activity = transcript.progress().caption();
         }
         instruments.todos = transcript.todos();
         instruments
@@ -507,7 +511,10 @@ mod tests {
             "t1 is still in flight"
         );
         transcript.apply(finished("t1", false, ToolResult::Opaque));
-        assert_eq!(Instruments::of(&transcript).activity, None);
+        assert_eq!(
+            Instruments::of(&transcript).activity.as_deref(),
+            Some("Working")
+        );
 
         // An overlong command is cut to a glanceable fragment.
         transcript.apply(tool("t3", "Bash", &"x".repeat(100)));

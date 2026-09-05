@@ -184,7 +184,7 @@ fn attributed_facts_round_trip_with_native_identity_and_complete_payloads() {
     let snapshot = store.load(thread).unwrap();
     assert_eq!(replay_events(&snapshot), expected);
     let bytes = fs::read_to_string(store.log_path(thread)).unwrap();
-    assert!(bytes.starts_with("{\"schema\":9,"));
+    assert!(bytes.starts_with(&format!("{{\"schema\":{SCHEMA_VERSION},")));
     assert!(bytes.contains("\"type\":\"activity\""));
     assert_eq!(
         snapshot.inputs().len(),
@@ -494,7 +494,7 @@ fn schema_eight_upgrade_retains_main_history_before_new_attributed_facts() {
     assert_eq!(replay_events(&after), vec![event]);
     assert!(fs::read_to_string(store.log_path(thread))
         .unwrap()
-        .starts_with("{\"schema\":9,"));
+        .starts_with(&format!("{{\"schema\":{SCHEMA_VERSION},")));
 }
 
 #[derive(Default)]
@@ -1057,12 +1057,12 @@ fn streaming_child_reader_recovers_torn_tail_and_refuses_future_header() {
     drop(writer);
     fs::write(
         store.log_path(thread),
-        "{\"schema\":10,\"provider\":\"claude\"}\n",
+        "{\"schema\":999,\"provider\":\"claude\"}\n",
     )
     .unwrap();
     assert!(matches!(
         store.agent_inputs(thread, &key("child")),
-        Err(LoadError::FutureSchema { found: 10, .. })
+        Err(LoadError::FutureSchema { found: 999, .. })
     ));
 }
 

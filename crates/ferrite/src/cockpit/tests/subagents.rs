@@ -637,3 +637,73 @@ fn an_open_overflow_menu_resolves_a_subject_alias_before_selecting_its_request(
         ))
         .is_some());
 }
+
+#[gpui::test]
+fn native_child_progress_uses_the_shared_pinned_row_and_selected_wall_cache(
+    cx: &mut TestAppContext,
+) {
+    let (core, fake) = cockpit("subagents-native-progress", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
+    child(&fake, "Atlas", AgentStatus::Working);
+    emit(
+        &fake,
+        ActivityEvent::Content {
+            key: key("Atlas"),
+            id: Some("heading".into()),
+            event: ExecutionEvent::ReasoningSummaryPart {
+                item_id: "heading".into(),
+                summary_index: 0,
+                text: "**Checking child paths**".into(),
+                snapshot: false,
+            },
+        },
+    );
+    tick(cx);
+    click_child(cx, "Atlas");
+    assert!(cx
+        .debug_bounds("progress-caption-Checking child paths")
+        .is_some());
+    emit(
+        &fake,
+        ActivityEvent::Content {
+            key: key("Atlas"),
+            id: None,
+            event: ExecutionEvent::Progress {
+                event: ferrite_core::progress::ProgressEvent::Phase {
+                    phase: ferrite_core::progress::Phase::Retrying,
+                    detail: "Server busy".into(),
+                },
+            },
+        },
+    );
+    tick(cx);
+    assert!(cx
+        .debug_bounds("progress-caption-Retrying · Server busy")
+        .is_some());
+    view.read_with(cx, |view, _| {
+        let pane = &view.panes[0];
+        let facts = view.facts.get(pane.thread().unwrap()).unwrap();
+        assert!(facts
+            .wall_for(&pane.selected)
+            .unwrap()
+            .working
+            .contains("Retrying · Server busy"));
+        assert!(!facts.wall.working.contains("Server busy"));
+    });
+    emit(
+        &fake,
+        ActivityEvent::Content {
+            key: key("Atlas"),
+            id: Some("end".into()),
+            event: ExecutionEvent::TurnEnded {
+                outcome: ferrite_core::TurnOutcome::Interrupted,
+                cost_usd: None,
+            },
+        },
+    );
+    tick(cx);
+    assert!(cx
+        .debug_bounds("progress-caption-Retrying · Server busy")
+        .is_none());
+}

@@ -529,6 +529,13 @@ fn seed_working_planned() -> Vec<Step> {
         &mut steps,
         "Holding the watcher open for the next hunk.\n\n",
     );
+    steps.push(Step::new(
+        20,
+        SessionEvent::ReasoningSummaryDelta {
+            text: "**Checking fold call sites**".into(),
+            summary_index: 0,
+        },
+    ));
     steps
 }
 
