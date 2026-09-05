@@ -25,10 +25,13 @@ use ferrite_core::groups::GroupId;
 use ferrite_core::store::Provider;
 use ferrite_core::workspace::registry::ProjectId;
 use ferrite_core::ThreadId;
+use std::time::Duration;
+
 use gpui::prelude::*;
 use gpui::{
-    div, point, px, radians, relative, rgb, rgba, AnyElement, BoxShadow, CursorStyle, Div,
-    FontWeight, ScrollHandle, SharedString, Stateful, Transformation,
+    div, point, pulsating_between, px, radians, relative, rgb, rgba, Animation, AnimationExt,
+    AnyElement, BoxShadow, CursorStyle, Div, FontWeight, ScrollHandle, SharedString, Stateful,
+    Transformation,
 };
 
 use crate::components;
@@ -38,11 +41,12 @@ use crate::theme::{
     ATTENTION, BLOCKED, FILL, FONT_UI, FS_LG, FS_MD, FS_SM, GROUP_GAP, GROUP_RAIL, GROUP_ROW_H,
     HOVER, ICON_BUTTON, ICON_BUTTON_GLYPH, ICON_CHEVRON_LG, IDLE, LINE_TIGHT, MEMBERS_TOP,
     MEMBER_GAP, MEMBER_INDENT, MENU, MENU_PAD, MENU_ROW_H, MENU_TOP, NAV, NAV_HEAD_H, NAV_TREE_PAD,
-    NAV_TREE_PAD_B, PROVIDER_CLAUDE, PROVIDER_CODEX, PROVIDER_MARK, RAIL_INSET, RAIL_OFFSET,
-    ROW_GAP, ROW_ICON, ROW_ICON_GAP, ROW_PAD_X, ROW_PAD_Y, ROW_TEXT_W, RUNNING, R_CONTROL, R_MENU,
-    R_TIGHT, SEP, SHADOW_FAR, SHADOW_FAR_BLUR, SHADOW_FAR_SPREAD, SHADOW_FAR_Y, SHADOW_NEAR,
-    SHADOW_NEAR_BLUR, SHADOW_NEAR_Y, SOLOS_TOP, STATUS_DOT, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG,
-    THREAD_ROW_H, TRAFFIC_RESERVE, WIN_CHROME_H,
+    NAV_TREE_PAD_B, PROVIDER_CLAUDE, PROVIDER_CODEX, PROVIDER_MARK, PULSE_MIN, RAIL_INSET,
+    RAIL_OFFSET, ROW_GAP, ROW_ICON, ROW_ICON_GAP, ROW_PAD_X, ROW_PAD_Y, ROW_TEXT_W, RUNNING,
+    RUNNING_HALO, R_CONTROL, R_MENU, R_TIGHT, SEP, SHADOW_FAR, SHADOW_FAR_BLUR, SHADOW_FAR_SPREAD,
+    SHADOW_FAR_Y, SHADOW_NEAR, SHADOW_NEAR_BLUR, SHADOW_NEAR_Y, SOLOS_TOP, STATUS_DOT,
+    STATUS_HALO_INSET, STATUS_PULSE_MS, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG, THREAD_ROW_H,
+    TRAFFIC_RESERVE, WIN_CHROME_H,
 };
 
 /// The nav's two widths — 286px, and the 56px rail cmd-b folds it to.
@@ -223,20 +227,52 @@ pub enum RowStatus {
 /// The status dot before a row's title: the Pane head's own colours, so
 /// the tree and the Pane can never disagree. An idle Thread keeps a dim
 /// dot — it is alive, just quiet — and a parked one a hollow ring.
-fn status_dot(status: RowStatus) -> Div {
+///
+/// A **working** Thread's dot breathes: a halo behind it swells and fades
+/// on a 1.4s loop. Motion is the one thing a still row cannot fake, and
+/// inference is the one fact the operator scans the tree for — every other
+/// state stays as still as the column around it. The halo is absolute and
+/// the box is a fixed `STATUS_DOT`, so nothing in the row moves with it.
+fn status_dot(thread: ThreadId, status: RowStatus) -> AnyElement {
     let dot = div()
         .flex_shrink_0()
         .w(px(STATUS_DOT))
         .h(px(STATUS_DOT))
         .rounded_full();
-    match status {
+    let dot = match status {
         RowStatus::Working => dot.bg(rgb(RUNNING)),
         RowStatus::Failing => dot.bg(rgb(RUNNING)).border_1().border_color(rgb(BLOCKED)),
         RowStatus::Attention => dot.bg(rgb(ATTENTION)),
         RowStatus::Blocked => dot.bg(rgb(BLOCKED)),
         RowStatus::Idle => dot.bg(rgb(IDLE)),
         RowStatus::Parked => dot.border_1().border_color(rgb(SEP)),
+    };
+    if !matches!(status, RowStatus::Working | RowStatus::Failing) {
+        return dot.into_any_element();
     }
+    let halo = div()
+        .absolute()
+        .left(px(-STATUS_HALO_INSET))
+        .top(px(-STATUS_HALO_INSET))
+        .w(px(STATUS_DOT + 2. * STATUS_HALO_INSET))
+        .h(px(STATUS_DOT + 2. * STATUS_HALO_INSET))
+        .rounded_full()
+        .bg(rgba(RUNNING_HALO))
+        .with_animation(
+            ("nav-working", thread.get() as usize),
+            Animation::new(Duration::from_millis(STATUS_PULSE_MS))
+                .repeat()
+                .with_easing(pulsating_between(PULSE_MIN, 1.0)),
+            |halo, delta| halo.opacity(delta),
+        );
+    div()
+        .relative()
+        .flex_shrink_0()
+        .w(px(STATUS_DOT))
+        .h(px(STATUS_DOT))
+        .child(halo)
+        .child(dot)
+        .into_any_element()
 }
 
 /// The nav column itself: full height, the `--nav` ground, and **no border
@@ -667,7 +703,7 @@ pub fn thread_row_with_title(row: &ThreadRow, title: impl IntoElement) -> Statef
             .flex()
             .items_center()
             .gap(px(ROW_PAD_X))
-            .child(status_dot(row.status))
+            .child(status_dot(row.thread, row.status))
             .child(
                 div()
                     .flex_1()
@@ -1055,6 +1091,23 @@ mod tests {
             Some(px(GROUP_ROW_H).into()),
             "6 + 16.25 + 1 + 13.75 + 6"
         );
+    }
+
+    /// The working halo is absolute inside a fixed dot box, so a Thread
+    /// that starts inferring does not shift its own row — or any row under
+    /// it — by a pixel.
+    #[test]
+    fn a_working_row_is_the_same_box_as_a_quiet_one() {
+        let working = ThreadRow {
+            status: RowStatus::Working,
+            ..thread(Some(Provider::Claude))
+        };
+        let height = |mut drawn: Stateful<Div>| drawn.style().size.height;
+        assert_eq!(
+            height(thread_row(&working)),
+            height(thread_row(&thread(Some(Provider::Claude))))
+        );
+        assert_eq!(height(thread_row(&working)), Some(px(THREAD_ROW_H).into()));
     }
 
     /// The nav column draws no border on any edge: Soft separates the

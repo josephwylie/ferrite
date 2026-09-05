@@ -98,6 +98,10 @@ pub const FOCUS: u32 = 0x9a9a9a;
 pub const RUNNING: u32 = 0x7fbf95;
 /// `rgba(127,191,149,0.11)` — the pass chip's ground and an added hunk row.
 pub const RUNNING_WASH: u32 = 0x7fbf951c;
+/// `rgba(127,191,149,0.4)` — the halo that breathes behind a working
+/// Thread's dot in the nav. Far stronger than the wash: it is read across
+/// a 286px column at 14px wide, not under a paragraph.
+pub const RUNNING_HALO: u32 = 0x7fbf9566;
 /// `#d9b872` — `--attention`: a Decision. The status dot, the signal line,
 /// the Pane's border, the Decision card's mark.
 pub const ATTENTION: u32 = 0xd9b872;
@@ -395,6 +399,16 @@ pub const BODY_PAD_T: f32 = 6.0;
 pub const BODY_PAD_B: f32 = 12.0;
 /// 6px — the Pane head's status dot.
 pub const STATUS_DOT: f32 = 6.0;
+
+/// 4px — how far the working halo reaches past its dot on every side, so
+/// the breathing circle is 14px across.
+pub const STATUS_HALO_INSET: f32 = 4.0;
+/// 1.4s — one full breath of a working Thread's dot. Slow enough to read
+/// as breathing rather than blinking.
+pub const STATUS_PULSE_MS: u64 = 1_400;
+/// The dimmest the halo goes: never all the way out, so the dot keeps a
+/// ring at the bottom of the breath instead of flickering off.
+pub const PULSE_MIN: f32 = 0.15;
 /// The tasks meter: 12 × 4 segments, 1px radius, 3px apart (15px pitch).
 #[allow(dead_code)]
 pub const METER_SEG_W: f32 = 12.0;
