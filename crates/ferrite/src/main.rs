@@ -148,7 +148,7 @@ fn main() {
                     eprintln!("ferrite: cannot stand in the launch directory: {e}");
                 }
             }
-            core.watch_memory(Box::new(ProcessRss), RSS_LIMIT);
+            core.watch_memory(Box::new(ProcessRss::default()), RSS_LIMIT);
             for thread in adopted {
                 if let Err(e) = core.revive(thread) {
                     eprintln!("ferrite: imported thread {thread} would not open: {e}");

@@ -97,9 +97,11 @@ pub struct CockpitView {
     /// Pane holds a Composer, this handle is what keeps the keyboard alive.
     focus: FocusHandle,
     perf: Option<Perf>,
-    /// When the watchdog last swept. Sweeping costs a `ps`/`tasklist` per
-    /// live Session, so it runs on its own slow cadence, never per frame.
+    /// When the watchdog last swept. Measurements are cached from the RSS
+    /// worker, so a sweep never waits for an operating-system query.
     swept: std::time::Instant,
+    /// One checkout-label refresh at a time, always off the UI thread.
+    branch_refreshing: bool,
     /// The one live text selection, at character grain (#27). The cockpit
     /// speaks raw positions — begin on press, extend on drag, copied_text
     /// on cmd-c — and select.rs owns every offset behind that seam. A plain
@@ -560,6 +562,7 @@ impl CockpitView {
                 since: std::time::Instant::now(),
             }),
             swept: std::time::Instant::now(),
+            branch_refreshing: false,
             selection: TranscriptSelection::default(),
             nav_filter: None,
             nav_filter_open: false,
@@ -759,6 +762,7 @@ impl CockpitView {
                 restarted.push(restart.thread);
             }
             self.facts.tick(&self.cockpit);
+            self.refresh_branches(cx);
             branch_tick = true;
         }
         // A restart writes a Notice even when no Session streamed this frame —
@@ -791,6 +795,50 @@ impl CockpitView {
             self.facts.acted(&self.cockpit, thread);
         }
         cx.notify();
+    }
+
+    /// Refresh checkout labels without ever waiting for Git in GPUI's pump.
+    fn refresh_branches(&mut self, cx: &mut Context<Self>) {
+        if self.branch_refreshing {
+            return;
+        }
+        let targets: Vec<_> = self
+            .cockpit
+            .threads()
+            .into_iter()
+            .filter_map(|thread| {
+                let open = self.cockpit.thread(thread)?;
+                let cwd = ferrite_core::workspace::effective_cwd(
+                    open.session_project_root(),
+                    open.workspace(),
+                )?;
+                Some((thread, cwd.to_path_buf()))
+            })
+            .collect();
+        if targets.is_empty() {
+            return;
+        }
+        self.branch_refreshing = true;
+        cx.spawn(async move |this, cx| {
+            let branches = cx
+                .background_executor()
+                .spawn(async move {
+                    targets
+                        .into_iter()
+                        .map(|(thread, cwd)| {
+                            (thread, ferrite_core::workspace::checkout_branch(&cwd))
+                        })
+                        .collect()
+                })
+                .await;
+            this.update(cx, |view, cx| {
+                view.branch_refreshing = false;
+                view.facts.set_branches(branches);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Transcript membership changes only through the pump. Prune stale
@@ -7715,6 +7763,17 @@ mod tests {
             view.swept = std::time::Instant::now() - SWEEP_INTERVAL;
             view.pump(cx);
         });
+        view.read_with(cx, |view, _| {
+            assert_eq!(
+                view.facts
+                    .get(thread)
+                    .and_then(|facts| facts.branch.as_ref())
+                    .map(|branch| branch.to_string()),
+                Some(expected),
+                "the pump returns before the background Git refresh"
+            );
+        });
+        cx.run_until_parked();
         view.read_with(cx, |view, _| {
             assert_eq!(
                 view.facts
