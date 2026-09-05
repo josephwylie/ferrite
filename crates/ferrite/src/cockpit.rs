@@ -6804,8 +6804,8 @@ mod tests {
         });
     }
     #[gpui::test]
-    fn a_group_scoped_draft_joins_only_after_its_first_send_succeeds(cx: &mut TestAppContext) {
-        let (mut core, _fake) = cockpit("group-draft", 2);
+    fn add_thread_from_a_group_opens_a_loose_draft_and_switches_to_solo(cx: &mut TestAppContext) {
+        let (mut core, _fake) = cockpit("group-loose-draft", 2);
         let threads = core.threads();
         let group = core
             .apply_group(GroupChange::Create {
@@ -6825,15 +6825,13 @@ mod tests {
         view.update(cx, |view, cx| view.enter_group(group, cx));
         cx.simulate_keystrokes("cmd-t");
         view.read_with(cx, |view, _| {
-            assert_eq!(
-                view.visible_indices().len(),
-                3,
-                "the pending draft is visible"
-            );
+            assert_eq!(view.cockpit.roster().view(), View::Solo);
+            assert_eq!(view.visible_indices().len(), 1, "the draft Pane is visible");
+            assert!(view.panes[view.focused()].draft().is_some());
             assert_eq!(
                 view.cockpit.groups().iter().next().unwrap().members.len(),
                 2,
-                "no fake id persisted"
+                "the draft is not added to the Group"
             );
         });
         cx.simulate_input("build it");
@@ -6841,8 +6839,11 @@ mod tests {
         view.read_with(cx, |view, _| {
             assert_eq!(
                 view.cockpit.groups().iter().next().unwrap().members.len(),
-                3
+                2,
+                "the created Thread remains outside the Group"
             );
+            let thread = view.cockpit.roster().focused_thread().unwrap();
+            assert!(view.cockpit.groups().of(thread).is_none());
             assert!(view.panes.iter().all(|pane| pane.draft().is_none()));
         });
     }
@@ -6878,7 +6879,14 @@ mod tests {
             view.bootstrap_draft(cx);
             let joined = view
                 .focused_thread()
-                .expect("different-Project draft joined");
+                .expect("different-Project Thread created");
+            view.cockpit
+                .apply_group(GroupChange::Join {
+                    thread: joined,
+                    group,
+                    index: None,
+                })
+                .unwrap();
             assert_eq!(
                 view.cockpit.groups().get(group).unwrap().members,
                 [original[0], original[1], joined]
@@ -6894,6 +6902,7 @@ mod tests {
             );
             assert_eq!(view.cockpit.project_id(original[0]), Some(first_project));
             assert_eq!(view.cockpit.project_id(joined), Some(second_project));
+            view.enter_group(group, cx);
             let nav = view.nav_state();
             assert_eq!(
                 nav.groups[0]
@@ -12884,115 +12893,29 @@ mod tests {
 
         cx.simulate_keystrokes("cmd-t");
         view.read_with(cx, |view, _| {
-            assert_eq!(view.visible_indices().len(), 4, "pending draft appends");
+            assert_eq!(view.cockpit.roster().view(), View::Solo);
+            assert_eq!(view.visible_indices().len(), 1, "draft has its own Pane");
             assert_eq!(view.cockpit.groups().get(group).unwrap().members, threads);
         });
         cx.simulate_input("build it");
         cx.simulate_keystrokes("enter");
         view.read_with(cx, |view, _| {
-            assert_eq!(view.cockpit.groups().get(group).unwrap().members.len(), 4);
+            assert_eq!(view.cockpit.groups().get(group).unwrap().members.len(), 3);
+            assert_eq!(view.cockpit.roster().view(), View::Solo);
         });
 
         cx.simulate_keystrokes("cmd-w");
         view.read_with(cx, |view, _| {
-            assert_eq!(view.cockpit.roster().view(), View::Group(group));
-            assert_eq!(view.visible_indices().len(), 3);
-            assert_eq!(view.cockpit.threads().len(), 4, "leaving never parks");
+            assert_eq!(view.cockpit.roster().view(), View::Solo);
+            assert_eq!(view.cockpit.threads().len(), 3, "the loose Thread parks");
         });
+        view.update(cx, |view, cx| view.enter_group(group, cx));
         cx.simulate_keystrokes("cmd-w cmd-w");
         view.read_with(cx, |view, _| {
             assert_eq!(view.cockpit.roster().view(), View::Solo);
             assert!(view.cockpit.groups().get(group).is_none());
             assert_eq!(view.visible_indices().len(), 1);
-            assert_eq!(view.cockpit.threads().len(), 4);
-        });
-    }
-
-    #[gpui::test]
-    fn a_pending_draft_keeps_a_pair_open_until_it_sends_or_closes(cx: &mut TestAppContext) {
-        let (mut core, _fake) = cockpit("group-pending-draft", 4);
-        let threads = core.threads();
-        let sending = core
-            .apply_group(GroupChange::Create {
-                first: threads[0],
-                second: threads[1],
-            })
-            .unwrap()
-            .group
-            .unwrap();
-        let closing = core
-            .apply_group(GroupChange::Create {
-                first: threads[2],
-                second: threads[3],
-            })
-            .unwrap()
-            .group
-            .unwrap();
-        cx.update(|cx| {
-            cx.bind_keys([
-                KeyBinding::new("cmd-t", NewThread, None),
-                KeyBinding::new("cmd-w", CloseThread, None),
-                KeyBinding::new("enter", Submit, None),
-            ])
-        });
-        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-
-        view.update(cx, |view, cx| view.enter_group(sending, cx));
-        cx.simulate_keystrokes("cmd-t");
-        let sending_draft =
-            view.read_with(cx, |view, _| view.panes[view.focused()].composer.clone());
-        view.update(cx, |view, _| {
-            view.focus_pane(view.pane_for(threads[0]).unwrap())
-        });
-        cx.simulate_keystrokes("cmd-w");
-        view.read_with(cx, |view, _| {
-            assert_eq!(view.cockpit.roster().view(), View::Group(sending));
-            assert_eq!(view.visible_indices().len(), 2, "survivor plus Draft");
-            assert_eq!(view.cockpit.groups().get(sending).unwrap().members.len(), 2);
-        });
-        view.update(cx, |view, _| {
-            let draft = view
-                .panes
-                .iter()
-                .position(|pane| pane.composer == sending_draft)
-                .unwrap();
-            view.focus_pane(draft);
-        });
-        cx.simulate_input("preserve this prompt");
-        cx.simulate_keystrokes("enter");
-        view.read_with(cx, |view, _| {
-            let members = &view.cockpit.groups().get(sending).unwrap().members;
-            assert_eq!(members.len(), 2);
-            assert_eq!(members[0], threads[1]);
-            assert!(!members.contains(&threads[0]));
-        });
-
-        view.update(cx, |view, cx| view.enter_group(closing, cx));
-        cx.simulate_keystrokes("cmd-t");
-        let closing_draft =
-            view.read_with(cx, |view, _| view.panes[view.focused()].composer.clone());
-        cx.simulate_input("discard only when I close");
-        view.update(cx, |view, _| {
-            view.focus_pane(view.pane_for(threads[2]).unwrap())
-        });
-        cx.simulate_keystrokes("cmd-w");
-        view.read_with(cx, |view, _| {
-            assert_eq!(view.cockpit.roster().view(), View::Group(closing));
-            assert_eq!(view.visible_indices().len(), 2);
-        });
-        view.update(cx, |view, _| {
-            let draft = view
-                .panes
-                .iter()
-                .position(|pane| pane.composer == closing_draft)
-                .unwrap();
-            view.focus_pane(draft);
-        });
-        cx.simulate_keystrokes("cmd-w");
-        view.read_with(cx, |view, _| {
-            assert_eq!(view.cockpit.roster().view(), View::Solo);
-            assert!(view.cockpit.groups().get(closing).is_none());
-            assert_eq!(view.focused_thread(), Some(threads[3]));
+            assert_eq!(view.cockpit.threads().len(), 3);
         });
     }
 
@@ -13138,54 +13061,6 @@ mod tests {
         view.read_with(cx, |view, _| {
             let groups: Vec<_> = view.cockpit.groups().iter().map(|group| group.id).collect();
             assert_eq!(groups, [second_group, group]);
-        });
-    }
-
-    #[gpui::test]
-    fn pointer_dragging_from_a_pair_with_a_draft_keeps_the_group_pending(cx: &mut TestAppContext) {
-        let (mut core, _) = cockpit("group-pointer-pending-draft", 2);
-        let threads = core.threads();
-        let group = core
-            .apply_group(GroupChange::Create {
-                first: threads[0],
-                second: threads[1],
-            })
-            .unwrap()
-            .group
-            .unwrap();
-        cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-t", NewThread, None)]));
-        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-        view.update(cx, |view, cx| view.enter_group(group, cx));
-        cx.simulate_keystrokes("cmd-t");
-        let draft = view.read_with(cx, |view, _| view.panes[view.focused()].composer.clone());
-        cx.simulate_input("preserve this exact prompt");
-        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
-        cx.run_until_parked();
-
-        drag_nav(cx, "nav-thread-1", "loose-zone");
-
-        view.read_with(cx, |view, _| {
-            assert_eq!(view.cockpit.roster().view(), View::Solo);
-            assert_eq!(view.focused_thread(), Some(threads[0]));
-            assert_eq!(
-                view.cockpit.groups().get(group).unwrap().members,
-                threads,
-                "the pending leave has not dissolved the durable pair"
-            );
-        });
-        view.update(cx, |view, cx| view.enter_group(group, cx));
-        view.read_with(cx, |view, cx| {
-            let visible = view.visible_indices();
-            assert_eq!(visible.len(), 2, "survivor plus Draft");
-            let visible_threads: Vec<_> = visible
-                .iter()
-                .filter_map(|index| view.panes[*index].thread())
-                .collect();
-            assert_eq!(visible_threads, [threads[1]]);
-            assert!(visible
-                .iter()
-                .any(|index| view.panes[*index].composer == draft));
-            assert_eq!(draft.read(cx).text(), "preserve this exact prompt");
         });
     }
 
