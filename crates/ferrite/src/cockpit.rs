@@ -7912,6 +7912,94 @@ mod tests {
         });
     }
 
+    /// A Thread opens on its tail. A fresh ScrollHandle sits at the top, so
+    /// a reopened Thread with history landed on its oldest line; it must
+    /// land on its newest, and keep following the tail from there.
+    #[gpui::test]
+    fn a_reopened_thread_opens_at_the_bottom_and_keeps_following_the_tail(
+        cx: &mut TestAppContext,
+    ) {
+        let (core, fake) = cockpit("reopen-at-tail", 2);
+        cx.update(|cx| {
+            cx.bind_keys([
+                KeyBinding::new("cmd-w", CloseThread, None),
+                KeyBinding::new("cmd-o", ReopenThread, None),
+            ]);
+        });
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        // Reopening respawns the Session, so the revived Thread streams on
+        // the newest Sender, not the one it was parked with.
+        let say = |line: usize| {
+            fake.streams
+                .borrow()
+                .last()
+                .expect("a spawned Session")
+                .send(SessionEvent::TextDelta {
+                    text: format!("history line {line:03}\n\n"),
+                })
+                .unwrap();
+        };
+        // Stream into the second-spawned Session: that is `panes[0]`'s only
+        // if spawn order matches grid order, so pick the Pane by its stream
+        // instead — the last spawn is the last Thread created.
+        for line in 0..80 {
+            say(line);
+        }
+        tick(cx);
+        let closed = view.read_with(cx, |view, _| {
+            view.panes
+                .iter()
+                .filter_map(|pane| pane.thread())
+                .max()
+                .unwrap()
+        });
+        let at = view.read_with(cx, |view, _| {
+            view.panes
+                .iter()
+                .position(|pane| pane.thread() == Some(closed))
+                .unwrap()
+        });
+        view.update(cx, |view, _| view.focus_pane(at));
+        cx.simulate_keystrokes("cmd-w");
+        view.read_with(cx, |view, _| assert_eq!(view.panes.len(), 1));
+
+        cx.simulate_keystrokes("cmd-o");
+        tick(cx);
+        let gap = |cx: &mut gpui::VisualTestContext| {
+            view.read_with(cx, |view, _| {
+                let pane = view
+                    .panes
+                    .iter()
+                    .find(|pane| pane.thread() == Some(closed))
+                    .expect("the reopened Pane");
+                let scroll = &pane.scroll;
+                (
+                    scroll.max_offset().height,
+                    scroll.max_offset().height + scroll.offset().y,
+                )
+            })
+        };
+        let (max, at_open) = gap(cx);
+        assert!(max > px(0.), "the transcript must overflow for this test");
+        assert!(
+            at_open <= TAIL_SLACK,
+            "a reopened Thread opens at its bottom, not its top: {at_open:?} of {max:?}"
+        );
+
+        // Streaming into the reopened Pane keeps it on the tail.
+        for line in 80..100 {
+            say(line);
+        }
+        tick(cx);
+        let (later_max, after_stream) = gap(cx);
+        assert!(later_max > max, "more history grew the transcript");
+        assert!(
+            after_stream <= TAIL_SLACK,
+            "new Blocks keep a tail-riding reader at the bottom: {after_stream:?}"
+        );
+    }
+
     /// #15 AC2 at character grain (#27): a mid-word press sweeps exact
     /// characters across Blocks, and cmd-c puts exactly the highlighted
     /// text on the clipboard — endpoint rows cut at their characters, the
