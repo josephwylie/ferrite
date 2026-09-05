@@ -35,14 +35,14 @@ use crate::components;
 use crate::icons::{self, icon};
 use crate::pointer::{Pointer, PointerPressed};
 use crate::theme::{
-    ATTENTION, BLOCKED, CURRENT_MARK, CURRENT_MARK_W, FILL, FONT_UI, FS_LG, FS_MD, FS_SM,
-    GROUP_GAP, GROUP_RAIL, GROUP_ROW_H, HOVER, ICON_BUTTON, ICON_BUTTON_GLYPH, ICON_CHEVRON_LG,
-    IDLE, LINE_TIGHT, MEMBERS_TOP, MEMBER_GAP, MEMBER_INDENT, MENU, MENU_PAD, MENU_ROW_H, MENU_TOP,
-    NAV, NAV_HEAD_H, NAV_TREE_PAD, NAV_TREE_PAD_B, PROVIDER_CLAUDE, PROVIDER_CODEX, PROVIDER_MARK,
-    RAIL_INSET, RAIL_OFFSET, ROW_GAP, ROW_ICON, ROW_ICON_GAP, ROW_PAD_X, ROW_PAD_Y, ROW_TEXT_W,
-    RUNNING, R_CONTROL, R_MENU, R_TIGHT, SEP, SHADOW_FAR, SHADOW_FAR_BLUR, SHADOW_FAR_SPREAD,
-    SHADOW_FAR_Y, SHADOW_NEAR, SHADOW_NEAR_BLUR, SHADOW_NEAR_Y, SOLOS_TOP, STATUS_DOT, TEXT,
-    TEXT_2, TEXT_MUTED, TEXT_STRONG, THREAD_ROW_H, TRAFFIC_RESERVE, WIN_CHROME_H,
+    ATTENTION, BLOCKED, FILL, FONT_UI, FS_LG, FS_MD, FS_SM, GROUP_GAP, GROUP_RAIL, GROUP_ROW_H,
+    HOVER, ICON_BUTTON, ICON_BUTTON_GLYPH, ICON_CHEVRON_LG, IDLE, LINE_TIGHT, MEMBERS_TOP,
+    MEMBER_GAP, MEMBER_INDENT, MENU, MENU_PAD, MENU_ROW_H, MENU_TOP, NAV, NAV_HEAD_H, NAV_TREE_PAD,
+    NAV_TREE_PAD_B, PROVIDER_CLAUDE, PROVIDER_CODEX, PROVIDER_MARK, RAIL_INSET, RAIL_OFFSET,
+    ROW_GAP, ROW_ICON, ROW_ICON_GAP, ROW_PAD_X, ROW_PAD_Y, ROW_TEXT_W, RUNNING, R_CONTROL, R_MENU,
+    R_TIGHT, SEP, SHADOW_FAR, SHADOW_FAR_BLUR, SHADOW_FAR_SPREAD, SHADOW_FAR_Y, SHADOW_NEAR,
+    SHADOW_NEAR_BLUR, SHADOW_NEAR_Y, SOLOS_TOP, STATUS_DOT, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG,
+    THREAD_ROW_H, TRAFFIC_RESERVE, WIN_CHROME_H,
 };
 
 /// The nav's two widths — 286px, and the 56px rail cmd-b folds it to.
@@ -194,9 +194,9 @@ pub struct ThreadRow {
     pub branch: Option<SharedString>,
     /// `None` → no logomark. Never a `cl`/`cx` string.
     pub provider: Option<Provider>,
-    /// This is the focused Pane's Thread: it carries the selected fill, the
-    /// white title, and the current mark down its leading edge. The Group
-    /// around it carries the fill too, so the pair reads as one selection.
+    /// This is the focused Pane's Thread: it carries the selected fill and
+    /// the white title. The Group around it carries the fill too, so the
+    /// pair reads as one selection.
     pub current: bool,
     /// How long since the Thread was last used — `40m`, `2h`, `3d` — at the
     /// tail of the checkout line. `None` says nothing at all.
@@ -658,7 +658,6 @@ pub fn thread_row_with_title(row: &ThreadRow, title: impl IntoElement) -> Statef
         THREAD_ROW_H,
         row.current,
     )
-    .when(row.current, |row| row.child(current_mark()))
     .debug_selector({
         let thread = row.thread;
         move || format!("nav-thread-{}", thread.get())
@@ -703,21 +702,6 @@ fn since_tail(label: Option<SharedString>) -> Div {
         .line_height(relative(LINE_TIGHT))
         .text_color(rgb(TEXT_MUTED))
         .child(label)
-}
-
-/// The current Thread's leading mark: a 2px bar down the row's left edge,
-/// inset by the row's own radius so it reads as part of the filled box
-/// rather than a rule beside it. Absolute — it takes no layout, so a row
-/// gains it without any of its three lines moving.
-fn current_mark() -> Div {
-    div()
-        .absolute()
-        .left_0()
-        .top(px(R_CONTROL))
-        .bottom(px(R_CONTROL))
-        .w(px(CURRENT_MARK_W))
-        .rounded_r(px(CURRENT_MARK_W))
-        .bg(rgb(CURRENT_MARK))
 }
 
 /// One run of solo Threads — those no Group claims — at root indent with
@@ -1059,7 +1043,7 @@ mod tests {
         assert_eq!(
             height(thread_row(&bare)),
             height(thread_row(&current_thread(None, true))),
-            "the current mark is absolute: a row's height never moves with it"
+            "the current row is the same box as any other, only filled"
         );
         assert_eq!(
             height(thread_row(&bare)),
