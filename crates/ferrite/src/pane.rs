@@ -2603,8 +2603,8 @@ struct ComposerStack<'a> {
 /// in all, until the text wraps or breaks), growing upward to
 /// `composer::MAX_ROWS` rows and then scrolling. The Pane lays the region
 /// out `flex_shrink_0` below the body, so the transcript above gives way.
-/// No top border: Soft draws no separators, and the ground change is the
-/// whole separation.
+/// A hairline matching the header's bottom edge closes the transcript at the
+/// top of the input region.
 ///
 /// The draft's setup chips occupy the controls row, so a new Thread and an
 /// existing Thread share the same input silhouette. A queued prompt may add
@@ -2638,6 +2638,8 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         .gap(px(theme::COMPOSER_GAP))
         .min_w_0()
         .bg(rgb(RAISED))
+        .border_t_1()
+        .border_color(rgba(PANE_HEAD_EDGE))
         // gpui's `overflow_hidden()` content mask is an axis-aligned rect, so
         // the shell's 8px radius never clips this ground. The bottom-most
         // child carries the shell's padding-box radius itself: 8 - 1 border.

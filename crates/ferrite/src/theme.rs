@@ -11,12 +11,9 @@
 //! are `0xRRGGBBAA` and drawn with `gpui::rgba`. The alpha byte is the
 //! prototype's fraction × 255, rounded.
 //!
-//! Soft draws **no hairline separators at all**. There is no border between
-//! the nav and the Cockpit, no rule above the changed strip, none above the
-//! Composer. Separation is by fill contrast alone — with one exception: the
-//! Pane header is a two-line band on its own ground, closed by a hairline,
-//! because two lines of chrome need a stated end and fill contrast at this
-//! step is too soft to give one.
+//! Soft draws very few hairline separators. There is no border between the
+//! nav and the Cockpit, but the Pane header and Composer bracket the content
+//! with matching rules where fill contrast alone is too soft.
 
 // ---------------------------------------------------------------- grounds
 
@@ -34,9 +31,8 @@ pub const NAV: u32 = 0x232323;
 /// the Pane's own ground so the title and its checkout line read as chrome
 /// and the transcript reads as content.
 pub const PANE_HEAD: u32 = 0x1d1d1d;
-/// `rgba(255,255,255,0.07)` — the hairline under the Pane header. The one
-/// rule Soft draws inside a Pane: the header band carries two lines now,
-/// and fill contrast alone is too soft to say where the transcript starts.
+/// `rgba(255,255,255,0.07)` — the matching hairlines under the Pane header
+/// and above the Composer, bracketing the Pane's transcript content.
 pub const PANE_HEAD_EDGE: u32 = 0xffffff12;
 
 /// `#282828` — `--raised`: inline-code chips, code blocks, keycaps, the
@@ -398,7 +394,7 @@ pub const ROW_ICON_GAP: f32 = 5.0;
 
 // --------------------------------------------------------- geometry: pane
 
-/// 32px — the Pane head. No background, no border, no rule beneath it.
+/// 32px — the Pane head's title row, inside the grounded header band.
 pub const PANE_HEAD_H: f32 = 32.0;
 /// The checkout line beneath the Pane head's title: 20px, sharing the
 /// head's inline padding and its ground, so the two read as one band.
