@@ -198,8 +198,8 @@ pub const SELECTION: u32 = 0x3f3f3f;
 /// state (its only `:active` is a 0.96 scale on the collapse button), so a
 /// future retune can split them without a rename.
 pub const PRESSED: u32 = FILL_HOVER;
-/// `#3a3a3a` — `--scrollbar`: the nav-tree and Pane-body thumb.
-#[allow(dead_code)]
+/// `#3a3a3a` — `--scrollbar`: the nav-tree and Pane-body thumb. Reaches
+/// the toolkit's scrollbar through `init_components`, not a call site.
 pub const SCROLLBAR: u32 = 0x3a3a3a;
 
 // ------------------------------------------------------------------- type
@@ -550,11 +550,6 @@ pub const CHIP_PAD_X: f32 = 6.0;
 pub const CHIP_PAD_Y: f32 = 1.0;
 #[allow(dead_code)]
 pub const FILE_CHIP_GAP: f32 = 6.0;
-/// The hand-drawn scrollbar: a 3px thumb inside a 9px gutter.
-#[allow(dead_code)]
-pub const SCROLLBAR_W: f32 = 9.0;
-#[allow(dead_code)]
-pub const SCROLLBAR_THUMB_W: f32 = 3.0;
 
 // ------------------------------------- geometry: levels below L1 (unspecified)
 
@@ -664,7 +659,9 @@ pub fn init_components(cx: &mut gpui::App) {
     theme.input = rgb(RAISED).into();
     theme.switch = rgb(RAISED).into();
     theme.switch_thumb = rgb(TEXT_STRONG).into();
+    // No track: Soft draws no lines, so only the thumb is ever ink, and
+    // it lightens rather than darkens when the pointer takes hold of it.
     theme.scrollbar = rgba(TRANSPARENT).into();
-    theme.scrollbar_thumb = rgb(FILL).into();
-    theme.scrollbar_thumb_hover = rgb(HOVER).into();
+    theme.scrollbar_thumb = rgb(SCROLLBAR).into();
+    theme.scrollbar_thumb_hover = rgb(SEP).into();
 }

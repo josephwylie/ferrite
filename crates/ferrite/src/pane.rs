@@ -34,6 +34,7 @@ use std::time::Duration;
 #[cfg(test)]
 use std::{cell::RefCell, rc::Rc};
 
+use crate::components;
 use crate::composer::Composer;
 use crate::icons::{self, icon};
 use crate::pointer::{Pointer, PointerPressed};
@@ -561,14 +562,17 @@ pub fn render_pane(
             if let Some(todos) = transcript.todos() {
                 pane = pane.child(tasks_strip(todos, transcript.current_task()));
             }
-            pane = pane.child(body(
+            pane = pane.child(scrollback(
                 view,
-                transcript,
-                level,
-                &selection,
-                timings,
-                &mut tool_controls,
-                thread.map(|thread| thread.provider()),
+                body(
+                    view,
+                    transcript,
+                    level,
+                    &selection,
+                    timings,
+                    &mut tool_controls,
+                    thread.map(|thread| thread.provider()),
+                ),
             ));
             // The Decision card is a **sibling of the body**, not a child
             // of the Composer (§D.5): its `margin: 0 12px 8px` is measured
@@ -1588,6 +1592,25 @@ pub fn rendered_output_tools(blocks: &[Block], level: Level) -> impl Iterator<It
             Body::Tool(tool) if tool_has_details(tool) => Some(tool),
             _ => None,
         })
+}
+
+/// The scrollback and its bar. The bar is a *sibling* of the scrolling
+/// body inside this one `relative()` parent — as a child it would scroll
+/// away with the transcript — and it is keyed by Thread, because each open
+/// Pane drags, hovers and fades its own.
+fn scrollback(view: &PaneView, body: impl IntoElement) -> Div {
+    let thread = view.thread().map(|thread| thread.get()).unwrap_or(0);
+    div()
+        .relative()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_h_0()
+        .child(body)
+        .child(components::scrollbar(
+            ("transcript-scrollbar", thread as usize),
+            &view.scroll,
+        ))
 }
 
 fn body(

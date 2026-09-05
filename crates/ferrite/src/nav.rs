@@ -31,6 +31,7 @@ use gpui::{
     FontWeight, ScrollHandle, SharedString, Stateful, Transformation,
 };
 
+use crate::components;
 use crate::icons::{self, icon};
 use crate::pointer::{Pointer, PointerPressed};
 use crate::theme::{
@@ -39,9 +40,9 @@ use crate::theme::{
     MEMBER_GAP, MEMBER_INDENT, MENU, MENU_PAD, MENU_ROW_H, MENU_TOP, NAV, NAV_HEAD_H, NAV_TREE_PAD,
     NAV_TREE_PAD_B, PROVIDER_CLAUDE, PROVIDER_CODEX, PROVIDER_MARK, RAIL_INSET, RAIL_OFFSET,
     ROW_GAP, ROW_ICON, ROW_ICON_GAP, ROW_PAD_X, ROW_PAD_Y, ROW_TEXT_W, RUNNING, R_CONTROL, R_MENU,
-    R_TIGHT, SCROLLBAR, SCROLLBAR_THUMB_W, SCROLLBAR_W, SEP, SHADOW_FAR, SHADOW_FAR_BLUR,
-    SHADOW_FAR_SPREAD, SHADOW_FAR_Y, SHADOW_NEAR, SHADOW_NEAR_BLUR, SHADOW_NEAR_Y, SOLOS_TOP,
-    STATUS_DOT, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG, THREAD_ROW_H, TRAFFIC_RESERVE, WIN_CHROME_H,
+    R_TIGHT, SEP, SHADOW_FAR, SHADOW_FAR_BLUR, SHADOW_FAR_SPREAD, SHADOW_FAR_Y, SHADOW_NEAR,
+    SHADOW_NEAR_BLUR, SHADOW_NEAR_Y, SOLOS_TOP, STATUS_DOT, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG,
+    THREAD_ROW_H, TRAFFIC_RESERVE, WIN_CHROME_H,
 };
 
 /// The nav's two widths — 286px, and the 56px rail cmd-b folds it to.
@@ -456,41 +457,10 @@ pub fn nav_tree(scroll: &ScrollHandle) -> Stateful<Div> {
         .pb(px(NAV_TREE_PAD_B))
 }
 
-/// The hand-drawn scrollbar — gpui 0.2.2 paints none of its own. A 3px
-/// thumb in a 9px gutter, and **nothing at all** when the tree fits: an
-/// always-on track would be a line, and Soft draws no lines.
-///
-/// Hang it as a *sibling* of `nav_tree` inside a shared `relative()` parent,
-/// never as a child, or it scrolls away with the content.
+/// The nav tree's scrollbar, over the tree it scrolls. See
+/// [`components::scrollbar`] for the shape and the sibling rule.
 pub fn scrollbar(scroll: &ScrollHandle) -> Div {
-    let max = scroll.max_offset().height;
-    if max <= px(0.) {
-        return div();
-    }
-    let viewport = scroll.bounds().size.height;
-    let content = viewport + max;
-    let visible = if content > px(0.) {
-        (viewport / content).clamp(0.05, 1.0)
-    } else {
-        1.0
-    };
-    let travelled = (-scroll.offset().y / max).clamp(0., 1.);
-    div()
-        .absolute()
-        .top_0()
-        .bottom_0()
-        .right_0()
-        .w(px(SCROLLBAR_W))
-        .child(
-            div()
-                .absolute()
-                .right(px(SCROLLBAR_THUMB_W))
-                .w(px(SCROLLBAR_THUMB_W))
-                .h(relative(visible))
-                .top(relative(travelled * (1.0 - visible)))
-                .rounded(px(SCROLLBAR_W))
-                .bg(rgb(SCROLLBAR)),
-        )
+    components::scrollbar("nav-scrollbar", scroll)
 }
 
 /// One Group section: the parent row, then its members. Blocks after the
