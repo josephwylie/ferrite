@@ -3923,20 +3923,6 @@ impl CockpitView {
                 })
             })
             .collect();
-        // A Group is as recent as its most recently used member, and the
-        // Groups sort by that alongside the solos below. A Group's own
-        // members keep the operator's order — that order is the Group.
-        let mut groups = groups;
-        groups.sort_by_key(|block| {
-            std::cmp::Reverse(
-                block
-                    .members
-                    .iter()
-                    .map(|row| self.last_used(row.thread))
-                    .max()
-                    .unwrap_or(std::time::UNIX_EPOCH),
-            )
-        });
 
         // ...and so it lands in the solos below, which is where a Thread on
         // its way out of a Group belongs.
@@ -3969,15 +3955,43 @@ impl CockpitView {
             .map(|thread| self.thread_row(thread))
             .collect();
         solos.dedup_by_key(|row| row.thread);
+
         // The nav's default order (#21): most recently used first, across
-        // open and parked alike. `sort_by_key` is stable, so Threads that
-        // share a second keep the pane-then-park order they arrived in.
-        solos.sort_by_key(|row| std::cmp::Reverse(self.last_used(row.thread)));
+        // open and parked alike, and across Groups and solo Threads alike —
+        // one list, not a Groups shelf above a Threads shelf. A Group is as
+        // recent as its most recently used member; its own members keep the
+        // operator's order, because that order *is* the Group.
+        //
+        // `sort_by_key` is stable, so items sharing a second keep the order
+        // they were gathered in: Groups in the roster's order, Threads in
+        // pane-then-park order.
+        let mut order: Vec<(std::time::SystemTime, nav::NavItem)> = groups
+            .iter()
+            .enumerate()
+            .map(|(index, block)| {
+                let recency = block
+                    .members
+                    .iter()
+                    .map(|row| self.last_used(row.thread))
+                    .max()
+                    .unwrap_or(std::time::UNIX_EPOCH);
+                (recency, nav::NavItem::Group(index))
+            })
+            .chain(
+                solos
+                    .iter()
+                    .enumerate()
+                    .map(|(index, row)| (self.last_used(row.thread), nav::NavItem::Solo(index))),
+            )
+            .collect();
+        order.sort_by_key(|(recency, _)| std::cmp::Reverse(*recency));
+        let order = order.into_iter().map(|(_, item)| item).collect();
 
         nav::NavState {
             filter,
             groups,
             solos,
+            order,
             collapsed: self.nav_collapsed,
         }
     }
@@ -5856,9 +5870,11 @@ impl CockpitView {
         head.child(deferred(menu))
     }
 
-    /// The scrolling tree: the Groups with their members, then the solos.
-    /// The 16px between Group blocks is also the `GroupGap` drop zone, so
-    /// reordering costs no layout of its own.
+    /// The scrolling tree: Groups with their members and solo Threads in
+    /// one order, most recently used first. The 16px band above a Group
+    /// block is also its `GroupGap` drop zone, so reordering costs no
+    /// layout of its own, and every run of solo rows is a `LooseZone` — a
+    /// place to drop a row to get it out of its Group.
     fn nav_tree(&self, state: &nav::NavState, cx: &mut Context<Self>) -> Stateful<Div> {
         // Every drag started from this frame started from this View.
         let origin = self.cockpit.roster().view();
@@ -5875,28 +5891,117 @@ impl CockpitView {
                     .child(error.clone()),
             );
         }
-        for (index, group) in state.groups.iter().enumerate() {
-            let id = group.id;
-            let full_index = self
-                .cockpit
-                .groups()
-                .iter()
-                .position(|group| group.id == id)
-                .expect("navigation only shows existing Groups");
-            let gap = DropTarget::GroupGap(full_index);
-            if index > 0 {
-                tree = tree.child(
-                    drop_feedback(nav::group_gap(index), self.cockpit.groups().clone(), gap)
-                        .on_drop(cx.listener(move |view, drag: &NavDrag, _, cx| {
-                            view.apply_drop(*drag, gap, cx)
-                        })),
-                );
+        // Solo rows the order puts next to each other are drawn as one run,
+        // so the 2px between siblings stays a container's gap rather than a
+        // margin on every row.
+        let mut zones = 0usize;
+        let mut run: Vec<AnyElement> = Vec::new();
+        let mut after_group = false;
+        for (position, item) in state.order.iter().enumerate() {
+            match item {
+                nav::NavItem::Solo(index) => {
+                    run.push(self.thread_element(&state.solos[*index], None, cx));
+                }
+                nav::NavItem::Group(index) => {
+                    if !run.is_empty() {
+                        tree = tree.child(self.loose_run(
+                            zones,
+                            std::mem::take(&mut run),
+                            after_group,
+                            cx,
+                        ));
+                        zones += 1;
+                        after_group = false;
+                    }
+                    tree = tree.child(self.group_element(
+                        state,
+                        *index,
+                        position == 0,
+                        after_group,
+                        origin,
+                        cx,
+                    ));
+                    after_group = true;
+                }
             }
-            let head = nav::group_row_with_title(
-                group,
-                self.editable_group_title(id, group.title.clone(), cx),
-            );
-            let mut block = nav::group_block().child(
+        }
+        if !run.is_empty() {
+            tree = tree.child(self.loose_run(zones, run, after_group, cx));
+            zones += 1;
+            after_group = false;
+        }
+        // The ground under the last row is a drop target too — with every
+        // Thread in a Group it is the only place left to drop one to get it
+        // out — and it takes the tree's slack, so that ground is never dead.
+        let ground = nav::loose_ground(zones)
+            .when(after_group, |ground| ground.mt(px(crate::theme::SOLOS_TOP)));
+        tree = tree.child(
+            drop_feedback(ground, self.cockpit.groups().clone(), DropTarget::LooseZone).on_drop(
+                cx.listener(|view, drag: &NavDrag, _, cx| {
+                    view.apply_drop(*drag, DropTarget::LooseZone, cx)
+                }),
+            ),
+        );
+        if state.order.is_empty() {
+            tree = tree.child(nav::empty_filter(&state.filter.label));
+        }
+        tree
+    }
+
+    /// One run of solo rows, which is also a `LooseZone`. `after_group` is
+    /// what separates it from the Group above it; a run that opens the tree
+    /// starts at the tree's own padding.
+    fn loose_run(
+        &self,
+        zone: usize,
+        rows: Vec<AnyElement>,
+        after_group: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let run =
+            nav::solos(zone, rows).when(after_group, |run| run.mt(px(crate::theme::SOLOS_TOP)));
+        drop_feedback(run, self.cockpit.groups().clone(), DropTarget::LooseZone)
+            .on_drop(cx.listener(|view, drag: &NavDrag, _, cx| {
+                view.apply_drop(*drag, DropTarget::LooseZone, cx)
+            }))
+            .into_any_element()
+    }
+
+    /// One Group block: the 16px band above it when another Group precedes
+    /// it — the "insert between these two" drop target — then the header,
+    /// which is the drag handle, the rename target and the way in, then the
+    /// member rows.
+    fn group_element(
+        &self,
+        state: &nav::NavState,
+        index: usize,
+        first_in_tree: bool,
+        after_group: bool,
+        origin: View,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let group = &state.groups[index];
+        let id = group.id;
+        let full_index = self
+            .cockpit
+            .groups()
+            .iter()
+            .position(|group| group.id == id)
+            .expect("navigation only shows existing Groups");
+        let gap = DropTarget::GroupGap(full_index);
+        let head = nav::group_row_with_title(
+            group,
+            self.editable_group_title(id, group.title.clone(), cx),
+        );
+        let mut block = nav::group_block()
+            // A Group separates itself from whatever is above it: nothing
+            // when it opens the tree, the 16px band from another Group —
+            // prepended below, because that band is a drop target and not a
+            // margin — and the solos' own 24px from a run of rows.
+            .when(!first_in_tree && !after_group, |block| {
+                block.mt(px(crate::theme::SOLOS_TOP))
+            })
+            .child(
                 drop_feedback(
                     head,
                     self.cockpit.groups().clone(),
@@ -5924,77 +6029,65 @@ impl CockpitView {
                     }),
                 ),
             );
-            // Gap 0 has no band of its own; it rides the header instead.
-            if index == 0 {
-                block = block.child(
-                    drop_feedback(
-                        nav::group_gap_lead(index),
-                        self.cockpit.groups().clone(),
-                        gap,
-                    )
-                    .on_drop(cx.listener(
-                        move |view, drag: &NavDrag, _, cx| view.apply_drop(*drag, gap, cx),
-                    )),
+        // The first block in the tree has no band above it to drop into, so
+        // "insert above this Group" rides its header instead.
+        if first_in_tree {
+            block = block.child(
+                drop_feedback(
+                    nav::group_gap_lead(index),
+                    self.cockpit.groups().clone(),
+                    gap,
+                )
+                .on_drop(
+                    cx.listener(move |view, drag: &NavDrag, _, cx| view.apply_drop(*drag, gap, cx)),
+                ),
+            );
+        }
+        if !group.members.is_empty() {
+            let rows = group
+                .members
+                .iter()
+                .map(|row| self.thread_element(row, Some(id), cx))
+                .collect();
+            let mut members = nav::members(rows);
+            // Appending to the Group means dropping past its last row —
+            // an index one beyond the end, aimed at the last member.
+            if let Some(last) = group.members.last().map(|row| row.thread) {
+                let tail = DropTarget::ThreadRow {
+                    thread: last,
+                    group: Some(id),
+                    index: self
+                        .cockpit
+                        .groups()
+                        .get(id)
+                        .expect("Group exists")
+                        .members
+                        .len(),
+                };
+                members = members.child(
+                    drop_feedback(nav::member_tail(id), self.cockpit.groups().clone(), tail)
+                        .on_drop(cx.listener(move |view, drag: &NavDrag, _, cx| {
+                            view.apply_drop(*drag, tail, cx)
+                        })),
                 );
             }
-            if !group.members.is_empty() {
-                let rows = group
-                    .members
-                    .iter()
-                    .map(|row| self.thread_element(row, Some(id), cx))
-                    .collect();
-                let mut members = nav::members(rows);
-                // Appending to the Group means dropping past its last row —
-                // an index one beyond the end, aimed at the last member.
-                if let Some(last) = group.members.last().map(|row| row.thread) {
-                    let tail = DropTarget::ThreadRow {
-                        thread: last,
-                        group: Some(id),
-                        index: self
-                            .cockpit
-                            .groups()
-                            .get(id)
-                            .expect("Group exists")
-                            .members
-                            .len(),
-                    };
-                    members = members.child(
-                        drop_feedback(nav::member_tail(id), self.cockpit.groups().clone(), tail)
-                            .on_drop(cx.listener(move |view, drag: &NavDrag, _, cx| {
-                                view.apply_drop(*drag, tail, cx)
-                            })),
-                    );
-                }
-                block = block.child(members);
-            }
-            tree = tree.child(block);
+            block = block.child(members);
         }
-        let rows = state
-            .solos
-            .iter()
-            .map(|row| self.thread_element(row, None, cx))
-            .collect();
-        // `nav::solos` carries the 24px that separates it from the last
-        // Group. With no Group above it there is nothing to separate
-        // from, and the section starts at the tree's own padding. With no
-        // solo rows at all it separates nothing either — but it still
-        // renders, as the empty ground below the tree: with every Thread in
-        // a Group that is the only place left to drop one to get it out.
-        let empty = state.solos.is_empty();
-        let solos = nav::solos(rows)
-            .when(empty || state.groups.is_empty(), |solos| solos.mt(px(0.)))
-            .when(empty, |solos| solos.flex_1());
-        tree = tree.child(
-            drop_feedback(solos, self.cockpit.groups().clone(), DropTarget::LooseZone).on_drop(
-                cx.listener(|view, drag: &NavDrag, _, cx| {
-                    view.apply_drop(*drag, DropTarget::LooseZone, cx)
-                }),
-            ),
-        );
-        if state.groups.is_empty() && state.solos.is_empty() {
-            tree = tree.child(nav::empty_filter(&state.filter.label));
+        if !after_group {
+            return block.into_any_element();
         }
-        tree
+        // Two Groups in a row: the band between them, drawn above this one.
+        div()
+            .flex()
+            .flex_col()
+            .flex_shrink_0()
+            .child(
+                drop_feedback(nav::group_gap(index), self.cockpit.groups().clone(), gap).on_drop(
+                    cx.listener(move |view, drag: &NavDrag, _, cx| view.apply_drop(*drag, gap, cx)),
+                ),
+            )
+            .child(block)
+            .into_any_element()
     }
 
     /// One Thread row, with the whole drag/drop and click wiring a row has
@@ -6066,18 +6159,8 @@ impl CockpitView {
     /// dropdown, and this is how a 56px column reaches it.
     fn rail(&self, state: &nav::NavState, cx: &mut Context<Self>) -> Div {
         let mut items = nav::rail_items();
-        let focused = self.cockpit.roster().focused_thread();
-        for (row, current) in state
-            .groups
-            .iter()
-            .flat_map(|group| group.members.iter().map(move |row| (row, group.current)))
-            .chain(
-                state
-                    .solos
-                    .iter()
-                    .map(|row| (row, focused == Some(row.thread))),
-            )
-        {
+        for row in state.ordered_rows() {
+            let current = row.current;
             let thread = row.thread;
             let open = self.pane_for(thread).is_some();
             items = items.child(nav::rail_item(row, current).on_mouse_down(
@@ -6495,6 +6578,61 @@ mod tests {
                     .unwrap()
                     .cwd(),
                 repo.canonicalize().unwrap()
+            );
+        });
+    }
+
+    /// The tree draws one list, not a Groups shelf above a Threads shelf:
+    /// Groups and solo Threads sort together by when they were last used,
+    /// a Group counting as its most recently used member. Threads created
+    /// back to back can share a timestamp, so the assertion is the rule
+    /// itself — the order never climbs — plus every item drawn exactly once.
+    #[gpui::test]
+    fn groups_and_solo_threads_share_one_recency_order(cx: &mut TestAppContext) {
+        let (mut core, _) = cockpit("nav-interleave", 4);
+        let ids = core.threads();
+        core.apply_group(GroupChange::Create {
+            first: ids[0],
+            second: ids[1],
+        })
+        .unwrap();
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        tick(cx);
+
+        view.read_with(cx, |view, _| {
+            let state = view.nav_state();
+            assert_eq!(state.groups.len(), 1);
+            assert_eq!(state.solos.len(), 2);
+            assert_eq!(
+                state.order.len(),
+                3,
+                "one entry per Group and per solo Thread, and no other"
+            );
+            let recency = |item: &nav::NavItem| match item {
+                nav::NavItem::Group(index) => state.groups[*index]
+                    .members
+                    .iter()
+                    .map(|row| view.last_used(row.thread))
+                    .max()
+                    .unwrap(),
+                nav::NavItem::Solo(index) => view.last_used(state.solos[*index].thread),
+            };
+            let times: Vec<_> = state.order.iter().map(recency).collect();
+            assert!(
+                times.windows(2).all(|pair| pair[0] >= pair[1]),
+                "most recently used first, whichever kind of item it is"
+            );
+            let mut seen: Vec<nav::NavItem> = state.order.clone();
+            seen.sort_by_key(|item| match item {
+                nav::NavItem::Group(index) => (0, *index),
+                nav::NavItem::Solo(index) => (1, *index),
+            });
+            seen.dedup();
+            assert_eq!(seen.len(), 3, "nothing is drawn twice and nothing is lost");
+            assert_eq!(
+                view.nav_state().ordered_rows().len(),
+                4,
+                "every Thread has a row, member or solo"
             );
         });
     }
@@ -9197,7 +9335,8 @@ mod tests {
         view.read_with(cx, |view, _| {
             let state = view.nav_state();
             assert!(state.groups.is_empty(), "no Group claims these Threads");
-            let rows: Vec<ThreadId> = state.solos.iter().map(|row| row.thread).collect();
+            let ordered = state.ordered_solos();
+            let rows: Vec<ThreadId> = ordered.iter().map(|row| row.thread).collect();
             let mut expected: Vec<ThreadId> = grid_order.to_vec();
             // The nav's default order, and the only one it has: last used
             // first. Parking does not move a row — using it does.
@@ -9208,23 +9347,23 @@ mod tests {
                 "a parked Thread is a row like any other"
             );
             assert_eq!(
-                state.solos[0].name.as_ref(),
+                ordered[0].name.as_ref(),
                 format!("thread-{:02}", expected[0]),
                 "rows say what the Pane head says"
             );
             assert!(
-                state.solos.iter().all(|row| row.last_used.is_some()),
+                ordered.iter().all(|row| row.last_used.is_some()),
                 "every row says how long since it was used"
             );
             assert_eq!(
-                state.solos[0].provider,
+                ordered[0].provider,
                 Some(Provider::Claude),
                 "the provider is the logomark's own value, never a `cl` tag"
             );
             let parked: Vec<ThreadId> = view.facts.parked().to_vec();
             assert_eq!(parked, vec![parked_thread], "the parked Thread moved below");
             assert_eq!(
-                state.solos.last().unwrap().provider,
+                ordered.last().unwrap().provider,
                 Some(Provider::Claude),
                 "a parked row still names its provider — peeked, not loaded"
             );
@@ -9249,7 +9388,7 @@ mod tests {
         let row_of = |view: &CockpitView, pane: usize| {
             let thread = view.panes[pane].thread().unwrap();
             view.nav_state()
-                .solos
+                .ordered_solos()
                 .iter()
                 .position(|row| row.thread == thread)
                 .expect("every open Thread has a row")
@@ -9377,9 +9516,8 @@ mod tests {
     /// signal ever creeps back in, this is what catches it.
     fn describe_nav(state: &nav::NavState) -> Vec<String> {
         state
-            .solos
-            .iter()
-            .chain(state.groups.iter().flat_map(|group| group.members.iter()))
+            .ordered_rows()
+            .into_iter()
             .map(|row| {
                 format!(
                     "{}|{:?}|{:?}|{:?}",

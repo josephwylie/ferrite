@@ -107,7 +107,46 @@ pub struct NavState {
     pub filter: FilterState,
     pub groups: Vec<GroupBlock>,
     pub solos: Vec<ThreadRow>,
+    /// The one order the tree draws in — Groups and solo Threads
+    /// interleaved, most recently used first. The two lists above are the
+    /// membership; this is the sequence.
+    pub order: Vec<NavItem>,
     pub collapsed: bool,
+}
+
+impl NavState {
+    /// Every row in the order the tree draws it: a Group's members where
+    /// their Group sits, a solo where it sits. The rail folds to exactly
+    /// this sequence, and tests read the tree's order from it.
+    pub fn ordered_rows(&self) -> Vec<&ThreadRow> {
+        self.order
+            .iter()
+            .flat_map(|item| match item {
+                NavItem::Group(index) => self.groups[*index].members.iter(),
+                NavItem::Solo(index) => std::slice::from_ref(&self.solos[*index]).iter(),
+            })
+            .collect()
+    }
+
+    /// The solo Threads alone, in the tree's order.
+    pub fn ordered_solos(&self) -> Vec<&ThreadRow> {
+        self.order
+            .iter()
+            .filter_map(|item| match item {
+                NavItem::Solo(index) => Some(&self.solos[*index]),
+                NavItem::Group(_) => None,
+            })
+            .collect()
+    }
+}
+
+/// One entry in the tree's order: an index into `NavState::groups`, or one
+/// into `NavState::solos`. Indices rather than the blocks themselves, so
+/// the two kinds keep their own types and nothing is cloned to be ordered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NavItem {
+    Group(usize),
+    Solo(usize),
 }
 
 /// The single Project dropdown at the top of navigation. Default label
@@ -681,18 +720,46 @@ fn current_mark() -> Div {
         .bg(rgb(CURRENT_MARK))
 }
 
-/// The solo section: Threads no Group claims, at root indent with no rail.
-/// 24px below the last Group — and nothing above it when the filter has
-/// left no Groups at all, which is the caller's `first` to decide.
-pub fn solos(rows: Vec<AnyElement>) -> Stateful<Div> {
+/// One run of solo Threads — those no Group claims — at root indent with
+/// no rail. A run is however many solo rows the recency order happens to
+/// put together between two Groups, so the tree holds several; each is a
+/// place to drop a row to get it out of its Group, and each carries its
+/// own id. The caller sets the margin above: a run that follows a Group
+/// takes `SOLOS_TOP`, and a run that opens the tree takes none.
+pub fn solos(index: usize, rows: Vec<AnyElement>) -> Stateful<Div> {
     div()
-        .id("loose-zone")
-        .debug_selector(|| "loose-zone".into())
+        .id(("loose-zone", index))
+        .debug_selector(move || {
+            if index == 0 {
+                "loose-zone".into()
+            } else {
+                format!("loose-zone-{index}")
+            }
+        })
         .flex()
         .flex_col()
+        .flex_shrink_0()
         .gap(px(MEMBER_GAP))
-        .mt(px(SOLOS_TOP))
         .children(rows)
+}
+
+/// The empty ground under the last row: the tree's own remainder, and the
+/// drop target that gets a row out of its Group when every Thread is in
+/// one and there is no solo run to aim at.
+pub fn loose_ground(index: usize) -> Stateful<Div> {
+    div()
+        .id(("loose-zone", index))
+        .debug_selector(move || {
+            if index == 0 {
+                "loose-zone".into()
+            } else {
+                format!("loose-zone-{index}")
+            }
+        })
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_h(px(SOLOS_TOP))
 }
 
 /// What a Project filter that matches nothing says. It names the Project
@@ -710,10 +777,11 @@ pub fn empty_filter(project: &str) -> Div {
 
 /// The badge that follows the pointer while a row is being dragged into a
 /// Group. It rides the menu ground — it is floating, like a menu is.
-/// A Group title that says it can be renamed: the row's own title text,
-/// plus the hover wash every other control in the system wears. No border
-/// and no field ground — a title that looked like an input would read as a
-/// second control in a row that has none.
+/// A Group title that can be renamed: the row's own title text, and
+/// nothing else. It wears **no** hover wash — the wash would advertise a
+/// control the single click no longer operates, and a title box lighting
+/// up inside an already-hovered row reads as a second target where there
+/// is one. The double click is the affordance; the row is the control.
 pub fn rename_target_group(id: GroupId, title: SharedString) -> Stateful<Div> {
     div()
         .id(("rename-group", id.get() as usize))
@@ -722,11 +790,10 @@ pub fn rename_target_group(id: GroupId, title: SharedString) -> Stateful<Div> {
         .truncate()
         .rounded(px(R_TIGHT))
         .child(title)
-        .hover_control()
 }
 
-/// A Thread title that says it can be renamed — `rename_target_group`'s
-/// twin, on the smaller row.
+/// A Thread title that can be renamed — `rename_target_group`'s twin, on
+/// the smaller row, and equally unwashed.
 pub fn rename_target_thread(thread: ThreadId, title: SharedString) -> Stateful<Div> {
     div()
         .id(("rename-thread", thread.get() as usize))
@@ -735,7 +802,6 @@ pub fn rename_target_thread(thread: ThreadId, title: SharedString) -> Stateful<D
         .truncate()
         .rounded(px(R_TIGHT))
         .child(title)
-        .hover_control()
 }
 
 pub fn drag_badge(label: SharedString) -> Div {
