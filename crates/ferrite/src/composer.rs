@@ -132,7 +132,11 @@ impl Composer {
     }
 
     /// Files stay separate from editable prose until the send/history seam.
-    pub fn attachments(entity: &Entity<Self>, cx: &App) -> Option<gpui::AnyElement> {
+    pub fn attachments(
+        entity: &Entity<Self>,
+        preview: &crate::attachment_preview::Preview,
+        cx: &App,
+    ) -> Option<gpui::AnyElement> {
         let composer = entity.read(cx);
         if composer.files.is_empty() {
             return None;
@@ -148,7 +152,7 @@ impl Composer {
                 .track_focus(&focus)
                 .tab_stop(true)
                 .child(
-                    crate::attachments::Attachments::new("prompt-attachments", files)
+                    crate::attachments::Attachments::new("prompt-attachments", files, preview)
                         .in_island(generation)
                         .on_remove(move |remove, window, cx| {
                             let _ = composer.update(cx, |composer, cx| {

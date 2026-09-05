@@ -5,10 +5,6 @@
 use std::{path::PathBuf, rc::Rc, time::Duration};
 
 use gpui::base::motion::{animate_keyframes, Easing, Keyframe, Keyframes, Timing};
-use gpui::{
-    canvas, point, prelude::*, px, App, Axis, ElementId, Global, Hsla, IntoElement, PathBuilder,
-    Pixels, Window,
-};
 use gpui::component::{
     attachment::{
         Attachment, AttachmentActions, AttachmentContent, AttachmentDescription, AttachmentGroup,
@@ -16,8 +12,14 @@ use gpui::component::{
     },
     button::{Button, ButtonVariants},
     group_box::{GroupBox, GroupBoxVariants},
-    Icon, IconName, Sizable, Theme, WindowExt,
+    Icon, IconName, Sizable, Theme,
 };
+use gpui::{
+    canvas, point, prelude::*, px, App, Axis, ElementId, Global, Hsla, IntoElement, PathBuilder,
+    Pixels, Window,
+};
+
+use crate::attachment_preview::Preview;
 
 // Keep the actual kit defaults before Ferrite makes its global borders
 // transparent. Restoring these tokens on the kit slots preserves the
@@ -35,15 +37,17 @@ type Remove = Rc<dyn Fn(&PathBuf, &mut Window, &mut App)>;
 pub struct Attachments {
     id: ElementId,
     files: Vec<PathBuf>,
+    preview: Preview,
     on_remove: Option<Remove>,
     island: Option<usize>,
 }
 
 impl Attachments {
-    pub fn new(id: impl Into<ElementId>, files: Vec<PathBuf>) -> Self {
+    pub fn new(id: impl Into<ElementId>, files: Vec<PathBuf>, preview: &Preview) -> Self {
         Self {
             id: id.into(),
             files,
+            preview: preview.clone(),
             on_remove: None,
             island: None,
         }
@@ -102,6 +106,8 @@ impl RenderOnce for Attachments {
                 let title = name.clone();
                 let button_preview = path.clone();
                 let button_title = name.clone();
+                let card_host = self.preview.clone();
+                let button_host = self.preview.clone();
                 let media = AttachmentMedia::new()
                     .bg(tokens.colors.muted)
                     .text_color(tokens.colors.foreground)
@@ -138,7 +144,8 @@ impl RenderOnce for Attachments {
                                 .accessibility_label(format!("Preview {name}"))
                                 .tooltip("Preview image")
                                 .on_click(move |_, window, cx| {
-                                    preview_file(
+                                    cx.stop_propagation();
+                                    button_host.open(
                                         button_preview.clone(),
                                         button_title.clone(),
                                         window,
@@ -159,7 +166,8 @@ impl RenderOnce for Attachments {
                     )
                     .when(image, |attachment| {
                         attachment.on_click(move |_, window, cx| {
-                            preview_file(preview.clone(), title.clone(), window, cx);
+                            cx.stop_propagation();
+                            card_host.open(preview.clone(), title.clone(), window, cx);
                         })
                     })
                     .when_some(self.on_remove.clone(), |attachment, remove| {
@@ -172,7 +180,10 @@ impl RenderOnce for Attachments {
                                     .key_context("PromptAttachment")
                                     .accessibility_label(format!("Remove {name}"))
                                     .tooltip(format!("Remove {}", path.display()))
-                                    .on_click(move |_, window, cx| remove(&path, window, cx)),
+                                    .on_click(move |_, window, cx| {
+                                        cx.stop_propagation();
+                                        remove(&path, window, cx);
+                                    }),
                             ),
                         )
                     })
@@ -198,6 +209,7 @@ impl RenderOnce for Attachments {
                     .px(radius)
                     .child(
                         gpui::div()
+                            .debug_selector(|| "attachment-island-content".into())
                             .min_w_0()
                             .max_w_full()
                             .relative()
@@ -317,19 +329,4 @@ impl gpui::Element for KitScale {
     ) {
         window.with_rem_size(Some(self.rem_size), |window| self.child.paint(window, cx));
     }
-}
-
-fn preview_file(path: PathBuf, title: String, window: &mut Window, cx: &mut App) {
-    window.open_dialog(cx, move |dialog, window, _| {
-        let viewport = window.viewport_size();
-        dialog
-            .title(title.clone())
-            .w(px(760.).min((viewport.width - px(48.)).max(px(0.))))
-            .child(
-                gpui::img(path.clone())
-                    .w_full()
-                    .h(px(480.).min((viewport.height - px(160.)).max(px(0.))))
-                    .object_fit(gpui::ObjectFit::Contain),
-            )
-    });
 }

@@ -96,8 +96,8 @@ With the pointer:
 
 - **Drop files anywhere in a Pane** to attach them to its Composer. The Pane
   under the pointer shows the drop overlay, including in Groups. Attachments
-  sit in a compact, raised island joined to the prompt box. Images show thumbnails; click
-  one for a larger preview or use its × button to remove it.
+  sit in a compact, raised island joined to the prompt box. Images show thumbnails;
+  click one for a preview centered within that Pane, or use its × button to remove it.
   Other file types show file attachments. The same cards and image previews
   remain in the chat after Send, including reopened chats. Files follow queued
   prompts and history recall. Claude and Codex receive supported images as native image
@@ -150,7 +150,7 @@ accessibility bridge upstream.
 ## Development
 
 Rust workspace; the renderer decision and the GPUI Kit `=0.6.0` pin are recorded
-in `docs/adr/0001-gpui-renderer.md` and `docs/adr/0002-gpui-kit.md`, project vocabulary in `CONTEXT.md`, and
+in `docs/adr/0003-native-gpui-components.md`, project vocabulary in `CONTEXT.md`, and
 the original 24-pane render spike in `spikes/panes24/`.
 
 ## License

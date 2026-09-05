@@ -1,4 +1,5 @@
 // Ferrite: the cockpit window and the pump behind it.
+mod attachment_preview;
 mod attachments;
 mod cockpit;
 mod components;

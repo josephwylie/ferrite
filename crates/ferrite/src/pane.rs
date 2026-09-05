@@ -67,6 +67,7 @@ pub struct PaneView {
     /// Built once; the wall must not format names per frame.
     pub name: SharedString,
     pub composer: Entity<Composer>,
+    pub preview: crate::attachment_preview::Preview,
     pub scroll: ScrollHandle,
     pub selection_scope: gpui::base::TextSelectionScopeId,
     pub transcript_focus: FocusHandle,
@@ -130,6 +131,7 @@ impl PaneView {
             draft: None,
             name: SharedString::from(format!("thread-{thread:02}")),
             composer: cx.new(Composer::new),
+            preview: crate::attachment_preview::Preview::new(cx),
             scroll: ScrollHandle::new(),
             selection_scope: gpui::base::TextSelectionScopeId::new(),
             transcript_focus: cx.focus_handle(),
@@ -157,6 +159,7 @@ impl PaneView {
             draft: Some(binding),
             name: SharedString::from("new thread"),
             composer: cx.new(Composer::new),
+            preview: crate::attachment_preview::Preview::new(cx),
             scroll: ScrollHandle::new(),
             selection_scope: gpui::base::TextSelectionScopeId::new(),
             transcript_focus: cx.focus_handle(),
@@ -1787,6 +1790,7 @@ fn body(
             signal,
             flow,
             provider,
+            &view.preview,
         ));
         index += 1;
     }
@@ -3190,6 +3194,7 @@ fn render_block(
     signal: u32,
     flow: Flow,
     provider: Option<Provider>,
+    preview: &crate::attachment_preview::Preview,
 ) -> AnyElement {
     let row = div().w_full().flex_shrink_0();
     match &block.body {
@@ -3226,6 +3231,7 @@ fn render_block(
                         .child(crate::attachments::Attachments::new(
                             format!("sent-attachments-{:?}", block.id),
                             files,
+                            preview,
                         ))
                 })
                 .into_any_element()
@@ -3476,7 +3482,6 @@ fn render_tool(
         .child(if has_disclosure { "" } else { glyph })
         .children(disclosure);
     let mut line = div()
-        .debug_selector(|| "prompt-editor-region".into())
         .flex()
         .flex_row()
         .items_baseline()
@@ -4353,6 +4358,7 @@ mod tests {
             _cx: &mut Context<Self>,
         ) -> impl IntoElement {
             let overlay = self.selection.overlay(self.thread, &self.blocks);
+            let preview = crate::attachment_preview::Preview::new(_cx);
             div()
                 .flex()
                 .flex_col()
@@ -4373,6 +4379,7 @@ mod tests {
                         TEXT_MUTED,
                         Flow::default(),
                         self.provider,
+                        &preview,
                     )
                 }))
         }

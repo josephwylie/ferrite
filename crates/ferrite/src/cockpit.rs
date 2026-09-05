@@ -4568,6 +4568,7 @@ impl Render for CockpitView {
             .map(|(_, editor)| editor.focus_handle(cx))
             .or_else(|| {
                 self.panes.get(self.focused()).and_then(|pane| match level {
+                    _ if pane.preview.focus_target().is_some() => pane.preview.focus_target(),
                     // At L1 the Composer keeps the keyboard even while a
                     // Decision pends: the card is part of its stack and the
                     // input stays live (PromptBox state 04) — y/n/a answer
@@ -4836,6 +4837,7 @@ impl CockpitView {
         if self.settings_open {
             return content;
         }
+        let content = self.panes[index].preview.mount(content);
         let composer = self.panes[index].composer.clone();
         let identity = self.panes[index].identity;
         let view = cx.entity().downgrade();
@@ -4929,7 +4931,7 @@ impl CockpitView {
             return cell.child(pane::render_draft(
                 pane,
                 pane::DraftState {
-                    attachments: Composer::attachments(&pane.composer, cx),
+                    attachments: Composer::attachments(&pane.composer, &pane.preview, cx),
                     band: self.draft_band_element(index, cx),
                     menu: (level == Level::Transcript)
                         .then(|| self.popover_element(index, cx))
@@ -4965,7 +4967,7 @@ impl CockpitView {
         // picker (#25) or a context ring; the wall answers with keys alone.
         let l1 = level == Level::Transcript;
         let wiring = pane::PaneWiring {
-            attachments: Composer::attachments(&pane.composer, cx),
+            attachments: Composer::attachments(&pane.composer, &pane.preview, cx),
             menu: l1.then(|| self.popover_element(index, cx)).flatten(),
             model_picker: l1.then(|| self.model_picker(index, cx)).flatten(),
             usage_ring: l1.then(|| self.usage_ring(index, cx)).flatten(),
@@ -11506,6 +11508,34 @@ mod tests {
                 tray.bottom() <= editor.top(),
                 "the attachment island stays above the editable prompt"
             );
+            // The thumbnail overlay and card share a hit area: one click must
+            // open one preview, so one Escape must dismiss it completely.
+            let island = cx.debug_bounds("attachment-island-content").unwrap();
+            cx.simulate_click(
+                island.origin + gpui::point(px(24.), island.size.height / 2.),
+                gpui::Modifiers::none(),
+            );
+            tick(cx);
+            let popup = cx.debug_bounds("attachment-preview-content").unwrap();
+            let owner = cx.update(|window, cx| {
+                let view = view.read(cx);
+                view.pane_rects(window)
+                    .into_iter()
+                    .find(|(index, _)| *index == view.focused())
+                    .unwrap()
+                    .1
+            });
+            assert!((popup.center().x - px(owner.x + owner.w / 2.)).abs() <= px(2.));
+            assert!((popup.center().y - px(owner.y + owner.h / 2.)).abs() <= px(2.));
+            assert!(popup.size.width < px(owner.w) && popup.size.height < px(owner.h));
+            cx.simulate_keystrokes("escape");
+            tick(cx);
+            assert!(
+                cx.debug_bounds("attachment-preview-content").is_none(),
+                "one Escape dismisses the only preview"
+            );
+            cx.simulate_click(editor.center(), gpui::Modifiers::none());
+            tick(cx);
             // Leaving the window cancels the drag; a later release adds nothing.
             cx.simulate_event(gpui::FileDropEvent::Entered {
                 position: points[0],
@@ -11523,7 +11553,6 @@ mod tests {
                     .is_empty())
             });
             // The kit's controls receive Tab and Enter/Space without sending.
-            use gpui::component::WindowExt;
             cx.simulate_keystrokes("tab");
             tick(cx);
             cx.simulate_keystrokes("enter");
@@ -11531,11 +11560,23 @@ mod tests {
                 keystroke: gpui::Keystroke::parse("enter").unwrap(),
             });
             tick(cx);
-            cx.update(|window, cx| assert!(window.has_active_dialog(cx), "keyboard image preview"));
+            let popup = cx
+                .debug_bounds("attachment-preview-content")
+                .expect("keyboard image preview");
             assert!(fake.sent.borrow().len() == n, "preview never submits");
+            cx.simulate_resize(gpui::size(px(1000.), px(480.)));
+            tick(cx);
+            tick(cx);
+            let smaller = cx.debug_bounds("attachment-preview-content").unwrap();
+            assert!(
+                smaller.size.width < popup.size.width && smaller.size.height < popup.size.height,
+                "preview resizes with its pane: {popup:?} -> {smaller:?}"
+            );
             cx.simulate_keystrokes("escape");
             tick(cx);
-            cx.update(|window, cx| assert!(!window.has_active_dialog(cx)));
+            assert!(cx.debug_bounds("attachment-preview-content").is_none());
+            cx.simulate_resize(gpui::size(px(1200.), px(700.)));
+            tick(cx);
             cx.executor().advance_clock(Duration::from_millis(300));
             cx.run_until_parked();
             cx.simulate_keystrokes("tab tab");
@@ -11555,7 +11596,7 @@ mod tests {
                 );
             });
             assert!(
-                cx.debug_bounds("dialog-layer").is_none(),
+                cx.debug_bounds("attachment-preview-content").is_none(),
                 "closed preview leaves no hitbox"
             );
             // A repeated drop restores the removed file and deduplicates the image.
