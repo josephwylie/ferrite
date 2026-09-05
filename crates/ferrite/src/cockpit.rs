@@ -8713,6 +8713,44 @@ mod tests {
         assert_eq!(clipboard(cx).as_deref(), Some("kept"));
     }
 
+    #[gpui::test]
+    fn a_plain_transcript_click_does_not_move_the_viewport(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("click-keeps-scroll", 1);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TextDelta {
+                text: (0..80)
+                    .map(|line| format!("history line {line:03}\n\n"))
+                    .collect(),
+            })
+            .unwrap();
+        tick(cx);
+
+        let clicked = view.update(cx, |view, cx| {
+            let pane = &mut view.panes[0];
+            pane.follow_tail.set(false);
+            let offset = gpui::point(px(0.), -pane.scroll.max_offset().y / 2.);
+            pane.scroll.set_offset(offset);
+            cx.notify();
+            let bounds = pane.scroll.bounds();
+            gpui::point(bounds.center().x, bounds.bottom() - px(2.))
+        });
+        cx.run_until_parked();
+        let before = view.read_with(cx, |view, _| view.panes[0].scroll.offset());
+
+        let titlebar = gpui::point(px(500.), px(crate::theme::WIN_CHROME_H / 2.));
+        cx.simulate_mouse_down(titlebar, MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_mouse_up(titlebar, MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_click(clicked, gpui::Modifiers::none());
+        cx.simulate_mouse_move(clicked, MouseButton::Left, gpui::Modifiers::none());
+        cx.run_until_parked();
+
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.panes[0].scroll.offset(), before);
+        });
+    }
+
     /// The on-screen position of a byte in one Block's first text run in
     /// the first Pane — where a test aims the mouse (#27). TextLayout
     /// records screen-space geometry, so no scroll math is needed.
