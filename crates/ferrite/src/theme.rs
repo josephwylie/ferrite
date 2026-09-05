@@ -259,13 +259,8 @@ pub const LINE_BODY: f32 = 1.55;
 #[allow(dead_code)]
 pub const LINE_HUNK: f32 = 1.65;
 
-/// 0.84px — the *only* letter-spacing in Soft + Sans: `CHANGED` at 0.08em
-/// on 10.5px. gpui has no tracking; see the port note on `changed_strip`.
-#[allow(dead_code)]
-pub const CHANGED_TRACKING: f32 = 0.84;
-/// 0.6em — JetBrains Mono's advance width, the pitch a tracked mono label
-/// must be laid out on so a per-character cell cannot round up to a whole
-/// pixel.
+/// 0.6em — JetBrains Mono's advance width, the pitch a per-character cell
+/// must be laid out on so it cannot round up to a whole pixel.
 #[allow(dead_code)]
 pub const MONO_ADVANCE: f32 = 0.6;
 
@@ -411,10 +406,8 @@ pub const PANE_CHECKOUT_H: f32 = 20.0;
 /// The gap between the checkout line's own marks — tighter than the head's
 /// gap, because these are one reading, not separate slots.
 pub const CHECKOUT_GAP: f32 = 8.0;
-/// 24px — the tasks strip, and the changed-files strip.
+/// 24px — the tasks strip.
 pub const TASKS_STRIP_H: f32 = 24.0;
-#[allow(dead_code)]
-pub const CHANGED_STRIP_H: f32 = 24.0;
 /// 12px — the inline padding every Pane strip shares.
 pub const PANE_PAD_X: f32 = 12.0;
 /// The Pane body's padding: 6px top, 12px inline, 12px bottom.
@@ -622,8 +615,6 @@ pub const HUNK_MAX_ROWS: usize = 24;
 pub const CHIP_PAD_X: f32 = 6.0;
 #[allow(dead_code)]
 pub const CHIP_PAD_Y: f32 = 1.0;
-#[allow(dead_code)]
-pub const FILE_CHIP_GAP: f32 = 6.0;
 
 // ------------------------------------- geometry: levels below L1 (unspecified)
 

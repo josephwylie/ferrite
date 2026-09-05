@@ -4,8 +4,8 @@
 //! cockpit above it.
 //!
 //! L1 is the Soft prototype's Pane, drawn top to bottom: a 32px head, a
-//! 24px tasks strip, the transcript body, the Decision card, the 24px
-//! changed-files strip and the 58px Composer — all on `--pane`, inside an
+//! 24px tasks strip, the transcript body, the Decision card and the 58px
+//! Composer — all on `--pane`, inside an
 //! always-in-layout 1px border that only changes colour, with the focus
 //! ring 2px OUTSIDE it so attention and focus are independent channels.
 //! Tools inherit JetBrains Mono; assistant prose uses the native UI face.
@@ -34,7 +34,6 @@ use gpui::{
 #[cfg(test)]
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
 use std::time::Duration;
 use std::{cell::Cell as Flag, rc::Rc};
 
@@ -821,8 +820,11 @@ pub fn render_pane(
             // of the Composer (§D.5): its `margin: 0 12px 8px` is measured
             // from the Pane's own content box, so nesting it inside the
             // Composer's 12px padding would inset it twice. The child
-            // order §D.1 pins is head · tasks · body · decision · changed
-            // · composer.
+            // order is head · tasks · body · decision · composer — §D.1
+            // pins a CHANGED strip between the last two, which the Pane no
+            // longer draws: a strip of filenames repeated what the diff
+            // cards in the body had already said, file by file, and cost a
+            // walk of every Block per frame to say it.
             if view.is_main() {
                 if let Some((_, error)) = &view.request_error {
                     pane = pane.child(
@@ -838,6 +840,7 @@ pub fn render_pane(
             if let Some(decision) = decision.filter(|_| activity_decisions.is_none()) {
                 pane = pane.child(decision_card(decision, decide.take()));
             }
+<<<<<<< HEAD
             // The CHANGED strip rides above the Composer whenever the
             // Thread has touched files (#22 C11). `Instruments::of` walks
             // every Block, per frame — the same price every L2 cell already
@@ -851,6 +854,8 @@ pub fn render_pane(
             if let Some(decisions) = activity_decisions {
                 pane = pane.child(decisions);
             }
+=======
+>>>>>>> 5a69801 (Drop the CHANGED strip from the Pane)
             if let Some(footer) = child_footer {
                 pane = pane.child(footer);
             } else {
@@ -3181,66 +3186,6 @@ fn hollow_dot(size: gpui::Pixels) -> Div {
         .border_color(rgb(SEP))
 }
 
-/// The changed-files strip (§D.6): 24px, 12px inline padding, an 8px gap —
-/// the word `CHANGED`, then one chip per file carrying its diff stat. No
-/// top border: Soft draws no separators.
-fn changed_strip(changed: &[ferrite_core::docview::FileChange]) -> Div {
-    let mut strip = div()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .min_w_0()
-        .gap(px(theme::EVENT_GAP))
-        .h(px(theme::CHANGED_STRIP_H))
-        .px(px(theme::PANE_PAD_X))
-        .text_size(px(theme::FS_MONO))
-        .line_height(relative(theme::LINE_UI))
-        .text_color(rgb(TEXT_2))
-        .overflow_hidden()
-        .child(tracked("CHANGED", TEXT_MUTED));
-    for file in changed {
-        let name = Path::new(&file.path)
-            .file_name()
-            .map(|name| name.to_string_lossy().to_string())
-            .unwrap_or_else(|| file.path.clone());
-        strip = strip.child(
-            div()
-                .flex()
-                .flex_shrink_0()
-                .items_center()
-                .min_w_0()
-                .gap(px(theme::FILE_CHIP_GAP))
-                .px(px(theme::CHIP_PAD_X))
-                .py(px(theme::CHIP_PAD_Y))
-                .rounded(px(theme::R_CHIP))
-                .bg(rgb(RAISED))
-                .child(div().min_w_0().truncate().child(SharedString::from(name)))
-                .child(diff_stat(file.added, file.removed)),
-        );
-    }
-    strip
-}
-
-/// `CHANGED` at 0.08em tracking — the only letter-spacing in Soft + Sans.
-/// gpui's `TextStyle` has no tracking field, so the label is one element
-/// per character on a 0.84px flex gap. CSS also adds a trailing gap after
-/// the last character; this row is 0.84px narrower for it, which is below
-/// the noise floor on a seven-character string (R-04).
-fn tracked(label: &'static str, ink: u32) -> Div {
-    div()
-        .flex()
-        .flex_shrink_0()
-        .gap(px(theme::CHANGED_TRACKING))
-        .font_weight(FontWeight::MEDIUM)
-        .text_color(rgb(ink))
-        .children(label.chars().map(|glyph| {
-            div()
-                .flex_shrink_0()
-                .w(px(theme::FS_MONO * theme::MONO_ADVANCE))
-                .child(glyph.to_string())
-        }))
-}
-
 /// `+N −N` (§E.12): the added count in `--running`, **a literal space**,
 /// then the removed count in `--blocked` with a U+2212 MINUS SIGN — never a
 /// hyphen. The space is the gap; there is no flex gap here. One pair, drawn
@@ -4639,8 +4584,8 @@ pub fn tool_disclosure_control(
 /// The card draws at most `HUNK_MAX_ROWS` rows and then names what it left
 /// out. A patch is normally a handful of lines, but a written file's patch
 /// is the whole file, and the card is a note about a change rather than the
-/// change itself. The count it reports is the truth — `Diff::added` and the
-/// CHANGED strip always count every line, drawn or not.
+/// change itself. The count it reports is the truth — `Diff::added` counts
+/// every line, drawn or not.
 fn render_diff(block: BlockId, diff: &Diff, selection: &TextRuns) -> impl IntoElement {
     let mut lines = div()
         .flex()
