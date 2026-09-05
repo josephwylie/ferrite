@@ -14,10 +14,12 @@ mod pane;
 mod pointer;
 mod prefs;
 mod rich;
+mod scrollbar;
 mod select;
 mod session;
 mod shell;
 mod theme;
+mod titlebar;
 
 use ::gpui;
 use ::gpui as kit;
@@ -149,7 +151,7 @@ fn main() {
                     eprintln!("ferrite: cannot stand in the launch directory: {e}");
                 }
             }
-            core.watch_memory(Box::new(ProcessRss), RSS_LIMIT);
+            core.watch_memory(Box::new(ProcessRss::default()), RSS_LIMIT);
             for thread in adopted {
                 if let Err(e) = core.revive(thread) {
                     eprintln!("ferrite: imported thread {thread} would not open: {e}");
@@ -183,13 +185,15 @@ fn main() {
                     WindowOptions {
                         window_bounds: Some(WindowBounds::Windowed(bounds)),
                         // The titlebar band blends into the app: the strip is
-                        // the visible titlebar, and the traffic lights sit in
-                        // its band (#22 D24). macOS only — hiding the system
-                        // titlebar elsewhere would take the window controls
-                        // with it.
+                        // the visible titlebar, and on macOS the traffic
+                        // lights sit in its band (#22 D24). Windows has no
+                        // lights to keep, so hiding its titlebar hides the
+                        // caption buttons too — `titlebar.rs` draws them back
+                        // into the same band, which is the whole point: one
+                        // band, not the system's bar above the app's.
                         titlebar: Some(TitlebarOptions {
                             title: Some("ferrite".into()),
-                            appears_transparent: cfg!(target_os = "macos"),
+                            appears_transparent: cfg!(target_os = "macos") || titlebar::CUSTOM,
                             traffic_light_position: Some(point(
                                 px(theme::TRAFFIC_X),
                                 px(theme::TRAFFIC_Y),

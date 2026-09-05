@@ -14,6 +14,9 @@ gpui = { package = "gpui-kit", version = "=0.6.0" }
 # own JSON. Already in the tree via ferrite-core.
 serde_json = { workspace = true }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_ProcessStatus", "Win32_System_Threading"] }
+
 [dev-dependencies]
 # The smoke render needs a window; gpui's own test harness provides a headless
 # one, so the app's rendering is exercised without a display.

@@ -202,8 +202,8 @@ pub const TABLE_RULE: u32 = 0x333333;
 /// state (its only `:active` is a 0.96 scale on the collapse button), so a
 /// future retune can split them without a rename.
 pub const PRESSED: u32 = FILL_HOVER;
-/// `#3a3a3a` — `--scrollbar`: the nav-tree and Pane-body thumb.
-#[allow(dead_code)]
+/// `#3a3a3a` — `--scrollbar`: the nav-tree and Pane-body thumb. Reaches
+/// the toolkit's scrollbar through `init_components`, not a call site.
 pub const SCROLLBAR: u32 = 0x3a3a3a;
 
 // ------------------------------------------------------------------- type
@@ -286,12 +286,37 @@ pub const TRAFFIC_RESERVE: f32 = 77.0;
 pub const TRAFFIC_X: f32 = 13.0;
 pub const TRAFFIC_Y: f32 = 14.0;
 
+/// The Windows caption buttons (`titlebar.rs`), which exist only where the
+/// app draws its own titlebar. 46px is the width Windows gives each of its
+/// own — the snap-layout flyout aligns to it, so a narrower button would
+/// hang the flyout off-centre — and they run the band's full 42px height,
+/// flush to the window's top-right corner.
+#[allow(dead_code)]
+pub const CAPTION_W: f32 = 46.0;
+/// 10px — the caption mark inside that button. Window chrome is smaller
+/// than UI: `ICON_BUTTON_GLYPH` at 16px would read as an app control.
+#[allow(dead_code)]
+pub const CAPTION_GLYPH: f32 = 10.0;
+/// 4px — the top edge a drag region leaves untagged, so the window can
+/// still be resized from its top border. `SM_CYFRAME` is 4 logical pixels,
+/// and gpui only reaches its own `HTTOP` fallback where no control area
+/// answered first: a drag region flush to y = 0 would eat the resize edge
+/// along the whole strip. A maximized window has no such edge and insets
+/// nothing.
+#[allow(dead_code)]
+pub const CAPTION_RESIZE_EDGE: f32 = 4.0;
+
 /// The Pane board: 8px gap on both axes, 10px padding on all four sides.
 /// (The prototype's own render reserves 58px at the bottom for its
 /// mode-switcher; that is prototype-only chrome and its `data-view="window"`
 /// rule restores 10px. Port 10px.)
 pub const GRID_GAP: f32 = 8.0;
 pub const GRID_PAD: f32 = 10.0;
+/// Where the board starts: under the titlebar band, then the same 10px it
+/// keeps on its other three sides. Flush to the band, a Pane's top-right
+/// corner sits directly beneath the caption buttons, and their hover face
+/// — edge-to-edge by design — reads as lying over the Pane.
+pub const BOARD_TOP: f32 = WIN_CHROME_H + GRID_PAD;
 
 // ---------------------------------------------------------- geometry: nav
 
@@ -529,11 +554,6 @@ pub const CHIP_PAD_X: f32 = 6.0;
 pub const CHIP_PAD_Y: f32 = 1.0;
 #[allow(dead_code)]
 pub const FILE_CHIP_GAP: f32 = 6.0;
-/// The hand-drawn scrollbar: a 3px thumb inside a 9px gutter.
-#[allow(dead_code)]
-pub const SCROLLBAR_W: f32 = 9.0;
-#[allow(dead_code)]
-pub const SCROLLBAR_THUMB_W: f32 = 3.0;
 
 // ------------------------------------- geometry: levels below L1 (unspecified)
 
@@ -643,7 +663,9 @@ pub fn init_components(cx: &mut gpui::App) {
     theme.input = rgb(RAISED).into();
     theme.switch = rgb(RAISED).into();
     theme.switch_thumb = rgb(TEXT_STRONG).into();
+    // No track: Soft draws no lines, so only the thumb is ever ink, and
+    // it lightens rather than darkens when the pointer takes hold of it.
     theme.scrollbar = rgba(TRANSPARENT).into();
-    theme.scrollbar_thumb = rgb(FILL).into();
-    theme.scrollbar_thumb_hover = rgb(HOVER).into();
+    theme.scrollbar_thumb = rgb(SCROLLBAR).into();
+    theme.scrollbar_thumb_hover = rgb(SEP).into();
 }

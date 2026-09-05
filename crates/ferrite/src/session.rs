@@ -3,7 +3,9 @@
 //! The scripted demo Sessions are their own adapter, in `crate::demo` —
 //! both hand the pump the same `Receiver<SessionEvent>`.
 
+use std::collections::{HashMap, HashSet};
 use std::io;
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
 use ferrite_core::cockpit::{RssSampler, SpawnRequest, Spawner};
@@ -62,6 +64,25 @@ impl Spawn {
 }
 
 impl Spawner for Spawn {
+    fn discover_models(
+        &mut self,
+    ) -> Option<std::sync::mpsc::Receiver<(Provider, Vec<ferrite_core::ModelInfo>)>> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::Builder::new()
+            .name("ferrite-model-discovery".into())
+            .spawn(move || {
+                let program = ferrite_core::providers::discover::program(Provider::Codex);
+                match ferrite_core::providers::codex_models(&program) {
+                    Ok(models) => {
+                        let _ = tx.send((Provider::Codex, models));
+                    }
+                    Err(error) => eprintln!("ferrite: could not discover Codex models: {error}"),
+                }
+            })
+            .ok()?;
+        Some(rx)
+    }
+
     fn spawn(&mut self, request: SpawnRequest) -> io::Result<Box<dyn Session>> {
         self.config(request)
             .spawn(self.defaults.clone())
@@ -209,12 +230,55 @@ impl Spawn {
 }
 
 /// Resident memory per Session, read the way the panes24 spike reads it.
-#[derive(Default)]
-pub struct ProcessRss;
+pub struct ProcessRss {
+    requests: Sender<u32>,
+    samples: Receiver<(u32, Option<u64>)>,
+    cached: HashMap<u32, u64>,
+    pending: HashSet<u32>,
+}
+
+impl Default for ProcessRss {
+    fn default() -> Self {
+        Self::with_sampler(rss_bytes)
+    }
+}
+
+impl ProcessRss {
+    fn with_sampler(sample: impl Fn(u32) -> Option<u64> + Send + 'static) -> Self {
+        let (request_tx, request_rx) = mpsc::channel();
+        let (sample_tx, sample_rx) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("ferrite-rss".into())
+            .spawn(move || {
+                while let Ok(pid) = request_rx.recv() {
+                    if sample_tx.send((pid, sample(pid))).is_err() {
+                        break;
+                    }
+                }
+            })
+            .expect("RSS sampler thread starts");
+        Self {
+            requests: request_tx,
+            samples: sample_rx,
+            cached: HashMap::new(),
+            pending: HashSet::new(),
+        }
+    }
+}
 
 impl RssSampler for ProcessRss {
     fn sample(&mut self, _thread: ThreadId, pid: Option<u32>) -> Option<u64> {
-        rss_bytes(pid?)
+        while let Ok((pid, rss)) = self.samples.try_recv() {
+            self.pending.remove(&pid);
+            if let Some(rss) = rss {
+                self.cached.insert(pid, rss);
+            }
+        }
+        let pid = pid?;
+        if self.pending.insert(pid) && self.requests.send(pid).is_err() {
+            self.pending.remove(&pid);
+        }
+        self.cached.get(&pid).copied()
     }
 }
 
@@ -229,26 +293,28 @@ pub(crate) fn rss_bytes(pid: u32) -> Option<u64> {
     Some(kilobytes * 1024)
 }
 
-/// One process's resident bytes. Windows has no `ps`; `tasklist` is the
-/// stock instrument, and its working-set column is also kilobytes.
+/// One process's resident bytes through the native Windows process API.
 #[cfg(windows)]
 pub(crate) fn rss_bytes(pid: u32) -> Option<u64> {
-    let out = std::process::Command::new("tasklist")
-        .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
-        .output()
-        .ok()?;
-    tasklist_rss(&String::from_utf8_lossy(&out.stdout))
-}
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::ProcessStatus::{
+        K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
+    };
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ,
+    };
 
-/// The memory column of one `tasklist` CSV row — the last quoted field,
-/// `"12,345 K"`. Digit grouping is locale-typed (`.` in German), so only the
-/// digits are read.
-#[cfg(any(windows, test))]
-fn tasklist_rss(row: &str) -> Option<u64> {
-    let field = row.trim().rsplit('"').nth(1)?;
-    let digits: String = field.chars().filter(char::is_ascii_digit).collect();
-    let kilobytes: u64 = digits.parse().ok()?;
-    Some(kilobytes * 1024)
+    unsafe {
+        let process = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, 0, pid);
+        if process.is_null() {
+            return None;
+        }
+        let mut counters: PROCESS_MEMORY_COUNTERS = std::mem::zeroed();
+        counters.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+        let ok = K32GetProcessMemoryInfo(process, &mut counters, counters.cb);
+        CloseHandle(process);
+        (ok != 0).then_some(counters.WorkingSetSize as u64)
+    }
 }
 
 #[cfg(test)]
@@ -348,14 +414,30 @@ mod tests {
     }
 
     #[test]
-    fn a_tasklist_row_yields_bytes_whatever_the_locale_groups_with() {
-        for row in [
-            "\"node.exe\",\"1234\",\"Console\",\"1\",\"54,321 K\"\r\n",
-            "\"node.exe\",\"1234\",\"Console\",\"1\",\"54.321 K\"",
-        ] {
-            assert_eq!(tasklist_rss(row), Some(54_321 * 1024), "{row:?}");
+    fn the_watchdog_never_waits_for_process_measurement() {
+        use std::time::{Duration, Instant};
+
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let mut sampler = ProcessRss::with_sampler(move |_| {
+            let _ = started_tx.send(());
+            let _ = release_rx.recv();
+            Some(42)
+        });
+
+        let before = Instant::now();
+        assert_eq!(sampler.sample(ThreadId::new(1), Some(7)), None);
+        assert!(before.elapsed() < Duration::from_millis(50));
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        release_tx.send(()).unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while Instant::now() < deadline {
+            if sampler.sample(ThreadId::new(1), Some(7)) == Some(42) {
+                return;
+            }
+            std::thread::yield_now();
         }
-        assert_eq!(tasklist_rss("INFO: No tasks are running.\r\n"), None);
-        assert_eq!(tasklist_rss(""), None);
+        panic!("background sample was not adopted");
     }
 }

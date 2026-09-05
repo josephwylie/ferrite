@@ -94,7 +94,7 @@ pub enum SessionEvent {
 /// One model a provider offers: the value its CLI accepts, and the name a
 /// person reads. The value is what goes on the wire (`--model sonnet`,
 /// `"model": "gpt-5.6"`); the display is what every chip and row shows.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ModelInfo {
     /// What the provider accepts as the model choice: an alias (`sonnet`,
     /// `opus[1m]`) or a full id (`claude-fable-5-1`, `gpt-5.6`).

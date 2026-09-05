@@ -97,9 +97,11 @@ pub struct CockpitView {
     /// Pane holds a Composer, this handle is what keeps the keyboard alive.
     focus: FocusHandle,
     perf: Option<Perf>,
-    /// When the watchdog last swept. Sweeping costs a `ps`/`tasklist` per
-    /// live Session, so it runs on its own slow cadence, never per frame.
+    /// When the watchdog last swept. Measurements are cached from the RSS
+    /// worker, so a sweep never waits for an operating-system query.
     swept: std::time::Instant,
+    /// One checkout-label refresh at a time, always off the UI thread.
+    branch_refreshing: bool,
     /// Stable text-run identities; selection itself belongs to GPUI.
     selection: TranscriptText,
     native_copy: Option<String>,
@@ -161,6 +163,11 @@ pub struct CockpitView {
     /// The Settings panel is up.
     settings_open: bool,
     settings_focus: FocusHandle,
+    /// Whether the window is maximized, read once per frame in `render`.
+    /// The nav's band is drawn without a `Window` in hand, and the two
+    /// halves of the titlebar have to agree: a maximized window has no top
+    /// resize edge for the drag regions to leave alone (`titlebar.rs`).
+    maximized: bool,
     /// The CLIs' versions as `--version` reports them, probed once when the
     /// panel first opens: (claude, codex).
     cli_versions: Option<(SharedString, SharedString)>,
@@ -442,6 +449,7 @@ impl std::ops::Deref for Row {
 
 /// What picking a row does. A command or a file lands in the line; every
 /// other pick is Ferrite's own act, never a prompt.
+#[derive(PartialEq)]
 enum Consequence {
     /// Replace the whole `/filter` with `/name ` — sent later as plain text
     /// on Claude and translated to the typed skill item inside the Codex
@@ -472,6 +480,7 @@ enum Consequence {
 }
 
 /// What picking a band row does to the focused draft.
+#[derive(PartialEq)]
 enum BandChoice {
     Provider(ProviderChoice),
     /// The effort chip: a rung, or None for the operator's default.
@@ -546,6 +555,7 @@ impl CockpitView {
                 since: std::time::Instant::now(),
             }),
             swept: std::time::Instant::now(),
+            branch_refreshing: false,
             selection: TranscriptText::default(),
             native_copy: None,
             nav_filter: None,
@@ -566,6 +576,7 @@ impl CockpitView {
             prefs,
             settings_open: false,
             settings_focus: cx.focus_handle(),
+            maximized: false,
             cli_versions: None,
             group_error: None,
             questions: std::collections::HashMap::new(),
@@ -716,6 +727,10 @@ impl CockpitView {
     /// changed are worth a repaint; a frame where nothing moved costs nothing.
     fn pump(&mut self, cx: &mut Context<Self>) {
         let frame = self.cockpit.pump();
+        let models_changed = self.cockpit.take_models_changed();
+        if models_changed {
+            self.refresh_model_picker(cx);
+        }
         let completions = self.cockpit.take_bootstrap_results();
         let startup_changed = !completions.is_empty();
         for completion in completions {
@@ -741,12 +756,18 @@ impl CockpitView {
                 restarted.push(restart.thread);
             }
             self.facts.tick(&self.cockpit);
+            self.refresh_branches(cx);
             branch_tick = true;
         }
         // A restart writes a Notice even when no Session streamed this frame —
         // and a failed respawn will never stream again, so this notify is that
         // notice's only ride to the screen.
-        if frame.is_empty() && restarted.is_empty() && !branch_tick && !startup_changed {
+        if frame.is_empty()
+            && restarted.is_empty()
+            && !branch_tick
+            && !startup_changed
+            && !models_changed
+        {
             return;
         }
         for update in &frame {
@@ -768,6 +789,50 @@ impl CockpitView {
             self.facts.acted(&self.cockpit, thread);
         }
         cx.notify();
+    }
+
+    /// Refresh checkout labels without ever waiting for Git in GPUI's pump.
+    fn refresh_branches(&mut self, cx: &mut Context<Self>) {
+        if self.branch_refreshing {
+            return;
+        }
+        let targets: Vec<_> = self
+            .cockpit
+            .threads()
+            .into_iter()
+            .filter_map(|thread| {
+                let open = self.cockpit.thread(thread)?;
+                let cwd = ferrite_core::workspace::effective_cwd(
+                    open.session_project_root(),
+                    open.workspace(),
+                )?;
+                Some((thread, cwd.to_path_buf()))
+            })
+            .collect();
+        if targets.is_empty() {
+            return;
+        }
+        self.branch_refreshing = true;
+        cx.spawn(async move |this, cx| {
+            let branches = cx
+                .background_executor()
+                .spawn(async move {
+                    targets
+                        .into_iter()
+                        .map(|(thread, cwd)| {
+                            (thread, ferrite_core::workspace::checkout_branch(&cwd))
+                        })
+                        .collect()
+                })
+                .await;
+            this.update(cx, |view, cx| {
+                view.branch_refreshing = false;
+                view.facts.set_branches(branches);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Transcript membership changes only through the pump. Prune stale
@@ -808,10 +873,22 @@ impl CockpitView {
         let width =
             (f32::from(viewport.width) - chrome) / layout.columns as f32 - crate::theme::GRID_GAP;
         let height =
-            (f32::from(viewport.height) - crate::theme::WIN_CHROME_H - crate::theme::GRID_PAD)
+            (f32::from(viewport.height) - crate::theme::BOARD_TOP - crate::theme::GRID_PAD)
                 / layout.rows as f32
                 - crate::theme::GRID_GAP;
         Cell::new(width.max(0.0), height.max(0.0))
+    }
+
+    /// Whether something floats over the cockpit: a menu, a popover, the
+    /// filter list or the Settings panel. The titlebar's drag region reads
+    /// it — a region that lies under an open overlay would answer Windows'
+    /// hit test as the window frame, and the row under the pointer would
+    /// never see the press (`titlebar.rs`).
+    fn overlay_open(&self) -> bool {
+        self.settings_open
+            || self.nav_filter_open
+            || self.popover.is_some()
+            || self.context_menu.is_some()
     }
 
     /// How much of the window the nav holds right now: the 208px column, or
@@ -839,14 +916,14 @@ impl CockpitView {
 
     /// The board the Panes lay out in, in window coordinates: right of the
     /// nav, inset by the grid padding.
-    /// The board starts under the titlebar band, the same `WIN_CHROME_H`
-    /// the nav reserves: with a transparent macOS titlebar AppKit still
+    /// The board starts under the titlebar band the nav also reserves,
+    /// plus its own padding (`BOARD_TOP`): with a transparent macOS titlebar AppKit still
     /// drags the window from that strip, and a Pane head drawn inside it
     /// could not be dragged onto another Pane — the window moved instead.
     fn board_bounds(&self, window: &Window) -> layout::Rect {
         let viewport = window.viewport_size();
         let pad = crate::theme::GRID_PAD;
-        let top = crate::theme::WIN_CHROME_H;
+        let top = crate::theme::BOARD_TOP;
         layout::Rect {
             x: self.nav_width() + pad,
             y: top,
@@ -3295,6 +3372,39 @@ impl CockpitView {
         }
     }
 
+    /// Discovery can finish while a picker is open. Rebuild its rows and
+    /// preserve the highlighted choice by value, even if row order changes.
+    fn refresh_model_picker(&mut self, cx: &mut Context<Self>) {
+        let Some(previous) = self.popover.take() else {
+            return;
+        };
+        match (&previous.kind, previous.pane) {
+            (Kind::Provider, PaneIdentity::Thread(thread)) => self.open_provider_picker(thread, cx),
+            (Kind::Effort, PaneIdentity::Thread(thread)) => self.open_effort_picker(thread, cx),
+            (
+                Kind::Band(chip @ (pane::BandChip::Provider | pane::BandChip::Effort)),
+                PaneIdentity::Draft(_),
+            ) => {
+                self.open_band_popover(*chip, cx);
+            }
+            _ => {
+                self.popover = Some(previous);
+                return;
+            }
+        }
+        if let (Some(open), Some(selected)) =
+            (&mut self.popover, previous.rows.get(previous.selected))
+        {
+            if let Some(index) = open
+                .rows
+                .iter()
+                .position(|row| row.consequence == selected.consequence)
+            {
+                open.selected = index;
+            }
+        }
+    }
+
     /// Stop the submitted startup before Escape or a choice changes its draft.
     fn cancel_focused_draft_start(&mut self) -> bool {
         let Some(id) = self
@@ -4325,6 +4435,7 @@ impl Render for CockpitView {
                 .to_string();
             self.native_copy = (!copied.is_empty()).then_some(copied);
         }
+        self.maximized = window.is_maximized();
         // The fullscreened Pane, if the roster still shows it: a Pane gone
         // by any path is the roster's to notice, and it falls back to the
         // grid — never a blank cockpit.
@@ -4490,8 +4601,9 @@ impl Render for CockpitView {
                 .min_h_0()
                 .gap(px(crate::theme::GRID_GAP))
                 .p(px(crate::theme::GRID_PAD))
-                // The titlebar band stays the window's own drag strip.
-                .pt(px(crate::theme::WIN_CHROME_H))
+                // The titlebar band stays the window's own drag strip, and
+                // the board keeps its own padding under it (`BOARD_TOP`).
+                .pt(px(crate::theme::BOARD_TOP))
         };
         let visible = self.visible_indices();
         let layout = self.cockpit.layout();
@@ -4542,6 +4654,9 @@ impl Render for CockpitView {
         div()
             .flex()
             .flex_row()
+            // `relative`, so the titlebar strip below can lie over the band
+            // the board reserves rather than take a row of its own.
+            .relative()
             .size_full()
             .bg(rgb(crate::theme::GROUND))
             .font_family(crate::theme::FONT_UI)
@@ -4673,6 +4788,18 @@ impl Render for CockpitView {
             .on_action(cx.listener(Self::open_settings))
             .child(self.nav(cx))
             .child(grid)
+            // The window's own titlebar, where the platform makes the app
+            // draw one. It is the last thing over the band and the first
+            // thing under a menu: an overlay that reached into the band
+            // would be answering the frame's hit test, not its own rows, so
+            // the drag region stands down while one is open.
+            .when(crate::titlebar::CUSTOM, |root| {
+                root.child(crate::titlebar::strip(
+                    self.nav_width(),
+                    !self.overlay_open(),
+                    self.maximized,
+                ))
+            })
             .children(self.context_menu_element(cx))
             .children(self.context_usage_element(cx))
             .children(self.settings_element(cx))
@@ -5588,9 +5715,15 @@ impl CockpitView {
                 }),
             ));
         // The gear sits hard right of the band; folded, it stacks under
-        // the collapse button.
+        // the collapse button. The stretch between the two is the window's
+        // where the app draws its own titlebar: the band reads as a
+        // titlebar, so it drags like one (`titlebar.rs`).
         if !state.collapsed {
-            chrome = chrome.child(div().flex_1());
+            chrome = chrome.child(if crate::titlebar::CUSTOM {
+                crate::titlebar::drag_region("nav-chrome-drag", self.maximized)
+            } else {
+                div().flex_1()
+            });
         }
         chrome = chrome.child(gear);
         let column = nav::shell(state.collapsed).child(chrome);
@@ -6056,6 +6189,7 @@ mod tests {
 
     #[derive(Clone, Default)]
     struct Fake {
+        model_discovery: Rc<RefCell<Option<Receiver<(Provider, Vec<ferrite_core::ModelInfo>)>>>>,
         streams: Rc<RefCell<Vec<Sender<SessionEvent>>>>,
         /// Every spawn's choice, in call order — what the provider-picker
         /// tests read back (#25).
@@ -6069,6 +6203,12 @@ mod tests {
     }
 
     impl Spawner for Fake {
+        fn discover_models(
+            &mut self,
+        ) -> Option<Receiver<(Provider, Vec<ferrite_core::ModelInfo>)>> {
+            self.model_discovery.borrow_mut().take()
+        }
+
         fn spawn(
             &mut self,
             request: ferrite_core::cockpit::SpawnRequest,
@@ -7676,6 +7816,17 @@ mod tests {
             view.swept = std::time::Instant::now() - SWEEP_INTERVAL;
             view.pump(cx);
         });
+        view.read_with(cx, |view, _| {
+            assert_eq!(
+                view.facts
+                    .get(thread)
+                    .and_then(|facts| facts.branch.as_ref())
+                    .map(|branch| branch.to_string()),
+                Some(expected),
+                "the pump returns before the background Git refresh"
+            );
+        });
+        cx.run_until_parked();
         view.read_with(cx, |view, _| {
             assert_eq!(
                 view.facts
@@ -10529,6 +10680,91 @@ mod tests {
 
     // ------------------------------------------------- Provider choice (#25)
 
+    #[gpui::test]
+    fn discovery_updates_an_open_draft_picker_without_starting_a_session(cx: &mut TestAppContext) {
+        let fake = Fake::default();
+        let (tx, rx) = mpsc::channel();
+        *fake.model_discovery.borrow_mut() = Some(rx);
+        let core = Cockpit::new(
+            Store::open(scratch("discovered-models")).unwrap(),
+            Box::new(fake.clone()),
+        );
+        bind_production_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        tick(cx);
+        view.update(cx, |view, cx| {
+            view.open_band_popover(pane::BandChip::Provider, cx)
+        });
+        let models = vec![ferrite_core::ModelInfo {
+            value: "gpt-future-model".into(),
+            display: "Future Model".into(),
+            detail: "Discovered, never bundled".into(),
+            resolved: None,
+            efforts: vec!["medium".into(), "ultra".into()],
+            default_effort: Some("medium".into()),
+        }];
+        tx.send((Provider::Codex, models.clone())).unwrap();
+        tick(cx);
+        let index = view.read_with(cx, |view, _| {
+            assert_eq!(view.cockpit.model_catalog(Provider::Codex), models);
+            view.popover
+                .as_ref()
+                .unwrap()
+                .rows
+                .iter()
+                .position(|row| row.name.as_ref() == "Future Model")
+                .expect("the open picker updates when discovery arrives")
+        });
+        assert!(
+            fake.spawned.borrow().is_empty(),
+            "discovery creates no Session"
+        );
+        view.update(cx, |view, cx| view.pick(index, cx));
+        view.read_with(cx, |view, _| {
+            assert_eq!(
+                view.panes[0]
+                    .draft()
+                    .unwrap()
+                    .binding
+                    .provider()
+                    .model
+                    .as_deref(),
+                Some("gpt-future-model")
+            );
+            assert!(view.cockpit.threads().is_empty());
+        });
+        assert!(
+            fake.spawned.borrow().is_empty(),
+            "choosing a model creates no Session"
+        );
+        tx.send((Provider::Codex, Vec::new())).unwrap();
+        drop(tx);
+        tick(cx);
+        view.update(cx, |view, cx| {
+            assert_eq!(
+                view.cockpit.model_catalog(Provider::Codex),
+                models,
+                "an empty discovery keeps the last usable menu"
+            );
+            view.settings_open = true;
+            cx.notify();
+        });
+        tick(cx);
+        let choice = cx
+            .debug_bounds("settings-codex-model-0")
+            .expect("Settings renders the discovered model")
+            .center();
+        cx.simulate_click(choice, gpui::Modifiers::none());
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert_eq!(
+                view.prefs.settings.codex_model.as_deref(),
+                Some("gpt-future-model")
+            );
+        });
+    }
+
     /// #25 AC: the keyboard-only path. `/` lists the local provider row on
     /// top; ↵ opens the picker — the two Providers with the ✓ on the
     /// current one, and no invented model rows before an announcement —
@@ -10697,7 +10933,9 @@ mod tests {
     }
 
     #[gpui::test]
-    fn a_draft_inherits_the_focused_provider_model_and_only_live_models(cx: &mut TestAppContext) {
+    fn a_draft_inherits_the_focused_provider_model_and_only_announced_models(
+        cx: &mut TestAppContext,
+    ) {
         let (core, fake) = cockpit("draft-provider-choice", 2);
         bind_production_keys(cx);
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -10886,7 +11124,11 @@ mod tests {
                 .iter()
                 .position(|row| row.active)
                 .expect("✓ on the choice");
-            assert_eq!(picker.rows[standing].name.as_ref(), "Opus 5");
+            assert_eq!(
+                picker.rows[standing].name.as_ref(),
+                "Opus",
+                "the learned provider label survives the Session replacement"
+            );
             assert_eq!(picker.selected, standing);
         });
         cx.simulate_keystrokes("enter");

@@ -36,6 +36,7 @@ use std::{
     rc::Rc,
 };
 
+use crate::components;
 use crate::composer::Composer;
 use crate::icons::{self, icon};
 use crate::pointer::{Pointer, PointerPressed};
@@ -572,15 +573,18 @@ pub fn render_pane(
             if let Some(todos) = transcript.todos() {
                 pane = pane.child(tasks_strip(todos, transcript.current_task()));
             }
-            pane = pane.child(body(
+            pane = pane.child(scrollback(
                 view,
-                transcript,
-                focused,
-                level,
-                &selection,
-                timings,
-                &mut tool_controls,
-                thread.map(|thread| thread.provider()),
+                body(
+                    view,
+                    transcript,
+                    focused,
+                    level,
+                    &selection,
+                    timings,
+                    &mut tool_controls,
+                    thread.map(|thread| thread.provider()),
+                ),
             ));
             // The Decision card is a **sibling of the body**, not a child
             // of the Composer (§D.5): its `margin: 0 12px 8px` is measured
@@ -1608,6 +1612,65 @@ pub fn rendered_output_tools(blocks: &[Block], level: Level) -> impl Iterator<It
             }
         }
     })
+}
+
+/// A scrollbar gesture owns the viewport until it reaches the tail again.
+/// Keep this on the handle so both dragging and track clicks agree with the wheel.
+#[derive(Clone)]
+struct TranscriptScrollbar {
+    scroll: ScrollHandle,
+    follow_tail: Rc<Flag<bool>>,
+}
+
+impl gpui::base::ScrollbarHandle for TranscriptScrollbar {
+    fn viewport_bounds(&self) -> gpui::Bounds<gpui::Pixels> {
+        self.scroll.bounds()
+    }
+
+    fn offset(&self) -> gpui::Point<gpui::Pixels> {
+        self.scroll.offset()
+    }
+
+    fn set_offset(&self, offset: gpui::Point<gpui::Pixels>) {
+        self.follow_tail
+            .set(self.scroll.max_offset().y + offset.y <= px(2.));
+        self.scroll.set_offset(offset);
+    }
+
+    fn content_size(&self) -> gpui::Size<gpui::Pixels> {
+        (self.scroll.max_offset() + self.scroll.bounds().size.into()).into()
+    }
+
+    fn start_drag(&self) {
+        self.follow_tail.set(false);
+    }
+
+    fn end_drag(&self) {
+        self.follow_tail
+            .set(self.scroll.max_offset().y + self.scroll.offset().y <= px(2.));
+    }
+}
+
+/// The scrollback and its bar. The bar is a *sibling* of the scrolling
+/// body inside this one `relative()` parent — as a child it would scroll
+/// away with the transcript — and it is keyed by Thread, because each open
+/// Pane drags, hovers and fades its own.
+fn scrollback(view: &PaneView, body: impl IntoElement) -> Div {
+    let thread = view.thread().map(|thread| thread.get()).unwrap_or(0);
+    div()
+        .relative()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_h_0()
+        .child(body)
+        .child(components::scrollbar(
+            ("transcript-scrollbar", thread as usize),
+            &TranscriptScrollbar {
+                scroll: view.scroll.clone(),
+                follow_tail: view.follow_tail.clone(),
+            },
+        ))
 }
 
 fn body(
