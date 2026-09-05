@@ -8665,6 +8665,39 @@ mod tests {
         assert_eq!(clipboard(cx).as_deref(), Some("kept"));
     }
 
+    /// A native window resize can consume the pointer release after its
+    /// initial press reached the window. Once the pointer reports that no
+    /// button is held, transcript selection must not keep following it.
+    #[gpui::test]
+    fn resizing_the_window_cannot_leave_text_selection_dragging(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("resize-selection", 1);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TextDelta {
+                text: "alpha\n\nbravo\n\ncharlie\n\n".into(),
+            })
+            .unwrap();
+        tick(cx);
+
+        let over_text = caret(&view, cx, 1, 3);
+        let resize_edge = gpui::point(px(999.), over_text.y);
+        cx.simulate_mouse_down(
+            resize_edge,
+            gpui::MouseButton::Left,
+            gpui::Modifiers::none(),
+        );
+        cx.simulate_resize(gpui::size(px(900.), px(700.)));
+        cx.simulate_mouse_move(over_text, None, gpui::Modifiers::none());
+
+        cx.update(|window, cx| {
+            assert!(
+                !gpui::base::TextSelection::has_selection(window, cx),
+                "a lost resize release must not turn later pointer motion into selection"
+            );
+        });
+    }
+
     #[gpui::test]
     fn a_plain_transcript_click_does_not_move_the_viewport(cx: &mut TestAppContext) {
         let (core, fake) = cockpit("click-keeps-scroll", 1);
