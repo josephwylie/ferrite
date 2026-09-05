@@ -159,6 +159,7 @@ pub use claude::{
     ClaudeCapabilities, ClaudeConfig, ClaudeSession, ClaudeSpawnError,
     CLAUDE_CLI_MAX_VERSION_EXCLUSIVE, CLAUDE_CLI_MIN_VERSION,
 };
+pub use codex::catalog::list as codex_models;
 pub use codex::title as codex_title;
 pub use codex::{
     CodexCapabilities, CodexConfig, CodexSession, CodexSpawnError, CODEX_CLI_MAX_VERSION_EXCLUSIVE,

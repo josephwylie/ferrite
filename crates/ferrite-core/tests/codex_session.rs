@@ -922,6 +922,89 @@ fn the_model_list_is_announced_on_the_event_stream() {
     assert_eq!(models[0].default_effort.as_deref(), Some("low"));
 }
 
+/// Captured from Codex 0.153.4 with initialize + model/list, without a
+/// turn. A newly announced model reaches the picker without a whitelist.
+#[test]
+fn astra_from_the_installed_cli_reaches_the_model_picker() {
+    let program = stub(
+        "codex-astra-models",
+        &format!(
+            "{PRELUDE}\ncat '{}'\nexec cat > /dev/null",
+            fixture("models-0.153.4").display()
+        ),
+    );
+    let session = CodexSession::spawn(config(program)).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let announced = loop {
+        match session
+            .events()
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        {
+            Ok(SessionEvent::Models { models }) => break models,
+            Ok(SessionEvent::Init { .. }) => continue,
+            other => panic!("expected a model announcement: {other:?}"),
+        }
+    };
+    let rows =
+        ferrite_core::providers::models::catalog(ferrite_core::store::Provider::Codex, &announced);
+    assert_eq!(rows, announced, "the provider's list wins in full");
+    let astra = &rows[0];
+    assert_eq!(astra.value, "gpt-6-astra");
+    assert_eq!(astra.display, "GPT-6 Astra");
+    assert_eq!(
+        astra.detail,
+        "Our most capable model for complex, demanding work."
+    );
+    assert_eq!(
+        astra.efforts,
+        ["low", "medium", "high", "xhigh", "max", "ultra"]
+    );
+    assert_eq!(astra.default_effort.as_deref(), Some("medium"));
+    assert!(rows.iter().any(|row| row.value == "gpt-5.3-codex-spark"));
+    assert!(!rows.iter().any(|row| row.value == "gpt-5.4"));
+}
+
+#[test]
+fn model_discovery_asks_the_cli_without_creating_a_thread() {
+    let log = log_path("model-discovery.log");
+    let _ = fs::remove_file(&log);
+    let mut captured: Value =
+        serde_json::from_str(&fs::read_to_string(fixture("models-0.153.4")).unwrap()).unwrap();
+    captured["id"] = serde_json::json!(2);
+    let program = stub(
+        "codex-model-discovery",
+        &format!(
+            r#"{VERSION_CASE}
+while read -r line; do
+  echo "$line" >> '{}'
+  case "$line" in
+    *'"method":"initialize"'*) echo '{{"id":1,"result":{{}}}}';;
+    *'"method":"model/list"'*) cat <<'MODELS'
+{captured}
+MODELS
+    ;;
+  esac
+done"#,
+            log.display()
+        ),
+    );
+    let rows = ferrite_core::providers::codex_models(&program).unwrap();
+    assert_eq!(rows[0].value, "gpt-6-astra");
+    assert_eq!(rows[0].default_effort.as_deref(), Some("medium"));
+    let messages: Vec<Value> = fs::read_to_string(log)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(
+        messages
+            .iter()
+            .map(|message| message["method"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["initialize", "initialized", "model/list"]
+    );
+}
+
 /// A resume preserves the CLI default; the next turn carries Ferrite's effort.
 #[test]
 fn a_resumed_session_passes_effort_on_its_next_turn() {

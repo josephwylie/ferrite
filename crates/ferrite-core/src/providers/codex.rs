@@ -10,6 +10,7 @@
 //! full the reader blocks, the pipe fills, and the server stalls — nothing is
 //! dropped.
 
+pub(super) mod catalog;
 mod wire;
 
 use std::io::{self, BufRead, BufReader, Write};
