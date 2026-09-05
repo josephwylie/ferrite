@@ -13,6 +13,7 @@ mod nav;
 mod pane;
 mod pointer;
 mod prefs;
+mod scrollbar;
 mod select;
 mod session;
 mod shell;
