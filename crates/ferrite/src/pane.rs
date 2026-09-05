@@ -21,7 +21,7 @@ use ferrite_core::transcript::{
     Block, BlockId, Body, Class, Diff, Span, Status, Style, Todos, Token, ToolActivity, ToolBlock,
     ToolState, Transcript,
 };
-use ferrite_core::workspace::WorkspaceBinding;
+use ferrite_core::workspace::{BranchStatus, CheckState, PrState, WorkspaceBinding};
 use ferrite_core::{Decision, ThreadId};
 use gpui::prelude::*;
 use gpui::{
@@ -47,7 +47,8 @@ use crate::theme;
 use crate::theme::{
     ATTENTION, ATTENTION_EDGE, ATTENTION_WASH, BLOCKED, BLOCKED_WASH, DIFF_ADDED_INK,
     DIFF_REMOVED_INK, FOCUS, HOVER, IDLE, INLINE_CODE_INK, LINK_INK, METER_OFF, PANE,
-    PROMPT_WASH_CLAUDE, PROMPT_WASH_CODEX, PROVIDER_CLAUDE, PROVIDER_CODEX, RAISED, RUNNING,
+    PANE_HEAD, PANE_HEAD_EDGE, PROMPT_WASH_CLAUDE, PROMPT_WASH_CODEX, PROVIDER_CLAUDE,
+    PROVIDER_CODEX, RAISED, RUNNING,
     RUNNING_WASH, SELECTION, SEP, SYN_KEYWORD, SYN_NUMBER, SYN_STRING, TEXT, TEXT_2, TEXT_MUTED,
     TEXT_STRONG, TRANSPARENT,
 };
@@ -463,6 +464,12 @@ pub struct PaneFacts<'a> {
     /// header's binding slot. Display-only, never a control: post-lock the
     /// CWD is immutable, and nothing may look otherwise.
     pub branch: Option<SharedString>,
+    /// What the header's second line says about that checkout (#29): its
+    /// drift from the upstream, its dirt, and its PR and CI when `gh` can
+    /// answer. Cached on the same cadence as `branch`; `None` draws the
+    /// line away entirely rather than claiming a clean tree it has not
+    /// read.
+    pub checkout: Option<&'a BranchStatus>,
     /// Whether the Composer line is empty — what decides the idle
     /// placeholder, read where the cockpit has a `cx` to read it with.
     pub composer_empty: bool,
@@ -640,6 +647,7 @@ pub fn render_pane(
     let PaneFacts {
         thread,
         branch,
+        checkout,
         composer_empty,
         history_available,
         focused,
@@ -768,6 +776,7 @@ pub fn render_pane(
     let mut pane = shell.child(pane_head(
         view,
         branch.as_ref(),
+        checkout,
         status,
         title,
         agents,
@@ -989,7 +998,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
 
     focus_wrapper(
         shell
-            .child(pane_head(view, None, None, None, None, None))
+            .child(pane_head(view, None, None, None, None, None, None))
             .child(div().flex().flex_1().min_h_0())
             .child(composer_region(
                 view,
@@ -1578,15 +1587,20 @@ fn l2_decision_body(decision: &Decision, decide: Option<AnyElement>) -> Div {
 
 // ---------------------------------------------------------------- L1 pane
 
-/// The Pane head (§D.2): 32px, 12px inline padding, an 8px gap, muted ink.
-/// Status dot · Thread id · checkout. No background, no border, and **no
-/// rule beneath it** —
-/// Soft separates by fill contrast alone. There is no model chip here (the
-/// Composer's picker is the only model surface) and no window controls
-/// (park and zoom stay on the keyboard).
+/// The Pane head (§D.2): a banded header on its own `--pane-head` ground,
+/// closed by a single hairline. Its first line is 32px — status dot ·
+/// Thread id · agents · attention — and beneath it, when the checkout is
+/// known, a 20px line saying where the work is: the branch, its drift from
+/// its upstream, its dirt, and its PR and CI. The band is chrome; the
+/// hairline is the one rule Soft draws inside a Pane, and it earns its
+/// place by separating two header lines from the transcript below.
+///
+/// There is no model chip here (the Composer's picker is the only model
+/// surface) and no window controls (park and zoom stay on the keyboard).
 fn pane_head(
     view: &PaneView,
     branch: Option<&SharedString>,
+    checkout: Option<&BranchStatus>,
     status: Option<Status>,
     title: Option<AnyElement>,
     agents: Option<AnyElement>,
@@ -1602,7 +1616,7 @@ fn pane_head(
         _ => TEXT_MUTED,
     };
     let has_agents = agents.is_some();
-    let mut head = div()
+    let mut top = div()
         .flex()
         .flex_shrink_0()
         .items_center()
@@ -1631,33 +1645,132 @@ fn pane_head(
                     None => div().truncate().child(view.name.clone()).into_any_element(),
                 }),
         );
-    // The checkout slot (#29): the branch mark and the cached branch name.
-    // Pure text — no hover, no click target: the CWD is immutable once the
-    // Thread runs and the head must never look otherwise. No `·` seam
-    // before it; the 8px gap is the whole separation.
-    if let Some(branch) = branch {
-        head = head.child(
+    if let Some(agents) = agents {
+        top = top.child(agents);
+    }
+    if let Some(attention) = attention {
+        top = top.child(attention);
+    }
+    // The checkout keeps its own line now, so the title line no longer
+    // has to share its width with a branch name.
+    let checkout_line = checkout_strip(checkout, branch);
+    div()
+        .flex()
+        .flex_col()
+        .flex_shrink_0()
+        .bg(rgb(PANE_HEAD))
+        .border_b_1()
+        .border_color(rgba(PANE_HEAD_EDGE))
+        .child(top)
+        .children(checkout_line)
+}
+
+/// The header's second line (#29): the branch mark and name, then only
+/// what is actually true of it — `↑2 ↓1` against its upstream, `3±` of
+/// working-tree dirt, its PR by number, and its CI rollup. Pure text and
+/// dots: no hover, no click target. A branch with no upstream simply has
+/// no drift marks, and a checkout with no PR says nothing about one —
+/// silence here always means unknown or absent, never "fine".
+fn checkout_strip(checkout: Option<&BranchStatus>, branch: Option<&SharedString>) -> Option<Div> {
+    // A branch label with no status behind it still deserves the line: the
+    // first refresh has simply not landed yet.
+    let name: SharedString = match (checkout.and_then(|status| status.branch.as_ref()), branch) {
+        (Some(name), _) => SharedString::from(name.clone()),
+        (None, Some(name)) => name.clone(),
+        (None, None) => return None,
+    };
+    let mut strip = div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(theme::CHECKOUT_GAP))
+        .h(px(theme::PANE_CHECKOUT_H))
+        .px(px(theme::PANE_PAD_X))
+        .pb(px(2.))
+        .text_size(px(theme::FS_MONO))
+        .line_height(relative(theme::LINE_UI))
+        .text_color(rgb(TEXT_MUTED))
+        .child(
             div()
                 .flex()
                 .min_w_0()
+                .flex_shrink(1.)
                 .items_center()
                 .gap(px(theme::ROW_ICON_GAP))
-                .when(has_agents, |branch| branch.max_w(relative(0.20)))
-                .text_size(px(theme::FS_MONO))
-                .line_height(relative(theme::LINE_UI))
                 .child(icon(icons::BRANCH, theme::ROW_ICON, TEXT_MUTED))
-                // Same one-pixel lift as the Thread id; the mark keeps its
-                // own centring.
-                .child(div().min_w_0().truncate().pb(px(2.)).child(branch.clone())),
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(rgb(TEXT_2))
+                        .child(name),
+                ),
         );
+    let Some(status) = checkout else {
+        return Some(strip);
+    };
+    // Drift, only where there is an upstream to drift from.
+    if status.ahead > 0 || status.behind > 0 {
+        let mut drift = div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(px(theme::ROW_ICON_GAP));
+        if status.ahead > 0 {
+            drift = drift.child(mark(format!("↑{}", status.ahead), TEXT_2));
+        }
+        if status.behind > 0 {
+            drift = drift.child(mark(format!("↓{}", status.behind), ATTENTION));
+        }
+        strip = strip.child(drift);
     }
-    if let Some(agents) = agents {
-        head = head.child(agents);
+    if status.dirty > 0 {
+        strip = strip.child(mark(format!("{}±", status.dirty), ATTENTION));
     }
-    if let Some(attention) = attention {
-        head = head.child(attention);
+    // The PR, by number, in the ink of what became of it — and its checks
+    // as a dot beside it, because a rollup is a state, not a count.
+    if let Some(pr) = &status.pr {
+        let ink = match (pr.state, pr.draft) {
+            (PrState::Merged, _) => TEXT_2,
+            (PrState::Closed, _) => BLOCKED,
+            (PrState::Open, true) => TEXT_MUTED,
+            (PrState::Open, false) => RUNNING,
+        };
+        let label = match (pr.state, pr.draft) {
+            (PrState::Merged, _) => format!("#{} merged", pr.number),
+            (PrState::Closed, _) => format!("#{} closed", pr.number),
+            (PrState::Open, true) => format!("#{} draft", pr.number),
+            (PrState::Open, false) => format!("#{}", pr.number),
+        };
+        strip = strip.child(mark(label, ink));
+        if let Some(checks) = pr.checks {
+            let (ink, word) = match checks {
+                CheckState::Passing => (RUNNING, "ci"),
+                CheckState::Failing => (BLOCKED, "ci"),
+                CheckState::Pending => (ATTENTION, "ci"),
+            };
+            strip = strip.child(
+                div()
+                    .flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .gap(px(theme::ROW_ICON_GAP))
+                    .child(led(px(theme::STATUS_DOT), ink))
+                    .child(div().text_color(rgb(ink)).child(word)),
+            );
+        }
     }
-    head
+    Some(strip)
+}
+
+/// One mark on the checkout line: a short run in its own ink that never
+/// shrinks — these are the facts the line exists to carry, and the branch
+/// name is what gives way when the Pane is narrow.
+fn mark(text: String, ink: u32) -> Div {
+    div()
+        .flex_shrink_0()
+        .text_color(rgb(ink))
+        .child(SharedString::from(text))
 }
 
 /// The head's title, saying it can be renamed: the name in its own ink

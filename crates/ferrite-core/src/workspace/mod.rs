@@ -15,7 +15,10 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::collections::HashMap;
 use std::process::Command;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 pub mod registry;
 
@@ -274,6 +277,203 @@ pub fn checkout_branch(cwd: &Path) -> Option<String> {
     (!head.is_empty()).then(|| head.to_string())
 }
 
+/// How far a checkout has drifted, and what the forge says about it — the
+/// Pane header's second line (#29). Every field is `Option`-ish in spirit:
+/// a tree with no upstream reports no ahead/behind, and a repo with no
+/// `gh` (or no PR) reports no PR. Nothing here is invented.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BranchStatus {
+    /// The branch by name, or a short commit id on a detached HEAD.
+    pub branch: Option<String>,
+    /// The upstream this branch tracks, when it has one.
+    pub upstream: Option<String>,
+    /// Commits ahead of / behind the upstream. Both zero without one.
+    pub ahead: u32,
+    pub behind: u32,
+    /// Working-tree entries `git status --porcelain` lists — modified,
+    /// staged and untracked alike. Zero is a clean tree.
+    pub dirty: u32,
+    /// What `gh` says about the branch's pull request, when `gh` is
+    /// installed, authenticated, and the branch has one.
+    pub pr: Option<PullRequest>,
+}
+
+/// The branch's pull request, as the forge reports it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PullRequest {
+    pub number: u64,
+    pub state: PrState,
+    pub draft: bool,
+    /// The rollup of the PR's checks. `None` when the PR has no checks at
+    /// all — an honest silence, not a pass.
+    pub checks: Option<CheckState>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrState {
+    Open,
+    Merged,
+    Closed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckState {
+    Passing,
+    Failing,
+    Pending,
+}
+
+/// Read the checkout's drift and its PR in one place, off the UI thread.
+/// One `git status --porcelain=v2 --branch` answers branch, upstream,
+/// ahead/behind and dirt together; `gh` is asked separately and its
+/// absence costs only the failed spawn. `None` where `cwd` is not a
+/// checkout at all.
+pub fn branch_status(cwd: &Path) -> Option<BranchStatus> {
+    let listed = git(cwd, &["status", "--porcelain=v2", "--branch"]).ok()?;
+    let mut status = BranchStatus::default();
+    for line in listed.lines() {
+        if let Some(head) = line.strip_prefix("# branch.head ") {
+            let head = head.trim();
+            if head != "(detached)" {
+                status.branch = Some(head.to_string());
+            }
+        } else if let Some(upstream) = line.strip_prefix("# branch.upstream ") {
+            status.upstream = Some(upstream.trim().to_string());
+        } else if let Some(ab) = line.strip_prefix("# branch.ab ") {
+            let mut counts = ab.split_whitespace();
+            status.ahead = counts.next().and_then(parse_signed).unwrap_or(0);
+            status.behind = counts.next().and_then(parse_signed).unwrap_or(0);
+        } else if !line.starts_with('#') && !line.trim().is_empty() {
+            status.dirty += 1;
+        }
+    }
+    if status.branch.is_none() {
+        // Detached HEAD: the short commit id is the honest name.
+        status.branch = git(cwd, &["rev-parse", "--short", "HEAD"])
+            .ok()
+            .map(|head| head.trim().to_string())
+            .filter(|head| !head.is_empty());
+    }
+    status.pr = cached_pull_request(cwd);
+    Some(status)
+}
+
+/// `+3` / `-0` as git writes them in porcelain v2.
+fn parse_signed(token: &str) -> Option<u32> {
+    token
+        .trim_start_matches(['+', '-'])
+        .parse::<u32>()
+        .ok()
+}
+
+/// How long a PR reading is reused before `gh` is asked again. The branch
+/// half of the status is local git and rides the caller's own cadence; the
+/// PR half crosses the network, so it gets its own, far slower one. A
+/// header that is a minute stale about CI is right; one that spawns `gh`
+/// every couple of seconds per Thread is not.
+const PR_TTL: Duration = Duration::from_secs(60);
+
+/// The last PR reading per checkout, with when it was taken. Keyed by cwd
+/// because that is what the caller has; a worktree and its repo are
+/// different branches and so different answers.
+static PR_CACHE: Mutex<Option<HashMap<PathBuf, (Instant, Option<PullRequest>)>>> =
+    Mutex::new(None);
+
+/// The branch's PR, from cache while it is fresh and from `gh` when it is
+/// not.
+fn cached_pull_request(cwd: &Path) -> Option<PullRequest> {
+    let mut guard = PR_CACHE.lock().ok()?;
+    let cache = guard.get_or_insert_with(HashMap::new);
+    if let Some((taken, pr)) = cache.get(cwd) {
+        if taken.elapsed() < PR_TTL {
+            return pr.clone();
+        }
+    }
+    // Held across the call on purpose: several Threads in one worktree ask
+    // together on the tick, and one `gh` for them is the whole point.
+    let pr = pull_request(cwd);
+    cache.insert(cwd.to_path_buf(), (Instant::now(), pr.clone()));
+    pr
+}
+
+/// The branch's PR through `gh`. Every failure — no `gh`, not logged in,
+/// not a GitHub remote, no PR for this branch — is the same answer: the
+/// header says nothing about a PR.
+fn pull_request(cwd: &Path) -> Option<PullRequest> {
+    let output = Command::new("gh")
+        .args([
+            "pr",
+            "view",
+            "--json",
+            "number,state,isDraft,statusCheckRollup",
+        ])
+        .current_dir(cwd)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let body = String::from_utf8_lossy(&output.stdout);
+    parse_pr_json(&body)
+}
+
+/// Pull the four fields the header needs out of `gh`'s JSON without taking
+/// a JSON dependency into this crate: the shapes are flat and fixed, and a
+/// field we cannot read is simply one the header does not claim.
+fn parse_pr_json(body: &str) -> Option<PullRequest> {
+    let number = json_number(body, "number")?;
+    let state = match json_string(body, "state")?.as_str() {
+        "MERGED" => PrState::Merged,
+        "CLOSED" => PrState::Closed,
+        _ => PrState::Open,
+    };
+    let draft = body.contains("\"isDraft\":true");
+    let rollup = body
+        .split_once("\"statusCheckRollup\":")
+        .map(|(_, rest)| rest)
+        .unwrap_or("");
+    let checks = if rollup.starts_with("[]") || rollup.starts_with("null") {
+        None
+    } else {
+        Some(rollup_state(rollup))
+    };
+    Some(PullRequest {
+        number,
+        state,
+        draft,
+        checks,
+    })
+}
+
+/// A check rollup reads worst-first: any failure fails, any unfinished run
+/// is pending, and only an all-clear passes.
+fn rollup_state(rollup: &str) -> CheckState {
+    let failing = ["\"FAILURE\"", "\"TIMED_OUT\"", "\"ERROR\"", "\"CANCELLED\"", "\"ACTION_REQUIRED\""];
+    if failing.iter().any(|word| rollup.contains(word)) {
+        return CheckState::Failing;
+    }
+    if rollup.contains("\"IN_PROGRESS\"")
+        || rollup.contains("\"QUEUED\"")
+        || rollup.contains("\"PENDING\"")
+        || rollup.contains("\"WAITING\"")
+        || rollup.contains("\"REQUESTED\"")
+    {
+        return CheckState::Pending;
+    }
+    CheckState::Passing
+}
+
+fn json_number(body: &str, key: &str) -> Option<u64> {
+    let rest = body.split_once(&format!("\"{key}\":"))?.1;
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok()
+}
+
+fn json_string(body: &str, key: &str) -> Option<String> {
+    let rest = body.split_once(&format!("\"{key}\":\""))?.1;
+    Some(rest.split_once('"')?.0.to_string())
+}
+
 /// The local branches of `repo`, in git's own ref order.
 pub fn branches(repo: &Path) -> Result<Vec<String>, GitError> {
     let listed = git(
@@ -339,6 +539,27 @@ fn git(repo: &Path, args: &[&str]) -> Result<String, GitError> {
 
 #[cfg(test)]
 mod tests {
+
+    /// `gh`'s JSON is read for exactly four facts, and a failing check
+    /// anywhere in the rollup is what the header must say.
+    #[test]
+    fn a_pr_reading_takes_the_worst_check_in_the_rollup() {
+        let body = r#"{"isDraft":false,"number":47,"state":"OPEN","statusCheckRollup":[{"conclusion":"SUCCESS"},{"conclusion":"FAILURE"}]}"#;
+        let pr = parse_pr_json(body).expect("a PR");
+        assert_eq!(pr.number, 47);
+        assert_eq!(pr.state, PrState::Open);
+        assert!(!pr.draft);
+        assert_eq!(pr.checks, Some(CheckState::Failing));
+    }
+
+    /// A PR with no checks at all claims nothing — silence, never a pass.
+    #[test]
+    fn a_pr_without_checks_claims_no_ci() {
+        let body = r#"{"isDraft":true,"number":3,"state":"OPEN","statusCheckRollup":[]}"#;
+        let pr = parse_pr_json(body).expect("a PR");
+        assert!(pr.draft);
+        assert_eq!(pr.checks, None);
+    }
     use super::*;
     use std::fs;
 

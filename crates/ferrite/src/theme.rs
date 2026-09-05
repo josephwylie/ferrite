@@ -13,7 +13,10 @@
 //!
 //! Soft draws **no hairline separators at all**. There is no border between
 //! the nav and the Cockpit, no rule above the changed strip, none above the
-//! Composer, none under the Pane head. Separation is by fill contrast only.
+//! Composer. Separation is by fill contrast alone — with one exception: the
+//! Pane header is a two-line band on its own ground, closed by a hairline,
+//! because two lines of chrome need a stated end and fill contrast at this
+//! step is too soft to give one.
 
 // ---------------------------------------------------------------- grounds
 
@@ -27,6 +30,15 @@ pub const PANE: u32 = 0x171717;
 /// nearer than the Cockpit, which is the inversion the Soft mode makes.
 #[allow(dead_code)]
 pub const NAV: u32 = 0x232323;
+/// `#1d1d1d` — `--pane-head`: the Pane header band, one step lighter than
+/// the Pane's own ground so the title and its checkout line read as chrome
+/// and the transcript reads as content.
+pub const PANE_HEAD: u32 = 0x1d1d1d;
+/// `rgba(255,255,255,0.07)` — the hairline under the Pane header. The one
+/// rule Soft draws inside a Pane: the header band carries two lines now,
+/// and fill contrast alone is too soft to say where the transcript starts.
+pub const PANE_HEAD_EDGE: u32 = 0xffffff12;
+
 /// `#282828` — `--raised`: inline-code chips, code blocks, keycaps, the
 /// changed strip's file chips, and the Composer's own ground.
 pub const RAISED: u32 = 0x282828;
@@ -89,10 +101,12 @@ pub const SEP: u32 = 0x6e6e6e;
 
 // -------------------------------------------------------- state + signals
 
-/// `#9a9a9a` — `--focus`: the focused Pane's 2px ring, and every
+/// `#5e5e5e` — `--focus`: the focused Pane's hairline ring, and every
 /// `:focus-visible` outline. A quiet neutral, never an accent hue: the
-/// system has no accent.
-pub const FOCUS: u32 = 0x9a9a9a;
+/// system has no accent. Dimmer than the ink it sits beside — at 1px the
+/// ring is read as an edge, not as a highlight, and a brighter value at
+/// this width reads as a glare around the Pane rather than as focus.
+pub const FOCUS: u32 = 0x5e5e5e;
 /// `#7fbf95` — `--running`: the running status dot, a running signal line,
 /// the pass chip, diff `+`.
 pub const RUNNING: u32 = 0x7fbf95;
@@ -391,6 +405,12 @@ pub const ROW_ICON_GAP: f32 = 5.0;
 
 /// 32px — the Pane head. No background, no border, no rule beneath it.
 pub const PANE_HEAD_H: f32 = 32.0;
+/// The checkout line beneath the Pane head's title: 20px, sharing the
+/// head's inline padding and its ground, so the two read as one band.
+pub const PANE_CHECKOUT_H: f32 = 20.0;
+/// The gap between the checkout line's own marks — tighter than the head's
+/// gap, because these are one reading, not separate slots.
+pub const CHECKOUT_GAP: f32 = 8.0;
 /// 24px — the tasks strip, and the changed-files strip.
 pub const TASKS_STRIP_H: f32 = 24.0;
 #[allow(dead_code)]
@@ -454,11 +474,11 @@ pub const USAGE_SPENT: f32 = 0.85;
 pub const USAGE_LINE_W: f32 = 24.0;
 pub const USAGE_LINE_H: f32 = 2.0;
 pub const USAGE_LINE_GAP: f32 = 2.0;
-/// The focused Pane's ring: 2px wide, 2px outside the Pane's border box.
-/// gpui has no `outline-offset`, so it is an absolutely positioned overlay
-/// at `inset(-4px)` inside a non-clipping wrapper; its radii follow the
-/// offset — inner 10, outer 12.
-pub const FOCUS_RING_W: f32 = 2.0;
+/// The focused Pane's ring: a 1px hairline, 2px outside the Pane's border
+/// box. gpui has no `outline-offset`, so it is an absolutely positioned
+/// overlay at `inset(-3px)` inside a non-clipping wrapper; its radii follow
+/// the offset — inner 10, outer 11.
+pub const FOCUS_RING_W: f32 = 1.0;
 pub const FOCUS_RING_OFFSET: f32 = 2.0;
 /// The Decision card: 12px inline margin, 8px below, 8/10 padding, a 10px
 /// gap, and a 15px warning mark.

@@ -824,7 +824,8 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// Refresh checkout labels without ever waiting for Git in GPUI's pump.
+    /// Refresh checkout labels and their branch status without ever waiting
+    /// for Git — or `gh` — in GPUI's pump.
     fn refresh_branches(&mut self, cx: &mut Context<Self>) {
         if self.branch_refreshing {
             return;
@@ -853,7 +854,7 @@ impl CockpitView {
                     targets
                         .into_iter()
                         .map(|(thread, cwd)| {
-                            (thread, ferrite_core::workspace::checkout_branch(&cwd))
+                            (thread, ferrite_core::workspace::branch_status(&cwd))
                         })
                         .collect()
                 })
@@ -5209,6 +5210,7 @@ impl CockpitView {
             thread: open,
             // The cached checkout label (#29) — display-only.
             branch: cached.and_then(|facts| facts.branch.clone()),
+            checkout: cached.and_then(|facts| facts.status.as_ref()),
             composer_empty: pane.composer.read(cx).is_empty(),
             history_available: self.history_available(index, level),
             focused,
