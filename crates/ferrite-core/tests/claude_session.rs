@@ -325,6 +325,7 @@ fn a_permission_request_arrives_as_a_decision_naming_its_tool_call() {
                 description,
                 input,
                 suggestions,
+                ..
             },
     } = decisions[0]
     else {
@@ -581,7 +582,7 @@ fn a_resumed_session_answers_from_the_previous_process_history() {
         recorded[0],
         format!(
             "-p --input-format stream-json --output-format stream-json \
-             --include-partial-messages --forward-subagent-text --verbose --permission-prompt-tool stdio \
+             --include-partial-messages --thinking-display summarized --forward-subagent-text --verbose --permission-prompt-tool stdio \
              --resume {resumed}"
         )
     );
@@ -689,7 +690,7 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
     assert_eq!(
         recorded[0],
         "-p --input-format stream-json --output-format stream-json \
-         --include-partial-messages --forward-subagent-text --verbose --permission-prompt-tool stdio \
+         --include-partial-messages --thinking-display summarized --forward-subagent-text --verbose --permission-prompt-tool stdio \
          --model haiku --permission-mode default --name CI flake"
     );
     assert_eq!(sent.len(), 5, "the rename wrote nothing");
@@ -745,7 +746,7 @@ fn no_model_or_permission_mode_is_passed_when_the_config_names_none() {
     assert_eq!(
         recorded[0],
         "-p --input-format stream-json --output-format stream-json \
-         --include-partial-messages --forward-subagent-text --verbose --permission-prompt-tool stdio"
+         --include-partial-messages --thinking-display summarized --forward-subagent-text --verbose --permission-prompt-tool stdio"
     );
 }
 

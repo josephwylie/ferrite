@@ -7,9 +7,12 @@ use ferrite_core::activity::{
 use ferrite_core::transcript::Status;
 use gpui::component::{
     button::ButtonVariants,
+    checkbox::Checkbox,
+    group_box::{GroupBox, GroupBoxVariants},
     input::{Input, InputState},
+    radio::{Radio, RadioGroup},
     tab::{Tab, TabBar},
-    Selectable, Sizable,
+    Disableable, Sizable,
 };
 use gpui::{Animation, AnimationExt, KeyDownEvent};
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
@@ -666,11 +669,19 @@ impl CockpitView {
         match self.cockpit.respond_decision(thread, handle, answer) {
             Ok(true) => {
                 if let Some(index) = self.pane_for(thread) {
-                    self.panes[index]
-                        .request_forms
-                        .0
-                        .borrow_mut()
-                        .remove(handle);
+                    let pending = self.cockpit.thread(thread).is_some_and(|open| {
+                        open.activity()
+                            .pending_decisions()
+                            .iter()
+                            .any(|p| &p.handle == handle)
+                    });
+                    if !pending {
+                        self.panes[index]
+                            .request_forms
+                            .0
+                            .borrow_mut()
+                            .remove(handle);
+                    }
                     self.panes[index].request_error = None;
                 }
             }
@@ -696,6 +707,9 @@ impl CockpitView {
         let activity = self.cockpit.thread(thread)?.activity();
         let all = activity.pending_decisions();
         if pane.is_main()
+            && all
+                .iter()
+                .all(|request| pane::question_of(&request.decision).is_none())
             && all.len() <= 1
             && all
                 .iter()
@@ -716,10 +730,12 @@ impl CockpitView {
         }
         let mut cards = div()
             .id(("subject-requests", thread.get()))
-            .max_h(px(260.))
+            .max_h(px(
+                (f32::from(window.viewport_size().height) * 0.55).min(440.)
+            ))
             .overflow_y_scroll()
-            .px(px(theme::PANE_PAD_X))
-            .py(px(6.))
+            .w_full()
+            .min_w_0()
             .flex()
             .flex_col()
             .gap(px(8.));
@@ -729,7 +745,7 @@ impl CockpitView {
         Some(native_keys(cards).into_any_element())
     }
 
-    fn request_card(
+    pub(super) fn request_card(
         &self,
         index: usize,
         thread: ThreadId,
@@ -778,7 +794,11 @@ impl CockpitView {
             if !forms.0.borrow().contains_key(&handle) {
                 let inputs = questions
                     .iter()
-                    .map(|_| cx.new(|cx| InputState::new(window, cx).placeholder("Other answer")))
+                    .map(|_| {
+                        cx.new(|cx| {
+                            InputState::new(window, cx).placeholder("Or write your own answer…")
+                        })
+                    })
                     .collect();
                 forms.0.borrow_mut().insert(
                     handle.clone(),
@@ -788,110 +808,281 @@ impl CockpitView {
                     },
                 );
             }
-            for (question_at, question) in questions.iter().enumerate() {
-                card = card.child(components::label(
-                    question.question.clone(),
-                    theme::TEXT_STRONG,
-                ));
-                let mut options = div().flex().flex_wrap().gap(px(4.));
-                for (option_at, option) in question.options.iter().enumerate() {
+            let mut content = div()
+                .id(("question-content", handle.serial as usize))
+                .w_full()
+                .min_w_0()
+                .max_h(px(
+                    (f32::from(window.viewport_size().height) * 0.4).min(320.)
+                ))
+                .overflow_y_scroll()
+                .flex()
+                .flex_col()
+                .gap(px(16.));
+            for (qi, question) in questions.iter().enumerate() {
+                let mut section = div()
+                    .w_full()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(10.))
+                    .child(
+                        div()
+                            .text_size(px(theme::FS_MD))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(rgb(theme::TEXT))
+                            .child(question.question.clone()),
+                    );
+                if question.multi_select {
+                    section =
+                        section.child(components::label("Choose any that apply", theme::TEXT_2));
+                    for (oi, option) in question.options.iter().enumerate() {
+                        let checked = forms.0.borrow()[&handle].answers[qi].picks.contains(&oi);
+                        let forms = forms.clone();
+                        let handle = handle.clone();
+                        section = section.child(
+                            Checkbox::new(("question-checkbox", qi * 256 + oi))
+                                .checked(checked)
+                                .disabled(request.submitting)
+                                .accessibility_label(option.label.clone())
+                                .w_full()
+                                .min_w_0()
+                                .child(question_choice(option))
+                                .on_click(cx.listener(move |_, checked: &bool, _, cx| {
+                                    if let Some(form) = forms.0.borrow_mut().get_mut(&handle) {
+                                        let picks = &mut form.answers[qi].picks;
+                                        picks.retain(|at| *at != oi);
+                                        if *checked {
+                                            picks.push(oi);
+                                        }
+                                    }
+                                    cx.notify();
+                                })),
+                        );
+                    }
+                } else if !question.options.is_empty() {
+                    let selected = forms.0.borrow()[&handle].answers[qi].picks.first().copied();
                     let forms = forms.clone();
                     let handle = handle.clone();
-                    let multi = question.multi_select;
-                    let selected = forms.0.borrow()[&handle].answers[question_at]
-                        .picks
-                        .contains(&option_at);
-                    options = options.child(
-                        components::button(SharedString::from(format!(
-                            "request-choice-{}-{}-{question_at}-{option_at}",
-                            handle.generation, handle.serial
-                        )))
-                        .tab_stop(true)
-                        .selected(selected)
-                        .label(option.label.clone())
-                        .tooltip(option.description.clone())
-                        .on_click(cx.listener(move |_, _, _, cx| {
-                            if let Some(form) = forms.0.borrow_mut().get_mut(&handle) {
-                                let picks = &mut form.answers[question_at].picks;
-                                if picks.contains(&option_at) {
-                                    picks.retain(|at| *at != option_at);
-                                } else {
-                                    if !multi {
-                                        picks.clear();
-                                    }
-                                    picks.push(option_at);
+                    section = section.child(
+                        RadioGroup::vertical(("question-radios", qi))
+                            .w_full()
+                            .min_w_0()
+                            .selected_index(selected)
+                            .disabled(request.submitting)
+                            .children(question.options.iter().enumerate().map(|(oi, option)| {
+                                Radio::new(oi)
+                                    .w_full()
+                                    .min_w_0()
+                                    .accessibility_label(option.label.clone())
+                                    .debug_selector(move || format!("question-choice-{qi}-{oi}"))
+                                    .child(question_choice(option))
+                            }))
+                            .on_click(cx.listener(move |_, selected: &usize, _, cx| {
+                                if let Some(form) = forms.0.borrow_mut().get_mut(&handle) {
+                                    form.answers[qi].picks = vec![*selected];
                                 }
-                            }
-                            cx.notify();
-                        })),
+                                cx.notify();
+                            })),
                     );
                 }
-                let input_selector = format!(
-                    "request-other-{}-{}-{question_at}",
-                    thread.get(),
-                    handle.serial
-                );
-                card = card.child(options).child(
-                    div()
-                        .debug_selector(move || input_selector.clone())
-                        .child(Input::new(&forms.0.borrow()[&handle].inputs[question_at])),
+                let selector = format!("request-other-{}-{}-{qi}", thread.get(), handle.serial);
+                content = content.child(
+                    section.child(
+                        div()
+                            .w_full()
+                            .min_w_0()
+                            .debug_selector(move || selector.clone())
+                            .child(
+                                Input::new(&forms.0.borrow()[&handle].inputs[qi])
+                                    .disabled(request.submitting),
+                            ),
+                    ),
                 );
             }
-            let deny_handle = handle.clone();
-            card = card.child(
-                components::button(SharedString::from(format!(
-                    "request-cancel-{}-{}",
-                    handle.generation, handle.serial
-                )))
-                .tab_stop(true)
-                .label("Decline")
-                .on_click(cx.listener(move |view, _, _, cx| {
-                    view.respond_exact(
-                        thread,
-                        &deny_handle,
-                        DecisionAnswer::Deny {
-                            message: "The operator declined this question.".into(),
-                        },
-                        cx,
+            let async_question = !request.decision.blocks_execution();
+            let working = async_question
+                && request
+                    .subject
+                    .as_ref()
+                    .and_then(|subject| self.cockpit.thread(thread)?.activity().subject(subject))
+                    .is_some_and(|subject| subject.busy());
+            let status = if request.submitting {
+                "Sending answer…"
+            } else if working {
+                "Work continues while you answer"
+            } else if async_question {
+                "Answer when ready"
+            } else {
+                "Waiting for your answer"
+            };
+            let status = div()
+                .min_w_0()
+                .text_size(px(theme::FS_SM))
+                .text_color(rgb(theme::TEXT_2))
+                .child(status);
+            let status = if request.submitting || working {
+                pane::live_text(status, "question-live".into())
+            } else {
+                status.into_any_element()
+            };
+            let mut body = div()
+                .w_full()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(12.))
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap(px(8.))
+                        .child(components::label(
+                            if questions.len() == 1 {
+                                "Question for you".into()
+                            } else {
+                                format!("{} questions for you", questions.len())
+                            },
+                            theme::TEXT,
+                        ))
+                        .child(div().flex_1())
+                        .child(status),
+                )
+                .when(request.subject.is_none(), |body| {
+                    body.child(components::label(
+                        "Agent identity unavailable",
+                        theme::TEXT_2,
+                    ))
+                })
+                .child(content);
+            if let Some(error) = request.reply_error.as_ref().or_else(|| {
+                self.panes[index]
+                    .request_error
+                    .as_ref()
+                    .filter(|(failed, _)| failed == &handle)
+                    .map(|(_, error)| error)
+            }) {
+                body = body.child(div().text_color(rgb(theme::BLOCKED)).child(error.clone()));
+            }
+            let skip_handle = handle.clone();
+            let submit_handle = handle.clone();
+            let input = request.decision.input.clone();
+            let selector = format!("request-submit-{}-{}", thread.get(), handle.serial);
+            body = body.child(
+                div()
+                    .flex()
+                    .justify_end()
+                    .gap(px(8.))
+                    .child(
+                        gpui::component::button::Button::new("question-skip")
+                            .ghost()
+                            .small()
+                            .label("Skip")
+                            .disabled(request.submitting)
+                            .on_click(cx.listener(move |view, _, _, cx| {
+                                view.respond_exact(
+                                    thread,
+                                    &skip_handle,
+                                    DecisionAnswer::Deny {
+                                        message: "The operator skipped this question.".into(),
+                                    },
+                                    cx,
+                                )
+                            })),
                     )
-                })),
+                    .child(
+                        gpui::component::button::Button::new("question-send")
+                            .primary()
+                            .small()
+                            .label(if request.submitting {
+                                "Sending…"
+                            } else {
+                                "Send answer"
+                            })
+                            .disabled(request.submitting)
+                            .debug_selector(move || selector.clone())
+                            .on_click(cx.listener(move |view, _, _, cx| {
+                                let mut state = forms.0.borrow_mut();
+                                let Some(form) = state.get_mut(&submit_handle) else {
+                                    return;
+                                };
+                                for (answer, input) in form.answers.iter_mut().zip(&form.inputs) {
+                                    answer.other = Some(input.read(cx).value().to_string())
+                                        .filter(|text| !text.trim().is_empty());
+                                }
+                                if form
+                                    .answers
+                                    .iter()
+                                    .any(|answer| answer.picks.is_empty() && answer.other.is_none())
+                                {
+                                    if let Some(index) = view.pane_for(thread) {
+                                        view.panes[index].request_error = Some((
+                                            submit_handle.clone(),
+                                            "Answer each question before sending.".into(),
+                                        ));
+                                    }
+                                    cx.notify();
+                                    return;
+                                }
+                                let input = ferrite_core::questions::answered_input(
+                                    &input,
+                                    &form.answers,
+                                    &questions,
+                                );
+                                drop(state);
+                                view.respond_exact(
+                                    thread,
+                                    &submit_handle,
+                                    DecisionAnswer::Allow { input },
+                                    cx,
+                                );
+                            })),
+                    ),
             );
-            let answered = request.decision.input.clone();
-            let submit_selector = format!("request-submit-{}-{}", thread.get(), handle.serial);
-            let handle = handle.clone();
-            card = card.child(
-                components::button(SharedString::from(format!(
-                    "request-submit-{}-{}",
-                    handle.generation, handle.serial
-                )))
-                .tab_stop(true)
-                .label("Send answer")
-                .debug_selector(move || submit_selector.clone())
-                .on_click(cx.listener(move |view, _, _, cx| {
-                    let mut state = forms.0.borrow_mut();
-                    let Some(form) = state.get_mut(&handle) else {
-                        return;
-                    };
-                    for (answer, input) in form.answers.iter_mut().zip(&form.inputs) {
-                        answer.other = Some(input.read(cx).value().to_string())
-                            .filter(|text| !text.trim().is_empty());
-                    }
-                    if form
-                        .answers
-                        .iter()
-                        .any(|answer| answer.picks.is_empty() && answer.other.is_none())
-                    {
-                        return;
-                    }
-                    let input = ferrite_core::questions::answered_input(
-                        &answered,
-                        &form.answers,
-                        &questions,
-                    );
-                    drop(state);
-                    view.respond_exact(thread, &handle, DecisionAnswer::Allow { input }, cx);
-                })),
-            );
+            let radius = gpui::component::Theme::global(cx).radius_2xl();
+            let surface = div()
+                .bg(rgb(theme::RAISED))
+                .rounded_tl(radius)
+                .rounded_tr(radius)
+                .rounded_bl(px(0.))
+                .rounded_br(px(0.))
+                .p(px(16.))
+                .w_full()
+                .min_w_0()
+                .style()
+                .clone();
+            return native_keys(
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .flex()
+                    .justify_center()
+                    .px(px(theme::PANE_PAD_X + 12.))
+                    .child(
+                        div()
+                            .id(("question-island", handle.serial as usize))
+                            .debug_selector(|| "question-island".into())
+                            .relative()
+                            .w_full()
+                            .max_w(px(680.))
+                            .min_w_0()
+                            .font_family(theme::FONT_UI)
+                            .child(crate::components::composer_join(
+                                radius,
+                                rgb(theme::RAISED).into(),
+                            ))
+                            .child(
+                                GroupBox::new()
+                                    .id("question-surface")
+                                    .fill()
+                                    .min_w_0()
+                                    .content_style(surface)
+                                    .child(body),
+                            ),
+                    ),
+            )
+            .into_any_element();
         } else {
             let accepted = request.decision.input.clone();
             let allow_handle = handle.clone();
@@ -996,7 +1187,7 @@ impl CockpitView {
         &mut self,
         thread: ThreadId,
         subject: &Subject,
-        call: &str,
+        call: &pane::DisclosureId,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1058,4 +1249,28 @@ impl CockpitView {
         };
         self.respond_exact(thread, &request.handle, response, cx);
     }
+}
+
+/// Labels and descriptions wrap inside the native choice's content slot.
+fn question_choice(choice: &ferrite_core::questions::Choice) -> impl IntoElement {
+    div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .gap(px(4.))
+        .text_size(px(theme::FS_SM))
+        .line_height(gpui::relative(theme::LINE_BODY))
+        .child(
+            div()
+                .text_color(rgb(theme::TEXT))
+                .child(choice.label.clone()),
+        )
+        .when(!choice.description.is_empty(), |column| {
+            column.child(
+                div()
+                    .text_color(rgb(theme::TEXT_2))
+                    .child(choice.description.clone()),
+            )
+        })
 }

@@ -123,6 +123,11 @@ pub enum ActivityEvent {
         subject: Option<Subject>,
         decision: Decision,
     },
+    /// The provider acknowledged or rejected an asynchronously submitted answer.
+    DecisionReply {
+        id: String,
+        error: Option<String>,
+    },
     DecisionCancelled {
         id: String,
     },
@@ -217,6 +222,8 @@ pub struct PendingDecision {
     pub handle: DecisionHandle,
     pub subject: Option<Subject>,
     pub decision: Decision,
+    pub submitting: bool,
+    pub reply_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -249,6 +256,9 @@ pub enum ActivityInput {
         generation: u64,
     },
     Disconnect,
+    AnswerSubmitted {
+        handle: DecisionHandle,
+    },
     Answered {
         handle: DecisionHandle,
         allowed: bool,
@@ -411,8 +421,8 @@ impl SubjectState {
                 self.busy = false;
                 self.stop_timings(at);
             }
-            Input::Event(SessionEvent::DecisionRequested { .. }) => {
-                if live {
+            Input::Event(SessionEvent::DecisionRequested { decision }) => {
+                if live && decision.blocks_execution() {
                     self.status = AgentStatus::Waiting;
                 }
             }
@@ -765,6 +775,16 @@ impl Activity {
             ActivityInput::Disconnect => {
                 self.connected = false;
                 self.invalidate()
+            }
+            ActivityInput::AnswerSubmitted { handle } => {
+                if let Some(pending) = self.pending.iter_mut().find(|p| p.handle == handle) {
+                    pending.submitting = true;
+                    pending.reply_error = None;
+                }
+                ActivityUpdate {
+                    attention_changed: true,
+                    ..ActivityUpdate::default()
+                }
             }
             ActivityInput::Answered {
                 handle,
@@ -1199,6 +1219,8 @@ impl Activity {
                     },
                     subject: subject.clone(),
                     decision: decision.clone(),
+                    submitting: false,
+                    reply_error: None,
                 });
                 if let Some(subject) = subject {
                     if let Subject::Subagent(key) = &subject {
@@ -1223,6 +1245,20 @@ impl Activity {
                 }
                 update.attention_changed = true;
             }
+            ActivityEvent::DecisionReply { id, error } => {
+                if live {
+                    if let Some(pending) = self.pending.iter_mut().find(|p| p.decision.id == *id) {
+                        if let Some(error) = error {
+                            pending.submitting = false;
+                            pending.reply_error = Some(error.clone());
+                            update.attention_changed = true;
+                        } else {
+                            let handle = pending.handle.clone();
+                            return self.answered(handle, true, at);
+                        }
+                    }
+                }
+            }
             ActivityEvent::DecisionCancelled { id } => {
                 if live {
                     let owners: Vec<_> = self
@@ -1235,11 +1271,10 @@ impl Activity {
                     self.pending.retain(|pending| &pending.decision.id != id);
                     update.attention_changed = before != self.pending.len();
                     for subject in owners {
-                        if !self
-                            .pending
-                            .iter()
-                            .any(|pending| pending.subject.as_ref() == Some(&subject))
-                        {
+                        if !self.pending.iter().any(|pending| {
+                            pending.subject.as_ref() == Some(&subject)
+                                && pending.decision.blocks_execution()
+                        }) {
                             if let Some(state) = self.state_mut(&subject) {
                                 if state.status == AgentStatus::Waiting {
                                     state.status = AgentStatus::Unknown;
@@ -1366,8 +1401,9 @@ impl Activity {
 
     fn remove_subject_decisions(&mut self, subject: &Subject, update: &mut ActivityUpdate) {
         let before = self.pending.len();
-        self.pending
-            .retain(|pending| pending.subject.as_ref() != Some(subject));
+        self.pending.retain(|pending| {
+            pending.subject.as_ref() != Some(subject) || !pending.decision.blocks_execution()
+        });
         update.attention_changed |= before != self.pending.len();
     }
 
@@ -1393,14 +1429,19 @@ impl Activity {
             attention_changed: true,
             ..ActivityUpdate::default()
         };
+        let blocking = pending.decision.blocks_execution();
         if let Some(subject) = pending.subject {
             let sequence = self.sequence;
             let limits = self.limits;
             if let Some(state) = self.state_mut(&subject) {
                 let blocks = state.append(
-                    Input::Answered {
-                        allowed,
-                        tool_name: pending.decision.tool_name,
+                    if blocking {
+                        Input::Answered {
+                            allowed,
+                            tool_name: pending.decision.tool_name,
+                        }
+                    } else {
+                        Input::Notice("Answer delivered".into())
                     },
                     None,
                     sequence,
@@ -1417,11 +1458,9 @@ impl Activity {
     }
 
     fn refresh_waiting(&mut self, subject: &Subject) {
-        if self
-            .pending
-            .iter()
-            .any(|pending| pending.subject.as_ref() == Some(subject))
-        {
+        if self.pending.iter().any(|pending| {
+            pending.subject.as_ref() == Some(subject) && pending.decision.blocks_execution()
+        }) {
             if let Some(state) = self.state_mut(subject) {
                 state.status = AgentStatus::Waiting;
                 state.transcript.set_attention(true, state.busy);

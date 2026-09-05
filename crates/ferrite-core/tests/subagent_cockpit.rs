@@ -223,6 +223,7 @@ impl Harness {
 
 fn decision(id: &str) -> Decision {
     Decision {
+        delivery: Default::default(),
         id: id.to_owned(),
         tool_use_id: "shared-tool".to_owned(),
         tool_name: "Write".to_owned(),

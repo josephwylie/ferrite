@@ -8,7 +8,7 @@
 //! changed-files strip and the 58px Composer — all on `--pane`, inside an
 //! always-in-layout 1px border that only changes colour, with the focus
 //! ring 2px OUTSIDE it so attention and focus are independent channels.
-//! Everything inside a Pane is JetBrains Mono; the shell opts in once.
+//! Tools inherit JetBrains Mono; assistant prose uses the native UI face.
 //! L2 (Instruments) and L3 (Wall) keep the metrics they have — the
 //! prototype specifies only L1 — and take the new palette and scale.
 
@@ -18,24 +18,23 @@ use ferrite_core::docview::{is_test_run, passed_count, Instruments, Level, Tests
 use ferrite_core::roster::{DraftId, PaneIdentity};
 use ferrite_core::store::Provider;
 use ferrite_core::transcript::{
-    Block, BlockId, Body, Class, Diff, ShellActivity, Span, Status, Style, Todos, Token, ToolBlock,
+    Block, BlockId, Body, Class, Diff, Span, Status, Style, Todos, Token, ToolActivity, ToolBlock,
     ToolState, Transcript,
 };
 use ferrite_core::workspace::WorkspaceBinding;
 use ferrite_core::{Decision, ThreadId};
 use gpui::prelude::*;
 use gpui::{
-    canvas, deferred, div, point, px, relative, rgb, rgba, AnyElement, BoxShadow, Context, Div,
-    Entity, FocusHandle, FontFeatures, FontWeight, HighlightStyle, PathBuilder, ScrollHandle,
-    SharedString, Stateful, Styled, StyledText,
+    canvas, deferred, div, point, px, relative, rgb, rgba, AnimationExt, AnyElement, BoxShadow,
+    Context, Div, Entity, FocusHandle, FontFeatures, FontWeight, HighlightStyle, PathBuilder,
+    ScrollHandle, SharedString, Stateful, Styled, StyledText,
 };
+#[cfg(test)]
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::Duration;
-use std::{
-    cell::{Cell as Flag, RefCell},
-    rc::Rc,
-};
+use std::{cell::Cell as Flag, rc::Rc};
 
 use crate::components;
 use crate::composer::Composer;
@@ -99,12 +98,36 @@ struct TranscriptViewport {
     disclosure: ToolDisclosure,
 }
 
+/// Independent disclosure identities keep a group's first call separate from
+/// its parent, and preserve choices while content streams or Subjects switch.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum DisclosureId {
+    Tool(String),
+    Group(String),
+    Reasoning(BlockId),
+}
+impl From<&str> for DisclosureId {
+    fn from(call: &str) -> Self {
+        Self::Tool(call.to_owned())
+    }
+}
+impl From<&DisclosureId> for DisclosureId {
+    fn from(id: &DisclosureId) -> Self {
+        id.clone()
+    }
+}
+impl std::fmt::Display for DisclosureId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+
 struct ToolDisclosure {
-    expanded: HashSet<String>,
-    target: Option<String>,
+    expanded: HashSet<DisclosureId>,
+    target: Option<DisclosureId>,
     focus: FocusHandle,
     #[cfg(test)]
-    bounds: Rc<RefCell<HashMap<String, gpui::Bounds<gpui::Pixels>>>>,
+    bounds: Rc<RefCell<HashMap<DisclosureId, gpui::Bounds<gpui::Pixels>>>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -327,38 +350,42 @@ impl PaneView {
         }
     }
 
-    pub(crate) fn toggle_tool(&mut self, call: &str) {
+    pub(crate) fn toggle_tool(&mut self, call: &DisclosureId) {
         if !self.disclosure.expanded.remove(call) {
-            self.disclosure.expanded.insert(call.to_string());
+            self.disclosure.expanded.insert(call.clone());
         }
-        self.disclosure.target = Some(call.to_string());
+        self.disclosure.target = Some(call.clone());
     }
 
-    pub(crate) fn tool_state(&self, call: &str) -> DisclosureState {
-        if self.disclosure.expanded.contains(call) {
+    pub(crate) fn tool_state(&self, call: impl Into<DisclosureId>) -> DisclosureState {
+        if self.disclosure.expanded.contains(&call.into()) {
             DisclosureState::Expanded
         } else {
             DisclosureState::Collapsed
         }
     }
 
-    pub(crate) fn tool_targeted(&self, call: &str) -> bool {
-        self.disclosure.target.as_deref() == Some(call)
+    pub(crate) fn tool_targeted(&self, call: impl Into<DisclosureId>) -> bool {
+        self.disclosure.target.as_ref() == Some(&call.into())
     }
 
     pub(crate) fn has_tool_target(&self) -> bool {
         self.disclosure.target.is_some()
     }
 
-    pub(crate) fn targeted_tool(&self) -> Option<&str> {
-        self.disclosure.target.as_deref()
+    pub(crate) fn targeted_tool(&self) -> Option<&DisclosureId> {
+        self.disclosure.target.as_ref()
     }
 
     pub(crate) fn tool_focus(&self) -> FocusHandle {
         self.disclosure.focus.clone()
     }
 
-    pub(crate) fn cycle_tools(&mut self, calls: &[String], reverse: bool) -> Option<&str> {
+    pub(crate) fn cycle_tools(
+        &mut self,
+        calls: &[DisclosureId],
+        reverse: bool,
+    ) -> Option<&DisclosureId> {
         let next = if calls.is_empty() {
             None
         } else if reverse {
@@ -385,10 +412,10 @@ impl PaneView {
             }
         };
         self.disclosure.target = next;
-        self.disclosure.target.as_deref()
+        self.disclosure.target.as_ref()
     }
 
-    pub(crate) fn prune_tools(&mut self, calls: &HashSet<String>) {
+    pub(crate) fn prune_tools(&mut self, calls: &HashSet<DisclosureId>) {
         self.disclosure.expanded.retain(|call| calls.contains(call));
         if self
             .disclosure
@@ -405,19 +432,22 @@ impl PaneView {
     }
 
     #[cfg(test)]
-    pub(crate) fn tool_expanded(&self, call: &str) -> bool {
-        self.disclosure.expanded.contains(call)
+    pub(crate) fn tool_expanded(&self, call: impl Into<DisclosureId>) -> bool {
+        self.disclosure.expanded.contains(&call.into())
     }
 
     #[cfg(test)]
-    pub(crate) fn tool_bounds(&self, call: &str) -> Option<gpui::Bounds<gpui::Pixels>> {
-        self.disclosure.bounds.borrow().get(call).copied()
+    pub(crate) fn tool_bounds(
+        &self,
+        call: impl Into<DisclosureId>,
+    ) -> Option<gpui::Bounds<gpui::Pixels>> {
+        self.disclosure.bounds.borrow().get(&call.into()).copied()
     }
 
     #[cfg(test)]
     pub(crate) fn tool_bounds_sink(
         &self,
-    ) -> Rc<RefCell<HashMap<String, gpui::Bounds<gpui::Pixels>>>> {
+    ) -> Rc<RefCell<HashMap<DisclosureId, gpui::Bounds<gpui::Pixels>>>> {
         self.disclosure.bounds.clone()
     }
 }
@@ -469,7 +499,7 @@ pub struct PaneWiring {
     /// nothing pends, and at the wall, which draws no keycaps.
     pub decide: Option<AnyElement>,
     /// L1 tool chevrons, already wired to the cockpit's shared toggle door.
-    pub tool_controls: HashMap<String, AnyElement>,
+    pub tool_controls: HashMap<DisclosureId, AnyElement>,
     /// The head's title cell, wired: the name with a double-click that
     /// opens the rename editor, or the editor itself while renaming. None
     /// draws the plain name (L2, L3, drafts).
@@ -478,7 +508,6 @@ pub struct PaneWiring {
     /// press picks, the keys that send. Some only at L1 and only while the
     /// pending Decision is Claude's `AskUserQuestion`; it stands in for
     /// the y/n card, which cannot answer a question.
-    pub question_form: Option<AnyElement>,
     pub agents: Option<AnyElement>,
     pub activity_attention: Option<AnyElement>,
     pub activity_decisions: Option<AnyElement>,
@@ -627,7 +656,6 @@ pub fn render_pane(
         mut decide,
         mut tool_controls,
         title,
-        question_form,
         agents,
         activity_attention,
         activity_decisions,
@@ -654,7 +682,11 @@ pub fn render_pane(
     // offers no way out. The focus half is here because the prototype's
     // running-but-unfocused Pane draws no hint.
     let running = focused && status == Some(Status::Streaming);
-    let state = wall_state(transcript, decision.is_some(), wall.tests_failing);
+    let state = wall_state(
+        transcript,
+        decision.is_some_and(Decision::blocks_execution),
+        wall.tests_failing,
+    );
     // Attention and focus are two independent channels, and they no longer
     // nest (§D.1): the state edge is the Pane's own 1px border — always in
     // layout, only ever recoloured, so nothing reflows when a Decision
@@ -763,7 +795,9 @@ pub fn render_pane(
                     thread.map(|thread| thread.provider()),
                 ),
             ));
-            if transcript.status() == Status::Streaming {
+            // Short transcripts keep progress directly after their last block.
+            // Once scrollback fills the pane, pin the same line above Composer.
+            if transcript.status() == Status::Streaming && progress_is_pinned(view) {
                 pane = pane.child(
                     working_line(transcript, timings, false)
                         .px(px(theme::PANE_PAD_X))
@@ -788,11 +822,7 @@ pub fn render_pane(
                     );
                 }
             }
-            if let Some(decisions) = activity_decisions {
-                pane = pane.child(decisions);
-            } else if let Some(form) = question_form {
-                pane = pane.child(form);
-            } else if let Some(decision) = decision {
+            if let Some(decision) = decision.filter(|_| activity_decisions.is_none()) {
                 pane = pane.child(decision_card(decision, decide.take()));
             }
             // The CHANGED strip rides above the Composer whenever the
@@ -804,6 +834,9 @@ pub fn render_pane(
             let changed = Instruments::of(transcript).changed;
             if !changed.is_empty() {
                 pane = pane.child(changed_strip(&changed));
+            }
+            if let Some(decisions) = activity_decisions {
+                pane = pane.child(decisions);
             }
             if let Some(footer) = child_footer {
                 pane = pane.child(footer);
@@ -1476,7 +1509,7 @@ fn l2_tail(transcript: &Transcript) -> Div {
                 if text.is_empty() {
                     continue;
                 }
-                line(text, TEXT_2)
+                line(text, TEXT).font_family(theme::FONT_UI)
             }
             Body::Heading { spans, .. } => {
                 let text = prose(spans);
@@ -1498,9 +1531,9 @@ fn l2_tail(transcript: &Transcript) -> Div {
                 line(format!("{glyph} {} {}", tool.name, tool.summary), ink).line_clamp(1)
             }
             Body::Notice(text) => line(text.clone(), ATTENTION).font_weight(FontWeight::SEMIBOLD),
-            Body::Meta(text) => line(text.clone(), TEXT_MUTED),
+            Body::Meta(text) => line(text.clone(), TEXT_2),
             Body::Thinking(text) => {
-                line(ferrite_core::progress::headline(text), TEXT_MUTED).line_clamp(1)
+                line(ferrite_core::progress::headline(text), TEXT_2).line_clamp(1)
             }
         };
         column = column.child(drawn);
@@ -1795,28 +1828,47 @@ pub fn rendered_window(blocks: &[Block], level: Level) -> &[Block] {
     &blocks[tail..]
 }
 
-/// Tool rows with output or multiline input in exactly the window L1 draws. Disclosure
+/// Tool rows with output or input in exactly the window L1 draws. Disclosure
 /// cycling, focus validation, and controls all consume this one eligibility
 /// rule so an invisible row can never remain keyboard-addressable.
 pub fn tool_has_details(tool: &ToolBlock) -> bool {
-    tool.output.is_some() || tool.summary.contains(['\n', '\r'])
+    tool.output.is_some() || !tool.summary.is_empty()
 }
 
-pub fn rendered_output_tools(blocks: &[Block], level: Level) -> impl Iterator<Item = &ToolBlock> {
+/// One visibility rule for rendering controls, keyboard cycling and focus.
+/// Hidden children retain their expansion choice but cannot receive focus.
+pub fn rendered_disclosures(view: &PaneView, blocks: &[Block], level: Level) -> Vec<DisclosureId> {
     let mut remaining = rendered_window(blocks, level);
-    std::iter::from_fn(move || loop {
-        let block = remaining.first()?;
-        if let Some(activity) = ShellActivity::at_start(remaining) {
+    let mut controls = Vec::new();
+    while let Some(block) = remaining.first() {
+        if let Some(activity) = ToolActivity::at_start(remaining) {
+            let group = DisclosureId::Group(activity.leader().call.clone());
+            let expanded = view.tool_state(&group) == DisclosureState::Expanded;
+            controls.push(group);
+            for block in activity.blocks {
+                if let Body::Tool(tool) = &block.body {
+                    if (expanded || matches!(tool.state, ToolState::Failed(_)))
+                        && tool_has_details(tool)
+                    {
+                        controls.push(DisclosureId::Tool(tool.call.clone()));
+                    }
+                }
+            }
             remaining = &remaining[activity.blocks.len()..];
-            return Some(activity.leader());
+            continue;
+        }
+        match &block.body {
+            Body::Tool(tool) if tool_has_details(tool) => {
+                controls.push(DisclosureId::Tool(tool.call.clone()))
+            }
+            Body::Thinking(text) if !text.trim().is_empty() => {
+                controls.push(DisclosureId::Reasoning(block.id))
+            }
+            _ => {}
         }
         remaining = &remaining[1..];
-        if let Body::Tool(tool) = &block.body {
-            if tool_has_details(tool) {
-                return Some(tool);
-            }
-        }
-    })
+    }
+    controls
 }
 
 /// A scrollbar gesture owns the viewport until it reaches the tail again.
@@ -1866,6 +1918,8 @@ fn scrollback(view: &PaneView, body: impl IntoElement) -> Div {
         .flex()
         .flex_col()
         .flex_1()
+        .min_w_0()
+        .w_full()
         .min_h_0()
         .child(body)
         .child(components::scrollbar(
@@ -1885,7 +1939,7 @@ fn body(
     level: Level,
     selection: &TextRuns,
     timings: Option<&HashMap<String, ToolTiming>>,
-    tool_controls: &mut HashMap<String, AnyElement>,
+    tool_controls: &mut HashMap<DisclosureId, AnyElement>,
     provider: Option<Provider>,
 ) -> impl IntoElement {
     use gpui::base::ElementExt as _;
@@ -1901,6 +1955,8 @@ fn body(
         .flex()
         .flex_col()
         .flex_1()
+        .min_w_0()
+        .w_full()
         .min_h_0()
         .overflow_y_scroll()
         .track_scroll(&view.scroll)
@@ -1953,15 +2009,17 @@ fn body(
             prev_margin_b = theme::P_MARGIN_B;
             continue;
         }
-        if let Some(activity) = ShellActivity::at_start(&window[index..]) {
-            let call = &activity.leader().call;
+        if let Some(activity) = ToolActivity::at_start(&window[index..]) {
+            let call = DisclosureId::Group(activity.leader().call.clone());
             let len = activity.blocks.len();
-            body = body.child(render_shell_activity(
+            body = body.child(render_tool_activity(
                 activity,
                 selection,
                 timings,
-                view.tool_state(call) == DisclosureState::Expanded,
-                tool_controls.remove(call),
+                view.tool_state(&call) == DisclosureState::Expanded,
+                tool_controls.remove(&call),
+                view,
+                tool_controls,
             ));
             prev_margin_b = 0.;
             index += len;
@@ -1980,12 +2038,14 @@ fn body(
             block,
             selection,
             timings,
-            view.tool_state(match &block.body {
-                Body::Tool(tool) => &tool.call,
-                _ => "",
-            }) == DisclosureState::Expanded,
             match &block.body {
-                Body::Tool(tool) => tool_controls.remove(&tool.call),
+                Body::Tool(tool) => view.tool_state(tool.call.as_str()),
+                Body::Thinking(_) => view.tool_state(DisclosureId::Reasoning(block.id)),
+                _ => DisclosureState::Collapsed,
+            } == DisclosureState::Expanded,
+            match &block.body {
+                Body::Tool(tool) => tool_controls.remove(&DisclosureId::Tool(tool.call.clone())),
+                Body::Thinking(_) => tool_controls.remove(&DisclosureId::Reasoning(block.id)),
                 _ => None,
             },
             signal,
@@ -1995,10 +2055,15 @@ fn body(
         ));
         index += 1;
     }
+    if transcript.status() == Status::Streaming && !progress_is_pinned(view) {
+        body = body.child(working_line(transcript, timings, false).py(px(theme::KEYS_GAP)));
+    }
     let wheel_scroll = view.scroll.clone();
     let follow = view.follow_tail.clone();
     let paint_scroll = view.scroll.clone();
     let paint_follow = view.follow_tail.clone();
+    let progress_was_pinned = progress_is_pinned(view);
+    let streaming = transcript.status() == Status::Streaming;
     let body = body
         .track_focus(&view.transcript_focus)
         .text_selection_scope(if focused {
@@ -2012,13 +2077,17 @@ fn body(
         .relative()
         .flex()
         .flex_1()
-        .min_h_0()
         .min_w_0()
+        .w_full()
+        .min_h_0()
         .child(body)
         .child(
             gpui::canvas(
                 |_, _, _| (),
-                move |_, _, window, _| {
+                move |_, _, window, cx| {
+                    if streaming && progress_was_pinned != (paint_scroll.max_offset().y > px(0.)) {
+                        window.defer(cx, |window, _| window.refresh());
+                    }
                     if paint_follow.get()
                         && paint_scroll.max_offset().y + paint_scroll.offset().y > px(2.)
                     {
@@ -2042,6 +2111,12 @@ fn body(
         )
 }
 
+// Moving progress out of the scroll content shrinks the viewport by the same
+// height, keeping its overflow stable across the inline → pinned transition.
+fn progress_is_pinned(view: &PaneView) -> bool {
+    view.scroll.max_offset().y > px(0.)
+}
+
 /// `◐ Running 6 shell commands… (2m 6s · ↓ 8.0k tokens)`: the phrase names
 /// the calls in flight (several of one kind counted together), else the
 /// model's own thinking or answering; the clock is the turn's, the count
@@ -2058,6 +2133,9 @@ fn working_line(
     let tokens = transcript.turn_output_tokens();
     if tokens > 0 && !compact {
         facts.push(format!("↓ {} tokens", tokens_label(tokens)));
+    }
+    if !compact {
+        facts.push("esc to interrupt".into());
     }
     let progress = transcript.progress();
     let caption = progress.caption();
@@ -2080,17 +2158,16 @@ fn working_line(
                 .child(
                     div()
                         .min_w_0()
-                        .flex_1()
                         .truncate()
                         .text_color(rgb(TEXT_2))
-                        .italic()
+                        .font_weight(FontWeight::SEMIBOLD)
                         .child(SharedString::from(format!("◐ {caption}"))),
                 )
                 .child(
                     div()
                         .flex_shrink_0()
-                        .text_color(rgb(TEXT_MUTED))
-                        .child(SharedString::from(facts.join(" · "))),
+                        .text_color(rgb(TEXT_2))
+                        .child(SharedString::from(format!("({})", facts.join(" · ")))),
                 ),
         );
         let tool = transcript
@@ -2124,12 +2201,32 @@ fn working_line(
             let detail = elapsed
                 .map(|elapsed| format!("{detail} · {}", duration_label(elapsed)))
                 .unwrap_or(detail);
-            row = row.child(div().truncate().text_color(rgb(TEXT_MUTED)).child(
-                SharedString::from(ferrite_core::progress::one_line(&detail, 240)),
-            ));
+            row = row.child(
+                div()
+                    .truncate()
+                    .text_color(rgb(TEXT_2))
+                    .child(SharedString::from(ferrite_core::progress::one_line(
+                        &detail, 240,
+                    ))),
+            );
         }
     }
-    row
+    div()
+        .w_full()
+        .min_w_0()
+        .flex_shrink_0()
+        .child(live_text(row, "live-progress".into()))
+}
+
+pub(crate) fn live_text(row: Div, id: SharedString) -> AnyElement {
+    row.with_animation(
+        id,
+        gpui::Animation::new(Duration::from_millis(theme::STATUS_PULSE_MS))
+            .repeat()
+            .with_easing(gpui::pulsating_between(0.65, 1.0)),
+        |row, opacity| row.opacity(opacity),
+    )
+    .into_any_element()
 }
 
 /// `8.0k`, `12k`, `340` — the token count the way Claude Code prints it.
@@ -2234,6 +2331,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         focused,
     } = stack;
     let is_draft = setup_controls.is_some();
+    let blocking = decision.is_some_and(Decision::blocks_execution);
     let mut region = div()
         .relative()
         .flex()
@@ -2363,10 +2461,10 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
     // it is answered, and a closed Session has no mode to be in. The
     // prototype draws it on its two running Panes and omits it from the
     // Decision and the blocked one.
-    if let Some(mode) = mode.filter(|_| running && decision.is_none()) {
+    if let Some(mode) = mode.filter(|_| running && !blocking) {
         controls = controls.child(mode_chip(mode));
     }
-    let escape = if decision.is_some() {
+    let escape = if blocking {
         Some("esc dismiss")
     } else if running {
         Some("esc interrupt")
@@ -2766,152 +2864,6 @@ pub fn question_of(decision: &Decision) -> Option<Vec<ferrite_core::questions::Q
     ferrite_core::questions::is_question_tool(&decision.tool_name)
         .then(|| ferrite_core::questions::parse(&decision.input))
         .flatten()
-}
-
-/// The question card: the Decision card's ground and ring grown into a
-/// column — one block per question, its options as rows, the keys last.
-/// The same margins as the y/n card, so the Composer sits where it always
-/// sits and the transcript above gives way by exactly the card's height.
-pub fn question_card() -> Div {
-    div()
-        .relative()
-        .flex()
-        .flex_col()
-        .flex_shrink_0()
-        .min_w_0()
-        .gap(px(theme::DECISION_GAP))
-        .mx(px(theme::DECISION_MARGIN_X))
-        .mb(px(theme::DECISION_MARGIN_B))
-        .px(px(theme::DECISION_PAD_X))
-        .py(px(theme::DECISION_PAD_Y))
-        .rounded(px(theme::R_CHIP))
-        .bg(rgba(ATTENTION_WASH))
-        .child(ring_overlay(ATTENTION_EDGE, theme::R_CHIP))
-}
-
-/// One question's head: the model's short label as an amber tag, the
-/// question itself in the strong ink, wrapping, and "pick any" when more
-/// than one option may be taken.
-pub fn question_head(header: SharedString, text: SharedString, multi: bool) -> Div {
-    let mut head = div().flex().flex_col().min_w_0().gap(px(2.)).pt(px(2.));
-    let mut tags = div()
-        .flex()
-        .items_center()
-        .gap(px(theme::KEYS_GAP))
-        .text_size(px(theme::FS_MONO))
-        .line_height(relative(theme::LINE_UI));
-    if !header.is_empty() {
-        tags = tags.child(
-            div()
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(ATTENTION))
-                .child(header),
-        );
-    }
-    if multi {
-        tags = tags.child(div().text_color(rgb(TEXT_MUTED)).child("pick any"));
-    }
-    head = head.child(tags);
-    let mut question = div()
-        .text_size(px(theme::FS_MD))
-        .line_height(relative(theme::LINE_BODY))
-        .font_weight(FontWeight::SEMIBOLD)
-        .text_color(rgb(TEXT_STRONG))
-        .child(text);
-    question.style().size.width = None;
-    head.child(question)
-}
-
-/// One option row: the mark (`◉`/`○`, or `☑`/`☐` for pick-any), the
-/// number key that picks it, the label, and the model's one-line reason
-/// under it in the muted ink. Picked rows carry the amber mark and the
-/// strong label; the whole row is the press target.
-pub fn question_option(
-    id: (&'static str, usize),
-    number: usize,
-    label: SharedString,
-    description: SharedString,
-    picked: bool,
-    multi: bool,
-) -> Stateful<Div> {
-    let mark = match (multi, picked) {
-        (true, true) => "☑",
-        (true, false) => "☐",
-        (false, true) => "◉",
-        (false, false) => "○",
-    };
-    let mut column = div().flex().flex_col().flex_1().min_w_0().child(
-        div()
-            .text_size(px(theme::FS_SM))
-            .line_height(relative(theme::LINE_UI))
-            .font_weight(FontWeight::SEMIBOLD)
-            .text_color(rgb(if picked { TEXT_STRONG } else { TEXT_2 }))
-            .child(label),
-    );
-    if !description.is_empty() {
-        let mut reason = div()
-            .text_size(px(theme::FS_MONO))
-            .line_height(relative(theme::LINE_BODY))
-            .text_color(rgb(TEXT_MUTED))
-            .child(description);
-        reason.style().size.width = None;
-        column = column.child(reason);
-    }
-    div()
-        .id(id)
-        .flex()
-        .items_start()
-        .min_w_0()
-        .gap(px(theme::EVENT_GAP))
-        .px(px(6.))
-        .py(px(3.))
-        .rounded(px(theme::R_CONTROL))
-        .child(
-            div()
-                .flex_shrink_0()
-                .w(px(12.))
-                .text_size(px(theme::FS_SM))
-                .line_height(relative(theme::LINE_UI))
-                .text_color(rgb(if picked { ATTENTION } else { TEXT_MUTED }))
-                .child(mark),
-        )
-        .child(
-            div()
-                .flex_shrink_0()
-                .text_size(px(theme::FS_MONO))
-                .line_height(relative(theme::LINE_UI))
-                .text_color(rgb(TEXT_MUTED))
-                .child(SharedString::from(number.to_string())),
-        )
-        .child(column)
-        .hover_row()
-}
-
-/// The card's last row: how to answer, in the muted ink, and the keys.
-pub fn question_footer(hint: SharedString, keys: Option<AnyElement>) -> Div {
-    div()
-        .flex()
-        .items_center()
-        .min_w_0()
-        .gap(px(theme::DECISION_GAP))
-        .pt(px(2.))
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .truncate()
-                .text_size(px(theme::FS_MONO))
-                .line_height(relative(theme::LINE_UI))
-                .text_color(rgb(TEXT_MUTED))
-                .child(hint),
-        )
-        .children(keys)
-}
-
-/// The question card's send key — ↵, the Composer's own key, because the
-/// typed line is part of the answer.
-pub fn keycap_send() -> Stateful<Div> {
-    keycap("enter send", "↵", " send answers", TEXT_2)
 }
 
 // ------------------------------------------------------------ shared bits
@@ -3564,7 +3516,7 @@ fn render_block(
     provider: Option<Provider>,
     preview: &crate::attachment_preview::Preview,
 ) -> AnyElement {
-    let row = div().w_full().flex_shrink_0();
+    let row = div().w_full().min_w_0().flex_shrink_0();
     match &block.body {
         // The operator's own line stands apart from the answer: a
         // content-sized block in the strong ink on a ground of its own, so
@@ -3604,7 +3556,8 @@ fn render_block(
                 })
                 .into_any_element()
         }
-        Body::Paragraph { spans } => paragraph(row, TEXT_2)
+        Body::Paragraph { spans } => paragraph(row, TEXT)
+            .font_family(theme::FONT_UI)
             .child(prose(block.id, spans, selection))
             .into_any_element(),
         // `h4`: `margin: 12px 0 6px`, the same 12px as body text —
@@ -3649,13 +3602,44 @@ fn render_block(
         // A blank thought from an older log (redacted thinking, before the
         // fold learned to drop it) draws nothing — not even its margin.
         Body::Thinking(thought) if thought.trim().is_empty() => div().into_any_element(),
-        Body::Thinking(thought) => paragraph(row, TEXT_MUTED)
-            .child(
-                selection
-                    .markdown(block.id, thought.trim_end().to_string())
-                    .muted(),
-            )
-            .into_any_element(),
+        Body::Thinking(thought) => {
+            let summary = ferrite_core::progress::headline(thought);
+            let header = div()
+                .flex()
+                .items_center()
+                .min_w_0()
+                .gap(px(theme::EVENT_GAP))
+                .font_family(theme::FONT_UI)
+                .child(
+                    div()
+                        .min_w_0()
+                        .flex_1()
+                        .truncate()
+                        .child(SharedString::from(summary)),
+                )
+                .child(
+                    div()
+                        .relative()
+                        .flex_shrink_0()
+                        .w(px(theme::GUTTER_W))
+                        .h(px(theme::FS_MD * theme::LINE_BODY))
+                        .children(disclosure),
+                );
+            let mut reasoning = gpui::component::collapsible::Collapsible::new()
+                .w_full()
+                .open(expanded)
+                .child(header);
+            if expanded {
+                reasoning = reasoning.content(
+                    div().min_w_0().mt(px(theme::KEYS_GAP)).child(
+                        selection
+                            .markdown(block.id, thought.trim_end().to_owned())
+                            .muted(),
+                    ),
+                );
+            }
+            paragraph(row, TEXT_2).child(reasoning).into_any_element()
+        }
         // A Notice is the prototype's `.signal` line (§E.8): 12px/600,
         // 10px below, coloured by the Pane's own state — muted at rest,
         // amber while a Decision waits, red once the Session closed.
@@ -3666,7 +3650,7 @@ fn render_block(
             .child(selection.line(block.id, text.clone(), separators(text)))
             .into_any_element(),
         // Meta, likewise, is a `.note` paragraph (R-09).
-        Body::Meta(text) => paragraph(row, TEXT_MUTED)
+        Body::Meta(text) => paragraph(row, TEXT_2)
             .child(selection.line(block.id, text.clone(), Vec::new()))
             .into_any_element(),
         // `.codeblock` (§E.7): 4px radius on `--raised`, a language label
@@ -3717,7 +3701,7 @@ fn render_block(
             )
             .into_any_element(),
         Body::Tool(tool) => render_tool(
-            row, block.id, tool, selection, timings, expanded, disclosure,
+            row, block.id, tool, selection, timings, expanded, disclosure, false,
         ),
     }
 }
@@ -3802,6 +3786,7 @@ fn render_tool(
     timings: Option<&HashMap<String, ToolTiming>>,
     expanded: bool,
     disclosure: Option<AnyElement>,
+    in_group: bool,
 ) -> AnyElement {
     // Every call wears the `●` Claude Code's own transcript uses, in the
     // call's state: green once it ran, red when it failed, muted while it
@@ -3937,14 +3922,14 @@ fn render_tool(
         .open(expanded)
         .child(line);
     if expanded {
-        let mut details = div().flex().flex_col();
-        if tool.summary.contains(['\n', '\r']) {
+        let mut details = div().flex().flex_col().min_w_0();
+        if !tool.summary.is_empty() {
             details = details.child(
                 div()
                     .ml(px(theme::INDENT))
                     .mt(px(theme::EVENT_GAP))
                     .text_color(rgb(TEXT_MUTED))
-                    .child("Command"),
+                    .child("Input"),
             );
             details = details.child(output_block(
                 block,
@@ -3975,7 +3960,7 @@ fn render_tool(
             }
         }
         card = card.content(details);
-    } else if !promoted {
+    } else if !promoted && (!in_group || matches!(tool.state, ToolState::Failed(_))) {
         // A failed call's compact result reads in the blocked ink. Raw
         // output above remains neutral so ordinary source is still readable.
         if let Some(line) = &tool.result_line {
@@ -4009,20 +3994,24 @@ fn render_tool(
             }
         }
     }
-    if let Some(diff) = &tool.diff {
-        card = card.child(render_diff(block, diff, selection));
+    if expanded || !in_group {
+        if let Some(diff) = &tool.diff {
+            card = card.child(render_diff(block, diff, selection));
+        }
     }
     row.child(card).into_any_element()
 }
 
 /// One stable summary; expanding reveals the original command/result pairs.
 /// Failure previews remain visible even when successful siblings are hidden.
-fn render_shell_activity(
-    activity: ShellActivity<'_>,
+fn render_tool_activity(
+    activity: ToolActivity<'_>,
     selection: &TextRuns,
     timings: Option<&HashMap<String, ToolTiming>>,
     expanded: bool,
     disclosure: Option<AnyElement>,
+    view: &PaneView,
+    controls: &mut HashMap<DisclosureId, AnyElement>,
 ) -> AnyElement {
     let call = activity.leader().call.clone();
     let total = activity.blocks.len();
@@ -4034,17 +4023,20 @@ fn render_shell_activity(
         )
         .count();
     let label = if unavailable > 0 {
-        format!("{total} shell commands · {unavailable} results unavailable")
-    } else if activity.running > 0 {
-        format!(
-            "Running {total} shell commands · {} finished",
-            total - activity.running
-        )
+        format!("{total} tool calls · {unavailable} results unavailable")
     } else {
-        format!("Ran {total} shell commands")
+        activity.summary()
+    };
+    let summary = div().min_w_0().child(label);
+    let summary = if activity.running > 0 {
+        live_text(summary, format!("live-group-{call}").into())
+    } else {
+        summary.into_any_element()
     };
     let mut header = div()
+        .min_w_0()
         .flex()
+        .flex_wrap()
         .items_center()
         .gap(px(theme::EVENT_GAP))
         .py(px(theme::EVENT_PAD_Y))
@@ -4065,7 +4057,7 @@ fn render_shell_activity(
                 .h(px(theme::FS_MD * theme::LINE_BODY))
                 .children(disclosure),
         )
-        .child(label);
+        .child(summary);
     if activity.failed > 0 {
         let key = call.clone();
         header = header.child(
@@ -4083,7 +4075,7 @@ fn render_shell_activity(
         .open(expanded)
         .child(header);
     if expanded {
-        let mut details = div().flex().flex_col().ml(px(theme::INDENT));
+        let mut details = div().flex().flex_col().min_w_0().ml(px(theme::INDENT));
         for block in activity.blocks {
             let Body::Tool(tool) = &block.body else {
                 continue;
@@ -4094,8 +4086,9 @@ fn render_shell_activity(
                 tool,
                 selection,
                 timings,
+                view.tool_state(tool.call.as_str()) == DisclosureState::Expanded,
+                controls.remove(&DisclosureId::Tool(tool.call.clone())),
                 true,
-                None,
             ));
         }
         group = group.content(details);
@@ -4111,8 +4104,9 @@ fn render_shell_activity(
                     tool,
                     selection,
                     timings,
-                    false,
-                    None,
+                    view.tool_state(tool.call.as_str()) == DisclosureState::Expanded,
+                    controls.remove(&DisclosureId::Tool(tool.call.clone())),
+                    true,
                 )));
             }
         }
@@ -4129,13 +4123,21 @@ fn render_shell_activity(
         let key = call.clone();
         let running = div().debug_selector(move || format!("tool-group-running-{key}"));
         group = group.child(if expanded {
-            running
+            running.into_any_element()
         } else {
-            running
-                .ml(px(theme::INDENT))
-                .text_color(rgb(TEXT_MUTED))
-                .truncate()
-                .child(SharedString::from(tool_summary_line(tool).into_owned()))
+            live_text(
+                running
+                    .ml(px(theme::INDENT))
+                    .w_full()
+                    .min_w_0()
+                    .text_color(rgb(TEXT_2))
+                    .line_clamp(3)
+                    .child(SharedString::from(format!(
+                        "{} {}",
+                        tool.name, tool.summary
+                    ))),
+                format!("live-tool-{}", tool.call).into(),
+            )
         });
     }
     div()
@@ -4150,15 +4152,15 @@ fn render_shell_activity(
 /// The compact row never lays out hard line breaks. The original command
 /// stays in the ToolBlock and becomes selectable in the disclosed details.
 fn tool_summary_line(tool: &ToolBlock) -> std::borrow::Cow<'_, str> {
-    if tool.summary.contains(['\n', '\r']) {
-        let first = tool
-            .summary
+    let summary = tool.title.as_deref().unwrap_or(&tool.summary);
+    if summary.contains(['\n', '\r']) {
+        let first = summary
             .lines()
             .find(|line| !line.trim().is_empty())
             .unwrap_or("");
         format!("{} …", first.trim()).into()
     } else {
-        tool.summary.as_str().into()
+        summary.into()
     }
 }
 
@@ -4286,7 +4288,7 @@ fn tool_verdicts(tool: &ToolBlock) -> Vec<ToolVerdict> {
 /// The only clickable part of a tool row. Its pointer role and pressed
 /// treatment make the chevron's hit target honest while the row stays text.
 pub fn tool_disclosure_control(
-    call: &str,
+    call: &DisclosureId,
     expanded: bool,
     targeted: bool,
     focus: &FocusHandle,
@@ -4295,10 +4297,13 @@ pub fn tool_disclosure_control(
         .w(px(theme::TOOL_DISCLOSURE_HIT))
         .h(px(theme::TOOL_DISCLOSURE_HIT))
         .p_0()
-        .tooltip(if expanded {
-            "Collapse tool details"
-        } else {
-            "Expand tool details"
+        .tooltip(match (call, expanded) {
+            (DisclosureId::Reasoning(_), false) => "Show reasoning",
+            (DisclosureId::Reasoning(_), true) => "Hide reasoning",
+            (DisclosureId::Group(_), false) => "Show tool calls",
+            (DisclosureId::Group(_), true) => "Hide tool calls",
+            (_, false) => "Show tool details",
+            (_, true) => "Hide tool details",
         })
         .child(icon(
             if expanded {
@@ -5205,6 +5210,7 @@ mod tests {
         // A Decision's subject becomes the alert's second line, wearing the
         // tool prefix every Decision surface shares (#22 C7).
         let decision = Decision {
+            delivery: Default::default(),
             id: "perm".into(),
             tool_use_id: "toolu".into(),
             tool_name: "Bash".into(),
@@ -5237,6 +5243,7 @@ mod tests {
     #[test]
     fn every_decision_surface_shares_one_subject_derivation() {
         let decision = |tool: &str, description: &str| Decision {
+            delivery: Default::default(),
             id: "perm".into(),
             tool_use_id: "toolu".into(),
             tool_name: tool.into(),

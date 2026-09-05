@@ -14,10 +14,7 @@ use gpui::component::{
     group_box::{GroupBox, GroupBoxVariants},
     Icon, IconName, Sizable, Theme,
 };
-use gpui::{
-    canvas, point, prelude::*, px, App, Axis, ElementId, Global, Hsla, IntoElement, PathBuilder,
-    Pixels, Window,
-};
+use gpui::{prelude::*, px, App, Axis, ElementId, Global, IntoElement, Window};
 
 use crate::attachment_preview::Preview;
 
@@ -215,7 +212,7 @@ impl RenderOnce for Attachments {
                             .relative()
                             .top(px(8. * (1. - entrance)))
                             .opacity(0.6 + 0.4 * entrance)
-                            .child(composer_join(radius, background))
+                            .child(crate::components::composer_join(radius, background))
                             .child(
                                 GroupBox::new()
                                     .id("attachment-island")
@@ -237,35 +234,6 @@ impl RenderOnce for Attachments {
 
 /// Concave shoulders turn the kit container's sides into the prompt's top
 /// edge. Only the join is drawn here; cards and their surface remain kit UI.
-fn composer_join(radius: Pixels, background: Hsla) -> impl IntoElement {
-    canvas(
-        |_, _, _| (),
-        move |bounds, _, window, _| {
-            let left = bounds.origin.x;
-            let right = bounds.right();
-            let top = bounds.origin.y;
-            let bottom = bounds.bottom();
-            let mut path = PathBuilder::fill();
-            path.move_to(point(left, bottom));
-            path.curve_to(point(left + radius, top), point(left + radius, bottom));
-            path.line_to(point(left + radius, bottom));
-            path.close();
-            path.move_to(point(right - radius, top));
-            path.curve_to(point(right, bottom), point(right - radius, bottom));
-            path.line_to(point(right - radius, bottom));
-            path.close();
-            if let Ok(path) = path.build() {
-                window.paint_path(path, background);
-            }
-        },
-    )
-    .absolute()
-    .left(-radius)
-    .right(-radius)
-    .bottom_0()
-    .h(radius)
-}
-
 /// Root sets a smaller rem for Ferrite's compact controls. Scope the kit's
 /// original rem to this subtree in every drawing phase, including image and
 /// button layout. No attachment dimensions are duplicated here.

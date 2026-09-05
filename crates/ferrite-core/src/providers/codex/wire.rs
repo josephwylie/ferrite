@@ -118,6 +118,22 @@ impl ContentDecoder {
             .as_str()
             .or(p["item"]["id"].as_str())
             .unwrap_or("");
+        // Started/completed repeat the same structured message. Deliver once,
+        // suppress its prose fallback, and keep final_answer from ending a turn.
+        if matches!(method, "item/started" | "item/completed") {
+            if let Some(decision) = super::questions::decode(p) {
+                if self.texts.contains_key(id) {
+                    return vec![];
+                }
+                if self.texts.len() < 128 {
+                    self.texts.insert(id.into(), None);
+                }
+                return vec![
+                    SessionEvent::ContentBoundary,
+                    SessionEvent::DecisionRequested { decision },
+                ];
+            }
+        }
         let mut before = vec![];
         if matches!(method, "item/agentMessage/delta" | "item/plan/delta") {
             if let Some(delta) = p["delta"].as_str() {
@@ -401,6 +417,7 @@ pub(super) fn parse_item(params: &Value, completed: bool) -> Option<SessionEvent
 fn parse_approval_request(value: &Value, params: &Value, tool_name: &str) -> Option<SessionEvent> {
     Some(SessionEvent::DecisionRequested {
         decision: Decision {
+            delivery: Default::default(),
             id: rpc_id_string(value.get("id")?)?,
             tool_use_id: params.get("itemId")?.as_str()?.to_string(),
             tool_name: tool_name.to_string(),
@@ -1110,6 +1127,7 @@ mod tests {
                     description,
                     input,
                     suggestions,
+                    ..
                 },
         } = decisions[0]
         else {

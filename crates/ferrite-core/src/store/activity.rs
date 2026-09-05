@@ -460,7 +460,9 @@ impl PersistedActivity {
             },
             // Replayed request IDs cannot authorize a new Session. Cancellation
             // only retires one of those live handles and is equally ephemeral.
-            ActivityEvent::Decision { .. } | ActivityEvent::DecisionCancelled { .. } => {
+            ActivityEvent::Decision { .. }
+            | ActivityEvent::DecisionCancelled { .. }
+            | ActivityEvent::DecisionReply { .. } => {
                 return None;
             }
         })

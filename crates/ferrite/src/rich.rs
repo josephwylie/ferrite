@@ -187,11 +187,12 @@ impl gpui::RenderOnce for Markdown {
         #[cfg(test)]
         testing::record(self.id, state.clone(), _window.text_style().clone(), cx);
         let text_style = if self.muted {
-            style().with_foreground(rgb(theme::TEXT_MUTED).into())
+            style().with_foreground(rgb(theme::TEXT_2).into())
         } else {
-            style()
+            style().with_foreground(rgb(theme::TEXT).into())
         };
         TextView::new(&state)
+            .font_family(theme::FONT_UI)
             .w_full()
             .min_w_0()
             // Use natural height inside the transcript's own scroll container.
@@ -238,12 +239,12 @@ pub fn style() -> TextViewStyle {
     TextViewStyle::default()
         .with_dark(true)
         .with_foreground(rgb(theme::TEXT_2).into())
-        .with_muted_foreground(rgb(theme::TEXT_MUTED).into())
-        .with_link(rgb(theme::TEXT_STRONG).into())
+        .with_muted_foreground(rgb(theme::TEXT_2).into())
+        .with_link(rgb(theme::LINK_INK).into())
         .with_selection(rgba(theme::TEXT_SELECTION_WASH).into())
         .with_code_background(rgb(theme::RAISED).into())
         .with_inline_code(gpui::HighlightStyle {
-            color: Some(rgb(theme::TEXT).into()),
+            color: Some(rgb(theme::INLINE_CODE_INK).into()),
             background_color: Some(rgb(theme::RAISED).into()),
             ..Default::default()
         })
