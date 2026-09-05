@@ -14,6 +14,20 @@ use ferrite_core::{Decision, DecisionAnswer, SessionEvent, TurnOutcome};
 /// Generous: a real turn crosses the network and may be rate limited.
 const TURN_TIMEOUT: Duration = Duration::from_secs(180);
 
+/// Metadata only: no Thread or turn, and no model call.
+#[test]
+#[ignore = "queries the installed Codex CLI model catalog"]
+fn the_real_server_lists_models_without_a_session() {
+    let program = std::env::var("FERRITE_CODEX_BIN").unwrap_or_else(|_| {
+        ferrite_core::providers::discover::program(ferrite_core::store::Provider::Codex)
+    });
+    let rows = ferrite_core::providers::codex_models(&program).unwrap();
+    assert!(!rows.is_empty(), "the installed provider announces a menu");
+    for row in rows {
+        println!("{}: {} ({:?})", row.value, row.display, row.efforts);
+    }
+}
+
 fn live_config() -> CodexConfig {
     CodexConfig {
         program: std::env::var("FERRITE_CODEX_BIN").unwrap_or_else(|_| "codex".into()),

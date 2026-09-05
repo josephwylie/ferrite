@@ -3,9 +3,9 @@
 //!
 //! Claude's CLI announces its menu at the handshake — values, resolved
 //! ids, one-line descriptions, effort levels — and Codex answers a
-//! `model/list` once its thread is up; either announcement always wins.
-//! A draft Pane has no Session to ask, and a Session that has not spoken
-//! yet has announced nothing: both read the fallback catalog here. The
+//! `model/list` both at app startup (without a Thread) and when a Session
+//! starts; either announcement always wins. Until discovery or a Session
+//! announces a menu, pickers read the fallback catalog here. The
 //! display grooming turns any raw id a Session's Init names
 //! (`claude-fable-5-1`, `gpt-5.4-mini`) into the name a person would say
 //! (`Fable 5.1`, `GPT-5.4 Mini`), so no API spelling ever reaches a chip.
@@ -32,7 +32,7 @@ type FallbackRow = (
     Option<&'static str>,
 );
 
-/// The models a provider offers when no Session of it has announced a
+/// The models a provider offers when its adapter has not announced a
 /// list. Values are the spellings the CLI accepts today; the display is
 /// what the picker shows; the efforts are what each took when last
 /// probed. The first row is the provider's own default.
@@ -153,7 +153,7 @@ pub fn fallback(provider: Provider) -> Vec<ModelInfo> {
         .collect()
 }
 
-/// The rows a picker shows for `provider`: what its Sessions announced
+/// The rows a picker shows for `provider`: what its adapter announced
 /// when any did, else the fallback catalog.
 pub fn catalog(provider: Provider, announced: &[ModelInfo]) -> Vec<ModelInfo> {
     if announced.is_empty() {

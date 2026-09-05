@@ -50,6 +50,12 @@ pub struct SpawnRequest<'a> {
 /// How a Session is started. Injected so the cockpit can be driven with
 /// scripted Sessions in tests — nothing below this line spawns a process.
 pub trait Spawner {
+    /// Discover provider menus off-thread, without creating a Session or
+    /// sending a prompt. Unsupported adapters keep the fallback catalog.
+    fn discover_models(&mut self) -> Option<Receiver<(Provider, Vec<ModelInfo>)>> {
+        None
+    }
+
     fn spawn(&mut self, request: SpawnRequest) -> io::Result<Box<dyn Session>>;
 
     /// A ready adapter completes synchronously; production overrides this
@@ -375,6 +381,9 @@ pub struct Cockpit {
     /// below, which keep it showing exactly the open Threads plus drafts.
     roster: Roster,
     spawner: Box<dyn Spawner>,
+    model_discovery: Option<Receiver<(Provider, Vec<ModelInfo>)>>,
+    discovered_models: Vec<(Provider, Vec<ModelInfo>)>,
+    models_changed: bool,
     bootstraps: HashMap<ThreadId, PendingBootstrap>,
     bootstrap_results: Vec<BootstrapResult>,
     sampler: Option<Box<dyn RssSampler>>,
@@ -385,9 +394,10 @@ pub struct Cockpit {
 }
 
 impl Cockpit {
-    pub fn try_new(store: Store, spawner: Box<dyn Spawner>) -> io::Result<Self> {
+    pub fn try_new(store: Store, mut spawner: Box<dyn Spawner>) -> io::Result<Self> {
         let registry = Registry::open(store.dir())?;
         let groups = Groups::load(store.dir())?;
+        let model_discovery = spawner.discover_models();
         Ok(Self {
             threads: BTreeMap::new(),
             store,
@@ -395,6 +405,9 @@ impl Cockpit {
             groups,
             roster: Roster::default(),
             spawner,
+            model_discovery,
+            discovered_models: Vec::new(),
+            models_changed: false,
             bootstraps: HashMap::new(),
             bootstrap_results: Vec::new(),
             sampler: None,
@@ -1616,6 +1629,7 @@ impl Cockpit {
     /// One frame: drain every live Session, fold what arrived, and write it
     /// down. What comes back is only the Panes that actually changed.
     pub fn pump(&mut self) -> Vec<PaneUpdate> {
+        self.poll_model_discovery();
         let mut frame = self.advance_startups();
         for (id, thread) in &mut self.threads {
             let Some(session) = thread.session.as_ref().and_then(SessionLifecycle::session) else {
@@ -1633,6 +1647,9 @@ impl Cockpit {
             };
             let mut release = None;
             for event in events {
+                if matches!(&event, SessionEvent::Models { models } if !models.is_empty()) {
+                    self.models_changed = true;
+                }
                 // Folded first, then written: the fold is what stops a tool
                 // call's clock, and the record carries that reading so a
                 // revived Thread keeps its durations.
@@ -1726,8 +1743,43 @@ impl Cockpit {
         true
     }
 
-    /// Models actually announced by live Sessions of this provider, stable
-    /// and deduplicated for a draft that has no Session of its own.
+    fn poll_model_discovery(&mut self) {
+        loop {
+            let Some(receiver) = &self.model_discovery else {
+                return;
+            };
+            match receiver.try_recv() {
+                Ok((provider, models)) if !models.is_empty() => {
+                    if let Some((_, known)) = self
+                        .discovered_models
+                        .iter_mut()
+                        .find(|(known, _)| *known == provider)
+                    {
+                        self.models_changed |= *known != models;
+                        *known = models;
+                    } else {
+                        self.discovered_models.push((provider, models));
+                        self.models_changed = true;
+                    }
+                }
+                Ok(_) => {}
+                Err(std::sync::mpsc::TryRecvError::Empty) => return,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.model_discovery = None;
+                    return;
+                }
+            }
+        }
+    }
+
+    /// A provider menu changed, including before there is a Pane Session
+    /// to repaint. The view also refreshes any already-open model picker.
+    pub fn take_models_changed(&mut self) -> bool {
+        std::mem::take(&mut self.models_changed)
+    }
+
+    /// Live Session announcements, else the install's startup discovery.
+    /// Drafts and Settings can read a provider menu before any Session exists.
     pub fn announced_models(&self, provider: Provider) -> Vec<ModelInfo> {
         let mut models: Vec<ModelInfo> = Vec::new();
         for thread in self
@@ -1741,10 +1793,18 @@ impl Cockpit {
                 }
             }
         }
-        models
+        if models.is_empty() {
+            self.discovered_models
+                .iter()
+                .find(|(known, _)| *known == provider)
+                .map(|(_, models)| models.clone())
+                .unwrap_or_default()
+        } else {
+            models
+        }
     }
 
-    /// The picker's rows for `provider`: what its live Sessions announced,
+    /// The picker's rows for `provider`: what its adapter announced,
     /// else the fallback catalog — never empty, so a draft can choose.
     pub fn model_catalog(&self, provider: Provider) -> Vec<ModelInfo> {
         crate::providers::models::catalog(provider, &self.announced_models(provider))

@@ -62,6 +62,25 @@ impl Spawn {
 }
 
 impl Spawner for Spawn {
+    fn discover_models(
+        &mut self,
+    ) -> Option<std::sync::mpsc::Receiver<(Provider, Vec<ferrite_core::ModelInfo>)>> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::Builder::new()
+            .name("ferrite-model-discovery".into())
+            .spawn(move || {
+                let program = ferrite_core::providers::discover::program(Provider::Codex);
+                match ferrite_core::providers::codex_models(&program) {
+                    Ok(models) => {
+                        let _ = tx.send((Provider::Codex, models));
+                    }
+                    Err(error) => eprintln!("ferrite: could not discover Codex models: {error}"),
+                }
+            })
+            .ok()?;
+        Some(rx)
+    }
+
     fn spawn(&mut self, request: SpawnRequest) -> io::Result<Box<dyn Session>> {
         self.config(request)
             .spawn(self.defaults.clone())

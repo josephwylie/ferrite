@@ -434,6 +434,7 @@ impl std::ops::Deref for Row {
 
 /// What picking a row does. A command or a file lands in the line; every
 /// other pick is Ferrite's own act, never a prompt.
+#[derive(PartialEq)]
 enum Consequence {
     /// Replace the whole `/filter` with `/name ` — sent later as plain text
     /// on Claude and translated to the typed skill item inside the Codex
@@ -464,6 +465,7 @@ enum Consequence {
 }
 
 /// What picking a band row does to the focused draft.
+#[derive(PartialEq)]
 enum BandChoice {
     Provider(ProviderChoice),
     /// The effort chip: a rung, or None for the operator's default.
@@ -722,6 +724,10 @@ impl CockpitView {
     /// changed are worth a repaint; a frame where nothing moved costs nothing.
     fn pump(&mut self, cx: &mut Context<Self>) {
         let frame = self.cockpit.pump();
+        let models_changed = self.cockpit.take_models_changed();
+        if models_changed {
+            self.refresh_model_picker(cx);
+        }
         let completions = self.cockpit.take_bootstrap_results();
         let startup_changed = !completions.is_empty();
         for completion in completions {
@@ -752,7 +758,12 @@ impl CockpitView {
         // A restart writes a Notice even when no Session streamed this frame —
         // and a failed respawn will never stream again, so this notify is that
         // notice's only ride to the screen.
-        if frame.is_empty() && restarted.is_empty() && !branch_tick && !startup_changed {
+        if frame.is_empty()
+            && restarted.is_empty()
+            && !branch_tick
+            && !startup_changed
+            && !models_changed
+        {
             return;
         }
         for update in &frame {
@@ -3295,6 +3306,39 @@ impl CockpitView {
         if let Some(open) = &mut self.popover {
             open.selected = open.selected.min(rows.len().saturating_sub(1));
             open.rows = rows;
+        }
+    }
+
+    /// Discovery can finish while a picker is open. Rebuild its rows and
+    /// preserve the highlighted choice by value, even if row order changes.
+    fn refresh_model_picker(&mut self, cx: &mut Context<Self>) {
+        let Some(previous) = self.popover.take() else {
+            return;
+        };
+        match (&previous.kind, previous.pane) {
+            (Kind::Provider, PaneIdentity::Thread(thread)) => self.open_provider_picker(thread, cx),
+            (Kind::Effort, PaneIdentity::Thread(thread)) => self.open_effort_picker(thread, cx),
+            (
+                Kind::Band(chip @ (pane::BandChip::Provider | pane::BandChip::Effort)),
+                PaneIdentity::Draft(_),
+            ) => {
+                self.open_band_popover(*chip, cx);
+            }
+            _ => {
+                self.popover = Some(previous);
+                return;
+            }
+        }
+        if let (Some(open), Some(selected)) =
+            (&mut self.popover, previous.rows.get(previous.selected))
+        {
+            if let Some(index) = open
+                .rows
+                .iter()
+                .position(|row| row.consequence == selected.consequence)
+            {
+                open.selected = index;
+            }
         }
     }
 
@@ -6017,6 +6061,7 @@ mod tests {
 
     #[derive(Clone, Default)]
     struct Fake {
+        model_discovery: Rc<RefCell<Option<Receiver<(Provider, Vec<ferrite_core::ModelInfo>)>>>>,
         streams: Rc<RefCell<Vec<Sender<SessionEvent>>>>,
         /// Every spawn's choice, in call order — what the provider-picker
         /// tests read back (#25).
@@ -6030,6 +6075,12 @@ mod tests {
     }
 
     impl Spawner for Fake {
+        fn discover_models(
+            &mut self,
+        ) -> Option<Receiver<(Provider, Vec<ferrite_core::ModelInfo>)>> {
+            self.model_discovery.borrow_mut().take()
+        }
+
         fn spawn(
             &mut self,
             request: ferrite_core::cockpit::SpawnRequest,
@@ -10398,6 +10449,91 @@ mod tests {
     }
 
     // ------------------------------------------------- Provider choice (#25)
+
+    #[gpui::test]
+    fn discovery_updates_an_open_draft_picker_without_starting_a_session(cx: &mut TestAppContext) {
+        let fake = Fake::default();
+        let (tx, rx) = mpsc::channel();
+        *fake.model_discovery.borrow_mut() = Some(rx);
+        let core = Cockpit::new(
+            Store::open(scratch("discovered-models")).unwrap(),
+            Box::new(fake.clone()),
+        );
+        bind_production_keys(cx);
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        tick(cx);
+        view.update(cx, |view, cx| {
+            view.open_band_popover(pane::BandChip::Provider, cx)
+        });
+        let models = vec![ferrite_core::ModelInfo {
+            value: "gpt-future-model".into(),
+            display: "Future Model".into(),
+            detail: "Discovered, never bundled".into(),
+            resolved: None,
+            efforts: vec!["medium".into(), "ultra".into()],
+            default_effort: Some("medium".into()),
+        }];
+        tx.send((Provider::Codex, models.clone())).unwrap();
+        tick(cx);
+        let index = view.read_with(cx, |view, _| {
+            assert_eq!(view.cockpit.model_catalog(Provider::Codex), models);
+            view.popover
+                .as_ref()
+                .unwrap()
+                .rows
+                .iter()
+                .position(|row| row.name.as_ref() == "Future Model")
+                .expect("the open picker updates when discovery arrives")
+        });
+        assert!(
+            fake.spawned.borrow().is_empty(),
+            "discovery creates no Session"
+        );
+        view.update(cx, |view, cx| view.pick(index, cx));
+        view.read_with(cx, |view, _| {
+            assert_eq!(
+                view.panes[0]
+                    .draft()
+                    .unwrap()
+                    .binding
+                    .provider()
+                    .model
+                    .as_deref(),
+                Some("gpt-future-model")
+            );
+            assert!(view.cockpit.threads().is_empty());
+        });
+        assert!(
+            fake.spawned.borrow().is_empty(),
+            "choosing a model creates no Session"
+        );
+        tx.send((Provider::Codex, Vec::new())).unwrap();
+        drop(tx);
+        tick(cx);
+        view.update(cx, |view, cx| {
+            assert_eq!(
+                view.cockpit.model_catalog(Provider::Codex),
+                models,
+                "an empty discovery keeps the last usable menu"
+            );
+            view.settings_open = true;
+            cx.notify();
+        });
+        tick(cx);
+        let choice = cx
+            .debug_bounds("settings-codex-model-0")
+            .expect("Settings renders the discovered model")
+            .center();
+        cx.simulate_click(choice, gpui::Modifiers::none());
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert_eq!(
+                view.prefs.settings.codex_model.as_deref(),
+                Some("gpt-future-model")
+            );
+        });
+    }
 
     /// #25 AC: the keyboard-only path. `/` lists the local provider row on
     /// top; ↵ opens the picker — the two Providers with the ✓ on the
