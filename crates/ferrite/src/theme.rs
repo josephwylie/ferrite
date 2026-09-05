@@ -611,6 +611,11 @@ pub const DIFF_SIGN_W: f32 = 7.0;
 pub const DIFF_GAP: f32 = 10.0;
 #[allow(dead_code)]
 pub const HUNK_MARGIN_T: f32 = 4.0;
+/// How many rows one hunk card draws before it stops and says how many it
+/// did not. An edit's patch is a handful of lines; a written file's is
+/// however long the file is, and a card that redrew a 900-line file would
+/// be the transcript rather than a note in it.
+pub const HUNK_MAX_ROWS: usize = 24;
 /// A chip's padding — the pass chip, the changed strip's file chip: 1px
 /// block, 6px inline.
 #[allow(dead_code)]

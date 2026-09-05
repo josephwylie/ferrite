@@ -4635,6 +4635,12 @@ pub fn tool_disclosure_control(
 ///
 /// The code cells route through the overlay — their lines copy honestly;
 /// the number and sign columns are chrome and never do (#27).
+///
+/// The card draws at most `HUNK_MAX_ROWS` rows and then names what it left
+/// out. A patch is normally a handful of lines, but a written file's patch
+/// is the whole file, and the card is a note about a change rather than the
+/// change itself. The count it reports is the truth — `Diff::added` and the
+/// CHANGED strip always count every line, drawn or not.
 fn render_diff(block: BlockId, diff: &Diff, selection: &TextRuns) -> impl IntoElement {
     let mut lines = div()
         .flex()
@@ -4651,10 +4657,16 @@ fn render_diff(block: BlockId, diff: &Diff, selection: &TextRuns) -> impl IntoEl
         // unpainted seam between them.
         .line_height(px((theme::FS_MD * theme::LINE_HUNK).round()))
         .text_color(rgb(TEXT_MUTED));
+    let (cap, omitted) = hunk_rows(diff.hunks.iter().map(|hunk| hunk.lines.len()).sum());
+    let mut drawn = 0usize;
     for hunk in &diff.hunks {
         let mut old = hunk.old_start;
         let mut new = hunk.new_start;
         for line in &hunk.lines {
+            if drawn == cap {
+                break;
+            }
+            drawn += 1;
             // The prototype signs a removal with U+2212 MINUS SIGN, never a
             // hyphen; the source line still carries whatever it carries, so
             // the sign column is drawn and the body is the bare code — the
@@ -4725,7 +4737,37 @@ fn render_diff(block: BlockId, diff: &Diff, selection: &TextRuns) -> impl IntoEl
             );
         }
     }
+    // What the cap left out, in the card's quietest ink and on the same
+    // grid as the rows above it — never a silent truncation.
+    if omitted > 0 {
+        lines = lines.child(
+            div()
+                .flex()
+                .gap(px(theme::DIFF_GAP))
+                .px(px(theme::HUNK_PAD_X))
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .w(px(theme::DIFF_NUM_W + theme::DIFF_SIGN_W + theme::DIFF_GAP)),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(rgb(SEP))
+                        .child(SharedString::from(format!("… {omitted} more lines"))),
+                ),
+        );
+    }
     lines
+}
+
+/// How many of a diff's rows the card draws, and how many are left for
+/// the omission line to account for. Split out so the arithmetic the card
+/// depends on is assertable without a window.
+fn hunk_rows(total: usize) -> (usize, usize) {
+    let drawn = total.min(theme::HUNK_MAX_ROWS);
+    (drawn, total - drawn)
 }
 
 /// What a unified-diff line is, read from its first byte.
@@ -5574,6 +5616,24 @@ mod tests {
                 .context
                 .as_ref(),
             "unreadable permission request"
+        );
+    }
+
+    /// A written file's patch is the whole file, so the card draws a
+    /// bounded number of rows and accounts for the rest. Every line is
+    /// still counted — the cap is what is drawn, never what is claimed.
+    #[test]
+    fn a_hunk_card_draws_a_bounded_number_of_rows_and_says_what_it_left() {
+        assert_eq!(hunk_rows(0), (0, 0));
+        assert_eq!(hunk_rows(4), (4, 0));
+        assert_eq!(
+            hunk_rows(theme::HUNK_MAX_ROWS),
+            (theme::HUNK_MAX_ROWS, 0),
+            "a patch that exactly fills the card is not truncated"
+        );
+        assert_eq!(
+            hunk_rows(theme::HUNK_MAX_ROWS + 900),
+            (theme::HUNK_MAX_ROWS, 900)
         );
     }
 
