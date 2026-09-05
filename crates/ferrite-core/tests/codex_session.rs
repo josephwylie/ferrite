@@ -14,7 +14,9 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 use ferrite_core::providers::{CodexCapabilities, CodexConfig, CodexSession, CodexSpawnError};
-use ferrite_core::{Decision, DecisionAnswer, SessionEvent, ToolResult, TurnOutcome};
+use ferrite_core::{
+    Decision, DecisionAnswer, RateLimitWindow, SessionEvent, ToolResult, TurnOutcome,
+};
 
 const VERSION_CASE: &str = "case \"$1\" in --version) echo 'codex-cli 0.149.1'; exit 0;; esac";
 
@@ -223,7 +225,7 @@ fn the_reader_thread_delivers_the_captured_stream() {
     let session = CodexSession::spawn(config(program)).unwrap();
     let events = drain(session.events());
 
-    assert_eq!(events.len(), 7, "unexpected stream: {events:?}");
+    assert_eq!(events.len(), 8, "unexpected stream: {events:?}");
     let SessionEvent::Init { session_id, model } = &events[0] else {
         panic!("the Session must announce itself first: {events:?}");
     };
@@ -244,6 +246,18 @@ fn the_reader_thread_delivers_the_captured_stream() {
     assert!(events
         .iter()
         .any(|e| matches!(e, SessionEvent::TokenUsage { .. })));
+    assert!(events.iter().any(|event| {
+        matches!(
+            event,
+            SessionEvent::RateLimits {
+                five_hour: None,
+                weekly: Some(RateLimitWindow {
+                    used_fraction: 0.08,
+                    resets_at: Some(1_788_137_211),
+                }),
+            }
+        )
+    }));
     assert_eq!(
         events.last(),
         Some(&SessionEvent::TurnEnded {
