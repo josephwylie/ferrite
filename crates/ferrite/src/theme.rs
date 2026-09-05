@@ -591,3 +591,55 @@ pub const FONT_MONO: &str = "JetBrains Mono";
 /// Unlike the mono family it exposes a real weight axis, so `.font_weight`
 /// works here.
 pub const FONT_UI: &str = ".SystemUIFont";
+
+/// Install Longbridge once per app, then map its semantic theme to Ferrite's
+/// existing tokens. Constructors also call this for standalone test windows.
+/// The window mounts the toolkit Root for Settings search input and focus.
+pub fn init_components(cx: &mut gpui::App) {
+    use gpui::{px, rgb, rgba};
+    use gpui_component::{Theme, ThemeMode};
+
+    if cx.has_global::<Theme>() {
+        return;
+    }
+    gpui_component::init(cx);
+    Theme::change(ThemeMode::Dark, None, cx);
+    let theme = Theme::global_mut(cx);
+    theme.font_family = FONT_UI.into();
+    theme.font_size = px(FS_MD);
+    theme.mono_font_family = FONT_MONO.into();
+    theme.mono_font_size = px(FS_MD);
+    theme.radius = px(R_CONTROL);
+    theme.radius_lg = px(R_MENU);
+    theme.shadow = false;
+    theme.background = rgb(PANE).into();
+    theme.foreground = rgb(TEXT).into();
+    theme.border = rgba(TRANSPARENT).into();
+    theme.accent = rgb(HOVER).into();
+    theme.accent_foreground = rgb(TEXT_STRONG).into();
+    theme.secondary = rgb(RAISED).into();
+    theme.secondary_hover = rgb(HOVER).into();
+    theme.secondary_active = rgb(PRESSED).into();
+    theme.secondary_foreground = rgb(TEXT_2).into();
+    theme.primary = rgb(FILL).into();
+    theme.primary_hover = rgb(FILL_HOVER).into();
+    theme.primary_active = rgb(PRESSED).into();
+    theme.primary_foreground = rgb(TEXT_STRONG).into();
+    theme.muted = rgb(RAISED).into();
+    theme.muted_foreground = rgb(TEXT_MUTED).into();
+    theme.popover = rgb(MENU).into();
+    theme.popover_foreground = rgb(TEXT).into();
+    theme.ring = rgb(FOCUS).into();
+    theme.selection = rgb(SELECTION).into();
+    theme.sidebar = rgb(MENU).into();
+    theme.sidebar_foreground = rgb(TEXT_2).into();
+    theme.sidebar_accent = rgb(HOVER).into();
+    theme.sidebar_accent_foreground = rgb(TEXT_STRONG).into();
+    theme.sidebar_border = rgba(TRANSPARENT).into();
+    theme.input = rgb(RAISED).into();
+    theme.switch = rgb(RAISED).into();
+    theme.switch_thumb = rgb(TEXT_STRONG).into();
+    theme.scrollbar = rgba(TRANSPARENT).into();
+    theme.scrollbar_thumb = rgb(FILL).into();
+    theme.scrollbar_thumb_hover = rgb(HOVER).into();
+}

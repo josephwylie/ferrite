@@ -189,8 +189,12 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
         (with_primary("shift-n"), "cockpit::NewWorktreeThread", None),
         // Tab keeps #29's draft-band walk; on a Thread Pane the same action
         // walks L1 tool disclosures. Shift-Tab is the reverse Thread walk.
-        ("tab".into(), "cockpit::BandCycle", None),
-        ("shift-tab".into(), "cockpit::ToolCyclePrevious", None),
+        ("tab".into(), "cockpit::BandCycle", Some("Ferrite")),
+        (
+            "shift-tab".into(),
+            "cockpit::ToolCyclePrevious",
+            Some("Ferrite"),
+        ),
         // Close parks the Thread; it is still there, and reopening revives it.
         (with_primary("w"), "cockpit::CloseThread", None),
         // And back again: the most recently parked Thread, revived.
@@ -334,13 +338,13 @@ mod tests {
     fn tab_cycles_the_band_on_both_platforms() {
         for platform in [Platform::Mac, Platform::Windows] {
             assert!(
-                bindings(platform).contains(&("tab".into(), "cockpit::BandCycle", None)),
+                bindings(platform).contains(&("tab".into(), "cockpit::BandCycle", Some("Ferrite"))),
                 "{platform:?} is missing tab for cockpit::BandCycle"
             );
             assert!(bindings(platform).contains(&(
                 "shift-tab".into(),
                 "cockpit::ToolCyclePrevious",
-                None
+                Some("Ferrite")
             )));
         }
     }

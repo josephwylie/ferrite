@@ -18,9 +18,9 @@ use ferrite_core::workspace::WorkspaceChoice;
 use ferrite_core::{DecisionAnswer, ThreadId};
 use gpui::prelude::*;
 use gpui::{
-    actions, anchored, deferred, div, px, rgb, rgba, AnyElement, ClipboardItem, Context, Div,
-    Entity, FocusHandle, Focusable, FontWeight, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, Pixels, Point, ScrollHandle, SharedString, Stateful, Window,
+    actions, anchored, deferred, div, px, rgb, rgba, AnyElement, ClickEvent, ClipboardItem,
+    Context, Div, Entity, FocusHandle, Focusable, FontWeight, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle, SharedString, Stateful, Window,
 };
 
 use crate::composer::{Composer, Edited};
@@ -162,7 +162,7 @@ pub struct CockpitView {
     prefs: Preferences,
     /// The Settings panel is up.
     settings_open: bool,
-    settings_scroll: ScrollHandle,
+    settings_focus: FocusHandle,
     /// The CLIs' versions as `--version` reports them, probed once when the
     /// panel first opens: (claude, codex).
     cli_versions: Option<(SharedString, SharedString)>,
@@ -528,6 +528,7 @@ impl CockpitView {
         prefs: Preferences,
         cx: &mut Context<Self>,
     ) -> Self {
+        crate::theme::init_components(cx);
         cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(pump_interval()).await;
             if this.update(cx, |view, cx| view.pump(cx)).is_err() {
@@ -570,7 +571,7 @@ impl CockpitView {
             drop_preview: None,
             prefs,
             settings_open: false,
-            settings_scroll: ScrollHandle::new(),
+            settings_focus: cx.focus_handle(),
             cli_versions: None,
             group_error: None,
             questions: std::collections::HashMap::new(),
@@ -788,7 +789,7 @@ impl CockpitView {
             .into_iter()
             .flat_map(|transcript| transcript.blocks())
             .filter_map(|block| match &block.body {
-                ferrite_core::transcript::Body::Tool(tool) if tool.output.is_some() => {
+                ferrite_core::transcript::Body::Tool(tool) if pane::tool_has_details(tool) => {
                     Some(tool.call.clone())
                 }
                 _ => None,
@@ -1736,347 +1737,223 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// The Settings panel: a veil over the whole window (a press on it
-    /// closes the panel) and the card, sections of rows whose chips each
-    /// write one setting. Deferred so nothing paints over it.
+    /// Route every toolkit field through the same save and session-default path.
+    fn setting_change<T: 'static>(
+        &self,
+        cx: &Context<Self>,
+        write: impl Fn(&mut ferrite_core::settings::Settings, T) + 'static,
+    ) -> impl Fn(T, &mut gpui::App) + 'static {
+        let view = cx.entity().downgrade();
+        move |value, cx| {
+            let _ = view.update(cx, |view, cx| {
+                view.change_settings(|settings| write(settings, value), cx);
+            });
+        }
+    }
+
+    /// Searchable toolkit Settings, drawn above the cockpit's overlays.
     fn settings_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        use gpui_component::setting::SettingGroup;
         if !self.settings_open {
             return None;
         }
         let settings = &self.prefs.settings;
-        let mut sections: Vec<AnyElement> = Vec::new();
-
-        // --- New Threads ---
-        let provider_chips: Vec<AnyElement> = [Provider::Claude, Provider::Codex]
-            .into_iter()
-            .enumerate()
-            .map(|(at, provider)| {
-                prefs::chip(
-                    ("settings-provider", at),
-                    SharedString::from(provider_title(provider)),
-                    settings.default_provider == provider,
-                )
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                        cx.stop_propagation();
-                        view.change_settings(|settings| settings.default_provider = provider, cx);
-                    }),
-                )
-                .into_any_element()
-            })
-            .collect();
-        let mut rows = vec![prefs::row(
+        let mut defaults = vec![prefs::choices(
+            "settings-provider",
             "Provider",
-            "What a new Thread starts on".into(),
-            provider_chips,
-        )
-        .into_any_element()];
-        for (slot, provider) in [Provider::Claude, Provider::Codex].into_iter().enumerate() {
+            "What a new Thread starts on",
+            [Provider::Claude, Provider::Codex]
+                .into_iter()
+                .map(|provider| {
+                    (
+                        provider_title(provider).into(),
+                        settings.default_provider == provider,
+                        provider,
+                    )
+                })
+                .collect(),
+            self.setting_change(cx, |settings, provider| {
+                settings.default_provider = provider
+            }),
+        )];
+        for provider in [Provider::Claude, Provider::Codex] {
             let chosen = settings.model_for(provider).map(str::to_string);
-            let mut chips: Vec<AnyElement> = Vec::new();
             let mut catalog = self.cockpit.model_catalog(provider);
             if let Some(chosen) = &chosen {
                 if !catalog.iter().any(|row| row.is(chosen)) {
                     catalog.push(ferrite_core::ModelInfo::bare(chosen));
                 }
             }
-            for (at, model) in catalog.into_iter().enumerate() {
-                let value = Some(model.value.clone()).filter(|value| value != "default");
-                let selected = chosen == value;
-                let pick = value.clone();
-                chips.push(
-                    prefs::chip(
-                        (
-                            if provider == Provider::Claude {
-                                "settings-claude-model"
-                            } else {
-                                "settings-codex-model"
-                            },
-                            at,
-                        ),
-                        SharedString::from(model.display.clone()),
-                        selected,
-                    )
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                            cx.stop_propagation();
-                            let pick = pick.clone();
-                            view.change_settings(
-                                |settings| settings.set_model_for(provider, pick),
-                                cx,
-                            );
-                        }),
-                    )
-                    .into_any_element(),
-                );
-            }
-            let _ = slot;
-            rows.push(
-                prefs::row(
-                    if provider == Provider::Claude {
-                        "Claude model"
-                    } else {
-                        "Codex model"
-                    },
-                    "Default is the CLI's own choice".into(),
-                    chips,
-                )
-                .into_any_element(),
-            );
-            // The effort default: the ladder the chosen model takes.
-            let chosen_effort = settings.effort_for(provider).map(str::to_string);
+            defaults.push(prefs::choices(
+                if provider == Provider::Claude {
+                    "settings-claude-model"
+                } else {
+                    "settings-codex-model"
+                },
+                if provider == Provider::Claude {
+                    "Claude model"
+                } else {
+                    "Codex model"
+                },
+                "Default uses the CLI's own choice",
+                catalog
+                    .into_iter()
+                    .map(|model| {
+                        let value = Some(model.value).filter(|v| v != "default");
+                        (model.display.into(), chosen == value, value)
+                    })
+                    .collect(),
+                self.setting_change(cx, move |settings, value| {
+                    settings.set_model_for(provider, value)
+                }),
+            ));
+            let effort = settings.effort_for(provider).map(str::to_string);
             let ladder = ferrite_core::providers::models::efforts_for(
                 provider,
                 chosen.as_deref(),
                 &self.cockpit.announced_models(provider),
             );
-            let mut effort_chips: Vec<AnyElement> = Vec::new();
-            for (at, effort) in std::iter::once(None)
-                .chain(ladder.into_iter().map(Some))
-                .enumerate()
-            {
-                let selected = chosen_effort == effort;
-                let pick = effort.clone();
-                let label = match &effort {
-                    Some(effort) => SharedString::from(effort_title(effort)),
-                    None => SharedString::from("Default"),
-                };
-                effort_chips.push(
-                    prefs::chip(
-                        (
-                            if provider == Provider::Claude {
-                                "settings-claude-effort"
-                            } else {
-                                "settings-codex-effort"
-                            },
-                            at,
-                        ),
-                        label,
-                        selected,
-                    )
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                            cx.stop_propagation();
-                            let pick = pick.clone();
-                            view.change_settings(
-                                |settings| settings.set_effort_for(provider, pick),
-                                cx,
-                            );
-                        }),
-                    )
-                    .into_any_element(),
-                );
-            }
-            rows.push(
-                prefs::row(
-                    if provider == Provider::Claude {
-                        "Claude effort"
-                    } else {
-                        "Codex effort"
-                    },
-                    "Reasoning depth a new Thread starts at; each Thread can change its own".into(),
-                    effort_chips,
-                )
-                .into_any_element(),
-            );
+            defaults.push(prefs::choices(
+                if provider == Provider::Claude {
+                    "settings-claude-effort"
+                } else {
+                    "settings-codex-effort"
+                },
+                if provider == Provider::Claude {
+                    "Claude effort"
+                } else {
+                    "Codex effort"
+                },
+                "Reasoning depth for new Threads. Each Thread can change its own.",
+                std::iter::once(None)
+                    .chain(ladder.into_iter().map(Some))
+                    .map(|value| {
+                        let label = value
+                            .as_deref()
+                            .map(effort_title)
+                            .unwrap_or_else(|| "Default".into());
+                        (label.into(), effort == value, value)
+                    })
+                    .collect(),
+                self.setting_change(cx, move |settings, value| {
+                    settings.set_effort_for(provider, value)
+                }),
+            ));
         }
-        sections.push(prefs::section("New Threads", rows).into_any_element());
-
-        // --- Permissions ---
-        let mode_chips = |cx: &mut Context<Self>,
-                          current: Option<&str>,
-                          options: &'static [(&'static str, Option<&'static str>)],
-                          id: &'static str,
-                          write: fn(&mut ferrite_core::settings::Settings, Option<String>)|
-         -> Vec<AnyElement> {
+        let modes = |options: &[(&str, Option<&str>)], selected: Option<&str>| {
             options
                 .iter()
-                .enumerate()
-                .map(|(at, (label, value))| {
-                    let value: Option<String> = value.map(str::to_string);
-                    let pick = value.clone();
-                    prefs::chip(
-                        (id, at),
-                        SharedString::from(*label),
-                        current == value.as_deref(),
+                .map(|(label, value)| {
+                    (
+                        SharedString::from(label.to_string()),
+                        selected == *value,
+                        value.map(str::to_string),
                     )
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                            cx.stop_propagation();
-                            let pick = pick.clone();
-                            view.change_settings(|settings| write(settings, pick), cx);
-                        }),
-                    )
-                    .into_any_element()
                 })
                 .collect()
         };
-        const CLAUDE_MODES: &[(&str, Option<&str>)] = &[
-            ("CLI default", None),
-            ("Ask", Some("default")),
-            ("Accept edits", Some("acceptEdits")),
-            ("Plan", Some("plan")),
-            ("Bypass", Some("bypassPermissions")),
-        ];
-        const CODEX_APPROVALS: &[(&str, Option<&str>)] = &[
-            ("On request", Some("on-request")),
-            ("Untrusted", Some("untrusted")),
-            ("Never", Some("never")),
-        ];
-        const CODEX_SANDBOXES: &[(&str, Option<&str>)] = &[
-            ("Codex default", None),
-            ("Read only", Some("read-only")),
-            ("Workspace write", Some("workspace-write")),
-            ("Full access", Some("danger-full-access")),
-        ];
-        let rows = vec![
-            prefs::row(
+        let permissions = vec![
+            prefs::choices(
+                "settings-claude-mode",
                 "Claude permissions",
-                "Applies to the next Session".into(),
-                mode_chips(
-                    cx,
+                "When Claude asks before acting",
+                modes(
+                    &[
+                        ("CLI default", None),
+                        ("Ask", Some("default")),
+                        ("Accept edits", Some("acceptEdits")),
+                        ("Plan", Some("plan")),
+                        ("Bypass", Some("bypassPermissions")),
+                    ],
                     settings.claude_permission_mode.as_deref(),
-                    CLAUDE_MODES,
-                    "settings-claude-mode",
-                    |s, v| s.claude_permission_mode = v,
                 ),
-            )
-            .into_any_element(),
-            prefs::row(
+                self.setting_change(cx, |s, v| s.claude_permission_mode = v),
+            ),
+            prefs::choices(
+                "settings-codex-approval",
                 "Codex approvals",
-                "When Codex asks before acting".into(),
-                mode_chips(
-                    cx,
-                    Some(settings.codex_approval_policy.as_str()),
-                    CODEX_APPROVALS,
-                    "settings-codex-approval",
-                    |s, v| s.codex_approval_policy = v.unwrap_or_else(|| "on-request".into()),
+                "When Codex asks before acting",
+                modes(
+                    &[
+                        ("On request", Some("on-request")),
+                        ("Untrusted", Some("untrusted")),
+                        ("Never", Some("never")),
+                    ],
+                    Some(&settings.codex_approval_policy),
                 ),
-            )
-            .into_any_element(),
-            prefs::row(
-                "Codex sandbox",
-                "What Codex may touch".into(),
-                mode_chips(
-                    cx,
-                    settings.codex_sandbox.as_deref(),
-                    CODEX_SANDBOXES,
-                    "settings-codex-sandbox",
-                    |s, v| s.codex_sandbox = v,
-                ),
-            )
-            .into_any_element(),
-        ];
-        sections.push(prefs::section("Permissions", rows).into_any_element());
-
-        // --- Behaviour ---
-        let toggle = |cx: &mut Context<Self>,
-                      id: &'static str,
-                      on: bool,
-                      write: fn(&mut ferrite_core::settings::Settings, bool)|
-         -> Vec<AnyElement> {
-            [("On", true), ("Off", false)]
-                .into_iter()
-                .enumerate()
-                .map(|(at, (label, value))| {
-                    prefs::chip((id, at), SharedString::from(label), on == value)
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                                cx.stop_propagation();
-                                view.change_settings(|settings| write(settings, value), cx);
-                            }),
-                        )
-                        .into_any_element()
-                })
-                .collect()
-        };
-        let rows = vec![
-            prefs::row(
-                "Name Threads by their first prompt",
-                format!(
-                    "Then a short title its own Provider writes (Claude {} at {} effort, Codex {} at {}) — until you rename it",
-                    ferrite_core::titler::claude::MODEL,
-                    ferrite_core::titler::claude::EFFORT,
-                    ferrite_core::titler::codex::MODEL,
-                    ferrite_core::titler::codex::EFFORT,
-                )
-                .into(),
-                toggle(cx, "settings-auto-title", settings.auto_title, |s, v| {
-                    s.auto_title = v
+                self.setting_change(cx, |s, v: Option<String>| {
+                    s.codex_approval_policy = v.unwrap_or_else(|| "on-request".into())
                 }),
-            )
-            .into_any_element(),
-            prefs::row(
-                "Confirm before deleting a Thread",
-                "".into(),
-                toggle(
-                    cx,
-                    "settings-confirm-delete",
-                    settings.confirm_delete,
-                    |s, v| s.confirm_delete = v,
+            ),
+            prefs::choices(
+                "settings-codex-sandbox",
+                "Codex sandbox",
+                "What Codex may touch",
+                modes(
+                    &[
+                        ("Codex default", None),
+                        ("Read only", Some("read-only")),
+                        ("Workspace write", Some("workspace-write")),
+                        ("Full access", Some("danger-full-access")),
+                    ],
+                    settings.codex_sandbox.as_deref(),
                 ),
-            )
-            .into_any_element(),
-            prefs::row(
-                "Start with the sidebar collapsed",
-                "⌘B toggles it any time".into(),
-                toggle(
-                    cx,
-                    "settings-nav-collapsed",
-                    settings.nav_collapsed,
-                    |s, v| s.nav_collapsed = v,
-                ),
-            )
-            .into_any_element(),
+                self.setting_change(cx, |s, v| s.codex_sandbox = v),
+            ),
         ];
-        sections.push(prefs::section("Behaviour", rows).into_any_element());
-
-        // --- About ---
+        let behaviour = vec![
+            prefs::toggle("settings-auto-title", "Name Threads automatically",
+                "Use the first prompt, then a short title from the Thread's Provider. Renaming a Thread keeps your title.",
+                settings.auto_title, self.setting_change(cx, |s, v| s.auto_title = v)),
+            prefs::toggle("settings-confirm-delete", "Confirm before deleting a Thread", "Ask before removing a Thread and its transcript.",
+                settings.confirm_delete, self.setting_change(cx, |s, v| s.confirm_delete = v)),
+            prefs::toggle("settings-nav-collapsed", "Start with the sidebar collapsed", "⌘B toggles it any time",
+                settings.nav_collapsed, self.setting_change(cx, |s, v| s.nav_collapsed = v)),
+        ];
         let (claude, codex) = self
             .cli_versions
             .clone()
             .unwrap_or_else(|| ("checking…".into(), "checking…".into()));
-        let rows = vec![
-            prefs::fact("claude CLI", claude).into_any_element(),
-            prefs::fact("codex CLI", codex).into_any_element(),
+        let about = vec![
+            prefs::fact("Claude CLI", claude),
+            prefs::fact("Codex CLI", codex),
             prefs::fact(
                 "Threads",
-                SharedString::from(self.prefs.dir.join("threads").display().to_string()),
-            )
-            .into_any_element(),
+                self.prefs.dir.join("threads").display().to_string().into(),
+            ),
             prefs::fact(
                 "Settings file",
-                SharedString::from(
-                    self.prefs
-                        .dir
-                        .join(ferrite_core::settings::Settings::FILE)
-                        .display()
-                        .to_string(),
-                ),
-            )
-            .into_any_element(),
+                self.prefs
+                    .dir
+                    .join(ferrite_core::settings::Settings::FILE)
+                    .display()
+                    .to_string()
+                    .into(),
+            ),
         ];
-        sections.push(prefs::section("About", rows).into_any_element());
+        let groups = vec![
+            SettingGroup::new().title("New Threads").items(defaults),
+            SettingGroup::new().title("Permissions").items(permissions),
+            SettingGroup::new().title("Behaviour").items(behaviour),
+            SettingGroup::new().title("About").items(about),
+        ];
 
         let card = prefs::card()
+            .id("settings-card")
+            .debug_selector(|| "settings-card".into())
+            .track_focus(&self.settings_focus)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
             )
-            .child(prefs::head(prefs::close_button().on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|view, _: &MouseDownEvent, _, cx| {
+            .child(prefs::head(prefs::close_button().on_click(cx.listener(
+                |view, _: &ClickEvent, _, cx| {
                     cx.stop_propagation();
                     view.settings_open = false;
                     cx.notify();
-                }),
-            )))
-            .child(prefs::body(&self.settings_scroll).children(sections));
+                },
+            ))))
+            .child(prefs::body(groups));
         Some(
             deferred(
                 prefs::veil()
@@ -2334,6 +2211,10 @@ impl CockpitView {
     /// Tab walks a draft's band (#29), or an L1 Thread Pane's rendered tool
     /// disclosures before returning to the Composer.
     fn band_cycle(&mut self, _: &BandCycle, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings_open {
+            window.focus_next();
+            return;
+        }
         let Some(draft) = self.focused_draft_mut() else {
             self.cycle_tools(false, window, cx);
             return;
@@ -2356,7 +2237,11 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.cycle_tools(true, window, cx);
+        if self.settings_open {
+            window.focus_prev();
+        } else {
+            self.cycle_tools(true, window, cx);
+        }
     }
 
     fn cycle_tools(&mut self, reverse: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -4600,7 +4485,12 @@ impl Render for CockpitView {
                 })
             })
             .unwrap_or_else(|| self.focus.clone());
-        if !wanted.is_focused(window) {
+        if self.settings_open {
+            // The pump must not steal focus from Settings search or controls.
+            if !self.settings_focus.contains_focused(window, cx) {
+                window.focus(&self.settings_focus);
+            }
+        } else if !wanted.is_focused(window) {
             window.focus(&wanted);
         }
 
@@ -4667,10 +4557,13 @@ impl Render for CockpitView {
             .bg(rgb(crate::theme::GROUND))
             .font_family(crate::theme::FONT_UI)
             .track_focus(&self.focus)
+            .key_context("Ferrite")
             // At wall range no Pane holds a Composer, so the answer keys are
             // not competing with typing: they answer whichever Thread is
             // flagged, without the operator focusing it first.
-            .when(level == Level::Wall, |wall| wall.key_context("Wall"))
+            .when(level == Level::Wall, |wall| {
+                wall.key_context("Ferrite Wall")
+            })
             .on_action(cx.listener(Self::submit))
             .on_action(cx.listener(Self::unqueue_from_backspace))
             .on_action(cx.listener(Self::interrupt))
@@ -5642,13 +5535,10 @@ impl CockpitView {
     /// `nav_state`'s O(1) reads or the project/branch/parked caches.
     fn nav(&self, cx: &mut Context<Self>) -> Div {
         let state = self.nav_state();
-        let gear = prefs::gear_button().on_mouse_down(
-            MouseButton::Left,
-            cx.listener(|view, _: &MouseDownEvent, _, cx| {
-                cx.stop_propagation();
-                view.toggle_settings(cx);
-            }),
-        );
+        let gear = prefs::gear_button().on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
+            cx.stop_propagation();
+            view.toggle_settings(cx);
+        }));
         let mut chrome =
             nav::win_chrome(state.collapsed).child(nav::collapse_button().on_mouse_down(
                 MouseButton::Left,
@@ -8096,6 +7986,94 @@ mod tests {
     }
 
     #[gpui::test]
+    fn multiline_tool_input_is_compact_and_disclosable_while_running(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("multiline-tool-disclosure", 1);
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+        let command = "cat <<'EOF'\nlet answer = 42;\nEOF";
+        fake.streams.borrow()[0]
+            .send(SessionEvent::ToolStarted {
+                id: "multiline".into(),
+                name: "Bash".into(),
+                input: serde_json::json!({ "command": command }),
+            })
+            .unwrap();
+        fake.streams.borrow()[0]
+            .send(SessionEvent::ToolStarted {
+                id: "next".into(),
+                name: "Read".into(),
+                input: serde_json::json!({ "file_path": "next.rs" }),
+            })
+            .unwrap();
+        tick(cx);
+
+        let chevron = view.read_with(cx, |view, _| {
+            let runs = view.selection.registered(thread);
+            assert!(runs.iter().any(|(_, _, _, text)| text == "cat <<'EOF' …"));
+            assert!(!runs
+                .iter()
+                .any(|(_, _, _, text)| text.contains("let answer")));
+            let first = runs
+                .iter()
+                .find(|(_, _, _, text)| text == "Bash")
+                .unwrap()
+                .0;
+            let next = runs
+                .iter()
+                .find(|(_, _, _, text)| text == "Read")
+                .unwrap()
+                .0;
+            let y = |block| {
+                view.selection
+                    .caret_position(thread, block, 0, 0)
+                    .unwrap()
+                    .y
+            };
+            assert!(
+                y(next) - y(first) < px(30.),
+                "a collapsed script must stay one row tall"
+            );
+            view.panes[0].tool_bounds("multiline").unwrap().center()
+        });
+        cx.simulate_click(chevron, gpui::Modifiers::none());
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert!(view.panes[0].tool_expanded("multiline"));
+            assert!(view
+                .selection
+                .registered(thread)
+                .iter()
+                .any(|(_, _, _, text)| text == "let answer = 42;"));
+        });
+
+        // Subsequent events must not prune an input-only disclosure.
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TextDelta {
+                text: "continuing".into(),
+            })
+            .unwrap();
+        tick(cx);
+        view.read_with(cx, |view, _| {
+            assert!(view.panes[0].tool_expanded("multiline"))
+        });
+
+        let chevron = view.read_with(cx, |view, _| {
+            view.panes[0].tool_bounds("multiline").unwrap().center()
+        });
+        cx.simulate_click(chevron, gpui::Modifiers::none());
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert!(!view.panes[0].tool_expanded("multiline"));
+            let transcript = view.cockpit.thread(thread).unwrap().transcript();
+            assert!(transcript
+                .blocks()
+                .iter()
+                .any(|block| matches!(&block.body, Body::Tool(tool) if tool.summary == command)));
+        });
+    }
+
+    #[gpui::test]
     fn clicking_the_tool_chevron_replaces_the_compact_line_with_selectable_output(
         cx: &mut TestAppContext,
     ) {
@@ -8231,15 +8209,14 @@ mod tests {
         let (mut core, fake) = cockpit("tool-disclosure-keyboard", 1);
         let thread = core.threads()[0];
         core.send(thread, "prior prompt".into());
-        cx.update(|cx| {
-            cx.bind_keys([
-                KeyBinding::new("tab", BandCycle, None),
-                KeyBinding::new("shift-tab", ToolCyclePrevious, None),
-                KeyBinding::new("enter", Submit, None),
-                KeyBinding::new("enter", ToggleTool, Some("ToolDisclosure")),
-            ])
+        bind_production_keys(cx);
+        let (root, cx) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|cx| CockpitView::new(core, cx));
+            gpui_component::Root::new(view, window, cx)
         });
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let view = root.read_with(cx, |root, _| {
+            root.view().clone().downcast::<CockpitView>().unwrap()
+        });
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         let stream = fake.streams.borrow();
         stream[0]
@@ -10890,7 +10867,13 @@ mod tests {
     fn settings_open_on_cmd_comma_and_every_change_saves(cx: &mut TestAppContext) {
         let (core, _fake) = cockpit("settings-panel", 1);
         bind_production_keys(cx);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (root, cx) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|cx| CockpitView::new(core, cx));
+            gpui_component::Root::new(view, window, cx)
+        });
+        let view = root.read_with(cx, |root, _| {
+            root.view().clone().downcast::<CockpitView>().unwrap()
+        });
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         tick(cx);
 
@@ -10899,6 +10882,69 @@ mod tests {
         view.read_with(cx, |view, _| {
             assert!(view.settings_open, "cmd-, opens the panel")
         });
+        let card = cx.debug_bounds("settings-card").unwrap();
+        cx.simulate_click(
+            card.origin + gpui::point(px(60.), px(200.)),
+            gpui::Modifiers::none(),
+        );
+        tick(cx);
+        let about = cx
+            .debug_bounds("settings-fact-Settings file")
+            .expect("About navigation reveals stored paths");
+        assert!(
+            about.bottom() <= card.bottom(),
+            "About must scroll into the panel"
+        );
+        cx.simulate_click(
+            card.origin + gpui::point(px(60.), px(128.)),
+            gpui::Modifiers::none(),
+        );
+        tick(cx);
+        let codex = cx.debug_bounds("settings-provider-1").unwrap().center();
+        cx.simulate_click(codex, gpui::Modifiers::none());
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.prefs.settings.default_provider, Provider::Codex);
+            assert_eq!(
+                ferrite_core::settings::Settings::load(&view.prefs.dir).default_provider,
+                Provider::Codex,
+                "the restyled component must save through the real settings action"
+            );
+        });
+        // Click the native search field in the Settings sidebar.
+        let card = cx.debug_bounds("settings-card").unwrap();
+        cx.simulate_click(
+            card.origin + gpui::point(px(80.), px(66.)),
+            gpui::Modifiers::none(),
+        );
+        cx.simulate_input("Confirm before deleting");
+        tick(cx);
+        let toggle = cx.debug_bounds("settings-confirm-delete").unwrap().center();
+        cx.simulate_click(toggle, gpui::Modifiers::none());
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert!(!view.prefs.settings.confirm_delete);
+            assert!(!ferrite_core::settings::Settings::load(&view.prefs.dir).confirm_delete);
+        });
+        cx.simulate_click(
+            card.origin + gpui::point(px(80.), px(66.)),
+            gpui::Modifiers::none(),
+        );
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert!(!view.settings_open, "escape from search closes Settings")
+        });
+        cx.simulate_keystrokes("cmd-,");
+        cx.run_until_parked();
+        let close = cx.debug_bounds("settings-close").unwrap().center();
+        cx.simulate_click(close, gpui::Modifiers::none());
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| assert!(!view.settings_open));
+        let gear = cx.debug_bounds("settings-gear").unwrap().center();
+        cx.simulate_click(gear, gpui::Modifiers::none());
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| assert!(view.settings_open));
         cx.simulate_keystrokes("escape");
         cx.run_until_parked();
         view.read_with(cx, |view, _| {

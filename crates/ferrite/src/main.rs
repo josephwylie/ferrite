@@ -1,5 +1,6 @@
 // Ferrite: the cockpit window and the pump behind it.
 mod cockpit;
+mod components;
 mod composer;
 mod demo;
 mod facts;
@@ -90,6 +91,7 @@ fn main() {
     Application::new()
         .with_assets(icons::Assets)
         .run(move |cx: &mut App| {
+            theme::init_components(cx);
             // First, before anything can lay out text in it: the bundled mono
             // face. `add_fonts` returns a Result and a discarded one fails
             // silently — you get the system font and no explanation.
@@ -189,9 +191,9 @@ fn main() {
                         }),
                         ..Default::default()
                     },
-                    |_, cx| {
-                        cx.new(|cx| {
-                            CockpitView::new_with_settings(
+                    |window, cx| {
+                        let view = cx.new(|cx| {
+                            let mut view = CockpitView::new_with_settings(
                                 core,
                                 provider,
                                 cockpit::Preferences {
@@ -201,17 +203,16 @@ fn main() {
                                     titler: true,
                                 },
                                 cx,
-                            )
-                        })
+                            );
+                            if let Some(group) = seeded_group {
+                                view.enter_group(group, cx);
+                            }
+                            view
+                        });
+                        cx.new(|cx| gpui_component::Root::new(view, window, cx))
                     },
                 )
                 .unwrap();
-
-            if let Some(group) = seeded_group {
-                window
-                    .update(cx, |view, _window, cx| view.enter_group(group, cx))
-                    .unwrap();
-            }
 
             window
                 .update(cx, |_, _window, cx| cx.activate(true))

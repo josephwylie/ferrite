@@ -1,22 +1,24 @@
-//! The Settings panel: drawing only, like `nav.rs`. A card floated over
-//! the Cockpit on the menu ground, sections of rows, each row a label and
-//! its choices as chips — the one on wears the fill. The cockpit owns the
-//! values and wires every chip.
+//! Longbridge Settings layout with Ferrite controls and theme tokens.
+//! Values and persistence remain owned by the cockpit.
 
 use gpui::prelude::*;
-use gpui::{div, point, px, rgb, rgba, BoxShadow, Div, FontWeight, SharedString, Stateful};
+use gpui::{div, point, px, rgb, rgba, App, Axis, BoxShadow, Div, FontWeight, SharedString};
 
+use gpui_component::button::Button;
+use gpui_component::setting::{SettingField, SettingGroup, SettingItem, SettingPage, Settings};
+use gpui_component::{switch::Switch, Sizable};
+use std::rc::Rc;
+
+use crate::components;
 use crate::icons::{self, icon};
-use crate::pointer::{Pointer, PointerPressed};
 use crate::theme::{
-    FILL, FONT_MONO, FONT_UI, FS_LG, FS_MD, FS_MONO, FS_SM, ICON_BUTTON, ICON_BUTTON_GLYPH,
-    LINE_UI, MENU, MENU_PAD, RAISED, R_CHIP, R_CONTROL, R_MENU, SHADOW_FAR, SHADOW_FAR_BLUR,
-    SHADOW_FAR_SPREAD, SHADOW_FAR_Y, SHADOW_NEAR, SHADOW_NEAR_BLUR, SHADOW_NEAR_Y, TEXT, TEXT_2,
-    TEXT_MUTED, TEXT_STRONG,
+    FILL, FONT_MONO, FONT_UI, FS_LG, FS_MD, FS_MONO, ICON_BUTTON, ICON_BUTTON_GLYPH, MENU,
+    MENU_PAD, RAISED, R_CHIP, R_MENU, SHADOW_FAR, SHADOW_FAR_BLUR, SHADOW_FAR_SPREAD, SHADOW_FAR_Y,
+    SHADOW_NEAR, SHADOW_NEAR_BLUR, SHADOW_NEAR_Y, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG,
 };
 
 /// The card's width; tall enough sections scroll inside it.
-pub const WIDTH: f32 = 600.0;
+pub const WIDTH: f32 = 820.0;
 const HEAD_H: f32 = 44.0;
 const PAD: f32 = 16.0;
 const ROW_GAP: f32 = 8.0;
@@ -40,7 +42,12 @@ pub fn card() -> Div {
         .flex()
         .flex_col()
         .w(px(WIDTH))
+        .max_w(gpui::relative(0.94))
+        .h(px(680.))
         .max_h(relative_h())
+        .overflow_hidden()
+        .text_size(px(FS_MD))
+        .text_color(rgb(TEXT))
         .rounded(px(R_MENU))
         .bg(rgb(MENU))
         .font_family(FONT_UI)
@@ -94,166 +101,137 @@ pub fn head(close: impl IntoElement) -> Div {
 }
 
 /// The 28px close button.
-pub fn close_button() -> Stateful<Div> {
-    div()
-        .id("settings-close")
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .justify_center()
+pub fn close_button() -> Button {
+    components::button("settings-close")
+        .debug_selector(|| "settings-close".into())
         .w(px(ICON_BUTTON))
         .h(px(ICON_BUTTON))
-        .rounded(px(R_CONTROL))
-        .text_size(px(FS_LG))
-        .text_color(rgb(TEXT_MUTED))
-        .hover_control()
-        .press_control()
-        .child("✕")
+        .p_0()
+        .tooltip("Close Settings")
+        .child(icon(icons::CLOSE, ICON_BUTTON_GLYPH, TEXT_MUTED))
 }
 
-/// The scrolling body the sections stack in.
-pub fn body(scroll: &gpui::ScrollHandle) -> Stateful<Div> {
-    div()
-        .id("settings-body")
-        .flex()
-        .flex_col()
-        .flex_1()
-        .min_h_0()
-        .overflow_y_scroll()
-        .track_scroll(scroll)
-        .px(px(PAD))
-        .pb(px(PAD))
-        .gap(px(PAD))
+/// One page keeps search across every group, with sidebar links into the
+/// virtualized list. Labels and descriptions stay native searchable items.
+pub fn body(groups: Vec<SettingGroup>) -> Div {
+    let mut sidebar = gpui::StyleRefinement::default();
+    sidebar.background = Some(rgb(MENU).into());
+    let group_count = groups.len();
+    div().flex_1().min_h_0().child(components::MeasuredSettings {
+        groups: group_count,
+        settings: Settings::new("ferrite-settings")
+            .small()
+            .sidebar_width(px(172.))
+            .sidebar_style(&sidebar)
+            .page(SettingPage::new("Ferrite")
+                .description("Changes save automatically. Session defaults apply when a new Session starts.")
+                .default_open(true)
+                .resettable(false)
+                .groups(groups)),
+    })
 }
 
-/// A section: a small title, then its rows.
-pub fn section(title: &'static str, rows: Vec<gpui::AnyElement>) -> Div {
-    div()
-        .flex()
-        .flex_col()
-        .gap(px(ROW_GAP))
-        .child(
-            div()
-                .text_size(px(FS_SM))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(TEXT_MUTED))
-                .child(title),
-        )
-        .children(rows)
-}
-
-/// A row: the label and its detail on the left, the choices on the right.
-pub fn row(label: &'static str, detail: SharedString, choices: Vec<gpui::AnyElement>) -> Div {
-    div()
-        .flex()
-        .items_start()
-        .gap(px(PAD))
-        .py(px(4.))
-        .child(
+pub fn choices<T: Clone + 'static>(
+    id: &'static str,
+    title: &'static str,
+    detail: impl Into<SharedString>,
+    options: Vec<(SharedString, bool, T)>,
+    change: impl Fn(T, &mut App) + 'static,
+) -> SettingItem {
+    let change = Rc::new(change);
+    SettingItem::new(
+        title,
+        SettingField::render(move |_, _, _| {
             div()
                 .flex()
-                .flex_col()
-                .w(px(180.))
-                .flex_shrink_0()
-                .gap(px(2.))
-                .child(
-                    div()
-                        .text_size(px(FS_MD))
-                        .line_height(gpui::relative(LINE_UI))
-                        .text_color(rgb(TEXT))
-                        .child(label),
-                )
-                .when(!detail.is_empty(), |column| {
-                    column.child(
-                        div()
-                            .text_size(px(FS_SM))
-                            .line_height(gpui::relative(LINE_UI))
-                            .text_color(rgb(TEXT_MUTED))
-                            .child(detail),
-                    )
-                }),
-        )
-        .child(
-            div()
-                .flex()
-                .flex_1()
-                .min_w_0()
                 .flex_wrap()
                 .gap(px(6.))
-                .children(choices),
-        )
+                .children(
+                    options
+                        .iter()
+                        .enumerate()
+                        .map(|(at, (label, selected, value))| {
+                            let value = value.clone();
+                            let change = change.clone();
+                            chip((id, at), label.clone(), *selected).on_click(move |_, _, cx| {
+                                cx.stop_propagation();
+                                change(value.clone(), cx);
+                            })
+                        }),
+                )
+        }),
+    )
+    .description(detail.into())
+    .layout(Axis::Vertical)
+}
+
+pub fn toggle(
+    id: &'static str,
+    title: &'static str,
+    detail: impl Into<SharedString>,
+    checked: bool,
+    change: impl Fn(bool, &mut App) + 'static,
+) -> SettingItem {
+    let change = Rc::new(change);
+    SettingItem::new(
+        title,
+        SettingField::render(move |_, _, _| {
+            let change = change.clone();
+            div().id(id).debug_selector(move || id.into()).child(
+                Switch::new(id)
+                    .small()
+                    .checked(checked)
+                    .on_click(move |value, _, cx| {
+                        cx.stop_propagation();
+                        change(*value, cx);
+                    }),
+            )
+        }),
+    )
+    .description(detail.into())
 }
 
 /// One choice chip: the selected one carries the fill and the strong ink.
-pub fn chip(id: (&'static str, usize), label: SharedString, selected: bool) -> Stateful<Div> {
-    let chip = div()
-        .id(id)
-        .flex()
-        .flex_shrink_0()
-        .items_center()
+pub fn chip(id: (&'static str, usize), label: SharedString, selected: bool) -> Button {
+    components::button(id)
+        .tab_stop(true)
+        .debug_selector(move || format!("{}-{}", id.0, id.1))
         .h(px(CHIP_H))
         .px(px(9.))
         .rounded(px(R_CHIP))
-        .text_size(px(FS_SM))
-        .child(label);
-    if selected {
-        chip.bg(rgb(FILL))
-            .text_color(rgb(TEXT_STRONG))
-            .hover_carried()
-            .press_row()
-    } else {
-        chip.bg(rgb(RAISED))
-            .text_color(rgb(TEXT_2))
-            .hover_raised()
-            .press_raised()
-    }
+        .bg(rgb(if selected { FILL } else { RAISED }))
+        .child(components::label(
+            label,
+            if selected { TEXT_STRONG } else { TEXT_2 },
+        ))
 }
 
-/// A read-only fact row: label left, value right in the mono face.
-pub fn fact(label: &'static str, value: SharedString) -> Div {
-    div()
-        .flex()
-        .items_center()
-        .gap(px(PAD))
-        .py(px(2.))
-        .child(
+/// Read-only values remain searchable and wrap so full paths are readable.
+pub fn fact(title: &'static str, value: SharedString) -> SettingItem {
+    SettingItem::new(
+        title,
+        SettingField::render(move |_, _, _| {
             div()
-                .w(px(180.))
-                .flex_shrink_0()
-                .text_size(px(FS_MD))
-                .text_color(rgb(TEXT))
-                .child(label),
-        )
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .truncate()
+                .id(title)
+                .debug_selector(move || format!("settings-fact-{title}"))
                 .font_family(FONT_MONO)
                 .text_size(px(FS_MONO))
                 .text_color(rgb(TEXT_2))
-                .child(value),
-        )
+                .child(value.clone())
+        }),
+    )
+    .layout(Axis::Vertical)
 }
 
 /// The nav chrome's gear: the door to this panel.
-pub fn gear_button() -> Stateful<Div> {
-    div()
-        .id("settings-gear")
-        .group("settings-gear")
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .justify_center()
+pub fn gear_button() -> Button {
+    components::button("settings-gear")
+        .debug_selector(|| "settings-gear".into())
         .w(px(ICON_BUTTON))
         .h(px(ICON_BUTTON))
-        .rounded(px(R_CONTROL))
-        .hover_control()
-        .press_control()
-        .child(
-            icon(icons::GEAR, ICON_BUTTON_GLYPH, TEXT_MUTED)
-                .group_hover("settings-gear", |style| style.text_color(rgb(TEXT))),
-        )
+        .p_0()
+        .tooltip("Settings")
+        .child(icon(icons::GEAR, ICON_BUTTON_GLYPH, TEXT_MUTED))
 }
 
 #[cfg(test)]

@@ -9,6 +9,10 @@ description = "Ferrite: native multi-provider agent cockpit (GPUI app)"
 ferrite-core = { path = "../ferrite-core" }
 # Pinned published release (ADR-0001); upgrades are deliberate events.
 gpui = "=0.2.2"
+# A Longbridge component release on the same GPUI API. Kit 0.6 uses
+# gpui-pre 0.3; adopting that renderer is a separate migration.
+gpui-component = "=0.5.1"
+gpui-component-assets = "=0.5.1"
 # The demo script builds real provider events, whose payloads are the vendors'
 # own JSON. Already in the tree via ferrite-core.
 serde_json = { workspace = true }

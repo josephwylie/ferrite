@@ -1574,14 +1574,18 @@ pub fn rendered_window(blocks: &[Block], level: Level) -> &[Block] {
     &blocks[tail..]
 }
 
-/// Output-bearing tool rows in exactly the window L1 draws. Disclosure
+/// Tool rows with output or multiline input in exactly the window L1 draws. Disclosure
 /// cycling, focus validation, and controls all consume this one eligibility
 /// rule so an invisible row can never remain keyboard-addressable.
+pub fn tool_has_details(tool: &ToolBlock) -> bool {
+    tool.output.is_some() || tool.summary.contains(['\n', '\r'])
+}
+
 pub fn rendered_output_tools(blocks: &[Block], level: Level) -> impl Iterator<Item = &ToolBlock> {
     rendered_window(blocks, level)
         .iter()
         .filter_map(|block| match &block.body {
-            Body::Tool(tool) if tool.output.is_some() => Some(tool),
+            Body::Tool(tool) if tool_has_details(tool) => Some(tool),
             _ => None,
         })
 }
@@ -3261,20 +3265,22 @@ fn render_tool(
                         .child(selection.piece(block, "(", Vec::new())),
                 ),
             )
-            .child(args(tool.summary.clone().into()).min_w_0().truncate())
+            .child(
+                args(tool_summary_line(tool).into_owned().into())
+                    .min_w_0()
+                    .truncate(),
+            )
             .child(args(")".into()).flex_shrink_0());
     }
-    // The prototype draws `▸`/`●` in the glyph column and no chevron
-    // anywhere, so the glyph is unconditional — and the disclosure rides on
-    // top of it as an invisible hit target rather than replacing it. A tool
-    // row with output stays openable by pointer and by keyboard without the
-    // Pane drawing one pixel the prototype does not.
+    // A visible chevron replaces the dot on rows with details. The verb
+    // still carries status colour; the glyph now explains the interaction.
+    let has_disclosure = disclosure.is_some();
     let gutter = div()
         .relative()
         .flex_shrink_0()
         .w(px(theme::GUTTER_W))
         .text_color(rgb(glyph_ink))
-        .child(glyph)
+        .child(if has_disclosure { "" } else { glyph })
         .children(disclosure);
     let mut line = div()
         .flex()
@@ -3359,25 +3365,40 @@ fn render_tool(
         }
         line = line.child(div().flex_1().min_w_0()).child(trail);
     }
-    let mut card = row.flex().flex_col().child(line);
+    let mut card = gpui_component::collapsible::Collapsible::new()
+        .w_full()
+        .open(expanded)
+        .child(line);
     if expanded {
+        let mut details = div().flex().flex_col();
+        if tool.summary.contains(['\n', '\r']) {
+            details = details.child(
+                div()
+                    .ml(px(theme::INDENT))
+                    .mt(px(theme::EVENT_GAP))
+                    .text_color(rgb(TEXT_MUTED))
+                    .child("Command"),
+            );
+            details = details.child(output_block(block, &tool.summary, TEXT_2, selection));
+        }
         if let Some(output) = &tool.output {
-            let ink = result_ink(&tool.state);
             // One row per hard line, each a stretched block under the
             // elbow — the prompt block's lesson (see `paragraph`): a run
             // handed to a flex row is measured at min-content and wraps a
             // character per line.
-            card = card.child(output_block(block, &output.text, ink, selection));
+            // Ordinary stdout stays neutral even when a command failed.
+            // The verb, verdict and compact error line carry failure ink.
+            details = details.child(output_block(block, &output.text, TEXT_MUTED, selection));
             if output.omitted_bytes > 0 {
-                card = card.child(result_line(TEXT_MUTED).child(div().min_w_0().child(format!(
-                    "… {} bytes omitted from inline view",
-                    output.omitted_bytes
-                ))));
+                details = details.child(result_line(TEXT_MUTED).child(div().min_w_0().child(
+                    format!("… {} bytes omitted from inline view", output.omitted_bytes),
+                )));
             }
         }
+        card = card.content(details);
     } else if !promoted {
-        // A failed call's result is the failure: it reads in the blocked
-        // ink, as its expanded output and its message line do.
+        // A failed call's compact result reads in the blocked ink. Raw
+        // output above remains neutral so ordinary source is still readable.
         if let Some(line) = &tool.result_line {
             card =
                 card.child(result_line(result_ink(&tool.state)).child(
@@ -3391,19 +3412,40 @@ fn render_tool(
     }
     if !expanded {
         if let ToolState::Failed(message) = &tool.state {
-            card = card.child(result_line(BLOCKED).child(
-                div().min_w_0().truncate().child(selection.line(
-                    block,
-                    message.clone(),
-                    Vec::new(),
-                )),
-            ));
+            let first = message
+                .lines()
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or("");
+            if !first.is_empty() && tool.result_line.as_deref() != Some(first) {
+                card = card.child(result_line(BLOCKED).child(
+                    div().min_w_0().truncate().child(selection.line(
+                        block,
+                        first.to_owned(),
+                        Vec::new(),
+                    )),
+                ));
+            }
         }
     }
     if let Some(diff) = &tool.diff {
         card = card.child(render_diff(block, diff, selection));
     }
-    card.into_any_element()
+    row.child(card).into_any_element()
+}
+
+/// The compact row never lays out hard line breaks. The original command
+/// stays in the ToolBlock and becomes selectable in the disclosed details.
+fn tool_summary_line(tool: &ToolBlock) -> std::borrow::Cow<'_, str> {
+    if tool.summary.contains(['\n', '\r']) {
+        let first = tool
+            .summary
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or("");
+        format!("{} …", first.trim()).into()
+    } else {
+        tool.summary.as_str().into()
+    }
 }
 
 /// A tool row's verb ink: the call's state, as the `●` beside it — green
@@ -3511,12 +3553,24 @@ pub fn tool_disclosure_control(
     targeted: bool,
     focus: &FocusHandle,
 ) -> Stateful<Div> {
-    // Nothing is drawn. The prototype puts `▸` in the glyph column and no
-    // chevron anywhere, so the control is the glyph's own square: an
-    // invisible hit target laid over the gutter the row already paints.
-    // `expanded` therefore turns nothing — the disclosed output below the
-    // row is the whole tell, which is what the prototype shows too.
-    let _ = expanded;
+    let control = crate::components::button(SharedString::from(format!("tool-button-{call}")))
+        .w(px(theme::TOOL_DISCLOSURE_HIT))
+        .h(px(theme::TOOL_DISCLOSURE_HIT))
+        .p_0()
+        .tooltip(if expanded {
+            "Collapse tool details"
+        } else {
+            "Expand tool details"
+        })
+        .child(icon(
+            if expanded {
+                icons::CHEVRON_DOWN
+            } else {
+                icons::CHEVRON_RIGHT
+            },
+            theme::ICON_CHEVRON,
+            TEXT_MUTED,
+        ));
     div()
         .id(SharedString::from(format!("tool-disclosure-{call}")))
         .absolute()
@@ -3534,8 +3588,7 @@ pub fn tool_disclosure_control(
                 .track_focus(focus)
                 .key_context("ToolDisclosure")
         })
-        .hover_control()
-        .press_control()
+        .child(control)
 }
 
 /// `.hunk` (§E.13): no card, no filename header — the event above already

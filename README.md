@@ -77,7 +77,8 @@ Shortcuts are spelled with `cmd` below; on Windows the same shortcuts use
 - `cmd-w` — park a Thread; `cmd-o` — revive the newest parked one
 - `cmd-,` — Settings: the Provider, model and effort new Threads start on,
   Claude's permission mode, Codex's approval policy and sandbox, naming and
-  confirmation behaviour. Saved to `~/.ferrite/settings.json`.
+  confirmation behaviour. Search by setting name or description; changes save
+  automatically to `~/.ferrite/settings.json`.
 - `cmd-v` — paste into the focused Pane's Composer from anywhere in the
   window; `cmd-c` copies a transcript selection.
 

@@ -39,6 +39,8 @@ macro_rules! icons {
 icons![
     "sidebar",
     "chevron-down",
+    "chevron-right",
+    "close",
     "folder",
     "warning",
     "pencil",
@@ -54,6 +56,8 @@ icons![
 pub const SIDEBAR: &str = "icons/sidebar.svg";
 #[allow(dead_code)]
 pub const CHEVRON_DOWN: &str = "icons/chevron-down.svg";
+pub const CHEVRON_RIGHT: &str = "icons/chevron-right.svg";
+pub const CLOSE: &str = "icons/close.svg";
 #[allow(dead_code)]
 pub const FOLDER: &str = "icons/folder.svg";
 #[allow(dead_code)]
@@ -80,7 +84,8 @@ impl AssetSource for Assets {
         Ok(ICONS
             .iter()
             .find(|(name, _)| *name == path)
-            .map(|(_, bytes)| Cow::Borrowed(*bytes)))
+            .map(|(_, bytes)| Cow::Borrowed(*bytes))
+            .or_else(|| gpui_component_assets::Assets::get(path).map(|asset| asset.data)))
     }
 
     fn list(&self, path: &str) -> gpui::Result<Vec<SharedString>> {
@@ -117,6 +122,8 @@ mod tests {
         for key in [
             SIDEBAR,
             CHEVRON_DOWN,
+            CHEVRON_RIGHT,
+            CLOSE,
             FOLDER,
             WARNING,
             PENCIL,
@@ -135,8 +142,8 @@ mod tests {
         }
         assert_eq!(
             ICONS.len(),
-            11,
-            "the nine prototype icons, plus the add and settings marks"
+            13,
+            "the prototype and app controls, including disclosure and close"
         );
     }
 
@@ -144,7 +151,16 @@ mod tests {
     /// root, or resvg renders them as filled blobs; the logomarks must not.
     #[test]
     fn line_icons_bake_the_stroke_class_and_logomarks_do_not() {
-        for key in [SIDEBAR, CHEVRON_DOWN, FOLDER, WARNING, PENCIL, CHECK] {
+        for key in [
+            SIDEBAR,
+            CHEVRON_DOWN,
+            CHEVRON_RIGHT,
+            CLOSE,
+            FOLDER,
+            WARNING,
+            PENCIL,
+            CHECK,
+        ] {
             let bytes = Assets.load(key).unwrap().unwrap();
             let svg = std::str::from_utf8(&bytes).unwrap();
             assert!(svg.contains(r#"fill="none""#), "{key} does not fill");
@@ -172,6 +188,6 @@ mod tests {
     #[test]
     fn an_unknown_key_is_absent_rather_than_an_error() {
         assert!(Assets.load("icons/nope.svg").unwrap().is_none());
-        assert_eq!(Assets.list("icons/").unwrap().len(), 11);
+        assert_eq!(Assets.list("icons/").unwrap().len(), 13);
     }
 }
