@@ -220,6 +220,12 @@ pub fn shell(collapsed: bool) -> Div {
 /// binding fact is the button's left edge and the empty band before it —
 /// anything drawn or hit-testable in that strip kills AppKit's drag region.
 ///
+/// Everywhere else there are no lights to reserve for, and reserving anyway
+/// is what pushed the collapse button 77px off the column it belongs to:
+/// the band takes the row inset instead, so the button's left edge lines up
+/// with every nav row under it. The caption buttons sit at the *window's*
+/// corner, not the column's — `titlebar.rs` draws them.
+///
 /// Collapsed the band becomes a vertical stack. The button is the caller's
 /// to append: its click lives where the view state does.
 pub fn win_chrome(collapsed: bool) -> Div {
@@ -233,13 +239,16 @@ pub fn win_chrome(collapsed: bool) -> Div {
             .pb(px(RAIL_CHROME_PAD_B))
             .gap(px(ROW_PAD_X));
     }
-    div()
+    let band = div()
         .flex()
         .flex_shrink_0()
         .items_center()
         .h(px(WIN_CHROME_H))
-        .pr(px(ROW_PAD_X))
-        .child(div().flex_shrink_0().w(px(TRAFFIC_RESERVE)))
+        .pr(px(ROW_PAD_X));
+    if crate::titlebar::CUSTOM {
+        return band.pl(px(ROW_PAD_X));
+    }
+    band.child(div().flex_shrink_0().w(px(TRAFFIC_RESERVE)))
 }
 
 /// The 28×28 collapse button and its 16px sidebar glyph. The cockpit wires
