@@ -746,6 +746,7 @@ mod tests {
                 "Commands",
                 "DecisionRequested",
                 "Init",
+                "RateLimits",
                 "ReasoningSummaryDelta",
                 "TextDelta",
                 "TokenUsage",
@@ -775,20 +776,20 @@ mod tests {
         assert_eq!(
             counted,
             [
-                // 3 text deltas, 1 summary delta, 1 usage, 1 turn end.
-                ("hello", 29, 6),
+                // 3 text deltas, 1 summary delta, 1 usage, 1 rate limit, 1 turn end.
+                ("hello", 29, 7),
                 // ... plus a command run and its completion.
-                ("tool", 46, 22),
+                ("tool", 46, 24),
                 // ... plus the Decision that gated the command.
-                ("approval-allow", 44, 17),
-                ("approval-deny", 66, 37),
+                ("approval-allow", 44, 19),
+                ("approval-deny", 66, 39),
                 // The same command twice, gated once: the execpolicy amendment
                 // was accepted, so the repeat ran unasked.
-                ("approval-always", 75, 45),
+                ("approval-always", 75, 48),
                 // The same gate for a patch instead of a command.
-                ("approval-patch", 52, 20),
-                ("interrupt", 25, 3),
-                ("resume", 32, 9),
+                ("approval-patch", 52, 22),
+                ("interrupt", 25, 4),
+                ("resume", 32, 10),
                 // Ten retry errors and a warning, all ignored: only the failed
                 // turn itself is an event.
                 ("error", 22, 1),
