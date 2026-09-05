@@ -10,13 +10,14 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
-use crate::SessionEvent;
-use crate::workspace::WorkspaceBinding;
 use crate::workspace::registry::ProjectId;
-use crate::{ThreadId, transcript::Input};
+use crate::workspace::WorkspaceBinding;
+use crate::SessionEvent;
+use crate::{transcript::Input, ThreadId};
 
 mod activity;
 use activity::{Execution as PersistedExecution, PersistedActivity};
@@ -439,6 +440,7 @@ impl Record {
             SessionEvent::Commands { .. } => return None,
             SessionEvent::PermissionMode { .. } => return None,
             SessionEvent::Models { .. } => return None,
+            SessionEvent::RateLimits { .. } => return None,
         })
     }
 
@@ -709,6 +711,17 @@ impl Store {
     /// chunks only up to the first newline, so the records after the header
     /// are never read off the disk, and a huge log peeks at the same cost
     /// as an empty one.
+    /// When a Thread was last written to — its log's modification time.
+    /// The log is appended on every prompt, every stream and every act, so
+    /// its mtime *is* "last used", and it costs one `stat` rather than a
+    /// replay. A log that cannot be stat'd has no time; a row with no time
+    /// simply says nothing, and sorts last.
+    pub fn last_used(&self, id: ThreadId) -> Option<SystemTime> {
+        fs::metadata(self.log_path(id))
+            .and_then(|meta| meta.modified())
+            .ok()
+    }
+
     pub fn peek(&self, id: ThreadId) -> Result<ThreadMeta, LoadError> {
         use std::io::BufRead;
         let mut first = Vec::new();
@@ -2050,14 +2063,12 @@ mod tests {
         assert_eq!(thread.resume_target(), Some("codex-thread"));
         assert!(thread.last_handover().unwrap().delivered);
         assert!(store.create(Provider::Claude, None, main_choice()).is_ok());
-        assert!(
-            Store::open(&dir)
-                .unwrap()
-                .load(ThreadId::new(2))
-                .unwrap()
-                .last_handover()
-                .is_none()
-        );
+        assert!(Store::open(&dir)
+            .unwrap()
+            .load(ThreadId::new(2))
+            .unwrap()
+            .last_handover()
+            .is_none());
     }
 
     /// A realistic Claude-shaped turn: identity, thinking, markdown streamed

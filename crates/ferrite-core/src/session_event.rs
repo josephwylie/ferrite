@@ -72,6 +72,13 @@ pub enum SessionEvent {
         /// The model's context window, when the provider states it.
         context_window: Option<u64>,
     },
+    /// Provider-reported subscription usage. Windows are named by duration,
+    /// rather than by the provider's primary/secondary ordering, because that
+    /// ordering is not stable across plans.
+    RateLimits {
+        five_hour: Option<RateLimitWindow>,
+        weekly: Option<RateLimitWindow>,
+    },
     /// The Session's own command menu, announced at Session start — what the
     /// Composer's `/` popover lists (#23). Claude lifts it from the initialize
     /// handshake's `commands[]`; Codex answers a `skills/list` request. Session
@@ -92,6 +99,14 @@ pub enum SessionEvent {
     Models { models: Vec<ModelInfo> },
     /// The session process exited; no further events will arrive.
     Closed { reason: String },
+}
+
+/// One rolling subscription limit, normalized to a fraction for the UI while
+/// retaining the provider's reset instant for detail surfaces.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RateLimitWindow {
+    pub used_fraction: f32,
+    pub resets_at: Option<u64>,
 }
 
 /// One model a provider offers: the value its CLI accepts, and the name a

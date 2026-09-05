@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 use ferrite_core::providers::{ClaudeCapabilities, ClaudeConfig, ClaudeSession, ClaudeSpawnError};
-use ferrite_core::{Decision, DecisionAnswer, SessionEvent, TurnOutcome};
+use ferrite_core::{Decision, DecisionAnswer, RateLimitWindow, SessionEvent, TurnOutcome};
 
 const VERSION_CASE: &str = "case \"$1\" in --version) echo '2.1.243 (Claude Code)'; exit 0;; esac";
 
@@ -208,7 +208,7 @@ fn the_reader_thread_delivers_the_captured_stream() {
         .filter(|event| !matches!(event, SessionEvent::TokenUsage { .. }))
         .collect();
 
-    assert_eq!(events.len(), 10, "unexpected stream: {events:?}");
+    assert_eq!(events.len(), 11, "unexpected stream: {events:?}");
     let inits: Vec<_> = events
         .iter()
         .filter_map(|e| match e {
@@ -231,6 +231,21 @@ fn the_reader_thread_delivers_the_captured_stream() {
     assert!(events
         .iter()
         .any(|e| matches!(e, SessionEvent::ThinkingDelta { .. })));
+    assert!(events.iter().any(|event| {
+        matches!(
+            event,
+            SessionEvent::RateLimits {
+                five_hour: Some(RateLimitWindow {
+                    used_fraction: 0.52,
+                    resets_at: Some(1_787_635_800),
+                }),
+                weekly: Some(RateLimitWindow {
+                    used_fraction: 0.08,
+                    resets_at: Some(1_788_174_000),
+                }),
+            }
+        )
+    }));
     assert_eq!(
         events.last(),
         Some(&SessionEvent::TurnEnded {

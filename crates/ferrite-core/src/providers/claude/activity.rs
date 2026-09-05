@@ -81,6 +81,9 @@ impl Decoder {
                 self.root = root.to_owned();
             }
         }
+        if let Some(limits) = wire::parse_rate_limits(line) {
+            events.push(limits);
+        }
         match string(&value, "type") {
             Some("system") if string(&value, "subtype") != Some("init") => {
                 self.task(&value, &mut events);
@@ -766,6 +769,7 @@ mod tests {
                 .flat_map(|line| {
                     wire::parse_usage(line)
                         .into_iter()
+                        .chain(wire::parse_rate_limits(line))
                         .chain(wire::parse_line(line))
                 })
                 .collect();

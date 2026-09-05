@@ -196,6 +196,12 @@ impl Router {
             return;
         }
         let method = frame["method"].as_str().unwrap_or_default();
+        if method == "account/rateLimits/updated" {
+            if let Some(event) = wire::parse_line(&frame.to_string()) {
+                update.events.push(event);
+            }
+            return;
+        }
         if frame_scope_checked(&frame).is_err() {
             return; // Contradictory owner fields cannot route to either subject.
         }

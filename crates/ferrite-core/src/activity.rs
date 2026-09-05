@@ -4,7 +4,7 @@
 //! state; Main and each child cross the same transcript seam.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
-use std::sync::{Arc, mpsc::Receiver};
+use std::sync::{mpsc::Receiver, Arc};
 use std::time::{Duration, Instant};
 
 use crate::store::Provider;
