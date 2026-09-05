@@ -383,6 +383,9 @@ pub struct Cockpit {
     spawner: Box<dyn Spawner>,
     model_discovery: Option<Receiver<(Provider, Vec<ModelInfo>)>>,
     model_cache: crate::providers::models::ModelCache,
+    /// The last subscription windows each provider reported — an account
+    /// fact the transcript log deliberately does not replay.
+    limit_cache: crate::providers::limits::LimitCache,
     models_changed: bool,
     bootstraps: HashMap<ThreadId, PendingBootstrap>,
     bootstrap_results: Vec<BootstrapResult>,
@@ -399,6 +402,7 @@ impl Cockpit {
         let groups = Groups::load(store.dir())?;
         let model_discovery = spawner.discover_models();
         let model_cache = crate::providers::models::ModelCache::load(store.dir());
+        let limit_cache = crate::providers::limits::LimitCache::load(store.dir());
         Ok(Self {
             threads: BTreeMap::new(),
             store,
@@ -408,6 +412,7 @@ impl Cockpit {
             spawner,
             model_discovery,
             model_cache,
+            limit_cache,
             models_changed: false,
             bootstraps: HashMap::new(),
             bootstrap_results: Vec::new(),
@@ -1407,6 +1412,13 @@ impl Cockpit {
         self.store.peek(thread)
     }
 
+    /// When a Thread was last used, live or parked — the nav's default
+    /// order and its "3 days" line. One `stat`, so callers still cache it
+    /// rather than ask per frame.
+    pub fn last_used(&self, thread: ThreadId) -> Option<std::time::SystemTime> {
+        self.store.last_used(thread)
+    }
+
     pub fn threads(&self) -> Vec<ThreadId> {
         self.threads.keys().copied().collect()
     }
@@ -1648,6 +1660,15 @@ impl Cockpit {
             };
             let mut release = None;
             for event in events {
+                if let SessionEvent::RateLimits { five_hour, weekly } = &event {
+                    self.limit_cache.remember(
+                        thread.provider,
+                        crate::transcript::RateLimits {
+                            five_hour: *five_hour,
+                            weekly: *weekly,
+                        },
+                    );
+                }
                 if let SessionEvent::Models { models } = &event {
                     self.model_cache.remember(thread.provider, models);
                     // A Session's own effort menu may have been empty even
@@ -1775,6 +1796,14 @@ impl Cockpit {
     /// earlier launch. Fresh discovery or Session announcements replace it.
     pub fn announced_models(&self, provider: Provider) -> Vec<ModelInfo> {
         self.model_cache.get(provider).to_vec()
+    }
+
+    /// The subscription windows in force for `provider` — the live
+    /// Session's latest report, else the one a previous Session or launch
+    /// left behind, and unknown once a remembered window has rolled over.
+    /// Account-wide, so every Thread on the provider reads the same meter.
+    pub fn account_limits(&self, provider: Provider) -> crate::transcript::RateLimits {
+        self.limit_cache.get(provider)
     }
 
     /// The picker's rows for `provider`: what its adapter announced,

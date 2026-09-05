@@ -536,6 +536,11 @@ fn read_stdout(
                     return;
                 }
             }
+            if let Some(limits) = wire::parse_rate_limits(text) {
+                if sender.send(limits).is_err() {
+                    return;
+                }
+            }
             if let Some(event) = wire::parse_line(text) {
                 // A full channel parks this thread, the OS pipe fills, and the
                 // CLI blocks on its own write. Backpressure, never loss.
