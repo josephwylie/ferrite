@@ -4,6 +4,7 @@
 //! is swappable at exactly this seam). Modules follow the spec: providers,
 //! transcript, store, cockpit — added as their tickets land.
 
+pub mod activity;
 pub mod cockpit;
 pub mod docview;
 pub mod draft;

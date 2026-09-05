@@ -636,6 +636,9 @@ pub fn init_components(cx: &mut gpui::App) {
     theme.radius = px(R_CONTROL);
     theme.radius_lg = px(R_MENU);
     theme.shadow = false;
+    theme.motion.spring_move = gpui::base::Spring::new(std::time::Duration::from_millis(120))
+        .with_damping(1.0)
+        .with_epsilon(0.1);
     theme.background = rgb(PANE).into();
     theme.foreground = rgb(TEXT).into();
     theme.border = rgba(TRANSPARENT).into();

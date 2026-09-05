@@ -1,52 +1,107 @@
 //! Native rich text with a stable parser per answer run. Appending tokens
 //! advances the toolkit parser; unrelated pane renders do not parse again.
 use gpui::base::text::{TextView, TextViewState, TextViewStyle};
-use gpui::{prelude::*, px, rems, rgb, rgba, App, Context, Entity, SharedString, Window};
+use gpui::{prelude::*, px, rems, rgb, rgba, App, Entity, SharedString, Window};
+
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use crate::theme;
 
 struct CachedText {
     source: String,
     state: Entity<TextViewState>,
+    touched: u64,
+}
+
+/// Pane-owned native text entities survive temporarily hidden Subjects. The
+/// least recently used run is discarded only at this explicit cache limit.
+#[derive(Clone, Default)]
+pub struct TextCache(Rc<RefCell<(u64, HashMap<SharedString, CachedText>, usize)>>);
+
+impl TextCache {
+    pub fn redirect_namespace(&self, from: &str, to: &str) {
+        let mut cache = self.0.borrow_mut();
+        let keys: Vec<_> = cache
+            .1
+            .keys()
+            .filter_map(|key| {
+                ["markdown-", "literal-"].into_iter().find_map(|kind| {
+                    key.strip_prefix(&format!("{kind}{from}"))
+                        .map(|tail| (key.clone(), SharedString::from(format!("{kind}{to}{tail}"))))
+                })
+            })
+            .collect();
+        for (from, to) in keys {
+            if let Some(state) = cache.1.remove(&from) {
+                if let Some(replaced) = cache.1.insert(to, state) {
+                    cache.2 -= replaced.source.len();
+                }
+            }
+        }
+    }
+
+    fn state(&self, id: SharedString, source: &str, cx: &mut App) -> Entity<TextViewState> {
+        let mut cache = self.0.borrow_mut();
+        cache.0 += 1;
+        let touched = cache.0;
+        let prior_bytes = cache.1.get(&id).map_or(0, |text| text.source.len());
+        while (!cache.1.contains_key(&id) && cache.1.len() >= 256)
+            || cache.2.saturating_sub(prior_bytes) + source.len() > 8 * 1024 * 1024
+        {
+            let Some(oldest) = cache
+                .1
+                .iter()
+                .filter(|(key, _)| *key != &id)
+                .min_by_key(|(_, text)| text.touched)
+                .map(|(id, _)| id.clone())
+            else {
+                break;
+            };
+            if let Some(old) = cache.1.remove(&oldest) {
+                cache.2 -= old.source.len();
+            }
+        }
+        cache.2 = cache.2.saturating_sub(prior_bytes) + source.len();
+        let text = cache.1.entry(id).or_insert_with(|| CachedText {
+            source: source.to_string(),
+            state: cx.new(|cx| TextViewState::markdown(source, cx)),
+            touched,
+        });
+        if text.source != source {
+            text.state.update(cx, |state, cx| {
+                if let Some(suffix) = source.strip_prefix(&text.source) {
+                    state.push_str(suffix, cx);
+                } else {
+                    state.set_text(source, cx);
+                }
+            });
+            text.source = source.to_string();
+        }
+        text.touched = touched;
+        text.state.clone()
+    }
 }
 
 #[derive(IntoElement)]
 pub struct Markdown {
     id: SharedString,
     source: String,
+    cache: TextCache,
 }
 
 impl Markdown {
-    pub fn new(id: impl Into<SharedString>, source: String) -> Self {
+    pub fn new(id: impl Into<SharedString>, source: String, cache: TextCache) -> Self {
         Self {
             id: id.into(),
             source,
+            cache,
         }
     }
 }
 
 impl gpui::RenderOnce for Markdown {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let cache =
-            window.use_keyed_state(self.id.clone(), cx, |_, cx: &mut Context<CachedText>| {
-                CachedText {
-                    source: self.source.clone(),
-                    state: cx.new(|cx| TextViewState::markdown(&self.source, cx)),
-                }
-            });
-        let state = cache.update(cx, |cache, cx| {
-            if cache.source != self.source {
-                cache.state.update(cx, |state, cx| {
-                    if let Some(suffix) = self.source.strip_prefix(&cache.source) {
-                        state.push_str(suffix, cx);
-                    } else {
-                        state.set_text(&self.source, cx);
-                    }
-                });
-                cache.source = self.source;
-            }
-            cache.state.clone()
-        });
+        let state = self.cache.state(self.id.clone(), &self.source, cx);
         #[cfg(test)]
         testing::record(self.id, state.clone(), window.text_style().clone(), cx);
         TextView::new(&state)
@@ -150,6 +205,7 @@ pub struct Literal {
     pub id: SharedString,
     pub text: SharedString,
     pub highlights: Vec<(std::ops::Range<usize>, gpui::HighlightStyle)>,
+    pub cache: TextCache,
 }
 
 impl gpui::RenderOnce for Literal {
@@ -177,10 +233,7 @@ impl gpui::RenderOnce for Literal {
                     .text_size(inherited.font_size.to_pixels(window.rem_size()))
                     .line_height(inherited.line_height_in_pixels(window.rem_size())),
             );
-        let state = window.use_keyed_state(self.id.clone(), cx, |_, cx| {
-            TextViewState::markdown(&source, cx)
-        });
-        state.update(cx, |state, cx| state.set_text(&source, cx));
+        let state = self.cache.state(self.id.clone(), &source, cx);
         #[cfg(test)]
         testing::record(self.id, state.clone(), inherited.clone(), cx);
         TextView::new(&state)
@@ -198,6 +251,14 @@ pub mod testing {
     #[derive(Default)]
     struct Views(HashMap<SharedString, (Entity<TextViewState>, gpui::TextStyle)>);
     impl gpui::Global for Views {}
+
+    pub fn first_entity(prefix: &str, cx: &App) -> Option<gpui::EntityId> {
+        cx.global::<Views>()
+            .0
+            .iter()
+            .find(|(id, _)| id.starts_with(prefix))
+            .map(|(_, (state, _))| state.entity_id())
+    }
 
     pub fn record(
         id: SharedString,

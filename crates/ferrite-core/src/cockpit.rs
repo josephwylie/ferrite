@@ -8,9 +8,15 @@
 use std::collections::{BTreeMap, HashMap};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
+pub use crate::activity::ToolTiming;
+use crate::activity::{
+    Activity, ActivityEvent, ActivityInput, ActivityUpdate, ActivityView, AgentKey, DecisionHandle,
+    Subject,
+};
 use crate::groups::{Applied, ApplyError, Drag, DropTarget, GroupChange, GroupId, Groups, Plan};
 pub use crate::prompt_history::HistoryDirection;
 use crate::prompt_history::PromptHistory;
@@ -18,10 +24,12 @@ use crate::providers::Session;
 use crate::roster::{DraftId, DraftScope, Layout, PaneIdentity, Roster, View};
 use crate::session::SessionLifecycle;
 use crate::store::{LoadError, Provider, Store, ThreadWriter};
-use crate::transcript::{BlockId, Input, Lexer, Transcript, Update};
+use crate::transcript::{BlockId, Input, Transcript, Update};
 use crate::workspace::registry::{self, ProjectId, Registry};
 use crate::workspace::{self, WorkspaceBinding, WorkspaceChoice};
 use crate::{Decision, DecisionAnswer, ModelInfo, SessionEvent, ThreadId};
+
+mod history;
 
 /// Everything one spawn needs, in one struct: every path that starts a
 /// Session (open, revive, send-respawn, sweep) reads the Thread's stored
@@ -90,14 +98,71 @@ pub struct PaneUpdate {
     pub dirty: Vec<BlockId>,
     /// Blocks that fell off the far end and no longer exist.
     pub evicted: Vec<BlockId>,
+    /// Child changes never enter the Main-only compatibility lists above.
+    pub subjects: Vec<SubjectUpdate>,
+    pub activity_changed: bool,
+    pub redirects: Vec<(AgentKey, AgentKey)>,
 }
 
-/// What one fold left for the caller to do.
 #[derive(Debug, Clone, PartialEq)]
-pub enum Wake {
-    Nothing,
-    /// The turn ended and a prompt was waiting behind it — send this now.
-    Send(String),
+pub struct SubjectUpdate {
+    pub subject: Subject,
+    pub dirty: Vec<BlockId>,
+    pub evicted: Vec<BlockId>,
+    pub content_changed: bool,
+}
+
+impl PaneUpdate {
+    fn new(thread: ThreadId) -> Self {
+        Self {
+            thread,
+            dirty: Vec::new(),
+            evicted: Vec::new(),
+            subjects: Vec::new(),
+            activity_changed: false,
+            redirects: Vec::new(),
+        }
+    }
+
+    fn absorb(&mut self, applied: ActivityUpdate, content_changed: bool) {
+        self.activity_changed |=
+            !applied.changed.is_empty() || applied.attention_changed || applied.order_changed;
+        self.redirects.extend(applied.redirects);
+        for subject in applied.changed {
+            if !self.subjects.iter().any(|change| change.subject == subject) {
+                self.subjects.push(SubjectUpdate {
+                    subject,
+                    dirty: Vec::new(),
+                    evicted: Vec::new(),
+                    content_changed: false,
+                });
+            }
+        }
+        for (subject, blocks) in applied.blocks {
+            if subject == Subject::Main {
+                self.dirty.extend(blocks.dirty.iter().copied());
+                self.evicted.extend(blocks.evicted.iter().copied());
+            }
+            let index = self
+                .subjects
+                .iter()
+                .position(|change| change.subject == subject)
+                .unwrap_or_else(|| {
+                    self.subjects.push(SubjectUpdate {
+                        subject,
+                        dirty: Vec::new(),
+                        evicted: Vec::new(),
+                        content_changed: false,
+                    });
+                    self.subjects.len() - 1
+                });
+            let change = &mut self.subjects[index];
+            change.content_changed |=
+                content_changed && (!blocks.dirty.is_empty() || !blocks.evicted.is_empty());
+            change.dirty.extend(blocks.dirty);
+            change.evicted.extend(blocks.evicted);
+        }
+    }
 }
 
 /// A provider and the model to serve it with — what the #25 picker picks,
@@ -234,11 +299,11 @@ pub struct BootstrapResult {
 }
 
 struct Thread {
-    transcript: Transcript,
-    /// Highlighting answers for this Thread's own Blocks. Per Thread because
-    /// BlockIds are per Transcript: one shared channel could not say which
-    /// Pane an answer belonged to.
-    highlights: Receiver<Input>,
+    activity: Activity,
+    generation: u64,
+    store_error: Option<String>,
+    history: HashMap<AgentKey, history::Pending>,
+    history_errors: HashMap<AgentKey, String>,
     /// The live Session, or None for a parked Thread.
     session: Option<SessionLifecycle>,
     replacement: Option<Replacement>,
@@ -254,11 +319,10 @@ struct Thread {
     /// respawn, like the model.
     effort: Option<String>,
     title: Option<String>,
-    pending: Option<Decision>,
     /// A prompt the operator wrote while the turn was still running.
     queued: Option<String>,
+    queued_ready: bool,
     prompt_history: PromptHistory,
-    busy: bool,
     /// The provider-native id a replacement Session resumes from — the latest
     /// the provider announced. Held here rather than read back from the log,
     /// which has not necessarily flushed when the watchdog acts.
@@ -300,11 +364,6 @@ struct Thread {
     /// in the provider's own word. Display-only, and Session state exactly
     /// like the menu: None until announced, gone with the Session.
     permission_mode: Option<String>,
-    /// Each tool call's wall clock: stamped when this cockpit ingested its
-    /// events, and restored from the log on revive — the transcript's folds
-    /// stay clockless either way. Keyed by the provider's call id, the
-    /// `ToolBlock.call` a row renders from.
-    timings: HashMap<String, ToolTiming>,
 }
 
 impl Thread {
@@ -320,10 +379,15 @@ impl Thread {
         workspace: Option<WorkspaceBinding>,
         session_project_root: Option<PathBuf>,
     ) -> Self {
-        let (lexer, highlights) = Lexer::new();
+        let generation = next_generation();
+        let mut activity = Activity::default();
+        activity.apply(ActivityInput::Connect { generation });
         Self {
-            transcript: Transcript::new(std::sync::Arc::new(lexer)),
-            highlights,
+            activity,
+            generation,
+            store_error: None,
+            history: HashMap::new(),
+            history_errors: HashMap::new(),
             session: Some(session),
             replacement: None,
             writer,
@@ -331,10 +395,9 @@ impl Thread {
             model,
             effort,
             title: None,
-            pending: None,
             queued: None,
+            queued_ready: false,
             prompt_history: PromptHistory::new(Vec::new()),
-            busy: false,
             resume,
             workspace,
             session_project_root,
@@ -344,27 +407,56 @@ impl Thread {
             models: Vec::new(),
             first_prompt_sent: false,
             permission_mode: None,
-            timings: HashMap::new(),
         }
     }
 }
 
-/// One tool call's clock reading, stamped at ingestion.
-#[derive(Debug, Clone, Copy)]
-pub enum ToolTiming {
-    /// Still in flight — the clock is ticking from here.
-    Running(Instant),
-    /// Settled, with the whole run measured.
-    Done(Duration),
+// A park/revive creates a new Activity; generation must still distinguish old UI handles.
+static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
+fn next_generation() -> u64 {
+    NEXT_GENERATION.fetch_add(1, Ordering::Relaxed)
 }
 
-impl ToolTiming {
-    /// Time on the clock — still growing for a running call.
-    pub fn elapsed(&self) -> Duration {
-        match self {
-            ToolTiming::Running(since) => since.elapsed(),
-            ToolTiming::Done(total) => *total,
+impl Thread {
+    fn apply(&mut self, input: Input) -> Update {
+        let applied = self.activity.apply(ActivityInput::Main {
+            input,
+            at: Instant::now(),
+        });
+        let mut update = Update::default();
+        for (subject, changed) in applied.blocks {
+            if subject == Subject::Main {
+                update.dirty.extend(changed.dirty);
+                update.evicted.extend(changed.evicted);
+                update.boundary = changed.boundary.or(update.boundary);
+            }
         }
+        update
+    }
+
+    fn transcript(&self) -> &Transcript {
+        self.activity.view().main().transcript()
+    }
+    fn busy(&self) -> bool {
+        self.activity.view().main().busy()
+    }
+    fn replace_generation(&mut self) {
+        self.history.clear();
+        self.history_errors.clear();
+        self.generation = next_generation();
+        self.activity.apply(ActivityInput::Connect {
+            generation: self.generation,
+        });
+    }
+
+    fn report_store_error(&mut self, error: io::Error) {
+        let message = error.to_string();
+        if self.store_error.as_ref() != Some(&message) {
+            self.apply(Input::Notice(format!(
+                "history could not be saved: {message}"
+            )));
+        }
+        self.store_error = Some(message);
     }
 }
 
@@ -386,6 +478,7 @@ pub struct Cockpit {
     models_changed: bool,
     bootstraps: HashMap<ThreadId, PendingBootstrap>,
     bootstrap_results: Vec<BootstrapResult>,
+    history_loader: Option<history::Loader>,
     sampler: Option<Box<dyn RssSampler>>,
     /// Bytes one Session may hold before the watchdog replaces it.
     limit: u64,
@@ -411,6 +504,7 @@ impl Cockpit {
             models_changed: false,
             bootstraps: HashMap::new(),
             bootstrap_results: Vec::new(),
+            history_loader: None,
             sampler: None,
             limit: u64::MAX,
             #[cfg(test)]
@@ -541,6 +635,7 @@ impl Cockpit {
             // process must not outlive its replacement.
             thread.session = None;
             thread.replacement = None;
+            thread.replace_generation();
             let spawned = self.spawner.start(SpawnRequest {
                 provider: thread.provider,
                 model: thread.model.as_deref(),
@@ -559,7 +654,7 @@ impl Cockpit {
                 }
                 Err(e) => format!("restart failed after {}: {e}", megabytes(rss)),
             };
-            thread.transcript.apply(Input::Notice(note));
+            thread.apply(Input::Notice(note));
             restarts.push(Restart { thread: id, rss });
         }
         restarts
@@ -773,7 +868,7 @@ impl Cockpit {
         }
         let state = self.threads.get_mut(&id).expect("pending Thread exists");
         if let Some(binding) = &state.workspace {
-            state.transcript.apply(Input::Notice(format!(
+            state.apply(Input::Notice(format!(
                 "opened in {}",
                 binding.cwd().display()
             )));
@@ -807,8 +902,7 @@ impl Cockpit {
             Some(state) => {
                 state.session = None;
                 state.replacement = None;
-                state.pending = None;
-                state.busy = false;
+                state.replace_generation();
                 self.store.set_session_project_root(
                     thread,
                     root.clone(),
@@ -921,7 +1015,7 @@ impl Cockpit {
         kind: ReplacementKind,
     ) -> Result<(), ProvisionError> {
         let state = self.threads.get(&thread).expect("checked by caller");
-        if (state.busy && !matches!(kind, ReplacementKind::Fresh))
+        if (state.busy() && !matches!(kind, ReplacementKind::Fresh))
             || state.replacement.is_some()
             || self.bootstraps.contains_key(&thread)
         {
@@ -994,23 +1088,18 @@ impl Cockpit {
         };
         match kind {
             ReplacementKind::Fresh => {
-                let (lexer, highlights) = Lexer::new();
-                state.transcript = Transcript::new(std::sync::Arc::new(lexer));
-                state.highlights = highlights;
+                state.activity = Activity::default();
                 state.resume = None;
                 state.carry = None;
-                state.timings.clear();
             }
             ReplacementKind::Handover => {
                 let handover = handover.expect("committed with header");
                 state.carry = Some(carry_digest(handover.from, &handover.exchanges));
                 state.resume = None;
-                state
-                    .transcript
-                    .apply(Input::Notice(crate::store::handover_notice(
-                        provider,
-                        model.as_deref(),
-                    )));
+                state.apply(Input::Notice(crate::store::handover_notice(
+                    provider,
+                    model.as_deref(),
+                )));
             }
             ReplacementKind::Retune => {
                 if state.model != model {
@@ -1018,12 +1107,10 @@ impl Cockpit {
                         model.as_deref().unwrap_or("default"),
                         &state.models,
                     );
-                    state
-                        .transcript
-                        .apply(Input::Notice(format!("model changed to {label}")));
+                    state.apply(Input::Notice(format!("model changed to {label}")));
                 }
                 if state.effort != effort {
-                    state.transcript.apply(Input::Notice(format!(
+                    state.apply(Input::Notice(format!(
                         "effort changed to {}",
                         effort.as_deref().unwrap_or("default")
                     )));
@@ -1034,8 +1121,7 @@ impl Cockpit {
         state.provider = provider;
         state.model = model;
         state.effort = effort;
-        state.pending = None;
-        state.busy = false;
+        state.replace_generation();
         state.preface_pending = true;
         state.commands.clear();
         state.models.clear();
@@ -1126,9 +1212,15 @@ impl Cockpit {
             });
             return Ok(());
         }
-        let Some(mut state) = self.threads.remove(&thread) else {
+        let Some(state) = self.threads.get_mut(&thread) else {
             return Ok(());
         };
+        // A failed write keeps the live owner and its retry buffer reachable.
+        if let Err(error) = state.writer.flush() {
+            state.report_store_error(io::Error::new(error.kind(), error.to_string()));
+            return Err(error);
+        }
+        let mut state = self.threads.remove(&thread).expect("checked");
         self.roster.remove_thread(thread);
         state.session = None;
         state.replacement = None;
@@ -1136,7 +1228,7 @@ impl Cockpit {
         if self.refuse_park.contains(&thread) {
             return Err(io::Error::other("stub refused to park"));
         }
-        state.writer.flush()
+        Ok(())
     }
 
     /// Reopen a parked Thread: its history is replayed from the log into a
@@ -1189,22 +1281,16 @@ impl Cockpit {
             state.carry = Some(carry_digest(handover.from, &handover.exchanges));
         }
         state.prompt_history = PromptHistory::new(snapshot.prompt_texts());
-        // The clocks come back with the history: a settled call's duration
-        // was measured when it ran and written down, so the replayed rows
-        // draw the same durations they drew before the restart.
-        state.timings = snapshot
-            .tool_durations()
-            .into_iter()
-            .map(|(id, total)| (id, ToolTiming::Done(total)))
-            .collect();
         let inputs = snapshot.inputs();
-        // The lock arms with the history (#25): a replayed operator prompt
-        // is a first prompt already sent.
         state.first_prompt_sent = history_locks(&inputs);
-        for input in inputs {
-            state.transcript.apply(input);
+        state.activity.apply(ActivityInput::Disconnect);
+        for input in snapshot.activity_inputs() {
+            state.activity.apply(input);
         }
-        state.transcript.apply(Input::Revived);
+        state.apply(Input::Revived);
+        state.activity.apply(ActivityInput::Connect {
+            generation: state.generation,
+        });
 
         self.threads.insert(thread, state);
         self.roster.insert_thread(thread);
@@ -1270,10 +1356,11 @@ impl Cockpit {
         // fresh provider process behind. `deliver` guards again for the
         // sends that never pass through here.
         if let Some(refusal) = vanished_root_refusal(state) {
-            state.transcript.apply(Input::Notice(refusal));
+            state.apply(Input::Notice(refusal));
             return;
         }
         if state.session.is_none() {
+            state.replace_generation();
             let resume = state.resume.clone();
             let cwd = workspace::effective_cwd(
                 state.session_project_root.as_deref(),
@@ -1293,9 +1380,7 @@ impl Cockpit {
                     state.preface_pending = true;
                 }
                 Err(e) => {
-                    state
-                        .transcript
-                        .apply(Input::Notice(format!("send failed: {e}")));
+                    state.apply(Input::Notice(format!("send failed: {e}")));
                     return;
                 }
             }
@@ -1311,9 +1396,7 @@ impl Cockpit {
         }
         if let Err(error) = deliver(state, text.clone()) {
             state.queued = Some(text);
-            state
-                .transcript
-                .apply(Input::Notice(format!("send failed: {error}")));
+            state.apply(Input::Notice(format!("send failed: {error}")));
         }
     }
 
@@ -1332,6 +1415,7 @@ impl Cockpit {
             .is_some_and(SessionLifecycle::is_starting)
         {
             state.session = None;
+            state.replace_generation();
         }
         state.replacement = None;
         if let Some(session) = state
@@ -1340,43 +1424,80 @@ impl Cockpit {
             .and_then(SessionLifecycle::session_mut)
         {
             if let Err(e) = session.interrupt() {
-                state
-                    .transcript
-                    .apply(Input::Notice(format!("interrupt failed: {e}")));
+                state.apply(Input::Notice(format!("interrupt failed: {e}")));
             }
         }
     }
 
-    /// Answer a Decision, if it is still the one this Thread waits on.
+    /// Compatibility entry point. The app uses generation-scoped handles via
+    /// `respond_decision`; this accepts only a still-pending identical request.
     pub fn respond(&mut self, thread: ThreadId, decision: &Decision, answer: DecisionAnswer) {
-        if !self.answer(thread, &decision.id) {
-            return;
+        let handle = self.threads.get(&thread).and_then(|state| {
+            state
+                .activity
+                .view()
+                .decisions()
+                .iter()
+                .find(|pending| pending.decision == *decision)
+                .map(|pending| pending.handle.clone())
+        });
+        if let Some(handle) = handle {
+            let _ = self.respond_decision(thread, &handle, answer);
+        }
+    }
+
+    /// Answer exactly the request the operator saw. A tab change cannot
+    /// redirect it, and an old Session's handle cannot match its replacement.
+    /// A failed write retains the Decision so the operator can retry.
+    pub fn respond_decision(
+        &mut self,
+        thread: ThreadId,
+        handle: &DecisionHandle,
+        answer: DecisionAnswer,
+    ) -> io::Result<bool> {
+        let Some(state) = self.threads.get_mut(&thread) else {
+            return Ok(false);
+        };
+        let Some(pending) = state
+            .activity
+            .view()
+            .decisions()
+            .iter()
+            .find(|pending| pending.handle == *handle)
+            .cloned()
+        else {
+            return Ok(false);
+        };
+        if handle.generation != state.generation {
+            return Ok(false);
         }
         let allowed = !matches!(answer, DecisionAnswer::Deny { .. });
-        let Some(state) = self.threads.get_mut(&thread) else {
-            return;
-        };
-        if let Some(session) = state
+        let Some(session) = state
             .session
             .as_mut()
             .and_then(SessionLifecycle::session_mut)
-        {
-            if let Err(e) = session.respond_to_decision(&decision.id, answer) {
-                state
-                    .transcript
-                    .apply(Input::Notice(format!("answer failed: {e}")));
-            }
+        else {
+            return Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "Session is not available",
+            ));
+        };
+        if let Err(error) = session.respond_to_decision(&pending.decision.id, answer) {
+            state.apply(Input::Notice(format!("answer failed: {error}")));
+            return Err(error);
         }
-        state.transcript.apply(Input::Answered {
+        state.activity.apply(ActivityInput::Answered {
+            handle: handle.clone(),
             allowed,
-            tool_name: decision.tool_name.clone(),
+            at: Instant::now(),
         });
+        Ok(true)
     }
 
     /// Something Ferrite itself needs to say in a Pane.
     pub fn apply_input(&mut self, thread: ThreadId, input: Input) {
         if let Some(state) = self.threads.get_mut(&thread) {
-            state.transcript.apply(input);
+            state.apply(input);
         }
     }
 
@@ -1469,6 +1590,9 @@ impl Cockpit {
             ));
         }
         let mut state = self.threads.get_mut(&thread);
+        if let Some(state) = state.as_mut() {
+            state.history.clear();
+        }
         self.store
             .set_title(
                 thread,
@@ -1527,7 +1651,6 @@ impl Cockpit {
                         self.threads
                             .get_mut(&id)
                             .expect("exists")
-                            .transcript
                             .apply(Input::Notice(format!("Session change failed: {error}")));
                     }
                 }
@@ -1585,9 +1708,8 @@ impl Cockpit {
                     }
                     Err(error) => {
                         state.session = None;
-                        state
-                            .transcript
-                            .apply(Input::Notice(format!("could not start: {error}")));
+                        state.replace_generation();
+                        state.apply(Input::Notice(format!("could not start: {error}")));
                     }
                 }
                 changed.push(id);
@@ -1597,9 +1719,7 @@ impl Cockpit {
                 if let Some(text) = state.queued.take() {
                     if let Err(error) = deliver(state, text.clone()) {
                         state.queued = Some(text);
-                        state
-                            .transcript
-                            .apply(Input::Notice(format!("send failed: {error}")));
+                        state.apply(Input::Notice(format!("send failed: {error}")));
                     }
                 }
             }
@@ -1615,7 +1735,7 @@ impl Cockpit {
                     .get(&thread)
                     .map(|state| {
                         state
-                            .transcript
+                            .transcript()
                             .blocks()
                             .iter()
                             .map(|block| block.id)
@@ -1623,6 +1743,9 @@ impl Cockpit {
                     })
                     .unwrap_or_default(),
                 evicted: Vec::new(),
+                subjects: Vec::new(),
+                activity_changed: true,
+                redirects: Vec::new(),
             })
             .collect()
     }
@@ -1632,69 +1755,171 @@ impl Cockpit {
     pub fn pump(&mut self) -> Vec<PaneUpdate> {
         self.poll_model_discovery();
         let mut frame = self.advance_startups();
+        frame.extend(self.advance_history());
+        let mut history_reloads = Vec::new();
         for (id, thread) in &mut self.threads {
-            let Some(session) = thread.session.as_ref().and_then(SessionLifecycle::session) else {
-                continue;
-            };
-            let events: Vec<SessionEvent> = session.events().try_iter().collect();
-            let answers: Vec<Input> = thread.highlights.try_iter().collect();
-            if events.is_empty() && answers.is_empty() {
+            let mut update = PaneUpdate::new(*id);
+            // Fold answers from the previous frame before asking the Lexer
+            // for new work; highlighted Blocks remain an explicit next-frame wake.
+            let highlighted = thread.activity.apply(ActivityInput::DrainHighlights);
+            update.absorb(highlighted, false);
+            // Backpressure on failed persistence: retain the writer's buffer
+            // and let the bounded provider channel fill rather than lose history.
+            if thread.store_error.is_some() {
+                match thread.writer.flush() {
+                    Ok(()) => {
+                        thread.store_error = None;
+                        update.activity_changed = true;
+                    }
+                    Err(error) => {
+                        thread.report_store_error(error);
+                        update.activity_changed = true;
+                        frame.push(update);
+                        continue;
+                    }
+                }
+            }
+            if thread.history_backpressure() {
+                if update.activity_changed {
+                    frame.push(update);
+                }
                 continue;
             }
-            let mut update = PaneUpdate {
-                thread: *id,
-                dirty: Vec::new(),
-                evicted: Vec::new(),
-            };
-            let mut release = None;
-            for event in events {
+            let mut closed = false;
+            for _ in 0..256 {
+                if thread.store_error.is_some() || thread.history_backpressure() {
+                    break;
+                }
+                let Some(event) = thread
+                    .session
+                    .as_ref()
+                    .and_then(SessionLifecycle::session)
+                    .and_then(|session| session.events().try_recv().ok())
+                else {
+                    break;
+                };
                 if let SessionEvent::Models { models } = &event {
                     self.model_cache.remember(thread.provider, models);
-                    // A Session's own effort menu may have been empty even
-                    // when its announcement matches the saved provider menu.
+                    // Refresh this Session's effort menu even when its catalog
+                    // matches the saved provider menu. Child Activity payloads
+                    // cannot announce models or alter Main's provider metadata.
                     self.models_changed |= !models.is_empty();
                 }
-                // Folded first, then written: the fold is what stops a tool
-                // call's clock, and the record carries that reading so a
-                // revived Thread keeps its durations.
-                if let Wake::Send(held) = fold(thread, &event) {
-                    release = Some(held);
+                let alias_needs_reload = match &event {
+                    SessionEvent::Activity(ActivityEvent::Alias { from, to }) => {
+                        let view = thread.activity.view();
+                        [from, to].iter().any(|key| {
+                            let subject = Subject::Subagent((*key).clone());
+                            view.subject(&subject)
+                                .is_some_and(|subject| !subject.retained())
+                                || thread.history.keys().any(|pending| {
+                                    view.canonical_subject(&Subject::Subagent(pending.clone()))
+                                        == view.canonical_subject(&subject)
+                                })
+                        })
+                    }
+                    _ => false,
+                };
+                fold(thread, &event);
+                let content_changed = event_changes_content(&event);
+                let applied = match &event {
+                    SessionEvent::Activity(event) => {
+                        thread.activity.apply(ActivityInput::Observe {
+                            generation: thread.generation,
+                            event: event.clone(),
+                            at: Instant::now(),
+                        })
+                    }
+                    _ => thread.activity.apply(ActivityInput::Main {
+                        input: Input::Event(event.clone()),
+                        at: Instant::now(),
+                    }),
+                };
+                thread.queued_ready |= applied.main_turn_ended;
+                if matches!(&event, SessionEvent::Activity(_)) {
+                    for accepted in &applied.accepted {
+                        if !matches!(accepted, ActivityEvent::Status { .. })
+                            || !applied.blocks.is_empty()
+                        {
+                            thread.buffer_history(accepted);
+                        }
+                        let event = SessionEvent::Activity(accepted.clone());
+                        let duration = settled_duration(thread, &event);
+                        if let Err(error) = thread.writer.record_event(&event, duration) {
+                            thread.report_store_error(error);
+                        }
+                    }
+                } else {
+                    let duration = settled_duration(thread, &event);
+                    if let Err(error) = thread.writer.record_event(&event, duration) {
+                        thread.report_store_error(error);
+                    }
                 }
-                let duration = settled_duration(thread, &event);
-                let _ = thread.writer.record_event(&event, duration);
-                let applied = thread.transcript.apply(Input::Event(event));
-                update.dirty.extend(applied.dirty);
-                update.evicted.extend(applied.evicted);
+                if alias_needs_reload {
+                    for (_, canonical) in &applied.redirects {
+                        let subject = Subject::Subagent(canonical.clone());
+                        let view = thread.activity.view();
+                        thread.history.retain(|key, _| {
+                            view.canonical_subject(&Subject::Subagent(key.clone())) != subject
+                        });
+                        thread.history_errors.remove(canonical);
+                        update.absorb(
+                            thread.activity.apply(ActivityInput::Evict(subject.clone())),
+                            true,
+                        );
+                        history_reloads.push((*id, subject));
+                    }
+                }
+                closed |= matches!(&event, SessionEvent::Closed { .. });
+                update.absorb(applied, content_changed);
             }
-            for answer in answers {
-                update.dirty.extend(thread.transcript.apply(answer).dirty);
+            if closed {
+                thread.session = None;
+                thread.history.clear();
+                thread.activity.apply(ActivityInput::Disconnect);
+                update.activity_changed = true;
             }
-            if let Some(held) = release {
-                if thread.replacement.is_some()
-                    || thread
-                        .session
-                        .as_ref()
-                        .is_some_and(SessionLifecycle::is_starting)
-                {
-                    thread.queued = Some(held);
-                } else if thread.session.is_some() {
-                    // Through `deliver`, like any prompt: the preface and
-                    // the vanished-root guard apply to held prompts too.
+            if thread.queued_ready
+                && thread.store_error.is_none()
+                && thread.replacement.is_none()
+                && thread
+                    .session
+                    .as_ref()
+                    .and_then(SessionLifecycle::session)
+                    .is_some()
+            {
+                if let Some(held) = thread.queued.take() {
                     match deliver(thread, held.clone()) {
-                        Ok(sent) => update.dirty.extend(sent.dirty),
+                        Ok(sent) => {
+                            update.dirty.extend(sent.dirty);
+                            update.evicted.extend(sent.evicted);
+                            update.activity_changed = true;
+                        }
                         Err(error) => {
                             thread.queued = Some(held);
                             update.dirty.extend(
                                 thread
-                                    .transcript
                                     .apply(Input::Notice(format!("send failed: {error}")))
                                     .dirty,
                             );
                         }
                     }
+                } else {
+                    thread.queued_ready = false;
                 }
             }
-            frame.push(update);
+            if update.activity_changed || !update.dirty.is_empty() || !update.subjects.is_empty() {
+                frame.push(update);
+            }
+        }
+        for (thread, subject) in history_reloads {
+            if let Err(error) = self.ensure_subject_history(thread, &subject) {
+                if let (Some(state), Subject::Subagent(key)) =
+                    (self.threads.get_mut(&thread), subject)
+                {
+                    state.history_errors.insert(key, error.to_string());
+                }
+            }
         }
         frame
     }
@@ -1736,14 +1961,23 @@ impl Cockpit {
         let Some(state) = self.threads.get_mut(&thread) else {
             return false;
         };
-        if state
-            .pending
-            .as_ref()
-            .is_none_or(|pending| pending.id != id)
-        {
+        let Some(handle) = state
+            .activity
+            .view()
+            .decisions()
+            .iter()
+            .find(|pending| pending.decision.id == id)
+            .map(|pending| pending.handle.clone())
+        else {
             return false;
-        }
-        state.pending = None;
+        };
+        state.activity.apply(ActivityInput::Observe {
+            generation: state.generation,
+            event: ActivityEvent::DecisionCancelled {
+                id: handle.request_id,
+            },
+            at: Instant::now(),
+        });
         true
     }
 
@@ -1814,7 +2048,7 @@ impl Cockpit {
                 .set_provider(thread, meta.provider, meta.model, effort, None)
                 .map_err(ProvisionError::Store);
         };
-        if state.busy
+        if state.busy()
             || state.replacement.is_some()
             || state
                 .session
@@ -1840,6 +2074,7 @@ impl Cockpit {
         if state.effort == effort {
             return Ok(());
         }
+        state.history.clear();
         if let Err(error) = self.store.set_provider(
             thread,
             state.provider,
@@ -1856,7 +2091,7 @@ impl Cockpit {
             }
             return Err(ProvisionError::Store(error));
         }
-        state.transcript.apply(Input::Notice(format!(
+        state.apply(Input::Notice(format!(
             "effort changed to {}",
             effort.as_deref().unwrap_or("default")
         )));
@@ -1923,7 +2158,7 @@ impl Cockpit {
     pub fn blocked(&self) -> Vec<ThreadId> {
         self.threads
             .iter()
-            .filter(|(_, state)| state.pending.is_some())
+            .filter(|(_, state)| !state.activity.view().decisions().is_empty())
             .map(|(id, _)| *id)
             .collect()
     }
@@ -1938,8 +2173,16 @@ pub struct ThreadView<'a> {
 }
 
 impl<'a> ThreadView<'a> {
+    pub fn activity(&self) -> ActivityView<'a> {
+        self.state.activity.view()
+    }
+
+    pub fn store_error(&self) -> Option<&'a str> {
+        self.state.store_error.as_deref()
+    }
+
     pub fn transcript(&self) -> &'a Transcript {
-        &self.state.transcript
+        self.state.transcript()
     }
 
     /// Which backend serves this Thread.
@@ -1966,7 +2209,12 @@ impl<'a> ThreadView<'a> {
 
     /// What this Thread is blocked on, if anything.
     pub fn pending(&self) -> Option<&'a Decision> {
-        self.state.pending.as_ref()
+        self.state
+            .activity
+            .view()
+            .decisions()
+            .first()
+            .map(|pending| &pending.decision)
     }
 
     /// A prompt held back while the turn runs.
@@ -1987,7 +2235,7 @@ impl<'a> ThreadView<'a> {
     }
 
     pub fn busy(&self) -> bool {
-        self.state.busy || self.starting()
+        self.state.busy() || self.starting()
     }
 
     /// The checkout this Thread works in — what the Pane's chrome shows.
@@ -2016,7 +2264,7 @@ impl<'a> ThreadView<'a> {
     /// calls the Cockpit ingested live, plus the ones its log recorded a
     /// duration for. Never a guess: a call with no measured clock is absent.
     pub fn tool_timings(&self) -> &'a HashMap<String, ToolTiming> {
-        &self.state.timings
+        self.state.activity.view().main().tool_timings()
     }
 
     /// The live Session's command menu (#23): what `/` offers in this
@@ -2564,14 +2812,17 @@ fn deliver(state: &mut Thread, text: String) -> io::Result<Update> {
         wire.insert_str(operator, &format!("{carry}\n\n"));
     }
     session.send(&wire)?;
+    state.queued_ready = false;
     state.carry = None;
     // The Session's first prompt has gone out; every later one is bare.
     state.preface_pending = false;
     // And the Thread's first locks its provider for good (#25, #29).
     state.first_prompt_sent = true;
-    let _ = state.writer.record_prompt(&text);
+    if let Err(error) = state.writer.record_prompt(&text) {
+        state.report_store_error(error);
+    }
     state.prompt_history.append(text.clone());
-    Ok(state.transcript.apply(Input::Prompt(text)))
+    Ok(state.apply(Input::Prompt(text)))
 }
 
 /// How much of the earlier conversation a Provider switch hands over:
@@ -2659,71 +2910,55 @@ fn branch_name(thread: ThreadId) -> String {
 /// The clock reading this event settled, for the log to keep. Only a
 /// completed tool call has one, and only where the fold just stopped it —
 /// a call whose start this cockpit never saw stays clockless.
+fn event_changes_content(event: &SessionEvent) -> bool {
+    use crate::activity::ExecutionEvent;
+    match event {
+        SessionEvent::Activity(
+            ActivityEvent::Content { event, .. }
+            | ActivityEvent::HistoryContent { event, .. }
+            | ActivityEvent::MainContent { event, .. },
+        ) => !matches!(event, ExecutionEvent::TokenUsage { .. }),
+        SessionEvent::Activity(ActivityEvent::Status { .. }) => true,
+        SessionEvent::Activity(_)
+        | SessionEvent::TokenUsage { .. }
+        | SessionEvent::Commands { .. }
+        | SessionEvent::Models { .. }
+        | SessionEvent::PermissionMode { .. } => false,
+        _ => true,
+    }
+}
+
 fn settled_duration(state: &Thread, event: &SessionEvent) -> Option<Duration> {
-    let SessionEvent::ToolCompleted { id, .. } = event else {
-        return None;
+    use crate::activity::ExecutionEvent;
+    let (subject, id) = match event {
+        SessionEvent::ToolCompleted { id, .. } => (Subject::Main, id),
+        SessionEvent::Activity(ActivityEvent::Content {
+            key,
+            event: ExecutionEvent::ToolCompleted { id, .. },
+            ..
+        }) => (Subject::Subagent(key.clone()), id),
+        SessionEvent::Activity(ActivityEvent::MainContent {
+            event: ExecutionEvent::ToolCompleted { id, .. },
+            ..
+        }) => (Subject::Main, id),
+        _ => return None,
     };
-    match state.timings.get(id) {
+    let view = state.activity.view().subject(&subject)?;
+    match view.tool_timings().get(id) {
         Some(ToolTiming::Done(total)) => Some(*total),
         _ => None,
     }
 }
 
-/// The bookkeeping half of a fold: what the operator is on the hook for.
-fn fold(state: &mut Thread, event: &SessionEvent) -> Wake {
-    let mut wake = Wake::Nothing;
+/// Only Session-level metadata belongs here; execution state lives in Activity.
+fn fold(state: &mut Thread, event: &SessionEvent) {
     match event {
-        SessionEvent::TextDelta { .. }
-        | SessionEvent::ThinkingDelta { .. }
-        | SessionEvent::ReasoningSummaryDelta { .. } => state.busy = true,
-        // The call's clock starts and stops at ingestion — the only clock
-        // durations ever get (transcript folds keep none).
-        SessionEvent::ToolStarted { id, .. } => {
-            state.busy = true;
-            state
-                .timings
-                .insert(id.clone(), ToolTiming::Running(Instant::now()));
-        }
-        SessionEvent::ToolCompleted { id, .. } => {
-            if let Some(ToolTiming::Running(since)) = state.timings.get(id) {
-                let total = since.elapsed();
-                state.timings.insert(id.clone(), ToolTiming::Done(total));
-            }
-        }
-        // A turn that ends takes its Decision with it: the provider is no
-        // longer waiting, so an answer would go nowhere. Anything the operator
-        // wrote behind the turn goes out now.
-        SessionEvent::TurnEnded { .. } | SessionEvent::Closed { .. } => {
-            state.pending = None;
-            state.busy = false;
-            if let Some(held) = state.queued.take() {
-                wake = Wake::Send(held);
-            }
-        }
-        SessionEvent::DecisionRequested { decision } => {
-            state.pending = Some(decision.clone());
-        }
-        // The Session announced its command menu; the Composer's `/` popover
-        // reads it from here.
-        SessionEvent::Commands { commands } => {
-            state.commands = commands.clone();
-        }
-        // And its model menu — the provider picker's rows (#25).
-        SessionEvent::Models { models } => {
-            state.models = models.clone();
-        }
-        // And its permission mode — the meta row's chip.
-        SessionEvent::PermissionMode { mode } => {
-            state.permission_mode = Some(mode.clone());
-        }
-        // Kept for the watchdog: a replacement Session resumes from the newest
-        // id the provider gave, even one it renamed mid-Thread.
-        SessionEvent::Init { session_id, .. } => {
-            state.resume = Some(session_id.clone());
-        }
+        SessionEvent::Commands { commands } => state.commands = commands.clone(),
+        SessionEvent::Models { models } => state.models = models.clone(),
+        SessionEvent::PermissionMode { mode } => state.permission_mode = Some(mode.clone()),
+        SessionEvent::Init { session_id, .. } => state.resume = Some(session_id.clone()),
         _ => {}
     }
-    wake
 }
 
 #[cfg(test)]

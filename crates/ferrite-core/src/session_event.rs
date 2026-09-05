@@ -6,6 +6,9 @@
 /// One structured event from a provider Session.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SessionEvent {
+    /// Attributed execution and discovery. Child facts must enter Activity
+    /// before any Main transcript, usage, queue, or resume bookkeeping.
+    Activity(crate::activity::ActivityEvent),
     /// The provider session is live. `session_id` is the provider-native id
     /// later used for resume.
     Init { session_id: String, model: String },
@@ -189,7 +192,8 @@ pub struct Hunk {
 /// A tool call the operator has to rule on before it runs.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Decision {
-    /// The provider's handle for this Decision.
+    /// Opaque provider handle for this Decision. Echo it unchanged when
+    /// answering; its spelling need not match the provider's raw wire ID.
     pub id: String,
     /// The tool call being gated — the id of its `ToolStarted`, so a Pane can
     /// put the Decision on the tool card it blocks.

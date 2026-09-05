@@ -1,4 +1,7 @@
-//! One stdout line of the CLI's stream-json to at most one SessionEvent.
+//! Claude's legacy Main event shapes and control-protocol fields.
+//!
+//! The stateful activity decoder classifies each live frame before calling
+//! these helpers. Their line wrappers remain the Main-only fixture baseline.
 //!
 //! The vendor extends this stream without notice, so every line is read as a
 //! `Value` and anything unrecognised — new event types, changed field types,
@@ -115,15 +118,20 @@ pub(super) fn parse_capabilities(line: &str, request_id: &str) -> Option<ClaudeC
 
 /// `None` means "nothing Ferrite models": hook chatter, status lines,
 /// assistant snapshots, rate limits, unparseable junk.
+#[cfg(test)]
 pub(super) fn parse_line(line: &str) -> Option<SessionEvent> {
     let value: Value = serde_json::from_str(line).ok()?;
+    parse_value(&value)
+}
+
+pub(super) fn parse_value(value: &Value) -> Option<SessionEvent> {
     match value.get("type")?.as_str()? {
-        "system" => parse_system(&value),
-        "stream_event" => parse_stream_event(&value),
-        "assistant" => parse_assistant(&value),
-        "user" => parse_user(&value),
-        "control_request" => parse_control_request(&value),
-        "result" => Some(parse_result(&value)),
+        "system" => parse_system(value),
+        "stream_event" => parse_stream_event(value),
+        "assistant" => parse_assistant(value),
+        "user" => parse_user(value),
+        "control_request" => parse_control_request(value),
+        "result" => Some(parse_result(value)),
         _ => None,
     }
 }
@@ -134,10 +142,15 @@ pub(super) fn parse_line(line: &str) -> Option<SessionEvent> {
 /// point), and the `result` line reports the turn's totals with the
 /// model's `contextWindow`. Between results the window is read off the
 /// model id: Claude's 1M models carry `[1m]` (or `-1m`), the rest are 200k.
-/// The reader sends this after the line's own event, so a turn's ring
-/// moves with every message and lands exactly at the result.
+/// The decoder sends scoped usage before content, so a turn's ring moves
+/// with every message and lands exactly at the result.
+#[cfg(test)]
 pub(super) fn parse_usage(line: &str) -> Option<SessionEvent> {
     let value: Value = serde_json::from_str(line).ok()?;
+    parse_usage_value(&value)
+}
+
+pub(super) fn parse_usage_value(value: &Value) -> Option<SessionEvent> {
     let count = |usage: &Value, key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
     match value.get("type")?.as_str()? {
         "assistant" => {
@@ -240,7 +253,7 @@ fn parse_user(value: &Value) -> Option<SessionEvent> {
 /// The CLI hangs its structured result off the same line as the prose one.
 /// Each arm below matches a shape in the committed captures; a payload that
 /// fits none of them is Opaque rather than half-read.
-fn parse_tool_result(value: Option<&Value>) -> ToolResult {
+pub(super) fn parse_tool_result(value: Option<&Value>) -> ToolResult {
     let Some(value) = value else {
         return ToolResult::Opaque;
     };
@@ -513,6 +526,9 @@ mod tests {
     /// here until someone decides which fixture proves it.
     fn variant(event: &SessionEvent) -> Option<&'static str> {
         Some(match event {
+            // Stateful child attribution is proved by the activity decoder's
+            // captures; these legacy parser fixtures are Main-only.
+            SessionEvent::Activity(_) => return None,
             SessionEvent::Init { .. } => "Init",
             SessionEvent::TextDelta { .. } => "TextDelta",
             SessionEvent::ThinkingDelta { .. } => "ThinkingDelta",

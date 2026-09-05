@@ -11,7 +11,7 @@
 //! [`parse_thread_response`]; every other response — turn/start
 //! acknowledgements, interrupt receipts — is ignored.
 
-use std::path::Path;
+use std::{io, path::Path};
 
 use serde_json::Value;
 
@@ -134,14 +134,26 @@ fn parse_approval_request(value: &Value, params: &Value, tool_name: &str) -> Opt
     })
 }
 
-/// The server numbers its requests in its own id space (integers observed on
-/// 0.149.1, strings allowed by its schema). The string form is what travels
-/// in the Decision; `respond_to_decision` restores the original type.
+/// Keep the ID's JSON representation as the opaque Decision handle. Encoding
+/// strings, including their quotes and escapes, distinguishes integer `0`
+/// from string `"0"` without changing the provider-neutral Decision type.
 fn rpc_id_string(id: &Value) -> Option<String> {
     match id {
-        Value::Number(n) => Some(n.to_string()),
-        Value::String(s) => Some(s.clone()),
+        Value::Number(_) | Value::String(_) => Some(id.to_string()),
         _ => None,
+    }
+}
+
+/// Restore only a handle emitted by the approval decoder. Invalid handles
+/// fail before a reply is written; treating them as raw strings would make
+/// malformed handles address a different provider request.
+pub(super) fn decision_request_id(handle: &str) -> io::Result<Value> {
+    match serde_json::from_str(handle) {
+        Ok(id @ (Value::Number(_) | Value::String(_))) => Ok(id),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid Codex Decision request handle",
+        )),
     }
 }
 
@@ -336,10 +348,12 @@ pub(super) fn input_items(text: &str, skills: &[SessionCommand], cwd: Option<&Pa
 
 /// Is this line the response to request `id`? `Some(Ok)` carries its result,
 /// `Some(Err)` the server's error message — a refused thread/start must fail
-/// spawn with the server's own words, not a timeout.
+/// spawn with the server's own words, not a timeout. Server requests use a
+/// separate ID space: a matching ID never makes a method-bearing frame a
+/// response to one of our requests.
 pub(super) fn parse_response(line: &str, id: u64) -> Option<Result<Value, String>> {
     let value: Value = serde_json::from_str(line).ok()?;
-    if value.get("id")?.as_u64()? != id {
+    if value.get("method").is_some() || value.get("id")?.as_u64()? != id {
         return None;
     }
     if let Some(error) = value.get("error") {
@@ -349,7 +363,7 @@ pub(super) fn parse_response(line: &str, id: u64) -> Option<Result<Value, String
             .unwrap_or("unexplained JSON-RPC error");
         return Some(Err(format!("{message} ({error})")));
     }
-    Some(Ok(value.get("result").cloned().unwrap_or(Value::Null)))
+    Some(Ok(value.get("result")?.clone()))
 }
 
 /// The thread/start (or thread/resume) result: the Session's identity and its
@@ -554,6 +568,9 @@ mod tests {
     /// that no codex line can.
     fn variant(event: &SessionEvent) -> Option<&'static str> {
         Some(match event {
+            // Attributed observations require the stateful ancestry decoder;
+            // its real child captures are covered in activity::tests.
+            SessionEvent::Activity(_) => return None,
             SessionEvent::Init { .. } => "Init",
             SessionEvent::TextDelta { .. } => "TextDelta",
             SessionEvent::ReasoningSummaryDelta { .. } => "ReasoningSummaryDelta",
@@ -820,6 +837,64 @@ mod tests {
         );
     }
 
+    #[test]
+    fn decision_handles_preserve_id_types_and_string_escapes() {
+        let ids = [
+            serde_json::json!(0),
+            serde_json::json!("0"),
+            serde_json::json!(-1),
+            serde_json::json!("-1"),
+            serde_json::json!(i64::MAX),
+            serde_json::json!(""),
+            serde_json::json!("request \"quoted\"\n\\slash"),
+            serde_json::json!("\"0\""),
+        ];
+        for method in [
+            "item/commandExecution/requestApproval",
+            "item/fileChange/requestApproval",
+        ] {
+            let mut handles = std::collections::HashSet::new();
+            for id in &ids {
+                let line = serde_json::json!({
+                    "method": method, "id": id, "params": {"itemId": "gated-item"}
+                });
+                let Some(SessionEvent::DecisionRequested { decision }) =
+                    parse_line(&line.to_string())
+                else {
+                    panic!("valid request did not produce a Decision: {line}");
+                };
+                assert_eq!(decision_request_id(&decision.id).unwrap(), *id);
+                assert!(handles.insert(decision.id), "request IDs collided: {id}");
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_decision_ids_are_not_accepted_or_reinterpreted_as_strings() {
+        for id in [
+            serde_json::json!(null),
+            serde_json::json!(true),
+            serde_json::json!([]),
+            serde_json::json!({}),
+        ] {
+            let line = serde_json::json!({
+                "method": "item/commandExecution/requestApproval", "id": id,
+                "params": {"itemId": "gated-item"}
+            });
+            assert!(parse_line(&line.to_string()).is_none());
+            assert_eq!(
+                decision_request_id(&id.to_string()).unwrap_err().kind(),
+                io::ErrorKind::InvalidInput
+            );
+        }
+        for handle in ["", "raw-request-id", "01", "\"unterminated", "0 trailing"] {
+            assert_eq!(
+                decision_request_id(handle).unwrap_err().kind(),
+                io::ErrorKind::InvalidInput
+            );
+        }
+    }
+
     /// The same gate for a patch: no command to quote (and a null reason), so
     /// the Decision's description is honestly empty — the changes live on the
     /// fileChange tool card it points at.
@@ -1010,6 +1085,53 @@ mod tests {
             panic!("an error response must surface: {error:?}");
         };
         assert!(detail.contains("no such model"), "detail: {detail}");
+    }
+
+    #[test]
+    fn server_requests_do_not_answer_host_requests_with_matching_ids() {
+        for id in [1, 2, 3, 4] {
+            let request = serde_json::json!({
+                "id": id, "method": "item/commandExecution/requestApproval",
+                "params": {"itemId": "gated-item"}
+            });
+            assert_eq!(parse_response(&request.to_string(), id), None);
+            assert!(matches!(
+                parse_line(&request.to_string()),
+                Some(SessionEvent::DecisionRequested { .. })
+            ));
+            for payload in [
+                serde_json::json!({"result": {}}),
+                serde_json::json!({"error": {"message": "error"}}),
+            ] {
+                let mut mixed = request.clone();
+                mixed
+                    .as_object_mut()
+                    .unwrap()
+                    .extend(payload.as_object().unwrap().clone());
+                assert_eq!(
+                    parse_response(&mixed.to_string(), id),
+                    None,
+                    "a method-bearing frame cannot be a host response"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn response_envelopes_require_a_result_or_error() {
+        assert_eq!(parse_response(r#"{"id":3}"#, 3), None);
+        assert_eq!(parse_response(r#"{"id":3,"params":{}}"#, 3), None);
+        assert_eq!(parse_response(r#"{"id":"3","result":null}"#, 3), None);
+        assert_eq!(
+            parse_response(r#"{"id":3,"result":null}"#, 3),
+            Some(Ok(Value::Null))
+        );
+        assert!(
+            parse_response(r#"{"id":3,"error":{"message":"refused"}}"#, 3)
+                .unwrap()
+                .unwrap_err()
+                .contains("refused")
+        );
     }
 
     #[test]
