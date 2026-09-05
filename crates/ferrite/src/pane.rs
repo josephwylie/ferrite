@@ -1861,7 +1861,7 @@ pub fn rendered_disclosures(view: &PaneView, blocks: &[Block], level: Level) -> 
             Body::Tool(tool) if tool_has_details(tool) => {
                 controls.push(DisclosureId::Tool(tool.call.clone()))
             }
-            Body::Thinking(text) if !text.trim().is_empty() => {
+            Body::Thinking(text) if reasoning_text(text).1.is_some() => {
                 controls.push(DisclosureId::Reasoning(block.id))
             }
             _ => {}
@@ -3496,6 +3496,31 @@ pub fn popover_footer(hints: &'static str) -> Div {
 
 // ----------------------------------------------------------- Block render
 
+/// A preview of received text, never a second provider reasoning channel.
+/// Keep a short first line in the header; disclose only what follows it.
+/// A shortened first line needs the original text in the disclosure too.
+fn reasoning_text(thought: &str) -> (String, Option<&str>) {
+    let thought = thought.trim();
+    let (first, rest) = thought.split_once('\n').unwrap_or((thought, ""));
+    let first = first.trim();
+    let heading = first
+        .strip_prefix("**")
+        .and_then(|text| text.strip_suffix("**"))
+        .or_else(|| {
+            let text = first.trim_start_matches('#');
+            (text.len() < first.len() && text.starts_with(' ')).then(|| text.trim())
+        })
+        .unwrap_or(first);
+    let summary = ferrite_core::progress::one_line(heading, 160);
+    let details = if summary != ferrite_core::progress::one_line(heading, usize::MAX) {
+        Some(thought)
+    } else {
+        let rest = rest.trim();
+        (!rest.is_empty()).then_some(rest)
+    };
+    (summary, details)
+}
+
 /// One Block in the prototype's transcript vocabulary (§E). The body draws
 /// **no gutter at all** for prose: paragraphs, headings and list items sit
 /// flush at the content edge, and the only glyphs left are the event row's
@@ -3603,7 +3628,18 @@ fn render_block(
         // fold learned to drop it) draws nothing — not even its margin.
         Body::Thinking(thought) if thought.trim().is_empty() => div().into_any_element(),
         Body::Thinking(thought) => {
-            let summary = ferrite_core::progress::headline(thought);
+            let (summary, details) = reasoning_text(thought);
+            let Some(details) = details else {
+                // Nothing more was supplied. Keep the whole short block
+                // visible, wrapped and selectable without a false disclosure.
+                return paragraph(row, TEXT_2)
+                    .child(
+                        selection
+                            .markdown(block.id, thought.trim().to_owned())
+                            .muted(),
+                    )
+                    .into_any_element();
+            };
             let header = div()
                 .flex()
                 .items_center()
@@ -3612,8 +3648,8 @@ fn render_block(
                 .font_family(theme::FONT_UI)
                 .child(
                     div()
+                        .debug_selector(|| "reasoning-summary".into())
                         .min_w_0()
-                        .flex_1()
                         .truncate()
                         .child(SharedString::from(summary)),
                 )
@@ -3631,11 +3667,10 @@ fn render_block(
                 .child(header);
             if expanded {
                 reasoning = reasoning.content(
-                    div().min_w_0().mt(px(theme::KEYS_GAP)).child(
-                        selection
-                            .markdown(block.id, thought.trim_end().to_owned())
-                            .muted(),
-                    ),
+                    div()
+                        .min_w_0()
+                        .mt(px(theme::KEYS_GAP))
+                        .child(selection.markdown(block.id, details.to_owned()).muted()),
                 );
             }
             paragraph(row, TEXT_2).child(reasoning).into_any_element()

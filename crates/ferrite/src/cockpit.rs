@@ -8673,6 +8673,106 @@ mod tests {
     }
 
     #[gpui::test]
+    fn short_reasoning_has_no_empty_disclosure(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("reasoning-short", 1);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        fake.streams.borrow()[0]
+            .send(SessionEvent::ThinkingDelta {
+                text: "Checking the files.".into(),
+            })
+            .unwrap();
+        tick(cx);
+        view.read_with(cx, |view, _| {
+            let pane = &view.panes[0];
+            let block = &view
+                .cockpit
+                .thread(pane.thread().unwrap())
+                .unwrap()
+                .transcript()
+                .blocks()[0];
+            assert!(
+                pane.tool_bounds(pane::DisclosureId::Reasoning(block.id))
+                    .is_none(),
+                "a short summary must not offer an expansion that repeats itself"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn reasoning_discloses_body_without_repeating_its_heading(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("reasoning-details", 1);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        let body = "The provider supplied these additional details.";
+        fake.streams.borrow()[0]
+            .send(SessionEvent::ReasoningSummaryPart {
+                item_id: "reasoning-1".into(),
+                summary_index: 0,
+                text: format!("**Checking files**\n\n{body}"),
+                snapshot: false,
+            })
+            .unwrap();
+        tick(cx);
+        let id = view.read_with(cx, |view, _| {
+            view.cockpit
+                .thread(view.panes[0].thread().unwrap())
+                .unwrap()
+                .transcript()
+                .blocks()[0]
+                .id
+        });
+        let control = view.read_with(cx, |view, _| {
+            view.panes[0]
+                .tool_bounds(pane::DisclosureId::Reasoning(id))
+                .unwrap()
+        });
+        cx.simulate_click(control.center(), gpui::Modifiers::none());
+        tick(cx);
+        view.read_with(cx, |view, _| {
+            let text = view.selection.registered(view.panes[0].thread().unwrap());
+            assert!(text.iter().any(|(block, _, _, text)| *block == id && text == body),
+                "expanded reasoning must contain the body without duplicating its heading: {text:?}");
+        });
+        for width in [1000., 740.] {
+            cx.simulate_resize(gpui::size(px(width), px(700.)));
+            tick(cx);
+            let summary = cx.debug_bounds("reasoning-summary").unwrap();
+            let control = view.read_with(cx, |view, _| {
+                view.panes[0]
+                    .tool_bounds(pane::DisclosureId::Reasoning(id))
+                    .unwrap()
+            });
+            assert!(
+                summary.size.width < px(160.),
+                "a short summary must size to its text: {summary:?}"
+            );
+            assert!(
+                (control.left() - summary.right()).abs() <= px(12.),
+                "chevron must immediately follow the text: {summary:?} / {control:?}"
+            );
+        }
+
+        fake.streams.borrow()[0]
+            .send(SessionEvent::ReasoningSummaryPart {
+                item_id: "reasoning-1".into(),
+                summary_index: 0,
+                text: " More streamed detail.".into(),
+                snapshot: false,
+            })
+            .unwrap();
+        tick(cx);
+        view.read_with(cx, |view, _| {
+            let text = view.selection.registered(view.panes[0].thread().unwrap());
+            assert!(
+                text.iter().any(|(block, _, _, text)| *block == id
+                    && text == &format!("{body} More streamed detail.")),
+                "streaming must preserve the open disclosure and append its body: {text:?}"
+            );
+        });
+    }
+
+    #[gpui::test]
     fn transcript_details_wrap_to_the_pane(cx: &mut TestAppContext) {
         let (core, fake) = cockpit("transcript-wrap", 1);
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
