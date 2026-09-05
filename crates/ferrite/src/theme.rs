@@ -471,7 +471,10 @@ pub const USAGE_CARD_BAR_H: f32 = 4.0;
 pub const USAGE_TIGHT: f32 = 0.6;
 pub const USAGE_SPENT: f32 = 0.85;
 /// Compact context / five-hour / weekly lines beside the Composer's model.
-pub const USAGE_LINE_W: f32 = 24.0;
+/// 48px, not 24: at half this length a percentage point was a third of a
+/// pixel, so the three lines read as one block rather than as three
+/// readings, and the control was smaller than the thing it opens.
+pub const USAGE_LINE_W: f32 = 48.0;
 pub const USAGE_LINE_H: f32 = 2.0;
 pub const USAGE_LINE_GAP: f32 = 2.0;
 /// The focused Pane's ring: a 1px hairline lying exactly on the Pane's own
