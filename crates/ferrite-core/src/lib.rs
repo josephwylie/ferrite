@@ -6,6 +6,7 @@
 
 pub mod cockpit;
 pub mod docview;
+pub mod draft;
 pub mod groups;
 pub mod import;
 pub mod layout;
