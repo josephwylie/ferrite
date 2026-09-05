@@ -163,6 +163,11 @@ pub struct CockpitView {
     /// The Settings panel is up.
     settings_open: bool,
     settings_focus: FocusHandle,
+    /// Whether the window is maximized, read once per frame in `render`.
+    /// The nav's band is drawn without a `Window` in hand, and the two
+    /// halves of the titlebar have to agree: a maximized window has no top
+    /// resize edge for the drag regions to leave alone (`titlebar.rs`).
+    maximized: bool,
     /// The CLIs' versions as `--version` reports them, probed once when the
     /// panel first opens: (claude, codex).
     cli_versions: Option<(SharedString, SharedString)>,
@@ -572,6 +577,7 @@ impl CockpitView {
             prefs,
             settings_open: false,
             settings_focus: cx.focus_handle(),
+            maximized: false,
             cli_versions: None,
             group_error: None,
             questions: std::collections::HashMap::new(),
@@ -811,11 +817,24 @@ impl CockpitView {
         let chrome = self.nav_width() + crate::theme::GRID_PAD * 2.0;
         let width =
             (f32::from(viewport.width) - chrome) / layout.columns as f32 - crate::theme::GRID_GAP;
-        let height =
-            (f32::from(viewport.height) - crate::theme::WIN_CHROME_H - crate::theme::GRID_PAD)
-                / layout.rows as f32
-                - crate::theme::GRID_GAP;
+        let height = (f32::from(viewport.height)
+            - crate::theme::BOARD_TOP
+            - crate::theme::GRID_PAD)
+            / layout.rows as f32
+            - crate::theme::GRID_GAP;
         Cell::new(width.max(0.0), height.max(0.0))
+    }
+
+    /// Whether something floats over the cockpit: a menu, a popover, the
+    /// filter list or the Settings panel. The titlebar's drag region reads
+    /// it — a region that lies under an open overlay would answer Windows'
+    /// hit test as the window frame, and the row under the pointer would
+    /// never see the press (`titlebar.rs`).
+    fn overlay_open(&self) -> bool {
+        self.settings_open
+            || self.nav_filter_open
+            || self.popover.is_some()
+            || self.context_menu.is_some()
     }
 
     /// How much of the window the nav holds right now: the 208px column, or
@@ -843,14 +862,14 @@ impl CockpitView {
 
     /// The board the Panes lay out in, in window coordinates: right of the
     /// nav, inset by the grid padding.
-    /// The board starts under the titlebar band, the same `WIN_CHROME_H`
-    /// the nav reserves: with a transparent macOS titlebar AppKit still
+    /// The board starts under the titlebar band the nav also reserves,
+    /// plus its own padding (`BOARD_TOP`): with a transparent macOS titlebar AppKit still
     /// drags the window from that strip, and a Pane head drawn inside it
     /// could not be dragged onto another Pane — the window moved instead.
     fn board_bounds(&self, window: &Window) -> layout::Rect {
         let viewport = window.viewport_size();
         let pad = crate::theme::GRID_PAD;
-        let top = crate::theme::WIN_CHROME_H;
+        let top = crate::theme::BOARD_TOP;
         layout::Rect {
             x: self.nav_width() + pad,
             y: top,
@@ -4330,6 +4349,7 @@ fn provider_of_title(title: &str) -> Option<Provider> {
 impl Render for CockpitView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.measure();
+        self.maximized = window.is_maximized();
         // The fullscreened Pane, if the roster still shows it: a Pane gone
         // by any path is the roster's to notice, and it falls back to the
         // grid — never a blank cockpit.
@@ -4501,8 +4521,9 @@ impl Render for CockpitView {
                 .min_h_0()
                 .gap(px(crate::theme::GRID_GAP))
                 .p(px(crate::theme::GRID_PAD))
-                // The titlebar band stays the window's own drag strip.
-                .pt(px(crate::theme::WIN_CHROME_H))
+                // The titlebar band stays the window's own drag strip, and
+                // the board keeps its own padding under it (`BOARD_TOP`).
+                .pt(px(crate::theme::BOARD_TOP))
         };
         let visible = self.visible_indices();
         let layout = self.cockpit.layout();
@@ -4553,6 +4574,9 @@ impl Render for CockpitView {
         div()
             .flex()
             .flex_row()
+            // `relative`, so the titlebar strip below can lie over the band
+            // the board reserves rather than take a row of its own.
+            .relative()
             .size_full()
             .bg(rgb(crate::theme::GROUND))
             .font_family(crate::theme::FONT_UI)
@@ -4692,6 +4716,18 @@ impl Render for CockpitView {
             .on_action(cx.listener(Self::open_settings))
             .child(self.nav(cx))
             .child(grid)
+            // The window's own titlebar, where the platform makes the app
+            // draw one. It is the last thing over the band and the first
+            // thing under a menu: an overlay that reached into the band
+            // would be answering the frame's hit test, not its own rows, so
+            // the drag region stands down while one is open.
+            .when(crate::titlebar::CUSTOM, |root| {
+                root.child(crate::titlebar::strip(
+                    self.nav_width(),
+                    !self.overlay_open(),
+                    self.maximized,
+                ))
+            })
             .children(self.context_menu_element(cx))
             .children(self.context_usage_element(cx))
             .children(self.settings_element(cx))
@@ -5549,9 +5585,15 @@ impl CockpitView {
                 }),
             ));
         // The gear sits hard right of the band; folded, it stacks under
-        // the collapse button.
+        // the collapse button. The stretch between the two is the window's
+        // where the app draws its own titlebar: the band reads as a
+        // titlebar, so it drags like one (`titlebar.rs`).
         if !state.collapsed {
-            chrome = chrome.child(div().flex_1());
+            chrome = chrome.child(if crate::titlebar::CUSTOM {
+                crate::titlebar::drag_region("nav-chrome-drag", self.maximized)
+            } else {
+                div().flex_1()
+            });
         }
         chrome = chrome.child(gear);
         let column = nav::shell(state.collapsed).child(chrome);

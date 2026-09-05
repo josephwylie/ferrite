@@ -50,6 +50,10 @@ icons![
     "claude",
     "plus",
     "gear",
+    "window-minimize",
+    "window-maximize",
+    "window-restore",
+    "window-close",
 ];
 
 #[allow(dead_code)]
@@ -76,6 +80,19 @@ pub const CLAUDE: &str = "icons/claude.svg";
 pub const PLUS: &str = "icons/plus.svg";
 /// The settings gear.
 pub const GEAR: &str = "icons/gear.svg";
+/// The four caption marks the Windows titlebar draws (`titlebar.rs`). They
+/// are 10px chrome, not 16px UI: on a 10-unit viewBox the line family's 1.5
+/// stroke would render a blob, so these carry the 1px hairline Windows' own
+/// caption glyphs use, with a square cap — every one of them is an unjoined
+/// straight run.
+#[allow(dead_code)]
+pub const WINDOW_MINIMIZE: &str = "icons/window-minimize.svg";
+#[allow(dead_code)]
+pub const WINDOW_MAXIMIZE: &str = "icons/window-maximize.svg";
+#[allow(dead_code)]
+pub const WINDOW_RESTORE: &str = "icons/window-restore.svg";
+#[allow(dead_code)]
+pub const WINDOW_CLOSE: &str = "icons/window-close.svg";
 
 pub struct Assets;
 
@@ -131,6 +148,10 @@ mod tests {
             BRANCH,
             CODEX,
             CLAUDE,
+            WINDOW_MINIMIZE,
+            WINDOW_MAXIMIZE,
+            WINDOW_RESTORE,
+            WINDOW_CLOSE,
         ] {
             let bytes = Assets
                 .load(key)
@@ -142,8 +163,8 @@ mod tests {
         }
         assert_eq!(
             ICONS.len(),
-            13,
-            "the prototype and app controls, including disclosure and close"
+            17,
+            "the prototype and app controls, including disclosure and close,              and the four Windows caption glyphs"
         );
     }
 
@@ -188,6 +209,6 @@ mod tests {
     #[test]
     fn an_unknown_key_is_absent_rather_than_an_error() {
         assert!(Assets.load("icons/nope.svg").unwrap().is_none());
-        assert_eq!(Assets.list("icons/").unwrap().len(), 13);
+        assert_eq!(Assets.list("icons/").unwrap().len(), 17);
     }
 }
