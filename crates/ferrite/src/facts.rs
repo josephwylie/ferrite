@@ -8,6 +8,7 @@
 //! parks or changes a Thread names the moment and cannot forget a cache.
 
 use std::collections::HashMap;
+use std::time::SystemTime;
 
 use ferrite_core::activity::Subject;
 use ferrite_core::cockpit::Cockpit;
@@ -46,6 +47,10 @@ pub struct ThreadFacts {
     /// The provider the log declared — a parked row's logomark. An open
     /// Thread's provider comes live from the Cockpit.
     pub provider: Option<Provider>,
+    /// When the Thread was last written to (#21) — what the nav orders
+    /// rows by and what its "40m / 2h / 3d" line says. `None` when the log
+    /// cannot be stat'd; such a row claims nothing and sorts last.
+    pub last_used: Option<SystemTime>,
     /// The wall cell's folded reading — everything the L3 recipe needs that
     /// is not an O(1) transcript read. A frame never walks Blocks at L3.
     pub wall: WallCard,
@@ -159,7 +164,9 @@ impl Facts {
     pub fn parked_changed(&mut self, cockpit: &Cockpit) {
         let ordered = cockpit.parked_in_order().unwrap_or_default();
         for thread in &ordered {
+            let last_used = cockpit.last_used(*thread);
             let facts = self.threads.entry(*thread).or_default();
+            facts.last_used = last_used;
             facts.name = SharedString::from(cockpit.display_title(*thread, self.auto_title));
             let Ok(meta) = cockpit.peek(*thread) else {
                 facts.provider = None;
@@ -209,7 +216,9 @@ impl Facts {
             Err(_) => (None, None),
         };
         let name = SharedString::from(cockpit.display_title(thread, self.auto_title));
+        let last_used = cockpit.last_used(thread);
         let facts = self.threads.entry(thread).or_default();
+        facts.last_used = last_used;
         facts.branch = branch;
         facts.project = project;
         facts.project_label = project_label;
@@ -227,7 +236,9 @@ impl Facts {
             Err(_) => (None, None),
         };
         let name = SharedString::from(cockpit.display_title(thread, self.auto_title));
+        let last_used = cockpit.last_used(thread);
         let facts = self.threads.entry(thread).or_default();
+        facts.last_used = last_used;
         facts.project = project;
         facts.project_label = project_label;
         facts.name = name;
@@ -264,6 +275,11 @@ impl Facts {
         self.threads.entry(thread).or_default().selected_wall = card;
     }
 
+    /// When a Thread was last used, from the cache.
+    pub fn last_used(&self, thread: ThreadId) -> Option<SystemTime> {
+        self.threads.get(&thread).and_then(|facts| facts.last_used)
+    }
+
     /// Refold one Thread's wall card, wherever its transcript can change.
     fn refresh_wall(&mut self, cockpit: &Cockpit, thread: ThreadId) {
         let open = cockpit.thread(thread);
@@ -271,8 +287,15 @@ impl Facts {
             open.map(|open| open.transcript()),
             open.and_then(|open| open.pending()),
         );
+        let last_used = cockpit.last_used(thread);
         let facts = self.threads.entry(thread).or_default();
         facts.wall = card;
+        // The wall refolds on exactly the moments that append to the log —
+        // a stream, a prompt, an act — so recency rides it rather than
+        // needing a moment of its own.
+        if last_used.is_some() {
+            facts.last_used = last_used;
+        }
         facts.main_busy = open.is_some_and(|open| open.busy());
     }
 }
@@ -293,4 +316,62 @@ fn project_label(
         WorkspaceBinding::Worktree { repo, .. } => repo.file_name(),
     }?;
     Some(SharedString::from(leaf.to_string_lossy().to_string()))
+}
+
+/// How long ago, in the nav's own shorthand: `now`, `40m`, `2h`, `3d`,
+/// `1w`, then `12mo` and `2y`. One unit, never two — the row has a line's
+/// tail to spend, and "2h" is the whole answer at a glance. A time in the
+/// future (a clock that moved) reads `now` rather than a negative.
+pub fn since_label(last_used: SystemTime, now: SystemTime) -> SharedString {
+    let secs = now.duration_since(last_used).unwrap_or_default().as_secs();
+    const MINUTE: u64 = 60;
+    const HOUR: u64 = 60 * MINUTE;
+    const DAY: u64 = 24 * HOUR;
+    const WEEK: u64 = 7 * DAY;
+    // A month is the mean Gregorian month, and a year twelve of them: the
+    // row says "3mo", not a date, so the calendar's irregularity is below
+    // what it claims.
+    const MONTH: u64 = 2_629_746;
+    const YEAR: u64 = 12 * MONTH;
+    let text = match secs {
+        s if s < MINUTE => "now".to_string(),
+        s if s < HOUR => format!("{}m", s / MINUTE),
+        s if s < DAY => format!("{}h", s / HOUR),
+        s if s < WEEK => format!("{}d", s / DAY),
+        s if s < MONTH => format!("{}w", s / WEEK),
+        s if s < YEAR => format!("{}mo", s / MONTH),
+        s => format!("{}y", s / YEAR),
+    };
+    SharedString::from(text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn ago(secs: u64) -> SharedString {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(10 * 365 * 24 * 3600);
+        since_label(now - Duration::from_secs(secs), now)
+    }
+
+    #[test]
+    fn the_shorthand_climbs_one_unit_at_a_time() {
+        assert_eq!(ago(0), "now");
+        assert_eq!(ago(59), "now");
+        assert_eq!(ago(60), "1m");
+        assert_eq!(ago(40 * 60), "40m");
+        assert_eq!(ago(2 * 3600), "2h");
+        assert_eq!(ago(3 * 24 * 3600), "3d");
+        assert_eq!(ago(7 * 24 * 3600), "1w");
+        assert_eq!(ago(62 * 24 * 3600), "2mo");
+        assert_eq!(ago(800 * 24 * 3600), "2y");
+    }
+
+    /// A clock that moved backwards must not print a negative age.
+    #[test]
+    fn a_future_stamp_reads_now() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+        assert_eq!(since_label(now + Duration::from_secs(500), now), "now");
+    }
 }

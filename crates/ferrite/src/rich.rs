@@ -197,13 +197,6 @@ impl gpui::RenderOnce for Markdown {
             // Use natural height inside the transcript's own scroll container.
             .max_lines(usize::MAX)
             .style(text_style)
-            .code_block_highlighter(|block| {
-                let source = block.code();
-                let language = block.lang();
-                let tokens =
-                    ferrite_core::transcript::highlight_tokens(language.as_deref(), &source);
-                crate::pane::code(&source, Some(&tokens))
-            })
             .code_block_actions(|block, _, _| {
                 if !block
                     .lang()

@@ -429,13 +429,11 @@ fn transcript_cache_limit_retains_metadata_decisions_and_durable_facts() {
     );
     assert_eq!(stored.accepted.len(), 1);
     assert_eq!(activity.view().children().len(), 2);
-    assert!(
-        !activity
-            .view()
-            .subject(&Subject::Subagent(b.clone()))
-            .unwrap()
-            .retained()
-    );
+    assert!(!activity
+        .view()
+        .subject(&Subject::Subagent(b.clone()))
+        .unwrap()
+        .retained());
     observe(
         &mut activity,
         ActivityEvent::Decision {
@@ -452,13 +450,11 @@ fn transcript_cache_limit_retains_metadata_decisions_and_durable_facts() {
         },
     }));
     assert_eq!(text(&activity, &Subject::Subagent(b)), "second");
-    assert!(
-        !activity
-            .view()
-            .subject(&Subject::Subagent(a))
-            .unwrap()
-            .retained()
-    );
+    assert!(!activity
+        .view()
+        .subject(&Subject::Subagent(a))
+        .unwrap()
+        .retained());
     assert_eq!(activity.view().decisions().len(), 1);
 }
 

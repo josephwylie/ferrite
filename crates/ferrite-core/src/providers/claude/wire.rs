@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use super::ClaudeCapabilities;
 use crate::progress::{Phase, ProgressEvent, StepStatus, TaskStatus};
-use crate::{Decision, Hunk, SessionEvent, ToolResult, TurnOutcome};
+use crate::{Decision, Hunk, RateLimitWindow, SessionEvent, ToolResult, TurnOutcome};
 
 /// The answer to spawn's initialize control request, if this line is it.
 ///
@@ -355,6 +355,28 @@ pub(super) fn parse_usage_value(value: &Value) -> Option<SessionEvent> {
     }
 }
 
+/// Subscription windows arrive as their own line, independently of token
+/// usage. Keep their provider reset instants, but normalize utilization so
+/// both providers feed the same compact meter.
+pub(super) fn parse_rate_limits(line: &str) -> Option<SessionEvent> {
+    let value: Value = serde_json::from_str(line).ok()?;
+    if value.get("type")?.as_str()? != "rate_limit_event" {
+        return None;
+    }
+    let windows = value.get("rate_limit_info")?.get("unifiedWindows")?;
+    let window = |key: &str| {
+        let value = windows.get(key)?;
+        Some(RateLimitWindow {
+            used_fraction: value.get("utilization")?.as_f64()? as f32,
+            resets_at: value.get("resetsAt").and_then(Value::as_u64),
+        })
+    };
+    Some(SessionEvent::RateLimits {
+        five_hour: window("five_hour"),
+        weekly: window("seven_day"),
+    })
+}
+
 /// The context window a Claude model id implies, until a result says.
 fn window_of_model(model: &str) -> u64 {
     let lower = model.to_ascii_lowercase();
@@ -662,6 +684,24 @@ mod tests {
         assert_eq!(parse_usage(r#"{"type":"user"}"#), None);
     }
 
+    #[test]
+    fn unified_rate_limit_windows_are_normalized() {
+        let event = parse_rate_limits(r#"{"type":"rate_limit_event","rate_limit_info":{"unifiedWindows":{"five_hour":{"utilization":0.52,"resetsAt":11},"seven_day":{"utilization":0.08,"resetsAt":22}}}}"#).unwrap();
+        assert_eq!(
+            event,
+            SessionEvent::RateLimits {
+                five_hour: Some(RateLimitWindow {
+                    used_fraction: 0.52,
+                    resets_at: Some(11),
+                }),
+                weekly: Some(RateLimitWindow {
+                    used_fraction: 0.08,
+                    resets_at: Some(22),
+                }),
+            }
+        );
+    }
+
     fn events_of(name: &str) -> Vec<SessionEvent> {
         let (_, text) = FIXTURES
             .iter()
@@ -706,6 +746,8 @@ mod tests {
             // Rides beside a line's own event (`parse_usage`), proved by
             // `every_message_and_the_result_report_the_context_in_use`.
             SessionEvent::TokenUsage { .. } => return None,
+            // Parsed alongside the ordinary event path by the reader.
+            SessionEvent::RateLimits { .. } => return None,
         })
     }
 

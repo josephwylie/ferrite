@@ -11,9 +11,9 @@ pub mod draft;
 pub mod groups;
 pub mod import;
 pub mod layout;
+pub mod progress;
 mod prompt_history;
 pub mod providers;
-pub mod progress;
 pub mod questions;
 pub mod roster;
 pub mod session;
@@ -26,7 +26,7 @@ pub mod workspace;
 mod session_event;
 mod thread;
 pub use session_event::{
-    Decision, DecisionAnswer, Hunk, ModelInfo, SessionCommand, SessionEvent, ToolResult,
-    TurnOutcome,
+    Decision, DecisionAnswer, Hunk, ModelInfo, RateLimitWindow, SessionCommand, SessionEvent,
+    ToolResult, TurnOutcome,
 };
 pub use thread::ThreadId;
