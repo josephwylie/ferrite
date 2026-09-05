@@ -2482,6 +2482,20 @@ impl Cockpit {
         draft
     }
 
+    /// Open a Draft in the current view. Shortcuts use this path so invoking
+    /// one from a Group preserves that context and the Thread joins the Group
+    /// after its first send succeeds.
+    pub fn open_draft_in_current_view(&mut self) -> DraftId {
+        let group = match self.roster.view() {
+            View::Group(group) => Some(group),
+            View::Solo => None,
+        };
+        self.roster.open_draft(DraftScope {
+            group,
+            pending_leave: None,
+        })
+    }
+
     /// The first send (#29): bootstrap the Thread — create, worktree, spawn
     /// — and only then let the prompt go; the Thread takes the draft's own
     /// slot, and joins the Group the draft was pending in. The leave the

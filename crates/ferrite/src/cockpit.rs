@@ -307,6 +307,12 @@ enum MenuVerb {
     RemoveProject,
 }
 
+#[derive(Clone, Copy)]
+enum DraftPlacement {
+    Loose,
+    CurrentGroup,
+}
+
 /// The context menu up on screen.
 struct ContextMenu {
     target: MenuTarget,
@@ -3238,6 +3244,19 @@ impl CockpitView {
     /// on the launch project; `target` is the caller's (cmd-shift-n drafts
     /// straight onto "new worktree").
     fn open_draft(&mut self, target: DraftTarget, cx: &mut Context<Self>) {
+        self.open_draft_with_placement(target, DraftPlacement::Loose, cx);
+    }
+
+    fn open_draft_in_current_view(&mut self, target: DraftTarget, cx: &mut Context<Self>) {
+        self.open_draft_with_placement(target, DraftPlacement::CurrentGroup, cx);
+    }
+
+    fn open_draft_with_placement(
+        &mut self,
+        target: DraftTarget,
+        placement: DraftPlacement,
+        cx: &mut Context<Self>,
+    ) {
         let provider = self
             .panes
             .get(self.focused())
@@ -3252,7 +3271,7 @@ impl CockpitView {
                 }
             })
             .unwrap_or_else(|| self.default_choice());
-        self.open_draft_with_choice(target, provider, cx);
+        self.open_draft_with_choice(target, provider, placement, cx);
     }
 
     /// What a new Thread starts on when nothing on screen says otherwise:
@@ -3277,6 +3296,7 @@ impl CockpitView {
                 provider,
                 model: None,
             },
+            DraftPlacement::Loose,
             cx,
         );
     }
@@ -3285,6 +3305,7 @@ impl CockpitView {
         &mut self,
         target: DraftTarget,
         provider: ProviderChoice,
+        placement: DraftPlacement,
         cx: &mut Context<Self>,
     ) {
         // The project starts where the operator is looking: a Group's own
@@ -3304,8 +3325,12 @@ impl CockpitView {
             band_focus: None,
             error: None,
         };
-        // The roster scopes the draft to the current view and focuses it.
-        let draft = self.cockpit.open_draft();
+        // Shortcuts retain an active Group; pointer/menu creation opens a
+        // loose Draft and switches the Cockpit to Solo. Both take focus.
+        let draft = match placement {
+            DraftPlacement::CurrentGroup => self.cockpit.open_draft_in_current_view(),
+            DraftPlacement::Loose => self.cockpit.open_draft(),
+        };
         let pane = PaneView::new_draft(draft, binding, cx);
         cx.subscribe(&pane.composer, Self::composer_edited).detach();
         self.panes.push(pane);
@@ -4221,13 +4246,13 @@ impl CockpitView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.open_draft(DraftTarget::New, cx);
+        self.open_draft_in_current_view(DraftTarget::New, cx);
     }
 
     /// cmd-t / cmd-n (#29): a draft Pane, not a Thread. The band chooses;
     /// the first send bootstraps.
     fn new_thread(&mut self, _: &NewThread, _window: &mut Window, cx: &mut Context<Self>) {
-        self.open_draft(DraftTarget::Main, cx);
+        self.open_draft_in_current_view(DraftTarget::Main, cx);
     }
 
     /// Reopen the Thread parked most recently — the one the operator just
@@ -6804,8 +6829,8 @@ mod tests {
         });
     }
     #[gpui::test]
-    fn add_thread_from_a_group_opens_a_loose_draft_and_switches_to_solo(cx: &mut TestAppContext) {
-        let (mut core, _fake) = cockpit("group-loose-draft", 2);
+    fn new_thread_shortcut_from_a_group_adds_the_thread_to_that_group(cx: &mut TestAppContext) {
+        let (mut core, _fake) = cockpit("group-shortcut-draft", 2);
         let threads = core.threads();
         let group = core
             .apply_group(GroupChange::Create {
@@ -6825,13 +6850,13 @@ mod tests {
         view.update(cx, |view, cx| view.enter_group(group, cx));
         cx.simulate_keystrokes("cmd-t");
         view.read_with(cx, |view, _| {
-            assert_eq!(view.cockpit.roster().view(), View::Solo);
-            assert_eq!(view.visible_indices().len(), 1, "the draft Pane is visible");
+            assert_eq!(view.cockpit.roster().view(), View::Group(group));
+            assert_eq!(view.visible_indices().len(), 3, "the draft Pane is visible");
             assert!(view.panes[view.focused()].draft().is_some());
             assert_eq!(
                 view.cockpit.groups().iter().next().unwrap().members.len(),
                 2,
-                "the draft is not added to the Group"
+                "the Draft has no durable membership before sending"
             );
         });
         cx.simulate_input("build it");
@@ -6839,11 +6864,14 @@ mod tests {
         view.read_with(cx, |view, _| {
             assert_eq!(
                 view.cockpit.groups().iter().next().unwrap().members.len(),
-                2,
-                "the created Thread remains outside the Group"
+                3,
+                "the shortcut-created Thread joins the Group"
             );
             let thread = view.cockpit.roster().focused_thread().unwrap();
-            assert!(view.cockpit.groups().of(thread).is_none());
+            assert_eq!(
+                view.cockpit.groups().of(thread).map(|group| group.id),
+                Some(group)
+            );
             assert!(view.panes.iter().all(|pane| pane.draft().is_none()));
         });
     }
@@ -9704,9 +9732,19 @@ mod tests {
     /// The nav exposes the same draft-opening path as cmd-t/cmd-n for
     /// operators who discover actions with the pointer.
     #[gpui::test]
-    fn add_thread_button_opens_a_new_thread(cx: &mut TestAppContext) {
-        let (core, _fake) = cockpit("add-thread-button", 1);
+    fn add_thread_button_opens_a_loose_draft_even_from_a_group(cx: &mut TestAppContext) {
+        let (mut core, _fake) = cockpit("add-thread-button", 2);
+        let threads = core.threads();
+        let group = core
+            .apply_group(GroupChange::Create {
+                first: threads[0],
+                second: threads[1],
+            })
+            .unwrap()
+            .group
+            .unwrap();
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, cx| view.enter_group(group, cx));
         tick(cx);
 
         let button = cx.debug_bounds("add-thread").expect("button is visible");
@@ -9714,7 +9752,9 @@ mod tests {
         cx.run_until_parked();
 
         view.read_with(cx, |view, _| {
-            assert_eq!(view.panes.len(), 2, "the button opened a draft Pane");
+            assert_eq!(view.cockpit.roster().view(), View::Solo);
+            assert_eq!(view.visible_indices().len(), 1);
+            assert_eq!(view.cockpit.groups().get(group).unwrap().members, threads);
             assert!(matches!(
                 view.panes.last().map(|pane| pane.identity),
                 Some(PaneIdentity::Draft(_))
@@ -12893,29 +12933,29 @@ mod tests {
 
         cx.simulate_keystrokes("cmd-t");
         view.read_with(cx, |view, _| {
-            assert_eq!(view.cockpit.roster().view(), View::Solo);
-            assert_eq!(view.visible_indices().len(), 1, "draft has its own Pane");
+            assert_eq!(view.cockpit.roster().view(), View::Group(group));
+            assert_eq!(view.visible_indices().len(), 4, "Draft joins the view");
             assert_eq!(view.cockpit.groups().get(group).unwrap().members, threads);
         });
         cx.simulate_input("build it");
         cx.simulate_keystrokes("enter");
         view.read_with(cx, |view, _| {
-            assert_eq!(view.cockpit.groups().get(group).unwrap().members.len(), 3);
-            assert_eq!(view.cockpit.roster().view(), View::Solo);
+            assert_eq!(view.cockpit.groups().get(group).unwrap().members.len(), 4);
+            assert_eq!(view.cockpit.roster().view(), View::Group(group));
         });
 
         cx.simulate_keystrokes("cmd-w");
         view.read_with(cx, |view, _| {
-            assert_eq!(view.cockpit.roster().view(), View::Solo);
-            assert_eq!(view.cockpit.threads().len(), 3, "the loose Thread parks");
+            assert_eq!(view.cockpit.roster().view(), View::Group(group));
+            assert_eq!(view.visible_indices().len(), 3);
+            assert_eq!(view.cockpit.threads().len(), 4, "leaving never parks");
         });
-        view.update(cx, |view, cx| view.enter_group(group, cx));
         cx.simulate_keystrokes("cmd-w cmd-w");
         view.read_with(cx, |view, _| {
             assert_eq!(view.cockpit.roster().view(), View::Solo);
             assert!(view.cockpit.groups().get(group).is_none());
             assert_eq!(view.visible_indices().len(), 1);
-            assert_eq!(view.cockpit.threads().len(), 3);
+            assert_eq!(view.cockpit.threads().len(), 4);
         });
     }
 
