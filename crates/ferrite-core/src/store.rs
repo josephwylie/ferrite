@@ -852,6 +852,37 @@ impl Store {
         Ok(())
     }
 
+    /// Commit the new header and its Handover together. Before the rename,
+    /// every refusal leaves the old log and writer authoritative; afterwards
+    /// no fallible read remains between persistence and Session adoption.
+    pub(crate) fn hand_over(
+        &self,
+        id: ThreadId,
+        provider: Provider,
+        model: Option<String>,
+        writer: &mut ThreadWriter,
+    ) -> Result<Handover, LoadError> {
+        writer.flush()?;
+        let mut snapshot = self.load(id)?;
+        snapshot.records.push(Record::Handover {
+            from: snapshot.provider,
+            to: provider,
+            model: model.clone(),
+        });
+        snapshot.provider = provider;
+        snapshot.model = model;
+        snapshot.effort = None;
+        let handover = snapshot.last_handover().expect("just added");
+        let file = self.rewrite(&snapshot)?;
+        *writer = ThreadWriter {
+            file,
+            buffer: Vec::new(),
+            flush_interval: self.flush_interval,
+            buffered_since: None,
+        };
+        Ok(handover)
+    }
+
     pub fn set_title(
         &self,
         id: ThreadId,

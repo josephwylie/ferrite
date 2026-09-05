@@ -13,6 +13,7 @@ mod prompt_history;
 pub mod providers;
 pub mod questions;
 pub mod roster;
+pub mod session;
 pub mod settings;
 pub mod store;
 pub mod titler;
