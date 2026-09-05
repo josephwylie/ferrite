@@ -31,9 +31,12 @@ pub const NAV: u32 = 0x232323;
 /// the Pane's own ground so the title and its checkout line read as chrome
 /// and the transcript reads as content.
 pub const PANE_HEAD: u32 = 0x1d1d1d;
-/// `rgba(255,255,255,0.07)` — the matching hairlines under the Pane header
-/// and above the Composer, bracketing the Pane's transcript content.
+/// `rgba(255,255,255,0.07)` — the hairline under the Pane header.
 pub const PANE_HEAD_EDGE: u32 = 0xffffff12;
+/// `rgba(255,255,255,0.10)` — the hairline above the Composer. Slightly
+/// brighter than the header edge to hold the same visual weight against the
+/// lighter raised input ground.
+pub const COMPOSER_EDGE: u32 = 0xffffff1a;
 
 /// `#282828` — `--raised`: inline-code chips, code blocks, keycaps, the
 /// changed strip's file chips, and the Composer's own ground.
