@@ -5075,8 +5075,17 @@ impl Render for CockpitView {
             // would be answering the frame's hit test, not its own rows, so
             // the drag region stands down while one is open.
             .when(crate::titlebar::CUSTOM, |root| {
+                let group_title = match self.cockpit.roster().view() {
+                    View::Group(group) => self
+                        .cockpit
+                        .groups()
+                        .get(group)
+                        .map(|group| SharedString::from(group.display_title())),
+                    View::Solo => None,
+                };
                 root.child(crate::titlebar::strip(
                     self.nav_width(),
+                    group_title,
                     !self.overlay_open(),
                     self.maximized,
                 ))
@@ -5969,7 +5978,7 @@ impl CockpitView {
         // titlebar, so it drags like one (`titlebar.rs`).
         if !state.collapsed {
             chrome = chrome.child(if crate::titlebar::CUSTOM {
-                crate::titlebar::drag_region("nav-chrome-drag", self.maximized)
+                crate::titlebar::drag_region("nav-chrome-drag", None, self.maximized)
             } else {
                 div().flex_1()
             });

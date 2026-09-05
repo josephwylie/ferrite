@@ -28,12 +28,13 @@
 //! they read.
 
 use gpui::prelude::*;
-use gpui::{div, px, rgb, Div, MouseButton, Stateful, WindowControlArea};
+use gpui::{div, px, rgb, Div, MouseButton, SharedString, Stateful, WindowControlArea};
 
 use crate::icons::{self, icon};
 use crate::pointer::{Pointer, PointerPressed};
 use crate::theme::{
-    BLOCKED, CAPTION_GLYPH, CAPTION_RESIZE_EDGE, CAPTION_W, TEXT, TEXT_MUTED, WIN_CHROME_H,
+    BLOCKED, CAPTION_GLYPH, CAPTION_RESIZE_EDGE, CAPTION_W, FS_SM, GRID_PAD, TEXT, TEXT_MUTED,
+    WIN_CHROME_H,
 };
 
 /// Whether this build draws its own titlebar. macOS keeps the host's, and
@@ -53,7 +54,7 @@ pub const CUSTOM: bool = cfg!(target_os = "windows");
 /// `draggable` is false while a menu, popover or the settings panel is
 /// open. Such an overlay can reach into the band, and Windows would route
 /// the press to the frame instead of to the row under the pointer.
-pub fn strip(nav_width: f32, draggable: bool, maximized: bool) -> Div {
+pub fn strip(nav_width: f32, title: Option<SharedString>, draggable: bool, maximized: bool) -> Div {
     div()
         .absolute()
         .top_0()
@@ -64,9 +65,9 @@ pub fn strip(nav_width: f32, draggable: bool, maximized: bool) -> Div {
         .flex_row()
         .child(div().flex_shrink_0().w(px(nav_width)))
         .child(if draggable {
-            drag_region("titlebar-drag", maximized)
+            drag_region("titlebar-drag", title, maximized)
         } else {
-            div().flex_1()
+            title_region(title)
         })
         .child(caption_buttons(maximized))
 }
@@ -74,7 +75,7 @@ pub fn strip(nav_width: f32, draggable: bool, maximized: bool) -> Div {
 /// An empty stretch Windows drags the window by. The tagged part starts
 /// below the resize edge on a restored window, so the top border still
 /// resizes; maximized, there is no border to preserve and it runs flush.
-pub fn drag_region(id: &'static str, maximized: bool) -> Div {
+pub fn drag_region(id: &'static str, title: Option<SharedString>, maximized: bool) -> Div {
     let inset = if maximized { 0.0 } else { CAPTION_RESIZE_EDGE };
     div()
         .flex_1()
@@ -87,6 +88,7 @@ pub fn drag_region(id: &'static str, maximized: bool) -> Div {
                 .id(id)
                 .flex_1()
                 .w_full()
+                .child(title_region(title))
                 // See `button`: the root's focus hitbox must not count as
                 // hovered under a caption region, or the press is marked
                 // handled and Windows never starts the move.
@@ -100,6 +102,25 @@ pub fn drag_region(id: &'static str, maximized: bool) -> Div {
                 })
                 .window_control_area(WindowControlArea::Drag),
         )
+}
+
+fn title_region(title: Option<SharedString>) -> Div {
+    div()
+        .h_full()
+        .flex_1()
+        .flex()
+        .items_center()
+        .justify_start()
+        .min_w_0()
+        .px(px(GRID_PAD))
+        .text_size(px(FS_SM))
+        .text_color(rgb(TEXT_MUTED))
+        .children(title.map(|title| {
+            div()
+                .debug_selector(|| "group-titlebar-name".into())
+                .truncate()
+                .child(title)
+        }))
 }
 
 /// Minimise, maximise/restore and close, in the platform's order, flush to
@@ -203,7 +224,7 @@ mod tests {
     /// take no layout of its own, or every Pane would move down by 42px.
     #[test]
     fn the_strip_is_an_overlay_of_the_band_the_board_reserves() {
-        let mut strip = strip(crate::nav::WIDTH, true, false);
+        let mut strip = strip(crate::nav::WIDTH, Some("Group Alpha".into()), true, false);
         assert_eq!(strip.style().size.height, Some(px(WIN_CHROME_H).into()));
         assert_eq!(strip.style().position, Some(gpui::Position::Absolute));
     }
