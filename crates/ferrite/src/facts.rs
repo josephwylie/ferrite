@@ -119,7 +119,14 @@ impl Facts {
     /// open Thread.
     pub fn tick(&mut self, cockpit: &Cockpit) {
         for thread in cockpit.threads() {
-            self.refresh_slow(cockpit, thread);
+            self.refresh_metadata(cockpit, thread);
+        }
+    }
+
+    /// Adopt checkout labels collected away from the UI thread.
+    pub fn set_branches(&mut self, branches: Vec<(ThreadId, Option<String>)>) {
+        for (thread, branch) in branches {
+            self.threads.entry(thread).or_default().branch = branch.map(SharedString::from);
         }
     }
 
@@ -184,6 +191,23 @@ impl Facts {
         let name = SharedString::from(cockpit.display_title(thread, self.auto_title));
         let facts = self.threads.entry(thread).or_default();
         facts.branch = branch;
+        facts.project = project;
+        facts.project_label = project_label;
+        facts.name = name;
+    }
+
+    /// Refresh everything except the checkout label. This path stays in the
+    /// pump, so it must never launch Git.
+    fn refresh_metadata(&mut self, cockpit: &Cockpit, thread: ThreadId) {
+        let (project, project_label) = match cockpit.peek(thread) {
+            Ok(meta) => (
+                meta.project_id,
+                project_label(cockpit, meta.project_id, meta.workspace.as_ref()),
+            ),
+            Err(_) => (None, None),
+        };
+        let name = SharedString::from(cockpit.display_title(thread, self.auto_title));
+        let facts = self.threads.entry(thread).or_default();
         facts.project = project;
         facts.project_label = project_label;
         facts.name = name;
