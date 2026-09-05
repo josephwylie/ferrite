@@ -716,12 +716,20 @@ pub fn thread_row_with_title(row: &ThreadRow, title: impl IntoElement) -> Statef
                     .text_color(rgb(if row.current { TEXT_STRONG } else { TEXT }))
                     .child(title),
             )
-            .child(provider_mark(row.provider, PROVIDER_MARK)),
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .debug_selector({
+                        let thread = row.thread;
+                        move || format!("nav-mark-{}", thread.get())
+                    })
+                    .child(provider_mark(row.provider, PROVIDER_MARK)),
+            ),
     )
     .child(meta_line(icons::FOLDER, row.project.clone(), TEXT_2))
     .child(
         meta_line(icons::BRANCH, row.branch.clone(), TEXT_MUTED)
-            .child(since_tail(row.last_used.clone())),
+            .child(since_tail(row.thread, row.last_used.clone())),
     )
 }
 
@@ -729,8 +737,12 @@ pub fn thread_row_with_title(row: &ThreadRow, title: impl IntoElement) -> Statef
 /// pushed right by its own auto margin rather than by a spacer, so a line
 /// whose branch is unknown still puts the age where every other row's age
 /// is. Never a date: the nav says how long ago, and the Pane says when.
-fn since_tail(label: Option<SharedString>) -> Div {
-    let cell = div().flex_shrink_0().ml_auto().pl(px(ROW_ICON_GAP));
+fn since_tail(thread: ThreadId, label: Option<SharedString>) -> Div {
+    let cell = div()
+        .flex_shrink_0()
+        .ml_auto()
+        .pl(px(ROW_ICON_GAP))
+        .debug_selector(move || format!("nav-since-{}", thread.get()));
     let Some(label) = label else {
         return cell;
     };
@@ -956,6 +968,7 @@ fn meta_line(mark: &'static str, label: Option<SharedString>, ink: u32) -> Div {
         .child(icon(mark, ROW_ICON, ink))
         .child(
             div()
+                .flex_1()
                 .min_w_0()
                 .truncate()
                 .text_size(px(FS_SM))

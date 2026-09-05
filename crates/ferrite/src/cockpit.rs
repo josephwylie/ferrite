@@ -6582,6 +6582,23 @@ mod tests {
         });
     }
 
+    /// The age at the tail of a row's last line hangs under the provider
+    /// logomark: one right edge down the row, not two.
+    #[gpui::test]
+    fn the_age_hangs_under_the_provider_mark(cx: &mut TestAppContext) {
+        let (core, _) = cockpit("nav-age-align", 1);
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        cx.run_until_parked();
+        let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+
+        let mark_id: &'static str = format!("nav-mark-{}", thread.get()).leak();
+        let age_id: &'static str = format!("nav-since-{}", thread.get()).leak();
+        let mark = cx.debug_bounds(mark_id).expect("the row draws a logomark");
+        let age = cx.debug_bounds(age_id).expect("the row draws its age");
+        assert_eq!(mark.right(), age.right(), "one right edge, not two");
+    }
+
     /// The tree draws one list, not a Groups shelf above a Threads shelf:
     /// Groups and solo Threads sort together by when they were last used,
     /// a Group counting as its most recently used member. Threads created
