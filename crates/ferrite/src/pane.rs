@@ -4759,6 +4759,7 @@ mod tests {
         selection: crate::select::TranscriptText,
         blocks: Vec<Block>,
         expanded: HashSet<String>,
+        reasoning_expanded: bool,
         /// The Thread's Provider, which colours the prompt block.
         provider: Option<Provider>,
     }
@@ -4778,10 +4779,11 @@ mod tests {
                 .font_family(crate::theme::FONT_MONO)
                 .text_size(px(12.))
                 .children(self.blocks.iter().map(|block| {
-                    let expanded = matches!(
-                        &block.body,
-                        Body::Tool(tool) if self.expanded.contains(&tool.call)
-                    );
+                    let expanded = match &block.body {
+                        Body::Tool(tool) => self.expanded.contains(&tool.call),
+                        Body::Thinking(_) => self.reasoning_expanded,
+                        _ => false,
+                    };
                     render_block(
                         block,
                         &overlay,
@@ -4803,6 +4805,7 @@ mod tests {
             selection: crate::select::TranscriptText::default(),
             blocks,
             expanded: HashSet::new(),
+            reasoning_expanded: false,
             provider: Some(Provider::Claude),
         }
     }
@@ -5021,6 +5024,11 @@ mod tests {
         let blocks: Vec<Block> = transcript.blocks().to_vec();
         let ids: Vec<ferrite_core::transcript::BlockId> =
             blocks.iter().map(|block| block.id).collect();
+        let reasoning: Vec<_> = blocks
+            .iter()
+            .filter(|block| matches!(block.body, Body::Thinking(_)))
+            .map(|block| block.id)
+            .collect();
         let thread = ThreadId::new(1);
         let (view, cx) = cx.add_window_view(|_, cx| {
             gpui::component::init(cx);
@@ -5029,6 +5037,18 @@ mod tests {
         cx.simulate_resize(size(px(900.), px(600.)));
         cx.run_until_parked();
 
+        let collapsed = view.read_with(cx, |view, _| view.selection.registered(thread));
+        assert!(
+            collapsed
+                .iter()
+                .all(|(block, _, _, _)| !reasoning.contains(block)),
+            "hidden reasoning must not join copied text"
+        );
+        view.update(cx, |view, cx| {
+            view.reasoning_expanded = true;
+            cx.notify();
+        });
+        cx.run_until_parked();
         let runs = view.read_with(cx, |view, _| view.selection.registered(thread));
         for id in &ids {
             assert!(
@@ -5047,6 +5067,7 @@ mod tests {
             all.push_str(text);
         }
         assert!(all.contains("run the tests"), "the prompt line: {all}");
+        assert!(all.contains("weighing it up"), "expanded reasoning: {all}");
         assert!(
             all.contains("fn main() {}"),
             "code registers its source: {all}"
