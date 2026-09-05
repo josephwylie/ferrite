@@ -148,6 +148,7 @@ mod tests {
             BRANCH,
             CODEX,
             CLAUDE,
+            GEAR,
             WINDOW_MINIMIZE,
             WINDOW_MAXIMIZE,
             WINDOW_RESTORE,
@@ -181,6 +182,7 @@ mod tests {
             WARNING,
             PENCIL,
             CHECK,
+            GEAR,
         ] {
             let bytes = Assets.load(key).unwrap().unwrap();
             let svg = std::str::from_utf8(&bytes).unwrap();
