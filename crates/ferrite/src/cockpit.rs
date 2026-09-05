@@ -10703,7 +10703,9 @@ mod tests {
     }
 
     #[gpui::test]
-    fn a_draft_inherits_the_focused_provider_model_and_only_live_models(cx: &mut TestAppContext) {
+    fn a_draft_inherits_the_focused_provider_model_and_only_announced_models(
+        cx: &mut TestAppContext,
+    ) {
         let (core, fake) = cockpit("draft-provider-choice", 2);
         bind_production_keys(cx);
         let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
@@ -10892,7 +10894,11 @@ mod tests {
                 .iter()
                 .position(|row| row.active)
                 .expect("✓ on the choice");
-            assert_eq!(picker.rows[standing].name.as_ref(), "Opus 5");
+            assert_eq!(
+                picker.rows[standing].name.as_ref(),
+                "Opus",
+                "the learned provider label survives the Session replacement"
+            );
             assert_eq!(picker.selected, standing);
         });
         cx.simulate_keystrokes("enter");

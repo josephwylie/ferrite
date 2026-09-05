@@ -382,7 +382,7 @@ pub struct Cockpit {
     roster: Roster,
     spawner: Box<dyn Spawner>,
     model_discovery: Option<Receiver<(Provider, Vec<ModelInfo>)>>,
-    discovered_models: Vec<(Provider, Vec<ModelInfo>)>,
+    model_cache: crate::providers::models::ModelCache,
     models_changed: bool,
     bootstraps: HashMap<ThreadId, PendingBootstrap>,
     bootstrap_results: Vec<BootstrapResult>,
@@ -398,6 +398,7 @@ impl Cockpit {
         let registry = Registry::open(store.dir())?;
         let groups = Groups::load(store.dir())?;
         let model_discovery = spawner.discover_models();
+        let model_cache = crate::providers::models::ModelCache::load(store.dir());
         Ok(Self {
             threads: BTreeMap::new(),
             store,
@@ -406,7 +407,7 @@ impl Cockpit {
             roster: Roster::default(),
             spawner,
             model_discovery,
-            discovered_models: Vec::new(),
+            model_cache,
             models_changed: false,
             bootstraps: HashMap::new(),
             bootstrap_results: Vec::new(),
@@ -1647,8 +1648,11 @@ impl Cockpit {
             };
             let mut release = None;
             for event in events {
-                if matches!(&event, SessionEvent::Models { models } if !models.is_empty()) {
-                    self.models_changed = true;
+                if let SessionEvent::Models { models } = &event {
+                    self.model_cache.remember(thread.provider, models);
+                    // A Session's own effort menu may have been empty even
+                    // when its announcement matches the saved provider menu.
+                    self.models_changed |= !models.is_empty();
                 }
                 // Folded first, then written: the fold is what stops a tool
                 // call's clock, and the record carries that reading so a
@@ -1749,20 +1753,9 @@ impl Cockpit {
                 return;
             };
             match receiver.try_recv() {
-                Ok((provider, models)) if !models.is_empty() => {
-                    if let Some((_, known)) = self
-                        .discovered_models
-                        .iter_mut()
-                        .find(|(known, _)| *known == provider)
-                    {
-                        self.models_changed |= *known != models;
-                        *known = models;
-                    } else {
-                        self.discovered_models.push((provider, models));
-                        self.models_changed = true;
-                    }
+                Ok((provider, models)) => {
+                    self.models_changed |= self.model_cache.remember(provider, &models);
                 }
-                Ok(_) => {}
                 Err(std::sync::mpsc::TryRecvError::Empty) => return,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     self.model_discovery = None;
@@ -1778,30 +1771,10 @@ impl Cockpit {
         std::mem::take(&mut self.models_changed)
     }
 
-    /// Live Session announcements, else the install's startup discovery.
-    /// Drafts and Settings can read a provider menu before any Session exists.
+    /// The last usable provider announcement, including one saved in an
+    /// earlier launch. Fresh discovery or Session announcements replace it.
     pub fn announced_models(&self, provider: Provider) -> Vec<ModelInfo> {
-        let mut models: Vec<ModelInfo> = Vec::new();
-        for thread in self
-            .threads
-            .values()
-            .filter(|open| open.provider == provider)
-        {
-            for model in &thread.models {
-                if !models.iter().any(|known| known.value == model.value) {
-                    models.push(model.clone());
-                }
-            }
-        }
-        if models.is_empty() {
-            self.discovered_models
-                .iter()
-                .find(|(known, _)| *known == provider)
-                .map(|(_, models)| models.clone())
-                .unwrap_or_default()
-        } else {
-            models
-        }
+        self.model_cache.get(provider).to_vec()
     }
 
     /// The picker's rows for `provider`: what its adapter announced,
@@ -4676,6 +4649,85 @@ mod tests {
             .map(|open| open.models())
             .unwrap_or_default()
             .is_empty());
+    }
+
+    #[test]
+    fn learned_provider_models_survive_parking_and_a_restart() {
+        let (mut cockpit, fake) = cockpit("learned-models");
+        let dir = cockpit.store.dir().to_path_buf();
+        let mut expected = Vec::new();
+        for (index, provider) in [Provider::Claude, Provider::Codex].into_iter().enumerate() {
+            let thread = cockpit.open(provider, main_choice()).unwrap();
+            let models = vec![ModelInfo {
+                value: format!("future-{provider:?}"),
+                display: format!("Future {provider:?}"),
+                detail: "Discovered by the provider".into(),
+                resolved: Some(format!("resolved-{provider:?}")),
+                efforts: vec!["medium".into(), "max".into()],
+                default_effort: Some("medium".into()),
+            }];
+            fake.streams.borrow()[index]
+                .send(SessionEvent::Models {
+                    models: models.clone(),
+                })
+                .unwrap();
+            cockpit.pump();
+            assert_eq!(cockpit.model_catalog(provider), models);
+            cockpit.park(thread).unwrap();
+            assert_eq!(
+                cockpit.model_catalog(provider),
+                models,
+                "parking keeps the learned fallback"
+            );
+            expected.push((provider, models));
+        }
+        drop(cockpit);
+        let reopened = Cockpit::new(Store::open(dir).unwrap(), Box::new(Fake::default()));
+        assert!(
+            reopened.threads().is_empty(),
+            "loading menus creates no Sessions"
+        );
+        for (provider, models) in expected {
+            assert_eq!(
+                reopened.model_catalog(provider),
+                models,
+                "all metadata survives a restart"
+            );
+        }
+    }
+
+    #[test]
+    fn a_new_provider_menu_replaces_the_learned_menu_in_full() {
+        let (mut cockpit, fake) = cockpit("replace-learned-models");
+        cockpit.open(Provider::Claude, main_choice()).unwrap();
+        cockpit.open(Provider::Claude, main_choice()).unwrap();
+        fake.streams.borrow()[0]
+            .send(SessionEvent::Models {
+                models: vec!["retired-model".into()],
+            })
+            .unwrap();
+        cockpit.pump();
+        let models = vec![ModelInfo::bare("future-model")];
+        fake.streams.borrow()[1]
+            .send(SessionEvent::Models {
+                models: models.clone(),
+            })
+            .unwrap();
+        cockpit.pump();
+        assert_eq!(
+            cockpit.model_catalog(Provider::Claude),
+            models,
+            "an older live Session must not reintroduce retired models"
+        );
+        fake.streams.borrow()[1]
+            .send(SessionEvent::Models { models: Vec::new() })
+            .unwrap();
+        cockpit.pump();
+        assert_eq!(
+            cockpit.model_catalog(Provider::Claude),
+            models,
+            "an empty announcement preserves the last usable menu"
+        );
     }
 
     /// AC (#25): choosing a provider before the first prompt replaces the

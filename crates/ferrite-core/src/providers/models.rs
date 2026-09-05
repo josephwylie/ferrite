@@ -4,14 +4,18 @@
 //! Claude's CLI announces its menu at the handshake — values, resolved
 //! ids, one-line descriptions, effort levels — and Codex answers a
 //! `model/list` both at app startup (without a Thread) and when a Session
-//! starts; either announcement always wins. Until discovery or a Session
-//! announces a menu, pickers read the fallback catalog here. The
+//! starts; either announcement always wins. The last usable menu is saved
+//! per provider across launches. Until a fresh announcement, pickers use
+//! that saved menu, or the bundled fallback here if none was saved. The
 //! display grooming turns any raw id a Session's Init names
 //! (`claude-fable-5-1`, `gpt-5.4-mini`) into the name a person would say
 //! (`Fable 5.1`, `GPT-5.4 Mini`), so no API spelling ever reaches a chip.
 
 use crate::store::Provider;
 use crate::ModelInfo;
+
+mod cache;
+pub(crate) use cache::ModelCache;
 
 /// The effort ladder every Claude model but Haiku takes, as the CLI
 /// announces it.
@@ -32,7 +36,7 @@ type FallbackRow = (
     Option<&'static str>,
 );
 
-/// The models a provider offers when its adapter has not announced a
+/// The models a provider offers when its adapter has no live or saved
 /// list. Values are the spellings the CLI accepts today; the display is
 /// what the picker shows; the efforts are what each took when last
 /// probed. The first row is the provider's own default.
