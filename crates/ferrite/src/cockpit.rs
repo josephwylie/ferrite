@@ -6174,6 +6174,12 @@ impl CockpitView {
                 cx.notify();
             }),
         ));
+        head = head.child(nav::add_thread_button().on_click(cx.listener(
+            |view, _: &ClickEvent, _, cx| {
+                cx.stop_propagation();
+                view.open_draft(DraftTarget::Main, cx);
+            },
+        )));
         // Agents at work: a spinner hard right of the head, opposite the
         // filter, while any Thread in the tree is working.
         if state.working {
@@ -9683,6 +9689,27 @@ mod tests {
         cx.simulate_keystrokes("cmd-n");
         view.read_with(cx, |view, _| {
             assert_eq!(view.panes.len(), 3, "and cmd-n still does");
+        });
+    }
+
+    /// The nav exposes the same draft-opening path as cmd-t/cmd-n for
+    /// operators who discover actions with the pointer.
+    #[gpui::test]
+    fn add_thread_button_opens_a_new_thread(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("add-thread-button", 1);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        tick(cx);
+
+        let button = cx.debug_bounds("add-thread").expect("button is visible");
+        cx.simulate_click(button.center(), gpui::Modifiers::none());
+        cx.run_until_parked();
+
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.panes.len(), 2, "the button opened a draft Pane");
+            assert!(matches!(
+                view.panes.last().map(|pane| pane.identity),
+                Some(PaneIdentity::Draft(_))
+            ));
         });
     }
 
