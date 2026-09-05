@@ -119,12 +119,20 @@ impl BandChip {
 
 impl PaneView {
     pub fn new<T: 'static>(thread: ThreadId, cx: &mut Context<T>) -> Self {
+        // A Pane opens on its tail, never on its first line: a fresh
+        // ScrollHandle sits at offset 0 (the top), so a Thread with history
+        // — reopened, or revived at launch — would land on its oldest block.
+        // gpui applies the request at the first prepaint, when the transcript
+        // has a height; from there tail-follow keeps it at the bottom until
+        // the operator scrolls up.
+        let scroll = ScrollHandle::new();
+        scroll.scroll_to_bottom();
         Self {
             identity: PaneIdentity::Thread(thread),
             draft: None,
             name: SharedString::from(format!("thread-{thread:02}")),
             composer: cx.new(Composer::new),
-            scroll: ScrollHandle::new(),
+            scroll,
             decision_focus: cx.focus_handle(),
             disclosure: ToolDisclosure {
                 expanded: HashSet::new(),
