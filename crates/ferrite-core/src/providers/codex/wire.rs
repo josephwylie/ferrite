@@ -16,7 +16,9 @@ use std::path::Path;
 use serde_json::Value;
 
 use super::CodexCapabilities;
-use crate::{Decision, ModelInfo, SessionCommand, SessionEvent, ToolResult, TurnOutcome};
+use crate::{
+    Decision, ModelInfo, RateLimitWindow, SessionCommand, SessionEvent, ToolResult, TurnOutcome,
+};
 
 /// The item types Ferrite reads as tool runs. Everything else the server
 /// wraps in an item — user messages, agent messages, reasoning — either
@@ -54,9 +56,37 @@ pub(super) fn parse_line(line: &str) -> Option<SessionEvent> {
         }
         "item/fileChange/requestApproval" => parse_approval_request(&value, params, "fileChange"),
         "thread/tokenUsage/updated" => parse_token_usage(params),
+        "account/rateLimits/updated" => parse_rate_limits(params),
         "turn/completed" => parse_turn_completed(params),
         _ => None,
     }
+}
+
+fn parse_rate_limits(params: &Value) -> Option<SessionEvent> {
+    let limits = params.get("rateLimits")?;
+    let mut five_hour = None;
+    let mut weekly = None;
+    for window in [limits.get("primary"), limits.get("secondary")]
+        .into_iter()
+        .flatten()
+    {
+        let Some(minutes) = window.get("windowDurationMins").and_then(Value::as_u64) else {
+            continue;
+        };
+        let Some(used_percent) = window.get("usedPercent").and_then(Value::as_f64) else {
+            continue;
+        };
+        let limit = RateLimitWindow {
+            used_fraction: (used_percent / 100.0) as f32,
+            resets_at: window.get("resetsAt").and_then(Value::as_u64),
+        };
+        match minutes {
+            300 => five_hour = Some(limit),
+            10_080 => weekly = Some(limit),
+            _ => {}
+        }
+    }
+    Some(SessionEvent::RateLimits { five_hour, weekly })
 }
 
 /// A tool run, as the server reports one: the item announces itself when the
@@ -561,6 +591,7 @@ mod tests {
             SessionEvent::ToolCompleted { .. } => "ToolCompleted",
             SessionEvent::DecisionRequested { .. } => "DecisionRequested",
             SessionEvent::TokenUsage { .. } => "TokenUsage",
+            SessionEvent::RateLimits { .. } => "RateLimits",
             SessionEvent::TurnEnded { .. } => "TurnEnded",
             // The skills menu: a correlated response like Init, read by the
             // reader against its own request id, so it is chained into the
@@ -636,6 +667,24 @@ mod tests {
                 total_tokens, output_tokens: 50_000, context_window: Some(200_000), ..
             } if total_tokens == current));
         }
+    }
+
+    #[test]
+    fn rate_limits_are_named_by_duration_not_provider_order() {
+        let event = parse_line(r#"{"method":"account/rateLimits/updated","params":{"rateLimits":{"primary":{"usedPercent":14,"windowDurationMins":10080,"resetsAt":22},"secondary":{"usedPercent":52,"windowDurationMins":300,"resetsAt":11}}}}"#).unwrap();
+        assert_eq!(
+            event,
+            SessionEvent::RateLimits {
+                five_hour: Some(RateLimitWindow {
+                    used_fraction: 0.52,
+                    resets_at: Some(11),
+                }),
+                weekly: Some(RateLimitWindow {
+                    used_fraction: 0.14,
+                    resets_at: Some(22),
+                }),
+            }
+        );
     }
 
     #[test]

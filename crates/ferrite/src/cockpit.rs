@@ -19,7 +19,7 @@ use ferrite_core::{DecisionAnswer, ThreadId};
 use gpui::prelude::*;
 use gpui::{
     actions, anchored, deferred, div, px, rgb, rgba, AnyElement, ClickEvent, ClipboardItem,
-    Context, Div, Entity, FocusHandle, Focusable, FontWeight, MouseButton, MouseDownEvent,
+    Context, Corner, Div, Entity, FocusHandle, Focusable, FontWeight, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle, SharedString, Stateful, Window,
 };
 
@@ -152,7 +152,7 @@ pub struct CockpitView {
     /// The right-click menu, if one is up: what it is about, where it was
     /// summoned, and which destructive row is armed for its second press.
     context_menu: Option<ContextMenu>,
-    /// The context ring's token card, tied to its Thread and click position.
+    /// The usage meter's detail card, tied to its Thread and click position.
     context_usage: Option<(ThreadId, gpui::Point<gpui::Pixels>)>,
     /// A seam being dragged: the Group, the seam, and the tree as it
     /// stands mid-drag — persisted on release, never per move.
@@ -3732,9 +3732,7 @@ impl CockpitView {
                 }),
             ));
         }
-        band.child(div().flex_1())
-            .child(pane::band_hint())
-            .into_any_element()
+        band.into_any_element()
     }
 
     /// Test-only: aim the launch project at a scratch repo — production
@@ -4931,12 +4929,12 @@ impl CockpitView {
             selection,
         };
         // Only L1 draws a Composer to hang a popover over (#23), a model
-        // picker (#25) or a context ring; the wall answers with keys alone.
+        // picker (#25) or usage meter; the wall answers with keys alone.
         let l1 = level == Level::Transcript;
         let wiring = pane::PaneWiring {
             menu: l1.then(|| self.popover_element(index, cx)).flatten(),
             model_picker: l1.then(|| self.model_picker(index, cx)).flatten(),
-            usage_ring: l1.then(|| self.usage_ring(index, cx)).flatten(),
+            usage_meter: l1.then(|| self.usage_meter(index, cx)).flatten(),
             decide: (level != Level::Wall)
                 .then(|| self.decide_keycaps(index, level, cx))
                 .flatten(),
@@ -5424,24 +5422,25 @@ impl CockpitView {
         Some(cluster.into_any_element())
     }
 
-    /// The header ring opens the latest reported token counts on click.
+    /// The Composer meter opens the latest reported usage on click.
     /// No reading is invented when the provider has not reported usage.
-    fn usage_ring(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn usage_meter(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
         let thread = self.panes[index].thread()?;
         let usage = self.cockpit.thread(thread)?.transcript().usage()?;
         let fraction = usage
             .context_window
             .filter(|window| *window > 0)
             .map_or(0., |window| usage.total_tokens as f32 / window as f32);
+        let limits = self.cockpit.thread(thread)?.transcript().rate_limits();
         let was_open = self.context_usage.is_some_and(|(shown, _)| shown == thread);
         Some(
             div()
-                .id(("context-ring", thread.get() as usize))
-                .debug_selector(move || format!("context-ring-{}", thread.get()))
+                .id(("usage-meter", thread.get() as usize))
+                .debug_selector(move || format!("usage-meter-{}", thread.get()))
                 .cursor_pointer()
                 .p(px(4.))
                 .m(px(-4.))
-                .child(pane::usage_ring(fraction))
+                .child(pane::usage_lines(fraction, limits))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |view, event: &MouseDownEvent, _, cx| {
@@ -5450,9 +5449,9 @@ impl CockpitView {
                         view.popover = None;
                         view.context_menu = None;
                         // Outside-click dismissal runs in capture phase, before this
-                        // toggle. Use the state of the ring that received the press.
+                        // toggle. Use the state of the meter that received the press.
                         view.context_usage = (!was_open)
-                            .then_some((thread, event.position + gpui::point(px(0.), px(12.))));
+                            .then_some((thread, event.position - gpui::point(px(0.), px(12.))));
                         cx.notify();
                     }),
                 )
@@ -5466,7 +5465,10 @@ impl CockpitView {
         let card = menu::shell()
             .id("context-usage-card")
             .debug_selector(|| "context-usage-card".into())
-            .child(pane::context_usage(usage))
+            .child(pane::context_usage(
+                usage,
+                self.cockpit.thread(thread)?.transcript().rate_limits(),
+            ))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
@@ -5479,6 +5481,7 @@ impl CockpitView {
         Some(
             deferred(
                 anchored()
+                    .anchor(Corner::BottomLeft)
                     .position(at)
                     .snap_to_window_with_margin(px(crate::theme::GRID_PAD))
                     .child(card),
@@ -6477,11 +6480,23 @@ mod tests {
     }
 
     #[gpui::test]
-    fn clicking_the_context_ring_shows_current_and_maximum_tokens(cx: &mut TestAppContext) {
+    fn composer_usage_lines_show_context_and_subscription_windows(cx: &mut TestAppContext) {
         let (core, fake) = cockpit("context-click", 1);
         bind_production_keys(cx);
         let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        fake.streams.borrow()[0]
+            .send(SessionEvent::RateLimits {
+                five_hour: Some(ferrite_core::RateLimitWindow {
+                    used_fraction: 0.52,
+                    resets_at: Some(11),
+                }),
+                weekly: Some(ferrite_core::RateLimitWindow {
+                    used_fraction: 0.08,
+                    resets_at: Some(22),
+                }),
+            })
+            .unwrap();
         fake.streams.borrow()[0]
             .send(SessionEvent::TokenUsage {
                 total_tokens: 124_000,
@@ -6493,10 +6508,13 @@ mod tests {
             })
             .unwrap();
         tick(cx);
-        let ring = cx
-            .debug_bounds("context-ring-1")
-            .expect("usage ring is visible");
-        cx.simulate_mouse_down(ring.center(), MouseButton::Left, gpui::Modifiers::none());
+        assert!(cx.debug_bounds("usage-line-context-62").is_some());
+        assert!(cx.debug_bounds("usage-line-five-hour-52").is_some());
+        assert!(cx.debug_bounds("usage-line-weekly-8").is_some());
+        let meter = cx
+            .debug_bounds("usage-meter-1")
+            .expect("usage lines are visible beside the model");
+        cx.simulate_mouse_down(meter.center(), MouseButton::Left, gpui::Modifiers::none());
         cx.run_until_parked();
         assert!(
             cx.debug_bounds("context-usage-current-124000").is_some(),
@@ -6506,6 +6524,8 @@ mod tests {
             cx.debug_bounds("context-usage-maximum-200000").is_some(),
             "click must reveal maximum tokens"
         );
+        assert!(cx.debug_bounds("context-usage-five-hour-52").is_some());
+        assert!(cx.debug_bounds("context-usage-weekly-8").is_some());
         fake.streams.borrow()[0]
             .send(SessionEvent::TokenUsage {
                 total_tokens: 31_000,
@@ -6525,12 +6545,12 @@ mod tests {
             cx.debug_bounds("context-usage-maximum-unknown").is_some(),
             "unknown limit is not invented"
         );
-        cx.simulate_mouse_down(ring.center(), MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_mouse_down(meter.center(), MouseButton::Left, gpui::Modifiers::none());
         cx.run_until_parked();
         view.read_with(cx, |view, _| {
-            assert!(view.context_usage.is_none(), "second ring click closes it")
+            assert!(view.context_usage.is_none(), "second meter click closes it")
         });
-        cx.simulate_mouse_down(ring.center(), MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_mouse_down(meter.center(), MouseButton::Left, gpui::Modifiers::none());
         cx.run_until_parked();
         view.read_with(cx, |view, _| assert!(view.context_usage.is_some()));
         cx.simulate_mouse_down(
@@ -6542,7 +6562,7 @@ mod tests {
         view.read_with(cx, |view, _| {
             assert!(view.context_usage.is_none(), "outside click dismisses")
         });
-        cx.simulate_mouse_down(ring.center(), MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_mouse_down(meter.center(), MouseButton::Left, gpui::Modifiers::none());
         cx.run_until_parked();
         cx.simulate_keystrokes("escape");
         view.read_with(cx, |view, _| assert!(view.context_usage.is_none()));

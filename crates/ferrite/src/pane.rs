@@ -316,9 +316,8 @@ pub struct PaneWiring {
     /// supplied for **every** L1 Pane, before and after the first-prompt
     /// lock: the prototype draws it in all four Panes (#25).
     pub model_picker: Option<AnyElement>,
-    /// The context ring (#22 C12). None when the provider reported no
-    /// usage, or below L1. Clicking opens the current/window token card.
-    pub usage_ring: Option<AnyElement>,
+    /// Context and account usage lines beside the model control.
+    pub usage_meter: Option<AnyElement>,
     /// The pending Decision's keycaps, wired to the exact decide verbs the
     /// keys run (#26) — laid into the L1 card or the L2 body. None while
     /// nothing pends, and at the wall, which draws no keycaps.
@@ -469,7 +468,7 @@ pub fn render_pane(
     let PaneWiring {
         menu,
         model_picker,
-        usage_ring,
+        usage_meter,
         mut decide,
         mut tool_controls,
         title,
@@ -531,7 +530,9 @@ pub fn render_pane(
                     menu: None,
                     mode: permission_mode,
                     model_picker: None,
-                    band: None,
+                    usage_meter: None,
+                    setup_controls: None,
+                    draft_error: None,
                     focused,
                 },
             )
@@ -553,7 +554,7 @@ pub fn render_pane(
         );
     }
 
-    let mut pane = shell.child(pane_head(view, branch.as_ref(), status, usage_ring, title));
+    let mut pane = shell.child(pane_head(view, branch.as_ref(), status, title));
     match transcript {
         Some(transcript) => {
             // The tasks strip sits directly under the header, full width,
@@ -607,7 +608,9 @@ pub fn render_pane(
                     menu,
                     mode: permission_mode,
                     model_picker,
-                    band: None,
+                    usage_meter,
+                    setup_controls: None,
+                    draft_error: None,
                     focused,
                 },
             ));
@@ -730,23 +733,9 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
         );
     }
 
-    let mut wrapped = div().flex().flex_col().flex_shrink_0();
-    wrapped = wrapped.child(band);
-    if let Some(error) = error {
-        wrapped = wrapped.child(
-            div()
-                .flex()
-                .flex_shrink_0()
-                .items_center()
-                .pb(px(4.))
-                .text_size(px(theme::FS_MONO))
-                .text_color(rgb(BLOCKED))
-                .child(div().min_w_0().whitespace_normal().child(error.clone())),
-        );
-    }
     focus_wrapper(
         shell
-            .child(pane_head(view, None, None, None, None))
+            .child(pane_head(view, None, None, None))
             .child(div().flex().flex_1().min_h_0())
             .child(composer_region(
                 view,
@@ -760,7 +749,9 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
                     menu,
                     mode: None,
                     model_picker: None,
-                    band: Some(wrapped.into_any_element()),
+                    usage_meter: None,
+                    setup_controls: Some(band),
+                    draft_error: error.cloned(),
                     focused,
                 },
             )),
@@ -768,25 +759,16 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
     )
 }
 
-/// The pre-prompt band's own row (#29): chips left, the key path's hint at
-/// the right edge — the Composer meta row's grammar, one step above the
-/// prompt line.
+/// Draft setup controls use the same 20px controls row as a live Composer.
 pub fn draft_band() -> Div {
     div()
         .flex()
+        .flex_1()
         .flex_shrink_0()
+        .min_w_0()
         .items_center()
         .gap(px(6.))
-        .h(px(theme::TASKS_STRIP_H))
-}
-
-/// The band's key-path hint, riding the row's right edge.
-pub fn band_hint() -> Div {
-    div()
-        .flex_shrink_0()
-        .text_size(px(theme::FS_MONO))
-        .text_color(rgb(TEXT_MUTED))
-        .child("⇥ chips · ↵ send")
+        .h(px(theme::COMPOSER_ROW_H))
 }
 
 /// One band chip. The prototype draws no draft band (R-09), so the chip is
@@ -1332,8 +1314,8 @@ fn l2_decision_body(decision: &Decision, decide: Option<AnyElement>) -> Div {
 // ---------------------------------------------------------------- L1 pane
 
 /// The Pane head (§D.2): 32px, 12px inline padding, an 8px gap, muted ink.
-/// Status dot · Thread id · checkout · the context ring pinned to the
-/// trailing edge. No background, no border, and **no rule beneath it** —
+/// Status dot · Thread id · checkout. No background, no border, and **no
+/// rule beneath it** —
 /// Soft separates by fill contrast alone. There is no model chip here (the
 /// Composer's picker is the only model surface) and no window controls
 /// (park and zoom stay on the keyboard).
@@ -1341,7 +1323,6 @@ fn pane_head(
     view: &PaneView,
     branch: Option<&SharedString>,
     status: Option<Status>,
-    usage_ring: Option<AnyElement>,
     title: Option<AnyElement>,
 ) -> Div {
     // The dot's base is the muted ink — the parked look — and each live
@@ -1400,14 +1381,7 @@ fn pane_head(
                 .child(div().min_w_0().truncate().pb(px(2.)).child(branch.clone())),
         );
     }
-    // The ring is hard right and it is the last thing in the head. A
-    // growing spacer, not `ml_auto` — see `tasks_strip` for why.
-    match usage_ring {
-        Some(ring) => head
-            .child(div().flex_1().min_w_0())
-            .child(div().flex_shrink_0().child(ring)),
-        None => head,
-    }
+    head
 }
 
 /// The head's title, saying it can be renamed: the name in its own ink
@@ -1821,9 +1795,10 @@ struct ComposerStack<'a> {
     mode: Option<&'a str>,
     /// The Composer's model picker (#25) — drawn in every Pane.
     model_picker: Option<AnyElement>,
-    /// The draft Pane's pre-prompt band (#29) — Some on drafts only, and
-    /// gone with the first send.
-    band: Option<AnyElement>,
+    /// Live usage sits immediately beside the model picker.
+    usage_meter: Option<AnyElement>,
+    setup_controls: Option<AnyElement>,
+    draft_error: Option<SharedString>,
     /// Whether this Pane holds the keyboard. The Composer paints its own
     /// caret when it does; the `›` mark stands in when it does not, and
     /// the two are mutually exclusive (§D.7).
@@ -1839,10 +1814,10 @@ struct ComposerStack<'a> {
 /// No top border: Soft draws no separators, and the ground change is the
 /// whole separation.
 ///
-/// Above the two rows, still inside the region, stack the draft band (#29)
-/// and the queued row — neither of which the prototype draws (R-09). The
-/// Decision card is **not** here: it is a sibling of the body, drawn by
-/// `render_pane`. While a Decision pends this region still carries the
+/// The draft's setup chips occupy the controls row, so a new Thread and an
+/// existing Thread share the same input silhouette. A queued prompt may add
+/// a row above. The Decision card is **not** here: it is a sibling of the
+/// body, drawn by `render_pane`. While a Decision pends this region carries the
 /// `Decision` key context, so y/n/a answer with the keyboard in the
 /// Composer (#23).
 fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: ComposerStack) -> Div {
@@ -1855,10 +1830,12 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         menu,
         mode,
         model_picker,
-        band,
+        usage_meter,
+        setup_controls,
+        draft_error,
         focused,
     } = stack;
-    let is_draft = band.is_some();
+    let is_draft = setup_controls.is_some();
     let mut region = div()
         .relative()
         .flex()
@@ -1879,8 +1856,16 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         .line_height(relative(theme::LINE_UI))
         .text_color(rgb(TEXT_2))
         .when(decision.is_some(), |region| region.key_context("Decision"));
-    if let Some(band) = band {
-        region = region.child(band);
+    if let Some(error) = draft_error {
+        region = region.child(
+            div()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .text_size(px(theme::FS_MONO))
+                .text_color(rgb(BLOCKED))
+                .child(div().min_w_0().whitespace_normal().child(error)),
+        );
     }
     if let Some(held) = queued {
         region = region.child(queued_line(held));
@@ -1960,15 +1945,16 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         ));
     }
 
-    // `.composer-controls`: the mode chip, then the esc hint — which does
-    // **not** push right here — then the model picker hard right. No cost,
-    // no token count, no context text.
+    // `.composer-controls`: setup or mode at left; usage and model at right.
     let mut controls = div()
         .flex()
         .flex_shrink_0()
         .items_center()
         .gap(px(theme::EVENT_GAP))
         .h(px(theme::COMPOSER_ROW_H));
+    if let Some(setup) = setup_controls {
+        controls = controls.child(setup);
+    }
     // The chip is the *running* Session's edit mode, so it rides only a
     // Pane that is running and unblocked: a Decision owns the keyboard until
     // it is answered, and a closed Session has no mode to be in. The
@@ -1996,10 +1982,14 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
     // `margin-inline-start: auto` on the picker. It renders in every Pane,
     // before and after the first-prompt lock — there is no plain-label
     // fallback and no second model surface anywhere.
+    if model_picker.is_some() || usage_meter.is_some() {
+        controls = controls.child(div().flex_1().min_w_0());
+    }
+    if let Some(meter) = usage_meter {
+        controls = controls.child(div().flex_shrink_0().child(meter));
+    }
     if let Some(picker) = model_picker {
-        controls = controls
-            .child(div().flex_1().min_w_0())
-            .child(div().flex_shrink_0().child(picker));
+        controls = controls.child(div().flex_shrink_0().child(picker));
     }
     region.child(controls)
 }
@@ -2666,8 +2656,11 @@ fn duration_label(elapsed: Duration) -> SharedString {
     }
 }
 
-/// The context ring's detail card. Counts are reported values, never estimates.
-pub fn context_usage(usage: ferrite_core::transcript::Usage) -> Div {
+/// The usage meter's detail card. Counts are reported values, never estimates.
+pub fn context_usage(
+    usage: ferrite_core::transcript::Usage,
+    limits: ferrite_core::transcript::RateLimits,
+) -> Div {
     fn count_label(count: u64) -> String {
         let digits = count.to_string();
         let mut label = String::new();
@@ -2701,6 +2694,30 @@ pub fn context_usage(usage: ferrite_core::transcript::Usage) -> Div {
                 )),
             )
     };
+    let limit_row = |key: &'static str,
+                     label: &'static str,
+                     limit: Option<ferrite_core::RateLimitWindow>| {
+        let percent = limit.map(|limit| (limit.used_fraction.clamp(0., 1.) * 100.).round() as u32);
+        div()
+            .id(key)
+            .debug_selector(move || {
+                format!(
+                    "context-usage-{key}-{}",
+                    percent.map_or("unknown".into(), |n| n.to_string())
+                )
+            })
+            .flex()
+            .justify_between()
+            .gap(px(12.))
+            .child(div().text_color(rgb(TEXT_MUTED)).child(label))
+            .child(
+                div().child(SharedString::from(
+                    percent
+                        .map(|percent| format!("{percent}% used"))
+                        .unwrap_or_else(|| "Not reported".into()),
+                )),
+            )
+    };
     div()
         .flex()
         .flex_col()
@@ -2715,6 +2732,48 @@ pub fn context_usage(usage: ferrite_core::transcript::Usage) -> Div {
         )
         .child(row("current", "Current", Some(usage.total_tokens)))
         .child(row("maximum", "Maximum", maximum))
+        .child(limit_row("five-hour", "5-hour limit", limits.five_hour))
+        .child(limit_row("weekly", "Weekly limit", limits.weekly))
+}
+
+/// Three quiet horizontal lines for context, five-hour and weekly usage.
+/// The fixed order makes the tiny meter scannable; unknown provider values
+/// retain their tracks and are explained as such in the click-through card.
+pub fn usage_lines(context: f32, limits: ferrite_core::transcript::RateLimits) -> Div {
+    let line = |key: &'static str, fraction: Option<f32>| {
+        let used = fraction.unwrap_or(0.).clamp(0., 1.);
+        let percent = (used * 100.).round() as u32;
+        div()
+            .id(key)
+            .debug_selector(move || format!("usage-line-{key}-{percent}"))
+            .w(px(theme::USAGE_LINE_W))
+            .h(px(theme::USAGE_LINE_H))
+            .rounded(px(theme::USAGE_LINE_H / 2.))
+            .bg(rgba(METER_OFF))
+            .child(
+                div()
+                    .h_full()
+                    .w(relative(used))
+                    .rounded(px(theme::USAGE_LINE_H / 2.))
+                    .bg(rgb(TEXT_2)),
+            )
+    };
+    div()
+        .flex()
+        .flex_col()
+        .flex_shrink_0()
+        .justify_center()
+        .gap(px(theme::USAGE_LINE_GAP))
+        .h(px(theme::COMPOSER_ROW_H))
+        .child(line("context", Some(context)))
+        .child(line(
+            "five-hour",
+            limits.five_hour.map(|limit| limit.used_fraction),
+        ))
+        .child(line(
+            "weekly",
+            limits.weekly.map(|limit| limit.used_fraction),
+        ))
 }
 
 /// The context ring (§G.10): a 14px box holding a 5.4px-radius, 2px-stroke
