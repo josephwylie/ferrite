@@ -3915,11 +3915,24 @@ impl CockpitView {
             .collect();
         solos.dedup_by_key(|row| row.thread);
 
+        let busy = |row: &nav::ThreadRow| {
+            matches!(
+                row.status,
+                nav::RowStatus::Working | nav::RowStatus::Failing
+            )
+        };
+        let working = groups
+            .iter()
+            .flat_map(|group| group.members.iter())
+            .any(busy)
+            || solos.iter().any(busy);
+
         nav::NavState {
             filter,
             groups,
             solos,
             collapsed: self.nav_collapsed,
+            working,
         }
     }
 
@@ -5726,6 +5739,11 @@ impl CockpitView {
             });
         }
         chrome = chrome.child(gear);
+        // Folded, the head is gone, so the activity mark stacks under the
+        // gear where the rail can still show it.
+        if state.collapsed && state.working {
+            chrome = chrome.child(nav::working_spinner());
+        }
         let column = nav::shell(state.collapsed).child(chrome);
         if state.collapsed {
             return column.child(self.rail(&state, cx));
@@ -5747,7 +5765,7 @@ impl CockpitView {
     /// the head, and the scrolling tree is a later sibling that would
     /// otherwise paint straight over it.
     fn nav_head(&self, state: &nav::NavState, cx: &mut Context<Self>) -> Div {
-        let head = nav::nav_head().child(nav::filter_trigger(&state.filter).on_mouse_down(
+        let mut head = nav::nav_head().child(nav::filter_trigger(&state.filter).on_mouse_down(
             MouseButton::Left,
             cx.listener(|view, _: &MouseDownEvent, _, cx| {
                 cx.stop_propagation();
@@ -5755,6 +5773,11 @@ impl CockpitView {
                 cx.notify();
             }),
         ));
+        // Agents at work: a spinner hard right of the head, opposite the
+        // filter, while any Thread in the tree is working.
+        if state.working {
+            head = head.child(div().flex_1()).child(nav::working_spinner());
+        }
         if !state.filter.open {
             return head;
         }

@@ -25,6 +25,8 @@ use ferrite_core::groups::GroupId;
 use ferrite_core::store::Provider;
 use ferrite_core::workspace::registry::ProjectId;
 use ferrite_core::ThreadId;
+use gpui::component::spinner::Spinner;
+use gpui::component::{Sizable as _, Size};
 use gpui::prelude::*;
 use gpui::{
     div, point, px, radians, relative, rgb, rgba, AnyElement, BoxShadow, CursorStyle, Div,
@@ -108,6 +110,9 @@ pub struct NavState {
     pub groups: Vec<GroupBlock>,
     pub solos: Vec<ThreadRow>,
     pub collapsed: bool,
+    /// Is any listed Thread working (or working against a red suite)?
+    /// The head spins while it is true.
+    pub working: bool,
 }
 
 /// The single Project dropdown at the top of navigation. Default label
@@ -191,6 +196,15 @@ fn status_dot(status: RowStatus) -> Div {
         RowStatus::Idle => dot.bg(rgb(IDLE)),
         RowStatus::Parked => dot.border_1().border_color(rgb(SEP)),
     }
+}
+
+/// The head's activity mark: a small spinner in the running colour, shown
+/// only while some Thread in the tree is working. It is the one place the
+/// nav admits motion — the tree itself stays pixel-identical row to row.
+pub fn working_spinner() -> Spinner {
+    Spinner::new()
+        .with_size(Size::XSmall)
+        .color(rgb(RUNNING).into())
 }
 
 /// The nav column itself: full height, the `--nav` ground, and **no border
