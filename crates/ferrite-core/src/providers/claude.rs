@@ -6,6 +6,7 @@
 //! reader thread blocks, the pipe fills, and the CLI stalls — nothing is
 //! dropped.
 
+mod activity;
 mod wire;
 
 use std::io::{self, BufRead, BufReader, Write};
@@ -193,6 +194,7 @@ pub struct ClaudeSession {
     events: Receiver<SessionEvent>,
     capabilities: ClaudeCapabilities,
     effort_reply: EffortReply,
+    decoder: Arc<Mutex<activity::Decoder>>,
     next_request_id: u64,
 }
 
@@ -212,6 +214,7 @@ impl ClaudeSession {
             "--output-format",
             "stream-json",
             "--include-partial-messages",
+            "--forward-subagent-text",
             "--verbose",
             // Route tool permissions to Ferrite over the control protocol
             // instead of letting the CLI answer them alone. A cockpit whose
@@ -271,12 +274,14 @@ impl ClaudeSession {
         let (sender, events) = sync_channel(EVENT_CHANNEL_CAPACITY);
         let child = Arc::new(Mutex::new(child));
         let effort_reply = Arc::new(Mutex::new(None));
+        let decoder = Arc::new(Mutex::new(activity::Decoder::default()));
         let capabilities = read_stdout(
             stdout,
             sender,
             Arc::clone(&child),
             stderr_tail,
             effort_reply.clone(),
+            decoder.clone(),
         );
 
         let mut session = Self {
@@ -288,6 +293,7 @@ impl ClaudeSession {
             events,
             capabilities: ClaudeCapabilities::default(),
             effort_reply,
+            decoder,
             next_request_id: 1,
         };
         // Before the operator is offered anything: ask the CLI what it can do.
@@ -385,6 +391,10 @@ impl ClaudeSession {
                 "updatedPermissions": [suggestion],
             }),
         };
+        // Serialize response bookkeeping with stdout decoding: a progress or
+        // cancellation frame can arrive as soon as this write reaches the CLI.
+        let decoder = self.decoder.clone();
+        let mut decoder = lock(&decoder);
         self.write_line(&serde_json::json!({
             "type": "control_response",
             "response": {
@@ -392,7 +402,9 @@ impl ClaudeSession {
                 "request_id": id,
                 "response": body,
             },
-        }))
+        }))?;
+        decoder.decision_resolved(id);
+        Ok(())
     }
 
     /// The process this Session runs, for a watchdog counting its memory.
@@ -453,6 +465,7 @@ fn read_stdout(
     child: Arc<Mutex<Child>>,
     stderr_tail: Arc<Mutex<StderrTail>>,
     effort_reply: EffortReply,
+    decoder: Arc<Mutex<activity::Decoder>>,
 ) -> Receiver<ClaudeCapabilities> {
     let (handshake, capabilities) = sync_channel(1);
     thread::spawn(move || {
@@ -533,12 +546,8 @@ fn read_stdout(
             // The token count a line carries goes first, so the context
             // ring has moved by the time the line's own event lands — and
             // the result's count is in before the turn is over.
-            if let Some(usage) = wire::parse_usage(text) {
-                if sender.send(usage).is_err() {
-                    return;
-                }
-            }
-            if let Some(event) = wire::parse_line(text) {
+            let events = lock(&decoder).decode(text);
+            for event in events {
                 // A full channel parks this thread, the OS pipe fills, and the
                 // CLI blocks on its own write. Backpressure, never loss.
                 if sender.send(event).is_err() {

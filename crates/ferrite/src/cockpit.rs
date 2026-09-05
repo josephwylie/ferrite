@@ -3,6 +3,8 @@
 //! Rendering and keys only. What each Pane shows — the Blocks, the pending
 //! Decision, the held prompt — is folded in core and read from there.
 
+pub(crate) mod subagents;
+
 use std::time::Duration;
 
 use ferrite_core::cockpit::{CloseError, Cockpit, HistoryDirection, ProviderChoice};
@@ -18,9 +20,10 @@ use ferrite_core::workspace::WorkspaceChoice;
 use ferrite_core::{DecisionAnswer, ThreadId};
 use gpui::prelude::*;
 use gpui::{
-    actions, anchored, deferred, div, px, rgb, rgba, AnyElement, ClickEvent, ClipboardItem,
-    Context, Div, Entity, FocusHandle, Focusable, FontWeight, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle, SharedString, Stateful, Window,
+    actions, anchored, deferred, div, ease_out_quint, px, rgb, rgba, Animation, AnimationExt,
+    AnyElement, ClickEvent, ClipboardItem, Context, Div, Entity, FocusHandle, Focusable,
+    FontWeight, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
+    ScrollHandle, SharedString, Stateful, Window,
 };
 
 use crate::composer::{Composer, Edited};
@@ -28,6 +31,7 @@ use crate::facts::Facts;
 use crate::menu;
 use crate::nav;
 use crate::pane::{self, PaneView};
+use crate::pointer::{Pointer, PointerPressed};
 use crate::prefs;
 use crate::select::TranscriptText;
 
@@ -83,6 +87,8 @@ fn pump_interval() -> Duration {
 }
 
 const PUMP_MS: u64 = 8;
+const NAV_OPEN_MS: u64 = 260;
+const NAV_CLOSE_MS: u64 = 190;
 
 pub struct CockpitView {
     cockpit: Cockpit,
@@ -108,6 +114,10 @@ pub struct CockpitView {
     /// cmd-b (#21): the nav folded to its 40px LED rail. In memory only —
     /// a preference store is not this ticket.
     nav_collapsed: bool,
+    /// False on launch so a restored preference never performs entrance
+    /// choreography. Once the operator acts, the shell may animate between
+    /// its two widths; the state itself remains immediately authoritative.
+    nav_has_toggled: bool,
     /// What the nav and the Pane head say about a Thread beyond an O(1)
     /// read — checkout, Project, a parked row's provider, the L3 card —
     /// refreshed by moment, never per frame.
@@ -150,7 +160,7 @@ pub struct CockpitView {
     /// The right-click menu, if one is up: what it is about, where it was
     /// summoned, and which destructive row is armed for its second press.
     context_menu: Option<ContextMenu>,
-    /// The context ring's token card, tied to its Thread and click position.
+    /// The usage meter's detail card, tied to its Thread and click position.
     context_usage: Option<(ThreadId, gpui::Point<gpui::Pixels>)>,
     /// A seam being dragged: the Group, the seam, and the tree as it
     /// stands mid-drag — persisted on release, never per move.
@@ -182,7 +192,7 @@ pub struct CockpitView {
 /// Where the operator has got to answering one question Decision.
 struct QuestionDraft {
     /// The Decision's own id — the draft dies with it.
-    decision: String,
+    decision: ferrite_core::activity::DecisionHandle,
     questions: Vec<ferrite_core::questions::Question>,
     answers: Vec<ferrite_core::questions::Answer>,
 }
@@ -531,6 +541,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> Self {
         crate::theme::init_components(cx);
+        subagents::init(cx);
         cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(pump_interval()).await;
             if this.update(cx, |view, cx| view.pump(cx)).is_err() {
@@ -570,6 +581,7 @@ impl CockpitView {
             context_menu: None,
             context_usage: None,
             nav_collapsed: prefs.settings.nav_collapsed,
+            nav_has_toggled: false,
             facts: Facts::with_auto_title(prefs.settings.auto_title),
             seam_drag: None,
             drop_preview: None,
@@ -771,18 +783,48 @@ impl CockpitView {
             return;
         }
         for update in &frame {
-            if let Some(pane) = self.pane_for(update.thread) {
-                // New content follows the tail; colour arriving late does
-                // not, and neither does an operator who scrolled back into
-                // history — they reattach by scrolling to the bottom.
-                if !update.dirty.is_empty() && self.panes[pane].follow_tail.get() {
-                    self.panes[pane].scroll.scroll_to_bottom();
+            if let Some(index) = self.pane_for(update.thread) {
+                for (from, to) in &update.redirects {
+                    self.panes[index].redirect_subject(from, to);
+                }
+                let selected = self.panes[index].selected.clone();
+                let generation = self
+                    .cockpit
+                    .thread(update.thread)
+                    .and_then(|open| open.activity().subject(&selected))
+                    .map(|subject| subject.revision())
+                    .unwrap_or(0);
+                self.panes[index].select_subject(selected.clone(), generation, cx);
+                let content_changed = update
+                    .subjects
+                    .iter()
+                    .any(|change| change.subject == selected && change.content_changed)
+                    || (self.panes[index].is_main() && !update.dirty.is_empty());
+                if content_changed && self.panes[index].follow_tail.get() {
+                    self.panes[index].scroll.scroll_to_bottom();
+                }
+                if update.activity_changed || content_changed || !update.evicted.is_empty() {
+                    self.prune_tool_disclosures(update.thread);
+                }
+                self.prune_request_forms(index);
+                self.panes[index].history_error = self
+                    .cockpit
+                    .subject_history_error(update.thread, &self.panes[index].selected)
+                    .map(str::to_string);
+                let unretained = self
+                    .cockpit
+                    .thread(update.thread)
+                    .and_then(|thread| thread.activity().subject(&self.panes[index].selected))
+                    .is_some_and(|subject| !subject.retained());
+                if unretained && self.panes[index].history_error.is_none() {
+                    self.retry_subject_history(index, cx);
                 }
             }
-            // The facts refold only when the Thread actually changed.
-            if !update.dirty.is_empty() || !update.evicted.is_empty() {
-                self.prune_tool_disclosures(update.thread);
-                self.facts.streamed(&self.cockpit, update.thread);
+            // Native progress can change without appending a transcript row.
+            self.facts.streamed(&self.cockpit, update.thread);
+            if let Some(index) = self.pane_for(update.thread) {
+                self.facts
+                    .selected(&self.cockpit, update.thread, &self.panes[index].selected);
             }
         }
         for thread in restarted {
@@ -844,7 +886,8 @@ impl CockpitView {
         let valid = self
             .cockpit
             .thread(thread)
-            .map(|open| open.transcript())
+            .and_then(|open| open.activity().subject(&self.panes[index].selected))
+            .map(|subject| subject.transcript())
             .into_iter()
             .flat_map(|transcript| transcript.blocks())
             .filter_map(|block| match &block.body {
@@ -1096,7 +1139,13 @@ impl CockpitView {
         nav::rename_target_group(group, title)
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                cx.listener(move |view, event: &MouseDownEvent, _, cx| {
+                    // A single click belongs to the row under the title —
+                    // it enters the Group. Only the second click renames,
+                    // and only then is the press worth swallowing.
+                    if event.click_count < 2 {
+                        return;
+                    }
                     cx.stop_propagation();
                     view.start_rename(RenameTarget::Group(group), cx);
                 }),
@@ -1505,7 +1554,7 @@ impl CockpitView {
         &self,
         group: GroupId,
         tree: Tree,
-        window: &Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
         let bounds = self.board_bounds(window);
@@ -1522,7 +1571,7 @@ impl CockpitView {
             let level = Level::for_cell(Cell::new(rect.w, rect.h));
             let rect = local(rect);
             board = board.child(
-                self.pane_cell(index, level, cx)
+                self.pane_cell(index, level, window, cx)
                     .absolute()
                     .left(px(rect.x))
                     .top(px(rect.y))
@@ -2116,7 +2165,12 @@ impl CockpitView {
         nav::rename_target_thread(thread, title)
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                cx.listener(move |view, event: &MouseDownEvent, _, cx| {
+                    // As on the Group title, and as on the Pane head: the
+                    // first click focuses the Thread, the second renames it.
+                    if event.click_count < 2 {
+                        return;
+                    }
                     cx.stop_propagation();
                     view.start_rename(RenameTarget::Thread(thread), cx);
                 }),
@@ -2162,6 +2216,9 @@ impl CockpitView {
         let Some(thread) = self.focused_thread() else {
             return;
         };
+        if !self.panes[self.focused()].is_main() {
+            return;
+        }
         let composer = self.panes[self.focused()].composer.clone();
         // A question waits: ↵ sends the picks, and whatever is on the
         // line goes with them as the operator's own answer.
@@ -2234,6 +2291,9 @@ impl CockpitView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.panes[self.focused()].is_main() {
+            return;
+        }
         let Some(thread) = self.focused_thread() else {
             return;
         };
@@ -2285,7 +2345,12 @@ impl CockpitView {
     /// Tab walks a draft's band (#29), or an L1 Thread Pane's rendered tool
     /// disclosures before returning to the Composer.
     fn band_cycle(&mut self, _: &BandCycle, window: &mut Window, cx: &mut Context<Self>) {
-        if self.settings_open {
+        if self.settings_open
+            || self
+                .focused_thread()
+                .and_then(|thread| self.cockpit.thread(thread))
+                .is_some_and(|thread| !thread.activity().children().is_empty())
+        {
             window.focus_next(cx);
             return;
         }
@@ -2320,7 +2385,12 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.settings_open {
+        if self.settings_open
+            || self
+                .focused_thread()
+                .and_then(|thread| self.cockpit.thread(thread))
+                .is_some_and(|thread| !thread.activity().children().is_empty())
+        {
             window.focus_prev(cx);
         } else {
             let composer = self
@@ -2372,9 +2442,9 @@ impl CockpitView {
         };
         self.cockpit
             .thread(thread)
-            .map(|open| open.transcript())
+            .and_then(|open| open.activity().subject(&self.panes[index].selected))
             .into_iter()
-            .flat_map(|transcript| pane::rendered_output_tools(transcript.blocks(), level))
+            .flat_map(|subject| pane::rendered_output_tools(subject.transcript().blocks(), level))
             .map(|tool| tool.call.clone())
             .collect()
     }
@@ -2404,6 +2474,10 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.panes[self.focused()].is_main() {
+            self.answer_subject(answer, cx);
+            return;
+        }
         if self.level_now(window) == Level::Transcript {
             if let Some(pane) = self.panes.get(self.focused()) {
                 // A question is answered in words as often as by a pick,
@@ -2474,7 +2548,19 @@ impl CockpitView {
                 None => return,
             },
         };
-        self.cockpit.respond(thread, &decision, response);
+        if let Some(handle) = self
+            .cockpit
+            .thread(thread)
+            .and_then(|open| {
+                open.activity().pending_decisions().iter().find(|request| {
+                    request.decision == decision
+                        && request.subject == Some(ferrite_core::activity::Subject::Main)
+                })
+            })
+            .map(|request| request.handle.clone())
+        {
+            self.respond_exact(thread, &handle, response, cx);
+        }
         self.facts.acted(&self.cockpit, thread);
         cx.notify();
     }
@@ -2506,7 +2592,15 @@ impl CockpitView {
     /// the 208px column. The width change feeds `cell()`, so Panes may
     /// legitimately change Level — size decides, no special case.
     fn toggle_nav(&mut self, _: &ToggleNav, _window: &mut Window, cx: &mut Context<Self>) {
-        self.nav_collapsed = !self.nav_collapsed;
+        self.set_nav_collapsed(!self.nav_collapsed, cx);
+    }
+
+    fn set_nav_collapsed(&mut self, collapsed: bool, cx: &mut Context<Self>) {
+        if self.nav_collapsed == collapsed {
+            return;
+        }
+        self.nav_collapsed = collapsed;
+        self.nav_has_toggled = true;
         cx.notify();
     }
 
@@ -3661,10 +3755,14 @@ impl CockpitView {
         }
     }
 
-    /// The focused draft's band — chips wired to their popovers (#29). A
-    /// chip click shares `open_band_popover` with ↵ on a tab-focused chip;
-    /// the closure re-finds the Pane by its Composer, a draft's one stable
-    /// identity.
+    /// The focused draft's setup chips — project and workspace, wired to
+    /// their popovers (#29) and riding the left of the controls row. The
+    /// model and effort controls sit in the trailing slot instead, where a
+    /// live Thread's Composer draws them: `draft_model_picker`.
+    ///
+    /// A chip click shares `open_band_popover` with ↵ on a tab-focused
+    /// chip; the closure re-finds the Pane by its Composer, a draft's one
+    /// stable identity.
     fn draft_band_element(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
         let Some(draft) = self.panes[index].draft() else {
             return div().into_any_element();
@@ -3681,62 +3779,21 @@ impl CockpitView {
             DraftTarget::Existing { branch } => SharedString::from(branch.clone()),
             DraftTarget::New => SharedString::from("new worktree"),
         };
-        let effort_label = match draft.binding.effort() {
-            Some(effort) => SharedString::from(effort_title(effort)),
-            None => match self
-                .prefs
-                .settings
-                .effort_for(draft.binding.provider().provider)
-            {
-                Some(effort) => SharedString::from(effort_title(effort)),
-                None => SharedString::from("effort"),
-            },
-        };
         let chips = [
-            (
-                pane::BandChip::Provider,
-                // The provider's own word until a model is chosen; the
-                // groomed model name after — one spelling, wherever it shows.
-                match draft.binding.provider().model.as_deref() {
-                    Some(model) => SharedString::from(ferrite_core::providers::models::label(
-                        model,
-                        &self
-                            .cockpit
-                            .model_catalog(draft.binding.provider().provider),
-                    )),
-                    None => SharedString::from(provider_title(draft.binding.provider().provider)),
-                },
-                true,
-            ),
-            (
-                pane::BandChip::Effort,
-                pane::band_chip_label(&effort_label),
-                false,
-            ),
             (
                 pane::BandChip::Project,
                 pane::band_chip_label(&project_title),
-                false,
             ),
             (
                 pane::BandChip::Workspace,
                 pane::band_chip_label(&workspace_label),
-                false,
             ),
         ];
         let mut band = pane::draft_band();
-        for (slot, (chip, label, accent)) in chips.into_iter().enumerate() {
+        for (slot, (chip, label)) in chips.into_iter().enumerate() {
             let focused = draft.band_focus == Some(chip);
-            if matches!(chip, pane::BandChip::Provider | pane::BandChip::Effort) {
-                let trigger = crate::components::button(("draft-choice", slot))
-                    .p_0()
-                    .h_auto()
-                    .child(pane::band_chip(slot, label, accent, focused));
-                band = band.child(self.choice_menu(index, Kind::Band(chip), trigger, cx));
-                continue;
-            }
             let chip_composer = composer.clone();
-            band = band.child(pane::band_chip(slot, label, accent, focused).on_mouse_down(
+            band = band.child(pane::band_chip(slot, label, false, focused).on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |view, _: &MouseDownEvent, _, cx| {
                     // The chip is this Pane's: land on it first, then
@@ -3754,9 +3811,76 @@ impl CockpitView {
                 }),
             ));
         }
-        band.child(div().flex_1())
-            .child(pane::band_hint())
-            .into_any_element()
+        band.into_any_element()
+    }
+
+    /// The focused draft's model and effort controls (#29): the same
+    /// pickers a live Thread's Composer draws, in the same trailing slot,
+    /// so a new Thread and an existing one share one input silhouette.
+    /// They open the band's popovers rather than the Thread's.
+    fn draft_model_picker(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+        let Some(draft) = self.panes[index].draft() else {
+            return div().into_any_element();
+        };
+        let composer = self.panes[index].composer.clone();
+        let provider = draft.binding.provider().provider;
+        // The provider's own word until a model is chosen; the groomed
+        // model name after — one spelling, wherever it shows.
+        let model_label = match draft.binding.provider().model.as_deref() {
+            Some(model) => SharedString::from(ferrite_core::providers::models::label(
+                model,
+                &self.cockpit.model_catalog(provider),
+            )),
+            None => SharedString::from(provider_title(provider)),
+        };
+        let effort_label = match draft.binding.effort() {
+            Some(effort) => SharedString::from(effort_title(effort)),
+            None => match self.prefs.settings.effort_for(provider) {
+                Some(effort) => SharedString::from(effort_title(effort)),
+                None => SharedString::from("effort"),
+            },
+        };
+        let controls = [
+            (
+                pane::BandChip::Provider,
+                pane::draft_picker(
+                    "draft-model-picker",
+                    draft.band_focus == Some(pane::BandChip::Provider),
+                    pane::model_picker(Some(provider), model_label),
+                ),
+            ),
+            (
+                pane::BandChip::Effort,
+                pane::draft_picker(
+                    "draft-effort-picker",
+                    draft.band_focus == Some(pane::BandChip::Effort),
+                    pane::effort_picker(effort_label),
+                ),
+            ),
+        ];
+        let mut row = div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(px(crate::theme::KEYS_GAP));
+        for (chip, control) in controls {
+            let chip_composer = composer.clone();
+            row = row.child(control.on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    if let Some(at) = view
+                        .panes
+                        .iter()
+                        .position(|pane| pane.composer == chip_composer)
+                    {
+                        view.focus_pane(at);
+                    }
+                    view.open_band_popover(chip, cx);
+                }),
+            ));
+        }
+        row.into_any_element()
     }
 
     /// Test-only: aim the launch project at a scratch repo — production
@@ -3932,11 +4056,55 @@ impl CockpitView {
             .collect();
         solos.dedup_by_key(|row| row.thread);
 
+        let busy = |row: &nav::ThreadRow| {
+            matches!(
+                row.status,
+                nav::RowStatus::Working | nav::RowStatus::Failing
+            )
+        };
+        let working = groups
+            .iter()
+            .flat_map(|group| group.members.iter())
+            .any(busy)
+            || solos.iter().any(busy);
+        // The nav's default order (#21): most recently used first, across
+        // open and parked alike, and across Groups and solo Threads alike —
+        // one list, not a Groups shelf above a Threads shelf. A Group is as
+        // recent as its most recently used member; its own members keep the
+        // operator's order, because that order *is* the Group.
+        //
+        // `sort_by_key` is stable, so items sharing a second keep the order
+        // they were gathered in: Groups in the roster's order, Threads in
+        // pane-then-park order.
+        let mut order: Vec<(std::time::SystemTime, nav::NavItem)> = groups
+            .iter()
+            .enumerate()
+            .map(|(index, block)| {
+                let recency = block
+                    .members
+                    .iter()
+                    .map(|row| self.last_used(row.thread))
+                    .max()
+                    .unwrap_or(std::time::UNIX_EPOCH);
+                (recency, nav::NavItem::Group(index))
+            })
+            .chain(
+                solos
+                    .iter()
+                    .enumerate()
+                    .map(|(index, row)| (self.last_used(row.thread), nav::NavItem::Solo(index))),
+            )
+            .collect();
+        order.sort_by_key(|(recency, _)| std::cmp::Reverse(*recency));
+        let order = order.into_iter().map(|(_, item)| item).collect();
+
         nav::NavState {
             filter,
             groups,
             solos,
+            order,
             collapsed: self.nav_collapsed,
+            working,
         }
     }
 
@@ -3972,6 +4140,7 @@ impl CockpitView {
                 }
             }
         };
+        let now = std::time::SystemTime::now();
         nav::ThreadRow {
             thread,
             name: self.facts.name(thread),
@@ -3983,7 +4152,20 @@ impl CockpitView {
                 .thread(thread)
                 .map(|open| open.provider())
                 .or_else(|| facts.and_then(|facts| facts.provider)),
+            current: self.cockpit.roster().focused_thread() == Some(thread),
+            last_used: facts
+                .and_then(|facts| facts.last_used)
+                .map(|at| crate::facts::since_label(at, now)),
         }
+    }
+
+    /// When a Thread was last used, for the nav's default order. A Thread
+    /// whose log cannot be stat'd sorts to the bottom rather than to the
+    /// top: an unknown time is not a recent one.
+    fn last_used(&self, thread: ThreadId) -> std::time::SystemTime {
+        self.facts
+            .last_used(thread)
+            .unwrap_or(std::time::UNIX_EPOCH)
     }
 
     /// A running nav row's click: land on that Thread's Pane, in the view
@@ -4138,10 +4320,30 @@ impl CockpitView {
 
     /// Jump to the next Thread waiting on the operator — the whole point of
     /// a Group you cannot read all of at once.
-    fn next_decision(&mut self, _: &NextDecision, _window: &mut Window, cx: &mut Context<Self>) {
-        if self.cockpit.next_decision().is_some() {
-            self.focus_pane(self.focused());
-            cx.notify();
+    fn next_decision(&mut self, _: &NextDecision, window: &mut Window, cx: &mut Context<Self>) {
+        let focused = self.focused();
+        let mut requests = Vec::new();
+        for pane in &self.panes {
+            if let Some(thread) = pane.thread() {
+                if let Some(open) = self.cockpit.thread(thread) {
+                    for request in open.activity().pending_decisions() {
+                        requests.push((
+                            thread,
+                            request
+                                .subject
+                                .clone()
+                                .unwrap_or(ferrite_core::activity::Subject::Main),
+                        ));
+                    }
+                }
+            }
+        }
+        let current = self
+            .panes
+            .get(focused)
+            .and_then(|pane| pane.thread().map(|thread| (thread, pane.selected.clone())));
+        if let Some((thread, subject)) = subagents::next_request(requests, current.as_ref()) {
+            self.select_subject(thread, subject, window, cx);
         }
     }
 
@@ -4188,6 +4390,9 @@ impl CockpitView {
     /// to select, a tool row — took the keyboard away: the text goes
     /// where the operator is about to type, and the keyboard follows it.
     fn paste_into_composer(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.panes[self.focused()].is_main() {
+            return;
+        }
         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
             return;
         };
@@ -4470,7 +4675,12 @@ impl Render for CockpitView {
                     self.panes[index]
                         .thread()
                         .and_then(|thread| {
-                            self.cockpit.thread(thread).map(|open| open.transcript())
+                            self.cockpit
+                                .thread(thread)
+                                .and_then(|open| {
+                                    open.activity().subject(&self.panes[index].selected)
+                                })
+                                .map(|subject| subject.transcript())
                         })
                         .is_some_and(|transcript| {
                             pane::rendered_output_tools(transcript.blocks(), level)
@@ -4576,6 +4786,9 @@ impl Render for CockpitView {
                     Level::Transcript if pane.has_tool_target() => Some(pane.tool_focus()),
                     // An L2 cell draws a Composer too, and the keys go
                     // where the caret is.
+                    Level::Transcript | Level::Instruments if !pane.is_main() => {
+                        Some(pane.transcript_focus.clone())
+                    }
                     Level::Transcript | Level::Instruments => {
                         Some(pane.composer.read(cx).focus_target(window, cx))
                     }
@@ -4593,12 +4806,35 @@ impl Render for CockpitView {
             })
             .unwrap_or_else(|| self.focus.clone());
         use gpui::component::WindowExt as _;
-        let native_text_focused = gpui::base::TextSelection::has_selection(window, cx)
+        let native_text_focused = (gpui::base::TextSelection::has_selection(window, cx)
+            || self
+                .panes
+                .get(self.focused())
+                .is_some_and(|pane| pane.rich.output_focused(&pane.text_namespace(), window, cx)))
             && self
                 .panes
                 .get(self.focused())
                 .is_some_and(|pane| pane.transcript_focus.contains_focused(window, cx));
-        if window.has_active_dialog(cx) || native_text_focused {
+        let pane_control_focused = self.panes.get(self.focused()).is_some_and(|pane| {
+            let controls = pane
+                .thread()
+                .and_then(|id| self.cockpit.thread(id))
+                .is_some_and(|thread| {
+                    !thread.activity().children().is_empty()
+                        || thread.activity().pending_decisions().len() > 1
+                        || thread
+                            .activity()
+                            .pending_decisions()
+                            .iter()
+                            .any(|request| request.subject.is_none())
+                });
+            pane.agent_menu_open
+                || (controls
+                    && pane.controls_focus.contains_focused(window, cx)
+                    && !pane.controls_focus.is_focused(window)
+                    && (!pane.is_main() || !pane.transcript_focus.is_focused(window)))
+        });
+        if window.has_active_dialog(cx) || native_text_focused || pane_control_focused {
             // Native text and dialogs keep their own keyboard focus.
         } else if self.settings_open {
             // The pump must not steal focus from Settings search or controls.
@@ -4636,7 +4872,7 @@ impl Render for CockpitView {
             frame()
                 .flex()
                 .flex_col()
-                .child(self.pane_cell(index, level, cx))
+                .child(self.pane_cell(index, level, window, cx))
         } else if let Some((group, tree)) = match self.cockpit.roster().view() {
             View::Group(group) => self.group_tree(group).map(|tree| (group, tree)),
             View::Solo => None,
@@ -4658,7 +4894,7 @@ impl Render for CockpitView {
                     .min_h_0()
                     .gap(px(crate::theme::GRID_GAP));
                 for index in row {
-                    line = line.child(self.pane_cell(*index, level, cx));
+                    line = line.child(self.pane_cell(*index, level, window, cx));
                 }
                 for _ in row.len()..columns {
                     line = line.child(div().flex_1().min_w_0().min_h_0());
@@ -4832,9 +5068,15 @@ impl CockpitView {
     /// One Pane's cell — the click-to-focus and drag plumbing around
     /// `render_pane`. The same cell serves a grid slot and the fullscreen
     /// view; only who lays it out differs.
-    fn pane_cell(&self, index: usize, level: Level, cx: &mut Context<Self>) -> Div {
-        let content = self.pane_content(index, level, cx);
-        if self.settings_open {
+    fn pane_cell(
+        &self,
+        index: usize,
+        level: Level,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let content = self.pane_content(index, level, window, cx);
+        if self.settings_open || !self.panes[index].is_main() {
             return content;
         }
         let content = self.panes[index].preview.mount(content);
@@ -4858,7 +5100,13 @@ impl CockpitView {
         })
     }
 
-    fn pane_content(&self, index: usize, level: Level, cx: &mut Context<Self>) -> Div {
+    fn pane_content(
+        &self,
+        index: usize,
+        level: Level,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let pane = &self.panes[index];
         let focused = index == self.focused();
         let cell = div()
@@ -4868,6 +5116,7 @@ impl CockpitView {
             .flex_1()
             .min_w_0()
             .min_h_0()
+            .track_focus(&pane.controls_focus)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |view, event: &MouseDownEvent, window, cx| {
@@ -4933,6 +5182,7 @@ impl CockpitView {
                 pane::DraftState {
                     attachments: Composer::attachments(&pane.composer, &pane.preview, cx),
                     band: self.draft_band_element(index, cx),
+                    picker: self.draft_model_picker(index, cx),
                     menu: (level == Level::Transcript)
                         .then(|| self.popover_element(index, cx))
                         .flatten(),
@@ -4948,9 +5198,16 @@ impl CockpitView {
         // exactly the rows the body will draw — the shared rendered window,
         // because copy is what you see.
         let selection = {
-            let blocks = open.map(|open| open.transcript().blocks()).unwrap_or(&[]);
-            self.selection
-                .overlay(thread, pane::rendered_window(blocks, level))
+            let blocks = open
+                .and_then(|open| open.activity().subject(&pane.selected))
+                .map(|subject| subject.transcript().blocks())
+                .unwrap_or(&[]);
+            self.selection.overlay_scoped(
+                thread,
+                pane.text_namespace(),
+                pane::rendered_window(blocks, level),
+                pane.rich.clone(),
+            )
         };
         let cached = self.facts.get(thread);
         let facts = pane::PaneFacts {
@@ -4960,17 +5217,17 @@ impl CockpitView {
             composer_empty: pane.composer.read(cx).is_empty(),
             history_available: self.history_available(index, level),
             focused,
-            wall: cached.map(|facts| &facts.wall),
+            wall: cached.and_then(|facts| facts.wall_for(&pane.selected)),
             selection,
         };
         // Only L1 draws a Composer to hang a popover over (#23), a model
-        // picker (#25) or a context ring; the wall answers with keys alone.
+        // picker (#25) or usage meter; the wall answers with keys alone.
         let l1 = level == Level::Transcript;
         let wiring = pane::PaneWiring {
             attachments: Composer::attachments(&pane.composer, &pane.preview, cx),
             menu: l1.then(|| self.popover_element(index, cx)).flatten(),
             model_picker: l1.then(|| self.model_picker(index, cx)).flatten(),
-            usage_ring: l1.then(|| self.usage_ring(index, cx)).flatten(),
+            usage_meter: l1.then(|| self.usage_meter(index, cx)).flatten(),
             decide: (level != Level::Wall)
                 .then(|| self.decide_keycaps(index, level, cx))
                 .flatten(),
@@ -4978,8 +5235,16 @@ impl CockpitView {
             // The title is the Pane's handle at every size: a drag moves a
             // grouped Pane, a double-click renames it — an L2 cell with no
             // handle could not be rearranged at all.
-            title: Some(self.pane_title(index, thread, cx)),
-            question_form: l1.then(|| self.question_form(index, cx)).flatten(),
+            title: Some(self.activity_title(index, cx)),
+            question_form: (l1 && pane.is_main())
+                .then(|| self.question_form(index, cx))
+                .flatten(),
+            agents: l1.then(|| self.subject_strip(index, window, cx)).flatten(),
+            activity_attention: self.activity_attention(index, cx),
+            activity_decisions: (level != Level::Wall)
+                .then(|| self.activity_decisions(index, window, cx))
+                .flatten(),
+            child_footer: self.child_footer(index, cx),
         };
         cell.child(pane::render_pane(pane, facts, wiring, level))
     }
@@ -4998,10 +5263,14 @@ impl CockpitView {
         let Some(open) = self.cockpit.thread(thread) else {
             return std::collections::HashMap::new();
         };
-        let transcript = open.transcript();
+        let Some(subject_view) = open.activity().subject(&pane.selected) else {
+            return Default::default();
+        };
+        let transcript = subject_view.transcript();
         let mut controls = std::collections::HashMap::new();
         for tool in pane::rendered_output_tools(transcript.blocks(), level) {
             let call = tool.call.clone();
+            let subject = pane.selected.clone();
             let wired = pane::tool_disclosure_control(
                 &call,
                 pane.tool_state(&call) == pane::DisclosureState::Expanded,
@@ -5012,9 +5281,10 @@ impl CockpitView {
                 MouseButton::Left,
                 cx.listener({
                     let call = call.clone();
+                    let subject = subject.clone();
                     move |view, _: &MouseDownEvent, window, cx| {
                         cx.stop_propagation();
-                        view.toggle_tool(thread, &call, window, cx);
+                        view.toggle_subject_tool(thread, &subject, &call, window, cx);
                     }
                 }),
             );
@@ -5047,6 +5317,9 @@ impl CockpitView {
         };
         self.focus_pane(index);
         gpui::base::TextSelection::clear(window, cx);
+        self.panes[index]
+            .rich
+            .clear_output_selection(&self.panes[index].text_namespace(), cx);
         self.panes[index].toggle_tool(call);
         window.focus(&self.panes[index].tool_focus(), cx);
         cx.notify();
@@ -5057,10 +5330,19 @@ impl CockpitView {
     fn pending_questions(
         &self,
         thread: ThreadId,
-    ) -> Option<(String, Vec<ferrite_core::questions::Question>)> {
-        let decision = self.cockpit.thread(thread)?.pending()?;
-        let questions = pane::question_of(decision)?;
-        Some((decision.id.clone(), questions))
+    ) -> Option<(
+        ferrite_core::activity::DecisionHandle,
+        Vec<ferrite_core::questions::Question>,
+    )> {
+        let request = self
+            .cockpit
+            .thread(thread)?
+            .activity()
+            .pending_decisions()
+            .iter()
+            .find(|request| request.subject == Some(ferrite_core::activity::Subject::Main))?;
+        let questions = pane::question_of(&request.decision)?;
+        Some((request.handle.clone(), questions))
     }
 
     /// Every open Thread's draft follows its pending Decision: a new
@@ -5211,12 +5493,29 @@ impl CockpitView {
             &draft.answers,
             &draft.questions,
         );
-        self.questions.remove(&thread);
-        self.cockpit
-            .respond(thread, &decision, DecisionAnswer::Allow { input });
+        let handle = draft.decision.clone();
+        let answered =
+            match self
+                .cockpit
+                .respond_decision(thread, &handle, DecisionAnswer::Allow { input })
+            {
+                Ok(answered) => answered,
+                Err(error) => {
+                    if let Some(index) = self.pane_for(thread) {
+                        self.panes[index].request_error = Some((handle, error.to_string()));
+                    }
+                    false
+                }
+            };
+        if answered {
+            self.questions.remove(&thread);
+            if let Some(index) = self.pane_for(thread) {
+                self.panes[index].request_error = None;
+            }
+        }
         self.facts.acted(&self.cockpit, thread);
         cx.notify();
-        true
+        answered
     }
 
     /// The question card (L1): one block per question, its options wired
@@ -5241,6 +5540,7 @@ impl CockpitView {
                 question.multi_select,
             ));
             for (oi, option) in question.options.iter().enumerate() {
+                let decision_id = decision_id.clone();
                 let row = pane::question_option(
                     ("question-option", qi * 8 + oi),
                     oi + 1,
@@ -5256,7 +5556,12 @@ impl CockpitView {
                         if let Some(index) = view.pane_for(thread) {
                             view.focus_pane(index);
                         }
-                        view.pick_option(thread, qi, oi);
+                        if view
+                            .pending_questions(thread)
+                            .is_some_and(|(handle, _)| handle == decision_id)
+                        {
+                            view.pick_option(thread, qi, oi);
+                        }
                         cx.notify();
                     }),
                 );
@@ -5272,6 +5577,7 @@ impl CockpitView {
             "1–4 or click to pick · or type an answer below and press ↵"
         });
         let wire = |keycap: Stateful<Div>, answer: Answer, cx: &mut Context<Self>| {
+            let decision_id = decision_id.clone();
             keycap.on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |view, _: &MouseDownEvent, _, cx| {
@@ -5279,12 +5585,26 @@ impl CockpitView {
                     if let Some(index) = view.pane_for(thread) {
                         view.focus_pane(index);
                     }
-                    view.answer(answer, cx);
+                    let request = view
+                        .cockpit
+                        .thread(thread)
+                        .and_then(|thread| {
+                            thread
+                                .activity()
+                                .pending_decisions()
+                                .iter()
+                                .find(|request| request.handle == decision_id)
+                        })
+                        .cloned();
+                    if let Some(request) = request {
+                        view.answer_request(thread, request, answer, cx);
+                    }
                 }),
             )
         };
         let mut keys = pane::decide_row(Level::Transcript);
         if answered || typed {
+            let decision_id = decision_id.clone();
             keys = keys.child(pane::keycap_send().on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |view, _: &MouseDownEvent, window, cx| {
@@ -5292,7 +5612,12 @@ impl CockpitView {
                     if let Some(index) = view.pane_for(thread) {
                         view.focus_pane(index);
                     }
-                    view.submit(&Submit, window, cx);
+                    if view
+                        .pending_questions(thread)
+                        .is_some_and(|(handle, _)| handle == decision_id)
+                    {
+                        view.submit(&Submit, window, cx);
+                    }
                 }),
             ));
         }
@@ -5435,9 +5760,21 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let thread = self.panes[index].thread()?;
-        let decision = self.cockpit.thread(thread)?.pending()?;
+        if !self.panes[index].is_main() {
+            return None;
+        }
+        let request = self
+            .cockpit
+            .thread(thread)?
+            .activity()
+            .pending_decisions()
+            .iter()
+            .find(|request| request.subject == Some(ferrite_core::activity::Subject::Main))?
+            .clone();
+        let decision = &request.decision;
         let offers_always = level == Level::Transcript && decision.standing_answer().is_some();
         let wire = |keycap: Stateful<Div>, answer: Answer, cx: &mut Context<Self>| {
+            let request = request.clone();
             keycap.on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |view, _: &MouseDownEvent, _, cx| {
@@ -5445,7 +5782,7 @@ impl CockpitView {
                     if let Some(index) = view.pane_for(thread) {
                         view.focus_pane(index);
                     }
-                    view.answer(answer, cx);
+                    view.answer_request(thread, request.clone(), answer, cx);
                 }),
             )
         };
@@ -5458,24 +5795,29 @@ impl CockpitView {
         Some(cluster.into_any_element())
     }
 
-    /// The header ring opens the latest reported token counts on click.
+    /// The Composer meter opens the latest reported usage on click.
     /// No reading is invented when the provider has not reported usage.
-    fn usage_ring(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn usage_meter(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
         let thread = self.panes[index].thread()?;
         let usage = self.cockpit.thread(thread)?.transcript().usage()?;
         let fraction = usage
             .context_window
             .filter(|window| *window > 0)
             .map_or(0., |window| usage.total_tokens as f32 / window as f32);
+        // Account-wide and remembered across launches, so the meter is
+        // not blank until this Thread's first turn happens to report.
+        let limits = self
+            .cockpit
+            .account_limits(self.cockpit.thread(thread)?.provider());
         let was_open = self.context_usage.is_some_and(|(shown, _)| shown == thread);
         Some(
             div()
-                .id(("context-ring", thread.get() as usize))
-                .debug_selector(move || format!("context-ring-{}", thread.get()))
-                .cursor_pointer()
-                .p(px(4.))
-                .m(px(-4.))
-                .child(pane::usage_ring(fraction))
+                .id(("usage-meter", thread.get() as usize))
+                .debug_selector(move || format!("usage-meter-{}", thread.get()))
+                .rounded(px(crate::theme::R_CHIP))
+                .child(pane::usage_lines(fraction, limits))
+                .hover_raised()
+                .press_raised()
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |view, event: &MouseDownEvent, _, cx| {
@@ -5484,9 +5826,9 @@ impl CockpitView {
                         view.popover = None;
                         view.context_menu = None;
                         // Outside-click dismissal runs in capture phase, before this
-                        // toggle. Use the state of the ring that received the press.
+                        // toggle. Use the state of the meter that received the press.
                         view.context_usage = (!was_open)
-                            .then_some((thread, event.position + gpui::point(px(0.), px(12.))));
+                            .then_some((thread, event.position - gpui::point(px(0.), px(12.))));
                         cx.notify();
                     }),
                 )
@@ -5500,7 +5842,11 @@ impl CockpitView {
         let card = menu::shell()
             .id("context-usage-card")
             .debug_selector(|| "context-usage-card".into())
-            .child(pane::context_usage(usage))
+            .child(pane::context_usage(
+                usage,
+                self.cockpit
+                    .account_limits(self.cockpit.thread(thread)?.provider()),
+            ))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
@@ -5513,6 +5859,7 @@ impl CockpitView {
         Some(
             deferred(
                 anchored()
+                    .anchor(gpui::Anchor::BottomLeft)
                     .position(at)
                     .snap_to_window_with_margin(px(crate::theme::GRID_PAD))
                     .child(card),
@@ -5748,7 +6095,7 @@ impl CockpitView {
     /// (#21). It paints inside the cockpit's own render — same entity, same
     /// pump, no second timer — and every fact it shows came from
     /// `nav_state`'s O(1) reads or the project/branch/parked caches.
-    fn nav(&self, cx: &mut Context<Self>) -> Div {
+    fn nav(&self, cx: &mut Context<Self>) -> AnyElement {
         let state = self.nav_state();
         let gear = prefs::gear_button().on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
             cx.stop_propagation();
@@ -5759,8 +6106,7 @@ impl CockpitView {
                 MouseButton::Left,
                 cx.listener(|view, _: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();
-                    view.nav_collapsed = !view.nav_collapsed;
-                    cx.notify();
+                    view.set_nav_collapsed(!view.nav_collapsed, cx);
                 }),
             ));
         // The gear sits hard right of the band; folded, it stacks under
@@ -5775,20 +6121,59 @@ impl CockpitView {
             });
         }
         chrome = chrome.child(gear);
-        let column = nav::shell(state.collapsed).child(chrome);
-        if state.collapsed {
-            return column.child(self.rail(&state, cx));
+        // Folded, the head is gone, so the activity mark stacks under the
+        // gear where the rail can still show it.
+        if state.collapsed && state.working {
+            chrome = chrome.child(nav::working_spinner());
         }
-        column.child(self.nav_head(&state, cx)).child(
-            div()
-                .relative()
-                .flex()
-                .flex_col()
-                .flex_1()
-                .min_h_0()
-                .child(self.nav_tree(&state, cx))
-                .child(nav::scrollbar(&self.nav_scroll)),
-        )
+        let content = div()
+            .flex()
+            .flex_col()
+            .flex_shrink_0()
+            .h_full()
+            .w(px(if state.collapsed {
+                nav::RAIL_WIDTH
+            } else {
+                nav::WIDTH
+            }))
+            .child(chrome);
+        let content = if state.collapsed {
+            content.child(self.rail(&state, cx))
+        } else {
+            content.child(self.nav_head(&state, cx)).child(
+                div()
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .child(self.nav_tree(&state, cx))
+                    .child(nav::scrollbar(&self.nav_scroll)),
+            )
+        };
+        if !self.nav_has_toggled {
+            return nav::shell(state.collapsed)
+                .child(content)
+                .into_any_element();
+        }
+        let (from, to, duration) = if state.collapsed {
+            (nav::WIDTH, nav::RAIL_WIDTH, NAV_CLOSE_MS)
+        } else {
+            (nav::RAIL_WIDTH, nav::WIDTH, NAV_OPEN_MS)
+        };
+        let content = content.with_animation(
+            ("nav-content", usize::from(state.collapsed)),
+            Animation::new(Duration::from_millis(duration)).with_easing(ease_out_quint()),
+            |content, delta| content.opacity(0.35 + 0.65 * delta),
+        );
+        nav::shell(state.collapsed)
+            .child(content)
+            .with_animation(
+                ("nav-resize", usize::from(state.collapsed)),
+                Animation::new(Duration::from_millis(duration)).with_easing(ease_out_quint()),
+                move |column, delta| column.w(px(from + (to - from) * delta)),
+            )
+            .into_any_element()
     }
 
     /// The 42px head: the one Project dropdown, and its menu when it is
@@ -5796,7 +6181,7 @@ impl CockpitView {
     /// the head, and the scrolling tree is a later sibling that would
     /// otherwise paint straight over it.
     fn nav_head(&self, state: &nav::NavState, cx: &mut Context<Self>) -> Div {
-        let head = nav::nav_head().child(nav::filter_trigger(&state.filter).on_mouse_down(
+        let mut head = nav::nav_head().child(nav::filter_trigger(&state.filter).on_mouse_down(
             MouseButton::Left,
             cx.listener(|view, _: &MouseDownEvent, _, cx| {
                 cx.stop_propagation();
@@ -5804,6 +6189,11 @@ impl CockpitView {
                 cx.notify();
             }),
         ));
+        // Agents at work: a spinner hard right of the head, opposite the
+        // filter, while any Thread in the tree is working.
+        if state.working {
+            head = head.child(div().flex_1()).child(nav::working_spinner());
+        }
         if !state.filter.open {
             return head;
         }
@@ -5851,9 +6241,11 @@ impl CockpitView {
         head.child(deferred(menu))
     }
 
-    /// The scrolling tree: the Groups with their members, then the solos.
-    /// The 16px between Group blocks is also the `GroupGap` drop zone, so
-    /// reordering costs no layout of its own.
+    /// The scrolling tree: Groups with their members and solo Threads in
+    /// one order, most recently used first. The 16px band above a Group
+    /// block is also its `GroupGap` drop zone, so reordering costs no
+    /// layout of its own, and every run of solo rows is a `LooseZone` — a
+    /// place to drop a row to get it out of its Group.
     fn nav_tree(&self, state: &nav::NavState, cx: &mut Context<Self>) -> Stateful<Div> {
         // Every drag started from this frame started from this View.
         let origin = self.cockpit.roster().view();
@@ -5870,28 +6262,117 @@ impl CockpitView {
                     .child(error.clone()),
             );
         }
-        for (index, group) in state.groups.iter().enumerate() {
-            let id = group.id;
-            let full_index = self
-                .cockpit
-                .groups()
-                .iter()
-                .position(|group| group.id == id)
-                .expect("navigation only shows existing Groups");
-            let gap = DropTarget::GroupGap(full_index);
-            if index > 0 {
-                tree = tree.child(
-                    drop_feedback(nav::group_gap(index), self.cockpit.groups().clone(), gap)
-                        .on_drop(cx.listener(move |view, drag: &NavDrag, _, cx| {
-                            view.apply_drop(*drag, gap, cx)
-                        })),
-                );
+        // Solo rows the order puts next to each other are drawn as one run,
+        // so the 2px between siblings stays a container's gap rather than a
+        // margin on every row.
+        let mut zones = 0usize;
+        let mut run: Vec<AnyElement> = Vec::new();
+        let mut after_group = false;
+        for (position, item) in state.order.iter().enumerate() {
+            match item {
+                nav::NavItem::Solo(index) => {
+                    run.push(self.thread_element(&state.solos[*index], None, cx));
+                }
+                nav::NavItem::Group(index) => {
+                    if !run.is_empty() {
+                        tree = tree.child(self.loose_run(
+                            zones,
+                            std::mem::take(&mut run),
+                            after_group,
+                            cx,
+                        ));
+                        zones += 1;
+                        after_group = false;
+                    }
+                    tree = tree.child(self.group_element(
+                        state,
+                        *index,
+                        position == 0,
+                        after_group,
+                        origin,
+                        cx,
+                    ));
+                    after_group = true;
+                }
             }
-            let head = nav::group_row_with_title(
-                group,
-                self.editable_group_title(id, group.title.clone(), cx),
-            );
-            let mut block = nav::group_block().child(
+        }
+        if !run.is_empty() {
+            tree = tree.child(self.loose_run(zones, run, after_group, cx));
+            zones += 1;
+            after_group = false;
+        }
+        // The ground under the last row is a drop target too — with every
+        // Thread in a Group it is the only place left to drop one to get it
+        // out — and it takes the tree's slack, so that ground is never dead.
+        let ground = nav::loose_ground(zones)
+            .when(after_group, |ground| ground.mt(px(crate::theme::SOLOS_TOP)));
+        tree = tree.child(
+            drop_feedback(ground, self.cockpit.groups().clone(), DropTarget::LooseZone).on_drop(
+                cx.listener(|view, drag: &NavDrag, _, cx| {
+                    view.apply_drop(*drag, DropTarget::LooseZone, cx)
+                }),
+            ),
+        );
+        if state.order.is_empty() {
+            tree = tree.child(nav::empty_filter(&state.filter.label));
+        }
+        tree
+    }
+
+    /// One run of solo rows, which is also a `LooseZone`. `after_group` is
+    /// what separates it from the Group above it; a run that opens the tree
+    /// starts at the tree's own padding.
+    fn loose_run(
+        &self,
+        zone: usize,
+        rows: Vec<AnyElement>,
+        after_group: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let run =
+            nav::solos(zone, rows).when(after_group, |run| run.mt(px(crate::theme::SOLOS_TOP)));
+        drop_feedback(run, self.cockpit.groups().clone(), DropTarget::LooseZone)
+            .on_drop(cx.listener(|view, drag: &NavDrag, _, cx| {
+                view.apply_drop(*drag, DropTarget::LooseZone, cx)
+            }))
+            .into_any_element()
+    }
+
+    /// One Group block: the 16px band above it when another Group precedes
+    /// it — the "insert between these two" drop target — then the header,
+    /// which is the drag handle, the rename target and the way in, then the
+    /// member rows.
+    fn group_element(
+        &self,
+        state: &nav::NavState,
+        index: usize,
+        first_in_tree: bool,
+        after_group: bool,
+        origin: View,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let group = &state.groups[index];
+        let id = group.id;
+        let full_index = self
+            .cockpit
+            .groups()
+            .iter()
+            .position(|group| group.id == id)
+            .expect("navigation only shows existing Groups");
+        let gap = DropTarget::GroupGap(full_index);
+        let head = nav::group_row_with_title(
+            group,
+            self.editable_group_title(id, group.title.clone(), cx),
+        );
+        let mut block = nav::group_block()
+            // A Group separates itself from whatever is above it: nothing
+            // when it opens the tree, the 16px band from another Group —
+            // prepended below, because that band is a drop target and not a
+            // margin — and the solos' own 24px from a run of rows.
+            .when(!first_in_tree && !after_group, |block| {
+                block.mt(px(crate::theme::SOLOS_TOP))
+            })
+            .child(
                 drop_feedback(
                     head,
                     self.cockpit.groups().clone(),
@@ -5919,77 +6400,65 @@ impl CockpitView {
                     }),
                 ),
             );
-            // Gap 0 has no band of its own; it rides the header instead.
-            if index == 0 {
-                block = block.child(
-                    drop_feedback(
-                        nav::group_gap_lead(index),
-                        self.cockpit.groups().clone(),
-                        gap,
-                    )
-                    .on_drop(cx.listener(
-                        move |view, drag: &NavDrag, _, cx| view.apply_drop(*drag, gap, cx),
-                    )),
+        // The first block in the tree has no band above it to drop into, so
+        // "insert above this Group" rides its header instead.
+        if first_in_tree {
+            block = block.child(
+                drop_feedback(
+                    nav::group_gap_lead(index),
+                    self.cockpit.groups().clone(),
+                    gap,
+                )
+                .on_drop(
+                    cx.listener(move |view, drag: &NavDrag, _, cx| view.apply_drop(*drag, gap, cx)),
+                ),
+            );
+        }
+        if !group.members.is_empty() {
+            let rows = group
+                .members
+                .iter()
+                .map(|row| self.thread_element(row, Some(id), cx))
+                .collect();
+            let mut members = nav::members(rows);
+            // Appending to the Group means dropping past its last row —
+            // an index one beyond the end, aimed at the last member.
+            if let Some(last) = group.members.last().map(|row| row.thread) {
+                let tail = DropTarget::ThreadRow {
+                    thread: last,
+                    group: Some(id),
+                    index: self
+                        .cockpit
+                        .groups()
+                        .get(id)
+                        .expect("Group exists")
+                        .members
+                        .len(),
+                };
+                members = members.child(
+                    drop_feedback(nav::member_tail(id), self.cockpit.groups().clone(), tail)
+                        .on_drop(cx.listener(move |view, drag: &NavDrag, _, cx| {
+                            view.apply_drop(*drag, tail, cx)
+                        })),
                 );
             }
-            if !group.members.is_empty() {
-                let rows = group
-                    .members
-                    .iter()
-                    .map(|row| self.thread_element(row, Some(id), cx))
-                    .collect();
-                let mut members = nav::members(rows);
-                // Appending to the Group means dropping past its last row —
-                // an index one beyond the end, aimed at the last member.
-                if let Some(last) = group.members.last().map(|row| row.thread) {
-                    let tail = DropTarget::ThreadRow {
-                        thread: last,
-                        group: Some(id),
-                        index: self
-                            .cockpit
-                            .groups()
-                            .get(id)
-                            .expect("Group exists")
-                            .members
-                            .len(),
-                    };
-                    members = members.child(
-                        drop_feedback(nav::member_tail(id), self.cockpit.groups().clone(), tail)
-                            .on_drop(cx.listener(move |view, drag: &NavDrag, _, cx| {
-                                view.apply_drop(*drag, tail, cx)
-                            })),
-                    );
-                }
-                block = block.child(members);
-            }
-            tree = tree.child(block);
+            block = block.child(members);
         }
-        let rows = state
-            .solos
-            .iter()
-            .map(|row| self.thread_element(row, None, cx))
-            .collect();
-        // `nav::solos` carries the 24px that separates it from the last
-        // Group. With no Group above it there is nothing to separate
-        // from, and the section starts at the tree's own padding. With no
-        // solo rows at all it separates nothing either — but it still
-        // renders, as the empty ground below the tree: with every Thread in
-        // a Group that is the only place left to drop one to get it out.
-        let empty = state.solos.is_empty();
-        let solos = nav::solos(rows)
-            .when(empty || state.groups.is_empty(), |solos| solos.mt(px(0.)))
-            .when(empty, |solos| solos.flex_1());
-        tree = tree.child(
-            drop_feedback(solos, self.cockpit.groups().clone(), DropTarget::LooseZone).on_drop(
-                cx.listener(|view, drag: &NavDrag, _, cx| {
-                    view.apply_drop(*drag, DropTarget::LooseZone, cx)
-                }),
-            ),
-        );
-        if state.groups.is_empty() && state.solos.is_empty() {
-            tree = tree.child(nav::empty_filter(&state.filter.label));
+        if !after_group {
+            return block.into_any_element();
         }
-        tree
+        // Two Groups in a row: the band between them, drawn above this one.
+        div()
+            .flex()
+            .flex_col()
+            .flex_shrink_0()
+            .child(
+                drop_feedback(nav::group_gap(index), self.cockpit.groups().clone(), gap).on_drop(
+                    cx.listener(move |view, drag: &NavDrag, _, cx| view.apply_drop(*drag, gap, cx)),
+                ),
+            )
+            .child(block)
+            .into_any_element()
     }
 
     /// One Thread row, with the whole drag/drop and click wiring a row has
@@ -6061,18 +6530,8 @@ impl CockpitView {
     /// dropdown, and this is how a 56px column reaches it.
     fn rail(&self, state: &nav::NavState, cx: &mut Context<Self>) -> Div {
         let mut items = nav::rail_items();
-        let focused = self.cockpit.roster().focused_thread();
-        for (row, current) in state
-            .groups
-            .iter()
-            .flat_map(|group| group.members.iter().map(move |row| (row, group.current)))
-            .chain(
-                state
-                    .solos
-                    .iter()
-                    .map(|row| (row, focused == Some(row.thread))),
-            )
-        {
+        for row in state.ordered_rows() {
+            let current = row.current;
             let thread = row.thread;
             let open = self.pane_for(thread).is_some();
             items = items.child(nav::rail_item(row, current).on_mouse_down(
@@ -6091,7 +6550,7 @@ impl CockpitView {
                 MouseButton::Left,
                 cx.listener(|view, _: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();
-                    view.nav_collapsed = false;
+                    view.set_nav_collapsed(false, cx);
                     view.nav_filter_open = true;
                     cx.notify();
                 }),
@@ -6193,6 +6652,7 @@ fn transcript_text(blocks: &[ferrite_core::transcript::Block]) -> String {
 
 #[cfg(test)]
 mod tests {
+    mod subagents;
     use super::*;
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -6494,6 +6954,78 @@ mod tests {
         });
     }
 
+    /// The age at the tail of a row's last line hangs under the provider
+    /// logomark: one right edge down the row, not two.
+    #[gpui::test]
+    fn the_age_hangs_under_the_provider_mark(cx: &mut TestAppContext) {
+        let (core, _) = cockpit("nav-age-align", 1);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        cx.run_until_parked();
+        let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+
+        let mark_id: &'static str = format!("nav-mark-{}", thread.get()).leak();
+        let age_id: &'static str = format!("nav-since-{}", thread.get()).leak();
+        let mark = cx.debug_bounds(mark_id).expect("the row draws a logomark");
+        let age = cx.debug_bounds(age_id).expect("the row draws its age");
+        assert_eq!(mark.right(), age.right(), "one right edge, not two");
+    }
+
+    /// The tree draws one list, not a Groups shelf above a Threads shelf:
+    /// Groups and solo Threads sort together by when they were last used,
+    /// a Group counting as its most recently used member. Threads created
+    /// back to back can share a timestamp, so the assertion is the rule
+    /// itself — the order never climbs — plus every item drawn exactly once.
+    #[gpui::test]
+    fn groups_and_solo_threads_share_one_recency_order(cx: &mut TestAppContext) {
+        let (mut core, _) = cockpit("nav-interleave", 4);
+        let ids = core.threads();
+        core.apply_group(GroupChange::Create {
+            first: ids[0],
+            second: ids[1],
+        })
+        .unwrap();
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        tick(cx);
+
+        view.read_with(cx, |view, _| {
+            let state = view.nav_state();
+            assert_eq!(state.groups.len(), 1);
+            assert_eq!(state.solos.len(), 2);
+            assert_eq!(
+                state.order.len(),
+                3,
+                "one entry per Group and per solo Thread, and no other"
+            );
+            let recency = |item: &nav::NavItem| match item {
+                nav::NavItem::Group(index) => state.groups[*index]
+                    .members
+                    .iter()
+                    .map(|row| view.last_used(row.thread))
+                    .max()
+                    .unwrap(),
+                nav::NavItem::Solo(index) => view.last_used(state.solos[*index].thread),
+            };
+            let times: Vec<_> = state.order.iter().map(recency).collect();
+            assert!(
+                times.windows(2).all(|pair| pair[0] >= pair[1]),
+                "most recently used first, whichever kind of item it is"
+            );
+            let mut seen: Vec<nav::NavItem> = state.order.clone();
+            seen.sort_by_key(|item| match item {
+                nav::NavItem::Group(index) => (0, *index),
+                nav::NavItem::Solo(index) => (1, *index),
+            });
+            seen.dedup();
+            assert_eq!(seen.len(), 3, "nothing is drawn twice and nothing is lost");
+            assert_eq!(
+                view.nav_state().ordered_rows().len(),
+                4,
+                "every Thread has a row, member or solo"
+            );
+        });
+    }
+
     #[gpui::test]
     fn dragging_filtered_members_uses_the_full_group_order(cx: &mut TestAppContext) {
         let (mut core, _) = cockpit("filtered-group-order", 2);
@@ -6579,11 +7111,23 @@ mod tests {
     }
 
     #[gpui::test]
-    fn clicking_the_context_ring_shows_current_and_maximum_tokens(cx: &mut TestAppContext) {
+    fn composer_usage_lines_show_context_and_subscription_windows(cx: &mut TestAppContext) {
         let (core, fake) = cockpit("context-click", 1);
         bind_production_keys(cx);
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        fake.streams.borrow()[0]
+            .send(SessionEvent::RateLimits {
+                five_hour: Some(ferrite_core::RateLimitWindow {
+                    used_fraction: 0.52,
+                    resets_at: Some(11),
+                }),
+                weekly: Some(ferrite_core::RateLimitWindow {
+                    used_fraction: 0.08,
+                    resets_at: Some(22),
+                }),
+            })
+            .unwrap();
         fake.streams.borrow()[0]
             .send(SessionEvent::TokenUsage {
                 total_tokens: 124_000,
@@ -6595,10 +7139,13 @@ mod tests {
             })
             .unwrap();
         tick(cx);
-        let ring = cx
-            .debug_bounds("context-ring-1")
-            .expect("usage ring is visible");
-        cx.simulate_mouse_down(ring.center(), MouseButton::Left, gpui::Modifiers::none());
+        assert!(cx.debug_bounds("usage-line-context-62").is_some());
+        assert!(cx.debug_bounds("usage-line-five-hour-52").is_some());
+        assert!(cx.debug_bounds("usage-line-weekly-8").is_some());
+        let meter = cx
+            .debug_bounds("usage-meter-1")
+            .expect("usage lines are visible beside the model");
+        cx.simulate_mouse_down(meter.center(), MouseButton::Left, gpui::Modifiers::none());
         cx.run_until_parked();
         assert!(
             cx.debug_bounds("context-usage-current-124000").is_some(),
@@ -6608,6 +7155,8 @@ mod tests {
             cx.debug_bounds("context-usage-maximum-200000").is_some(),
             "click must reveal maximum tokens"
         );
+        assert!(cx.debug_bounds("context-usage-five-hour-52").is_some());
+        assert!(cx.debug_bounds("context-usage-weekly-8").is_some());
         fake.streams.borrow()[0]
             .send(SessionEvent::TokenUsage {
                 total_tokens: 31_000,
@@ -6627,12 +7176,12 @@ mod tests {
             cx.debug_bounds("context-usage-maximum-unknown").is_some(),
             "unknown limit is not invented"
         );
-        cx.simulate_mouse_down(ring.center(), MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_mouse_down(meter.center(), MouseButton::Left, gpui::Modifiers::none());
         cx.run_until_parked();
         view.read_with(cx, |view, _| {
-            assert!(view.context_usage.is_none(), "second ring click closes it")
+            assert!(view.context_usage.is_none(), "second meter click closes it")
         });
-        cx.simulate_mouse_down(ring.center(), MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_mouse_down(meter.center(), MouseButton::Left, gpui::Modifiers::none());
         cx.run_until_parked();
         view.read_with(cx, |view, _| assert!(view.context_usage.is_some()));
         cx.simulate_mouse_down(
@@ -6644,7 +7193,7 @@ mod tests {
         view.read_with(cx, |view, _| {
             assert!(view.context_usage.is_none(), "outside click dismisses")
         });
-        cx.simulate_mouse_down(ring.center(), MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_mouse_down(meter.center(), MouseButton::Left, gpui::Modifiers::none());
         cx.run_until_parked();
         cx.simulate_keystrokes("escape");
         view.read_with(cx, |view, _| assert!(view.context_usage.is_none()));
@@ -8014,6 +8563,92 @@ mod tests {
         });
     }
 
+    /// A Thread opens on its tail. A fresh ScrollHandle sits at the top, so
+    /// a reopened Thread with history landed on its oldest line; it must
+    /// land on its newest, and keep following the tail from there.
+    #[gpui::test]
+    fn a_reopened_thread_opens_at_the_bottom_and_keeps_following_the_tail(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("reopen-at-tail", 2);
+        cx.update(|cx| {
+            cx.bind_keys([
+                KeyBinding::new("cmd-w", CloseThread, None),
+                KeyBinding::new("cmd-o", ReopenThread, None),
+            ]);
+        });
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        // Reopening respawns the Session, so the revived Thread streams on
+        // the newest Sender, not the one it was parked with.
+        let say = |line: usize| {
+            fake.streams
+                .borrow()
+                .last()
+                .expect("a spawned Session")
+                .send(SessionEvent::TextDelta {
+                    text: format!("history line {line:03}\n\n"),
+                })
+                .unwrap();
+        };
+        // Stream into the second-spawned Session: that is `panes[0]`'s only
+        // if spawn order matches grid order, so pick the Pane by its stream
+        // instead — the last spawn is the last Thread created.
+        for line in 0..80 {
+            say(line);
+        }
+        tick(cx);
+        let closed = view.read_with(cx, |view, _| {
+            view.panes
+                .iter()
+                .filter_map(|pane| pane.thread())
+                .max()
+                .unwrap()
+        });
+        let at = view.read_with(cx, |view, _| {
+            view.panes
+                .iter()
+                .position(|pane| pane.thread() == Some(closed))
+                .unwrap()
+        });
+        view.update(cx, |view, _| view.focus_pane(at));
+        cx.simulate_keystrokes("cmd-w");
+        view.read_with(cx, |view, _| assert_eq!(view.panes.len(), 1));
+
+        cx.simulate_keystrokes("cmd-o");
+        tick(cx);
+        let gap = |cx: &mut gpui::VisualTestContext| {
+            view.read_with(cx, |view, _| {
+                let pane = view
+                    .panes
+                    .iter()
+                    .find(|pane| pane.thread() == Some(closed))
+                    .expect("the reopened Pane");
+                let scroll = &pane.scroll;
+                (
+                    scroll.max_offset().y,
+                    scroll.max_offset().y + scroll.offset().y,
+                )
+            })
+        };
+        let (max, at_open) = gap(cx);
+        assert!(max > px(0.), "the transcript must overflow for this test");
+        assert!(
+            at_open <= TAIL_SLACK,
+            "a reopened Thread opens at its bottom, not its top: {at_open:?} of {max:?}"
+        );
+
+        // Streaming into the reopened Pane keeps it on the tail.
+        for line in 80..100 {
+            say(line);
+        }
+        tick(cx);
+        let (later_max, after_stream) = gap(cx);
+        assert!(later_max > max, "more history grew the transcript");
+        assert!(
+            after_stream <= TAIL_SLACK,
+            "new Blocks keep a tail-riding reader at the bottom: {after_stream:?}"
+        );
+    }
+
     /// #15 AC2 at character grain (#27): a mid-word press sweeps exact
     /// characters across Blocks, and cmd-c puts exactly the highlighted
     /// text on the clipboard — endpoint rows cut at their characters, the
@@ -8062,7 +8697,15 @@ mod tests {
         cx.update(|window, cx| {
             let view = view.read(cx);
             let thread = view.panes[0].thread().unwrap();
-            let blocks = view.cockpit.thread(thread).unwrap().transcript().blocks();
+            let blocks = view
+                .cockpit
+                .thread(thread)
+                .unwrap()
+                .activity()
+                .subject(&view.panes[0].selected)
+                .unwrap()
+                .transcript()
+                .blocks();
             let current = &blocks[block];
             let (id, item, paragraphs, text) = if current.markdown.is_some() {
                 let start = (0..=block)
@@ -8080,7 +8723,7 @@ mod tests {
                 (
                     format!(
                         "markdown-{}-{:?}",
-                        thread.get(),
+                        view.panes[0].text_namespace(),
                         current.markdown_run.unwrap_or(blocks[start].id)
                     ),
                     block - start,
@@ -8099,7 +8742,11 @@ mod tests {
                     .unwrap()
                     .3;
                 (
-                    format!("literal-{}-{:?}-0", thread.get(), current.id),
+                    format!(
+                        "literal-{}-{:?}-0",
+                        view.panes[0].text_namespace(),
+                        current.id
+                    ),
                     0,
                     1,
                     text,
@@ -8372,7 +9019,7 @@ mod tests {
                 .0;
             let y = |block| {
                 crate::rich::testing::bounds(
-                    &format!("literal-{}-{block:?}-0", thread.get()),
+                    &format!("literal-{}-{block:?}-0", view.panes[0].text_namespace()),
                     0,
                     cx,
                 )
@@ -8427,10 +9074,11 @@ mod tests {
         cx: &mut TestAppContext,
     ) {
         let (core, fake) = cockpit("tool-disclosure-pointer", 1);
+        cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-c", CopySelection, None)]));
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-        let output = format!("first line\n{}TAIL", "x".repeat(65_540));
+        let output = format!("first line\n\nλ🙂\t{}TAIL", "x".repeat(65_540));
         let stream = fake.streams.borrow();
         stream[0]
             .send(SessionEvent::ToolStarted {
@@ -8471,7 +9119,7 @@ mod tests {
             };
             let x = |block| {
                 crate::rich::testing::bounds(
-                    &format!("literal-{}-{block:?}-0", thread.get()),
+                    &format!("literal-{}-{block:?}-0", view.panes[0].text_namespace()),
                     0,
                     cx,
                 )
@@ -8500,9 +9148,8 @@ mod tests {
         view.read_with(cx, |view, _| {
             assert!(view.panes[0].tool_expanded("toolu_9"));
             let runs = view.selection.registered(thread);
-            // Every hard line of the output is its own run starting a
-            // line, so a drag across them copies back with the newlines
-            // the output had.
+            // Large output is one native read-only document, retaining exact
+            // hard lines and Unicode without per-character Markdown layout.
             let tool_block = view
                 .cockpit
                 .thread(thread)
@@ -8521,7 +9168,7 @@ mod tests {
                 .collect();
             assert!(lines
                 .iter()
-                .any(|(_, _, starts, text)| *starts && text == "first line"));
+                .any(|(_, _, starts, text)| *starts && text.starts_with("first line\n\nλ🙂\t")));
             let total: usize = lines.iter().map(|(_, _, _, text)| text.len() + 1).sum();
             assert!(total >= 64 * 1024, "{total}");
             assert!(!runs
@@ -8529,6 +9176,61 @@ mod tests {
                 .any(|(_, _, _, text)| text.contains('▾') || text.contains("bytes omitted")));
         });
 
+        let (output_state, expected) = view.read_with(cx, |view, cx| {
+            let block = view
+                .cockpit
+                .thread(thread)
+                .unwrap()
+                .transcript()
+                .blocks()
+                .iter()
+                .find(|block| matches!(&block.body, Body::Tool(tool) if tool.call == "toolu_9"))
+                .unwrap();
+            let Body::Tool(tool) = &block.body else {
+                unreachable!()
+            };
+            let id = format!(
+                "output-{}-{:?}-result",
+                view.panes[0].text_namespace(),
+                block.id
+            );
+            (
+                crate::rich::testing::output(&id, cx).unwrap(),
+                tool.output.as_ref().unwrap().text.clone(),
+            )
+        });
+        let bounds = output_state.read_with(cx, |state, _| state.text_bounds().unwrap());
+        assert!(
+            bounds.size.height < px(350.),
+            "large output has a bounded native viewport"
+        );
+        cx.simulate_click(bounds.center(), gpui::Modifiers::none());
+        tick(cx);
+        cx.update(|window, cx| {
+            assert!(
+                output_state.focus_handle(cx).is_focused(window),
+                "progress pumps preserve native output focus"
+            )
+        });
+        cx.simulate_keystrokes("cmd-down");
+        cx.run_until_parked();
+        output_state.read_with(cx, |state, _| {
+            assert_eq!(
+                state.cursor(),
+                expected.len(),
+                "native navigation reaches the retained tail"
+            );
+            assert!(
+                state.scroll_offset().y < px(0.),
+                "the native viewer scrolls to its tail"
+            );
+        });
+        cx.simulate_keystrokes("cmd-a cmd-c");
+        assert_eq!(clipboard(cx).as_deref(), Some(expected.as_str()));
+        cx.simulate_keystrokes("backspace");
+        output_state.read_with(cx, |state, _| {
+            assert_eq!(state.value().as_ref(), expected.as_str());
+        });
         // Expanding long output can scroll the header out of view while
         // following the tail. Bring it back before clicking its disclosure.
         view.update(cx, |view, cx| {
@@ -8563,6 +9265,180 @@ mod tests {
                 assert!(view.panes[0].composer.focus_handle(cx).is_focused(window));
             });
         });
+    }
+
+    #[gpui::test]
+    fn streaming_output_preserves_native_selection_scroll_and_command_identity(
+        cx: &mut TestAppContext,
+    ) {
+        let (core, fake) = cockpit("streaming-output-view", 1);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(900.)));
+        let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+        let command = format!("cat <<'EOF'\n{}\nEOF", "command ".repeat(1200));
+        let original = "a line of exact output λ🙂 with spaces\n".repeat(300);
+        fake.streams.borrow()[0]
+            .send(SessionEvent::ToolStarted {
+                id: "stream".into(),
+                name: "Bash".into(),
+                input: serde_json::json!({"command": command}),
+            })
+            .unwrap();
+        fake.streams.borrow()[0]
+            .send(SessionEvent::ToolOutputDelta {
+                id: "stream".into(),
+                text: original.clone(),
+            })
+            .unwrap();
+        tick(cx);
+        let chevron = view.read_with(cx, |view, _| {
+            view.panes[0].tool_bounds("stream").unwrap().center()
+        });
+        cx.simulate_click(chevron, gpui::Modifiers::none());
+        cx.run_until_parked();
+        let (command_state, result_state) = view.read_with(cx, |view, cx| {
+            let block = view
+                .cockpit
+                .thread(thread)
+                .unwrap()
+                .transcript()
+                .blocks()
+                .iter()
+                .find(|block| matches!(&block.body, Body::Tool(tool) if tool.call == "stream"))
+                .unwrap();
+            let prefix = format!("output-{}-{:?}", view.panes[0].text_namespace(), block.id);
+            (
+                crate::rich::testing::output(&format!("{prefix}-command"), cx).unwrap(),
+                crate::rich::testing::output(&format!("{prefix}-result"), cx).unwrap(),
+            )
+        });
+        assert_ne!(command_state.entity_id(), result_state.entity_id());
+        command_state.read_with(cx, |state, _| assert_eq!(state.value().as_ref(), command));
+        let bounds = result_state.read_with(cx, |state, _| state.text_bounds().unwrap());
+        cx.simulate_click(bounds.center(), gpui::Modifiers::none());
+        cx.simulate_keystrokes("cmd-down shift-up");
+        cx.run_until_parked();
+        let (selected, cursor, scroll) = result_state.read_with(cx, |state, _| {
+            (
+                state.selected_value(),
+                state.cursor(),
+                state.scroll_offset(),
+            )
+        });
+        assert!(!selected.is_empty());
+        assert!(scroll.y < px(0.));
+        fake.streams.borrow()[0]
+            .send(SessionEvent::ToolOutputDelta {
+                id: "stream".into(),
+                text: "new output\n".into(),
+            })
+            .unwrap();
+        tick(cx);
+        result_state.read_with(cx, |state, _| {
+            assert_eq!(state.value().as_ref(), format!("{original}new output\n"));
+            assert_eq!(state.selected_value(), selected);
+            assert_eq!(state.cursor(), cursor);
+            assert_eq!(state.scroll_offset(), scroll);
+        });
+        command_state.read_with(cx, |state, _| assert_eq!(state.value().as_ref(), command));
+        // A final replacement may be shorter. Native clipping keeps the
+        // retained selection on character boundaries without invalid offsets.
+        fake.streams.borrow()[0]
+            .send(SessionEvent::ToolCompleted {
+                id: "stream".into(),
+                output: "λ🙂\n".repeat(1500),
+                is_error: false,
+                result: ferrite_core::ToolResult::Opaque,
+            })
+            .unwrap();
+        tick(cx);
+        result_state.read_with(cx, |state, _| {
+            let value = state.value();
+            let range = state.selected_range();
+            assert!(value.is_char_boundary(range.start) && value.is_char_boundary(range.end));
+        });
+    }
+
+    #[gpui::test]
+    fn native_progress_stays_visible_while_scrolling_and_metadata_refreshes_the_wall(
+        cx: &mut TestAppContext,
+    ) {
+        use ferrite_core::progress::{Phase, ProgressEvent};
+        let (mut core, fake) = cockpit("native-progress", 1);
+        let thread = core.threads()[0];
+        core.send(thread, "Inspect progress".into());
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        for index in 0..70 {
+            fake.streams.borrow()[0]
+                .send(SessionEvent::TextDelta {
+                    text: format!("Earlier answer {index}.\n\n"),
+                })
+                .unwrap();
+        }
+        fake.streams.borrow()[0]
+            .send(SessionEvent::ReasoningSummaryDelta {
+                text: "**Checking fold call sites**".into(),
+                summary_index: 0,
+            })
+            .unwrap();
+        tick(cx);
+        let before = cx
+            .debug_bounds("progress-caption-Checking fold call sites")
+            .expect("native heading is pinned above the composer");
+        view.update(cx, |view, cx| {
+            view.panes[0].follow_tail.set(false);
+            view.panes[0].scroll.set_offset(gpui::point(px(0.), px(0.)));
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            cx.debug_bounds("progress-caption-Checking fold call sites")
+                .unwrap(),
+            before,
+            "scrollback cannot move the progress component"
+        );
+        // Working-phase detail appends no transcript block. Its wall caption
+        // must still change, or the smallest panes freeze on the old heading.
+        fake.streams.borrow()[0]
+            .send(SessionEvent::Progress {
+                event: ProgressEvent::Phase {
+                    phase: Phase::Compacting,
+                    detail: String::new(),
+                },
+            })
+            .unwrap();
+        tick(cx);
+        fake.streams.borrow()[0]
+            .send(SessionEvent::Progress {
+                event: ProgressEvent::Phase {
+                    phase: Phase::Working,
+                    detail: "Context compacted".into(),
+                },
+            })
+            .unwrap();
+        tick(cx);
+        view.read_with(cx, |view, _| {
+            assert!(view
+                .facts
+                .get(thread)
+                .unwrap()
+                .wall
+                .working
+                .contains("Checking fold call sites"));
+        });
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TurnEnded {
+                outcome: ferrite_core::TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+        tick(cx);
+        assert!(
+            cx.debug_bounds("progress-caption-Checking fold call sites")
+                .is_none(),
+            "completed turns stop their live indication"
+        );
     }
 
     #[gpui::test]
@@ -9159,12 +10035,12 @@ mod tests {
         });
     }
 
-    /// #21 AC1: the nav lists every Thread — open Panes first in grid
-    /// order, then the parked ones — each row naming its Project, its
-    /// checkout and its provider. There is no section header between them:
-    /// one list, split only by Group membership.
+    /// #21 AC1: the nav lists every Thread — most recently used first,
+    /// open and parked alike — each row naming its Project, its checkout
+    /// and its provider. There is no section header between them: one
+    /// list, split only by Group membership.
     #[gpui::test]
-    fn the_nav_lists_running_threads_in_grid_order_and_parked_below(cx: &mut TestAppContext) {
+    fn the_nav_lists_every_thread_most_recently_used_first(cx: &mut TestAppContext) {
         let (core, _fake) = cockpit("nav-order", 3);
         cx.update(|cx| {
             cx.bind_keys([KeyBinding::new("cmd-w", CloseThread, None)]);
@@ -9187,28 +10063,35 @@ mod tests {
         view.read_with(cx, |view, _| {
             let state = view.nav_state();
             assert!(state.groups.is_empty(), "no Group claims these Threads");
-            let rows: Vec<ThreadId> = state.solos.iter().map(|row| row.thread).collect();
-            let mut expected: Vec<ThreadId> = grid_order
-                .iter()
-                .copied()
-                .filter(|thread| *thread != parked_thread)
-                .collect();
-            expected.push(parked_thread);
-            assert_eq!(rows, expected, "open Panes in grid order, parked below");
+            let ordered = state.ordered_solos();
+            let rows: Vec<ThreadId> = ordered.iter().map(|row| row.thread).collect();
+            let mut expected: Vec<ThreadId> = grid_order.to_vec();
+            // The nav's default order, and the only one it has: last used
+            // first. Parking does not move a row — using it does.
+            expected.sort_by_key(|thread| std::cmp::Reverse(view.last_used(*thread)));
+            assert_eq!(rows, expected, "most recently used first");
+            assert!(
+                rows.contains(&parked_thread),
+                "a parked Thread is a row like any other"
+            );
             assert_eq!(
-                state.solos[0].name.as_ref(),
+                ordered[0].name.as_ref(),
                 format!("thread-{:02}", expected[0]),
                 "rows say what the Pane head says"
             );
+            assert!(
+                ordered.iter().all(|row| row.last_used.is_some()),
+                "every row says how long since it was used"
+            );
             assert_eq!(
-                state.solos[0].provider,
+                ordered[0].provider,
                 Some(Provider::Claude),
                 "the provider is the logomark's own value, never a `cl` tag"
             );
             let parked: Vec<ThreadId> = view.facts.parked().to_vec();
             assert_eq!(parked, vec![parked_thread], "the parked Thread moved below");
             assert_eq!(
-                state.solos.last().unwrap().provider,
+                ordered.last().unwrap().provider,
                 Some(Provider::Claude),
                 "a parked row still names its provider — peeked, not loaded"
             );
@@ -9228,14 +10111,24 @@ mod tests {
         tick(cx);
         view.read_with(cx, |view, _| assert_eq!(view.focused(), 0));
 
-        // The second row: the 42px window band, the 42px nav head, the
-        // tree's 8px inset, one 56.5px row and the 2px between siblings,
-        // then halfway down its own row. No strip, no section header.
+        // Which row is which is the nav's order to decide (last used
+        // first), so the test asks it rather than assuming the grid's.
+        let row_of = |view: &CockpitView, pane: usize| {
+            let thread = view.panes[pane].thread().unwrap();
+            view.nav_state()
+                .ordered_solos()
+                .iter()
+                .position(|row| row.thread == thread)
+                .expect("every open Thread has a row")
+        };
+        // Row `n`: the 42px window band, the 42px nav head, the tree's 8px
+        // inset, n rows of 56.5px each with the 2px between siblings, then
+        // halfway down its own row. No strip, no section header.
+        let row_y =
+            |n: usize| px(42. + 42. + 8. + n as f32 * (crate::theme::THREAD_ROW_H + 2.) + 28.);
+        let (second, first) = view.read_with(cx, |view, _| (row_of(view, 1), row_of(view, 0)));
         cx.simulate_click(
-            gpui::point(
-                px(104.),
-                px(42. + 42. + 8. + crate::theme::THREAD_ROW_H + 2. + 28.),
-            ),
+            gpui::point(px(104.), row_y(second)),
             gpui::Modifiers::none(),
         );
         view.read_with(cx, |view, _| {
@@ -9249,11 +10142,8 @@ mod tests {
                 Some(PaneIdentity::Thread(view.panes[1].thread().unwrap()))
             );
         });
-        // And back to the first row, halfway down it.
-        cx.simulate_click(
-            gpui::point(px(104.), px(42. + 42. + 8. + 28.)),
-            gpui::Modifiers::none(),
-        );
+        // And back to the other Pane's row.
+        cx.simulate_click(gpui::point(px(104.), row_y(first)), gpui::Modifiers::none());
         view.read_with(cx, |view, _| {
             assert_eq!(view.focused(), 0, "the nav still answers while fullscreen");
             assert_eq!(
@@ -9354,9 +10244,8 @@ mod tests {
     /// signal ever creeps back in, this is what catches it.
     fn describe_nav(state: &nav::NavState) -> Vec<String> {
         state
-            .solos
-            .iter()
-            .chain(state.groups.iter().flat_map(|group| group.members.iter()))
+            .ordered_rows()
+            .into_iter()
             .map(|row| {
                 format!(
                     "{}|{:?}|{:?}|{:?}",
@@ -12119,7 +13008,17 @@ mod tests {
         let thread_title = cx
             .debug_bounds("rename-thread-2")
             .expect("the parked title is rendered");
+        // A single click on a title is not a rename — it is the row's own
+        // click, which focuses the Thread. Only the second press opens the
+        // editor.
         cx.simulate_click(thread_title.center(), gpui::Modifiers::none());
+        view.read_with(cx, |view, _| {
+            assert!(
+                view.rename.is_none(),
+                "one click never opens the inline editor"
+            );
+        });
+        press(cx, thread_title.center(), 2);
         view.read_with(cx, |view, cx| {
             let editor = &view.rename.as_ref().expect("inline Thread editor").1;
             assert_eq!(editor.read(cx).text(), "Existing parked title");
@@ -12138,7 +13037,7 @@ mod tests {
         });
 
         let thread_title = cx.debug_bounds("rename-thread-2").unwrap();
-        cx.simulate_click(thread_title.center(), gpui::Modifiers::none());
+        press(cx, thread_title.center(), 2);
         view.update(cx, |view, cx| {
             let editor = view.rename.as_ref().unwrap().1.clone();
             editor.update(cx, |line, cx| line.set("Saved parked title".into(), cx));
@@ -12147,6 +13046,13 @@ mod tests {
 
         let group_title = cx.debug_bounds("rename-group-1").unwrap();
         cx.simulate_click(group_title.center(), gpui::Modifiers::none());
+        view.read_with(cx, |view, _| {
+            assert!(
+                view.rename.is_none(),
+                "a Group title takes two clicks too — one enters the Group"
+            );
+        });
+        press(cx, group_title.center(), 2);
         view.update(cx, |view, cx| {
             let editor = view.rename.as_ref().unwrap().1.clone();
             editor.update(cx, |line, cx| line.set("Saved Group title".into(), cx));

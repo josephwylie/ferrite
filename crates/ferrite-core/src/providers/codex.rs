@@ -10,14 +10,16 @@
 //! full the reader blocks, the pipe fills, and the server stalls — nothing is
 //! dropped.
 
+mod activity;
 pub(super) mod catalog;
 mod wire;
 
+use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -49,6 +51,10 @@ const STDERR_TAIL_LINES: usize = 20;
 /// against `codex` 0.149.1, which answers both well under a second from a
 /// cold start; the budget is generous because overrunning it fails the spawn.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// A resume can emit turn notifications before its response identifies Main.
+/// Bound those candidates; overflow stays non-interruptible until new evidence.
+const EARLY_TURN_THREAD_LIMIT: usize = 64;
 
 /// The request id spawn numbers its skills/list with — always the request
 /// after the two handshake steps, which is what lets the reader correlate
@@ -202,15 +208,15 @@ pub struct CodexSession {
     job: super::job::SessionJob,
     /// Held open for the life of the Session: closing it ends the Session,
     /// so multi-turn depends on this staying alive.
-    stdin: ChildStdin,
+    stdin: Arc<Mutex<ChildStdin>>,
     events: Receiver<SessionEvent>,
     capabilities: CodexCapabilities,
     thread_id: String,
     model: String,
     effort: Option<String>,
     models: Arc<Mutex<Vec<crate::ModelInfo>>>,
-    /// The running turn's id, tracked by the reader from turn/started:
-    /// turn/interrupt must name the turn it stops.
+    /// Main's running turn, tracked by the reader from scoped lifecycle:
+    /// child turns must never become this Session's interrupt target.
     current_turn: Arc<Mutex<Option<String>>>,
     /// The server's skills, filled by the reader from the skills/list answer
     /// (#23). `send` translates a leading `/name` against this list into the
@@ -255,7 +261,7 @@ impl CodexSession {
         let job =
             super::job::SessionJob::assign_or_reap(&mut child).map_err(CodexSpawnError::Io)?;
 
-        let stdin = child.stdin.take().expect("stdin was piped");
+        let stdin = Arc::new(Mutex::new(child.stdin.take().expect("stdin was piped")));
         let stdout = child.stdout.take().expect("stdout was piped");
         let stderr = child.stderr.take().expect("stderr was piped");
 
@@ -269,6 +275,7 @@ impl CodexSession {
         let models = Arc::new(Mutex::new(Vec::new()));
         let handshake = read_stdout(
             stdout,
+            Arc::downgrade(&stdin),
             sender,
             Arc::clone(&child),
             Arc::clone(&stderr_tail),
@@ -438,7 +445,8 @@ impl CodexSession {
     /// Composer's picks become real.
     pub fn send(&mut self, text: &str) -> io::Result<()> {
         let input = wire::input_items(text, &lock(&self.skills), self.cwd.as_deref());
-        let mut params = serde_json::json!({"threadId": self.thread_id, "input": input});
+        let mut params =
+            serde_json::json!({"threadId": self.thread_id, "input": input, "summary": "concise"});
         if let Some(effort) = &self.effort {
             params["effort"] = serde_json::json!(effort);
         }
@@ -504,13 +512,7 @@ impl CodexSession {
             // object exactly as it offered it.
             DecisionAnswer::AllowAlways { suggestion, .. } => suggestion.clone(),
         };
-        // The server's id space is its own: 0.149.1 numbers requests with
-        // integers, which `DecisionRequested` carried as text. Echo back the
-        // original type, not Ferrite's.
-        let id = match id.parse::<u64>() {
-            Ok(number) => serde_json::json!(number),
-            Err(_) => serde_json::json!(id),
-        };
+        let id = wire::decision_request_id(id)?;
         self.write_line(&serde_json::json!({
             "jsonrpc": "2.0",
             "id": id,
@@ -548,11 +550,18 @@ impl CodexSession {
     }
 
     fn write_line(&mut self, value: &serde_json::Value) -> io::Result<()> {
-        let mut line = serde_json::to_string(value).map_err(io::Error::other)?;
-        line.push('\n');
-        self.stdin.write_all(line.as_bytes())?;
-        self.stdin.flush()
+        write_request(&self.stdin, value)
     }
+}
+
+/// Session commands and reader-owned history requests share one writer. Hold
+/// its lock for the complete JSON-RPC frame so neither can interleave bytes.
+fn write_request(stdin: &Mutex<ChildStdin>, value: &serde_json::Value) -> io::Result<()> {
+    let mut line = serde_json::to_string(value).map_err(io::Error::other)?;
+    line.push('\n');
+    let mut stdin = lock(stdin);
+    stdin.write_all(line.as_bytes())?;
+    stdin.flush()
 }
 
 impl Drop for CodexSession {
@@ -598,6 +607,7 @@ fn await_step(
 /// spawn read it directly would race the reader for lines.
 fn read_stdout(
     stdout: ChildStdout,
+    stdin: Weak<Mutex<ChildStdin>>,
     sender: SyncSender<SessionEvent>,
     child: Arc<Mutex<Child>>,
     stderr_tail: Arc<Mutex<StderrTail>>,
@@ -609,6 +619,12 @@ fn read_stdout(
     thread::spawn(move || {
         let mut reader = BufReader::new(stdout);
         let mut line = Vec::new();
+        let mut activity = activity::Router::default();
+        let mut turns = MainTurnTracker {
+            main_thread_id: None,
+            early_turns: HashMap::new(),
+            current_turn,
+        };
         // Which handshake response is awaited: request 1, then request 2,
         // then none.
         let mut handshake = Some((step_sender, 1u64));
@@ -637,6 +653,7 @@ fn read_stdout(
                     }
                     Some(Ok(result)) => match wire::parse_thread_response(&result) {
                         Some(thread) => {
+                            turns.identify_main(&thread.thread_id);
                             // The Session announces itself the way every
                             // provider does; the values are the wire's, only
                             // the correlation is Ferrite's.
@@ -644,9 +661,20 @@ fn read_stdout(
                                 session_id: thread.thread_id.clone(),
                                 model: thread.model.clone(),
                             });
+                            let update = activity.identify_main(&thread.thread_id);
+                            // Release spawn before publishing a potentially
+                            // large resumed tree into the bounded event stream.
+                            // Main's interrupt owner is already authoritative.
                             let _ = step_sender.send(Ok(HandshakeStep::Thread(Box::new(thread))));
                             menu_pending = true;
                             models_pending = true;
+                            if !publish_activity(update, &mut activity, &sender, &stdin) {
+                                return;
+                            }
+                            let update = activity.root_history(&result["thread"]);
+                            if !publish_activity(update, &mut activity, &sender, &stdin) {
+                                return;
+                            }
                             continue;
                         }
                         None => {
@@ -697,11 +725,10 @@ fn read_stdout(
                     continue;
                 }
             }
-            track_turn(text, &current_turn);
-            if let Some(event) = wire::parse_line(text) {
-                // A full channel parks this thread, the OS pipe fills, and the
-                // server blocks on its own write. Backpressure, never loss.
-                if sender.send(event).is_err() {
+            turns.observe(text);
+            if let Ok(frame) = serde_json::from_str(text) {
+                let update = activity.observe(frame);
+                if !publish_activity(update, &mut activity, &sender, &stdin) {
                     return;
                 }
             }
@@ -714,27 +741,83 @@ fn read_stdout(
     steps
 }
 
-/// The running turn's id, tracked for `interrupt` off the turn lifecycle
-/// notifications: turn/started names it, turn/completed retires it, so a
-/// late interrupt is a no-op instead of a request naming a dead turn.
-/// Session state, not a SessionEvent: no Pane renders it.
-fn track_turn(line: &str, current_turn: &Mutex<Option<String>>) {
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
-        return;
-    };
-    match value.get("method").and_then(serde_json::Value::as_str) {
-        Some("turn/started") => {
-            let turn_id = value
-                .get("params")
-                .and_then(|p| p.get("turn"))
-                .and_then(|t| t.get("id"))
-                .and_then(serde_json::Value::as_str);
-            if let Some(turn_id) = turn_id {
-                *lock(current_turn) = Some(turn_id.to_string());
+fn publish_activity(
+    update: activity::Update,
+    router: &mut activity::Router,
+    sender: &SyncSender<SessionEvent>,
+    stdin: &Weak<Mutex<ChildStdin>>,
+) -> bool {
+    for event in update.events {
+        // A full channel parks the reader and backpressures the provider.
+        if sender.send(event).is_err() {
+            return false;
+        }
+    }
+    for request in update.requests {
+        let Some(stdin) = stdin.upgrade() else {
+            return false;
+        };
+        if write_request(&stdin, &request).is_err() {
+            for event in router.request_failed(&request).events {
+                if sender.send(event).is_err() {
+                    return false;
+                }
             }
         }
-        Some("turn/completed") => *lock(current_turn) = None,
-        _ => {}
+    }
+    true
+}
+
+/// Main's interrupt target. Child lifecycle shares this connection but cannot
+/// replace or retire Main's turn. The handshake is the sole identity authority.
+struct MainTurnTracker {
+    main_thread_id: Option<String>,
+    early_turns: HashMap<String, String>,
+    current_turn: Arc<Mutex<Option<String>>>,
+}
+
+impl MainTurnTracker {
+    fn identify_main(&mut self, thread_id: &str) {
+        *lock(&self.current_turn) = self.early_turns.remove(thread_id);
+        self.early_turns.clear();
+        self.main_thread_id = Some(thread_id.to_owned());
+    }
+
+    fn observe(&mut self, line: &str) {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            return;
+        };
+        let started = match value.get("method").and_then(serde_json::Value::as_str) {
+            Some("turn/started") => true,
+            Some("turn/completed") => false,
+            _ => return,
+        };
+        let params = &value["params"];
+        let (Some(thread_id), Some(turn_id)) =
+            (activity::frame_scope(&value), params["turn"]["id"].as_str())
+        else {
+            return;
+        };
+        if let Some(main_thread_id) = &self.main_thread_id {
+            if thread_id != main_thread_id {
+                return;
+            }
+            let mut current_turn = lock(&self.current_turn);
+            if started {
+                *current_turn = Some(turn_id.to_owned());
+            } else if current_turn.as_deref() == Some(turn_id) {
+                *current_turn = None;
+            }
+        } else if started {
+            if self.early_turns.len() < EARLY_TURN_THREAD_LIMIT
+                || self.early_turns.contains_key(thread_id)
+            {
+                self.early_turns
+                    .insert(thread_id.to_owned(), turn_id.to_owned());
+            }
+        } else if self.early_turns.get(thread_id).map(String::as_str) == Some(turn_id) {
+            self.early_turns.remove(thread_id);
+        }
     }
 }
 

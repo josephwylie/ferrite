@@ -18,6 +18,25 @@ The live provider process currently serving a Thread. A Thread may have no
 Session (parked) or one (hot). Sessions are disposable; Threads are not.
 _Avoid_: process (when meaning the conversation), instance.
 
+**Activity**
+The Main and subagent activity observed within one Thread: their transcripts,
+relationships, latest outcomes, and Decisions. Observation does not create
+additional Ferrite Sessions or Threads.
+
+**Subject**
+The execution context a Pane is showing within its Thread: Main or one
+Subagent. Switching Subject changes the view, not the Thread or its Title.
+
+**Main**
+The Thread's primary agent context, addressed by its Composer and interrupt
+control. Main can be idle while a Subagent is working.
+
+**Subagent**
+A provider-managed agent delegated within Main's ancestry, observed through
+the owning Session. It may delegate further or work again after completion;
+its transcript and Decisions remain its own.
+_Avoid_: Thread, Session, worker Pane.
+
 **Provider**
 An agent backend a Session runs on. v1: Claude and Codex.
 _Avoid_: model (a provider selects models; it is not one).
@@ -88,9 +107,10 @@ grows a row per line, keyboard-driven menus, queue-while-busy.
 _Avoid_: chat box, input field.
 
 **Decision**
-Anything a Thread is blocked on that only the operator can answer (tool
-permission, plan approval, a question). Decisions are answerable from
-Pane, wall badge, and (planned) Remote.
+A live request that only the operator can answer: tool permission, plan
+approval, or a Question, belonging to Main, a Subagent, or an unattributed
+request within the owning Session. Several may be pending at once; historical
+requests are not answerable.
 
 **Question**
 A Decision whose input is a form — Claude's `AskUserQuestion`. The Pane

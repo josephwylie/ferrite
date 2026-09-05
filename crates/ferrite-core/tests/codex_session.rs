@@ -14,7 +14,9 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 use ferrite_core::providers::{CodexCapabilities, CodexConfig, CodexSession, CodexSpawnError};
-use ferrite_core::{Decision, DecisionAnswer, SessionEvent, ToolResult, TurnOutcome};
+use ferrite_core::{
+    Decision, DecisionAnswer, RateLimitWindow, SessionEvent, ToolResult, TurnOutcome,
+};
 
 const VERSION_CASE: &str = "case \"$1\" in --version) echo 'codex-cli 0.149.1'; exit 0;; esac";
 
@@ -223,7 +225,19 @@ fn the_reader_thread_delivers_the_captured_stream() {
     let session = CodexSession::spawn(config(program)).unwrap();
     let events = drain(session.events());
 
-    assert_eq!(events.len(), 7, "unexpected stream: {events:?}");
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| !matches!(
+                e,
+                SessionEvent::Progress { .. }
+                    | SessionEvent::ContentBoundary
+                    | SessionEvent::ReasoningSummaryPart { snapshot: true, .. }
+            ))
+            .count(),
+        8,
+        "unexpected content stream: {events:?}"
+    );
     let SessionEvent::Init { session_id, model } = &events[0] else {
         panic!("the Session must announce itself first: {events:?}");
     };
@@ -238,12 +252,25 @@ fn the_reader_thread_delivers_the_captured_stream() {
         })
         .collect();
     assert_eq!(text, "hello ferrite");
-    assert!(events
-        .iter()
-        .any(|e| matches!(e, SessionEvent::ReasoningSummaryDelta { .. })));
+    assert!(events.iter().any(|e| matches!(
+        e,
+        SessionEvent::ReasoningSummaryDelta { .. } | SessionEvent::ReasoningSummaryPart { .. }
+    )));
     assert!(events
         .iter()
         .any(|e| matches!(e, SessionEvent::TokenUsage { .. })));
+    assert!(events.iter().any(|event| {
+        matches!(
+            event,
+            SessionEvent::RateLimits {
+                five_hour: None,
+                weekly: Some(RateLimitWindow {
+                    used_fraction: 0.08,
+                    resets_at: Some(1_788_137_211),
+                }),
+            }
+        )
+    }));
     assert_eq!(
         events.last(),
         Some(&SessionEvent::TurnEnded {
@@ -848,6 +875,7 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
             "params": {
                 "threadId": "stub-thread",
                 "input": [{"type": "text", "text": "hi"}],
+                "summary": "concise",
                 "effort": "high",
             },
         })
@@ -1239,11 +1267,11 @@ fn a_line_of_invalid_utf8_does_not_end_the_session() {
     let payload = log_path("mangled.jsonl");
     let mut bytes = vec![0xff, 0xfe, b'\n'];
     bytes.extend_from_slice(
-        br#"{"method":"item/agentMessage/delta","params":{"threadId":"t","turnId":"u","itemId":"m","delta":"still here"}}"#,
+        br#"{"method":"item/agentMessage/delta","params":{"threadId":"stub-thread","turnId":"u","itemId":"m","delta":"still here"}}"#,
     );
     bytes.push(b'\n');
     bytes.extend_from_slice(
-        br#"{"method":"turn/completed","params":{"threadId":"t","turn":{"id":"u","items":[],"status":"completed"}}}"#,
+        br#"{"method":"turn/completed","params":{"threadId":"stub-thread","turn":{"id":"u","items":[],"status":"completed"}}}"#,
     );
     bytes.push(b'\n');
     fs::write(&payload, &bytes).unwrap();
@@ -1286,12 +1314,12 @@ fn a_slow_consumer_stalls_the_server_instead_of_losing_events() {
     let mut lines = String::new();
     for n in 0..DELTAS {
         lines.push_str(&format!(
-            r#"{{"method":"item/agentMessage/delta","params":{{"threadId":"t","turnId":"u","itemId":"m","delta":"{n} "}}}}"#
+            r#"{{"method":"item/agentMessage/delta","params":{{"threadId":"stub-thread","turnId":"u","itemId":"m","delta":"{n} "}}}}"#
         ));
         lines.push('\n');
     }
     lines.push_str(
-        r#"{"method":"turn/completed","params":{"threadId":"t","turn":{"id":"u","items":[],"status":"completed"}}}"#,
+        r#"{"method":"turn/completed","params":{"threadId":"stub-thread","turn":{"id":"u","items":[],"status":"completed"}}}"#,
     );
     lines.push('\n');
     fs::write(&payload, &lines).unwrap();

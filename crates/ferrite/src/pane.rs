@@ -12,6 +12,7 @@
 //! L2 (Instruments) and L3 (Wall) keep the metrics they have — the
 //! prototype specifies only L1 — and take the new palette and scale.
 
+use ferrite_core::activity::Subject;
 use ferrite_core::cockpit::{ThreadView, ToolTiming};
 use ferrite_core::docview::{is_test_run, passed_count, Instruments, Level, Tests};
 use ferrite_core::roster::{DraftId, PaneIdentity};
@@ -68,12 +69,33 @@ pub struct PaneView {
     pub name: SharedString,
     pub composer: Entity<Composer>,
     pub preview: crate::attachment_preview::Preview,
+    pub controls_focus: FocusHandle,
+    pub selected: Subject,
+    pub generation: u64,
+    pub rich: crate::rich::TextCache,
+    pub agent_menu_open: bool,
+    pub subject_strip_width: f32,
+    pub tab_interaction: crate::cockpit::subagents::TabInteraction,
+    pub history_error: Option<String>,
+    pub request_forms: crate::cockpit::subagents::RequestForms,
+    pub request_error: Option<(ferrite_core::activity::DecisionHandle, String)>,
+    subject_views: HashMap<Subject, TranscriptViewport>,
     pub scroll: ScrollHandle,
     pub selection_scope: gpui::base::TextSelectionScopeId,
     pub transcript_focus: FocusHandle,
     pub follow_tail: Rc<Flag<bool>>,
     /// A pending Decision takes the keyboard: y and n are answers, not text.
     pub decision_focus: FocusHandle,
+    disclosure: ToolDisclosure,
+}
+
+/// View ownership stays with a Subject even while its transcript is hidden.
+struct TranscriptViewport {
+    generation: u64,
+    scroll: ScrollHandle,
+    selection_scope: gpui::base::TextSelectionScopeId,
+    transcript_focus: FocusHandle,
+    follow_tail: Rc<Flag<bool>>,
     disclosure: ToolDisclosure,
 }
 
@@ -126,13 +148,32 @@ impl BandChip {
 
 impl PaneView {
     pub fn new<T: 'static>(thread: ThreadId, cx: &mut Context<T>) -> Self {
+        // A Pane opens on its tail, never on its first line: a fresh
+        // ScrollHandle sits at offset 0 (the top), so a Thread with history
+        // — reopened, or revived at launch — would land on its oldest block.
+        // gpui applies the request at the first prepaint, when the transcript
+        // has a height; from there tail-follow keeps it at the bottom until
+        // the operator scrolls up.
+        let scroll = ScrollHandle::new();
+        scroll.scroll_to_bottom();
         Self {
             identity: PaneIdentity::Thread(thread),
             draft: None,
             name: SharedString::from(format!("thread-{thread:02}")),
             composer: cx.new(Composer::new),
             preview: crate::attachment_preview::Preview::new(cx),
-            scroll: ScrollHandle::new(),
+            controls_focus: cx.focus_handle(),
+            selected: Subject::Main,
+            generation: 0,
+            rich: Default::default(),
+            agent_menu_open: false,
+            subject_strip_width: 0.,
+            tab_interaction: Default::default(),
+            history_error: None,
+            request_forms: Default::default(),
+            request_error: None,
+            subject_views: HashMap::new(),
+            scroll,
             selection_scope: gpui::base::TextSelectionScopeId::new(),
             transcript_focus: cx.focus_handle(),
             follow_tail: Rc::new(Flag::new(true)),
@@ -160,6 +201,17 @@ impl PaneView {
             name: SharedString::from("new thread"),
             composer: cx.new(Composer::new),
             preview: crate::attachment_preview::Preview::new(cx),
+            controls_focus: cx.focus_handle(),
+            selected: Subject::Main,
+            generation: 0,
+            rich: Default::default(),
+            agent_menu_open: false,
+            subject_strip_width: 0.,
+            tab_interaction: Default::default(),
+            history_error: None,
+            request_forms: Default::default(),
+            request_error: None,
+            subject_views: HashMap::new(),
             scroll: ScrollHandle::new(),
             selection_scope: gpui::base::TextSelectionScopeId::new(),
             transcript_focus: cx.focus_handle(),
@@ -194,6 +246,85 @@ impl PaneView {
         self.identity = PaneIdentity::Thread(thread);
         self.draft = None;
         self.name = SharedString::from(format!("thread-{thread:02}"));
+    }
+
+    pub fn is_main(&self) -> bool {
+        self.selected == Subject::Main
+    }
+
+    pub fn text_namespace(&self) -> SharedString {
+        let thread = self.thread().map(|id| id.get()).unwrap_or(0);
+        match &self.selected {
+            Subject::Main => format!("{thread}-main-{}", self.generation).into(),
+            Subject::Subagent(key) => {
+                format!("{thread}-{}-{}", key.as_str(), self.generation).into()
+            }
+        }
+    }
+
+    pub fn select_subject<T: 'static>(
+        &mut self,
+        subject: Subject,
+        generation: u64,
+        cx: &mut Context<T>,
+    ) {
+        if self.selected == subject {
+            if self.generation != generation {
+                self.generation = generation;
+            }
+            return;
+        }
+        self.rich.clear_output_selection(&self.text_namespace(), cx);
+        let mut next = self
+            .subject_views
+            .remove(&subject)
+            .unwrap_or_else(|| TranscriptViewport {
+                generation,
+                scroll: ScrollHandle::new(),
+                selection_scope: gpui::base::TextSelectionScopeId::new(),
+                transcript_focus: cx.focus_handle(),
+                follow_tail: Rc::new(Flag::new(true)),
+                disclosure: ToolDisclosure {
+                    expanded: HashSet::new(),
+                    target: None,
+                    focus: cx.focus_handle(),
+                    #[cfg(test)]
+                    bounds: Rc::new(RefCell::new(HashMap::new())),
+                },
+            });
+        if next.generation != generation {
+            next.generation = generation;
+        }
+        std::mem::swap(&mut next.generation, &mut self.generation);
+        std::mem::swap(&mut next.scroll, &mut self.scroll);
+        std::mem::swap(&mut next.selection_scope, &mut self.selection_scope);
+        std::mem::swap(&mut next.transcript_focus, &mut self.transcript_focus);
+        std::mem::swap(&mut next.follow_tail, &mut self.follow_tail);
+        std::mem::swap(&mut next.disclosure, &mut self.disclosure);
+        self.subject_views
+            .insert(std::mem::replace(&mut self.selected, subject), next);
+        self.agent_menu_open = false;
+        self.history_error = None;
+    }
+
+    pub fn redirect_subject(
+        &mut self,
+        from: &ferrite_core::activity::AgentKey,
+        to: &ferrite_core::activity::AgentKey,
+    ) {
+        let thread = self.thread().map(|id| id.get()).unwrap_or(0);
+        self.rich.redirect_namespace(
+            &format!("{thread}-{}-", from.as_str()),
+            &format!("{thread}-{}-", to.as_str()),
+        );
+        let from = Subject::Subagent(from.clone());
+        let to = Subject::Subagent(to.clone());
+        if self.selected == from {
+            self.selected = to.clone();
+        }
+        if let Some(old) = self.subject_views.remove(&from) {
+            self.subject_views.entry(to).or_insert(old);
+        }
     }
 
     pub(crate) fn toggle_tool(&mut self, call: &str) {
@@ -331,9 +462,8 @@ pub struct PaneWiring {
     /// supplied for **every** L1 Pane, before and after the first-prompt
     /// lock: the prototype draws it in all four Panes (#25).
     pub model_picker: Option<AnyElement>,
-    /// The context ring (#22 C12). None when the provider reported no
-    /// usage, or below L1. Clicking opens the current/window token card.
-    pub usage_ring: Option<AnyElement>,
+    /// Context and account usage lines beside the model control.
+    pub usage_meter: Option<AnyElement>,
     /// The pending Decision's keycaps, wired to the exact decide verbs the
     /// keys run (#26) — laid into the L1 card or the L2 body. None while
     /// nothing pends, and at the wall, which draws no keycaps.
@@ -349,6 +479,10 @@ pub struct PaneWiring {
     /// pending Decision is Claude's `AskUserQuestion`; it stands in for
     /// the y/n card, which cannot answer a question.
     pub question_form: Option<AnyElement>,
+    pub agents: Option<AnyElement>,
+    pub activity_attention: Option<AnyElement>,
+    pub activity_decisions: Option<AnyElement>,
+    pub child_footer: Option<AnyElement>,
 }
 
 /// The wall's state matrix (glance.md §4), selected from O(1) reads plus the
@@ -426,9 +560,13 @@ pub fn wall_card(transcript: Option<&Transcript>, decision: Option<&Decision>) -
     let meter = todos
         .map(|todos| SharedString::from(meter_run(todos.done, todos.total)))
         .unwrap_or_default();
+    let caption = transcript
+        .progress()
+        .caption()
+        .unwrap_or_else(|| "Working".into());
     let working = match todos {
-        Some(todos) => SharedString::from(format!("{}/{} · ◐ working", todos.done, todos.total)),
-        None => SharedString::from("◐ working"),
+        Some(todos) => SharedString::from(format!("{}/{} · ◐ {caption}", todos.done, todos.total)),
+        None => SharedString::from(format!("◐ {caption}")),
     };
     let context = match decision {
         Some(decision) => decision_subject(decision),
@@ -485,19 +623,30 @@ pub fn render_pane(
         attachments,
         menu,
         model_picker,
-        usage_ring,
+        usage_meter,
         mut decide,
         mut tool_controls,
         title,
         question_form,
+        agents,
+        activity_attention,
+        activity_decisions,
+        child_footer,
     } = wiring;
-    let transcript = thread.map(|thread| thread.transcript());
-    let decision = thread.and_then(|thread| thread.pending());
+    let subject = thread.and_then(|thread| thread.activity().subject(&view.selected));
+    let transcript = subject.as_ref().map(|subject| subject.transcript());
+    let decision = if view.is_main() {
+        thread.and_then(|thread| thread.pending())
+    } else {
+        None
+    };
     let queued = thread.and_then(|thread| thread.queued());
     let workspace = thread.and_then(|thread| thread.workspace());
     let permission_mode = thread.and_then(|thread| thread.permission_mode());
-    let timings = thread.map(|thread| thread.tool_timings());
-    let status = transcript.map(|t| t.status());
+    let timings = subject.as_ref().map(|subject| subject.timings());
+    let status = subject.as_ref().map(|subject| {
+        crate::cockpit::subagents::transcript_status(subject.status(), subject.fresh())
+    });
     // `esc interrupt` (§D.7): running **and** focused. The head's dot reads
     // the transcript's own status, not the turn-in-flight flag — a revived
     // Thread mid-turn shows the green dot with `busy` false — so the hint
@@ -511,14 +660,24 @@ pub fn render_pane(
     // layout, only ever recoloured, so nothing reflows when a Decision
     // arrives — and focus is a 2px neutral ring 2px OUTSIDE it, painted by
     // `focus_wrapper` below.
-    let edge: gpui::Hsla = if decision.is_some() {
+    let attention_pending =
+        thread.is_some_and(|thread| !thread.activity().pending_decisions().is_empty());
+    let edge: gpui::Hsla = if attention_pending {
         rgb(ATTENTION).into()
     } else if state == WallState::Blocked {
         rgb(BLOCKED).into()
     } else {
         rgba(TRANSPARENT).into()
     };
-    let shell = pane_shell(edge);
+    let mut shell = pane_shell(edge);
+    let mut activity_attention = activity_attention;
+    if level != Level::Transcript {
+        if let Some(attention) = activity_attention.take() {
+            shell = shell
+                .relative()
+                .child(div().absolute().top(px(3.)).right(px(5.)).child(attention));
+        }
+    }
 
     // Far enough away, a Pane is one signal: no header, no transcript,
     // nothing that stops reading at a glance.
@@ -534,7 +693,7 @@ pub fn render_pane(
         // Pane as into a big one — a cell too small to read a transcript
         // is not too small to be told what to do next. No menu, picker
         // or band at this size; the keys still work.
-        let composer = transcript.map(|transcript| {
+        let composer = transcript.filter(|_| view.is_main()).map(|transcript| {
             composer_region(
                 view,
                 Some(transcript),
@@ -548,29 +707,40 @@ pub fn render_pane(
                     menu: None,
                     mode: permission_mode,
                     model_picker: None,
-                    band: None,
+                    usage_meter: None,
+                    setup_controls: None,
+                    draft_error: None,
                     focused,
                 },
             )
         });
         return focus_wrapper(
-            shell.child(l2_cell(
-                view,
-                transcript,
-                decision,
-                workspace,
-                branch.as_ref(),
-                state,
-                timings,
-                decide,
-                title,
-                composer,
-            )),
+            shell
+                .child(l2_cell(
+                    view,
+                    transcript,
+                    decision,
+                    workspace,
+                    branch.as_ref(),
+                    state,
+                    timings,
+                    decide,
+                    title,
+                    composer.or_else(|| child_footer.map(|footer| div().child(footer))),
+                ))
+                .children(activity_decisions),
             focused,
         );
     }
 
-    let mut pane = shell.child(pane_head(view, branch.as_ref(), status, usage_ring, title));
+    let mut pane = shell.child(pane_head(
+        view,
+        branch.as_ref(),
+        status,
+        title,
+        agents,
+        activity_attention,
+    ));
     match transcript {
         Some(transcript) => {
             // The tasks strip sits directly under the header, full width,
@@ -584,6 +754,7 @@ pub fn render_pane(
                 body(
                     view,
                     transcript,
+                    status,
                     focused,
                     level,
                     &selection,
@@ -592,13 +763,34 @@ pub fn render_pane(
                     thread.map(|thread| thread.provider()),
                 ),
             ));
+            if transcript.status() == Status::Streaming {
+                pane = pane.child(
+                    working_line(transcript, timings, false)
+                        .px(px(theme::PANE_PAD_X))
+                        .py(px(theme::KEYS_GAP)),
+                );
+            }
             // The Decision card is a **sibling of the body**, not a child
             // of the Composer (§D.5): its `margin: 0 12px 8px` is measured
             // from the Pane's own content box, so nesting it inside the
             // Composer's 12px padding would inset it twice. The child
             // order §D.1 pins is head · tasks · body · decision · changed
             // · composer.
-            if let Some(form) = question_form {
+            if view.is_main() {
+                if let Some((_, error)) = &view.request_error {
+                    pane = pane.child(
+                        div()
+                            .px(px(theme::PANE_PAD_X))
+                            .py(px(4.))
+                            .text_size(px(theme::FS_SM))
+                            .text_color(rgb(theme::BLOCKED))
+                            .child(format!("Could not send answer: {error}")),
+                    );
+                }
+            }
+            if let Some(decisions) = activity_decisions {
+                pane = pane.child(decisions);
+            } else if let Some(form) = question_form {
                 pane = pane.child(form);
             } else if let Some(decision) = decision {
                 pane = pane.child(decision_card(decision, decide.take()));
@@ -613,23 +805,29 @@ pub fn render_pane(
             if !changed.is_empty() {
                 pane = pane.child(changed_strip(&changed));
             }
-            pane = pane.child(composer_region(
-                view,
-                Some(transcript),
-                ComposerStack {
-                    decision,
-                    queued,
-                    running,
-                    empty: composer_empty,
-                    attachments,
-                    history_available,
-                    menu,
-                    mode: permission_mode,
-                    model_picker,
-                    band: None,
-                    focused,
-                },
-            ));
+            if let Some(footer) = child_footer {
+                pane = pane.child(footer);
+            } else {
+                pane = pane.child(composer_region(
+                    view,
+                    Some(transcript),
+                    ComposerStack {
+                        decision,
+                        queued,
+                        running,
+                        empty: composer_empty,
+                        attachments,
+                        history_available,
+                        menu,
+                        mode: permission_mode,
+                        model_picker,
+                        usage_meter,
+                        setup_controls: None,
+                        draft_error: None,
+                        focused,
+                    },
+                ));
+            }
         }
         None => {
             pane = pane.child(parked_body());
@@ -709,8 +907,12 @@ fn ring_overlay(color: u32, radius: f32) -> Div {
 /// clicks are wired — the Pane only lays it out.
 pub struct DraftState<'a> {
     pub attachments: Option<AnyElement>,
-    /// The pre-prompt band: the [provider][project][workspace] chip row.
+    /// The draft's setup chips — project and workspace — riding the left
+    /// of the controls row, where a live Composer's mode chip rides.
     pub band: AnyElement,
+    /// The draft's model and effort controls, in the trailing slot a live
+    /// Composer's model picker occupies.
+    pub picker: AnyElement,
     /// The open band popover, hung above the Composer like every menu.
     pub menu: Option<AnyElement>,
     pub composer_empty: bool,
@@ -727,6 +929,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
     let DraftState {
         attachments,
         band,
+        picker,
         menu,
         composer_empty,
         focused,
@@ -751,23 +954,9 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
         );
     }
 
-    let mut wrapped = div().flex().flex_col().flex_shrink_0();
-    wrapped = wrapped.child(band);
-    if let Some(error) = error {
-        wrapped = wrapped.child(
-            div()
-                .flex()
-                .flex_shrink_0()
-                .items_center()
-                .pb(px(4.))
-                .text_size(px(theme::FS_MONO))
-                .text_color(rgb(BLOCKED))
-                .child(div().min_w_0().whitespace_normal().child(error.clone())),
-        );
-    }
     focus_wrapper(
         shell
-            .child(pane_head(view, None, None, None, None))
+            .child(pane_head(view, None, None, None, None, None))
             .child(div().flex().flex_1().min_h_0())
             .child(composer_region(
                 view,
@@ -781,8 +970,10 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
                     history_available: false,
                     menu,
                     mode: None,
-                    model_picker: None,
-                    band: Some(wrapped.into_any_element()),
+                    model_picker: Some(picker),
+                    usage_meter: None,
+                    setup_controls: Some(band),
+                    draft_error: error.cloned(),
                     focused,
                 },
             )),
@@ -790,25 +981,15 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
     )
 }
 
-/// The pre-prompt band's own row (#29): chips left, the key path's hint at
-/// the right edge — the Composer meta row's grammar, one step above the
-/// prompt line.
+/// Draft setup controls use the same 20px controls row as a live Composer.
 pub fn draft_band() -> Div {
     div()
         .flex()
         .flex_shrink_0()
+        .min_w_0()
         .items_center()
         .gap(px(6.))
-        .h(px(theme::TASKS_STRIP_H))
-}
-
-/// The band's key-path hint, riding the row's right edge.
-pub fn band_hint() -> Div {
-    div()
-        .flex_shrink_0()
-        .text_size(px(theme::FS_MONO))
-        .text_color(rgb(TEXT_MUTED))
-        .child("⇥ chips · ↵ send")
+        .h(px(theme::COMPOSER_ROW_H))
 }
 
 /// One band chip. The prototype draws no draft band (R-09), so the chip is
@@ -834,14 +1015,33 @@ pub fn band_chip(slot: usize, label: SharedString, accent: bool, focused: bool) 
         .rounded(px(theme::R_CHIP))
         .px(px(theme::CHIP_PAD_X))
         .py(px(theme::CHIP_PAD_Y))
-        .hover_control()
-        .press_control()
+        .hover_raised()
+        .press_raised()
         .child(label)
 }
 
 /// A band chip's text: the choice plus the ⌵ that says it answers clicks.
 pub fn band_chip_label(choice: &str) -> SharedString {
     SharedString::from(format!("{choice} ⌵"))
+}
+
+/// A draft's model or effort control: the live Composer's own picker
+/// recipe, wrapped in the band chip's focus border so tab still says where
+/// ↵ will land. The 1px border is always in layout and only changes colour.
+pub fn draft_picker(id: &'static str, focused: bool, control: Div) -> Stateful<Div> {
+    let edge: gpui::Hsla = if focused {
+        rgb(FOCUS).into()
+    } else {
+        rgba(TRANSPARENT).into()
+    };
+    div()
+        .id(id)
+        .flex()
+        .flex_shrink_0()
+        .border_1()
+        .border_color(edge)
+        .rounded(px(theme::R_CHIP))
+        .child(control)
 }
 
 fn wall_cell(
@@ -1203,23 +1403,8 @@ fn l2_cell(
                 .text_color(rgb(TEXT_MUTED))
                 .child("❯ idle"),
         );
-    } else if let Some(activity) = read.activity {
-        // The running call's clock rides the line — "◐ Bash cargo check
-        // — 8s" — where the cockpit stamped one (#22 amendment).
-        let clocked = read
-            .running_call
-            .as_deref()
-            .and_then(|call| timings?.get(call))
-            .map(|timing| format!("◐ {activity} — {}", duration_label(timing.elapsed())))
-            .unwrap_or_else(|| format!("◐ {activity}"));
-        body = body.child(
-            div()
-                .w_full()
-                .truncate()
-                .text_size(px(theme::FS_MONO))
-                .text_color(rgb(TEXT_MUTED))
-                .child(SharedString::from(clocked)),
-        );
+    } else if transcript.status() == Status::Streaming {
+        body = body.child(working_line(transcript, timings, true));
     }
 
     let mut content = cell.child(header).child(body).children(composer);
@@ -1309,7 +1494,9 @@ fn l2_tail(transcript: &Transcript) -> Div {
             }
             Body::Notice(text) => line(text.clone(), ATTENTION).font_weight(FontWeight::SEMIBOLD),
             Body::Meta(text) => line(text.clone(), TEXT_MUTED),
-            Body::Thinking(_) => continue,
+            Body::Thinking(text) => {
+                line(ferrite_core::progress::headline(text), TEXT_MUTED).line_clamp(1)
+            }
         };
         column = column.child(drawn);
     }
@@ -1354,8 +1541,8 @@ fn l2_decision_body(decision: &Decision, decide: Option<AnyElement>) -> Div {
 // ---------------------------------------------------------------- L1 pane
 
 /// The Pane head (§D.2): 32px, 12px inline padding, an 8px gap, muted ink.
-/// Status dot · Thread id · checkout · the context ring pinned to the
-/// trailing edge. No background, no border, and **no rule beneath it** —
+/// Status dot · Thread id · checkout. No background, no border, and **no
+/// rule beneath it** —
 /// Soft separates by fill contrast alone. There is no model chip here (the
 /// Composer's picker is the only model surface) and no window controls
 /// (park and zoom stay on the keyboard).
@@ -1363,8 +1550,9 @@ fn pane_head(
     view: &PaneView,
     branch: Option<&SharedString>,
     status: Option<Status>,
-    usage_ring: Option<AnyElement>,
     title: Option<AnyElement>,
+    agents: Option<AnyElement>,
+    attention: Option<AnyElement>,
 ) -> Div {
     // The dot's base is the muted ink — the parked look — and each live
     // state takes its own signal colour. The no-dot ruling is scoped to
@@ -1375,6 +1563,7 @@ fn pane_head(
         Some(Status::Closed) => BLOCKED,
         _ => TEXT_MUTED,
     };
+    let has_agents = agents.is_some();
     let mut head = div()
         .flex()
         .flex_shrink_0()
@@ -1390,6 +1579,7 @@ fn pane_head(
             div()
                 .min_w_0()
                 .flex_shrink(1.)
+                .when(has_agents, |title| title.max_w(relative(0.32)))
                 .text_size(px(theme::FS_LG))
                 .line_height(relative(theme::LINE_UI))
                 // gpui seats a run one pixel lower in this 32px head than
@@ -1414,6 +1604,7 @@ fn pane_head(
                 .min_w_0()
                 .items_center()
                 .gap(px(theme::ROW_ICON_GAP))
+                .when(has_agents, |branch| branch.max_w(relative(0.20)))
                 .text_size(px(theme::FS_MONO))
                 .line_height(relative(theme::LINE_UI))
                 .child(icon(icons::BRANCH, theme::ROW_ICON, TEXT_MUTED))
@@ -1422,14 +1613,13 @@ fn pane_head(
                 .child(div().min_w_0().truncate().pb(px(2.)).child(branch.clone())),
         );
     }
-    // The ring is hard right and it is the last thing in the head. A
-    // growing spacer, not `ml_auto` — see `tasks_strip` for why.
-    match usage_ring {
-        Some(ring) => head
-            .child(div().flex_1().min_w_0())
-            .child(div().flex_shrink_0().child(ring)),
-        None => head,
+    if let Some(agents) = agents {
+        head = head.child(agents);
     }
+    if let Some(attention) = attention {
+        head = head.child(attention);
+    }
+    head
 }
 
 /// The head's title, saying it can be renamed: the name in its own ink
@@ -1569,7 +1759,7 @@ pub fn model_picker(provider: Option<Provider>, label: SharedString) -> Div {
         .children(mark)
         .child(div().flex_shrink_0().child(label))
         .child(icon(icons::CHEVRON_DOWN, theme::ICON_CHEVRON, TEXT_MUTED))
-        .hover_control()
+        .hover_raised()
 }
 
 /// The effort chip beside the model picker: the level in force and a
@@ -1588,7 +1778,7 @@ pub fn effort_picker(label: SharedString) -> Div {
         .text_color(rgb(TEXT_2))
         .child(div().flex_shrink_0().child(label))
         .child(icon(icons::CHEVRON_DOWN, theme::ICON_CHEVRON, TEXT_MUTED))
-        .hover_control()
+        .hover_raised()
 }
 
 /// The rendered tail of a transcript at one level — the window `body`
@@ -1663,10 +1853,9 @@ impl gpui::base::ScrollbarHandle for TranscriptScrollbar {
 
 /// The scrollback and its bar. The bar is a *sibling* of the scrolling
 /// body inside this one `relative()` parent — as a child it would scroll
-/// away with the transcript — and it is keyed by Thread, because each open
-/// Pane drags, hovers and fades its own.
+/// away with the transcript. Its identity follows the selected transcript,
+/// so a tab switch cannot carry a thumb drag into a different Subject.
 fn scrollback(view: &PaneView, body: impl IntoElement) -> Div {
-    let thread = view.thread().map(|thread| thread.get()).unwrap_or(0);
     div()
         .relative()
         .flex()
@@ -1675,7 +1864,7 @@ fn scrollback(view: &PaneView, body: impl IntoElement) -> Div {
         .min_h_0()
         .child(body)
         .child(components::scrollbar(
-            ("transcript-scrollbar", thread as usize),
+            SharedString::from(format!("transcript-scrollbar-{}", view.text_namespace())),
             &TranscriptScrollbar {
                 scroll: view.scroll.clone(),
                 follow_tail: view.follow_tail.clone(),
@@ -1686,6 +1875,7 @@ fn scrollback(view: &PaneView, body: impl IntoElement) -> Div {
 fn body(
     view: &PaneView,
     transcript: &Transcript,
+    status: Option<Status>,
     focused: bool,
     level: Level,
     selection: &TextRuns,
@@ -1698,9 +1888,11 @@ fn body(
         view.scroll.scroll_to_bottom();
     }
     // Only Thread Panes have a transcript body; a draft never lands here.
-    let thread = view.thread().map(|thread| thread.get()).unwrap_or(0);
     let mut body = div()
-        .id(("transcript", thread as usize))
+        .id(SharedString::from(format!(
+            "transcript-{}",
+            view.text_namespace()
+        )))
         .flex()
         .flex_col()
         .flex_1()
@@ -1722,7 +1914,7 @@ fn body(
         .hover_text();
     // A `.signal` line wears the Pane's own state, so the line and the
     // Pane's border can never disagree.
-    let signal = signal_color(Some(transcript.status()));
+    let signal = signal_color(status);
     let window = rendered_window(transcript.blocks(), level);
     let mut prev_margin_b = 0.;
     let mut index = 0;
@@ -1739,14 +1931,18 @@ fn body(
             }
             body = body.child(
                 div()
-                    .id(SharedString::from(format!("answer-{thread}-{first:?}")))
+                    .id(SharedString::from(format!(
+                        "answer-{}-{first:?}",
+                        view.text_namespace()
+                    )))
                     .min_w_0()
                     .w_full()
                     .flex_shrink_0()
                     .mb(px(theme::P_MARGIN_B))
                     .child(crate::rich::Markdown::new(
-                        format!("markdown-{thread}-{first:?}"),
+                        format!("markdown-{}-{first:?}", view.text_namespace()),
                         source,
+                        view.rich.clone(),
                     )),
             );
             prev_margin_b = theme::P_MARGIN_B;
@@ -1793,12 +1989,6 @@ fn body(
             &view.preview,
         ));
         index += 1;
-    }
-    // The working line, the way Claude Code's own ends its transcript
-    // while a turn runs: what the agent is doing, the turn's clock, and
-    // the tokens it has produced.
-    if transcript.status() == Status::Streaming {
-        body = body.child(working_line(transcript));
     }
     let wheel_scroll = view.scroll.clone();
     let follow = view.follow_tail.clone();
@@ -1851,76 +2041,90 @@ fn body(
 /// the calls in flight (several of one kind counted together), else the
 /// model's own thinking or answering; the clock is the turn's, the count
 /// the turn's output tokens when the provider has reported any.
-fn working_line(transcript: &Transcript) -> Div {
+fn working_line(
+    transcript: &Transcript,
+    timings: Option<&HashMap<String, ToolTiming>>,
+    compact: bool,
+) -> Div {
     let mut facts: Vec<String> = Vec::new();
     if let Some(elapsed) = transcript.turn_elapsed() {
         facts.push(duration_label(elapsed).to_string());
     }
     let tokens = transcript.turn_output_tokens();
-    if tokens > 0 {
+    if tokens > 0 && !compact {
         facts.push(format!("↓ {} tokens", tokens_label(tokens)));
     }
-    let mut text = format!("◐ {}", working_phrase(transcript.blocks()));
-    if !facts.is_empty() {
-        text.push_str(&format!(" ({})", facts.join(" · ")));
-    }
-    div()
+    let progress = transcript.progress();
+    let caption = progress.caption();
+    let mut row = div()
+        .flex()
+        .flex_col()
         .flex_shrink_0()
         .w_full()
-        .truncate()
-        .mt(px(theme::P_MARGIN_B))
+        .min_w_0()
         .text_size(px(theme::FS_SM))
-        .line_height(relative(theme::LINE_BODY))
-        .text_color(rgb(TEXT_MUTED))
-        .child(SharedString::from(text))
-}
-
-/// The phrase for the working line, from the turn's tail: the running
-/// tool calls since the last prompt, counted by kind, else what the model
-/// is doing with its own words.
-pub fn working_phrase(blocks: &[Block]) -> String {
-    let turn = blocks
-        .iter()
-        .rposition(|block| matches!(block.body, Body::Prompt(_)))
-        .map(|at| &blocks[at..])
-        .unwrap_or(blocks);
-    let running: Vec<&ToolBlock> = turn
-        .iter()
-        .filter_map(|block| match &block.body {
-            Body::Tool(tool) if matches!(tool.state, ToolState::Running) => Some(tool),
-            _ => None,
-        })
-        .collect();
-    if let Some(last) = running.last() {
-        let same = running.iter().filter(|tool| tool.name == last.name).count();
-        return if same > 1 {
-            format!("Running {same} {}…", tool_noun(&last.name))
-        } else if last.summary.is_empty() {
-            format!("Running {}…", last.name)
-        } else {
-            format!("Running {}: {}…", last.name, last.summary)
-        };
+        .line_height(relative(theme::LINE_BODY));
+    if let Some(caption) = caption {
+        let selector = format!("progress-caption-{caption}");
+        row = row.debug_selector(move || selector.clone());
+        row = row.child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(theme::KEYS_GAP))
+                .child(
+                    div()
+                        .min_w_0()
+                        .flex_1()
+                        .truncate()
+                        .text_color(rgb(TEXT_2))
+                        .italic()
+                        .child(SharedString::from(format!("◐ {caption}"))),
+                )
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .text_color(rgb(TEXT_MUTED))
+                        .child(SharedString::from(facts.join(" · "))),
+                ),
+        );
+        let tool = transcript
+            .blocks()
+            .iter()
+            .rev()
+            .find_map(|block| match &block.body {
+                Body::Tool(tool) if tool.state == ToolState::Running => Some(tool),
+                _ => None,
+            });
+        if let Some(tool) = tool {
+            let native = progress.tool(&tool.call);
+            let detail = native
+                .filter(|p| !p.message.is_empty())
+                .map(|p| p.message.clone())
+                .unwrap_or_else(|| {
+                    if tool.summary.is_empty() {
+                        tool.name.clone()
+                    } else {
+                        format!("{} · {}", tool.name, tool.summary)
+                    }
+                });
+            let elapsed = native
+                .and_then(|p| p.elapsed_ms)
+                .map(Duration::from_millis)
+                .or_else(|| {
+                    timings
+                        .and_then(|map| map.get(&tool.call))
+                        .map(ToolTiming::elapsed)
+                });
+            let detail = elapsed
+                .map(|elapsed| format!("{detail} · {}", duration_label(elapsed)))
+                .unwrap_or(detail);
+            row = row.child(div().truncate().text_color(rgb(TEXT_MUTED)).child(
+                SharedString::from(ferrite_core::progress::one_line(&detail, 240)),
+            ));
+        }
     }
-    match turn.last().map(|block| &block.body) {
-        Some(Body::Thinking(_)) => "Thinking…".to_string(),
-        Some(
-            Body::Paragraph { .. } | Body::Heading { .. } | Body::Bullet { .. } | Body::Code { .. },
-        ) => "Answering…".to_string(),
-        _ => "Inferring…".to_string(),
-    }
-}
-
-/// What several calls of one tool are called together.
-fn tool_noun(name: &str) -> &'static str {
-    match name {
-        "Bash" | "commandExecution" => "shell commands",
-        "Read" => "file reads",
-        "Edit" | "Write" | "MultiEdit" | "fileChange" => "edits",
-        "Grep" | "Glob" => "searches",
-        "WebFetch" | "WebSearch" => "web requests",
-        "Agent" | "Task" => "agents",
-        _ => "tool calls",
-    }
+    row
 }
 
 /// `8.0k`, `12k`, `340` — the token count the way Claude Code prints it.
@@ -1983,9 +2187,10 @@ struct ComposerStack<'a> {
     mode: Option<&'a str>,
     /// The Composer's model picker (#25) — drawn in every Pane.
     model_picker: Option<AnyElement>,
-    /// The draft Pane's pre-prompt band (#29) — Some on drafts only, and
-    /// gone with the first send.
-    band: Option<AnyElement>,
+    /// Live usage sits immediately beside the model picker.
+    usage_meter: Option<AnyElement>,
+    setup_controls: Option<AnyElement>,
+    draft_error: Option<SharedString>,
     /// Whether this Pane holds the keyboard. The Composer paints its own
     /// caret when it does; the `›` mark stands in when it does not, and
     /// the two are mutually exclusive (§D.7).
@@ -2001,10 +2206,10 @@ struct ComposerStack<'a> {
 /// No top border: Soft draws no separators, and the ground change is the
 /// whole separation.
 ///
-/// Above the two rows, still inside the region, stack the draft band (#29)
-/// and the queued row — neither of which the prototype draws (R-09). The
-/// Decision card is **not** here: it is a sibling of the body, drawn by
-/// `render_pane`. While a Decision pends this region still carries the
+/// The draft's setup chips occupy the controls row, so a new Thread and an
+/// existing Thread share the same input silhouette. A queued prompt may add
+/// a row above. The Decision card is **not** here: it is a sibling of the
+/// body, drawn by `render_pane`. While a Decision pends this region carries the
 /// `Decision` key context, so y/n/a answer with the keyboard in the
 /// Composer (#23).
 fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: ComposerStack) -> Div {
@@ -2018,10 +2223,12 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         menu,
         mode,
         model_picker,
-        band,
+        usage_meter,
+        setup_controls,
+        draft_error,
         focused,
     } = stack;
-    let is_draft = band.is_some();
+    let is_draft = setup_controls.is_some();
     let mut region = div()
         .relative()
         .flex()
@@ -2042,8 +2249,16 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         .line_height(relative(theme::LINE_UI))
         .text_color(rgb(TEXT_2))
         .when(decision.is_some(), |region| region.key_context("Decision"));
-    if let Some(band) = band {
-        region = region.child(band);
+    if let Some(error) = draft_error {
+        region = region.child(
+            div()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .text_size(px(theme::FS_MONO))
+                .text_color(rgb(BLOCKED))
+                .child(div().min_w_0().whitespace_normal().child(error)),
+        );
     }
     if let Some(held) = queued {
         region = region.child(queued_line(held));
@@ -2128,15 +2343,16 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         ));
     }
 
-    // `.composer-controls`: the mode chip, then the esc hint — which does
-    // **not** push right here — then the model picker hard right. No cost,
-    // no token count, no context text.
+    // `.composer-controls`: setup or mode at left; usage and model at right.
     let mut controls = div()
         .flex()
         .flex_shrink_0()
         .items_center()
         .gap(px(theme::EVENT_GAP))
         .h(px(theme::COMPOSER_ROW_H));
+    if let Some(setup) = setup_controls {
+        controls = controls.child(setup);
+    }
     // The chip is the *running* Session's edit mode, so it rides only a
     // Pane that is running and unblocked: a Decision owns the keyboard until
     // it is answered, and a closed Session has no mode to be in. The
@@ -2164,10 +2380,14 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
     // `margin-inline-start: auto` on the picker. It renders in every Pane,
     // before and after the first-prompt lock — there is no plain-label
     // fallback and no second model surface anywhere.
+    if model_picker.is_some() || usage_meter.is_some() {
+        controls = controls.child(div().flex_1().min_w_0());
+    }
+    if let Some(meter) = usage_meter {
+        controls = controls.child(div().flex_shrink_0().child(meter));
+    }
     if let Some(picker) = model_picker {
-        controls = controls
-            .child(div().flex_1().min_w_0())
-            .child(div().flex_shrink_0().child(picker));
+        controls = controls.child(div().flex_shrink_0().child(picker));
     }
     div()
         .flex()
@@ -2843,8 +3063,15 @@ fn duration_label(elapsed: Duration) -> SharedString {
     }
 }
 
-/// The context ring's detail card. Counts are reported values, never estimates.
-pub fn context_usage(usage: ferrite_core::transcript::Usage) -> Div {
+/// The usage meter's detail card: the meter's own three windows, in the
+/// meter's own order, each a labelled bar over the reading behind it.
+/// Counts are reported values, never estimates — a window the provider has
+/// not reported keeps its empty track and says so, rather than reading as
+/// zero used.
+pub fn context_usage(
+    usage: ferrite_core::transcript::Usage,
+    limits: ferrite_core::transcript::RateLimits,
+) -> Div {
     fn count_label(count: u64) -> String {
         let digits = count.to_string();
         let mut label = String::new();
@@ -2854,10 +3081,61 @@ pub fn context_usage(usage: ferrite_core::transcript::Usage) -> Div {
             }
             label.push(digit);
         }
-        format!("{label} tokens")
+        label
     }
     let maximum = usage.context_window.filter(|limit| *limit > 0);
-    let row = |key: &'static str, label: &'static str, count: Option<u64>| {
+    // One 4px bar, full width: the same track and the same status ink as
+    // the meter that opened the card, at a size a card can afford.
+    let bar = |fraction: Option<f32>| {
+        let used = fraction.unwrap_or(0.).clamp(0., 1.);
+        div()
+            .w_full()
+            .h(px(theme::USAGE_CARD_BAR_H))
+            .rounded(px(theme::USAGE_CARD_BAR_H / 2.))
+            .bg(rgba(METER_OFF))
+            .child(
+                div()
+                    .h_full()
+                    .w(relative(used))
+                    .rounded(px(theme::USAGE_CARD_BAR_H / 2.))
+                    .bg(rgb(usage_ink(used))),
+            )
+    };
+    // A window's heading: its name at the left, what it reads at the
+    // right — the one line that answers the question at a glance.
+    let heading = |label: &'static str, value: AnyElement| {
+        div()
+            .flex()
+            .items_baseline()
+            .justify_between()
+            .gap(px(12.))
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .text_color(rgb(TEXT_MUTED))
+                    .child(label),
+            )
+            .child(value)
+    };
+    let percent_value = |key: &'static str, fraction: Option<f32>| {
+        let percent = fraction.map(|fraction| (fraction.clamp(0., 1.) * 100.).round() as u32);
+        div()
+            .id(key)
+            .debug_selector(move || {
+                format!(
+                    "context-usage-{key}-{}",
+                    percent.map_or("unknown".into(), |n| n.to_string())
+                )
+            })
+            .flex_shrink_0()
+            .when(percent.is_none(), |value| value.text_color(rgb(TEXT_MUTED)))
+            .child(SharedString::from(
+                percent
+                    .map(|percent| format!("{percent}%"))
+                    .unwrap_or_else(|| "Not reported".into()),
+            ))
+    };
+    let count_value = |key: &'static str, count: Option<u64>| {
         div()
             .id(key)
             .debug_selector(move || {
@@ -2866,32 +3144,117 @@ pub fn context_usage(usage: ferrite_core::transcript::Usage) -> Div {
                     count.map_or("unknown".into(), |n| n.to_string())
                 )
             })
-            .flex()
-            .justify_between()
-            .gap(px(12.))
-            .child(div().text_color(rgb(TEXT_MUTED)).child(label))
+            .flex_shrink_0()
+            .child(SharedString::from(
+                count
+                    .map(count_label)
+                    .unwrap_or_else(|| "not reported".into()),
+            ))
+    };
+    let window =
+        |label: &'static str, key: &'static str, fraction: Option<f32>, detail: Option<Div>| {
+            let mut block = div()
+                .flex()
+                .flex_col()
+                .gap(px(theme::USAGE_CARD_ROW_GAP))
+                .child(heading(
+                    label,
+                    percent_value(key, fraction).into_any_element(),
+                ))
+                .child(bar(fraction));
+            if let Some(detail) = detail {
+                block = block.child(detail);
+            }
+            block
+        };
+    let context_fraction = maximum.map(|maximum| usage.total_tokens as f32 / maximum as f32);
+    // The counts behind the context bar, in the card's quietest ink: the
+    // bar says how full, this says of what.
+    let counts = div()
+        .flex()
+        .gap(px(4.))
+        .text_color(rgb(TEXT_MUTED))
+        .child(count_value("current", Some(usage.total_tokens)))
+        .child("/")
+        .child(count_value("maximum", maximum))
+        .child("tokens");
+    div()
+        .flex()
+        .flex_col()
+        .w(px(theme::USAGE_CARD_W))
+        .gap(px(theme::USAGE_CARD_GAP))
+        .p(px(theme::USAGE_CARD_PAD))
+        .text_size(px(theme::FS_MONO))
+        .text_color(rgb(TEXT))
+        .child(window("Context", "context", context_fraction, Some(counts)))
+        .child(window(
+            "5-hour limit",
+            "five-hour",
+            limits.five_hour.map(|limit| limit.used_fraction),
+            None,
+        ))
+        .child(window(
+            "Weekly limit",
+            "weekly",
+            limits.weekly.map(|limit| limit.used_fraction),
+            None,
+        ))
+}
+
+/// A usage bar's ink: the Pane's own status inks, so a budget reads like
+/// every other state in the app — RUNNING while there is room, ATTENTION
+/// as it tightens, BLOCKED once it is nearly spent. The thresholds are the
+/// same for all three windows; a fraction is a fraction.
+pub fn usage_ink(fraction: f32) -> u32 {
+    match fraction {
+        fraction if fraction >= theme::USAGE_SPENT => BLOCKED,
+        fraction if fraction >= theme::USAGE_TIGHT => ATTENTION,
+        _ => RUNNING,
+    }
+}
+
+/// Three quiet horizontal lines for context, five-hour and weekly usage,
+/// on the same 20px chip body the model picker beside them wears — the
+/// meter is a button, and its hover says so. The fixed order makes the tiny
+/// meter scannable; unknown provider values retain their tracks and are
+/// explained as such in the click-through card.
+pub fn usage_lines(context: f32, limits: ferrite_core::transcript::RateLimits) -> Div {
+    let line = |key: &'static str, fraction: Option<f32>| {
+        let used = fraction.unwrap_or(0.).clamp(0., 1.);
+        let percent = (used * 100.).round() as u32;
+        div()
+            .id(key)
+            .debug_selector(move || format!("usage-line-{key}-{percent}"))
+            .w(px(theme::USAGE_LINE_W))
+            .h(px(theme::USAGE_LINE_H))
+            .rounded(px(theme::USAGE_LINE_H / 2.))
+            .bg(rgba(METER_OFF))
             .child(
-                div().child(SharedString::from(
-                    count
-                        .map(count_label)
-                        .unwrap_or_else(|| "Not reported".into()),
-                )),
+                div()
+                    .h_full()
+                    .w(relative(used))
+                    .rounded(px(theme::USAGE_LINE_H / 2.))
+                    .bg(rgb(usage_ink(used))),
             )
     };
     div()
         .flex()
         .flex_col()
-        .gap(px(8.))
-        .p(px(8.))
-        .text_size(px(theme::FS_MONO))
-        .text_color(rgb(TEXT_STRONG))
-        .child(
-            div()
-                .font_weight(FontWeight::SEMIBOLD)
-                .child("Context window"),
-        )
-        .child(row("current", "Current", Some(usage.total_tokens)))
-        .child(row("maximum", "Maximum", maximum))
+        .flex_shrink_0()
+        .justify_center()
+        .gap(px(theme::USAGE_LINE_GAP))
+        .h(px(theme::CHIP_H))
+        .px(px(theme::CHIP_PAD_X))
+        .rounded(px(theme::R_CHIP))
+        .child(line("context", Some(context)))
+        .child(line(
+            "five-hour",
+            limits.five_hour.map(|limit| limit.used_fraction),
+        ))
+        .child(line(
+            "weekly",
+            limits.weekly.map(|limit| limit.used_fraction),
+        ))
 }
 
 /// The context ring (§G.10): a 14px box holding a 5.4px-radius, 2px-stroke
@@ -3282,11 +3645,11 @@ fn render_block(
         // fold learned to drop it) draws nothing — not even its margin.
         Body::Thinking(thought) if thought.trim().is_empty() => div().into_any_element(),
         Body::Thinking(thought) => paragraph(row, TEXT_MUTED)
-            .child(selection.line(
-                block.id,
-                thought.trim_end_matches('\n').to_string(),
-                Vec::new(),
-            ))
+            .child(
+                selection
+                    .markdown(block.id, thought.trim_end().to_string())
+                    .muted(),
+            )
             .into_any_element(),
         // A Notice is the prototype's `.signal` line (§E.8): 12px/600,
         // 10px below, coloured by the Pane's own state — muted at rest,
@@ -3578,7 +3941,13 @@ fn render_tool(
                     .text_color(rgb(TEXT_MUTED))
                     .child("Command"),
             );
-            details = details.child(output_block(block, &tool.summary, TEXT_2, selection));
+            details = details.child(output_block(
+                block,
+                "command",
+                &tool.summary,
+                TEXT_2,
+                selection,
+            ));
         }
         if let Some(output) = &tool.output {
             // One row per hard line, each a stretched block under the
@@ -3587,7 +3956,13 @@ fn render_tool(
             // character per line.
             // Ordinary stdout stays neutral even when a command failed.
             // The verb, verdict and compact error line carry failure ink.
-            details = details.child(output_block(block, &output.text, TEXT_MUTED, selection));
+            details = details.child(output_block(
+                block,
+                "result",
+                &output.text,
+                TEXT_MUTED,
+                selection,
+            ));
             if output.omitted_bytes > 0 {
                 details = details.child(result_line(TEXT_MUTED).child(div().min_w_0().child(
                     format!("… {} bytes omitted from inline view", output.omitted_bytes),
@@ -3608,6 +3983,9 @@ fn render_tool(
                     )),
                 ));
         }
+    }
+    if tool.state == ToolState::Unavailable {
+        card = card.child(result_line(TEXT_MUTED).child("Result unavailable"));
     }
     if !expanded {
         if let ToolState::Failed(message) = &tool.state {
@@ -3643,7 +4021,16 @@ fn render_shell_activity(
 ) -> AnyElement {
     let call = activity.leader().call.clone();
     let total = activity.blocks.len();
-    let label = if activity.running > 0 {
+    let unavailable = activity
+        .blocks
+        .iter()
+        .filter(
+            |block| matches!(&block.body, Body::Tool(tool) if tool.state == ToolState::Unavailable),
+        )
+        .count();
+    let label = if unavailable > 0 {
+        format!("{total} shell commands · {unavailable} results unavailable")
+    } else if activity.running > 0 {
         format!(
             "Running {total} shell commands · {} finished",
             total - activity.running
@@ -3794,7 +4181,7 @@ fn result_ink(state: &ToolState) -> u32 {
 /// hard line stretched to the column under it, each wrapping at the
 /// column's width. Blank lines keep their height so the shape of the
 /// output survives.
-fn output_block(block: BlockId, text: &str, ink: u32, selection: &TextRuns) -> Div {
+fn output_block(block: BlockId, part: &str, text: &str, ink: u32, selection: &TextRuns) -> Div {
     let mut rows = div()
         .flex()
         .flex_col()
@@ -3805,6 +4192,30 @@ fn output_block(block: BlockId, text: &str, ink: u32, selection: &TextRuns) -> D
         .text_size(px(theme::FS_MD))
         .line_height(relative(theme::LINE_BODY))
         .text_color(rgb(ink));
+    // Bound native layout work as output grows. A single read-only control
+    // keeps the original text selectable and scrolls within twelve rows.
+    if text.len() > 8 * 1024 {
+        return rows.child(
+            div()
+                .flex()
+                .w_full()
+                .min_w_0()
+                .gap(px(theme::EVENT_GAP))
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .w(px(theme::FS_MD * theme::MONO_ADVANCE))
+                        .text_color(rgb(SEP))
+                        .child("⎿"),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .child(selection.output(block, part, text)),
+                ),
+        );
+    }
     for (index, line) in text.split('\n').enumerate() {
         let run = if line.is_empty() {
             selection.line(block, " ", Vec::new())
@@ -4212,47 +4623,13 @@ pub(crate) fn code(
 
 #[cfg(test)]
 mod tests {
-
-    /// The working line names what runs: several calls of one tool count
-    /// together, one names itself, and with none running the model's own
-    /// tail says whether it is thinking or answering.
+    use super::*;
     #[test]
-    fn the_working_phrase_counts_the_calls_in_flight() {
-        let (lexer, _) = Lexer::new();
-        let mut transcript = Transcript::new(Arc::new(lexer));
-        transcript.apply(Input::Prompt("go".into()));
-        assert_eq!(working_phrase(transcript.blocks()), "Inferring…");
-        transcript.apply(Input::Event(SessionEvent::ThinkingDelta {
-            text: "hmm".into(),
-        }));
-        assert_eq!(working_phrase(transcript.blocks()), "Thinking…");
-        let start = |id: &str, name: &str| {
-            Input::Event(SessionEvent::ToolStarted {
-                id: id.into(),
-                name: name.into(),
-                input: serde_json::json!({ "command": "ls" }),
-            })
-        };
-        transcript.apply(start("toolu_1", "Read"));
-        assert!(working_phrase(transcript.blocks()).starts_with("Running Read"));
-        transcript.apply(Input::Event(SessionEvent::ToolCompleted {
-            id: "toolu_1".into(),
-            output: "x".into(),
-            is_error: false,
-            result: ToolResult::Opaque,
-        }));
-        transcript.apply(start("toolu_2", "Bash"));
-        transcript.apply(start("toolu_3", "Bash"));
-        assert_eq!(
-            working_phrase(transcript.blocks()),
-            "Running 2 shell commands…"
-        );
+    fn progress_token_counts_stay_compact() {
         assert_eq!(tokens_label(340), "340");
         assert_eq!(tokens_label(8_040), "8.0k");
         assert_eq!(tokens_label(12_400), "12k");
     }
-    use super::*;
-
     #[test]
     fn footer_advertises_history_only_when_the_context_is_armed() {
         assert_eq!(
@@ -4801,7 +5178,7 @@ mod tests {
         assert_eq!(transcript.todos(), Some(Todos { done: 3, total: 4 }));
         let card = wall_card(Some(&transcript), None);
         assert_eq!(card.meter.as_ref(), "▰▰▰▱");
-        assert_eq!(card.working.as_ref(), "3/4 · ◐ working");
+        assert_eq!(card.working.as_ref(), "3/4 · ◐ Working");
 
         // A red suite flips the folded flag and folds the failing line —
         // with the run's own count when its output reported one.
