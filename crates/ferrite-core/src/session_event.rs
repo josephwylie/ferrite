@@ -56,11 +56,11 @@ pub enum SessionEvent {
         /// part, so a Pane can break paragraphs where the provider did.
         summary_index: u64,
     },
-    /// Cumulative token accounting for the Session (Codex). Codex reports
-    /// spend in tokens against a context window, never in dollars —
-    /// `TurnEnded::cost_usd` stays `None` for it, and this event is where its
-    /// cost and compaction risk actually live.
+    /// Provider-reported context occupancy and output accounting. Codex's
+    /// output counters accumulate across the Session; Claude reports them
+    /// per message/turn. Neither is the current context size.
     TokenUsage {
+        /// The latest active context size, including input and output.
         total_tokens: u64,
         input_tokens: u64,
         cached_input_tokens: u64,

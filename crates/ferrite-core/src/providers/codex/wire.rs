@@ -145,14 +145,14 @@ fn rpc_id_string(id: &Value) -> Option<String> {
     }
 }
 
-/// Cumulative accounting for the whole thread (the wire's `total`, not
-/// `last`): what a Pane compares against the context window.
+/// Context occupancy is the latest request (`last`); output accounting
+/// remains cumulative so the Transcript can derive turn output separately.
 fn parse_token_usage(params: &Value) -> Option<SessionEvent> {
     let usage = params.get("tokenUsage")?;
     let total = usage.get("total")?;
     let count = |key: &str| total.get(key).and_then(Value::as_u64).unwrap_or(0);
     Some(SessionEvent::TokenUsage {
-        total_tokens: count("totalTokens"),
+        total_tokens: usage.get("last")?.get("totalTokens")?.as_u64()?,
         input_tokens: count("inputTokens"),
         cached_input_tokens: count("cachedInputTokens"),
         output_tokens: count("outputTokens"),
@@ -616,8 +616,28 @@ mod tests {
         );
     }
 
-    /// Spend is tokens against a window, not dollars: the captured cumulative
-    /// numbers, with the context window the model stated.
+    /// The latest context size and cumulative output counters from the wire.
+    #[test]
+    fn context_usage_tracks_the_latest_window_while_output_totals_keep_growing() {
+        let mut params = serde_json::json!({"tokenUsage": {
+            "total": {"totalTokens": 900_000, "inputTokens": 850_000, "outputTokens": 50_000},
+            "last": {"totalTokens": 124_000}, "modelContextWindow": 200_000
+        }});
+        for current in [124_000, 31_000, 0] {
+            params["tokenUsage"]["last"]["totalTokens"] = current.into();
+            let event = parse_line(
+                &serde_json::json!({
+                    "method": "thread/tokenUsage/updated", "params": params
+                })
+                .to_string(),
+            )
+            .unwrap();
+            assert!(matches!(event, SessionEvent::TokenUsage {
+                total_tokens, output_tokens: 50_000, context_window: Some(200_000), ..
+            } if total_tokens == current));
+        }
+    }
+
     #[test]
     fn fixture_reports_token_usage_against_the_context_window() {
         let usage: Vec<_> = fixture_events()

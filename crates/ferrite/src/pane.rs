@@ -316,8 +316,7 @@ pub struct PaneWiring {
     /// lock: the prototype draws it in all four Panes (#25).
     pub model_picker: Option<AnyElement>,
     /// The context ring (#22 C12). None when the provider reported no
-    /// window, or below L1. No hover card, no token count, no `ctx`: the
-    /// ring is the whole affordance.
+    /// usage, or below L1. Clicking opens the current/window token card.
     pub usage_ring: Option<AnyElement>,
     /// The pending Decision's keycaps, wired to the exact decide verbs the
     /// keys run (#26) — laid into the L1 card or the L2 body. None while
@@ -2640,12 +2639,62 @@ fn duration_label(elapsed: Duration) -> SharedString {
     }
 }
 
+/// The context ring's detail card. Counts are reported values, never estimates.
+pub fn context_usage(usage: ferrite_core::transcript::Usage) -> Div {
+    fn count_label(count: u64) -> String {
+        let digits = count.to_string();
+        let mut label = String::new();
+        for (index, digit) in digits.chars().enumerate() {
+            if index > 0 && (digits.len() - index) % 3 == 0 {
+                label.push(',');
+            }
+            label.push(digit);
+        }
+        format!("{label} tokens")
+    }
+    let maximum = usage.context_window.filter(|limit| *limit > 0);
+    let row = |key: &'static str, label: &'static str, count: Option<u64>| {
+        div()
+            .id(key)
+            .debug_selector(move || {
+                format!(
+                    "context-usage-{key}-{}",
+                    count.map_or("unknown".into(), |n| n.to_string())
+                )
+            })
+            .flex()
+            .justify_between()
+            .gap(px(12.))
+            .child(div().text_color(rgb(TEXT_MUTED)).child(label))
+            .child(
+                div().child(SharedString::from(
+                    count
+                        .map(count_label)
+                        .unwrap_or_else(|| "Not reported".into()),
+                )),
+            )
+    };
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(8.))
+        .p(px(8.))
+        .text_size(px(theme::FS_MONO))
+        .text_color(rgb(TEXT_STRONG))
+        .child(
+            div()
+                .font_weight(FontWeight::SEMIBOLD)
+                .child("Context window"),
+        )
+        .child(row("current", "Current", Some(usage.total_tokens)))
+        .child(row("maximum", "Maximum", maximum))
+}
+
 /// The context ring (§G.10): a 14px box holding a 5.4px-radius, 2px-stroke
 /// circle — a `--meter-off` track under a `--text-2` arc that sweeps
 /// clockwise from 12 o'clock with the used fraction of the window.
 ///
-/// **No text, no percentage, no `ctx`, ever.** The ring is the whole
-/// affordance: there is no hover card and no token count behind it.
+/// The header stays compact; its caller wires the token card on click.
 ///
 /// `PathBuilder::arc_to` draws the real arc — gpui 0.2.2 has an arc
 /// primitive, whatever the old comment here claimed.

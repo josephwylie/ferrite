@@ -597,14 +597,17 @@ fn parse_codex(bytes: &[u8]) -> Result<ParsedSession, ImportError> {
     })
 }
 
-/// Cumulative accounting, exactly as the live wire's TokenUsage carries it:
-/// the `total` block against the model's context window.
+/// Match the live wire: the latest context size, with cumulative output
+/// counters retained separately for the Transcript's turn accounting.
 fn parse_token_count(payload: &Value) -> Option<SessionEvent> {
     let info = payload.get("info")?;
     let total = info.get("total_token_usage")?;
     let count = |key: &str| total.get(key).and_then(Value::as_u64).unwrap_or(0);
     Some(SessionEvent::TokenUsage {
-        total_tokens: count("total_tokens"),
+        total_tokens: info
+            .get("last_token_usage")?
+            .get("total_tokens")?
+            .as_u64()?,
         input_tokens: count("input_tokens"),
         cached_input_tokens: count("cached_input_tokens"),
         output_tokens: count("output_tokens"),

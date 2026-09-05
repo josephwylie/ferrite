@@ -902,14 +902,12 @@ pub fn seed_panes(core: &mut Cockpit, panes: usize, first: Provider, demo: bool)
 /// it is owed — newest, because that is what the operator was last looking
 /// at — and opens a new one only when the store has none.
 pub fn threads_for(cockpit: &mut Cockpit, wanted: usize, provider: Provider) -> Vec<ThreadId> {
-    // A Group's members must share one Project (§3.5f), so the launch
-    // directory is registered up front and the seed is built inside it.
+    // Keep a fixture run scoped to its launch directory, even though real
+    // Groups may combine Threads from different Projects.
     let project = cockpit.register_project(&here()).ok();
     let mut parked = cockpit.parked().unwrap_or_default();
     parked.reverse();
-    // Only this Project's parked Threads come back: one left over from
-    // another checkout could not join the seeded Group, and a mixed seed
-    // would leave the nav with no Group at all.
+    // Only this Project's parked Threads come back into the fixture.
     let mut pool: Vec<ThreadId> = parked
         .into_iter()
         .filter(|thread| project.is_none() || cockpit.project_id(*thread) == project)

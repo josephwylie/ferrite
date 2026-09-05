@@ -36,8 +36,9 @@ _Avoid_: dashboard, workspace (see Workspace binding).
 The default Cockpit view: exactly the focused Thread's Pane.
 
 **Group**
-A durable, operator-ordered set of two or more Threads from one registered
-project. Opening its header shows exactly its members in the Cockpit.
+A durable, operator-ordered set of two or more Threads, which may span
+Projects. Each Thread retains its own Workspace binding. Opening the Group's
+header shows exactly its members in the Cockpit.
 
 **Roster**
 The Cockpit's state, headless: the open Panes in order, the one holding the

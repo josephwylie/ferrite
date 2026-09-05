@@ -715,15 +715,7 @@ impl Cockpit {
         group: GroupId,
         effort: Option<String>,
     ) -> io::Result<ThreadId> {
-        let root = match &workspace {
-            WorkspaceChoice::Main { checkout } => checkout,
-            WorkspaceChoice::NewWorktree { repo }
-            | WorkspaceChoice::ExistingWorktree { repo, .. } => repo,
-        };
-        let project = self.registry.register(root)?;
-        self.groups
-            .validate_join_project(group, Some(project))
-            .map_err(io::Error::other)?;
+        self.groups.validate_join(group).map_err(io::Error::other)?;
         self.begin_bootstrap(choice, workspace, prompt, effort, Some(group))
     }
 

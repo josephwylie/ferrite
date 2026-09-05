@@ -64,7 +64,7 @@ pub enum View {
     /// The default: exactly the focused Thread's Pane.
     #[default]
     Solo,
-    /// One durable Group — two or more Threads from one registered Project.
+    /// One durable Group — two or more Threads, possibly spanning Projects.
     Group(GroupId),
 }
 

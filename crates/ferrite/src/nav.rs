@@ -129,9 +129,9 @@ pub struct FilterOption {
 pub struct GroupBlock {
     pub id: GroupId,
     pub title: SharedString,
-    /// The Group's Project, named on its second line. `None` when no member
-    /// resolves one — the line is then drawn empty, never faked.
-    pub project: Option<SharedString>,
+    /// One Project's name, or the count of Projects across the whole Group.
+    /// None when no member resolves one.
+    pub projects: Option<SharedString>,
     /// This Group holds the focused Pane's Thread: it carries the selected
     /// fill **and** the white title. The Group carries the fill; a Thread
     /// row never does.
@@ -529,7 +529,7 @@ pub fn member_tail(id: GroupId) -> Stateful<Div> {
         .h(px(MEMBER_GAP))
 }
 
-/// The 43px Group parent row: the title, then the Project it belongs to.
+/// The 43px Group parent row: the title, then its Projects summary.
 /// **The Group is what carries the selected fill** — a Thread row never
 /// does — and the current Group also takes the white title. No provider
 /// mark, no checkout line, no disclosure glyph, no member count.
@@ -585,7 +585,7 @@ pub fn group_row_with_title(row: &GroupBlock, title: impl IntoElement) -> Statef
                     .child(title),
             ),
     )
-    .child(meta_line(icons::FOLDER, row.project.clone(), TEXT_2))
+    .child(meta_line(icons::FOLDER, row.projects.clone(), TEXT_2))
 }
 
 /// The members container, and the one line the whole Soft system draws: a
@@ -893,7 +893,7 @@ mod tests {
         GroupBlock {
             id: GroupId::new(1),
             title: "Project-scoped navigation prototype".into(),
-            project: Some("ferrite".into()),
+            projects: Some("ferrite".into()),
             current,
             members: vec![thread(Some(Provider::Codex))],
         }

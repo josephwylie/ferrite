@@ -150,6 +150,8 @@ pub struct CockpitView {
     /// The right-click menu, if one is up: what it is about, where it was
     /// summoned, and which destructive row is armed for its second press.
     context_menu: Option<ContextMenu>,
+    /// The context ring's token card, tied to its Thread and click position.
+    context_usage: Option<(ThreadId, gpui::Point<gpui::Pixels>)>,
     /// A seam being dragged: the Group, the seam, and the tree as it
     /// stands mid-drag — persisted on release, never per move.
     seam_drag: Option<SeamDrag>,
@@ -561,6 +563,7 @@ impl CockpitView {
             launch_project,
             rename: None,
             context_menu: None,
+            context_usage: None,
             nav_collapsed: prefs.settings.nav_collapsed,
             facts: Facts::with_auto_title(prefs.settings.auto_title),
             seam_drag: None,
@@ -1191,17 +1194,11 @@ impl CockpitView {
             .any(|thread| self.cockpit.project_id(thread) == Some(project))
     }
 
-    /// The directory a target stands for: a Thread's effective cwd (its
-    /// worktree or checkout), a Group's first member's, a Project's root.
+    /// A Thread's effective cwd or a Project's root. A Group has no cwd.
     fn target_path(&self, target: MenuTarget) -> Option<std::path::PathBuf> {
         match target {
             MenuTarget::Thread(thread) | MenuTarget::Pane(thread) => self.thread_path(thread),
-            MenuTarget::Group(group) => self
-                .cockpit
-                .groups()
-                .get(group)
-                .and_then(|group| group.members.first().copied())
-                .and_then(|thread| self.thread_path(thread)),
+            MenuTarget::Group(_) => None,
             MenuTarget::Project(project) => self
                 .cockpit
                 .registry()
@@ -2298,6 +2295,10 @@ impl CockpitView {
     }
 
     fn interrupt(&mut self, _: &Interrupt, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.context_usage.take().is_some() {
+            cx.notify();
+            return;
+        }
         if self.context_menu.take().is_some() {
             cx.notify();
             return;
@@ -3855,13 +3856,23 @@ impl CockpitView {
                 if members.is_empty() {
                     return None;
                 }
+                let projects: std::collections::HashSet<_> = group
+                    .members
+                    .iter()
+                    .filter(|thread| Some(**thread) != pending_leave)
+                    .filter_map(|thread| self.facts.get(*thread).and_then(|facts| facts.project))
+                    .collect();
+                let project_summary = match projects.len() {
+                    0 => None,
+                    1 => members.iter().find_map(|row| row.project.clone()),
+                    count => Some(format!("{count} projects").into()),
+                };
                 Some(nav::GroupBlock {
                     id: group.id,
                     title: group.display_title().into(),
-                    // A Group has no Project of its own in core (§3.5f): it
-                    // borrows the first member that resolves one, and draws
-                    // the line empty when none does.
-                    project: members.iter().find_map(|row| row.project.clone()),
+                    // Summarize the whole Group even when the filter hides
+                    // some member rows; opening it still shows every Pane.
+                    projects: project_summary,
                     current: focused.is_some_and(|thread| group.members.contains(&thread)),
                     members,
                 })
@@ -4489,6 +4500,19 @@ impl Render for CockpitView {
         self.selection
             .retain_threads(|thread| panes.iter().any(|pane| pane.thread() == Some(thread)));
 
+        if self.context_usage.is_some_and(|(thread, _)| {
+            level != Level::Transcript
+                || self.focused_thread() != Some(thread)
+                || self.settings_open
+                || self
+                    .cockpit
+                    .thread(thread)
+                    .and_then(|open| open.transcript().usage())
+                    .is_none()
+        }) {
+            self.context_usage = None;
+        }
+
         // The popover belongs to the focused Pane's Composer at L1 (#23):
         // leaving that Pane, or zooming below L1, closes it here — and a
         // picker closes the moment its offer expires (#11, #25). The
@@ -4776,6 +4800,7 @@ impl Render for CockpitView {
             .child(self.nav(cx))
             .child(grid)
             .children(self.context_menu_element(cx))
+            .children(self.context_usage_element(cx))
             .children(self.settings_element(cx))
     }
 }
@@ -4890,7 +4915,7 @@ impl CockpitView {
         let wiring = pane::PaneWiring {
             menu: l1.then(|| self.popover_element(index, cx)).flatten(),
             model_picker: l1.then(|| self.model_picker(index, cx)).flatten(),
-            usage_ring: l1.then(|| self.usage_ring(index)).flatten(),
+            usage_ring: l1.then(|| self.usage_ring(index, cx)).flatten(),
             decide: (level != Level::Wall)
                 .then(|| self.decide_keycaps(index, level, cx))
                 .flatten(),
@@ -5378,17 +5403,68 @@ impl CockpitView {
         Some(cluster.into_any_element())
     }
 
-    /// The header's context ring with its hover card (#22 C12) — assembled
-    /// here so the hover state lives beside every other pointer wire; the
-    /// Pane only places it. None until the provider reports a window.
-    fn usage_ring(&self, index: usize) -> Option<AnyElement> {
+    /// The header ring opens the latest reported token counts on click.
+    /// No reading is invented when the provider has not reported usage.
+    fn usage_ring(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
         let thread = self.panes[index].thread()?;
         let usage = self.cockpit.thread(thread)?.transcript().usage()?;
-        let window = usage.context_window.filter(|window| *window > 0)?;
-        let fraction = usage.total_tokens as f32 / window as f32;
-        // The ring is the whole affordance: no hover card, no token count
-        // (§5 #17). Only an accessible label rides with it.
-        Some(pane::usage_ring(fraction).into_any_element())
+        let fraction = usage
+            .context_window
+            .filter(|window| *window > 0)
+            .map_or(0., |window| usage.total_tokens as f32 / window as f32);
+        let was_open = self.context_usage.is_some_and(|(shown, _)| shown == thread);
+        Some(
+            div()
+                .id(("context-ring", thread.get() as usize))
+                .debug_selector(move || format!("context-ring-{}", thread.get()))
+                .cursor_pointer()
+                .p(px(4.))
+                .m(px(-4.))
+                .child(pane::usage_ring(fraction))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |view, event: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        view.focus_pane(index);
+                        view.popover = None;
+                        view.context_menu = None;
+                        // Outside-click dismissal runs in capture phase, before this
+                        // toggle. Use the state of the ring that received the press.
+                        view.context_usage = (!was_open)
+                            .then_some((thread, event.position + gpui::point(px(0.), px(12.))));
+                        cx.notify();
+                    }),
+                )
+                .into_any_element(),
+        )
+    }
+
+    fn context_usage_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (thread, at) = self.context_usage?;
+        let usage = self.cockpit.thread(thread)?.transcript().usage()?;
+        let card = menu::shell()
+            .id("context-usage-card")
+            .debug_selector(|| "context-usage-card".into())
+            .child(pane::context_usage(usage))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
+            )
+            .on_mouse_down_out(cx.listener(|view, _: &MouseDownEvent, _, cx| {
+                if view.context_usage.take().is_some() {
+                    cx.notify();
+                }
+            }));
+        Some(
+            deferred(
+                anchored()
+                    .position(at)
+                    .snap_to_window_with_margin(px(crate::theme::GRID_PAD))
+                    .child(card),
+            )
+            .with_priority(2)
+            .into_any_element(),
+        )
     }
 
     /// The Composer's model picker (#25): the provider logomark, the bare
@@ -5685,7 +5761,13 @@ impl CockpitView {
         }
         for (index, group) in state.groups.iter().enumerate() {
             let id = group.id;
-            let gap = DropTarget::GroupGap(index);
+            let full_index = self
+                .cockpit
+                .groups()
+                .iter()
+                .position(|group| group.id == id)
+                .expect("navigation only shows existing Groups");
+            let gap = DropTarget::GroupGap(full_index);
             if index > 0 {
                 tree = tree.child(
                     drop_feedback(nav::group_gap(index), self.cockpit.groups().clone(), gap)
@@ -5743,8 +5825,7 @@ impl CockpitView {
                 let rows = group
                     .members
                     .iter()
-                    .enumerate()
-                    .map(|(at, row)| self.thread_element(row, Some(id), at, cx))
+                    .map(|row| self.thread_element(row, Some(id), cx))
                     .collect();
                 let mut members = nav::members(rows);
                 // Appending to the Group means dropping past its last row —
@@ -5753,7 +5834,13 @@ impl CockpitView {
                     let tail = DropTarget::ThreadRow {
                         thread: last,
                         group: Some(id),
-                        index: group.members.len(),
+                        index: self
+                            .cockpit
+                            .groups()
+                            .get(id)
+                            .expect("Group exists")
+                            .members
+                            .len(),
                     };
                     members = members.child(
                         drop_feedback(nav::member_tail(id), self.cockpit.groups().clone(), tail)
@@ -5769,7 +5856,7 @@ impl CockpitView {
         let rows = state
             .solos
             .iter()
-            .map(|row| self.thread_element(row, None, 0, cx))
+            .map(|row| self.thread_element(row, None, cx))
             .collect();
         // `nav::solos` carries the 24px that separates it from the last
         // Group. With no Group above it there is nothing to separate
@@ -5802,10 +5889,15 @@ impl CockpitView {
         &self,
         row: &nav::ThreadRow,
         group: Option<GroupId>,
-        index: usize,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let thread = row.thread;
+        // A Project filter hides rows, not members. Drop positions always
+        // address the durable order, including the hidden members.
+        let index = group
+            .and_then(|id| self.cockpit.groups().get(id))
+            .and_then(|group| group.members.iter().position(|member| *member == thread))
+            .unwrap_or(0);
         let open = self.pane_for(thread).is_some();
         let origin = self.cockpit.roster().view();
         let target = DropTarget::ThreadRow {
@@ -6186,6 +6278,153 @@ mod tests {
         });
     }
 
+    #[gpui::test]
+    fn multi_project_groups_keep_bindings_and_filter_only_navigation(cx: &mut TestAppContext) {
+        let (mut core, _) = cockpit("multi-project-group", 2);
+        let original = core.threads();
+        let first_project = core.project_id(original[0]).unwrap();
+        let repo = repo_in(&scratch("multi-project-other"));
+        let second_project = core.register_project(&repo).unwrap();
+        let group = core
+            .apply_group(GroupChange::Create {
+                first: original[0],
+                second: original[1],
+            })
+            .unwrap()
+            .group
+            .unwrap();
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, cx| {
+            view.enter_group(group, cx);
+            view.open_draft(DraftTarget::Main, cx);
+            view.focused_draft_mut()
+                .unwrap()
+                .binding
+                .choose_project(second_project);
+            view.panes[view.focused()]
+                .composer
+                .update(cx, |composer, cx| {
+                    composer.set("join from another project".into(), cx)
+                });
+            view.bootstrap_draft(cx);
+            let joined = view
+                .focused_thread()
+                .expect("different-Project draft joined");
+            assert_eq!(
+                view.cockpit.groups().get(group).unwrap().members,
+                [original[0], original[1], joined]
+            );
+            assert_eq!(
+                view.cockpit
+                    .thread(joined)
+                    .unwrap()
+                    .workspace()
+                    .unwrap()
+                    .cwd(),
+                repo.canonicalize().unwrap()
+            );
+            assert_eq!(view.cockpit.project_id(original[0]), Some(first_project));
+            assert_eq!(view.cockpit.project_id(joined), Some(second_project));
+            let nav = view.nav_state();
+            assert_eq!(
+                nav.groups[0]
+                    .projects
+                    .as_ref()
+                    .map(|label| label.to_string()),
+                Some("2 projects".to_string())
+            );
+            assert_eq!(nav.groups[0].members.len(), 3);
+            view.nav_filter = Some(second_project);
+            let nav = view.nav_state();
+            assert_eq!(
+                nav.groups[0]
+                    .members
+                    .iter()
+                    .map(|row| row.thread)
+                    .collect::<Vec<_>>(),
+                [joined]
+            );
+            assert_eq!(
+                nav.groups[0]
+                    .projects
+                    .as_ref()
+                    .map(|label| label.to_string()),
+                Some("2 projects".to_string())
+            );
+            assert_eq!(
+                view.visible_indices().len(),
+                3,
+                "filter must not shrink the Cockpit"
+            );
+            view.cockpit.park(joined).unwrap();
+            view.sync_panes(cx);
+            view.enter_group(group, cx);
+            assert_eq!(
+                view.visible_indices().len(),
+                3,
+                "opening the Group revives every member"
+            );
+            assert_eq!(
+                view.cockpit
+                    .thread(joined)
+                    .unwrap()
+                    .workspace()
+                    .unwrap()
+                    .cwd(),
+                repo.canonicalize().unwrap()
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn dragging_filtered_members_uses_the_full_group_order(cx: &mut TestAppContext) {
+        let (mut core, _) = cockpit("filtered-group-order", 2);
+        let repo = repo_in(&scratch("filtered-order-other"));
+        let project = core.register_project(&repo).unwrap();
+        let third = core
+            .open(
+                Provider::Claude,
+                WorkspaceChoice::Main {
+                    checkout: repo.clone(),
+                },
+            )
+            .unwrap();
+        let fourth = core
+            .open(Provider::Codex, WorkspaceChoice::Main { checkout: repo })
+            .unwrap();
+        let ids = core.threads();
+        let group = core
+            .apply_group(GroupChange::Create {
+                first: ids[0],
+                second: ids[1],
+            })
+            .unwrap()
+            .group
+            .unwrap();
+        for thread in [third, fourth] {
+            core.apply_group(GroupChange::Join {
+                thread,
+                group,
+                index: None,
+            })
+            .unwrap();
+        }
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+        view.update(cx, |view, cx| {
+            view.nav_filter = Some(project);
+            view.enter_group(group, cx);
+        });
+        tick(cx);
+        drag_nav(cx, "nav-thread-4", "nav-thread-3");
+        view.read_with(cx, |view, _| {
+            assert_eq!(
+                view.cockpit.groups().get(group).unwrap().members,
+                [ids[0], ids[1], fourth, third]
+            );
+        });
+    }
+
     /// Let the pump's timer fire: the test clock does not move on its own.
     fn tick(cx: &mut gpui::VisualTestContext) {
         cx.executor()
@@ -6204,6 +6443,78 @@ mod tests {
                 suggestions: vec![],
             },
         }
+    }
+
+    #[gpui::test]
+    fn clicking_the_context_ring_shows_current_and_maximum_tokens(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("context-click", 1);
+        bind_production_keys(cx);
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TokenUsage {
+                total_tokens: 124_000,
+                input_tokens: 124_000,
+                cached_input_tokens: 0,
+                output_tokens: 0,
+                reasoning_output_tokens: 0,
+                context_window: Some(200_000),
+            })
+            .unwrap();
+        tick(cx);
+        let ring = cx
+            .debug_bounds("context-ring-1")
+            .expect("usage ring is visible");
+        cx.simulate_mouse_down(ring.center(), MouseButton::Left, gpui::Modifiers::none());
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("context-usage-current-124000").is_some(),
+            "click must reveal current tokens"
+        );
+        assert!(
+            cx.debug_bounds("context-usage-maximum-200000").is_some(),
+            "click must reveal maximum tokens"
+        );
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TokenUsage {
+                total_tokens: 31_000,
+                input_tokens: 31_000,
+                cached_input_tokens: 0,
+                output_tokens: 0,
+                reasoning_output_tokens: 0,
+                context_window: None,
+            })
+            .unwrap();
+        tick(cx);
+        assert!(
+            cx.debug_bounds("context-usage-current-31000").is_some(),
+            "open card follows live usage"
+        );
+        assert!(
+            cx.debug_bounds("context-usage-maximum-unknown").is_some(),
+            "unknown limit is not invented"
+        );
+        cx.simulate_mouse_down(ring.center(), MouseButton::Left, gpui::Modifiers::none());
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert!(view.context_usage.is_none(), "second ring click closes it")
+        });
+        cx.simulate_mouse_down(ring.center(), MouseButton::Left, gpui::Modifiers::none());
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| assert!(view.context_usage.is_some()));
+        cx.simulate_mouse_down(
+            gpui::point(px(500.), px(300.)),
+            MouseButton::Left,
+            gpui::Modifiers::none(),
+        );
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert!(view.context_usage.is_none(), "outside click dismisses")
+        });
+        cx.simulate_mouse_down(ring.center(), MouseButton::Left, gpui::Modifiers::none());
+        cx.run_until_parked();
+        cx.simulate_keystrokes("escape");
+        view.read_with(cx, |view, _| assert!(view.context_usage.is_none()));
     }
 
     /// The whole keystroke path in a real window: a blocked Pane, one key, and

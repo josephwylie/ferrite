@@ -237,6 +237,33 @@ fn the_imported_codex_history_replays_as_the_conversation() {
     assert_eq!(ends, [&TurnOutcome::Completed, &TurnOutcome::Interrupted]);
 }
 
+#[test]
+fn imported_context_usage_is_the_latest_window_not_lifetime_spend() {
+    let store = scratch("codex-current-context");
+    let original = fs::read_to_string(fixture("import-codex-rollout-0.149.1.jsonl")).unwrap();
+    let lines: Vec<String> = original
+        .lines()
+        .map(|line| {
+            let mut value: serde_json::Value = serde_json::from_str(line).unwrap();
+            if value["payload"]["type"] == "token_count" {
+                value["payload"]["info"]["last_token_usage"]["total_tokens"] = 31000.into();
+                value["payload"]["info"]["total_token_usage"]["total_tokens"] = 900000.into();
+            }
+            value.to_string()
+        })
+        .collect();
+    let path = store.dir().join("context-rollout.jsonl");
+    fs::write(&path, lines.join("\n")).unwrap();
+    let thread = import(&store, &path).unwrap();
+    let mut transcript = Transcript::default();
+    for input in store.load(thread).unwrap().inputs() {
+        transcript.apply(input);
+    }
+    let usage = transcript.usage().unwrap();
+    assert_eq!(usage.total_tokens, 31000);
+    assert_eq!(usage.context_window, Some(258400));
+}
+
 /// The tool-bearing rollout: an exec_command round trip imports as the tool
 /// events the wire would have carried.
 #[test]

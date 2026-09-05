@@ -216,8 +216,7 @@ pub struct Todos {
     pub total: usize,
 }
 
-/// How much of the model's context a Thread has spent. Codex reports this and
-/// never reports dollars; Claude reports dollars and not this.
+/// Latest provider-reported context occupancy and the model's window limit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Usage {
     pub total_tokens: u64,

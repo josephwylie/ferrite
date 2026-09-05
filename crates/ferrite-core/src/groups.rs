@@ -1,4 +1,4 @@
-//! Durable project-scoped Thread groups.
+//! Durable, ordered Thread groups spanning Projects.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -202,7 +202,6 @@ pub struct Applied {
 pub enum ApplyError {
     Io(String),
     MissingGroup,
-    CrossProject,
     MissingProject,
     SameThread,
     InvalidLayout,
@@ -213,7 +212,6 @@ impl std::fmt::Display for ApplyError {
         match self {
             Self::Io(error) => write!(f, "{error}"),
             Self::MissingGroup => write!(f, "group no longer exists"),
-            Self::CrossProject => write!(f, "Threads from different projects cannot be grouped"),
             Self::MissingProject => write!(f, "Thread project metadata is missing"),
             Self::SameThread => write!(f, "a Thread cannot be grouped with itself"),
             Self::InvalidLayout => write!(f, "layout does not name exactly the group's members"),
@@ -439,24 +437,10 @@ impl Groups {
         Ok(())
     }
 
-    /// Validate a draft's project against a group before its Thread exists.
-    pub(crate) fn validate_join_project(
-        &self,
-        group: GroupId,
-        project: Option<ProjectId>,
-    ) -> Result<(), ApplyError> {
+    /// Validate the destination before a draft creates its own Thread.
+    pub(crate) fn validate_join(&self, group: GroupId) -> Result<(), ApplyError> {
         self.validate_all()?;
-        let Some(project) = project else {
-            return Err(ApplyError::MissingProject);
-        };
-        let target = self.get(group).ok_or(ApplyError::MissingGroup)?;
-        if let Some(first) = target.members.first().copied() {
-            match self.thread_project(first)? {
-                Some(group_project) if group_project == project => {}
-                Some(_) => return Err(ApplyError::CrossProject),
-                None => return Err(ApplyError::MissingProject),
-            }
-        }
+        self.get(group).ok_or(ApplyError::MissingGroup)?;
         Ok(())
     }
 
@@ -466,7 +450,6 @@ impl Groups {
                 if first == second {
                     return Err(ApplyError::SameThread);
                 }
-                self.ensure_same_project(first, second)?;
                 let mut dissolved = self.detach(first).into_iter().collect::<Vec<_>>();
                 dissolved.extend(self.detach(second));
                 let id = GroupId(self.next_id);
@@ -487,10 +470,7 @@ impl Groups {
                 group,
                 index,
             } => {
-                let target = self.get(group).ok_or(ApplyError::MissingGroup)?;
-                if let Some(first) = target.members.first().copied() {
-                    self.ensure_same_project(thread, first)?;
-                }
+                self.get(group).ok_or(ApplyError::MissingGroup)?;
                 let dissolved = self.detach(thread).into_iter().collect();
                 let target = self
                     .groups
@@ -580,14 +560,6 @@ impl Groups {
         } else {
             self.groups[index].reconcile_layout();
             None
-        }
-    }
-
-    fn ensure_same_project(&self, a: ThreadId, b: ThreadId) -> Result<(), ApplyError> {
-        match (self.thread_project(a)?, self.thread_project(b)?) {
-            (Some(a), Some(b)) if a == b => Ok(()),
-            (None, _) | (_, None) => Err(ApplyError::MissingProject),
-            _ => Err(ApplyError::CrossProject),
         }
     }
 
@@ -1060,7 +1032,7 @@ mod tests {
     }
 
     #[test]
-    fn one_hundred_members_persist_in_order_while_cross_project_moves_refuse() {
+    fn one_hundred_members_persist_in_order_with_cross_project_moves() {
         let dir = scratch("project-unbounded");
         let store = Store::open(&dir).unwrap();
         let roots = [dir.join("one"), dir.join("two")];
@@ -1145,19 +1117,40 @@ mod tests {
         expected.push(ids[0]);
         assert_eq!(groups.get(group).unwrap().members, expected);
         drop(groups);
-        let groups = Groups::load(&dir).unwrap();
+        let mut groups = Groups::load(&dir).unwrap();
         assert_eq!(groups.get(group).unwrap().members, expected);
-        assert!(matches!(
-            groups.preview_drop(
-                Drag::Thread {
-                    thread: ids[102],
-                    group: None,
-                },
-                DropTarget::GroupHeader(group),
-            ),
-            Plan::Refused(reason) if reason.contains("different projects")
-        ));
+        let join = groups.preview_drop(
+            Drag::Thread {
+                thread: ids[102],
+                group: None,
+            },
+            DropTarget::GroupHeader(group),
+        );
+        let Plan::Change(change) = join else {
+            panic!("cross-project join refused: {join:?}")
+        };
+        groups.apply(change).unwrap();
+        expected.push(ids[102]);
         assert_eq!(groups.get(group).unwrap().members, expected);
+        assert_eq!(
+            Groups::load(&dir).unwrap().get(group).unwrap().members,
+            expected
+        );
+        // Creating a new pair can move a member across Projects too.
+        let pair = groups
+            .apply(GroupChange::Create {
+                first: ids[101],
+                second: ids[102],
+            })
+            .unwrap()
+            .group
+            .unwrap();
+        assert_eq!(
+            Groups::load(&dir).unwrap().get(pair).unwrap().members,
+            [ids[101], ids[102]]
+        );
+        assert_eq!(store.peek(ids[101]).unwrap().project_id, Some(projects[0]));
+        assert_eq!(store.peek(ids[102]).unwrap().project_id, Some(projects[1]));
     }
 
     #[test]
