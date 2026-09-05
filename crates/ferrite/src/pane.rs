@@ -900,14 +900,13 @@ fn pane_shell(edge: gpui::Hsla) -> Div {
         .overflow_hidden()
 }
 
-/// The Pane, plus its focus ring. gpui has no `outline-offset`, and a ring
-/// painted inside the shell's `overflow_hidden()` is clipped away
-/// entirely — so the ring lives in a **non-clipping** wrapper as an
-/// absolute overlay at `inset(-4px)`: 2px wide, 2px outside the border
-/// box, radii following the offset (inner 10, outer 12). It reaches 4px
-/// into the 8px board gap, which the gap exactly accommodates, and it
-/// coexists with the innermost 1px state border rather than nesting inside
-/// it.
+/// The Pane, plus its focus ring. The ring is **not** offset: it lands
+/// exactly on the Pane's own border box, same rectangle and same 8px
+/// radius, so a focused Pane is the same size and shape as an unfocused
+/// one and the board's gaps stay clean. A ring painted inside the shell's
+/// `overflow_hidden()` would be clipped away, so it still lives in a
+/// non-clipping wrapper as an absolute overlay — it simply covers the
+/// resting edge rather than sitting outside it.
 fn focus_wrapper(shell: Div, focused: bool) -> Div {
     div()
         .relative()
@@ -919,10 +918,8 @@ fn focus_wrapper(shell: Div, focused: bool) -> Div {
         .children(focused.then(|| {
             div()
                 .absolute()
-                .inset(px(-(theme::FOCUS_RING_OFFSET + theme::FOCUS_RING_W)))
-                .rounded(px(theme::R_SURFACE
-                    + theme::FOCUS_RING_OFFSET
-                    + theme::FOCUS_RING_W))
+                .inset_0()
+                .rounded(px(theme::R_SURFACE))
                 .border(px(theme::FOCUS_RING_W))
                 .border_color(rgb(FOCUS))
         }))
@@ -1659,6 +1656,10 @@ fn pane_head(
         .flex_col()
         .flex_shrink_0()
         .bg(rgb(PANE_HEAD))
+        // The shell's radius is 8 outside a 1px border, so its padding box
+        // curves at 7 — the band's own ground must follow that curve or it
+        // paints square shoulders into the Pane's rounded top.
+        .rounded_t(px(theme::R_SURFACE - 1.))
         .border_b_1()
         .border_color(rgba(PANE_HEAD_EDGE))
         .child(top)
