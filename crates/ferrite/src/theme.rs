@@ -44,7 +44,7 @@ pub const FILL: u32 = 0x343434;
 /// `#3b3b3b` — `--fill-hover`: a selected Group row under the pointer.
 pub const FILL_HOVER: u32 = 0x3b3b3b;
 /// `rgba(255,255,255,0.13)` — `--meter-off`: an unlit tasks-meter segment,
-/// and the context ring's track.
+/// and the compact usage lines' tracks.
 #[allow(dead_code)]
 pub const METER_OFF: u32 = 0xffffff21;
 
@@ -72,7 +72,7 @@ pub const TEXT_STRONG: u32 = 0xffffff;
 #[allow(dead_code)]
 pub const TEXT: u32 = 0xdedede;
 /// `#a8a8a8` — `--text-2`: body prose, the Project line, a lit meter
-/// segment, the context ring's used arc, the Composer's own text and caret.
+/// segment, the usage lines, the Composer's own text and caret.
 pub const TEXT_2: u32 = 0xa8a8a8;
 /// `#959595` — `--text-muted`: the checkout line, the Pane head, the tasks
 /// strip, tool arguments and durations, hints, the parked status dot.
@@ -420,6 +420,22 @@ pub const USAGE_RING_D: f32 = 14.0;
 #[allow(dead_code)]
 pub const USAGE_RING_R: f32 = 5.4;
 pub const USAGE_RING_W: f32 = 2.0;
+/// The usage meter's detail card: one column of labelled bars, sized so
+/// the three windows read at a glance without the card becoming a panel.
+pub const USAGE_CARD_W: f32 = 216.0;
+pub const USAGE_CARD_PAD: f32 = 10.0;
+/// Between one window's block and the next, and inside one block.
+pub const USAGE_CARD_GAP: f32 = 12.0;
+pub const USAGE_CARD_ROW_GAP: f32 = 5.0;
+pub const USAGE_CARD_BAR_H: f32 = 4.0;
+/// Where a usage bar turns from RUNNING to ATTENTION, and from ATTENTION
+/// to BLOCKED — a fraction of the window, not a count.
+pub const USAGE_TIGHT: f32 = 0.6;
+pub const USAGE_SPENT: f32 = 0.85;
+/// Compact context / five-hour / weekly lines beside the Composer's model.
+pub const USAGE_LINE_W: f32 = 24.0;
+pub const USAGE_LINE_H: f32 = 2.0;
+pub const USAGE_LINE_GAP: f32 = 2.0;
 /// The focused Pane's ring: 2px wide, 2px outside the Pane's border box.
 /// gpui has no `outline-offset`, so it is an absolutely positioned overlay
 /// at `inset(-4px)` inside a non-clipping wrapper; its radii follow the

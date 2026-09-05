@@ -425,6 +425,7 @@ impl Record {
             SessionEvent::Commands { .. } => return None,
             SessionEvent::PermissionMode { .. } => return None,
             SessionEvent::Models { .. } => return None,
+            SessionEvent::RateLimits { .. } => return None,
         })
     }
 

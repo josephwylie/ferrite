@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use crate::{Hunk, SessionEvent, ToolResult, TurnOutcome};
+use crate::{Hunk, RateLimitWindow, SessionEvent, ToolResult, TurnOutcome};
 
 mod highlight;
 pub use highlight::Lexer;
@@ -223,6 +223,15 @@ pub struct Usage {
     pub context_window: Option<u64>,
 }
 
+/// Latest live account windows. These are deliberately not restored from the
+/// transcript log: a persisted percentage becomes misleading as soon as its
+/// rolling window resets.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct RateLimits {
+    pub five_hour: Option<RateLimitWindow>,
+    pub weekly: Option<RateLimitWindow>,
+}
+
 /// What the Session is doing, as the transcript last saw it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Status {
@@ -258,6 +267,7 @@ pub struct Transcript {
     /// cannot stand in for this: Codex completes without reporting dollars.
     turn_outcome: Option<TurnOutcome>,
     usage: Option<Usage>,
+    rate_limits: RateLimits,
     /// When the running turn began — the operator's prompt went out — for
     /// the working line's clock. None between turns.
     turn_started: Option<std::time::Instant>,
@@ -305,6 +315,7 @@ impl Transcript {
             last_cost: None,
             turn_outcome: None,
             usage: None,
+            rate_limits: RateLimits::default(),
             turn_started: None,
             turn_output_tokens: 0,
             last_report: 0,
@@ -344,6 +355,10 @@ impl Transcript {
 
     pub fn usage(&self) -> Option<Usage> {
         self.usage
+    }
+
+    pub fn rate_limits(&self) -> RateLimits {
+        self.rate_limits
     }
 
     /// How long the running turn has been going; None between turns.
@@ -487,6 +502,10 @@ impl Transcript {
                     self.turn_output_tokens += output_tokens;
                 }
                 self.last_report = output_tokens;
+                Update::default()
+            }
+            Input::Event(SessionEvent::RateLimits { five_hour, weekly }) => {
+                self.rate_limits = RateLimits { five_hour, weekly };
                 Update::default()
             }
             Input::Answered { allowed, tool_name } => {
@@ -1717,6 +1736,32 @@ mod tests {
             .expect("usage after the provider reports");
         assert_eq!(usage.total_tokens, 12_400);
         assert_eq!(usage.context_window, Some(200_000));
+    }
+
+    #[test]
+    fn live_rate_limits_are_kept_separately_from_persisted_token_usage() {
+        let mut transcript = Transcript::default();
+        let five_hour = RateLimitWindow {
+            used_fraction: 0.52,
+            resets_at: Some(11),
+        };
+        let weekly = RateLimitWindow {
+            used_fraction: 0.08,
+            resets_at: Some(22),
+        };
+        transcript.apply(Input::Event(SessionEvent::RateLimits {
+            five_hour: Some(five_hour),
+            weekly: Some(weekly),
+        }));
+
+        assert_eq!(
+            transcript.rate_limits(),
+            RateLimits {
+                five_hour: Some(five_hour),
+                weekly: Some(weekly),
+            }
+        );
+        assert_eq!(transcript.usage(), None, "limits do not invent token usage");
     }
 
     #[test]
