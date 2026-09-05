@@ -25,6 +25,8 @@ use ferrite_core::groups::GroupId;
 use ferrite_core::store::Provider;
 use ferrite_core::workspace::registry::ProjectId;
 use ferrite_core::ThreadId;
+use gpui::component::spinner::Spinner;
+use gpui::component::{Sizable as _, Size};
 use std::time::Duration;
 
 use gpui::prelude::*;
@@ -116,6 +118,9 @@ pub struct NavState {
     /// membership; this is the sequence.
     pub order: Vec<NavItem>,
     pub collapsed: bool,
+    /// Is any listed Thread working (or working against a red suite)?
+    /// The head spins while it is true.
+    pub working: bool,
 }
 
 impl NavState {
@@ -273,6 +278,14 @@ fn status_dot(thread: ThreadId, status: RowStatus) -> AnyElement {
         .child(halo)
         .child(dot)
         .into_any_element()
+}
+
+/// The head's activity mark: a small spinner in the running colour, shown
+/// only while some Thread in the tree is working. It complements the working dots in the tree.
+pub fn working_spinner() -> Spinner {
+    Spinner::new()
+        .with_size(Size::XSmall)
+        .color(rgb(RUNNING).into())
 }
 
 /// The nav column itself: full height, the `--nav` ground, and **no border
