@@ -12,6 +12,7 @@
 //! L2 (Instruments) and L3 (Wall) keep the metrics they have — the
 //! prototype specifies only L1 — and take the new palette and scale.
 
+use ferrite_core::activity::Subject;
 use ferrite_core::cockpit::{ThreadView, ToolTiming};
 use ferrite_core::docview::{is_test_run, passed_count, Instruments, Level, Tests};
 use ferrite_core::roster::{DraftId, PaneIdentity};
@@ -67,12 +68,33 @@ pub struct PaneView {
     /// Built once; the wall must not format names per frame.
     pub name: SharedString,
     pub composer: Entity<Composer>,
+    pub controls_focus: FocusHandle,
+    pub selected: Subject,
+    pub generation: u64,
+    pub rich: crate::rich::TextCache,
+    pub agent_menu_open: bool,
+    pub subject_strip_width: f32,
+    pub tab_interaction: crate::cockpit::subagents::TabInteraction,
+    pub history_error: Option<String>,
+    pub request_forms: crate::cockpit::subagents::RequestForms,
+    pub request_error: Option<(ferrite_core::activity::DecisionHandle, String)>,
+    subject_views: HashMap<Subject, TranscriptViewport>,
     pub scroll: ScrollHandle,
     pub selection_scope: gpui::base::TextSelectionScopeId,
     pub transcript_focus: FocusHandle,
     pub follow_tail: Rc<Flag<bool>>,
     /// A pending Decision takes the keyboard: y and n are answers, not text.
     pub decision_focus: FocusHandle,
+    disclosure: ToolDisclosure,
+}
+
+/// View ownership stays with a Subject even while its transcript is hidden.
+struct TranscriptViewport {
+    generation: u64,
+    scroll: ScrollHandle,
+    selection_scope: gpui::base::TextSelectionScopeId,
+    transcript_focus: FocusHandle,
+    follow_tail: Rc<Flag<bool>>,
     disclosure: ToolDisclosure,
 }
 
@@ -138,6 +160,17 @@ impl PaneView {
             draft: None,
             name: SharedString::from(format!("thread-{thread:02}")),
             composer: cx.new(Composer::new),
+            controls_focus: cx.focus_handle(),
+            selected: Subject::Main,
+            generation: 0,
+            rich: Default::default(),
+            agent_menu_open: false,
+            subject_strip_width: 0.,
+            tab_interaction: Default::default(),
+            history_error: None,
+            request_forms: Default::default(),
+            request_error: None,
+            subject_views: HashMap::new(),
             scroll,
             selection_scope: gpui::base::TextSelectionScopeId::new(),
             transcript_focus: cx.focus_handle(),
@@ -165,6 +198,17 @@ impl PaneView {
             draft: Some(binding),
             name: SharedString::from("new thread"),
             composer: cx.new(Composer::new),
+            controls_focus: cx.focus_handle(),
+            selected: Subject::Main,
+            generation: 0,
+            rich: Default::default(),
+            agent_menu_open: false,
+            subject_strip_width: 0.,
+            tab_interaction: Default::default(),
+            history_error: None,
+            request_forms: Default::default(),
+            request_error: None,
+            subject_views: HashMap::new(),
             scroll: ScrollHandle::new(),
             selection_scope: gpui::base::TextSelectionScopeId::new(),
             transcript_focus: cx.focus_handle(),
@@ -199,6 +243,84 @@ impl PaneView {
         self.identity = PaneIdentity::Thread(thread);
         self.draft = None;
         self.name = SharedString::from(format!("thread-{thread:02}"));
+    }
+
+    pub fn is_main(&self) -> bool {
+        self.selected == Subject::Main
+    }
+
+    pub fn text_namespace(&self) -> SharedString {
+        let thread = self.thread().map(|id| id.get()).unwrap_or(0);
+        match &self.selected {
+            Subject::Main => format!("{thread}-main-{}", self.generation).into(),
+            Subject::Subagent(key) => {
+                format!("{thread}-{}-{}", key.as_str(), self.generation).into()
+            }
+        }
+    }
+
+    pub fn select_subject<T: 'static>(
+        &mut self,
+        subject: Subject,
+        generation: u64,
+        cx: &mut Context<T>,
+    ) {
+        if self.selected == subject {
+            if self.generation != generation {
+                self.generation = generation;
+            }
+            return;
+        }
+        let mut next = self
+            .subject_views
+            .remove(&subject)
+            .unwrap_or_else(|| TranscriptViewport {
+                generation,
+                scroll: ScrollHandle::new(),
+                selection_scope: gpui::base::TextSelectionScopeId::new(),
+                transcript_focus: cx.focus_handle(),
+                follow_tail: Rc::new(Flag::new(true)),
+                disclosure: ToolDisclosure {
+                    expanded: HashSet::new(),
+                    target: None,
+                    focus: cx.focus_handle(),
+                    #[cfg(test)]
+                    bounds: Rc::new(RefCell::new(HashMap::new())),
+                },
+            });
+        if next.generation != generation {
+            next.generation = generation;
+        }
+        std::mem::swap(&mut next.generation, &mut self.generation);
+        std::mem::swap(&mut next.scroll, &mut self.scroll);
+        std::mem::swap(&mut next.selection_scope, &mut self.selection_scope);
+        std::mem::swap(&mut next.transcript_focus, &mut self.transcript_focus);
+        std::mem::swap(&mut next.follow_tail, &mut self.follow_tail);
+        std::mem::swap(&mut next.disclosure, &mut self.disclosure);
+        self.subject_views
+            .insert(std::mem::replace(&mut self.selected, subject), next);
+        self.agent_menu_open = false;
+        self.history_error = None;
+    }
+
+    pub fn redirect_subject(
+        &mut self,
+        from: &ferrite_core::activity::AgentKey,
+        to: &ferrite_core::activity::AgentKey,
+    ) {
+        let thread = self.thread().map(|id| id.get()).unwrap_or(0);
+        self.rich.redirect_namespace(
+            &format!("{thread}-{}-", from.as_str()),
+            &format!("{thread}-{}-", to.as_str()),
+        );
+        let from = Subject::Subagent(from.clone());
+        let to = Subject::Subagent(to.clone());
+        if self.selected == from {
+            self.selected = to.clone();
+        }
+        if let Some(old) = self.subject_views.remove(&from) {
+            self.subject_views.entry(to).or_insert(old);
+        }
     }
 
     pub(crate) fn toggle_tool(&mut self, call: &str) {
@@ -352,6 +474,10 @@ pub struct PaneWiring {
     /// pending Decision is Claude's `AskUserQuestion`; it stands in for
     /// the y/n card, which cannot answer a question.
     pub question_form: Option<AnyElement>,
+    pub agents: Option<AnyElement>,
+    pub activity_attention: Option<AnyElement>,
+    pub activity_decisions: Option<AnyElement>,
+    pub child_footer: Option<AnyElement>,
 }
 
 /// The wall's state matrix (glance.md §4), selected from O(1) reads plus the
@@ -492,14 +618,25 @@ pub fn render_pane(
         mut tool_controls,
         title,
         question_form,
+        agents,
+        activity_attention,
+        activity_decisions,
+        child_footer,
     } = wiring;
-    let transcript = thread.map(|thread| thread.transcript());
-    let decision = thread.and_then(|thread| thread.pending());
+    let subject = thread.and_then(|thread| thread.activity().subject(&view.selected));
+    let transcript = subject.as_ref().map(|subject| subject.transcript());
+    let decision = if view.is_main() {
+        thread.and_then(|thread| thread.pending())
+    } else {
+        None
+    };
     let queued = thread.and_then(|thread| thread.queued());
     let workspace = thread.and_then(|thread| thread.workspace());
     let permission_mode = thread.and_then(|thread| thread.permission_mode());
-    let timings = thread.map(|thread| thread.tool_timings());
-    let status = transcript.map(|t| t.status());
+    let timings = subject.as_ref().map(|subject| subject.timings());
+    let status = subject.as_ref().map(|subject| {
+        crate::cockpit::subagents::transcript_status(subject.status(), subject.fresh())
+    });
     // `esc interrupt` (§D.7): running **and** focused. The head's dot reads
     // the transcript's own status, not the turn-in-flight flag — a revived
     // Thread mid-turn shows the green dot with `busy` false — so the hint
@@ -513,14 +650,24 @@ pub fn render_pane(
     // layout, only ever recoloured, so nothing reflows when a Decision
     // arrives — and focus is a 2px neutral ring 2px OUTSIDE it, painted by
     // `focus_wrapper` below.
-    let edge: gpui::Hsla = if decision.is_some() {
+    let attention_pending =
+        thread.is_some_and(|thread| !thread.activity().pending_decisions().is_empty());
+    let edge: gpui::Hsla = if attention_pending {
         rgb(ATTENTION).into()
     } else if state == WallState::Blocked {
         rgb(BLOCKED).into()
     } else {
         rgba(TRANSPARENT).into()
     };
-    let shell = pane_shell(edge);
+    let mut shell = pane_shell(edge);
+    let mut activity_attention = activity_attention;
+    if level != Level::Transcript {
+        if let Some(attention) = activity_attention.take() {
+            shell = shell
+                .relative()
+                .child(div().absolute().top(px(3.)).right(px(5.)).child(attention));
+        }
+    }
 
     // Far enough away, a Pane is one signal: no header, no transcript,
     // nothing that stops reading at a glance.
@@ -536,7 +683,7 @@ pub fn render_pane(
         // Pane as into a big one — a cell too small to read a transcript
         // is not too small to be told what to do next. No menu, picker
         // or band at this size; the keys still work.
-        let composer = transcript.map(|transcript| {
+        let composer = transcript.filter(|_| view.is_main()).map(|transcript| {
             composer_region(
                 view,
                 Some(transcript),
@@ -557,23 +704,32 @@ pub fn render_pane(
             )
         });
         return focus_wrapper(
-            shell.child(l2_cell(
-                view,
-                transcript,
-                decision,
-                workspace,
-                branch.as_ref(),
-                state,
-                timings,
-                decide,
-                title,
-                composer,
-            )),
+            shell
+                .child(l2_cell(
+                    view,
+                    transcript,
+                    decision,
+                    workspace,
+                    branch.as_ref(),
+                    state,
+                    timings,
+                    decide,
+                    title,
+                    composer.or_else(|| child_footer.map(|footer| div().child(footer))),
+                ))
+                .children(activity_decisions),
             focused,
         );
     }
 
-    let mut pane = shell.child(pane_head(view, branch.as_ref(), status, title));
+    let mut pane = shell.child(pane_head(
+        view,
+        branch.as_ref(),
+        status,
+        title,
+        agents,
+        activity_attention,
+    ));
     match transcript {
         Some(transcript) => {
             // The tasks strip sits directly under the header, full width,
@@ -587,6 +743,7 @@ pub fn render_pane(
                 body(
                     view,
                     transcript,
+                    status,
                     focused,
                     level,
                     &selection,
@@ -601,7 +758,21 @@ pub fn render_pane(
             // Composer's 12px padding would inset it twice. The child
             // order §D.1 pins is head · tasks · body · decision · changed
             // · composer.
-            if let Some(form) = question_form {
+            if view.is_main() {
+                if let Some((_, error)) = &view.request_error {
+                    pane = pane.child(
+                        div()
+                            .px(px(theme::PANE_PAD_X))
+                            .py(px(4.))
+                            .text_size(px(theme::FS_SM))
+                            .text_color(rgb(theme::BLOCKED))
+                            .child(format!("Could not send answer: {error}")),
+                    );
+                }
+            }
+            if let Some(decisions) = activity_decisions {
+                pane = pane.child(decisions);
+            } else if let Some(form) = question_form {
                 pane = pane.child(form);
             } else if let Some(decision) = decision {
                 pane = pane.child(decision_card(decision, decide.take()));
@@ -616,24 +787,28 @@ pub fn render_pane(
             if !changed.is_empty() {
                 pane = pane.child(changed_strip(&changed));
             }
-            pane = pane.child(composer_region(
-                view,
-                Some(transcript),
-                ComposerStack {
-                    decision,
-                    queued,
-                    running,
-                    empty: composer_empty,
-                    history_available,
-                    menu,
-                    mode: permission_mode,
-                    model_picker,
-                    usage_meter,
-                    setup_controls: None,
-                    draft_error: None,
-                    focused,
-                },
-            ));
+            if let Some(footer) = child_footer {
+                pane = pane.child(footer);
+            } else {
+                pane = pane.child(composer_region(
+                    view,
+                    Some(transcript),
+                    ComposerStack {
+                        decision,
+                        queued,
+                        running,
+                        empty: composer_empty,
+                        history_available,
+                        menu,
+                        mode: permission_mode,
+                        model_picker,
+                        usage_meter,
+                        setup_controls: None,
+                        draft_error: None,
+                        focused,
+                    },
+                ));
+            }
         }
         None => {
             pane = pane.child(parked_body());
@@ -760,7 +935,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
 
     focus_wrapper(
         shell
-            .child(pane_head(view, None, None, None))
+            .child(pane_head(view, None, None, None, None, None))
             .child(div().flex().flex_1().min_h_0())
             .child(composer_region(
                 view,
@@ -1367,6 +1542,8 @@ fn pane_head(
     branch: Option<&SharedString>,
     status: Option<Status>,
     title: Option<AnyElement>,
+    agents: Option<AnyElement>,
+    attention: Option<AnyElement>,
 ) -> Div {
     // The dot's base is the muted ink — the parked look — and each live
     // state takes its own signal colour. The no-dot ruling is scoped to
@@ -1377,6 +1554,7 @@ fn pane_head(
         Some(Status::Closed) => BLOCKED,
         _ => TEXT_MUTED,
     };
+    let has_agents = agents.is_some();
     let mut head = div()
         .flex()
         .flex_shrink_0()
@@ -1392,6 +1570,7 @@ fn pane_head(
             div()
                 .min_w_0()
                 .flex_shrink(1.)
+                .when(has_agents, |title| title.max_w(relative(0.32)))
                 .text_size(px(theme::FS_LG))
                 .line_height(relative(theme::LINE_UI))
                 // gpui seats a run one pixel lower in this 32px head than
@@ -1416,6 +1595,7 @@ fn pane_head(
                 .min_w_0()
                 .items_center()
                 .gap(px(theme::ROW_ICON_GAP))
+                .when(has_agents, |branch| branch.max_w(relative(0.20)))
                 .text_size(px(theme::FS_MONO))
                 .line_height(relative(theme::LINE_UI))
                 .child(icon(icons::BRANCH, theme::ROW_ICON, TEXT_MUTED))
@@ -1423,6 +1603,12 @@ fn pane_head(
                 // own centring.
                 .child(div().min_w_0().truncate().pb(px(2.)).child(branch.clone())),
         );
+    }
+    if let Some(agents) = agents {
+        head = head.child(agents);
+    }
+    if let Some(attention) = attention {
+        head = head.child(attention);
     }
     head
 }
@@ -1658,10 +1844,9 @@ impl gpui::base::ScrollbarHandle for TranscriptScrollbar {
 
 /// The scrollback and its bar. The bar is a *sibling* of the scrolling
 /// body inside this one `relative()` parent — as a child it would scroll
-/// away with the transcript — and it is keyed by Thread, because each open
-/// Pane drags, hovers and fades its own.
+/// away with the transcript. Its identity follows the selected transcript,
+/// so a tab switch cannot carry a thumb drag into a different Subject.
 fn scrollback(view: &PaneView, body: impl IntoElement) -> Div {
-    let thread = view.thread().map(|thread| thread.get()).unwrap_or(0);
     div()
         .relative()
         .flex()
@@ -1670,7 +1855,7 @@ fn scrollback(view: &PaneView, body: impl IntoElement) -> Div {
         .min_h_0()
         .child(body)
         .child(components::scrollbar(
-            ("transcript-scrollbar", thread as usize),
+            SharedString::from(format!("transcript-scrollbar-{}", view.text_namespace())),
             &TranscriptScrollbar {
                 scroll: view.scroll.clone(),
                 follow_tail: view.follow_tail.clone(),
@@ -1681,6 +1866,7 @@ fn scrollback(view: &PaneView, body: impl IntoElement) -> Div {
 fn body(
     view: &PaneView,
     transcript: &Transcript,
+    status: Option<Status>,
     focused: bool,
     level: Level,
     selection: &TextRuns,
@@ -1693,9 +1879,11 @@ fn body(
         view.scroll.scroll_to_bottom();
     }
     // Only Thread Panes have a transcript body; a draft never lands here.
-    let thread = view.thread().map(|thread| thread.get()).unwrap_or(0);
     let mut body = div()
-        .id(("transcript", thread as usize))
+        .id(SharedString::from(format!(
+            "transcript-{}",
+            view.text_namespace()
+        )))
         .flex()
         .flex_col()
         .flex_1()
@@ -1734,14 +1922,18 @@ fn body(
             }
             body = body.child(
                 div()
-                    .id(SharedString::from(format!("answer-{thread}-{first:?}")))
+                    .id(SharedString::from(format!(
+                        "answer-{}-{first:?}",
+                        view.text_namespace()
+                    )))
                     .min_w_0()
                     .w_full()
                     .flex_shrink_0()
                     .mb(px(theme::P_MARGIN_B))
                     .child(crate::rich::Markdown::new(
-                        format!("markdown-{thread}-{first:?}"),
+                        format!("markdown-{}-{first:?}", view.text_namespace()),
                         source,
+                        view.rich.clone(),
                     )),
             );
             prev_margin_b = theme::P_MARGIN_B;
@@ -1791,7 +1983,7 @@ fn body(
     // The working line, the way Claude Code's own ends its transcript
     // while a turn runs: what the agent is doing, the turn's clock, and
     // the tokens it has produced.
-    if transcript.status() == Status::Streaming {
+    if status == Some(Status::Streaming) {
         body = body.child(working_line(transcript));
     }
     let wheel_scroll = view.scroll.clone();

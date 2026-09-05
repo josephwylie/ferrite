@@ -1253,11 +1253,11 @@ fn a_line_of_invalid_utf8_does_not_end_the_session() {
     let payload = log_path("mangled.jsonl");
     let mut bytes = vec![0xff, 0xfe, b'\n'];
     bytes.extend_from_slice(
-        br#"{"method":"item/agentMessage/delta","params":{"threadId":"t","turnId":"u","itemId":"m","delta":"still here"}}"#,
+        br#"{"method":"item/agentMessage/delta","params":{"threadId":"stub-thread","turnId":"u","itemId":"m","delta":"still here"}}"#,
     );
     bytes.push(b'\n');
     bytes.extend_from_slice(
-        br#"{"method":"turn/completed","params":{"threadId":"t","turn":{"id":"u","items":[],"status":"completed"}}}"#,
+        br#"{"method":"turn/completed","params":{"threadId":"stub-thread","turn":{"id":"u","items":[],"status":"completed"}}}"#,
     );
     bytes.push(b'\n');
     fs::write(&payload, &bytes).unwrap();
@@ -1300,12 +1300,12 @@ fn a_slow_consumer_stalls_the_server_instead_of_losing_events() {
     let mut lines = String::new();
     for n in 0..DELTAS {
         lines.push_str(&format!(
-            r#"{{"method":"item/agentMessage/delta","params":{{"threadId":"t","turnId":"u","itemId":"m","delta":"{n} "}}}}"#
+            r#"{{"method":"item/agentMessage/delta","params":{{"threadId":"stub-thread","turnId":"u","itemId":"m","delta":"{n} "}}}}"#
         ));
         lines.push('\n');
     }
     lines.push_str(
-        r#"{"method":"turn/completed","params":{"threadId":"t","turn":{"id":"u","items":[],"status":"completed"}}}"#,
+        r#"{"method":"turn/completed","params":{"threadId":"stub-thread","turn":{"id":"u","items":[],"status":"completed"}}}"#,
     );
     lines.push('\n');
     fs::write(&payload, &lines).unwrap();

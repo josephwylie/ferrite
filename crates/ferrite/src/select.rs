@@ -14,14 +14,34 @@ type Registry =
 #[derive(Default)]
 pub struct TranscriptText {
     #[cfg(test)]
+    fallback: crate::rich::TextCache,
+    #[cfg(test)]
     registry: Registry,
 }
 impl TranscriptText {
-    pub fn overlay(&self, thread: ThreadId, _: &[Block]) -> TextRuns {
-        #[cfg(test)]
-        self.registry.borrow_mut().insert(thread, Vec::new());
-        TextRuns {
+    #[cfg(test)]
+    pub fn overlay(&self, thread: ThreadId, blocks: &[Block]) -> TextRuns {
+        self.overlay_scoped(
             thread,
+            thread.get().to_string().into(),
+            blocks,
+            self.fallback.clone(),
+        )
+    }
+    pub fn overlay_scoped(
+        &self,
+        _thread: ThreadId,
+        namespace: SharedString,
+        _: &[Block],
+        cache: crate::rich::TextCache,
+    ) -> TextRuns {
+        #[cfg(test)]
+        self.registry.borrow_mut().insert(_thread, Vec::new());
+        TextRuns {
+            #[cfg(test)]
+            thread: _thread,
+            namespace,
+            cache,
             block: RefCell::new(None),
             next_ordinal: RefCell::new(0),
             #[cfg(test)]
@@ -39,7 +59,10 @@ impl TranscriptText {
 }
 
 pub struct TextRuns {
+    #[cfg(test)]
     thread: ThreadId,
+    namespace: SharedString,
+    cache: crate::rich::TextCache,
     block: RefCell<Option<BlockId>>,
     next_ordinal: RefCell<u32>,
     #[cfg(test)]
@@ -67,9 +90,10 @@ impl TextRuns {
             .or_default()
             .push((block, ordinal, true, text.to_string()));
         crate::rich::Literal {
-            id: format!("literal-{}-{block:?}-{ordinal}", self.thread.get()).into(),
+            id: format!("literal-{}-{block:?}-{ordinal}", self.namespace).into(),
             text,
             highlights,
+            cache: self.cache.clone(),
         }
     }
 }

@@ -3,6 +3,8 @@
 //! Rendering and keys only. What each Pane shows — the Blocks, the pending
 //! Decision, the held prompt — is folded in core and read from there.
 
+pub(crate) mod subagents;
+
 use std::time::Duration;
 
 use ferrite_core::cockpit::{CloseError, Cockpit, HistoryDirection, ProviderChoice};
@@ -190,7 +192,7 @@ pub struct CockpitView {
 /// Where the operator has got to answering one question Decision.
 struct QuestionDraft {
     /// The Decision's own id — the draft dies with it.
-    decision: String,
+    decision: ferrite_core::activity::DecisionHandle,
     questions: Vec<ferrite_core::questions::Question>,
     answers: Vec<ferrite_core::questions::Answer>,
 }
@@ -539,6 +541,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> Self {
         crate::theme::init_components(cx);
+        subagents::init(cx);
         cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(pump_interval()).await;
             if this.update(cx, |view, cx| view.pump(cx)).is_err() {
@@ -780,17 +783,44 @@ impl CockpitView {
             return;
         }
         for update in &frame {
-            if let Some(pane) = self.pane_for(update.thread) {
-                // New content follows the tail; colour arriving late does
-                // not, and neither does an operator who scrolled back into
-                // history — they reattach by scrolling to the bottom.
-                if !update.dirty.is_empty() && self.panes[pane].follow_tail.get() {
-                    self.panes[pane].scroll.scroll_to_bottom();
+            if let Some(index) = self.pane_for(update.thread) {
+                for (from, to) in &update.redirects {
+                    self.panes[index].redirect_subject(from, to);
+                }
+                let selected = self.panes[index].selected.clone();
+                let generation = self
+                    .cockpit
+                    .thread(update.thread)
+                    .and_then(|open| open.activity().subject(&selected))
+                    .map(|subject| subject.revision())
+                    .unwrap_or(0);
+                self.panes[index].select_subject(selected.clone(), generation, cx);
+                let content_changed = update
+                    .subjects
+                    .iter()
+                    .any(|change| change.subject == selected && change.content_changed)
+                    || (self.panes[index].is_main() && !update.dirty.is_empty());
+                if content_changed && self.panes[index].follow_tail.get() {
+                    self.panes[index].scroll.scroll_to_bottom();
+                }
+                if update.activity_changed || content_changed || !update.evicted.is_empty() {
+                    self.prune_tool_disclosures(update.thread);
+                }
+                self.prune_request_forms(index);
+                self.panes[index].history_error = self
+                    .cockpit
+                    .subject_history_error(update.thread, &self.panes[index].selected)
+                    .map(str::to_string);
+                let unretained = self
+                    .cockpit
+                    .thread(update.thread)
+                    .and_then(|thread| thread.activity().subject(&self.panes[index].selected))
+                    .is_some_and(|subject| !subject.retained());
+                if unretained && self.panes[index].history_error.is_none() {
+                    self.retry_subject_history(index, cx);
                 }
             }
-            // The facts refold only when the Thread actually changed.
             if !update.dirty.is_empty() || !update.evicted.is_empty() {
-                self.prune_tool_disclosures(update.thread);
                 self.facts.streamed(&self.cockpit, update.thread);
             }
         }
@@ -853,7 +883,8 @@ impl CockpitView {
         let valid = self
             .cockpit
             .thread(thread)
-            .map(|open| open.transcript())
+            .and_then(|open| open.activity().subject(&self.panes[index].selected))
+            .map(|subject| subject.transcript())
             .into_iter()
             .flat_map(|transcript| transcript.blocks())
             .filter_map(|block| match &block.body {
@@ -1520,7 +1551,7 @@ impl CockpitView {
         &self,
         group: GroupId,
         tree: Tree,
-        window: &Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
         let bounds = self.board_bounds(window);
@@ -1537,7 +1568,7 @@ impl CockpitView {
             let level = Level::for_cell(Cell::new(rect.w, rect.h));
             let rect = local(rect);
             board = board.child(
-                self.pane_cell(index, level, cx)
+                self.pane_cell(index, level, window, cx)
                     .absolute()
                     .left(px(rect.x))
                     .top(px(rect.y))
@@ -2182,6 +2213,9 @@ impl CockpitView {
         let Some(thread) = self.focused_thread() else {
             return;
         };
+        if !self.panes[self.focused()].is_main() {
+            return;
+        }
         let composer = self.panes[self.focused()].composer.clone();
         // A question waits: ↵ sends the picks, and whatever is on the
         // line goes with them as the operator's own answer.
@@ -2254,6 +2288,9 @@ impl CockpitView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.panes[self.focused()].is_main() {
+            return;
+        }
         let Some(thread) = self.focused_thread() else {
             return;
         };
@@ -2305,7 +2342,12 @@ impl CockpitView {
     /// Tab walks a draft's band (#29), or an L1 Thread Pane's rendered tool
     /// disclosures before returning to the Composer.
     fn band_cycle(&mut self, _: &BandCycle, window: &mut Window, cx: &mut Context<Self>) {
-        if self.settings_open {
+        if self.settings_open
+            || self
+                .focused_thread()
+                .and_then(|thread| self.cockpit.thread(thread))
+                .is_some_and(|thread| !thread.activity().children().is_empty())
+        {
             window.focus_next(cx);
             return;
         }
@@ -2331,7 +2373,12 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.settings_open {
+        if self.settings_open
+            || self
+                .focused_thread()
+                .and_then(|thread| self.cockpit.thread(thread))
+                .is_some_and(|thread| !thread.activity().children().is_empty())
+        {
             window.focus_prev(cx);
         } else {
             self.cycle_tools(true, window, cx);
@@ -2375,9 +2422,9 @@ impl CockpitView {
         };
         self.cockpit
             .thread(thread)
-            .map(|open| open.transcript())
+            .and_then(|open| open.activity().subject(&self.panes[index].selected))
             .into_iter()
-            .flat_map(|transcript| pane::rendered_output_tools(transcript.blocks(), level))
+            .flat_map(|subject| pane::rendered_output_tools(subject.transcript().blocks(), level))
             .map(|tool| tool.call.clone())
             .collect()
     }
@@ -2407,6 +2454,10 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.panes[self.focused()].is_main() {
+            self.answer_subject(answer, cx);
+            return;
+        }
         if self.level_now(window) == Level::Transcript {
             if let Some(pane) = self.panes.get(self.focused()) {
                 // A question is answered in words as often as by a pick,
@@ -2477,7 +2528,19 @@ impl CockpitView {
                 None => return,
             },
         };
-        self.cockpit.respond(thread, &decision, response);
+        if let Some(handle) = self
+            .cockpit
+            .thread(thread)
+            .and_then(|open| {
+                open.activity().pending_decisions().iter().find(|request| {
+                    request.decision == decision
+                        && request.subject == Some(ferrite_core::activity::Subject::Main)
+                })
+            })
+            .map(|request| request.handle.clone())
+        {
+            self.respond_exact(thread, &handle, response, cx);
+        }
         self.facts.acted(&self.cockpit, thread);
         cx.notify();
     }
@@ -4225,10 +4288,30 @@ impl CockpitView {
 
     /// Jump to the next Thread waiting on the operator — the whole point of
     /// a Group you cannot read all of at once.
-    fn next_decision(&mut self, _: &NextDecision, _window: &mut Window, cx: &mut Context<Self>) {
-        if self.cockpit.next_decision().is_some() {
-            self.focus_pane(self.focused());
-            cx.notify();
+    fn next_decision(&mut self, _: &NextDecision, window: &mut Window, cx: &mut Context<Self>) {
+        let focused = self.focused();
+        let mut requests = Vec::new();
+        for pane in &self.panes {
+            if let Some(thread) = pane.thread() {
+                if let Some(open) = self.cockpit.thread(thread) {
+                    for request in open.activity().pending_decisions() {
+                        requests.push((
+                            thread,
+                            request
+                                .subject
+                                .clone()
+                                .unwrap_or(ferrite_core::activity::Subject::Main),
+                        ));
+                    }
+                }
+            }
+        }
+        let current = self
+            .panes
+            .get(focused)
+            .and_then(|pane| pane.thread().map(|thread| (thread, pane.selected.clone())));
+        if let Some((thread, subject)) = subagents::next_request(requests, current.as_ref()) {
+            self.select_subject(thread, subject, window, cx);
         }
     }
 
@@ -4275,6 +4358,9 @@ impl CockpitView {
     /// to select, a tool row — took the keyboard away: the text goes
     /// where the operator is about to type, and the keyboard follows it.
     fn paste_into_composer(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.panes[self.focused()].is_main() {
+            return;
+        }
         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
             return;
         };
@@ -4557,7 +4643,12 @@ impl Render for CockpitView {
                     self.panes[index]
                         .thread()
                         .and_then(|thread| {
-                            self.cockpit.thread(thread).map(|open| open.transcript())
+                            self.cockpit
+                                .thread(thread)
+                                .and_then(|open| {
+                                    open.activity().subject(&self.panes[index].selected)
+                                })
+                                .map(|subject| subject.transcript())
                         })
                         .is_some_and(|transcript| {
                             pane::rendered_output_tools(transcript.blocks(), level)
@@ -4662,6 +4753,9 @@ impl Render for CockpitView {
                     Level::Transcript if pane.has_tool_target() => Some(pane.tool_focus()),
                     // An L2 cell draws a Composer too, and the keys go
                     // where the caret is.
+                    Level::Transcript | Level::Instruments if !pane.is_main() => {
+                        Some(pane.transcript_focus.clone())
+                    }
                     Level::Transcript | Level::Instruments => Some(pane.composer.focus_handle(cx)),
                     _ if pane.thread().is_some_and(|thread| {
                         self.cockpit
@@ -4682,7 +4776,26 @@ impl Render for CockpitView {
                 .panes
                 .get(self.focused())
                 .is_some_and(|pane| pane.transcript_focus.contains_focused(window, cx));
-        if window.has_active_dialog(cx) || native_text_focused {
+        let pane_control_focused = self.panes.get(self.focused()).is_some_and(|pane| {
+            let controls = pane
+                .thread()
+                .and_then(|id| self.cockpit.thread(id))
+                .is_some_and(|thread| {
+                    !thread.activity().children().is_empty()
+                        || thread.activity().pending_decisions().len() > 1
+                        || thread
+                            .activity()
+                            .pending_decisions()
+                            .iter()
+                            .any(|request| request.subject.is_none())
+                });
+            pane.agent_menu_open
+                || (controls
+                    && pane.controls_focus.contains_focused(window, cx)
+                    && !pane.controls_focus.is_focused(window)
+                    && (!pane.is_main() || !pane.transcript_focus.is_focused(window)))
+        });
+        if window.has_active_dialog(cx) || native_text_focused || pane_control_focused {
             // Native text and dialogs keep their own keyboard focus.
         } else if self.settings_open {
             // The pump must not steal focus from Settings search or controls.
@@ -4719,7 +4832,7 @@ impl Render for CockpitView {
             frame()
                 .flex()
                 .flex_col()
-                .child(self.pane_cell(index, level, cx))
+                .child(self.pane_cell(index, level, window, cx))
         } else if let Some((group, tree)) = match self.cockpit.roster().view() {
             View::Group(group) => self.group_tree(group).map(|tree| (group, tree)),
             View::Solo => None,
@@ -4741,7 +4854,7 @@ impl Render for CockpitView {
                     .min_h_0()
                     .gap(px(crate::theme::GRID_GAP));
                 for index in row {
-                    line = line.child(self.pane_cell(*index, level, cx));
+                    line = line.child(self.pane_cell(*index, level, window, cx));
                 }
                 for _ in row.len()..columns {
                     line = line.child(div().flex_1().min_w_0().min_h_0());
@@ -4915,7 +5028,13 @@ impl CockpitView {
     /// One Pane's cell — the click-to-focus and drag plumbing around
     /// `render_pane`. The same cell serves a grid slot and the fullscreen
     /// view; only who lays it out differs.
-    fn pane_cell(&self, index: usize, level: Level, cx: &mut Context<Self>) -> Div {
+    fn pane_cell(
+        &self,
+        index: usize,
+        level: Level,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let pane = &self.panes[index];
         let focused = index == self.focused();
         let cell = div()
@@ -4925,6 +5044,7 @@ impl CockpitView {
             .flex_1()
             .min_w_0()
             .min_h_0()
+            .track_focus(&pane.controls_focus)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |view, event: &MouseDownEvent, window, cx| {
@@ -5005,9 +5125,16 @@ impl CockpitView {
         // exactly the rows the body will draw — the shared rendered window,
         // because copy is what you see.
         let selection = {
-            let blocks = open.map(|open| open.transcript().blocks()).unwrap_or(&[]);
-            self.selection
-                .overlay(thread, pane::rendered_window(blocks, level))
+            let blocks = open
+                .and_then(|open| open.activity().subject(&pane.selected))
+                .map(|subject| subject.transcript().blocks())
+                .unwrap_or(&[]);
+            self.selection.overlay_scoped(
+                thread,
+                pane.text_namespace(),
+                pane::rendered_window(blocks, level),
+                pane.rich.clone(),
+            )
         };
         let cached = self.facts.get(thread);
         let facts = pane::PaneFacts {
@@ -5034,8 +5161,16 @@ impl CockpitView {
             // The title is the Pane's handle at every size: a drag moves a
             // grouped Pane, a double-click renames it — an L2 cell with no
             // handle could not be rearranged at all.
-            title: Some(self.pane_title(index, thread, cx)),
-            question_form: l1.then(|| self.question_form(index, cx)).flatten(),
+            title: Some(self.activity_title(index, cx)),
+            question_form: (l1 && pane.is_main())
+                .then(|| self.question_form(index, cx))
+                .flatten(),
+            agents: l1.then(|| self.subject_strip(index, window, cx)).flatten(),
+            activity_attention: self.activity_attention(index, cx),
+            activity_decisions: (level != Level::Wall)
+                .then(|| self.activity_decisions(index, window, cx))
+                .flatten(),
+            child_footer: self.child_footer(index, cx),
         };
         cell.child(pane::render_pane(pane, facts, wiring, level))
     }
@@ -5054,10 +5189,14 @@ impl CockpitView {
         let Some(open) = self.cockpit.thread(thread) else {
             return std::collections::HashMap::new();
         };
-        let transcript = open.transcript();
+        let Some(subject_view) = open.activity().subject(&pane.selected) else {
+            return Default::default();
+        };
+        let transcript = subject_view.transcript();
         let mut controls = std::collections::HashMap::new();
         for tool in pane::rendered_output_tools(transcript.blocks(), level) {
             let call = tool.call.clone();
+            let subject = pane.selected.clone();
             let wired = pane::tool_disclosure_control(
                 &call,
                 pane.tool_state(&call) == pane::DisclosureState::Expanded,
@@ -5068,9 +5207,10 @@ impl CockpitView {
                 MouseButton::Left,
                 cx.listener({
                     let call = call.clone();
+                    let subject = subject.clone();
                     move |view, _: &MouseDownEvent, window, cx| {
                         cx.stop_propagation();
-                        view.toggle_tool(thread, &call, window, cx);
+                        view.toggle_subject_tool(thread, &subject, &call, window, cx);
                     }
                 }),
             );
@@ -5113,10 +5253,19 @@ impl CockpitView {
     fn pending_questions(
         &self,
         thread: ThreadId,
-    ) -> Option<(String, Vec<ferrite_core::questions::Question>)> {
-        let decision = self.cockpit.thread(thread)?.pending()?;
-        let questions = pane::question_of(decision)?;
-        Some((decision.id.clone(), questions))
+    ) -> Option<(
+        ferrite_core::activity::DecisionHandle,
+        Vec<ferrite_core::questions::Question>,
+    )> {
+        let request = self
+            .cockpit
+            .thread(thread)?
+            .activity()
+            .pending_decisions()
+            .iter()
+            .find(|request| request.subject == Some(ferrite_core::activity::Subject::Main))?;
+        let questions = pane::question_of(&request.decision)?;
+        Some((request.handle.clone(), questions))
     }
 
     /// Every open Thread's draft follows its pending Decision: a new
@@ -5267,12 +5416,29 @@ impl CockpitView {
             &draft.answers,
             &draft.questions,
         );
-        self.questions.remove(&thread);
-        self.cockpit
-            .respond(thread, &decision, DecisionAnswer::Allow { input });
+        let handle = draft.decision.clone();
+        let answered =
+            match self
+                .cockpit
+                .respond_decision(thread, &handle, DecisionAnswer::Allow { input })
+            {
+                Ok(answered) => answered,
+                Err(error) => {
+                    if let Some(index) = self.pane_for(thread) {
+                        self.panes[index].request_error = Some((handle, error.to_string()));
+                    }
+                    false
+                }
+            };
+        if answered {
+            self.questions.remove(&thread);
+            if let Some(index) = self.pane_for(thread) {
+                self.panes[index].request_error = None;
+            }
+        }
         self.facts.acted(&self.cockpit, thread);
         cx.notify();
-        true
+        answered
     }
 
     /// The question card (L1): one block per question, its options wired
@@ -5297,6 +5463,7 @@ impl CockpitView {
                 question.multi_select,
             ));
             for (oi, option) in question.options.iter().enumerate() {
+                let decision_id = decision_id.clone();
                 let row = pane::question_option(
                     ("question-option", qi * 8 + oi),
                     oi + 1,
@@ -5312,7 +5479,12 @@ impl CockpitView {
                         if let Some(index) = view.pane_for(thread) {
                             view.focus_pane(index);
                         }
-                        view.pick_option(thread, qi, oi);
+                        if view
+                            .pending_questions(thread)
+                            .is_some_and(|(handle, _)| handle == decision_id)
+                        {
+                            view.pick_option(thread, qi, oi);
+                        }
                         cx.notify();
                     }),
                 );
@@ -5328,6 +5500,7 @@ impl CockpitView {
             "1–4 or click to pick · or type an answer below and press ↵"
         });
         let wire = |keycap: Stateful<Div>, answer: Answer, cx: &mut Context<Self>| {
+            let decision_id = decision_id.clone();
             keycap.on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |view, _: &MouseDownEvent, _, cx| {
@@ -5335,12 +5508,26 @@ impl CockpitView {
                     if let Some(index) = view.pane_for(thread) {
                         view.focus_pane(index);
                     }
-                    view.answer(answer, cx);
+                    let request = view
+                        .cockpit
+                        .thread(thread)
+                        .and_then(|thread| {
+                            thread
+                                .activity()
+                                .pending_decisions()
+                                .iter()
+                                .find(|request| request.handle == decision_id)
+                        })
+                        .cloned();
+                    if let Some(request) = request {
+                        view.answer_request(thread, request, answer, cx);
+                    }
                 }),
             )
         };
         let mut keys = pane::decide_row(Level::Transcript);
         if answered || typed {
+            let decision_id = decision_id.clone();
             keys = keys.child(pane::keycap_send().on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |view, _: &MouseDownEvent, window, cx| {
@@ -5348,7 +5535,12 @@ impl CockpitView {
                     if let Some(index) = view.pane_for(thread) {
                         view.focus_pane(index);
                     }
-                    view.submit(&Submit, window, cx);
+                    if view
+                        .pending_questions(thread)
+                        .is_some_and(|(handle, _)| handle == decision_id)
+                    {
+                        view.submit(&Submit, window, cx);
+                    }
                 }),
             ));
         }
@@ -5491,9 +5683,21 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let thread = self.panes[index].thread()?;
-        let decision = self.cockpit.thread(thread)?.pending()?;
+        if !self.panes[index].is_main() {
+            return None;
+        }
+        let request = self
+            .cockpit
+            .thread(thread)?
+            .activity()
+            .pending_decisions()
+            .iter()
+            .find(|request| request.subject == Some(ferrite_core::activity::Subject::Main))?
+            .clone();
+        let decision = &request.decision;
         let offers_always = level == Level::Transcript && decision.standing_answer().is_some();
         let wire = |keycap: Stateful<Div>, answer: Answer, cx: &mut Context<Self>| {
+            let request = request.clone();
             keycap.on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |view, _: &MouseDownEvent, _, cx| {
@@ -5501,7 +5705,7 @@ impl CockpitView {
                     if let Some(index) = view.pane_for(thread) {
                         view.focus_pane(index);
                     }
-                    view.answer(answer, cx);
+                    view.answer_request(thread, request.clone(), answer, cx);
                 }),
             )
         };
@@ -6361,6 +6565,7 @@ fn transcript_text(blocks: &[ferrite_core::transcript::Block]) -> String {
 
 #[cfg(test)]
 mod tests {
+    mod subagents;
     use super::*;
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -8405,7 +8610,15 @@ mod tests {
         cx.update(|window, cx| {
             let view = view.read(cx);
             let thread = view.panes[0].thread().unwrap();
-            let blocks = view.cockpit.thread(thread).unwrap().transcript().blocks();
+            let blocks = view
+                .cockpit
+                .thread(thread)
+                .unwrap()
+                .activity()
+                .subject(&view.panes[0].selected)
+                .unwrap()
+                .transcript()
+                .blocks();
             let current = &blocks[block];
             let (id, item, paragraphs, text) = if current.markdown.is_some() {
                 let start = (0..=block)
@@ -8423,7 +8636,7 @@ mod tests {
                 (
                     format!(
                         "markdown-{}-{:?}",
-                        thread.get(),
+                        view.panes[0].text_namespace(),
                         current.markdown_run.unwrap_or(blocks[start].id)
                     ),
                     block - start,
@@ -8442,7 +8655,11 @@ mod tests {
                     .unwrap()
                     .3;
                 (
-                    format!("literal-{}-{:?}-0", thread.get(), current.id),
+                    format!(
+                        "literal-{}-{:?}-0",
+                        view.panes[0].text_namespace(),
+                        current.id
+                    ),
                     0,
                     1,
                     text,
@@ -8715,7 +8932,7 @@ mod tests {
                 .0;
             let y = |block| {
                 crate::rich::testing::bounds(
-                    &format!("literal-{}-{block:?}-0", thread.get()),
+                    &format!("literal-{}-{block:?}-0", view.panes[0].text_namespace()),
                     0,
                     cx,
                 )
@@ -8814,7 +9031,7 @@ mod tests {
             };
             let x = |block| {
                 crate::rich::testing::bounds(
-                    &format!("literal-{}-{block:?}-0", thread.get()),
+                    &format!("literal-{}-{block:?}-0", view.panes[0].text_namespace()),
                     0,
                     cx,
                 )

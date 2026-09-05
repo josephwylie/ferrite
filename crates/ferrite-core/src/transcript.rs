@@ -338,6 +338,21 @@ pub struct Transcript {
     completed: std::collections::BTreeSet<String>,
 }
 
+/// Runtime observations travel separately from replayable content. Activity
+/// preserves these while rebuilding an item or loading older child history.
+#[derive(Clone)]
+pub(crate) struct Runtime {
+    status: Status,
+    model: Option<String>,
+    session_id: Option<String>,
+    last_cost: Option<f64>,
+    turn_outcome: Option<TurnOutcome>,
+    usage: Option<Usage>,
+    turn_started: Option<std::time::Instant>,
+    turn_output_tokens: u64,
+    last_report: u64,
+}
+
 /// Blocks a long-running Thread keeps in memory. Generous enough that a Pane
 /// streaming all day scrolls back through the Thread's own history rather
 /// than a recent sliver of it.
@@ -380,6 +395,51 @@ impl Transcript {
 
     pub fn status(&self) -> Status {
         self.status
+    }
+
+    pub(crate) fn set_attention(&mut self, pending: bool, busy: bool) {
+        if pending {
+            self.status = Status::Blocked;
+        } else if self.status == Status::Blocked {
+            self.status = if busy {
+                Status::Streaming
+            } else {
+                Status::Idle
+            };
+        }
+    }
+
+    pub(crate) fn clear_activity(&mut self) {
+        if matches!(self.status, Status::Streaming | Status::Blocked) {
+            self.status = Status::Idle;
+        }
+        self.turn_started = None;
+    }
+
+    pub(crate) fn runtime(&self) -> Runtime {
+        Runtime {
+            status: self.status,
+            model: self.model.clone(),
+            session_id: self.session_id.clone(),
+            last_cost: self.last_cost,
+            turn_outcome: self.turn_outcome.clone(),
+            usage: self.usage,
+            turn_started: self.turn_started,
+            turn_output_tokens: self.turn_output_tokens,
+            last_report: self.last_report,
+        }
+    }
+
+    pub(crate) fn restore_runtime(&mut self, runtime: Runtime) {
+        self.status = runtime.status;
+        self.model = runtime.model;
+        self.session_id = runtime.session_id;
+        self.last_cost = runtime.last_cost;
+        self.turn_outcome = runtime.turn_outcome;
+        self.usage = runtime.usage;
+        self.turn_started = runtime.turn_started;
+        self.turn_output_tokens = runtime.turn_output_tokens;
+        self.last_report = runtime.last_report;
     }
 
     pub fn model(&self) -> Option<&str> {
@@ -496,6 +556,10 @@ impl Transcript {
     /// of a superset event model — a wildcard would silently render nothing.
     fn fold(&mut self, input: Input) -> Update {
         match input {
+            // Activity owns attribution and feeds each subject's execution
+            // into its own Transcript. Legacy callers cannot fold children
+            // into Main by accidentally replaying an attributed observation.
+            Input::Event(SessionEvent::Activity(_)) => Update::default(),
             Input::Event(SessionEvent::TextDelta { text }) => {
                 self.status = Status::Streaming;
                 Update {
