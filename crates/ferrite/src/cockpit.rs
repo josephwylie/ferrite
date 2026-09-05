@@ -162,6 +162,11 @@ pub struct CockpitView {
     context_menu: Option<ContextMenu>,
     /// The usage meter's detail card, tied to its Thread and click position.
     context_usage: Option<(ThreadId, gpui::Point<gpui::Pixels>)>,
+    /// The header `ci` mark's checks card, tied to its Thread and click
+    /// position (#29). The runs it lists are read from the same cached
+    /// `BranchStatus` the mark was drawn from, so the card can never
+    /// disagree with the mark that opened it.
+    context_checks: Option<(ThreadId, gpui::Point<gpui::Pixels>)>,
     /// A seam being dragged: the Group, the seam, and the tree as it
     /// stands mid-drag — persisted on release, never per move.
     seam_drag: Option<SeamDrag>,
@@ -573,6 +578,7 @@ impl CockpitView {
             rename: None,
             context_menu: None,
             context_usage: None,
+            context_checks: None,
             nav_collapsed: prefs.settings.nav_collapsed,
             nav_has_toggled: false,
             facts: Facts::with_auto_title(prefs.settings.auto_title),
@@ -853,9 +859,7 @@ impl CockpitView {
                 .spawn(async move {
                     targets
                         .into_iter()
-                        .map(|(thread, cwd)| {
-                            (thread, ferrite_core::workspace::branch_status(&cwd))
-                        })
+                        .map(|(thread, cwd)| (thread, ferrite_core::workspace::branch_status(&cwd)))
                         .collect()
                 })
                 .await;
@@ -925,6 +929,7 @@ impl CockpitView {
         self.settings_open
             || self.nav_filter_open
             || self.popover.is_some()
+            || self.context_checks.is_some()
             || self.context_menu.is_some()
     }
 
@@ -1152,6 +1157,7 @@ impl CockpitView {
     /// at a time.
     fn open_context_menu(&mut self, target: MenuTarget, at: Point<Pixels>, cx: &mut Context<Self>) {
         self.popover = None;
+        self.context_checks = None;
         self.nav_filter_open = false;
         if self.rename.is_some() {
             self.finish_rename(false, cx);
@@ -2288,6 +2294,10 @@ impl CockpitView {
     }
 
     fn interrupt(&mut self, _: &Interrupt, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.context_checks.take().is_some() {
+            cx.notify();
+            return;
+        }
         if self.context_usage.take().is_some() {
             cx.notify();
             return;
@@ -4696,6 +4706,24 @@ impl Render for CockpitView {
             }
         }
 
+        // The card belongs to the mark that opened it: leaving that Pane,
+        // zooming below L1, or the refresh that drops the PR out of the
+        // header takes the card with it. A card outliving its mark would be
+        // claiming CI for a Pane that is no longer saying anything about it.
+        if self.context_checks.is_some_and(|(thread, _)| {
+            level != Level::Transcript
+                || self.focused_thread() != Some(thread)
+                || self.settings_open
+                || self
+                    .facts
+                    .get(thread)
+                    .and_then(|facts| facts.status.as_ref())
+                    .and_then(|status| status.pr.as_ref())
+                    .is_none_or(|pr| pr.checks.is_none())
+        }) {
+            self.context_checks = None;
+        }
+
         if self.context_usage.is_some_and(|(thread, _)| {
             level != Level::Transcript
                 || self.focused_thread() != Some(thread)
@@ -5055,6 +5083,7 @@ impl Render for CockpitView {
             })
             .children(self.context_menu_element(cx))
             .children(self.context_usage_element(cx))
+            .children(self.context_checks_element(cx))
             .children(self.settings_element(cx))
             .children(gpui::component::Root::render_dialog_layer(window, cx))
     }
@@ -5234,6 +5263,7 @@ impl CockpitView {
             // handle could not be rearranged at all.
             title: Some(self.activity_title(index, cx)),
             agents: l1.then(|| self.subject_strip(index, window, cx)).flatten(),
+            ci: self.ci_mark(index, cx),
             activity_attention: self.activity_attention(index, cx),
             activity_decisions: (level != Level::Wall)
                 .then(|| self.activity_decisions(index, window, cx))
@@ -5559,6 +5589,108 @@ impl CockpitView {
                     }),
                 )
                 .into_any_element(),
+        )
+    }
+
+    /// The header's `ci` mark, wired to the checks card. Drawn from the
+    /// cached `BranchStatus` and nothing else — the mark never asks `gh`
+    /// itself, and a Pane whose PR reports no checks gets no control,
+    /// because there would be nothing for the card to list.
+    fn ci_mark(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let thread = self.panes[index].thread()?;
+        let pr = self
+            .facts
+            .get(thread)
+            .and_then(|facts| facts.status.as_ref())
+            .and_then(|status| status.pr.as_ref())?;
+        pr.checks?;
+        let was_open = self
+            .context_checks
+            .is_some_and(|(shown, _)| shown == thread);
+        Some(
+            div()
+                .id(("ci-mark", thread.get() as usize))
+                .debug_selector(move || format!("ci-mark-{}", thread.get()))
+                .child(pane::ci_mark(pr))
+                .cursor_pointer()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |view, event: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        view.focus_pane(index);
+                        view.popover = None;
+                        view.context_menu = None;
+                        view.context_usage = None;
+                        // Outside-click dismissal runs in the capture phase,
+                        // before this toggle: read the mark that was pressed.
+                        view.context_checks = (!was_open)
+                            .then_some((thread, event.position + gpui::point(px(0.), px(8.))));
+                        cx.notify();
+                    }),
+                )
+                .into_any_element(),
+        )
+    }
+
+    /// The checks card: every run behind the header's rollup, grouped by
+    /// the workflow that owns it, each row opening its own log. Built here
+    /// rather than in `pane.rs` because the rows are controls and a
+    /// listener needs this view's `Context`.
+    fn context_checks_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (thread, at) = self.context_checks?;
+        let pr = self
+            .facts
+            .get(thread)
+            .and_then(|facts| facts.status.as_ref())
+            .and_then(|status| status.pr.as_ref())?;
+        let mut card = pane::checks_card().child(pane::checks_head(pr));
+        let mut workflow: Option<Option<&str>> = None;
+        for (index, run) in pr.runs.iter().enumerate() {
+            let group = run.workflow.as_deref();
+            if workflow != Some(group) {
+                card = card.child(pane::checks_group(group, workflow.is_none()));
+                workflow = Some(group);
+            }
+            let row = pane::check_row(index, run);
+            card = card.child(match run.url.clone() {
+                // A press opens the run's log where the browser is, and
+                // closes the card: the answer is now in the other window.
+                Some(url) => row.on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        cx.open_url(&url);
+                        view.context_checks = None;
+                        cx.notify();
+                    }),
+                ),
+                None => row,
+            });
+        }
+        let card = menu::shell()
+            .id("context-checks-card")
+            .debug_selector(|| "context-checks-card".into())
+            .w(px(crate::theme::CHECKS_CARD_W))
+            .p(px(0.))
+            .child(card)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
+            )
+            .on_mouse_down_out(cx.listener(|view, _: &MouseDownEvent, _, cx| {
+                if view.context_checks.take().is_some() {
+                    cx.notify();
+                }
+            }));
+        Some(
+            deferred(
+                anchored()
+                    .position(at)
+                    .snap_to_window_with_margin(px(crate::theme::GRID_PAD))
+                    .child(card),
+            )
+            .with_priority(2)
+            .into_any_element(),
         )
     }
 
@@ -6932,6 +7064,115 @@ mod tests {
         cx.run_until_parked();
         cx.simulate_keystrokes("escape");
         view.read_with(cx, |view, _| assert!(view.context_usage.is_none()));
+    }
+
+    /// A branch status carrying a PR whose checks are mixed — one Actions
+    /// job failing, one passing, and a posted commit status beside them.
+    fn branch_status_with_checks() -> ferrite_core::workspace::BranchStatus {
+        use ferrite_core::workspace::{BranchStatus, Check, CheckState, PrState, PullRequest};
+        let run =
+            |name: &str, workflow: Option<&str>, state, detail: &str, url: Option<&str>| Check {
+                name: name.to_string(),
+                workflow: workflow.map(str::to_string),
+                state,
+                detail: detail.to_string(),
+                url: url.map(str::to_string),
+            };
+        BranchStatus {
+            branch: Some("feat/thread-pane-header".into()),
+            upstream: Some("origin/feat/thread-pane-header".into()),
+            ahead: 2,
+            behind: 0,
+            dirty: 0,
+            pr: Some(PullRequest {
+                number: 48,
+                state: PrState::Open,
+                draft: false,
+                checks: Some(CheckState::Failing),
+                runs: vec![
+                    run(
+                        "test (windows-latest)",
+                        Some("CI"),
+                        CheckState::Failing,
+                        "failure",
+                        Some("https://github.com/o/r/actions/runs/1"),
+                    ),
+                    run("fmt", Some("CI"), CheckState::Passing, "success", None),
+                    run(
+                        "codecov/patch",
+                        None,
+                        CheckState::Pending,
+                        "pending",
+                        Some("https://codecov.io/x"),
+                    ),
+                ],
+            }),
+        }
+    }
+
+    /// The header's `ci` mark is a control (#29): it counts the failures
+    /// the rollup folded, and a press opens the card that names every run
+    /// behind it, grouped by its workflow. A second press closes it, and so
+    /// does escape.
+    #[gpui::test]
+    fn the_ci_mark_opens_the_checks_it_counts(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("ci-card", 1);
+        bind_production_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        let thread = view.read_with(cx, |view, _| view.cockpit.threads()[0]);
+        view.update(cx, |view, cx| {
+            view.facts
+                .set_branches(vec![(thread, Some(branch_status_with_checks()))]);
+            cx.notify();
+        });
+        tick(cx);
+        let mark = cx
+            .debug_bounds("ci-mark-1")
+            .expect("the checkout line draws a ci mark for a PR with checks");
+        assert!(
+            cx.debug_bounds("context-checks-card").is_none(),
+            "the card is closed until the mark is pressed"
+        );
+        cx.simulate_mouse_down(mark.center(), MouseButton::Left, gpui::Modifiers::none());
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("context-checks-card").is_some());
+        for row in ["check-row-0", "check-row-1", "check-row-2"] {
+            assert!(
+                cx.debug_bounds(row).is_some(),
+                "every run behind the rollup gets a row"
+            );
+        }
+        cx.simulate_mouse_down(mark.center(), MouseButton::Left, gpui::Modifiers::none());
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert!(view.context_checks.is_none(), "a second press closes it")
+        });
+        cx.simulate_mouse_down(mark.center(), MouseButton::Left, gpui::Modifiers::none());
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| assert!(view.context_checks.is_some()));
+        cx.simulate_keystrokes("escape");
+        view.read_with(cx, |view, _| assert!(view.context_checks.is_none()));
+    }
+
+    /// A PR whose rollup is empty claims nothing about CI, so there is no
+    /// mark to press — the card would have had nothing to list.
+    #[gpui::test]
+    fn a_pr_without_checks_offers_no_ci_control(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("ci-no-checks", 1);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        let thread = view.read_with(cx, |view, _| view.cockpit.threads()[0]);
+        view.update(cx, |view, cx| {
+            let mut status = branch_status_with_checks();
+            let pr = status.pr.as_mut().unwrap();
+            pr.checks = None;
+            pr.runs.clear();
+            view.facts.set_branches(vec![(thread, Some(status))]);
+            cx.notify();
+        });
+        tick(cx);
+        assert!(cx.debug_bounds("ci-mark-1").is_none());
     }
 
     /// The whole keystroke path in a real window: a blocked Pane, one key, and

@@ -479,6 +479,19 @@ pub const USAGE_LINE_GAP: f32 = 2.0;
 /// an absolutely positioned overlay inside a non-clipping wrapper, since a
 /// ring drawn inside the shell's `overflow_hidden()` would be clipped.
 pub const FOCUS_RING_W: f32 = 1.0;
+/// The checks card the header's `ci` mark opens (#29): wide enough for a
+/// matrix job's own name — `test (windows-latest, stable)` — beside its
+/// state word, which is the whole reason the card exists.
+pub const CHECKS_CARD_W: f32 = 312.0;
+pub const CHECKS_CARD_PAD: f32 = 8.0;
+/// Between the card's heading and its runs.
+pub const CHECKS_CARD_GAP: f32 = 8.0;
+/// One run's line.
+pub const CHECKS_ROW_H: f32 = 22.0;
+/// A workflow's heading above the runs it owns, and the space that sets
+/// that group off from the one before it.
+pub const CHECKS_GROUP_H: f32 = 18.0;
+pub const CHECKS_GROUP_GAP: f32 = 6.0;
 /// The Decision card: 12px inline margin, 8px below, 8/10 padding, a 10px
 /// gap, and a 15px warning mark.
 #[allow(dead_code)]

@@ -12,10 +12,10 @@
 //! until `git worktree prune` (which `ensure_worktree` runs before creating,
 //! so Ferrite's own paths self-heal). Documented, not built for.
 
+use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::collections::HashMap;
 use std::process::Command;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -307,6 +307,67 @@ pub struct PullRequest {
     /// The rollup of the PR's checks. `None` when the PR has no checks at
     /// all — an honest silence, not a pass.
     pub checks: Option<CheckState>,
+    /// Every check behind that rollup, in the order the forge lists them:
+    /// what the header's `ci` mark opens onto. Empty exactly when `checks`
+    /// is `None` — the rollup *is* this list, folded.
+    pub runs: Vec<Check>,
+}
+
+impl PullRequest {
+    /// How the runs divide. The header's mark is a count, and this is what
+    /// it counts.
+    pub fn tally(&self) -> Tally {
+        let mut tally = Tally::default();
+        for run in &self.runs {
+            match run.state {
+                CheckState::Failing => tally.failing += 1,
+                CheckState::Pending => tally.pending += 1,
+                CheckState::Passing => tally.passing += 1,
+                CheckState::Skipped => tally.skipped += 1,
+            }
+        }
+        tally
+    }
+}
+
+/// The run counts by state. A skipped run is neither a pass nor a failure
+/// and is counted only as itself.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Tally {
+    pub passing: u32,
+    pub failing: u32,
+    pub pending: u32,
+    pub skipped: u32,
+}
+
+impl Tally {
+    pub fn total(&self) -> u32 {
+        self.passing + self.failing + self.pending + self.skipped
+    }
+
+    /// The runs that have finished, however they finished.
+    pub fn settled(&self) -> u32 {
+        self.total() - self.pending
+    }
+}
+
+/// One check on the PR: an Actions job, or a commit status some other
+/// service posted. Both arrive in the same rollup and both are shown.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Check {
+    /// The job or context name — `test (windows-latest)`,
+    /// `codecov/patch`.
+    pub name: String,
+    /// The Actions workflow the job belongs to. `None` for a plain commit
+    /// status, which has no workflow above it.
+    pub workflow: Option<String>,
+    pub state: CheckState,
+    /// GitHub's own word for where the run stands, lowercased —
+    /// `success`, `in_progress`, `timed_out`, `skipped`. The state above
+    /// is this folded to four; this is what the forge actually said.
+    pub detail: String,
+    /// Where the run's log lives, for the row that opens it.
+    pub url: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -321,6 +382,10 @@ pub enum CheckState {
     Passing,
     Failing,
     Pending,
+    /// Ran nothing and claims nothing — a skipped job or a neutral
+    /// status. Never the rollup's own reading: a PR whose every check
+    /// skipped is not a passing PR.
+    Skipped,
 }
 
 /// Read the checkout's drift and its PR in one place, off the UI thread.
@@ -360,10 +425,7 @@ pub fn branch_status(cwd: &Path) -> Option<BranchStatus> {
 
 /// `+3` / `-0` as git writes them in porcelain v2.
 fn parse_signed(token: &str) -> Option<u32> {
-    token
-        .trim_start_matches(['+', '-'])
-        .parse::<u32>()
-        .ok()
+    token.trim_start_matches(['+', '-']).parse::<u32>().ok()
 }
 
 /// How long a PR reading is reused before `gh` is asked again. The branch
@@ -376,8 +438,7 @@ const PR_TTL: Duration = Duration::from_secs(60);
 /// The last PR reading per checkout, with when it was taken. Keyed by cwd
 /// because that is what the caller has; a worktree and its repo are
 /// different branches and so different answers.
-static PR_CACHE: Mutex<Option<HashMap<PathBuf, (Instant, Option<PullRequest>)>>> =
-    Mutex::new(None);
+static PR_CACHE: Mutex<Option<HashMap<PathBuf, (Instant, Option<PullRequest>)>>> = Mutex::new(None);
 
 /// The branch's PR, from cache while it is fresh and from `gh` when it is
 /// not.
@@ -396,9 +457,9 @@ fn cached_pull_request(cwd: &Path) -> Option<PullRequest> {
     pr
 }
 
-/// The branch's PR through `gh`. Every failure — no `gh`, not logged in,
-/// not a GitHub remote, no PR for this branch — is the same answer: the
-/// header says nothing about a PR.
+/// The branch's PR through `gh`. Every failure — no `gh`, not logged
+/// in, not a GitHub remote, no PR for this branch — is the same
+/// answer: the header says nothing about a PR.
 fn pull_request(cwd: &Path) -> Option<PullRequest> {
     let output = Command::new("gh")
         .args([
@@ -417,61 +478,95 @@ fn pull_request(cwd: &Path) -> Option<PullRequest> {
     parse_pr_json(&body)
 }
 
-/// Pull the four fields the header needs out of `gh`'s JSON without taking
-/// a JSON dependency into this crate: the shapes are flat and fixed, and a
-/// field we cannot read is simply one the header does not claim.
+/// Read `gh pr view`'s JSON. The rollup is a heterogeneous array —
+/// Actions jobs (`CheckRun`) and posted commit statuses (`StatusContext`)
+/// side by side, with different keys for the same three facts — so
+/// each element is read for whichever pair it carries. An element with no
+/// name at all is dropped rather than listed as a blank row.
 fn parse_pr_json(body: &str) -> Option<PullRequest> {
-    let number = json_number(body, "number")?;
-    let state = match json_string(body, "state")?.as_str() {
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    let number = value.get("number")?.as_u64()?;
+    let state = match value.get("state").and_then(serde_json::Value::as_str)? {
         "MERGED" => PrState::Merged,
         "CLOSED" => PrState::Closed,
         _ => PrState::Open,
     };
-    let draft = body.contains("\"isDraft\":true");
-    let rollup = body
-        .split_once("\"statusCheckRollup\":")
-        .map(|(_, rest)| rest)
-        .unwrap_or("");
-    let checks = if rollup.starts_with("[]") || rollup.starts_with("null") {
-        None
-    } else {
-        Some(rollup_state(rollup))
-    };
+    let draft = value
+        .get("isDraft")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let runs: Vec<Check> = value
+        .get("statusCheckRollup")
+        .and_then(serde_json::Value::as_array)
+        .map(|nodes| nodes.iter().filter_map(parse_check).collect())
+        .unwrap_or_default();
+    // No runs is no rollup: the silence stays a silence rather than
+    // becoming a pass.
+    let checks = (!runs.is_empty()).then(|| rollup_state(&runs));
     Some(PullRequest {
         number,
         state,
         draft,
         checks,
+        runs,
     })
 }
 
-/// A check rollup reads worst-first: any failure fails, any unfinished run
-/// is pending, and only an all-clear passes.
-fn rollup_state(rollup: &str) -> CheckState {
-    let failing = ["\"FAILURE\"", "\"TIMED_OUT\"", "\"ERROR\"", "\"CANCELLED\"", "\"ACTION_REQUIRED\""];
-    if failing.iter().any(|word| rollup.contains(word)) {
+/// One rollup element, whichever shape it came in.
+fn parse_check(node: &serde_json::Value) -> Option<Check> {
+    let string = |key: &str| {
+        node.get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .filter(|value| !value.is_empty())
+    };
+    // A job answers to `name`, a posted status to `context`.
+    let name = string("name").or_else(|| string("context"))?;
+    // A finished job reports its `conclusion` and an unfinished one only
+    // its `status`; a commit status puts both in one `state`.
+    let word = string("conclusion")
+        .or_else(|| string("status"))
+        .or_else(|| string("state"))?
+        .to_ascii_lowercase();
+    Some(Check {
+        state: check_state(&word),
+        detail: word,
+        workflow: string("workflowName"),
+        url: string("detailsUrl").or_else(|| string("targetUrl")),
+        name,
+    })
+}
+
+/// GitHub's vocabulary folded to the four states a dot can show. Anything
+/// unrecognised is pending, not passing: a word we do not know is not a
+/// word that clears CI.
+fn check_state(word: &str) -> CheckState {
+    match word {
+        "success" => CheckState::Passing,
+        // A cancelled run is a run that did not pass, and reads as one.
+        "failure" | "timed_out" | "startup_failure" | "action_required" | "error" | "cancelled" => {
+            CheckState::Failing
+        }
+        "skipped" | "neutral" | "stale" => CheckState::Skipped,
+        _ => CheckState::Pending,
+    }
+}
+
+/// A check rollup reads worst-first: any failure fails the PR, any
+/// unfinished run leaves it pending, and only runs that actually passed
+/// pass it. An all-skipped rollup is pending — nothing has vouched
+/// for it.
+fn rollup_state(runs: &[Check]) -> CheckState {
+    if runs.iter().any(|run| run.state == CheckState::Failing) {
         return CheckState::Failing;
     }
-    if rollup.contains("\"IN_PROGRESS\"")
-        || rollup.contains("\"QUEUED\"")
-        || rollup.contains("\"PENDING\"")
-        || rollup.contains("\"WAITING\"")
-        || rollup.contains("\"REQUESTED\"")
-    {
+    if runs.iter().any(|run| run.state == CheckState::Pending) {
         return CheckState::Pending;
     }
-    CheckState::Passing
-}
-
-fn json_number(body: &str, key: &str) -> Option<u64> {
-    let rest = body.split_once(&format!("\"{key}\":"))?.1;
-    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
-    digits.parse().ok()
-}
-
-fn json_string(body: &str, key: &str) -> Option<String> {
-    let rest = body.split_once(&format!("\"{key}\":\""))?.1;
-    Some(rest.split_once('"')?.0.to_string())
+    if runs.iter().any(|run| run.state == CheckState::Passing) {
+        return CheckState::Passing;
+    }
+    CheckState::Pending
 }
 
 /// The local branches of `repo`, in git's own ref order.
@@ -540,11 +635,14 @@ fn git(repo: &Path, args: &[&str]) -> Result<String, GitError> {
 #[cfg(test)]
 mod tests {
 
-    /// `gh`'s JSON is read for exactly four facts, and a failing check
+    /// `gh`'s JSON is read for the PR's own facts, and a failing check
     /// anywhere in the rollup is what the header must say.
     #[test]
     fn a_pr_reading_takes_the_worst_check_in_the_rollup() {
-        let body = r#"{"isDraft":false,"number":47,"state":"OPEN","statusCheckRollup":[{"conclusion":"SUCCESS"},{"conclusion":"FAILURE"}]}"#;
+        let body = r#"{"isDraft":false,"number":47,"state":"OPEN","statusCheckRollup":[
+            {"name":"build","status":"COMPLETED","conclusion":"SUCCESS"},
+            {"name":"test","status":"COMPLETED","conclusion":"FAILURE"}
+        ]}"#;
         let pr = parse_pr_json(body).expect("a PR");
         assert_eq!(pr.number, 47);
         assert_eq!(pr.state, PrState::Open);
@@ -559,6 +657,92 @@ mod tests {
         let pr = parse_pr_json(body).expect("a PR");
         assert!(pr.draft);
         assert_eq!(pr.checks, None);
+        assert!(pr.runs.is_empty());
+    }
+
+    /// The card lists what the mark folds: every run, with the workflow
+    /// above it, the forge's own word for where it stands, and the link
+    /// to its log.
+    #[test]
+    fn every_run_behind_the_rollup_is_kept_in_order() {
+        let body = r#"{"isDraft":false,"number":9,"state":"OPEN","statusCheckRollup":[
+            {"name":"build","workflowName":"CI","status":"COMPLETED","conclusion":"SUCCESS",
+             "detailsUrl":"https://github.com/o/r/actions/runs/1"},
+            {"name":"test (windows)","workflowName":"CI","status":"IN_PROGRESS",
+             "detailsUrl":"https://github.com/o/r/actions/runs/2"}
+        ]}"#;
+        let pr = parse_pr_json(body).expect("a PR");
+        assert_eq!(pr.checks, Some(CheckState::Pending));
+        let names: Vec<&str> = pr.runs.iter().map(|run| run.name.as_str()).collect();
+        assert_eq!(names, ["build", "test (windows)"]);
+        assert_eq!(pr.runs[0].workflow.as_deref(), Some("CI"));
+        assert_eq!(pr.runs[0].detail, "success");
+        assert_eq!(pr.runs[1].detail, "in_progress");
+        assert_eq!(pr.runs[1].state, CheckState::Pending);
+        assert_eq!(
+            pr.runs[0].url.as_deref(),
+            Some("https://github.com/o/r/actions/runs/1")
+        );
+    }
+
+    /// A posted commit status names itself `context` and links through
+    /// `targetUrl`, and belongs to no workflow — the same row, read from
+    /// different keys.
+    #[test]
+    fn a_posted_commit_status_is_listed_beside_the_actions_jobs() {
+        let body = r#"{"isDraft":false,"number":9,"state":"OPEN","statusCheckRollup":[
+            {"name":"build","workflowName":"CI","status":"COMPLETED","conclusion":"SUCCESS"},
+            {"context":"codecov/patch","state":"SUCCESS","targetUrl":"https://codecov.io/x"}
+        ]}"#;
+        let pr = parse_pr_json(body).expect("a PR");
+        assert_eq!(pr.checks, Some(CheckState::Passing));
+        assert_eq!(pr.runs[1].name, "codecov/patch");
+        assert_eq!(pr.runs[1].workflow, None);
+        assert_eq!(pr.runs[1].url.as_deref(), Some("https://codecov.io/x"));
+    }
+
+    /// A skipped job is not a pass: it keeps its own state, and the mark
+    /// counts it as neither.
+    #[test]
+    fn skipped_runs_count_as_themselves() {
+        let body = r#"{"isDraft":false,"number":9,"state":"OPEN","statusCheckRollup":[
+            {"name":"build","status":"COMPLETED","conclusion":"SUCCESS"},
+            {"name":"deploy","status":"COMPLETED","conclusion":"SKIPPED"}
+        ]}"#;
+        let pr = parse_pr_json(body).expect("a PR");
+        assert_eq!(pr.checks, Some(CheckState::Passing));
+        let tally = pr.tally();
+        assert_eq!(tally.passing, 1);
+        assert_eq!(tally.skipped, 1);
+        assert_eq!(tally.failing, 0);
+        assert_eq!(tally.total(), 2);
+        assert_eq!(tally.settled(), 2);
+    }
+
+    /// A rollup where nothing ran and nothing passed has vouched for
+    /// nothing, and reads as pending rather than green.
+    #[test]
+    fn an_all_skipped_rollup_is_not_a_pass() {
+        let body = r#"{"isDraft":false,"number":9,"state":"OPEN","statusCheckRollup":[
+            {"name":"deploy","status":"COMPLETED","conclusion":"SKIPPED"}
+        ]}"#;
+        let pr = parse_pr_json(body).expect("a PR");
+        assert_eq!(pr.checks, Some(CheckState::Pending));
+    }
+
+    /// A conclusion we have never seen is not a word that clears CI.
+    #[test]
+    fn an_unknown_conclusion_stays_pending() {
+        assert_eq!(check_state("brand_new_word"), CheckState::Pending);
+        assert_eq!(check_state("cancelled"), CheckState::Failing);
+        assert_eq!(check_state("queued"), CheckState::Pending);
+    }
+
+    /// Not JSON at all, or JSON without a number: no PR, not a panic.
+    #[test]
+    fn junk_from_gh_reads_as_no_pr() {
+        assert!(parse_pr_json("no such pr").is_none());
+        assert!(parse_pr_json("{}").is_none());
     }
     use super::*;
     use std::fs;

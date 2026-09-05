@@ -21,7 +21,9 @@ use ferrite_core::transcript::{
     Block, BlockId, Body, Class, Diff, Span, Status, Style, Todos, Token, ToolActivity, ToolBlock,
     ToolState, Transcript,
 };
-use ferrite_core::workspace::{BranchStatus, CheckState, PrState, WorkspaceBinding};
+use ferrite_core::workspace::{
+    BranchStatus, Check, CheckState, PrState, PullRequest, WorkspaceBinding,
+};
 use ferrite_core::{Decision, ThreadId};
 use gpui::prelude::*;
 use gpui::{
@@ -46,11 +48,10 @@ use crate::select::TextRuns;
 use crate::theme;
 use crate::theme::{
     ATTENTION, ATTENTION_EDGE, ATTENTION_WASH, BLOCKED, BLOCKED_WASH, DIFF_ADDED_INK,
-    DIFF_REMOVED_INK, FOCUS, HOVER, IDLE, INLINE_CODE_INK, LINK_INK, METER_OFF, PANE,
-    PANE_HEAD, PANE_HEAD_EDGE, PROMPT_WASH_CLAUDE, PROMPT_WASH_CODEX, PROVIDER_CLAUDE,
-    PROVIDER_CODEX, RAISED, RUNNING,
-    RUNNING_WASH, SELECTION, SEP, SYN_KEYWORD, SYN_NUMBER, SYN_STRING, TEXT, TEXT_2, TEXT_MUTED,
-    TEXT_STRONG, TRANSPARENT,
+    DIFF_REMOVED_INK, FOCUS, HOVER, IDLE, INLINE_CODE_INK, LINK_INK, METER_OFF, PANE, PANE_HEAD,
+    PANE_HEAD_EDGE, PROMPT_WASH_CLAUDE, PROMPT_WASH_CODEX, PROVIDER_CLAUDE, PROVIDER_CODEX, RAISED,
+    RUNNING, RUNNING_WASH, SELECTION, SEP, SYN_KEYWORD, SYN_NUMBER, SYN_STRING, TEXT, TEXT_2,
+    TEXT_MUTED, TEXT_STRONG, TRANSPARENT,
 };
 
 /// One Pane's view state: what the window owns per Pane. Everything it
@@ -511,11 +512,12 @@ pub struct PaneWiring {
     /// opens the rename editor, or the editor itself while renaming. None
     /// draws the plain name (L2, L3, drafts).
     pub title: Option<AnyElement>,
-    /// A pending question Decision's form, wired — the options as rows a
-    /// press picks, the keys that send. Some only at L1 and only while the
-    /// pending Decision is Claude's `AskUserQuestion`; it stands in for
-    /// the y/n card, which cannot answer a question.
     pub agents: Option<AnyElement>,
+    /// The header's `ci` mark, wired: a press opens the checks card over
+    /// the Pane. `None` where there is no PR, no CI, or no room for the
+    /// card — the strip then draws the mark it can draw unwired, or
+    /// nothing.
+    pub ci: Option<AnyElement>,
     pub activity_attention: Option<AnyElement>,
     pub activity_decisions: Option<AnyElement>,
     pub child_footer: Option<AnyElement>,
@@ -665,6 +667,7 @@ pub fn render_pane(
         mut tool_controls,
         title,
         agents,
+        ci,
         activity_attention,
         activity_decisions,
         child_footer,
@@ -780,6 +783,7 @@ pub fn render_pane(
         status,
         title,
         agents,
+        ci,
         activity_attention,
     ));
     match transcript {
@@ -995,7 +999,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
 
     focus_wrapper(
         shell
-            .child(pane_head(view, None, None, None, None, None, None))
+            .child(pane_head(view, None, None, None, None, None, None, None))
             .child(div().flex().flex_1().min_h_0())
             .child(composer_region(
                 view,
@@ -1601,6 +1605,7 @@ fn pane_head(
     status: Option<Status>,
     title: Option<AnyElement>,
     agents: Option<AnyElement>,
+    ci: Option<AnyElement>,
     attention: Option<AnyElement>,
 ) -> Div {
     // The dot's base is the muted ink — the parked look — and each live
@@ -1650,7 +1655,7 @@ fn pane_head(
     }
     // The checkout keeps its own line now, so the title line no longer
     // has to share its width with a branch name.
-    let checkout_line = checkout_strip(checkout, branch);
+    let checkout_line = checkout_strip(checkout, branch, ci);
     div()
         .flex()
         .flex_col()
@@ -1668,11 +1673,20 @@ fn pane_head(
 
 /// The header's second line (#29): the branch mark and name, then only
 /// what is actually true of it — `↑2 ↓1` against its upstream, `3±` of
-/// working-tree dirt, its PR by number, and its CI rollup. Pure text and
-/// dots: no hover, no click target. A branch with no upstream simply has
-/// no drift marks, and a checkout with no PR says nothing about one —
-/// silence here always means unknown or absent, never "fine".
-fn checkout_strip(checkout: Option<&BranchStatus>, branch: Option<&SharedString>) -> Option<Div> {
+/// working-tree dirt, its PR by number, and its CI rollup. A branch with
+/// no upstream simply has no drift marks, and a checkout with no PR says
+/// nothing about one — silence here always means unknown or absent, never
+/// "fine".
+///
+/// The one control on the line is the `ci` mark, and only when the cockpit
+/// hands it down wired (`ci`): a press opens the card listing the runs
+/// behind the rollup. Unwired, the same mark is drawn as flat text, so the
+/// line reads identically in a screenshot test and below L1.
+fn checkout_strip(
+    checkout: Option<&BranchStatus>,
+    branch: Option<&SharedString>,
+    ci: Option<AnyElement>,
+) -> Option<Div> {
     // A branch label with no status behind it still deserves the line: the
     // first refresh has simply not landed yet.
     let name: SharedString = match (checkout.and_then(|status| status.branch.as_ref()), branch) {
@@ -1744,24 +1758,164 @@ fn checkout_strip(checkout: Option<&BranchStatus>, branch: Option<&SharedString>
             (PrState::Open, false) => format!("#{}", pr.number),
         };
         strip = strip.child(mark(label, ink));
-        if let Some(checks) = pr.checks {
-            let (ink, word) = match checks {
-                CheckState::Passing => (RUNNING, "ci"),
-                CheckState::Failing => (BLOCKED, "ci"),
-                CheckState::Pending => (ATTENTION, "ci"),
-            };
-            strip = strip.child(
-                div()
-                    .flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .gap(px(theme::ROW_ICON_GAP))
-                    .child(led(px(theme::STATUS_DOT), ink))
-                    .child(div().text_color(rgb(ink)).child(word)),
-            );
+        if pr.checks.is_some() {
+            strip = strip.child(match ci {
+                Some(ci) => ci,
+                None => ci_mark(pr).into_any_element(),
+            });
         }
     }
     Some(strip)
+}
+
+/// The CI mark: the rollup's dot, the word `ci`, and the one number that
+/// matters most about it — how many runs failed while any has, else how
+/// many of them have settled. A rollup is a state, not a count, so the ink
+/// carries the state and the digits only say how far along it is.
+///
+/// Sized and padded as a chip so the cockpit's wired copy can wear the
+/// hover wash without the line reflowing when it does.
+pub fn ci_mark(pr: &PullRequest) -> Div {
+    let checks = pr.checks.unwrap_or(CheckState::Pending);
+    let tally = pr.tally();
+    let ink = check_ink(checks);
+    let count = if tally.failing > 0 {
+        format!("{}✗", tally.failing)
+    } else {
+        format!("{}/{}", tally.settled(), tally.total())
+    };
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(theme::ROW_ICON_GAP))
+        .px(px(theme::CHIP_PAD_X))
+        .mx(px(-theme::CHIP_PAD_X))
+        .rounded(px(theme::R_TIGHT))
+        .child(led(px(theme::STATUS_DOT), ink))
+        .child(div().text_color(rgb(ink)).child("ci"))
+        .child(
+            div()
+                .text_color(rgb(TEXT_MUTED))
+                .child(SharedString::from(count)),
+        )
+}
+
+/// A check's ink, the Pane's own status inks: green for a run that passed,
+/// red for one that did not, amber while it is still going, and the
+/// quietest ink for a run that claims nothing at all.
+pub fn check_ink(state: CheckState) -> u32 {
+    match state {
+        CheckState::Passing => RUNNING,
+        CheckState::Failing => BLOCKED,
+        CheckState::Pending => ATTENTION,
+        CheckState::Skipped => TEXT_MUTED,
+    }
+}
+
+/// The checks card's column, for the cockpit to fill with `checks_head`
+/// and the `check_row`s it has wired. Its own width, because the runs it
+/// lists are named by the forge and a job name is longer than a menu row.
+pub fn checks_card() -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .w(px(theme::CHECKS_CARD_W))
+        .gap(px(theme::CHECKS_CARD_GAP))
+        .p(px(theme::CHECKS_CARD_PAD))
+        .text_size(px(theme::FS_MONO))
+        .text_color(rgb(TEXT))
+}
+
+/// The card's heading: the PR by number at the left, and how its runs
+/// divide at the right — the counts the one-glyph mark on the header line
+/// had no room for. Only states with runs in them are named, so the line
+/// never reads `0 failed`.
+pub fn checks_head(pr: &PullRequest) -> Div {
+    let tally = pr.tally();
+    let mut parts: Vec<String> = Vec::new();
+    if tally.failing > 0 {
+        parts.push(format!("{} failed", tally.failing));
+    }
+    if tally.pending > 0 {
+        parts.push(format!("{} running", tally.pending));
+    }
+    if tally.passing > 0 {
+        parts.push(format!("{} passed", tally.passing));
+    }
+    if tally.skipped > 0 {
+        parts.push(format!("{} skipped", tally.skipped));
+    }
+    div()
+        .flex()
+        .items_baseline()
+        .justify_between()
+        .gap(px(theme::EVENT_GAP))
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_color(rgb(TEXT_STRONG))
+                .child(SharedString::from(format!("#{} checks", pr.number))),
+        )
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_color(rgb(TEXT_MUTED))
+                .child(SharedString::from(parts.join(" · "))),
+        )
+}
+
+/// A workflow's heading in the card, above the runs it owns. Actions
+/// groups its jobs under a workflow and the card says so; a run that
+/// belongs to no workflow — a posted commit status — is grouped under
+/// `status` rather than being given a heading it does not have.
+pub fn checks_group(workflow: Option<&str>, first: bool) -> Div {
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .h(px(theme::CHECKS_GROUP_H))
+        .when(!first, |group| group.mt(px(theme::CHECKS_GROUP_GAP)))
+        .text_color(rgb(TEXT_MUTED))
+        .child(SharedString::from(workflow.unwrap_or("status").to_string()))
+}
+
+/// One run in the card: its state's dot, its name, and the forge's own
+/// word for where it stands at the trailing edge. The name is what gives
+/// way when it is longer than the card — the state word is the shorter
+/// string and the one the row exists to pair with the name.
+///
+/// The row is a control only where the run has a log to open; the cockpit
+/// wires the press, and a run with no URL is drawn without the hover wash
+/// so nothing offers a press that would do nothing.
+pub fn check_row(index: usize, run: &Check) -> Stateful<Div> {
+    let ink = check_ink(run.state);
+    let openable = run.url.is_some();
+    div()
+        .id(("check-row", index))
+        .debug_selector(move || format!("check-row-{index}"))
+        .flex()
+        .items_center()
+        .gap(px(theme::ROW_ICON_GAP))
+        .h(px(theme::CHECKS_ROW_H))
+        .px(px(theme::CHIP_PAD_X))
+        .rounded(px(theme::R_TIGHT))
+        .child(led(px(theme::STATUS_DOT), ink))
+        .child(
+            div()
+                .min_w_0()
+                .flex_1()
+                .truncate()
+                .child(SharedString::from(run.name.clone())),
+        )
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_color(rgb(ink))
+                .child(SharedString::from(run.detail.replace('_', " "))),
+        )
+        .when(openable, |row| row.hover_control().cursor_pointer())
 }
 
 /// One mark on the checkout line: a short run in its own ink that never
