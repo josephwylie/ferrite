@@ -1,15 +1,26 @@
 name: CI
 
-# Both platforms are first-class (CONTEXT.md), so both build on every push.
-on: [push, pull_request]
+# Validate each PR once; main builds also seed caches for subsequent PRs.
+on:
+  push:
+    branches: [main]
+  pull_request:
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # CI exercises debug assertions but does not need debugger symbols.
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
+  CARGO_INCREMENTAL: 0
+  # rust-cache excludes our vendored path dependencies. Cache compiler output
+  # too, so their dependants (the GPUI stack) need not compile on every PR.
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: "true"
 
 jobs:
   macos:
@@ -19,6 +30,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.11
       - uses: Swatinem/rust-cache@v2
       - name: Test core
         run: cargo test -p ferrite-core --locked
@@ -35,6 +47,7 @@ jobs:
         run: git config --global core.autocrlf false
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.11
       - uses: Swatinem/rust-cache@v2
       - name: Test core
         run: cargo test -p ferrite-core --locked
