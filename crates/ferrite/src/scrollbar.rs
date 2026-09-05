@@ -16,10 +16,10 @@ use std::{
 
 use gpui::component::ActiveTheme;
 use gpui::{
-    fill, point, px, relative, size, App, Axis, BorderStyle, Bounds, ContentMask, Corner,
-    CursorStyle, Edges, Element, ElementId, GlobalElementId, Hitbox, HitboxBehavior, Hsla,
-    InspectorElementId, IntoElement, IsZero, LayoutId, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, PaintQuad, Pixels, Point, Position, ScrollWheelEvent, Size, Style, Timer, Window,
+    fill, point, px, relative, size, App, Axis, BorderStyle, Bounds, ContentMask, CursorStyle,
+    Edges, Element, ElementId, GlobalElementId, Hitbox, HitboxBehavior, Hsla, InspectorElementId,
+    IntoElement, IsZero, LayoutId, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels,
+    Point, Position, ScrollWheelEvent, Size, Style, Window,
 };
 
 /// The width of the scrollbar (THUMB_ACTIVE_INSET * 2 + THUMB_ACTIVE_WIDTH)
@@ -570,7 +570,7 @@ impl Element for Scrollbar {
                                 let next_delay = Duration::from_secs_f32(FADE_OUT_DELAY - elapsed);
                                 window
                                     .spawn(cx, async move |cx| {
-                                        Timer::after(next_delay).await;
+                                        cx.background_executor().timer(next_delay).await;
                                         state.set(state.get().with_idle_timer_scheduled(false));
                                         cx.update(|_, cx| cx.notify(current_view)).ok();
                                     })
@@ -594,15 +594,13 @@ impl Element for Scrollbar {
 
             // The actual render area of the thumb
             let thumb_fill_bounds = if is_vertical {
-                Bounds::from_corner_and_size(
-                    Corner::TopRight,
-                    bounds.top_right() + point(-inset, inset + thumb_start),
+                Bounds::new(
+                    bounds.top_right() + point(-inset - thumb_width, inset + thumb_start),
                     size(thumb_width, thumb_length),
                 )
             } else {
-                Bounds::from_corner_and_size(
-                    Corner::BottomLeft,
-                    bounds.bottom_left() + point(inset + thumb_start, -inset),
+                Bounds::new(
+                    bounds.bottom_left() + point(inset + thumb_start, -inset - thumb_width),
                     size(thumb_length, thumb_width),
                 )
             };
@@ -901,15 +899,13 @@ fn thumb_hit_bounds(
     // across the gutter moves it outside the bar's mouse/cursor bounds and
     // leaves the opposite padding acting as a track click instead of a drag.
     if is_vertical {
-        Bounds::from_corner_and_size(
-            Corner::TopRight,
-            bounds.top_right() + point(px(0.), inset + thumb_start),
+        Bounds::new(
+            bounds.top_right() + point(-WIDTH, inset + thumb_start),
             size(WIDTH, thumb_length),
         )
     } else {
-        Bounds::from_corner_and_size(
-            Corner::BottomLeft,
-            bounds.bottom_left() + point(inset + thumb_start, px(0.)),
+        Bounds::new(
+            bounds.bottom_left() + point(inset + thumb_start, -WIDTH),
             size(thumb_length, WIDTH),
         )
     }
