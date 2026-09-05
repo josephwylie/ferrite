@@ -1,4 +1,6 @@
 // Ferrite: the cockpit window and the pump behind it.
+mod attachment_preview;
+mod attachments;
 mod cockpit;
 mod components;
 mod composer;
@@ -13,6 +15,7 @@ mod nav;
 mod pane;
 mod pointer;
 mod prefs;
+mod prompt_drop;
 mod rich;
 mod scrollbar;
 mod select;
@@ -219,7 +222,7 @@ fn main() {
                             }
                             view
                         });
-                        cx.new(|cx| kit::component::Root::new(view, window, cx))
+                        cx.new(|cx| kit::component::Root::new(view, window, cx).bordered(false))
                     },
                 )
                 .unwrap();

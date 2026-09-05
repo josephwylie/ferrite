@@ -68,6 +68,7 @@ pub struct PaneView {
     /// Built once; the wall must not format names per frame.
     pub name: SharedString,
     pub composer: Entity<Composer>,
+    pub preview: crate::attachment_preview::Preview,
     pub controls_focus: FocusHandle,
     pub selected: Subject,
     pub generation: u64,
@@ -160,6 +161,7 @@ impl PaneView {
             draft: None,
             name: SharedString::from(format!("thread-{thread:02}")),
             composer: cx.new(Composer::new),
+            preview: crate::attachment_preview::Preview::new(cx),
             controls_focus: cx.focus_handle(),
             selected: Subject::Main,
             generation: 0,
@@ -198,6 +200,7 @@ impl PaneView {
             draft: Some(binding),
             name: SharedString::from("new thread"),
             composer: cx.new(Composer::new),
+            preview: crate::attachment_preview::Preview::new(cx),
             controls_focus: cx.focus_handle(),
             selected: Subject::Main,
             generation: 0,
@@ -451,6 +454,7 @@ pub struct PaneFacts<'a> {
 /// `None` (or empty) below the level that draws it.
 #[derive(Default)]
 pub struct PaneWiring {
+    pub attachments: Option<AnyElement>,
     /// The open `/` or `@` popover for this Pane's Composer, rows wired to
     /// their picks in the cockpit and hung above the input line here (#23).
     pub menu: Option<AnyElement>,
@@ -616,6 +620,7 @@ pub fn render_pane(
     let empty = WallCard::default();
     let wall = wall.unwrap_or(&empty);
     let PaneWiring {
+        attachments,
         menu,
         model_picker,
         usage_meter,
@@ -697,6 +702,7 @@ pub fn render_pane(
                     queued,
                     running,
                     empty: composer_empty,
+                    attachments,
                     history_available,
                     menu: None,
                     mode: permission_mode,
@@ -810,6 +816,7 @@ pub fn render_pane(
                         queued,
                         running,
                         empty: composer_empty,
+                        attachments,
                         history_available,
                         menu,
                         mode: permission_mode,
@@ -899,6 +906,7 @@ fn ring_overlay(color: u32, radius: f32) -> Div {
 /// Everything a draft Pane draws (#29), assembled in the cockpit where the
 /// clicks are wired — the Pane only lays it out.
 pub struct DraftState<'a> {
+    pub attachments: Option<AnyElement>,
     /// The draft's setup chips — project and workspace — riding the left
     /// of the controls row, where a live Composer's mode chip rides.
     pub band: AnyElement,
@@ -919,6 +927,7 @@ pub struct DraftState<'a> {
 /// instruments could show.
 pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> impl IntoElement {
     let DraftState {
+        attachments,
         band,
         picker,
         menu,
@@ -957,6 +966,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
                     queued: None,
                     running: false,
                     empty: composer_empty,
+                    attachments,
                     history_available: false,
                     menu,
                     mode: None,
@@ -1976,6 +1986,7 @@ fn body(
             signal,
             flow,
             provider,
+            &view.preview,
         ));
         index += 1;
     }
@@ -2170,6 +2181,7 @@ struct ComposerStack<'a> {
     queued: Option<&'a str>,
     running: bool,
     empty: bool,
+    attachments: Option<AnyElement>,
     history_available: bool,
     menu: Option<AnyElement>,
     mode: Option<&'a str>,
@@ -2206,6 +2218,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         queued,
         running,
         empty,
+        attachments,
         history_available,
         menu,
         mode,
@@ -2256,6 +2269,14 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
     // the keyboard — the prototype keeps it under a running turn (§D.7)
     // and shows the focused Pane its caret alone.
     let mut line = div()
+        .debug_selector(move || {
+            if focused {
+                "focused-prompt-editor"
+            } else {
+                "prompt-editor"
+            }
+            .into()
+        })
         .relative()
         .flex_1()
         .min_w_0()
@@ -2297,9 +2318,6 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         );
     }
     input = input.child(line).child(
-        // `.hint`: hard right, nowrap, 10.5px muted. The line beside it is
-        // already `flex_1`, so it takes the free space and no auto margin
-        // is needed — one would collapse the row's gap.
         div()
             .flex()
             .flex_shrink_0()
@@ -2371,7 +2389,16 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
     if let Some(picker) = model_picker {
         controls = controls.child(div().flex_shrink_0().child(picker));
     }
-    region.child(controls)
+    div()
+        .flex()
+        .flex_col()
+        .flex_shrink_0()
+        .min_w_0()
+        .when_some(attachments, |stack, attachments| {
+            stack.child(div().px(px(theme::PANE_PAD_X)).child(attachments))
+        })
+        // The attachment shoulders meet this matching surface at its top edge.
+        .child(region.child(controls))
 }
 
 /// The Composer's mode chip (§D.7): 20px on `--hover` at rest, 7px inline
@@ -3530,6 +3557,7 @@ fn render_block(
     signal: u32,
     flow: Flow,
     provider: Option<Provider>,
+    preview: &crate::attachment_preview::Preview,
 ) -> AnyElement {
     let row = div().w_full().flex_shrink_0();
     match &block.body {
@@ -3544,6 +3572,7 @@ fn render_block(
         // see `paragraph` for why the width is dropped), so the wrap is
         // measured at the width it is painted.
         Body::Prompt(line) => {
+            let (text, files) = ferrite_core::prompt_files::split(line.clone());
             let mut row = paragraph(row, TEXT_STRONG)
                 .px(px(theme::CODE_PAD_X))
                 .py(px(theme::PROMPT_PAD_Y))
@@ -3555,7 +3584,19 @@ fn render_block(
                     .border_color(rgb(edge)),
                 None => row.bg(rgb(RAISED)),
             };
-            row.child(selection.line(block.id, line.clone(), Vec::new()))
+            row.flex()
+                .flex_col()
+                .when(!text.is_empty(), |row| {
+                    row.child(selection.line(block.id, text, Vec::new()))
+                })
+                .when(!files.is_empty(), |row| {
+                    row.debug_selector(|| "sent-prompt-attachments".into())
+                        .child(crate::attachments::Attachments::new(
+                            format!("sent-attachments-{:?}", block.id),
+                            files,
+                            preview,
+                        ))
+                })
                 .into_any_element()
         }
         Body::Paragraph { spans } => paragraph(row, TEXT_2)
@@ -4694,6 +4735,7 @@ mod tests {
             _cx: &mut Context<Self>,
         ) -> impl IntoElement {
             let overlay = self.selection.overlay(self.thread, &self.blocks);
+            let preview = crate::attachment_preview::Preview::new(_cx);
             div()
                 .flex()
                 .flex_col()
@@ -4714,6 +4756,7 @@ mod tests {
                         TEXT_MUTED,
                         Flow::default(),
                         self.provider,
+                        &preview,
                     )
                 }))
         }

@@ -100,6 +100,15 @@ multi-line draft, moves between rows).
 
 With the pointer:
 
+- **Drop files anywhere in a Pane** to attach them to its Composer. The Pane
+  under the pointer shows the drop overlay, including in Groups. Attachments
+  sit in a compact, raised island joined to the prompt box. Images show thumbnails;
+  click one for a preview centered within that Pane, or use its × button to remove it.
+  Other file types show file attachments. The same cards and image previews
+  remain in the chat after Send, including reopened chats. Files follow queued
+  prompts and history recall. Claude and Codex receive supported images as native image
+  input; other formats remain local file references for the Provider's tools.
+
 - **Right-click** a Thread, Group or Project in the nav for its menu:
   rename, open or resume, fullscreen, new Thread in the same Project,
   reveal in Finder, copy path, park, leave or dissolve a Group, delete
@@ -153,8 +162,8 @@ accessibility bridge upstream.
 
 ## Development
 
-Rust workspace; the renderer decision and the gpui `=0.2.2` pin are recorded
-in `docs/adr/0001-gpui-renderer.md`, project vocabulary in `CONTEXT.md`, and
+Rust workspace; the renderer decision and the GPUI Kit `=0.6.0` pin are recorded
+in `docs/adr/0003-native-gpui-components.md`, project vocabulary in `CONTEXT.md`, and
 the original 24-pane render spike in `spikes/panes24/`.
 
 Subagent architecture is recorded in

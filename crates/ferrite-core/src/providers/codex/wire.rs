@@ -603,29 +603,16 @@ pub(super) fn input_items(text: &str, skills: &[SessionCommand], cwd: Option<&Pa
             rest = after[name.len()..].trim_start();
         }
     }
-    if let Some(cwd) = cwd {
-        for token in rest.split_whitespace() {
-            let Some(candidate) = token.strip_prefix('@') else {
-                continue;
-            };
-            if candidate.is_empty() {
-                continue;
-            }
-            let path = cwd.join(candidate);
-            if !path.is_file() {
-                continue;
-            }
-            let path = path.display().to_string();
-            // The same file mentioned twice rides once.
-            if items
-                .iter()
-                .any(|item| item["type"] == "mention" && item["path"] == path.as_str())
-            {
-                continue;
-            }
+    for path in crate::prompt_files::paths(rest, cwd) {
+        if !path.is_file() {
+            continue;
+        }
+        if crate::prompt_files::image_type(&path).is_some() {
+            items.push(serde_json::json!({"type": "localImage", "path": path}));
+        } else {
             items.push(serde_json::json!({
                 "type": "mention",
-                "name": candidate.rsplit('/').next().unwrap_or(candidate),
+                "name": path.file_name().unwrap_or_default().to_string_lossy(),
                 "path": path,
             }));
         }
@@ -1623,6 +1610,26 @@ mod tests {
             input_items("read @docs/notes.txt", &[], None),
             [serde_json::json!({"type": "text", "text": "read @docs/notes.txt"})]
         );
+    }
+
+    #[test]
+    fn dropped_images_and_other_files_use_native_input_items() {
+        let dir = std::env::temp_dir().join(format!("ferrite-codex-files-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let image = dir.join("screen shot.PNG");
+        let file = dir.join("records.zip");
+        std::fs::write(&image, b"image").unwrap();
+        std::fs::write(&file, b"archive").unwrap();
+        let text = crate::prompt_files::compose("inspect", &[image.clone(), file.clone()]);
+        assert_eq!(
+            input_items(&text, &[], None),
+            [
+                serde_json::json!({"type": "localImage", "path": image}),
+                serde_json::json!({"type": "mention", "name": "records.zip", "path": file}),
+                serde_json::json!({"type": "text", "text": text}),
+            ]
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// A skill and a mention compose: skill first, mentions, then the args

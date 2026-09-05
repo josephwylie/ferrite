@@ -7,6 +7,43 @@
 //! `Value` and anything unrecognised — new event types, changed field types,
 //! outright junk — is silently nothing rather than an error.
 
+/// Stream-json accepts native image blocks. Keep every path in the text too:
+/// unreadable, oversized and other formats remain available to Claude's tools.
+/// The read is bounded; dropping an archive never loads it into the UI process.
+pub(super) fn input_content(text: &str, cwd: Option<&std::path::Path>) -> Vec<serde_json::Value> {
+    use base64::Engine;
+    use std::io::Read;
+    const IMAGE_LIMIT: u64 = 5 * 1024 * 1024;
+    let mut content = vec![serde_json::json!({"type": "text", "text": text})];
+    for path in crate::prompt_files::paths(text, cwd) {
+        let Some(media_type) = crate::prompt_files::image_type(&path) else {
+            continue;
+        };
+        let Ok(file) = std::fs::File::open(&path) else {
+            continue;
+        };
+        if !file
+            .metadata()
+            .is_ok_and(|meta| meta.is_file() && meta.len() <= IMAGE_LIMIT)
+        {
+            continue;
+        }
+        let mut bytes = Vec::new();
+        if file.take(IMAGE_LIMIT + 1).read_to_end(&mut bytes).is_err()
+            || bytes.is_empty()
+            || bytes.len() as u64 > IMAGE_LIMIT
+        {
+            continue;
+        }
+        content.push(serde_json::json!({
+            "type": "image",
+            "source": {"type": "base64", "media_type": media_type,
+                "data": base64::engine::general_purpose::STANDARD.encode(bytes)},
+        }));
+    }
+    content
+}
+
 use serde_json::Value;
 
 use super::ClaudeCapabilities;
@@ -596,6 +633,35 @@ fn describe_error(subtype: &str, text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dropped_images_are_native_blocks_and_other_files_stay_references() {
+        use base64::Engine;
+        let dir = std::env::temp_dir().join(format!("ferrite-claude-files-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let image = dir.join("screen shot.PNG");
+        let file = dir.join("records.zip");
+        std::fs::write(&image, b"image bytes").unwrap();
+        std::fs::write(&file, b"archive bytes").unwrap();
+        let text = crate::prompt_files::compose("inspect", &[image.clone(), file]);
+        let blocks = input_content(&text, None);
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0]["text"], text);
+        assert_eq!(blocks[1]["source"]["media_type"], "image/png");
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(blocks[1]["source"]["data"].as_str().unwrap())
+                .unwrap(),
+            b"image bytes"
+        );
+        std::fs::remove_file(image).unwrap();
+        assert_eq!(
+            input_content(&text, None).len(),
+            1,
+            "missing files keep their reference"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     const FIXTURE: &str = include_str!("../../../tests/fixtures/claude-hello-2.1.243.jsonl");
 

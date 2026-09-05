@@ -2223,7 +2223,7 @@ impl CockpitView {
         // A question waits: ↵ sends the picks, and whatever is on the
         // line goes with them as the operator's own answer.
         if self.pending_questions(thread).is_some() {
-            let text = composer.read(cx).text().trim().to_string();
+            let text = composer.read(cx).prompt().trim().to_string();
             let other = Some(text).filter(|text| !text.is_empty());
             if self.submit_questions(thread, other, cx) {
                 composer.update(cx, |composer, cx| {
@@ -2354,6 +2354,15 @@ impl CockpitView {
             window.focus_next(cx);
             return;
         }
+        let composer = self
+            .panes
+            .get(self.focused())
+            .map(|pane| pane.composer.clone());
+        if composer.is_some_and(|composer| {
+            composer.update(cx, |composer, cx| composer.cycle_files(false, window, cx))
+        }) {
+            return;
+        }
         let Some(draft) = self.focused_draft_mut() else {
             self.cycle_tools(false, window, cx);
             return;
@@ -2384,7 +2393,15 @@ impl CockpitView {
         {
             window.focus_prev(cx);
         } else {
-            self.cycle_tools(true, window, cx);
+            let composer = self
+                .panes
+                .get(self.focused())
+                .map(|pane| pane.composer.clone());
+            if !composer.is_some_and(|composer| {
+                composer.update(cx, |composer, cx| composer.cycle_files(true, window, cx))
+            }) {
+                self.cycle_tools(true, window, cx);
+            }
         }
     }
 
@@ -2792,7 +2809,7 @@ impl CockpitView {
             return;
         };
         let composer = self.panes[index].composer.clone();
-        let draft = composer.read(cx).text().to_string();
+        let draft = composer.read(cx).prompt();
         let Some(text) = self.cockpit.recall_prompt(thread, direction, &draft) else {
             return;
         };
@@ -3663,7 +3680,7 @@ impl CockpitView {
             return;
         };
         let composer = pane.composer.clone();
-        let text = composer.read(cx).text().trim().to_string();
+        let text = composer.read(cx).prompt().trim().to_string();
         if text.is_empty() {
             return;
         }
@@ -3701,7 +3718,7 @@ impl CockpitView {
                 let composer = self.panes[index].composer.clone();
                 composer.update(cx, |composer, cx| {
                     // Edits made while startup ran belong to the operator.
-                    if composer.text().trim() == text {
+                    if composer.prompt().trim() == text {
                         composer.take(cx);
                     }
                 });
@@ -4761,6 +4778,7 @@ impl Render for CockpitView {
             .map(|(_, editor)| editor.focus_handle(cx))
             .or_else(|| {
                 self.panes.get(self.focused()).and_then(|pane| match level {
+                    _ if pane.preview.focus_target().is_some() => pane.preview.focus_target(),
                     // At L1 the Composer keeps the keyboard even while a
                     // Decision pends: the card is part of its stack and the
                     // input stays live (PromptBox state 04) — y/n/a answer
@@ -4771,7 +4789,9 @@ impl Render for CockpitView {
                     Level::Transcript | Level::Instruments if !pane.is_main() => {
                         Some(pane.transcript_focus.clone())
                     }
-                    Level::Transcript | Level::Instruments => Some(pane.composer.focus_handle(cx)),
+                    Level::Transcript | Level::Instruments => {
+                        Some(pane.composer.read(cx).focus_target(window, cx))
+                    }
                     _ if pane.thread().is_some_and(|thread| {
                         self.cockpit
                             .thread(thread)
@@ -4826,6 +4846,7 @@ impl Render for CockpitView {
             .as_ref()
             .is_some_and(|open| open.kind.picker_slot().is_some())
             && !wanted.is_focused(window)
+            && (wanted == self.focus || !wanted.contains_focused(window, cx))
         {
             window.focus(&wanted, cx);
         }
@@ -5054,6 +5075,38 @@ impl CockpitView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
+        let content = self.pane_content(index, level, window, cx);
+        if self.settings_open || !self.panes[index].is_main() {
+            return content;
+        }
+        let content = self.panes[index].preview.mount(content);
+        let composer = self.panes[index].composer.clone();
+        let identity = self.panes[index].identity;
+        let view = cx.entity().downgrade();
+        crate::prompt_drop::target(content, composer, move |_, cx| {
+            let _ = view.update(cx, |view, cx| {
+                if let Some(index) = view.index_of(identity) {
+                    view.focus_pane(index);
+                    if level == Level::Wall {
+                        view.cockpit.toggle_fullscreen();
+                    }
+                    if let Some(draft) = view.panes[index].draft_mut() {
+                        draft.band_focus = None;
+                    }
+                    view.popover = None;
+                    cx.notify();
+                }
+            });
+        })
+    }
+
+    fn pane_content(
+        &self,
+        index: usize,
+        level: Level,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let pane = &self.panes[index];
         let focused = index == self.focused();
         let cell = div()
@@ -5127,6 +5180,7 @@ impl CockpitView {
             return cell.child(pane::render_draft(
                 pane,
                 pane::DraftState {
+                    attachments: Composer::attachments(&pane.composer, &pane.preview, cx),
                     band: self.draft_band_element(index, cx),
                     picker: self.draft_model_picker(index, cx),
                     menu: (level == Level::Transcript)
@@ -5170,6 +5224,7 @@ impl CockpitView {
         // picker (#25) or usage meter; the wall answers with keys alone.
         let l1 = level == Level::Transcript;
         let wiring = pane::PaneWiring {
+            attachments: Composer::attachments(&pane.composer, &pane.preview, cx),
             menu: l1.then(|| self.popover_element(index, cx)).flatten(),
             model_picker: l1.then(|| self.model_picker(index, cx)).flatten(),
             usage_meter: l1.then(|| self.usage_meter(index, cx)).flatten(),
@@ -12265,6 +12320,204 @@ mod tests {
             assert!(view.cockpit.thread(thread).is_none(), "gone on one press");
         });
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[gpui::test]
+    fn native_file_drops_follow_the_pointer_across_panes_and_groups(cx: &mut TestAppContext) {
+        let (mut core, fake) = cockpit("native-file-drop", 4);
+        let threads = core.threads();
+        let mut groups = Vec::new();
+        for pair in threads.chunks(2) {
+            groups.push(
+                core.apply_group(GroupChange::Create {
+                    first: pair[0],
+                    second: pair[1],
+                })
+                .unwrap()
+                .group
+                .unwrap(),
+            );
+        }
+        bind_production_keys(cx);
+        let (root, cx) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|cx| CockpitView::new(core, cx));
+            gpui::component::Root::new(view, window, cx).bordered(false)
+        });
+        let view = root.read_with(cx, |root, _| {
+            root.view().clone().downcast::<CockpitView>().unwrap()
+        });
+        cx.simulate_resize(gpui::size(px(1200.), px(700.)));
+        let files = vec![
+            here().join("screen shot.png"),
+            here().join("data.weird-extension"),
+        ];
+        let payload = gpui::ExternalPaths(files.clone().into());
+        for (n, group) in groups.into_iter().enumerate() {
+            view.update(cx, |view, cx| view.enter_group(group, cx));
+            tick(cx);
+            let points: Vec<_> = cx.update(|window, cx| {
+                view.read(cx)
+                    .pane_rects(window)
+                    .iter()
+                    .map(|(_, r)| gpui::point(px(r.x + r.w / 2.), px(r.y + r.h / 2.)))
+                    .collect()
+            });
+            cx.simulate_event(gpui::FileDropEvent::Entered {
+                position: points[0],
+                paths: payload.clone(),
+            });
+            tick(cx);
+            cx.simulate_event(gpui::FileDropEvent::Pending {
+                position: points[1],
+            });
+            tick(cx);
+            cx.simulate_event(gpui::FileDropEvent::Submit {
+                position: points[1],
+            });
+            tick(cx);
+            view.read_with(cx, |view, cx| {
+                assert_eq!(view.focused_thread(), Some(threads[n * 2 + 1]));
+                assert!(view.panes[view.pane_for(threads[n * 2]).unwrap()]
+                    .composer
+                    .read(cx)
+                    .is_empty());
+                let composer = view.panes[view.focused()].composer.read(cx);
+                assert!(
+                    composer.text().is_empty(),
+                    "files do not clutter editable prose"
+                );
+                assert_eq!(
+                    ferrite_core::prompt_files::paths(&composer.prompt(), None),
+                    files
+                );
+            });
+            let tray = cx.debug_bounds("pending-attachment-tray").unwrap();
+            let editor = cx.debug_bounds("focused-prompt-editor").unwrap();
+            assert!(
+                tray.bottom() <= editor.top(),
+                "the attachment island stays above the editable prompt"
+            );
+            // The thumbnail overlay and card share a hit area: one click must
+            // open one preview, so one Escape must dismiss it completely.
+            let island = cx.debug_bounds("attachment-island-content").unwrap();
+            cx.simulate_click(
+                island.origin + gpui::point(px(24.), island.size.height / 2.),
+                gpui::Modifiers::none(),
+            );
+            tick(cx);
+            let popup = cx.debug_bounds("attachment-preview-content").unwrap();
+            let owner = cx.update(|window, cx| {
+                let view = view.read(cx);
+                view.pane_rects(window)
+                    .into_iter()
+                    .find(|(index, _)| *index == view.focused())
+                    .unwrap()
+                    .1
+            });
+            assert!((popup.center().x - px(owner.x + owner.w / 2.)).abs() <= px(2.));
+            assert!((popup.center().y - px(owner.y + owner.h / 2.)).abs() <= px(2.));
+            assert!(popup.size.width < px(owner.w) && popup.size.height < px(owner.h));
+            cx.simulate_keystrokes("escape");
+            tick(cx);
+            assert!(
+                cx.debug_bounds("attachment-preview-content").is_none(),
+                "one Escape dismisses the only preview"
+            );
+            cx.simulate_click(editor.center(), gpui::Modifiers::none());
+            tick(cx);
+            // Leaving the window cancels the drag; a later release adds nothing.
+            cx.simulate_event(gpui::FileDropEvent::Entered {
+                position: points[0],
+                paths: payload.clone(),
+            });
+            cx.simulate_event(gpui::FileDropEvent::Exited);
+            cx.simulate_event(gpui::FileDropEvent::Submit {
+                position: points[0],
+            });
+            tick(cx);
+            view.read_with(cx, |view, cx| {
+                assert!(view.panes[view.pane_for(threads[n * 2]).unwrap()]
+                    .composer
+                    .read(cx)
+                    .is_empty())
+            });
+            // The kit's controls receive Tab and Enter/Space without sending.
+            cx.simulate_keystrokes("tab");
+            tick(cx);
+            cx.simulate_keystrokes("enter");
+            cx.simulate_event(gpui::KeyUpEvent {
+                keystroke: gpui::Keystroke::parse("enter").unwrap(),
+            });
+            tick(cx);
+            let popup = cx
+                .debug_bounds("attachment-preview-content")
+                .expect("keyboard image preview");
+            assert!(fake.sent.borrow().len() == n, "preview never submits");
+            cx.simulate_resize(gpui::size(px(1000.), px(480.)));
+            tick(cx);
+            tick(cx);
+            let smaller = cx.debug_bounds("attachment-preview-content").unwrap();
+            assert!(
+                smaller.size.width < popup.size.width && smaller.size.height < popup.size.height,
+                "preview resizes with its pane: {popup:?} -> {smaller:?}"
+            );
+            cx.simulate_keystrokes("escape");
+            tick(cx);
+            assert!(cx.debug_bounds("attachment-preview-content").is_none());
+            cx.simulate_resize(gpui::size(px(1200.), px(700.)));
+            tick(cx);
+            cx.executor().advance_clock(Duration::from_millis(300));
+            cx.run_until_parked();
+            cx.simulate_keystrokes("tab tab");
+            tick(cx);
+            cx.simulate_keystrokes("space");
+            cx.simulate_event(gpui::KeyUpEvent {
+                keystroke: gpui::Keystroke::parse("space").unwrap(),
+            });
+            tick(cx);
+            view.read_with(cx, |view, cx| {
+                assert_eq!(
+                    ferrite_core::prompt_files::paths(
+                        &view.panes[view.focused()].composer.read(cx).prompt(),
+                        None
+                    ),
+                    files[..1]
+                );
+            });
+            assert!(
+                cx.debug_bounds("attachment-preview-content").is_none(),
+                "closed preview leaves no hitbox"
+            );
+            // A repeated drop restores the removed file and deduplicates the image.
+            cx.simulate_event(gpui::FileDropEvent::Entered {
+                position: points[1],
+                paths: payload.clone(),
+            });
+            tick(cx);
+            cx.simulate_event(gpui::FileDropEvent::Pending {
+                position: points[1],
+            });
+            tick(cx);
+            cx.simulate_event(gpui::FileDropEvent::Submit {
+                position: points[1],
+            });
+            tick(cx);
+            // Attachments-only prompts still submit through the ordinary send path.
+            cx.dispatch_action(Submit);
+            tick(cx);
+            assert!(
+                cx.debug_bounds("sent-prompt-attachments").is_some(),
+                "sent files remain cards in the transcript"
+            );
+            view.read_with(cx, |view, cx| {
+                assert!(view.panes[view.focused()].composer.read(cx).is_empty());
+            });
+            let sent = fake.sent.borrow();
+            assert_eq!(
+                ferrite_core::prompt_files::paths(sent.last().unwrap(), None),
+                files
+            );
+        }
     }
 
     /// A Group's board is its split tree: two members sit side by side at
