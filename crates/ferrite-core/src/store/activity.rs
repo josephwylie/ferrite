@@ -1,6 +1,6 @@
 //! Schema 9's owned representation. Live Activity types deliberately lack serde.
 
-use super::{Outcome, PersistedToolResult};
+use super::{Outcome, PersistedProgress, PersistedToolResult};
 use crate::activity::{
     ActivityEvent, AgentInfo, AgentKey, AgentStatus, ExecutionEvent, Subject, TranscriptCoverage,
 };
@@ -95,6 +95,20 @@ pub(super) enum Status {
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(super) enum Execution {
+    Progress {
+        event: PersistedProgress,
+    },
+    ContentBoundary,
+    ReasoningSummaryPart {
+        item_id: String,
+        summary_index: u64,
+        text: String,
+        snapshot: bool,
+    },
+    ToolOutputDelta {
+        id: String,
+        text: String,
+    },
     TextDelta {
         text: String,
     },
@@ -239,6 +253,25 @@ impl Outcome {
 impl Execution {
     fn from_live(event: &ExecutionEvent) -> Self {
         match event {
+            ExecutionEvent::Progress { event } => Self::Progress {
+                event: PersistedProgress::from_live(event),
+            },
+            ExecutionEvent::ContentBoundary => Self::ContentBoundary,
+            ExecutionEvent::ReasoningSummaryPart {
+                item_id,
+                summary_index,
+                text,
+                snapshot,
+            } => Self::ReasoningSummaryPart {
+                item_id: item_id.clone(),
+                summary_index: *summary_index,
+                text: text.clone(),
+                snapshot: *snapshot,
+            },
+            ExecutionEvent::ToolOutputDelta { id, text } => Self::ToolOutputDelta {
+                id: id.clone(),
+                text: text.clone(),
+            },
             ExecutionEvent::TextDelta { text } => Self::TextDelta { text: text.clone() },
             ExecutionEvent::ThinkingDelta { text } => Self::ThinkingDelta { text: text.clone() },
             ExecutionEvent::ReasoningSummaryDelta {
@@ -295,6 +328,25 @@ impl Execution {
     }
     pub(super) fn live(&self) -> ExecutionEvent {
         match self {
+            Self::Progress { event } => ExecutionEvent::Progress {
+                event: event.live(),
+            },
+            Self::ContentBoundary => ExecutionEvent::ContentBoundary,
+            Self::ReasoningSummaryPart {
+                item_id,
+                summary_index,
+                text,
+                snapshot,
+            } => ExecutionEvent::ReasoningSummaryPart {
+                item_id: item_id.clone(),
+                summary_index: *summary_index,
+                text: text.clone(),
+                snapshot: *snapshot,
+            },
+            Self::ToolOutputDelta { id, text } => ExecutionEvent::ToolOutputDelta {
+                id: id.clone(),
+                text: text.clone(),
+            },
             Self::TextDelta { text } => ExecutionEvent::TextDelta { text: text.clone() },
             Self::ThinkingDelta { text } => ExecutionEvent::ThinkingDelta { text: text.clone() },
             Self::ReasoningSummaryDelta {
@@ -795,6 +847,10 @@ fn project_agent<R: std::borrow::Borrow<super::Record>>(
                         Execution::TextDelta { .. }
                         | Execution::ThinkingDelta { .. }
                         | Execution::ReasoningSummaryDelta { .. }
+                        | Execution::ReasoningSummaryPart {
+                            snapshot: false, ..
+                        }
+                        | Execution::ToolOutputDelta { .. }
                         | Execution::Text { .. }
                         | Execution::Thinking { .. }
                         | Execution::TextSnapshot { .. }

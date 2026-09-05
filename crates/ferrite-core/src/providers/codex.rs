@@ -445,7 +445,7 @@ impl CodexSession {
     /// Composer's picks become real.
     pub fn send(&mut self, text: &str) -> io::Result<()> {
         let input = wire::input_items(text, &lock(&self.skills), self.cwd.as_deref());
-        let mut params = serde_json::json!({"threadId": self.thread_id, "input": input});
+        let mut params = serde_json::json!({"threadId": self.thread_id, "input": input, "summary": "concise"});
         if let Some(effort) = &self.effort {
             params["effort"] = serde_json::json!(effort);
         }

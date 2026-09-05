@@ -10,6 +10,7 @@
 use serde_json::Value;
 
 use super::ClaudeCapabilities;
+use crate::progress::{Phase, ProgressEvent, StepStatus, TaskStatus};
 use crate::{Decision, Hunk, SessionEvent, ToolResult, TurnOutcome};
 
 /// The answer to spawn's initialize control request, if this line is it.
@@ -134,6 +135,153 @@ pub(super) fn parse_value(value: &Value) -> Option<SessionEvent> {
         "result" => Some(parse_result(value)),
         _ => None,
     }
+}
+
+/// Decode every fact in a native SDK message. A single assistant/user
+/// snapshot can contain several tools; progress messages contain no prose delta.
+pub(super) fn parse_events_value(value: &Value) -> Vec<SessionEvent> {
+    let kind = value["type"].as_str().unwrap_or("");
+    let mut events = Vec::new();
+    match kind {
+        "assistant" | "user" => {
+            if let Some(blocks) = value["message"]["content"].as_array() {
+                for block in blocks {
+                    let mut single = value.clone();
+                    single["message"]["content"] = serde_json::json!([block]);
+                    events.extend(if kind == "assistant" {
+                        parse_assistant(&single)
+                    } else {
+                        parse_user(&single)
+                    });
+                }
+            }
+        }
+        _ => events.extend(parse_value(value)),
+    }
+    let phase = |phase, detail| SessionEvent::Progress {
+        event: ProgressEvent::Phase { phase, detail },
+    };
+    let string = |key| value[key].as_str().unwrap_or("").to_string();
+    let extra = match kind {
+        "tool_progress" => value["tool_use_id"]
+            .as_str()
+            .map(|id| SessionEvent::Progress {
+                event: ProgressEvent::Tool {
+                    id: id.into(),
+                    message: string("tool_name"),
+                    elapsed_ms: value["elapsed_time_seconds"]
+                        .as_f64()
+                        .filter(|v| v.is_finite() && *v >= 0.)
+                        .map(|s| (s * 1000.) as u64),
+                },
+            }),
+        "tool_use_summary" => Some(phase(Phase::Working, string("summary"))),
+        "stream_event" => match value["event"]["type"].as_str() {
+            Some("content_block_stop") => Some(SessionEvent::ContentBoundary),
+            Some("content_block_start") => match value["event"]["content_block"]["type"].as_str() {
+                Some("thinking" | "redacted_thinking") => {
+                    Some(phase(Phase::Thinking, String::new()))
+                }
+                Some("tool_use" | "server_tool_use") => Some(phase(
+                    Phase::Working,
+                    value["event"]["content_block"]["name"]
+                        .as_str()
+                        .unwrap_or("")
+                        .into(),
+                )),
+                _ => None,
+            },
+            _ => None,
+        },
+        "system" => match value["subtype"].as_str() {
+            Some("api_retry") => {
+                let error = value["error"].as_str().unwrap_or("Request failed");
+                let attempt = value["attempt"].as_u64().unwrap_or(0);
+                let max = value["max_retries"].as_u64().unwrap_or(0);
+                let delay = value["retry_delay_ms"]
+                    .as_u64()
+                    .map(|ms| format!(" · next attempt in {:.1}s", ms as f64 / 1000.))
+                    .unwrap_or_default();
+                Some(phase(
+                    Phase::Retrying,
+                    format!("{error} · attempt {attempt}/{max}{delay}"),
+                ))
+            }
+            Some("status") => Some(phase(
+                if value["status"] == "compacting" {
+                    Phase::Compacting
+                } else {
+                    Phase::Working
+                },
+                string("message"),
+            )),
+            Some("compact_boundary") => Some(phase(Phase::Working, "Context compacted".into())),
+            Some("thinking_tokens") => Some(phase(Phase::Thinking, String::new())),
+            Some("task_started" | "task_progress" | "task_notification" | "task_updated") => {
+                value["task_id"].as_str().map(|id| SessionEvent::Progress {
+                    event: ProgressEvent::Background {
+                        id: id.into(),
+                        label: string("description"),
+                        status: match value["status"]
+                            .as_str()
+                            .or(value["patch"]["status"].as_str())
+                        {
+                            Some("completed") => TaskStatus::Completed,
+                            Some("failed") => TaskStatus::Failed,
+                            Some("stopped") => TaskStatus::Stopped,
+                            Some("running" | "in_progress") => TaskStatus::Working,
+                            _ if value["subtype"] == "task_started"
+                                || value["subtype"] == "task_progress" =>
+                            {
+                                TaskStatus::Working
+                            }
+                            _ => TaskStatus::Unknown,
+                        },
+                        detail: value["summary"]
+                            .as_str()
+                            .or(value["description"].as_str())
+                            .or(value["last_tool_name"].as_str())
+                            .unwrap_or("")
+                            .into(),
+                    },
+                })
+            }
+            _ => None,
+        },
+        _ => None,
+    };
+    events.extend(extra);
+    // The successful tool receipt supplies the actual task id. Starts alone
+    // cannot establish a plan step or mark one complete.
+    if kind == "user" && value["tool_use_result"]["success"] != false {
+        let result = &value["tool_use_result"];
+        if let Some(id) = result["task"]["id"].as_str() {
+            events.push(SessionEvent::Progress {
+                event: ProgressEvent::Task {
+                    id: id.into(),
+                    subject: result["task"]["subject"].as_str().unwrap_or("").into(),
+                    status: Some(StepStatus::Pending),
+                    deleted: false,
+                },
+            });
+        } else if let Some(id) = result["taskId"].as_str() {
+            let status = result["statusChange"]["to"].as_str();
+            events.push(SessionEvent::Progress {
+                event: ProgressEvent::Task {
+                    id: id.into(),
+                    subject: result["subject"].as_str().unwrap_or("").into(),
+                    deleted: status == Some("deleted"),
+                    status: match status {
+                        Some("pending") => Some(StepStatus::Pending),
+                        Some("in_progress") => Some(StepStatus::InProgress),
+                        Some("completed") => Some(StepStatus::Completed),
+                        _ => None,
+                    },
+                },
+            });
+        }
+    }
+    events
 }
 
 /// The token count a line carries beside its event, if any: every
@@ -526,6 +674,12 @@ mod tests {
     /// here until someone decides which fixture proves it.
     fn variant(event: &SessionEvent) -> Option<&'static str> {
         Some(match event {
+            // Shared progress is proved through the public Session replay in
+            // tests/provider_progress.rs, including captured native messages.
+            SessionEvent::ReasoningSummaryPart { .. }
+            | SessionEvent::Progress { .. }
+            | SessionEvent::ToolOutputDelta { .. }
+            | SessionEvent::ContentBoundary => return None,
             // Stateful child attribution is proved by the activity decoder's
             // captures; these legacy parser fixtures are Main-only.
             SessionEvent::Activity(_) => return None,

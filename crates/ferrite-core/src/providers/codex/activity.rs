@@ -10,7 +10,7 @@ use crate::activity::{
     ActivityEvent, AgentInfo, AgentKey, AgentStatus, ExecutionEvent, Subject, TranscriptCoverage,
 };
 use crate::store::Provider;
-use crate::{SessionEvent, ToolResult, TurnOutcome};
+use crate::{SessionEvent, TurnOutcome};
 
 use super::wire;
 
@@ -48,6 +48,9 @@ struct Read {
 
 #[derive(Default)]
 pub(super) struct Router {
+    content: wire::Decoder,
+    completed_turns: HashSet<(String, String)>,
+    completed_order: VecDeque<(String, String)>,
     root: Option<String>,
     children: HashMap<String, Child>,
     pending: VecDeque<(Value, usize)>,
@@ -285,16 +288,44 @@ impl Router {
         }
         let scope = scope.expect("known scope");
         let params = &frame["params"];
+        let turn = params["turnId"]
+            .as_str()
+            .or_else(|| params["turn"]["id"].as_str());
+        if let Some(turn) = turn {
+            let identity = (scope.clone(), turn.to_owned());
+            if self.completed_turns.contains(&identity) && method != "turn/completed" {
+                // Ordered native streams can still replay final snapshots after
+                // a reconnect. Enrich child history without restarting its clock.
+                if method == "item/completed" && self.root.as_deref() != Some(scope.as_str()) {
+                    self.item(&scope, turn, &params["item"], true, true, update);
+                }
+                return;
+            }
+            if method == "turn/completed"
+                && matches!(
+                    params["turn"]["status"].as_str(),
+                    Some("completed" | "interrupted" | "failed")
+                )
+                && self.completed_turns.insert(identity.clone())
+            {
+                self.completed_order.push_back(identity);
+                if self.completed_order.len() > MAX_ITEM_REVISIONS {
+                    if let Some(old) = self.completed_order.pop_front() {
+                        self.completed_turns.remove(&old);
+                    }
+                }
+            }
+        }
         if matches!(method, "item/started" | "item/completed") {
             self.discover_from_item(&scope, &params["item"], true, update);
         }
         if self.root.as_deref() == Some(scope.as_str()) {
-            if let Some(event) = wire::parse_line(&frame.to_string()) {
+            for event in self.content.parse(&frame.to_string()) {
                 if let SessionEvent::DecisionRequested { decision } = &event {
                     if self.requests.len() < MAX_PENDING_FRAMES
                         || self.requests.contains_key(&decision.id)
                     {
-                        self.requests.insert(decision.id.clone(), scope);
+                        self.requests.insert(decision.id.clone(), scope.clone());
                     }
                 }
                 update.events.push(event);
@@ -712,6 +743,27 @@ impl Router {
                         false,
                         update,
                     );
+                    for event in
+                        wire::parse_events(&frame.to_string())
+                            .into_iter()
+                            .filter(|event| {
+                                matches!(
+                                    event,
+                                    SessionEvent::ContentBoundary
+                                        | SessionEvent::Progress {
+                                            event: crate::progress::ProgressEvent::Phase { .. }
+                                        }
+                                )
+                            })
+                    {
+                        if let Some(event) = execution(event) {
+                            update.activity(ActivityEvent::Content {
+                                key: key.clone(),
+                                id: id.clone(),
+                                event,
+                            });
+                        }
+                    }
                 }
             }
             "thread/name/updated" => {
@@ -723,7 +775,7 @@ impl Router {
                 }
             }
             _ => {
-                if let Some(event) = wire::parse_line(&frame.to_string()) {
+                for event in wire::parse_events(&frame.to_string()) {
                     match event {
                         SessionEvent::DecisionRequested { mut decision } => {
                             if let Some(turn) = turn {
@@ -735,7 +787,7 @@ impl Router {
                                 self.requests.insert(decision.id.clone(), scope.to_owned());
                             }
                             update.activity(ActivityEvent::Decision {
-                                subject: Some(Subject::Subagent(key)),
+                                subject: Some(Subject::Subagent(key.clone())),
                                 decision,
                             });
                         }
@@ -744,9 +796,18 @@ impl Router {
                                 // Content streams require item identity. Usage has
                                 // no item and is scoped by the child key alone.
                                 if id.is_some()
-                                    || matches!(event, ExecutionEvent::TokenUsage { .. })
+                                    || matches!(
+                                        event,
+                                        ExecutionEvent::TokenUsage { .. }
+                                            | ExecutionEvent::Progress { .. }
+                                            | ExecutionEvent::ContentBoundary
+                                    )
                                 {
-                                    update.activity(ActivityEvent::Content { key, id, event });
+                                    update.activity(ActivityEvent::Content {
+                                        key: key.clone(),
+                                        id: id.clone(),
+                                        event: scoped_execution(event, turn),
+                                    });
                                 }
                             }
                         }
@@ -786,7 +847,7 @@ impl Router {
             })
         };
         match kind {
-            "agentMessage" if completed => {
+            "agentMessage" | "plan" if completed => {
                 if let Some(text) = item["text"].as_str() {
                     emit(
                         ExecutionEvent::TextSnapshot {
@@ -797,16 +858,22 @@ impl Router {
                 }
             }
             "reasoning" if completed => {
-                let text = item["summary"].as_array().map(|parts| {
-                    parts
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .collect::<Vec<_>>()
-                        .join("\n\n")
-                });
-                if let Some(text) = text.filter(|text| !text.is_empty()) {
-                    emit(ExecutionEvent::ThinkingSnapshot { text }, update);
+                if let Some(parts) = item["summary"].as_array() {
+                    for (index, part) in parts.iter().enumerate() {
+                        if let Some(text) = part.as_str() {
+                            emit(
+                                ExecutionEvent::ReasoningSummaryPart {
+                                    item_id: id.clone(),
+                                    summary_index: index as u64,
+                                    text: text.into(),
+                                    snapshot: true,
+                                },
+                                update,
+                            );
+                        }
+                    }
                 }
+                emit(ExecutionEvent::ContentBoundary, update);
             }
             "userMessage" if completed => {
                 let text = item["content"].as_array().map(|parts| {
@@ -820,7 +887,7 @@ impl Router {
                     emit(ExecutionEvent::Prompt { text }, update);
                 }
             }
-            "agentMessage" | "reasoning" | "userMessage" => {}
+            "agentMessage" | "plan" | "reasoning" | "userMessage" => {}
             "commandExecution"
             | "fileChange"
             | "mcpToolCall"
@@ -830,52 +897,19 @@ impl Router {
             | "imageView"
             | "imageGeneration"
             | "collabAgentToolCall"
+            | "collabToolCall"
             | "subAgentActivity" => {
-                let name = item["tool"].as_str().unwrap_or(kind).to_owned();
-                // A read may discover a tool only after completion. Upsert its
-                // start first so completion always has a row to settle.
-                emit(
-                    ExecutionEvent::ToolStarted {
-                        id: id.clone(),
-                        name,
-                        input: item.clone(),
-                    },
-                    update,
-                );
+                let params = json!({"item":item});
+                if let Some(event) = wire::parse_item(&params, false).and_then(execution) {
+                    emit(scoped_execution(event, Some(turn)), update);
+                }
                 if completed {
-                    let output = item
-                        .get("aggregatedOutput")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned)
-                        .or_else(|| {
-                            item.get("changes")
-                                .filter(|value| !value.is_null())
-                                .map(Value::to_string)
-                        })
-                        .or_else(|| {
-                            item.get("result")
-                                .filter(|value| !value.is_null())
-                                .map(Value::to_string)
-                        })
-                        .or_else(|| {
-                            item.get("contentItems")
-                                .filter(|value| !value.is_null())
-                                .map(Value::to_string)
-                        })
-                        .unwrap_or_default();
-                    let is_error = matches!(item["status"].as_str(), Some("failed" | "declined"))
-                        || item["success"] == false;
-                    emit(
-                        ExecutionEvent::ToolCompleted {
-                            id: id.clone(),
-                            output,
-                            is_error,
-                            result: ToolResult::Opaque,
-                        },
-                        update,
-                    );
+                    if let Some(event) = wire::parse_item(&params, true).and_then(execution) {
+                        emit(scoped_execution(event, Some(turn)), update);
+                    }
                 }
             }
+
             _ if completed => {
                 if let Some(text) = item["text"].as_str() {
                     emit(
@@ -940,47 +974,25 @@ fn item_key(turn: &str, item: &str) -> String {
 }
 
 fn execution(event: SessionEvent) -> Option<ExecutionEvent> {
-    Some(match event {
-        SessionEvent::TextDelta { text } => ExecutionEvent::TextDelta { text },
-        SessionEvent::ThinkingDelta { text } => ExecutionEvent::ThinkingDelta { text },
-        SessionEvent::ReasoningSummaryDelta {
-            text,
-            summary_index,
-        } => ExecutionEvent::ReasoningSummaryDelta {
-            text,
-            summary_index,
-        },
-        SessionEvent::ToolStarted { id, name, input } => {
-            ExecutionEvent::ToolStarted { id, name, input }
+    ExecutionEvent::from_session(&event)
+}
+
+fn scoped_execution(mut event: ExecutionEvent, turn: Option<&str>) -> ExecutionEvent {
+    if let Some(turn) = turn {
+        match &mut event {
+            ExecutionEvent::ToolStarted { id, .. }
+            | ExecutionEvent::ToolCompleted { id, .. }
+            | ExecutionEvent::ToolOutputDelta { id, .. } => *id = item_key(turn, id),
+            ExecutionEvent::ReasoningSummaryPart { item_id, .. } => {
+                *item_id = item_key(turn, item_id)
+            }
+            ExecutionEvent::Progress {
+                event: crate::progress::ProgressEvent::Tool { id, .. },
+            } => *id = item_key(turn, id),
+            _ => {}
         }
-        SessionEvent::ToolCompleted {
-            id,
-            output,
-            is_error,
-            result,
-        } => ExecutionEvent::ToolCompleted {
-            id,
-            output,
-            is_error,
-            result,
-        },
-        SessionEvent::TokenUsage {
-            total_tokens,
-            input_tokens,
-            cached_input_tokens,
-            output_tokens,
-            reasoning_output_tokens,
-            context_window,
-        } => ExecutionEvent::TokenUsage {
-            total_tokens,
-            input_tokens,
-            cached_input_tokens,
-            output_tokens,
-            reasoning_output_tokens,
-            context_window,
-        },
-        _ => return None,
-    })
+    }
+    event
 }
 
 #[cfg(test)]

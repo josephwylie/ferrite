@@ -128,6 +128,13 @@ With the pointer:
   ladder the model takes (from the Provider's own announcement), with
   your Settings default on top.
 
+While a turn runs, the latest native thinking or reasoning-summary heading stays
+above the Composer with tool activity and elapsed time. The same progress appears
+in compact Panes and the selected agent's tab. Native retries, compaction, tool
+output, and plans update this view through the existing Claude and Codex adapters.
+Codex turns request concise native summaries; a provider that emits no summary
+still shows its tool and phase activity. Saved history never restarts live clocks.
+
 Flags:
 
 - `--provider claude|codex` — Provider for the first Thread (default: `claude`)

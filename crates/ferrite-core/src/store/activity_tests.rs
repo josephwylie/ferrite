@@ -184,7 +184,7 @@ fn attributed_facts_round_trip_with_native_identity_and_complete_payloads() {
     let snapshot = store.load(thread).unwrap();
     assert_eq!(replay_events(&snapshot), expected);
     let bytes = fs::read_to_string(store.log_path(thread)).unwrap();
-    assert!(bytes.starts_with("{\"schema\":9,"));
+    assert!(bytes.starts_with(&format!("{{\"schema\":{SCHEMA_VERSION},")));
     assert!(bytes.contains("\"type\":\"activity\""));
     assert_eq!(
         snapshot.inputs().len(),
@@ -299,11 +299,9 @@ fn pending_decisions_and_cancellations_never_enter_the_log_or_replay() {
         },
     );
     writer.flush().unwrap();
-    assert!(
-        !fs::read_to_string(store.log_path(thread))
-            .unwrap()
-            .contains("live-only-request-secret")
-    );
+    assert!(!fs::read_to_string(store.log_path(thread))
+        .unwrap()
+        .contains("live-only-request-secret"));
     assert_eq!(
         replay_events(&store.load(thread).unwrap()),
         vec![ActivityEvent::Status {
@@ -459,12 +457,10 @@ fn handover_excludes_child_prompts_and_text_and_reconciles_main_item_snapshots()
         !handover.delivered,
         "child prompt cannot consume Main Handover"
     );
-    assert!(
-        !snapshot
-            .inputs()
-            .iter()
-            .any(|input| matches!(input, Input::Event(SessionEvent::Activity(_))))
-    );
+    assert!(!snapshot
+        .inputs()
+        .iter()
+        .any(|input| matches!(input, Input::Event(SessionEvent::Activity(_)))));
 }
 
 #[test]
@@ -496,11 +492,9 @@ fn schema_eight_upgrade_retains_main_history_before_new_attributed_facts() {
     assert_eq!(after.resume_target(), Some("old-main"));
     assert_eq!(after.effort().as_deref(), Some("high"));
     assert_eq!(replay_events(&after), vec![event]);
-    assert!(
-        fs::read_to_string(store.log_path(thread))
-            .unwrap()
-            .starts_with("{\"schema\":9,")
-    );
+    assert!(fs::read_to_string(store.log_path(thread))
+        .unwrap()
+        .starts_with(&format!("{{\"schema\":{SCHEMA_VERSION},")));
 }
 
 #[derive(Default)]
@@ -697,12 +691,10 @@ fn child_cache_checkpoint_excludes_later_appends_and_unrelated_actors() {
         history_content(store.agent_inputs(thread, &key("alpha")).unwrap()).len(),
         2
     );
-    assert!(
-        store
-            .agent_inputs_at(thread, &key("absent"), checkpoint)
-            .unwrap()
-            .is_empty()
-    );
+    assert!(store
+        .agent_inputs_at(thread, &key("absent"), checkpoint)
+        .unwrap()
+        .is_empty());
     assert!(matches!(
         store.agent_inputs_at(thread, &key("alpha"), u64::MAX),
         Err(LoadError::Corrupt { .. })
@@ -772,11 +764,9 @@ fn child_cache_reload_resolves_aliases_and_restores_only_target_timings() {
             | ActivityInput::Replay(_)
     )));
     assert!(inputs.iter().any(|input| matches!(input, ActivityInput::RestoreTimings { subject: Subject::Subagent(observed), timings } if observed == &key("canonical") && timings["same-call"] == Duration::from_millis(31))));
-    assert!(
-        history_content(inputs)
-            .iter()
-            .all(|(observed, _, _)| observed == &key("canonical"))
-    );
+    assert!(history_content(inputs)
+        .iter()
+        .all(|(observed, _, _)| observed == &key("canonical")));
 }
 
 #[test]
@@ -872,11 +862,9 @@ fn child_cache_reload_keeps_oversized_records_on_disk_and_allows_reattachment() 
     let content = history_content(inputs);
     assert_eq!(content.len(), 1);
     assert_eq!(content[0].1.as_deref(), Some("recent-frame"));
-    assert!(
-        fs::read_to_string(store.log_path(thread))
-            .unwrap()
-            .contains(&"x".repeat(4096))
-    );
+    assert!(fs::read_to_string(store.log_path(thread))
+        .unwrap()
+        .contains(&"x".repeat(4096)));
 }
 
 #[test]
@@ -1069,12 +1057,12 @@ fn streaming_child_reader_recovers_torn_tail_and_refuses_future_header() {
     drop(writer);
     fs::write(
         store.log_path(thread),
-        "{\"schema\":10,\"provider\":\"claude\"}\n",
+        "{\"schema\":999,\"provider\":\"claude\"}\n",
     )
     .unwrap();
     assert!(matches!(
         store.agent_inputs(thread, &key("child")),
-        Err(LoadError::FutureSchema { found: 10, .. })
+        Err(LoadError::FutureSchema { found: 999, .. })
     ));
 }
 
@@ -1158,12 +1146,10 @@ fn schema_eight_child_scan_remains_empty_then_reads_appended_schema_nine() {
         ),
     )
     .unwrap();
-    assert!(
-        store
-            .agent_inputs(thread, &key("child"))
-            .unwrap()
-            .is_empty()
-    );
+    assert!(store
+        .agent_inputs(thread, &key("child"))
+        .unwrap()
+        .is_empty());
     let mut writer = store.writer(thread).unwrap();
     record(
         &mut writer,

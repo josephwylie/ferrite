@@ -9,6 +9,7 @@
 
 use std::collections::HashMap;
 
+use ferrite_core::activity::Subject;
 use ferrite_core::cockpit::Cockpit;
 use ferrite_core::store::Provider;
 use ferrite_core::workspace::registry::ProjectId;
@@ -48,6 +49,20 @@ pub struct ThreadFacts {
     /// The wall cell's folded reading — everything the L3 recipe needs that
     /// is not an O(1) transcript read. A frame never walks Blocks at L3.
     pub wall: WallCard,
+    main_busy: bool,
+    selected_wall: Option<(Subject, WallCard)>,
+}
+impl ThreadFacts {
+    pub fn wall_for(&self, subject: &Subject) -> Option<&WallCard> {
+        match subject {
+            Subject::Main => Some(&self.wall),
+            _ => self
+                .selected_wall
+                .as_ref()
+                .filter(|(selected, _)| selected == subject)
+                .map(|(_, card)| card),
+        }
+    }
 }
 
 pub struct Facts {
@@ -101,8 +116,13 @@ impl Facts {
     /// just ended may have moved the checkout, the other stated refresh
     /// moment (#29), so the slow facts follow it.
     pub fn streamed(&mut self, cockpit: &Cockpit, thread: ThreadId) {
+        let was_busy = self
+            .threads
+            .get(&thread)
+            .is_some_and(|facts| facts.main_busy);
+        let busy = cockpit.thread(thread).is_some_and(|open| open.busy());
         self.refresh_wall(cockpit, thread);
-        if !cockpit.thread(thread).is_some_and(|open| open.busy()) {
+        if was_busy && !busy {
             self.refresh_slow(cockpit, thread);
         }
     }
@@ -230,6 +250,20 @@ impl Facts {
             .unwrap_or_else(|| SharedString::from(format!("thread-{}", thread.get())))
     }
 
+    /// Only the selected child needs a wall projection. Refresh at selection
+    /// and native observations, keeping rendering free of transcript scans.
+    pub fn selected(&mut self, cockpit: &Cockpit, thread: ThreadId, subject: &Subject) {
+        let card = if *subject == Subject::Main {
+            None
+        } else {
+            cockpit
+                .thread(thread)
+                .and_then(|open| open.activity().subject(subject))
+                .map(|view| (subject.clone(), wall_card(Some(view.transcript()), None)))
+        };
+        self.threads.entry(thread).or_default().selected_wall = card;
+    }
+
     /// Refold one Thread's wall card, wherever its transcript can change.
     fn refresh_wall(&mut self, cockpit: &Cockpit, thread: ThreadId) {
         let open = cockpit.thread(thread);
@@ -237,7 +271,9 @@ impl Facts {
             open.map(|open| open.transcript()),
             open.and_then(|open| open.pending()),
         );
-        self.threads.entry(thread).or_default().wall = card;
+        let facts = self.threads.entry(thread).or_default();
+        facts.wall = card;
+        facts.main_busy = open.is_some_and(|open| open.busy());
     }
 }
 

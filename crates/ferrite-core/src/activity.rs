@@ -4,7 +4,7 @@
 //! state; Main and each child cross the same transcript seam.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
-use std::sync::{Arc, mpsc::Receiver};
+use std::sync::{mpsc::Receiver, Arc};
 use std::time::{Duration, Instant};
 
 use crate::store::Provider;
@@ -136,6 +136,20 @@ pub enum ActivityEvent {
 /// Deliberately nonrecursive: execution cannot initialize or close a Session.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExecutionEvent {
+    Progress {
+        event: crate::progress::ProgressEvent,
+    },
+    ContentBoundary,
+    ReasoningSummaryPart {
+        item_id: String,
+        summary_index: u64,
+        text: String,
+        snapshot: bool,
+    },
+    ToolOutputDelta {
+        id: String,
+        text: String,
+    },
     TextDelta {
         text: String,
     },
@@ -347,9 +361,24 @@ impl SubjectState {
             | Input::Event(SessionEvent::TextDelta { .. })
             | Input::Event(SessionEvent::ThinkingDelta { .. })
             | Input::Event(SessionEvent::ReasoningSummaryDelta { .. })
+            | Input::Event(SessionEvent::ReasoningSummaryPart {
+                snapshot: false, ..
+            })
             | Input::Answered { .. } => {
                 if live {
                     self.status = AgentStatus::Working;
+                    self.busy = true;
+                }
+            }
+            Input::Event(SessionEvent::ToolOutputDelta { id, .. }) => {
+                if live && self.transcript.blocks().iter().any(|block| matches!(&block.body, transcript::Body::Tool(tool) if &tool.call == id && tool.state == transcript::ToolState::Running)) {
+                    self.status = AgentStatus::Working;
+                    self.busy = true;
+                }
+            }
+            Input::Event(SessionEvent::Progress { event: crate::progress::ProgressEvent::Phase { phase, .. } }) => {
+                if live {
+                    self.status = if *phase == crate::progress::Phase::Waiting { AgentStatus::Waiting } else { AgentStatus::Working };
                     self.busy = true;
                 }
             }
@@ -870,18 +899,22 @@ impl Activity {
         self.main.fresh = false;
         self.main.busy = false;
         self.main.stop_timings(at);
-        self.main.transcript.clear_activity();
+        let mut blocks = vec![(Subject::Main, self.main.transcript.clear_activity())];
         for (key, agent) in &mut self.agents {
             agent.state.fresh = false;
             agent.state.busy = false;
             agent.state.stop_timings(at);
-            agent.state.transcript.clear_activity();
+            blocks.push((
+                Subject::Subagent(key.clone()),
+                agent.state.transcript.clear_activity(),
+            ));
             changed.push(Subject::Subagent(key.clone()));
         }
         let attention_changed = !self.pending.is_empty();
         self.pending.clear();
         ActivityUpdate {
             changed,
+            blocks,
             attention_changed,
             ..ActivityUpdate::default()
         }
@@ -920,6 +953,7 @@ impl Activity {
         if live && closed {
             let invalid = self.invalidate();
             update.changed.extend(invalid.changed);
+            update.blocks.extend(invalid.blocks);
             update.attention_changed |= invalid.attention_changed;
             self.connected = false;
         }
@@ -978,6 +1012,20 @@ impl Activity {
                 agent.state.fresh = live && *state != AgentStatus::NotLoaded;
                 agent.state.busy =
                     live && matches!(state, AgentStatus::Working | AgentStatus::Pending);
+                if live
+                    && matches!(state, AgentStatus::Working | AgentStatus::Pending)
+                    && agent.state.transcript.progress().phase.is_none()
+                {
+                    agent
+                        .state
+                        .transcript
+                        .apply(Input::Event(SessionEvent::Progress {
+                            event: crate::progress::ProgressEvent::Phase {
+                                phase: crate::progress::Phase::Working,
+                                detail: String::new(),
+                            },
+                        }));
+                }
                 if previous != *state {
                     let outcome = match state {
                         AgentStatus::Idle => Some(TurnOutcome::Completed),
@@ -1009,6 +1057,10 @@ impl Activity {
                     AgentStatus::Working | AgentStatus::Pending | AgentStatus::Waiting
                 ) {
                     agent.state.stop_timings(at);
+                    let blocks = agent.state.transcript.clear_activity();
+                    if !blocks.dirty.is_empty() {
+                        update.blocks.push((subject.clone(), blocks));
+                    }
                 }
                 if live
                     && matches!(
@@ -1053,6 +1105,8 @@ impl Activity {
                     agent.state.fresh = false;
                     agent.state.busy = false;
                     agent.state.coverage = TranscriptCoverage::Unavailable;
+                    let blocks = agent.state.transcript.clear_activity();
+                    update.blocks.push((Subject::Subagent(key.clone()), blocks));
                     update.changed.push(Subject::Subagent(key));
                 }
             }
@@ -1709,6 +1763,25 @@ impl<'a> AgentView<'a> {
 impl ExecutionEvent {
     pub fn from_session(event: &SessionEvent) -> Option<Self> {
         Some(match event {
+            SessionEvent::Progress { event } => Self::Progress {
+                event: event.clone(),
+            },
+            SessionEvent::ContentBoundary => Self::ContentBoundary,
+            SessionEvent::ReasoningSummaryPart {
+                item_id,
+                summary_index,
+                text,
+                snapshot,
+            } => Self::ReasoningSummaryPart {
+                item_id: item_id.clone(),
+                summary_index: *summary_index,
+                text: text.clone(),
+                snapshot: *snapshot,
+            },
+            SessionEvent::ToolOutputDelta { id, text } => Self::ToolOutputDelta {
+                id: id.clone(),
+                text: text.clone(),
+            },
             SessionEvent::TextDelta { text } => Self::TextDelta { text: text.clone() },
             SessionEvent::ThinkingDelta { text } => Self::ThinkingDelta { text: text.clone() },
             SessionEvent::ReasoningSummaryDelta {
@@ -1759,6 +1832,20 @@ impl ExecutionEvent {
 
     fn into_input(self) -> Input {
         Input::Event(match self {
+            Self::Progress { event } => SessionEvent::Progress { event },
+            Self::ContentBoundary => SessionEvent::ContentBoundary,
+            Self::ReasoningSummaryPart {
+                item_id,
+                summary_index,
+                text,
+                snapshot,
+            } => SessionEvent::ReasoningSummaryPart {
+                item_id,
+                summary_index,
+                text,
+                snapshot,
+            },
+            Self::ToolOutputDelta { id, text } => SessionEvent::ToolOutputDelta { id, text },
             Self::TextDelta { text } | Self::TextSnapshot { text } => {
                 SessionEvent::TextDelta { text }
             }
@@ -1826,6 +1913,33 @@ fn delivery_id(event: &ExecutionEvent, id: Option<&str>) -> Option<String> {
 fn append_delta(previous: &mut Input, next: &Input) -> bool {
     match (previous, next) {
         (
+            Input::Event(SessionEvent::ToolOutputDelta { id, text }),
+            Input::Event(SessionEvent::ToolOutputDelta {
+                id: next,
+                text: more,
+            }),
+        ) if id == next => {
+            text.push_str(more);
+            true
+        }
+        (
+            Input::Event(SessionEvent::ReasoningSummaryPart {
+                item_id,
+                summary_index,
+                text,
+                snapshot: false,
+            }),
+            Input::Event(SessionEvent::ReasoningSummaryPart {
+                item_id: next,
+                summary_index: part,
+                text: more,
+                snapshot: false,
+            }),
+        ) if item_id == next && summary_index == part => {
+            text.push_str(more);
+            true
+        }
+        (
             Input::Event(SessionEvent::TextDelta { text: a }),
             Input::Event(SessionEvent::TextDelta { text: b }),
         )
@@ -1844,6 +1958,9 @@ fn input_bytes(input: &Input) -> usize {
     match input {
         Input::Prompt(text) | Input::Notice(text) => text.len(),
         Input::Event(event) => match event {
+            SessionEvent::ReasoningSummaryPart { item_id, text, .. } => item_id.len() + text.len(),
+            SessionEvent::ToolOutputDelta { id, text } => id.len() + text.len(),
+            SessionEvent::Progress { event } => event.retained_bytes(),
             SessionEvent::TextDelta { text }
             | SessionEvent::ThinkingDelta { text }
             | SessionEvent::ReasoningSummaryDelta { text, .. } => text.len(),

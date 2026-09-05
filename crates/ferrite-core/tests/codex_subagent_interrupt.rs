@@ -124,11 +124,16 @@ fn lifecycle(method: &str, thread: Option<&str>, turn: &str) -> String {
     format!("echo '{}'", json!({"method": method, "params": params}))
 }
 
+fn marker_token(text: &str) -> u64 {
+    text.bytes().map(u64::from).sum()
+}
 fn marker(text: &str) -> String {
+    // Usage is valid after turn completion; a late content delta is stale
+    // work, so it cannot serve as the reader's synchronization checkpoint.
     format!(
         "echo '{}'",
-        json!({"method": "item/agentMessage/delta", "params": {
-            "threadId": "main", "turnId": "main-turn", "itemId": "checkpoint", "delta": text,
+        json!({"method":"thread/tokenUsage/updated","params":{
+            "threadId":"main", "tokenUsage":{"last":{"totalTokens":marker_token(text)},"total":{"totalTokens":marker_token(text),"inputTokens":0,"cachedInputTokens":0,"outputTokens":0,"reasoningOutputTokens":0},"modelContextWindow":200000}
         }})
     )
 }
@@ -140,7 +145,8 @@ fn wait_for(session: &dyn Session, marker: &str) {
             .events()
             .recv_timeout(deadline.saturating_duration_since(Instant::now()))
             .unwrap_or_else(|e| panic!("no checkpoint {marker}: {e}"));
-        if matches!(event, SessionEvent::TextDelta { ref text } if text == marker) {
+        if matches!(event, SessionEvent::TokenUsage { total_tokens, .. } if total_tokens == marker_token(marker))
+        {
             return;
         }
         assert!(

@@ -966,7 +966,9 @@ fn handover_preserves_child_history_and_rejects_old_provider_decisions() {
 }
 
 fn pump_until(h: &mut Harness, mut ready: impl FnMut(&Cockpit) -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    // These are persistence/replay acceptance checks, not throughput budgets.
+    // Parallel Windows runners can spend over five seconds flushing the tree.
+    let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         h.cockpit.pump();
         if ready(&h.cockpit) {
@@ -974,7 +976,13 @@ fn pump_until(h: &mut Harness, mut ready: impl FnMut(&Cockpit) -> bool) {
         }
         assert!(
             Instant::now() < deadline,
-            "background history did not settle"
+            "background history did not settle ({} children observed)",
+            h.cockpit
+                .thread(h.thread)
+                .unwrap()
+                .activity()
+                .children()
+                .len()
         );
         std::thread::sleep(Duration::from_millis(1));
     }

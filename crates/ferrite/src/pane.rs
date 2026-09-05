@@ -263,6 +263,7 @@ impl PaneView {
             }
             return;
         }
+        self.rich.clear_output_selection(&self.text_namespace(), cx);
         let mut next = self
             .subject_views
             .remove(&subject)
@@ -548,9 +549,10 @@ pub fn wall_card(transcript: Option<&Transcript>, decision: Option<&Decision>) -
     let meter = todos
         .map(|todos| SharedString::from(meter_run(todos.done, todos.total)))
         .unwrap_or_default();
+    let caption = transcript.progress().caption().unwrap_or_else(|| "Working".into());
     let working = match todos {
-        Some(todos) => SharedString::from(format!("{}/{} · ◐ working", todos.done, todos.total)),
-        None => SharedString::from("◐ working"),
+        Some(todos) => SharedString::from(format!("{}/{} · ◐ {caption}", todos.done, todos.total)),
+        None => SharedString::from(format!("◐ {caption}")),
     };
     let context = match decision {
         Some(decision) => decision_subject(decision),
@@ -744,6 +746,9 @@ pub fn render_pane(
                     thread.map(|thread| thread.provider()),
                 ),
             ));
+            if transcript.status() == Status::Streaming {
+                pane = pane.child(working_line(transcript, timings, false).px(px(theme::PANE_PAD_X)).py(px(theme::KEYS_GAP)));
+            }
             // The Decision card is a **sibling of the body**, not a child
             // of the Composer (§D.5): its `margin: 0 12px 8px` is measured
             // from the Pane's own content box, so nesting it inside the
@@ -1369,23 +1374,8 @@ fn l2_cell(
                 .text_color(rgb(TEXT_MUTED))
                 .child("❯ idle"),
         );
-    } else if let Some(activity) = read.activity {
-        // The running call's clock rides the line — "◐ Bash cargo check
-        // — 8s" — where the cockpit stamped one (#22 amendment).
-        let clocked = read
-            .running_call
-            .as_deref()
-            .and_then(|call| timings?.get(call))
-            .map(|timing| format!("◐ {activity} — {}", duration_label(timing.elapsed())))
-            .unwrap_or_else(|| format!("◐ {activity}"));
-        body = body.child(
-            div()
-                .w_full()
-                .truncate()
-                .text_size(px(theme::FS_MONO))
-                .text_color(rgb(TEXT_MUTED))
-                .child(SharedString::from(clocked)),
-        );
+    } else if transcript.status() == Status::Streaming {
+        body = body.child(working_line(transcript, timings, true));
     }
 
     let mut content = cell.child(header).child(body).children(composer);
@@ -1475,7 +1465,7 @@ fn l2_tail(transcript: &Transcript) -> Div {
             }
             Body::Notice(text) => line(text.clone(), ATTENTION).font_weight(FontWeight::SEMIBOLD),
             Body::Meta(text) => line(text.clone(), TEXT_MUTED),
-            Body::Thinking(_) => continue,
+            Body::Thinking(text) => line(ferrite_core::progress::headline(text), TEXT_MUTED).line_clamp(1),
         };
         column = column.child(drawn);
     }
@@ -1901,7 +1891,7 @@ fn body(
         .hover_text();
     // A `.signal` line wears the Pane's own state, so the line and the
     // Pane's border can never disagree.
-    let signal = signal_color(Some(transcript.status()));
+    let signal = signal_color(status);
     let window = rendered_window(transcript.blocks(), level);
     let mut prev_margin_b = 0.;
     let mut index = 0;
@@ -1976,12 +1966,6 @@ fn body(
         ));
         index += 1;
     }
-    // The working line, the way Claude Code's own ends its transcript
-    // while a turn runs: what the agent is doing, the turn's clock, and
-    // the tokens it has produced.
-    if status == Some(Status::Streaming) {
-        body = body.child(working_line(transcript));
-    }
     let wheel_scroll = view.scroll.clone();
     let follow = view.follow_tail.clone();
     let paint_scroll = view.scroll.clone();
@@ -2033,76 +2017,90 @@ fn body(
 /// the calls in flight (several of one kind counted together), else the
 /// model's own thinking or answering; the clock is the turn's, the count
 /// the turn's output tokens when the provider has reported any.
-fn working_line(transcript: &Transcript) -> Div {
+fn working_line(
+    transcript: &Transcript,
+    timings: Option<&HashMap<String, ToolTiming>>,
+    compact: bool,
+) -> Div {
     let mut facts: Vec<String> = Vec::new();
     if let Some(elapsed) = transcript.turn_elapsed() {
         facts.push(duration_label(elapsed).to_string());
     }
     let tokens = transcript.turn_output_tokens();
-    if tokens > 0 {
+    if tokens > 0 && !compact {
         facts.push(format!("↓ {} tokens", tokens_label(tokens)));
     }
-    let mut text = format!("◐ {}", working_phrase(transcript.blocks()));
-    if !facts.is_empty() {
-        text.push_str(&format!(" ({})", facts.join(" · ")));
-    }
-    div()
+    let progress = transcript.progress();
+    let caption = progress.caption();
+    let mut row = div()
+        .flex()
+        .flex_col()
         .flex_shrink_0()
         .w_full()
-        .truncate()
-        .mt(px(theme::P_MARGIN_B))
+        .min_w_0()
         .text_size(px(theme::FS_SM))
-        .line_height(relative(theme::LINE_BODY))
-        .text_color(rgb(TEXT_MUTED))
-        .child(SharedString::from(text))
-}
-
-/// The phrase for the working line, from the turn's tail: the running
-/// tool calls since the last prompt, counted by kind, else what the model
-/// is doing with its own words.
-pub fn working_phrase(blocks: &[Block]) -> String {
-    let turn = blocks
-        .iter()
-        .rposition(|block| matches!(block.body, Body::Prompt(_)))
-        .map(|at| &blocks[at..])
-        .unwrap_or(blocks);
-    let running: Vec<&ToolBlock> = turn
-        .iter()
-        .filter_map(|block| match &block.body {
-            Body::Tool(tool) if matches!(tool.state, ToolState::Running) => Some(tool),
-            _ => None,
-        })
-        .collect();
-    if let Some(last) = running.last() {
-        let same = running.iter().filter(|tool| tool.name == last.name).count();
-        return if same > 1 {
-            format!("Running {same} {}…", tool_noun(&last.name))
-        } else if last.summary.is_empty() {
-            format!("Running {}…", last.name)
-        } else {
-            format!("Running {}: {}…", last.name, last.summary)
-        };
+        .line_height(relative(theme::LINE_BODY));
+    if let Some(caption) = caption {
+        let selector = format!("progress-caption-{caption}");
+        row = row.debug_selector(move || selector.clone());
+        row = row.child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(theme::KEYS_GAP))
+                .child(
+                    div()
+                        .min_w_0()
+                        .flex_1()
+                        .truncate()
+                        .text_color(rgb(TEXT_2))
+                        .italic()
+                        .child(SharedString::from(format!("◐ {caption}"))),
+                )
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .text_color(rgb(TEXT_MUTED))
+                        .child(SharedString::from(facts.join(" · "))),
+                ),
+        );
+        let tool = transcript
+            .blocks()
+            .iter()
+            .rev()
+            .find_map(|block| match &block.body {
+                Body::Tool(tool) if tool.state == ToolState::Running => Some(tool),
+                _ => None,
+            });
+        if let Some(tool) = tool {
+            let native = progress.tool(&tool.call);
+            let detail = native
+                .filter(|p| !p.message.is_empty())
+                .map(|p| p.message.clone())
+                .unwrap_or_else(|| {
+                    if tool.summary.is_empty() {
+                        tool.name.clone()
+                    } else {
+                        format!("{} · {}", tool.name, tool.summary)
+                    }
+                });
+            let elapsed = native
+                .and_then(|p| p.elapsed_ms)
+                .map(Duration::from_millis)
+                .or_else(|| {
+                    timings
+                        .and_then(|map| map.get(&tool.call))
+                        .map(ToolTiming::elapsed)
+                });
+            let detail = elapsed
+                .map(|elapsed| format!("{detail} · {}", duration_label(elapsed)))
+                .unwrap_or(detail);
+            row = row.child(div().truncate().text_color(rgb(TEXT_MUTED)).child(
+                SharedString::from(ferrite_core::progress::one_line(&detail, 240)),
+            ));
+        }
     }
-    match turn.last().map(|block| &block.body) {
-        Some(Body::Thinking(_)) => "Thinking…".to_string(),
-        Some(
-            Body::Paragraph { .. } | Body::Heading { .. } | Body::Bullet { .. } | Body::Code { .. },
-        ) => "Answering…".to_string(),
-        _ => "Inferring…".to_string(),
-    }
-}
-
-/// What several calls of one tool are called together.
-fn tool_noun(name: &str) -> &'static str {
-    match name {
-        "Bash" | "commandExecution" => "shell commands",
-        "Read" => "file reads",
-        "Edit" | "Write" | "MultiEdit" | "fileChange" => "edits",
-        "Grep" | "Glob" => "searches",
-        "WebFetch" | "WebSearch" => "web requests",
-        "Agent" | "Task" => "agents",
-        _ => "tool calls",
-    }
+    row
 }
 
 /// `8.0k`, `12k`, `340` — the token count the way Claude Code prints it.
@@ -3434,11 +3432,7 @@ fn render_block(
         // fold learned to drop it) draws nothing — not even its margin.
         Body::Thinking(thought) if thought.trim().is_empty() => div().into_any_element(),
         Body::Thinking(thought) => paragraph(row, TEXT_MUTED)
-            .child(selection.line(
-                block.id,
-                thought.trim_end_matches('\n').to_string(),
-                Vec::new(),
-            ))
+            .child(selection.markdown(block.id, thought.trim_end().to_string()).muted())
             .into_any_element(),
         // A Notice is the prototype's `.signal` line (§E.8): 12px/600,
         // 10px below, coloured by the Pane's own state — muted at rest,
@@ -3730,7 +3724,7 @@ fn render_tool(
                     .text_color(rgb(TEXT_MUTED))
                     .child("Command"),
             );
-            details = details.child(output_block(block, &tool.summary, TEXT_2, selection));
+            details = details.child(output_block(block, "command", &tool.summary, TEXT_2, selection));
         }
         if let Some(output) = &tool.output {
             // One row per hard line, each a stretched block under the
@@ -3739,7 +3733,7 @@ fn render_tool(
             // character per line.
             // Ordinary stdout stays neutral even when a command failed.
             // The verb, verdict and compact error line carry failure ink.
-            details = details.child(output_block(block, &output.text, TEXT_MUTED, selection));
+            details = details.child(output_block(block, "result", &output.text, TEXT_MUTED, selection));
             if output.omitted_bytes > 0 {
                 details = details.child(result_line(TEXT_MUTED).child(div().min_w_0().child(
                     format!("… {} bytes omitted from inline view", output.omitted_bytes),
@@ -3760,6 +3754,9 @@ fn render_tool(
                     )),
                 ));
         }
+    }
+    if tool.state == ToolState::Unavailable {
+        card = card.child(result_line(TEXT_MUTED).child("Result unavailable"));
     }
     if !expanded {
         if let ToolState::Failed(message) = &tool.state {
@@ -3795,11 +3792,11 @@ fn render_shell_activity(
 ) -> AnyElement {
     let call = activity.leader().call.clone();
     let total = activity.blocks.len();
-    let label = if activity.running > 0 {
-        format!(
-            "Running {total} shell commands · {} finished",
-            total - activity.running
-        )
+    let unavailable = activity.blocks.iter().filter(|block| matches!(&block.body, Body::Tool(tool) if tool.state == ToolState::Unavailable)).count();
+    let label = if unavailable > 0 {
+        format!("{total} shell commands · {unavailable} results unavailable")
+    } else if activity.running > 0 {
+        format!("Running {total} shell commands · {} finished", total - activity.running)
     } else {
         format!("Ran {total} shell commands")
     };
@@ -3946,7 +3943,7 @@ fn result_ink(state: &ToolState) -> u32 {
 /// hard line stretched to the column under it, each wrapping at the
 /// column's width. Blank lines keep their height so the shape of the
 /// output survives.
-fn output_block(block: BlockId, text: &str, ink: u32, selection: &TextRuns) -> Div {
+fn output_block(block: BlockId, part: &str, text: &str, ink: u32, selection: &TextRuns) -> Div {
     let mut rows = div()
         .flex()
         .flex_col()
@@ -3957,6 +3954,16 @@ fn output_block(block: BlockId, text: &str, ink: u32, selection: &TextRuns) -> D
         .text_size(px(theme::FS_MD))
         .line_height(relative(theme::LINE_BODY))
         .text_color(rgb(ink));
+    // Bound native layout work as output grows. A single read-only control
+    // keeps the original text selectable and scrolls within twelve rows.
+    if text.len() > 8 * 1024 {
+        return rows.child(
+            div().flex().w_full().min_w_0().gap(px(theme::EVENT_GAP))
+                .child(div().flex_shrink_0().w(px(theme::FS_MD * theme::MONO_ADVANCE))
+                    .text_color(rgb(SEP)).child("⎿"))
+                .child(div().flex_1().min_w_0().child(selection.output(block, part, text))),
+        );
+    }
     for (index, line) in text.split('\n').enumerate() {
         let run = if line.is_empty() {
             selection.line(block, " ", Vec::new())
@@ -4364,47 +4371,13 @@ pub(crate) fn code(
 
 #[cfg(test)]
 mod tests {
-
-    /// The working line names what runs: several calls of one tool count
-    /// together, one names itself, and with none running the model's own
-    /// tail says whether it is thinking or answering.
+    use super::*;
     #[test]
-    fn the_working_phrase_counts_the_calls_in_flight() {
-        let (lexer, _) = Lexer::new();
-        let mut transcript = Transcript::new(Arc::new(lexer));
-        transcript.apply(Input::Prompt("go".into()));
-        assert_eq!(working_phrase(transcript.blocks()), "Inferring…");
-        transcript.apply(Input::Event(SessionEvent::ThinkingDelta {
-            text: "hmm".into(),
-        }));
-        assert_eq!(working_phrase(transcript.blocks()), "Thinking…");
-        let start = |id: &str, name: &str| {
-            Input::Event(SessionEvent::ToolStarted {
-                id: id.into(),
-                name: name.into(),
-                input: serde_json::json!({ "command": "ls" }),
-            })
-        };
-        transcript.apply(start("toolu_1", "Read"));
-        assert!(working_phrase(transcript.blocks()).starts_with("Running Read"));
-        transcript.apply(Input::Event(SessionEvent::ToolCompleted {
-            id: "toolu_1".into(),
-            output: "x".into(),
-            is_error: false,
-            result: ToolResult::Opaque,
-        }));
-        transcript.apply(start("toolu_2", "Bash"));
-        transcript.apply(start("toolu_3", "Bash"));
-        assert_eq!(
-            working_phrase(transcript.blocks()),
-            "Running 2 shell commands…"
-        );
+    fn progress_token_counts_stay_compact() {
         assert_eq!(tokens_label(340), "340");
         assert_eq!(tokens_label(8_040), "8.0k");
         assert_eq!(tokens_label(12_400), "12k");
     }
-    use super::*;
-
     #[test]
     fn footer_advertises_history_only_when_the_context_is_armed() {
         assert_eq!(
@@ -4951,7 +4924,7 @@ mod tests {
         assert_eq!(transcript.todos(), Some(Todos { done: 3, total: 4 }));
         let card = wall_card(Some(&transcript), None);
         assert_eq!(card.meter.as_ref(), "▰▰▰▱");
-        assert_eq!(card.working.as_ref(), "3/4 · ◐ working");
+        assert_eq!(card.working.as_ref(), "3/4 · ◐ Working");
 
         // A red suite flips the folded flag and folds the failing line —
         // with the run's own count when its output reported one.

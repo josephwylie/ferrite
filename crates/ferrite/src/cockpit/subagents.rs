@@ -189,6 +189,7 @@ impl CockpitView {
             .subject(&subject)
             .map(|subject| subject.revision())
             .unwrap_or(0);
+        self.facts.selected(&self.cockpit, thread, &subject);
         self.panes[index].select_subject(subject, generation, cx);
         self.retry_subject_history(index, cx);
         self.cockpit.focus_thread(thread);

@@ -13,6 +13,7 @@ pub mod import;
 pub mod layout;
 mod prompt_history;
 pub mod providers;
+pub mod progress;
 pub mod questions;
 pub mod roster;
 pub mod session;

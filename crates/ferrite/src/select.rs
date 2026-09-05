@@ -69,6 +69,34 @@ pub struct TextRuns {
     registry: Registry,
 }
 impl TextRuns {
+    pub fn output(&self, block: BlockId, part: &str, text: &str) -> crate::rich::Output {
+        #[cfg(test)]
+        self.registry
+            .borrow_mut()
+            .entry(self.thread)
+            .or_default()
+            .push((block, 0, true, text.to_string()));
+        crate::rich::Output {
+            id: format!("output-{}-{block:?}-{part}", self.namespace).into(),
+            text: text.to_string().into(),
+            cache: self.cache.clone(),
+        }
+    }
+
+    pub fn markdown(&self, block: BlockId, source: String) -> crate::rich::Markdown {
+        #[cfg(test)]
+        self.registry
+            .borrow_mut()
+            .entry(self.thread)
+            .or_default()
+            .push((block, 0, true, source.clone()));
+        crate::rich::Markdown::new(
+            format!("thinking-{}-{block:?}", self.namespace),
+            source,
+            self.cache.clone(),
+        )
+    }
+
     pub fn line(
         &self,
         block: BlockId,
