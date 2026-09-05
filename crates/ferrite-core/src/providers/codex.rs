@@ -12,6 +12,7 @@
 
 mod activity;
 pub(super) mod catalog;
+mod questions;
 mod wire;
 
 use std::collections::HashMap;
@@ -225,6 +226,7 @@ pub struct CodexSession {
     /// The thread's cwd, kept for resolving `@path` mention tokens.
     cwd: Option<PathBuf>,
     next_request_id: u64,
+    question_replies: Arc<Mutex<questions::Replies>>,
 }
 
 impl CodexSession {
@@ -273,6 +275,7 @@ impl CodexSession {
         let current_turn = Arc::new(Mutex::new(None));
         let skills = Arc::new(Mutex::new(Vec::new()));
         let models = Arc::new(Mutex::new(Vec::new()));
+        let question_replies = Arc::new(Mutex::new(questions::Replies::default()));
         let handshake = read_stdout(
             stdout,
             Arc::downgrade(&stdin),
@@ -282,6 +285,7 @@ impl CodexSession {
             Arc::clone(&current_turn),
             Arc::clone(&skills),
             Arc::clone(&models),
+            Arc::clone(&question_replies),
         );
 
         let mut session = Self {
@@ -299,6 +303,7 @@ impl CodexSession {
             skills,
             cwd: config.cwd.clone(),
             next_request_id: 1,
+            question_replies,
         };
 
         // The handshake, in the server's required order. A failed one must
@@ -504,6 +509,28 @@ impl CodexSession {
     /// to the model (the wire's "decline" takes no text — the model learns
     /// only that the tool was rejected).
     pub fn respond_to_decision(&mut self, id: &str, answer: DecisionAnswer) -> io::Result<()> {
+        let rpc = self.take_request_id();
+        let turn = lock(&self.current_turn).clone();
+        let request = lock(&self.question_replies).prepare(
+            id,
+            &answer,
+            rpc,
+            &self.thread_id,
+            turn.as_deref(),
+        )?;
+        if let Some(mut request) = request {
+            if request["method"] == "turn/start" {
+                if let Some(effort) = &self.effort {
+                    request["params"]["effort"] = effort.clone().into();
+                }
+            }
+            let result = self.write_line(&request);
+            if result.is_err() {
+                lock(&self.question_replies).discard(rpc);
+            }
+            return result;
+        }
+
         let decision = match &answer {
             DecisionAnswer::Allow { .. } => serde_json::json!("accept"),
             DecisionAnswer::Deny { .. } => serde_json::json!("decline"),
@@ -614,6 +641,7 @@ fn read_stdout(
     current_turn: Arc<Mutex<Option<String>>>,
     skills: Arc<Mutex<Vec<crate::SessionCommand>>>,
     model_catalog: Arc<Mutex<Vec<crate::ModelInfo>>>,
+    question_replies: Arc<Mutex<questions::Replies>>,
 ) -> Receiver<Result<HandshakeStep, String>> {
     let (step_sender, steps) = sync_channel(2);
     thread::spawn(move || {
@@ -727,6 +755,13 @@ fn read_stdout(
             }
             turns.observe(text);
             if let Ok(frame) = serde_json::from_str(text) {
+                let reply = lock(&question_replies).observe(&frame);
+                if let Some(reply) = reply {
+                    if sender.send(reply).is_err() {
+                        return;
+                    }
+                    continue;
+                }
                 let update = activity.observe(frame);
                 if !publish_activity(update, &mut activity, &sender, &stdin) {
                     return;

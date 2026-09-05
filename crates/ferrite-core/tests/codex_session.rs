@@ -340,6 +340,7 @@ fn an_approval_request_arrives_as_a_decision_naming_its_tool_call() {
                 description,
                 input,
                 suggestions,
+                ..
             },
     } = decisions[0]
     else {

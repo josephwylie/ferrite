@@ -1476,6 +1476,9 @@ impl Cockpit {
         if handle.generation != state.generation {
             return Ok(false);
         }
+        if pending.submitting {
+            return Ok(false);
+        }
         let allowed = !matches!(answer, DecisionAnswer::Deny { .. });
         let Some(session) = state
             .session
@@ -1490,6 +1493,12 @@ impl Cockpit {
         if let Err(error) = session.respond_to_decision(&pending.decision.id, answer) {
             state.apply(Input::Notice(format!("answer failed: {error}")));
             return Err(error);
+        }
+        if !pending.decision.blocks_execution() {
+            state.activity.apply(ActivityInput::AnswerSubmitted {
+                handle: handle.clone(),
+            });
+            return Ok(true);
         }
         state.activity.apply(ActivityInput::Answered {
             handle: handle.clone(),
@@ -3900,6 +3909,7 @@ mod tests {
     fn decision(id: &str, tool: &str) -> SessionEvent {
         SessionEvent::DecisionRequested {
             decision: Decision {
+                delivery: Default::default(),
                 id: id.into(),
                 tool_use_id: format!("toolu_{id}"),
                 tool_name: tool.into(),

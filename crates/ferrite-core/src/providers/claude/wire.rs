@@ -517,6 +517,7 @@ fn parse_control_request(value: &Value) -> Option<SessionEvent> {
     }
     Some(SessionEvent::DecisionRequested {
         decision: Decision {
+            delivery: Default::default(),
             id: value.get("request_id")?.as_str()?.to_string(),
             tool_use_id: text(request, "tool_use_id"),
             tool_name: text(request, "tool_name"),

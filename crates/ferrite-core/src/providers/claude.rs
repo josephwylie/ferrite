@@ -214,6 +214,10 @@ impl ClaudeSession {
             "--output-format",
             "stream-json",
             "--include-partial-messages",
+            // Newer models omit readable thinking unless explicitly requested.
+            // This chooses its display, leaving effort/thinking mode unchanged.
+            "--thinking-display",
+            "summarized",
             "--forward-subagent-text",
             "--verbose",
             // Route tool permissions to Ferrite over the control protocol

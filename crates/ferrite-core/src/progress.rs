@@ -328,6 +328,14 @@ pub fn one_line(text: &str, max: usize) -> String {
 
 /// Only a provider-authored first paragraph/heading is used. No summarizer.
 pub fn headline(text: &str) -> String {
+    // Codex's CLI uses the first complete bold heading as its live status.
+    if let Some((_, rest)) = text.split_once("**") {
+        if let Some((heading, _)) = rest.split_once("**") {
+            if !heading.trim().is_empty() {
+                return one_line(heading, 160);
+            }
+        }
+    }
     let text = text.trim_start().trim_start_matches('#').trim_start();
     let line = text
         .lines()

@@ -33,10 +33,26 @@ in that scope, with inactive panes isolated. A document evicted from the render
 window clears its selection. Native double-click selects a word and triple-click
 a paragraph; GPUI Kit 0.6 does not extend a double-click drag word-wise.
 
-Consecutive shell calls share a display disclosure, retaining each call's
-identity and result. Success output starts collapsed, failures stay visible,
-and streaming preserves the operator's expansion choice. No parallel-execution
-claim is inferred. See [Claude CLI research](../research/claude-code-tool-grouping.md).
+Consecutive tool calls of every kind share a display disclosure, retaining each call's
+identity and result. Group expansion reveals compact call summaries; each call
+independently discloses its input/output. Failure previews stay visible. Reasoning
+starts as its provider-authored heading or first line with a right-hand chevron
+for the received summary text. Streaming preserves these independent choices.
+Commentary separates groups. No parallel-execution claim is inferred. See [Claude CLI research](../research/claude-code-tool-grouping.md).
+
+Questions share one GPUI form across Main and child subjects: `RadioGroup`,
+`Checkbox`, `Input`, and `Button` inside a `GroupBox` above the composer. The
+attachment island and question island share the same concave join. Input focus,
+choice activation and selection belong to the kit. Ordinary composer text stays
+conversation; answers use the form's text fields and Send button.
+
+Provider adapters set typed `DecisionDelivery`. Claude's question resumes its
+blocking tool, while Codex's structured async agent message produces a nonblocking
+request. Codex replies use `turn/steer` with the observed active turn ID, or
+`turn/start` when idle. Shared activity retains a submitting form until the
+adapter reports acknowledgement, and preserves its draft on rejection. Neither
+an async question nor its acknowledgement changes execution status. See
+[provider research](../research/provider-transcript-status.md).
 
 ## Consequences
 

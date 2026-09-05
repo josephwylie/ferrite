@@ -40,9 +40,9 @@ pub enum SessionEvent {
         /// written for the model.
         result: ToolResult,
     },
-    /// The Session is blocked on a Decision: only the operator can say whether
-    /// this tool may run. Answer it with the provider's respond-to-Decision
-    /// call, quoting the Decision's `id`.
+    /// Operator input is requested. `Decision::blocks_execution` distinguishes
+    /// tool approvals from questions delivered while execution continues. Answer
+    /// with the provider's respond-to-Decision call, quoting the Decision's `id`.
     DecisionRequested { decision: Decision },
     /// One native reasoning-summary section. Identity survives deltas and
     /// authoritative snapshots, so a completion can correct an earlier part.
@@ -221,9 +221,18 @@ pub struct Hunk {
     pub lines: Vec<String>,
 }
 
-/// A tool call the operator has to rule on before it runs.
+/// Provider-normalized delivery, independent of tool names and input schemas.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DecisionDelivery {
+    #[default]
+    Blocking,
+    Async,
+}
+
+/// A provider request for operator input.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Decision {
+    pub delivery: DecisionDelivery,
     /// Opaque provider handle for this Decision. Echo it unchanged when
     /// answering; its spelling need not match the provider's raw wire ID.
     pub id: String,
@@ -242,6 +251,12 @@ pub struct Decision {
 }
 
 impl Decision {
+    /// Async questions ask for input while execution continues. Their replies
+    /// are user messages and require a transport acknowledgement.
+    pub fn blocks_execution(&self) -> bool {
+        self.delivery == DecisionDelivery::Blocking
+    }
+
     /// The standing answer this request offers, if it offers one. Both
     /// providers put structured choices among plainer ones — Codex lists
     /// `"accept"` and `"cancel"` beside its amendment object — so the
@@ -257,6 +272,7 @@ mod tests {
 
     fn decision(suggestions: Vec<serde_json::Value>) -> Decision {
         Decision {
+            delivery: Default::default(),
             id: "1".into(),
             tool_use_id: "toolu_1".into(),
             tool_name: "Write".into(),

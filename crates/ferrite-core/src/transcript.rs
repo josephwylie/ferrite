@@ -68,6 +68,8 @@ pub struct ToolBlock {
     /// The provider's id for this call — what a later result quotes.
     pub call: String,
     pub name: String,
+    /// Provider-authored purpose when supplied; the input remains in `summary`.
+    pub title: Option<String>,
     /// One line naming what the call touched, for a row that never wraps.
     pub summary: String,
     pub state: ToolState,
@@ -84,24 +86,18 @@ pub struct ToolBlock {
 }
 
 /// A compact display run, never an assertion that calls executed in parallel.
-/// Visible prose, edits, prompts and notices remain chronological boundaries.
-pub struct ShellActivity<'a> {
+/// Visible prose, reasoning, prompts and notices remain chronological boundaries.
+pub struct ToolActivity<'a> {
     pub blocks: &'a [Block],
     pub running: usize,
     pub failed: usize,
 }
 
-impl ToolBlock {
-    pub fn is_shell(&self) -> bool {
-        matches!(self.name.as_str(), "Bash" | "commandExecution") && self.diff.is_none()
-    }
-}
-
-impl<'a> ShellActivity<'a> {
+impl<'a> ToolActivity<'a> {
     pub fn at_start(blocks: &'a [Block]) -> Option<Self> {
         let len = blocks
             .iter()
-            .take_while(|block| matches!(&block.body, Body::Tool(tool) if tool.is_shell()))
+            .take_while(|block| matches!(&block.body, Body::Tool(_)))
             .count();
         if len < 2 {
             return None;
@@ -121,9 +117,58 @@ impl<'a> ShellActivity<'a> {
         })
     }
 
+    /// Describe observed tool kinds without guessing a shell command's intent.
+    pub fn summary(&self) -> String {
+        let mut counts: Vec<(usize, usize)> = Vec::new();
+        for block in self.blocks {
+            let Body::Tool(tool) = &block.body else {
+                continue;
+            };
+            let kind = match tool.name.as_str() {
+                "Grep" | "Glob" => 0,
+                "Read" | "read_file" => 1,
+                "Edit" | "Write" | "MultiEdit" | "fileChange" => 2,
+                "Bash" | "commandExecution" => 3,
+                "WebSearch" | "webSearch" => 4,
+                _ => 5,
+            };
+            if let Some((_, count)) = counts.iter_mut().find(|(seen, _)| *seen == kind) {
+                *count += 1;
+            } else {
+                counts.push((kind, 1));
+            }
+        }
+        let mut parts = Vec::new();
+        for (kind, count) in counts {
+            let (active, done, noun) = match kind {
+                0 => ("Searching for", "Searched for", "pattern"),
+                1 => ("Reading", "Read", "file"),
+                2 => ("Updating", "Updated", "file"),
+                3 => ("Running", "Ran", "shell command"),
+                4 => ("Searching the web", "Searched the web", "time"),
+                _ => ("Using", "Used", "tool"),
+            };
+            let verb = if self.running > 0 { active } else { done };
+            let verb = if parts.is_empty() {
+                verb.to_owned()
+            } else {
+                verb.to_lowercase()
+            };
+            parts.push(format!(
+                "{verb} {count} {noun}{}",
+                if count == 1 { "" } else { "s" }
+            ));
+        }
+        let mut summary = parts.join(", ");
+        if self.running > 0 {
+            summary.push('…');
+        }
+        summary
+    }
+
     pub fn leader(&self) -> &'a ToolBlock {
         let Body::Tool(tool) = &self.blocks[0].body else {
-            unreachable!("shell activity contains tools")
+            unreachable!("tool activity contains tools")
         };
         tool
     }
@@ -965,6 +1010,16 @@ impl Transcript {
                 let block = self.push(Body::Tool(ToolBlock {
                     call: id,
                     summary: tool_summary(&input),
+                    title: ["title", "description", "reason"]
+                        .into_iter()
+                        .find_map(|key| {
+                            input
+                                .get(key)
+                                .and_then(serde_json::Value::as_str)
+                                .map(str::trim)
+                                .filter(|text| !text.is_empty())
+                        })
+                        .map(str::to_owned),
                     name,
                     state: ToolState::Running,
                     diff: None,
@@ -1012,7 +1067,14 @@ impl Transcript {
                 }
             }
             Input::Event(SessionEvent::DecisionRequested { decision }) => {
-                self.status = Status::Blocked;
+                if decision.blocks_execution() {
+                    self.status = Status::Blocked;
+                } else {
+                    return Update {
+                        dirty: vec![self.push(Body::Notice(decision.description))],
+                        ..Update::default()
+                    };
+                }
                 Update {
                     dirty: vec![self.push(Body::Notice(format!(
                         "decision needed: {} — {}",
@@ -1537,6 +1599,53 @@ mod tests {
     use super::*;
     use crate::Decision;
 
+    #[test]
+    fn mixed_tools_group_between_visible_reasoning_and_commentary() {
+        let mut transcript = Transcript::default();
+        transcript.apply(text("Checking the files."));
+        for (id, name) in [
+            ("read", "Read"),
+            ("mcp", "mcp__docs__search"),
+            ("edit", "Edit"),
+            ("shell", "Bash"),
+        ] {
+            transcript.apply(started(
+                id,
+                name,
+                serde_json::json!({"file_path": "src/main.rs"}),
+            ));
+        }
+        transcript.apply(Input::Event(SessionEvent::ThinkingDelta {
+            text: "The changes fit together.".into(),
+        }));
+        transcript.apply(started(
+            "verify",
+            "commandExecution",
+            serde_json::json!({"command": "check"}),
+        ));
+        transcript.apply(text("Checks passed."));
+        let blocks = transcript.blocks();
+        let group = ToolActivity::at_start(&blocks[1..])
+            .expect("all adjacent tool kinds share a disclosure");
+        assert_eq!(group.blocks.len(), 4);
+        assert_eq!(
+            group.summary(),
+            "Reading 1 file, using 1 tool, updating 1 file, running 1 shell command…"
+        );
+        assert!(matches!(&blocks[5].body, Body::Thinking(s) if s == "The changes fit together."));
+        assert_eq!(blocks[0].markdown.as_deref(), Some("Checking the files."));
+        assert_eq!(blocks[7].markdown.as_deref(), Some("Checks passed."));
+        for id in ["read", "mcp", "edit", "shell"] {
+            transcript.apply(completed(id, "done", false));
+        }
+        assert_eq!(
+            ToolActivity::at_start(&transcript.blocks()[1..])
+                .unwrap()
+                .summary(),
+            "Read 1 file, used 1 tool, updated 1 file, ran 1 shell command"
+        );
+    }
+
     fn started(id: &str, name: &str, input: serde_json::Value) -> Input {
         Input::Event(SessionEvent::ToolStarted {
             id: id.into(),
@@ -1953,6 +2062,7 @@ mod tests {
             ),
             Input::Event(SessionEvent::DecisionRequested {
                 decision: Decision {
+                    delivery: Default::default(),
                     id: "perm_01".into(),
                     tool_use_id: "toolu_01".into(),
                     tool_name: "AskUserQuestion".into(),
@@ -2006,6 +2116,7 @@ mod tests {
 
         transcript.apply(Input::Event(SessionEvent::DecisionRequested {
             decision: Decision {
+                delivery: Default::default(),
                 id: "perm_01".into(),
                 tool_use_id: "toolu_01".into(),
                 tool_name: "Write".into(),
@@ -2063,6 +2174,7 @@ mod tests {
         let mut transcript = Transcript::default();
         transcript.apply(Input::Event(SessionEvent::DecisionRequested {
             decision: Decision {
+                delivery: Default::default(),
                 id: "perm_01".into(),
                 tool_use_id: "toolu_01".into(),
                 tool_name: "Write".into(),
@@ -2673,6 +2785,7 @@ mod tests {
         let mut blocked = Transcript::default();
         blocked.apply(Input::Event(SessionEvent::DecisionRequested {
             decision: Decision {
+                delivery: Default::default(),
                 id: "perm_01".into(),
                 tool_use_id: "toolu_01".into(),
                 tool_name: "Write".into(),

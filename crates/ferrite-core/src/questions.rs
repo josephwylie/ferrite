@@ -1,17 +1,17 @@
-//! Claude Code's `AskUserQuestion` tool as a Decision.
-//!
-//! The tool never runs on its own: Claude calls it with a list of questions,
-//! the harness stops for permission, and the operator "allows" it with an
-//! `updatedInput` that carries the answers. So a question is a Decision
-//! whose `input` has a known shape, and answering it is building that
-//! updated input. This module is the pure part: recognising the shape,
-//! summarising it for a small Pane, and composing the answer. Sending it is
-//! the provider's job.
+//! Provider-normalized question forms and answer composition. Adapters own
+//! delivery: Claude resumes a blocked tool; Codex async replies steer a turn.
+//! No provider wire protocol or UI controls cross this seam.
 
 use serde_json::{Map, Value};
 
 /// The tool name Claude Code uses for a multiple-choice question.
 const TOOL_NAME: &str = "AskUserQuestion";
+
+/// Normalized nonblocking question delivery; the provider owns reply transport.
+pub const ASYNC_TOOL_NAME: &str = "request_user_input_async";
+pub fn is_async(tool_name: &str) -> bool {
+    tool_name == ASYNC_TOOL_NAME
+}
 
 /// One question the model put to the operator.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -50,7 +50,7 @@ pub struct Answer {
 
 /// Whether a Decision's tool is the question tool.
 pub fn is_question_tool(tool_name: &str) -> bool {
-    tool_name == TOOL_NAME
+    tool_name == TOOL_NAME || is_async(tool_name)
 }
 
 /// The questions in an `AskUserQuestion` input, or None if the input is not
@@ -65,10 +65,14 @@ pub fn parse(decision_input: &Value) -> Option<Vec<Question>> {
     if questions.is_empty() {
         return None;
     }
-    questions.iter().map(parse_question).collect()
+    let asynchronous = decision_input["delivery"] == "async";
+    questions
+        .iter()
+        .map(|value| parse_question(value, asynchronous))
+        .collect()
 }
 
-fn parse_question(value: &Value) -> Option<Question> {
+fn parse_question(value: &Value, asynchronous: bool) -> Option<Question> {
     let question = value.get("question")?.as_str()?.trim();
     if question.is_empty() {
         return None;
@@ -79,7 +83,7 @@ fn parse_question(value: &Value) -> Option<Question> {
         .iter()
         .map(parse_choice)
         .collect::<Option<Vec<_>>>()?;
-    if options.len() < 2 {
+    if !asynchronous && options.len() < 2 {
         return None;
     }
     Some(Question {

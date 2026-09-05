@@ -4,7 +4,7 @@
 use gpui::component::button::{Button, ButtonVariants};
 use gpui::component::Sizable;
 use gpui::prelude::*;
-use gpui::{div, px, rgb, ElementId, SharedString};
+use gpui::{canvas, div, point, px, rgb, ElementId, Hsla, PathBuilder, Pixels, SharedString};
 
 use crate::theme;
 
@@ -195,4 +195,33 @@ pub fn scrollbar(
                 .id(id)
                 .scrollbar_show(gpui::component::scroll::ScrollbarMode::Hover),
         )
+}
+
+pub(crate) fn composer_join(radius: Pixels, background: Hsla) -> impl IntoElement {
+    canvas(
+        |_, _, _| (),
+        move |bounds, _, window, _| {
+            let left = bounds.origin.x;
+            let right = bounds.right();
+            let top = bounds.origin.y;
+            let bottom = bounds.bottom();
+            let mut path = PathBuilder::fill();
+            path.move_to(point(left, bottom));
+            path.curve_to(point(left + radius, top), point(left + radius, bottom));
+            path.line_to(point(left + radius, bottom));
+            path.close();
+            path.move_to(point(right - radius, top));
+            path.curve_to(point(right, bottom), point(right - radius, bottom));
+            path.line_to(point(right - radius, bottom));
+            path.close();
+            if let Ok(path) = path.build() {
+                window.paint_path(path, background);
+            }
+        },
+    )
+    .absolute()
+    .left(-radius)
+    .right(-radius)
+    .bottom_0()
+    .h(radius)
 }
