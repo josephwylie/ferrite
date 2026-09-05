@@ -205,6 +205,11 @@ mod tests {
     use super::*;
     use std::fs;
 
+    // Discovery also walks real install directories. A fixture-only name
+    // keeps the operator's installed Codex out of these version comparisons.
+    #[cfg(unix)]
+    const STUB_PROGRAM: &str = "ferrite-discovery-test-codex";
+
     fn scratch(name: &str) -> PathBuf {
         let dir =
             std::env::temp_dir().join(format!("ferrite-discover-{}-{name}", std::process::id()));
@@ -216,7 +221,7 @@ mod tests {
     #[cfg(unix)]
     fn stub(dir: &Path, version: &str) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
-        let path = dir.join("codex");
+        let path = dir.join(STUB_PROGRAM);
         fs::write(&path, format!("#!/bin/sh\necho codex-cli {version}\n")).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
         path
@@ -232,15 +237,15 @@ mod tests {
         let third = scratch("third");
         let older = stub(&first, "0.144.4");
         let newer = stub(&second, "0.153.0");
-        std::os::unix::fs::symlink(&newer, third.join("codex")).unwrap();
+        std::os::unix::fs::symlink(&newer, third.join(STUB_PROGRAM)).unwrap();
         let path = std::env::join_paths([&first, &second, &third]).unwrap();
-        let found = candidates("codex", Some(&path));
+        let found = candidates(STUB_PROGRAM, Some(&path));
         assert!(
             found.starts_with(&[older.clone(), newer.clone()]),
             "{found:?}"
         );
         assert!(
-            !found.contains(&third.join("codex")),
+            !found.contains(&third.join(STUB_PROGRAM)),
             "the link is the same file: {found:?}"
         );
         let best = newest(&found, |path| {
