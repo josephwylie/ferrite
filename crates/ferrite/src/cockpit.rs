@@ -1687,8 +1687,9 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// The pointer moved with a seam held: the ratio follows it, clamped
-    /// by the tree to the 20% floor either side.
+    /// The pointer moved with a seam held: the seam follows it, and only
+    /// the two Panes touching the seam change size — the tree keeps every
+    /// other Pane where it was and neither neighbour under its floor.
     fn drag_seam(
         &mut self,
         position: gpui::Point<Pixels>,
@@ -1703,13 +1704,11 @@ impl CockpitView {
         let Some(drag) = self.seam_drag.as_mut() else {
             return;
         };
-        if let Some(ratio) =
-            drag.tree
-                .ratio_for(&drag.seam, bounds, pointer, crate::theme::GRID_GAP)
+        if drag
+            .tree
+            .drag(&drag.seam, bounds, pointer, crate::theme::GRID_GAP)
         {
-            if drag.tree.set_ratio(&drag.seam, ratio) {
-                cx.notify();
-            }
+            cx.notify();
         }
     }
 
@@ -2117,6 +2116,7 @@ impl CockpitView {
         let grouped = self.cockpit.groups().of(thread).is_some();
         pane::head_title(self.panes[index].name.clone())
             .id(("pane-title", thread.get() as usize))
+            .debug_selector(move || format!("pane-title-{}", thread.get()))
             // In a Group the title is the Pane's handle: drag it onto
             // another Pane to swap or split.
             .when(grouped, |title| {
@@ -12597,6 +12597,176 @@ mod tests {
                 "the source sits above"
             );
         });
+    }
+
+    /// Many members on one board, at two zoom levels: every seam grabs and
+    /// follows the pointer while every other seam holds its line — a chain
+    /// of N is nested splits, and a naive ratio drag squeezed the whole
+    /// rest of the chain — and every Pane's title drags onto another Pane,
+    /// not only the first two.
+    #[gpui::test]
+    fn a_crowded_board_drags_every_seam_and_every_title(cx: &mut TestAppContext) {
+        for (count, width, height) in [(6, 1400., 900.), (9, 900., 600.)] {
+            exercise_board(cx, count, width, height);
+        }
+    }
+
+    /// `count` Threads with a few lines each, grouped, at `width`×`height`.
+    fn exercise_board(cx: &mut TestAppContext, count: usize, width: f32, height: f32) {
+        let name: &'static str =
+            Box::leak(format!("tree-board-{count}-{width}x{height}").into_boxed_str());
+        let label = format!("{count} panes at {width}x{height}");
+        let (mut core, fake) = cockpit(name, count);
+        let threads = core.threads();
+        let group = core
+            .apply_group(GroupChange::Create {
+                first: threads[0],
+                second: threads[1],
+            })
+            .unwrap()
+            .group
+            .unwrap();
+        for thread in &threads[2..] {
+            core.apply_group(GroupChange::Join {
+                thread: *thread,
+                group,
+                index: None,
+            })
+            .unwrap();
+        }
+        bind_production_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(width), px(height)));
+        for (n, stream) in fake.streams.borrow().iter().enumerate() {
+            stream
+                .send(SessionEvent::TextDelta {
+                    text: format!("pane {n} says a few lines\nand a few more\n").repeat(12),
+                })
+                .unwrap();
+        }
+        view.update(cx, |view, cx| view.enter_group(group, cx));
+        tick(cx);
+
+        let bounds = cx.update(|window, cx| view.read(cx).board_bounds(window));
+        let tree = view.read_with(cx, |view, _| view.cockpit.group_layout(group).unwrap());
+        let seams = tree.seams(bounds, crate::theme::GRID_GAP, SEAM_GRAB);
+        assert_eq!(seams.len(), count - 1, "{label}: n leaves make n-1 seams");
+        for seam in &seams {
+            let at = gpui::point(
+                px(seam.band.x + seam.band.w / 2.0),
+                px(seam.band.y + seam.band.h / 2.0),
+            );
+            cx.simulate_mouse_down(at, gpui::MouseButton::Left, gpui::Modifiers::none());
+            cx.run_until_parked();
+            view.read_with(cx, |view, _| {
+                let held = view.seam_drag.as_ref().map(|drag| drag.seam.clone());
+                assert_eq!(
+                    held,
+                    Some(seam.id.clone()),
+                    "{label}: seam {:?} at {at:?} is held",
+                    seam.id
+                );
+            });
+            let nudge = match seam.axis {
+                layout::Axis::Row => gpui::point(px(30.), px(0.)),
+                layout::Axis::Column => gpui::point(px(0.), px(30.)),
+            };
+            cx.simulate_mouse_move(at + nudge, gpui::MouseButton::Left, gpui::Modifiers::none());
+            cx.run_until_parked();
+            cx.simulate_mouse_up(at + nudge, gpui::MouseButton::Left, gpui::Modifiers::none());
+            cx.run_until_parked();
+            view.read_with(cx, |view, _| {
+                assert!(view.seam_drag.is_none(), "{label}: released");
+                let now = view.cockpit.group_layout(group).unwrap();
+                let along = |s: &layout::Seam| match s.axis {
+                    layout::Axis::Row => s.band.x,
+                    layout::Axis::Column => s.band.y,
+                };
+                for after in now.seams(bounds, crate::theme::GRID_GAP, SEAM_GRAB) {
+                    let before = seams.iter().find(|s| s.id == after.id).unwrap();
+                    let (was, is) = (along(before), along(&after));
+                    if after.id == seam.id {
+                        assert!(
+                            (is - was - 30.0).abs() < 2.0,
+                            "{label}: seam {:?} followed the pointer: {was} -> {is}",
+                            seam.id
+                        );
+                    } else {
+                        assert!(
+                            (is - was).abs() < 0.5,
+                            "{label}: seam {:?} held its line while {:?} moved: {was} -> {is}",
+                            after.id,
+                            seam.id
+                        );
+                    }
+                }
+            });
+            // Put it back so later seams sit where the tree says.
+            view.update(cx, |view, _| {
+                view.cockpit.set_group_layout(group, tree.clone()).unwrap();
+            });
+            tick(cx);
+        }
+
+        let rect_of = |cx: &mut gpui::VisualTestContext, thread: ThreadId| {
+            cx.update(|window, cx| {
+                let view = view.read(cx);
+                let index = view.pane_for(thread).unwrap();
+                view.pane_rects(window)
+                    .into_iter()
+                    .find(|(i, _)| *i == index)
+                    .map(|(_, r)| r)
+                    .unwrap()
+            })
+        };
+        for source in 0..count {
+            let target = (source + count / 2) % count;
+            {
+                let (a, b) = (threads[source], threads[target]);
+                let before = view.read_with(cx, |view, _| {
+                    view.cockpit.group_layout(group).unwrap().leaves()
+                });
+                let selector: &'static str =
+                    Box::leak(format!("pane-title-{}", a.get()).into_boxed_str());
+                let title = cx
+                    .debug_bounds(selector)
+                    .unwrap_or_else(|| panic!("{label}: {selector} is drawn"));
+                let grab = title.center();
+                let target_rect = rect_of(cx, b);
+                let drop = gpui::point(
+                    px(target_rect.x + target_rect.w / 2.0),
+                    px(target_rect.y + target_rect.h / 2.0),
+                );
+                cx.simulate_mouse_down(grab, gpui::MouseButton::Left, gpui::Modifiers::none());
+                cx.run_until_parked();
+                cx.simulate_mouse_move(
+                    grab + gpui::point(px(12.), px(12.)),
+                    gpui::MouseButton::Left,
+                    gpui::Modifiers::none(),
+                );
+                cx.run_until_parked();
+                cx.simulate_mouse_move(drop, gpui::MouseButton::Left, gpui::Modifiers::none());
+                cx.run_until_parked();
+                view.read_with(cx, |view, _| {
+                    assert_eq!(
+                        view.drop_preview,
+                        Some((b, Zone::Swap)),
+                        "{label}: {source}->{target}: the preview says swap"
+                    );
+                });
+                cx.simulate_mouse_up(drop, gpui::MouseButton::Left, gpui::Modifiers::none());
+                cx.run_until_parked();
+                tick(cx);
+                let after = view.read_with(cx, |view, _| {
+                    view.cockpit.group_layout(group).unwrap().leaves()
+                });
+                let mut expected = before.clone();
+                let ia = expected.iter().position(|t| *t == a).unwrap();
+                let ib = expected.iter().position(|t| *t == b).unwrap();
+                expected.swap(ia, ib);
+                assert_eq!(after, expected, "{label}: {source}->{target}: swapped");
+            }
+        }
     }
 
     /// The effort chip opens a ladder from the provider's own announcement

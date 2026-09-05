@@ -15,8 +15,14 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::ThreadId;
 
-/// The smallest share of a split either side can be dragged down to.
+/// The smallest share `set_ratio` lets either side of a split hold. A seam
+/// drag works in the caller's units instead (`Tree::drag`, `MIN_LEAF`).
 pub const MIN_SHARE: f32 = 0.2;
+
+/// The shortest a seam drag leaves the Pane on either side of it, in the
+/// caller's units (px) — or a quarter of what the two neighbours share
+/// between them, when that is less, so a crowded board keeps resizing.
+pub const MIN_LEAF: f32 = 96.0;
 
 /// The drop core (the "swap" square at a Pane's centre) is this share of the
 /// Pane's shorter side, never under `CORE_FLOOR` px, never over
@@ -41,6 +47,24 @@ pub enum Axis {
     Row,
     /// `first` above `second`; the seam is horizontal.
     Column,
+}
+
+impl Axis {
+    /// The side of a rect this axis shares out.
+    fn length(self, rect: Rect) -> f32 {
+        match self {
+            Axis::Row => rect.w,
+            Axis::Column => rect.h,
+        }
+    }
+
+    /// How far into `area` a point is along this axis.
+    fn offset(self, point: Point, area: Rect) -> f32 {
+        match self {
+            Axis::Row => point.x - area.x,
+            Axis::Column => point.y - area.y,
+        }
+    }
 }
 
 /// A side of a Pane's rect — where a dropped Pane lands when it splits.
@@ -301,8 +325,9 @@ impl Tree {
     }
 
     /// The ratio that puts the seam's centre under `pointer`, within the
-    /// split's own area and the share limits — what a drag feeds to
-    /// `set_ratio`. A split too narrow to share reports its current ratio.
+    /// split's own area and the share limits — `set_ratio`'s input. A seam
+    /// drag goes through `drag` instead, which moves only the two Panes at
+    /// the seam. A split too narrow to share reports its current ratio.
     pub fn ratio_for(&self, seam: &SeamId, bounds: Rect, pointer: Point, gap: f32) -> Option<f32> {
         let (node, area) = self.locate(seam, bounds, gap)?;
         let Node::Split { axis, ratio, .. } = node else {
@@ -317,6 +342,75 @@ impl Tree {
             return Some(*ratio);
         }
         Some(clamp_share((offset - gap / 2.0) / usable))
+    }
+
+    /// A seam dragged to `pointer`: the seam's centre follows the pointer,
+    /// and only the two Panes touching the seam change size. Everything
+    /// else on the board keeps its size — including the other Panes in
+    /// the same chain, which `ratio_for` + `set_ratio` would squeeze,
+    /// since a chain of N is nested splits and this seam's split holds
+    /// "the first Pane against all the rest".
+    ///
+    /// Neither neighbour goes under `MIN_LEAF`, or a quarter of the two
+    /// neighbours' combined length when that is less. A cross-axis
+    /// subtree beside the seam hands the change on to whatever touches
+    /// the seam inside it: a column of two next to the seam gains and
+    /// loses width as one, and a column holding a row hands the change to
+    /// the row's nearest Pane alone. False when nothing changed.
+    pub fn drag(&mut self, seam: &SeamId, bounds: Rect, pointer: Point, gap: f32) -> bool {
+        let Some((node, area)) = self.locate(seam, bounds, gap) else {
+            return false;
+        };
+        let Node::Split {
+            axis,
+            ratio,
+            first,
+            second,
+        } = node
+        else {
+            return false;
+        };
+        let axis = *axis;
+        let usable = axis.length(area) - gap;
+        if usable <= 0.0 {
+            return false;
+        }
+        let first_old = usable * *ratio;
+        let second_old = usable - first_old;
+        // The neighbours' lengths, and so the length of whatever else each
+        // side holds that must stay as it is.
+        let near_first = first.edge_length(axis, first_old, gap, true);
+        let near_second = second.edge_length(axis, second_old, gap, false);
+        let fixed_first = first_old - near_first;
+        let fixed_second = second_old - near_second;
+        let floor = MIN_LEAF.min((near_first + near_second) / 4.0);
+        let lo = fixed_first + floor;
+        let hi = usable - fixed_second - floor;
+        if lo >= hi || lo.is_nan() || hi.is_nan() {
+            return false;
+        }
+        let wanted = axis.offset(pointer, area) - gap / 2.0;
+        let first_new = wanted.clamp(lo, hi);
+        if !first_new.is_finite() || (first_new - first_old).abs() < 1e-3 {
+            return false;
+        }
+        let new_ratio = first_new / usable;
+        if !(new_ratio > 0.0 && new_ratio < 1.0) {
+            return false;
+        }
+        let Some(Node::Split {
+            ratio: slot,
+            first,
+            second,
+            ..
+        }) = self.node_mut(&seam.0)
+        else {
+            return false;
+        };
+        *slot = new_ratio;
+        first.absorb(axis, first_old, first_new, gap, true);
+        second.absorb(axis, second_old, usable - first_new, gap, false);
+        true
     }
 
     /// Every leaf's rect in DFS order. A split shares its length minus the
@@ -470,6 +564,78 @@ impl Node {
                 first.exchange(a, b);
                 second.exchange(a, b);
             }
+        }
+    }
+
+    /// The length, along `axis`, of the shortest Pane a seam on this
+    /// node's `second` edge (`at_second`) or `first` edge would touch: the
+    /// last (or first) link of a same-axis chain; across a cross-axis
+    /// split, the shorter of its two children's answers, since both reach
+    /// the seam.
+    fn edge_length(&self, axis: Axis, length: f32, gap: f32, at_second: bool) -> f32 {
+        match self {
+            Node::Leaf(_) => length,
+            Node::Split {
+                axis: own,
+                ratio,
+                first,
+                second,
+            } => {
+                if *own != axis {
+                    return first
+                        .edge_length(axis, length, gap, at_second)
+                        .min(second.edge_length(axis, length, gap, at_second));
+                }
+                if length <= gap {
+                    return length;
+                }
+                let usable = length - gap;
+                let first_len = usable * ratio;
+                if at_second {
+                    second.edge_length(axis, usable - first_len, gap, at_second)
+                } else {
+                    first.edge_length(axis, first_len, gap, at_second)
+                }
+            }
+        }
+    }
+
+    /// This node's length along `axis` went from `old` to `new`: hand the
+    /// whole change to whatever touches the `second` (`at_second`) or
+    /// `first` edge, re-deriving each same-axis ratio so every other link
+    /// keeps its length. A cross-axis split spans the full length on both
+    /// sides, so the change goes down both.
+    fn absorb(&mut self, axis: Axis, old: f32, new: f32, gap: f32, at_second: bool) {
+        let Node::Split {
+            axis: own,
+            ratio,
+            first,
+            second,
+        } = self
+        else {
+            return;
+        };
+        if *own != axis {
+            first.absorb(axis, old, new, gap, at_second);
+            second.absorb(axis, old, new, gap, at_second);
+            return;
+        }
+        if old <= gap || new <= gap {
+            return;
+        }
+        let (old_usable, new_usable) = (old - gap, new - gap);
+        let first_old = old_usable * *ratio;
+        let second_old = old_usable - first_old;
+        if at_second {
+            // `first` keeps its length; `second` takes the change.
+            let first_new = first_old.min(new_usable);
+            *ratio = (first_new / new_usable).clamp(f32::EPSILON, 1.0 - f32::EPSILON);
+            second.absorb(axis, second_old, new_usable - first_new, gap, at_second);
+        } else {
+            let second_new = second_old.min(new_usable);
+            let first_new = new_usable - second_new;
+            *ratio = (first_new / new_usable).clamp(f32::EPSILON, 1.0 - f32::EPSILON);
+            first.absorb(axis, first_old, first_new, gap, at_second);
         }
     }
 
@@ -1089,6 +1255,178 @@ mod tests {
             .ratio_for(&root, rect(0.0, 0.0, 3.0, 3.0), at(1.0, 1.0), 4.0)
             .unwrap();
         assert!(close(cramped, root_ratio(&tree)));
+    }
+
+    /// Every leaf's width, DFS order.
+    fn widths(tree: &Tree, bounds: Rect, gap: f32) -> Vec<f32> {
+        tree.rects(bounds, gap)
+            .into_iter()
+            .map(|(_, r)| r.w)
+            .collect()
+    }
+
+    /// 1 | 2 | 3 at exactly `each` wide in a board `3 * each + 8` wide
+    /// with 4px gaps. (`even` shares the gap unevenly down its chain.)
+    fn three_across(each: f32) -> (Tree, Rect) {
+        let bounds = rect(0.0, 0.0, 3.0 * each + 8.0, 100.0);
+        let tree = of(split(
+            Row,
+            each / (bounds.w - 4.0),
+            leaf(1),
+            split(Row, 0.5, leaf(2), leaf(3)),
+        ));
+        (tree, bounds)
+    }
+
+    #[test]
+    fn a_seam_drag_moves_only_the_two_panes_touching_it() {
+        // Three across: 1 | 2 | 3, each 200 wide with two 4px gaps.
+        let (mut tree, bounds) = three_across(200.0);
+        assert_eq!(widths(&tree, bounds, 4.0), vec![200.0, 200.0, 200.0]);
+        // The first seam sits at x=202: dragging it 30 right grows 1 and
+        // shrinks 2 by 30 each; 3 does not move.
+        assert!(tree.drag(&SeamId(vec![]), bounds, at(232.0, 50.0), 4.0));
+        let w = widths(&tree, bounds, 4.0);
+        assert!(
+            close(w[0], 230.0) && close(w[1], 170.0) && close(w[2], 200.0),
+            "{w:?}"
+        );
+        let seam = &tree.seams(bounds, 4.0, 10.0)[0];
+        assert!(
+            close(seam.band.x + seam.band.w / 2.0, 232.0),
+            "under the pointer"
+        );
+        // The second seam only trades between 2 and 3.
+        assert!(tree.drag(&SeamId(vec![true]), bounds, at(450.0, 50.0), 4.0));
+        let w = widths(&tree, bounds, 4.0);
+        assert!(
+            close(w[0], 230.0) && close(w[1], 214.0) && close(w[2], 156.0),
+            "{w:?}"
+        );
+        // Dragging the first seam back left: 3 still does not move.
+        assert!(tree.drag(&SeamId(vec![]), bounds, at(100.0, 50.0), 4.0));
+        let w = widths(&tree, bounds, 4.0);
+        assert!(
+            close(w[0], 98.0) && close(w[1], 346.0) && close(w[2], 156.0),
+            "{w:?}"
+        );
+        assert!(!tree.is_corrupt());
+    }
+
+    #[test]
+    fn a_seam_drag_keeps_every_pane_at_least_the_floor_or_its_own_length() {
+        let (mut tree, bounds) = three_across(200.0);
+        assert_eq!(widths(&tree, bounds, 4.0), vec![200.0, 200.0, 200.0]);
+        // Far left: 1 stops at the floor, 2 takes what 1 gave up.
+        assert!(tree.drag(&SeamId(vec![]), bounds, at(-500.0, 50.0), 4.0));
+        let w = widths(&tree, bounds, 4.0);
+        assert!(
+            close(w[0], MIN_LEAF) && close(w[1], 304.0) && close(w[2], 200.0),
+            "{w:?}"
+        );
+        // Far right: 2 stops at the floor; 3 is untouched.
+        assert!(tree.drag(&SeamId(vec![]), bounds, at(5000.0, 50.0), 4.0));
+        let w = widths(&tree, bounds, 4.0);
+        assert!(
+            close(w[0], 304.0) && close(w[1], MIN_LEAF) && close(w[2], 200.0),
+            "{w:?}"
+        );
+        // A tiny board: the floor is a quarter of the pair, so seams still move.
+        let (mut small, tiny) = three_across(40.0);
+        assert_eq!(widths(&small, tiny, 4.0), vec![40.0, 40.0, 40.0]);
+        assert!(small.drag(&SeamId(vec![]), tiny, at(0.0, 10.0), 4.0));
+        let w = widths(&small, tiny, 4.0);
+        assert!(
+            close(w[0], 20.0) && close(w[1], 60.0) && close(w[2], 40.0),
+            "a quarter: {w:?}"
+        );
+        assert!(small.drag(&SeamId(vec![]), tiny, at(60.0, 10.0), 4.0));
+        let w = widths(&small, tiny, 4.0);
+        assert!(
+            close(w[0], 58.0) && close(w[1], 22.0) && close(w[2], 40.0),
+            "{w:?}"
+        );
+        assert!(!small.is_corrupt());
+        // No split, no drag.
+        assert!(!of(leaf(1)).drag(&SeamId(vec![]), bounds, at(10.0, 10.0), 4.0));
+        assert!(!tree.drag(&SeamId(vec![false]), bounds, at(10.0, 10.0), 4.0));
+        assert!(!tree.drag(&SeamId(vec![]), bounds, at(f32::NAN, 10.0), 4.0));
+    }
+
+    #[test]
+    fn a_seam_drag_treats_a_cross_axis_neighbour_as_one_and_reaches_down_a_first_chain() {
+        // (1 over 2) | 3 | 4: the column beside the first seam moves as one.
+        let bounds = rect(0.0, 0.0, 608.0, 100.0);
+        let mut tree = of(split(
+            Row,
+            200.0 / 604.0,
+            split(Column, 0.5, leaf(1), leaf(2)),
+            split(Row, 0.5, leaf(3), leaf(4)),
+        ));
+        assert_eq!(widths(&tree, bounds, 4.0), vec![200.0, 200.0, 200.0, 200.0]);
+        assert!(tree.drag(&SeamId(vec![]), bounds, at(232.0, 50.0), 4.0));
+        let rects = tree.rects(bounds, 4.0);
+        assert!(
+            close(rects[0].1.w, 230.0) && close(rects[1].1.w, 230.0),
+            "{rects:?}"
+        );
+        assert!(
+            close(rects[2].1.w, 170.0) && close(rects[3].1.w, 200.0),
+            "{rects:?}"
+        );
+        assert!(
+            close(rects[0].1.h, 48.0) && close(rects[1].1.h, 48.0),
+            "heights hold"
+        );
+        // ((1 | 2) over 5) | 3 | 4: the column beside the seam passes the
+        // change to 2 (the row's Pane at the seam) and to 5; 1 holds.
+        let mut deep = of(split(
+            Row,
+            404.0 / 604.0,
+            split(Column, 0.5, split(Row, 0.5, leaf(1), leaf(2)), leaf(5)),
+            split(Row, 0.5, leaf(3), leaf(4)),
+        ));
+        assert!(deep.drag(&SeamId(vec![]), bounds, at(420.0, 50.0), 4.0));
+        let w = widths(&deep, bounds, 4.0);
+        assert!(
+            close(w[0], 200.0) && close(w[1], 214.0) && close(w[2], 418.0),
+            "1 holds, 2 and 5 grow: {w:?}"
+        );
+        assert!(
+            close(w[3], 84.0) && close(w[4], 98.0),
+            "3 gives, 4 holds: {w:?}"
+        );
+        // ((1 | 2) | 3): the seam before 3 touches 2 alone; 1 holds.
+        let mut left = of(split(
+            Row,
+            404.0 / 604.0,
+            split(Row, 0.5, leaf(1), leaf(2)),
+            leaf(3),
+        ));
+        let w = widths(&left, bounds, 4.0);
+        assert!(w.iter().all(|w| close(*w, 200.0)), "{w:?}");
+        assert!(left.drag(&SeamId(vec![]), bounds, at(500.0, 50.0), 4.0));
+        let w = widths(&left, bounds, 4.0);
+        assert!(
+            close(w[0], 200.0) && close(w[1], 294.0) && close(w[2], 106.0),
+            "{w:?}"
+        );
+        // A Column seam reads y and holds the rows below.
+        let bounds = rect(0.0, 0.0, 100.0, 608.0);
+        let mut stack = of(split(
+            Column,
+            200.0 / 604.0,
+            leaf(1),
+            split(Column, 0.5, leaf(2), leaf(3)),
+        ));
+        let h: Vec<f32> = stack.rects(bounds, 4.0).iter().map(|(_, r)| r.h).collect();
+        assert_eq!(h, vec![200.0, 200.0, 200.0]);
+        assert!(stack.drag(&SeamId(vec![]), bounds, at(50.0, 302.0), 4.0));
+        let h: Vec<f32> = stack.rects(bounds, 4.0).iter().map(|(_, r)| r.h).collect();
+        assert!(
+            close(h[0], 300.0) && close(h[1], 100.0) && close(h[2], 200.0),
+            "{h:?}"
+        );
     }
 
     #[test]
