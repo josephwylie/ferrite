@@ -14,7 +14,7 @@ use ferrite_core::activity::Subject;
 use ferrite_core::cockpit::Cockpit;
 use ferrite_core::store::Provider;
 use ferrite_core::workspace::registry::ProjectId;
-use ferrite_core::workspace::WorkspaceBinding;
+use ferrite_core::workspace::{BranchStatus, WorkspaceBinding};
 use ferrite_core::ThreadId;
 use gpui::SharedString;
 
@@ -34,6 +34,11 @@ pub struct ThreadFacts {
     /// header reads the repo and not the binding. A cwd outside any
     /// checkout has no text.
     pub branch: Option<SharedString>,
+    /// What the checkout's second header line says (#29): drift against the
+    /// upstream, the working tree's dirt, and the branch's PR and CI when
+    /// `gh` can answer. Collected on the same slow cadence as the branch
+    /// itself, and `None` until it has been.
+    pub status: Option<BranchStatus>,
     /// The Project the Thread recorded (#29) — what the nav filter matches
     /// on, so a Thread whose Project is unknown appears under `All
     /// Projects` alone rather than being quietly filed under someone
@@ -148,10 +153,18 @@ impl Facts {
         }
     }
 
-    /// Adopt checkout labels collected away from the UI thread.
-    pub fn set_branches(&mut self, branches: Vec<(ThreadId, Option<String>)>) {
-        for (thread, branch) in branches {
-            self.threads.entry(thread).or_default().branch = branch.map(SharedString::from);
+    /// Adopt checkout labels and their status, collected away from the UI
+    /// thread. The two travel together because one `git status` answers
+    /// both, and a branch name without its drift would draw a header that
+    /// contradicts itself for a tick.
+    pub fn set_branches(&mut self, branches: Vec<(ThreadId, Option<BranchStatus>)>) {
+        for (thread, status) in branches {
+            let facts = self.threads.entry(thread).or_default();
+            facts.branch = status
+                .as_ref()
+                .and_then(|status| status.branch.clone())
+                .map(SharedString::from);
+            facts.status = status;
         }
     }
 

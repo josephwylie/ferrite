@@ -4,8 +4,8 @@
 //! cockpit above it.
 //!
 //! L1 is the Soft prototype's Pane, drawn top to bottom: a 32px head, a
-//! 24px tasks strip, the transcript body, the Decision card, the 24px
-//! changed-files strip and the 58px Composer — all on `--pane`, inside an
+//! 24px tasks strip, the transcript body, the Decision card and the 58px
+//! Composer — all on `--pane`, inside an
 //! always-in-layout 1px border that only changes colour, with the focus
 //! ring 2px OUTSIDE it so attention and focus are independent channels.
 //! Tools inherit JetBrains Mono; assistant prose uses the native UI face.
@@ -21,7 +21,9 @@ use ferrite_core::transcript::{
     Block, BlockId, Body, Class, Diff, Span, Status, Style, Todos, Token, ToolActivity, ToolBlock,
     ToolState, Transcript,
 };
-use ferrite_core::workspace::WorkspaceBinding;
+use ferrite_core::workspace::{
+    BranchStatus, Check, CheckState, PrState, PullRequest, WorkspaceBinding,
+};
 use ferrite_core::{Decision, ThreadId};
 use gpui::prelude::*;
 use gpui::{
@@ -32,7 +34,6 @@ use gpui::{
 #[cfg(test)]
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
 use std::time::Duration;
 use std::{cell::Cell as Flag, rc::Rc};
 
@@ -45,11 +46,11 @@ use crate::select::TextRuns;
 // survives in render code, which is #22's grep-able law.
 use crate::theme;
 use crate::theme::{
-    ATTENTION, ATTENTION_EDGE, ATTENTION_WASH, BLOCKED, BLOCKED_WASH, DIFF_ADDED_INK,
-    DIFF_REMOVED_INK, FOCUS, HOVER, IDLE, INLINE_CODE_INK, LINK_INK, METER_OFF, PANE,
-    PROMPT_WASH_CLAUDE, PROMPT_WASH_CODEX, PROVIDER_CLAUDE, PROVIDER_CODEX, RAISED, RUNNING,
-    RUNNING_WASH, SELECTION, SEP, SYN_KEYWORD, SYN_NUMBER, SYN_STRING, TEXT, TEXT_2, TEXT_MUTED,
-    TEXT_STRONG, TRANSPARENT,
+    ATTENTION, ATTENTION_EDGE, ATTENTION_WASH, BLOCKED, BLOCKED_WASH, COMPOSER_EDGE,
+    DIFF_ADDED_INK, DIFF_REMOVED_INK, FOCUS, HOVER, IDLE, INLINE_CODE_INK, LINK_INK, METER_OFF,
+    PANE, PANE_HEAD, PANE_HEAD_EDGE, PROMPT_WASH_CLAUDE, PROMPT_WASH_CODEX, PROVIDER_CLAUDE,
+    PROVIDER_CODEX, RAISED, RUNNING, RUNNING_WASH, SELECTION, SEP, SYN_KEYWORD, SYN_NUMBER,
+    SYN_STRING, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG, TRANSPARENT,
 };
 
 /// One Pane's view state: what the window owns per Pane. Everything it
@@ -463,6 +464,12 @@ pub struct PaneFacts<'a> {
     /// header's binding slot. Display-only, never a control: post-lock the
     /// CWD is immutable, and nothing may look otherwise.
     pub branch: Option<SharedString>,
+    /// What the header's second line says about that checkout (#29): its
+    /// drift from the upstream, its dirt, and its PR and CI when `gh` can
+    /// answer. Cached on the same cadence as `branch`; `None` draws the
+    /// line away entirely rather than claiming a clean tree it has not
+    /// read.
+    pub checkout: Option<&'a BranchStatus>,
     /// Whether the Composer line is empty — what decides the idle
     /// placeholder, read where the cockpit has a `cx` to read it with.
     pub composer_empty: bool,
@@ -504,11 +511,12 @@ pub struct PaneWiring {
     /// opens the rename editor, or the editor itself while renaming. None
     /// draws the plain name (L2, L3, drafts).
     pub title: Option<AnyElement>,
-    /// A pending question Decision's form, wired — the options as rows a
-    /// press picks, the keys that send. Some only at L1 and only while the
-    /// pending Decision is Claude's `AskUserQuestion`; it stands in for
-    /// the y/n card, which cannot answer a question.
     pub agents: Option<AnyElement>,
+    /// The header's `ci` mark, wired: a press opens the checks card over
+    /// the Pane. `None` where there is no PR, no CI, or no room for the
+    /// card — the strip then draws the mark it can draw unwired, or
+    /// nothing.
+    pub ci: Option<AnyElement>,
     pub activity_attention: Option<AnyElement>,
     pub activity_decisions: Option<AnyElement>,
     pub child_footer: Option<AnyElement>,
@@ -640,6 +648,7 @@ pub fn render_pane(
     let PaneFacts {
         thread,
         branch,
+        checkout,
         composer_empty,
         history_available,
         focused,
@@ -657,6 +666,7 @@ pub fn render_pane(
         mut tool_controls,
         title,
         agents,
+        ci,
         activity_attention,
         activity_decisions,
         child_footer,
@@ -768,9 +778,11 @@ pub fn render_pane(
     let mut pane = shell.child(pane_head(
         view,
         branch.as_ref(),
+        checkout,
         status,
         title,
         agents,
+        ci,
         activity_attention,
     ));
     match transcript {
@@ -808,8 +820,11 @@ pub fn render_pane(
             // of the Composer (§D.5): its `margin: 0 12px 8px` is measured
             // from the Pane's own content box, so nesting it inside the
             // Composer's 12px padding would inset it twice. The child
-            // order §D.1 pins is head · tasks · body · decision · changed
-            // · composer.
+            // order is head · tasks · body · decision · composer — §D.1
+            // pins a CHANGED strip between the last two, which the Pane no
+            // longer draws: a strip of filenames repeated what the diff
+            // cards in the body had already said, file by file, and cost a
+            // walk of every Block per frame to say it.
             if view.is_main() {
                 if let Some((_, error)) = &view.request_error {
                     pane = pane.child(
@@ -824,16 +839,6 @@ pub fn render_pane(
             }
             if let Some(decision) = decision.filter(|_| activity_decisions.is_none()) {
                 pane = pane.child(decision_card(decision, decide.take()));
-            }
-            // The CHANGED strip rides above the Composer whenever the
-            // Thread has touched files (#22 C11). `Instruments::of` walks
-            // every Block, per frame — the same price every L2 cell already
-            // pays, and a window shows few L1 Panes; if a wall of L1 Panes
-            // ever dips, the fix is the incremental fold docview.rs already
-            // names, not a render-side cache.
-            let changed = Instruments::of(transcript).changed;
-            if !changed.is_empty() {
-                pane = pane.child(changed_strip(&changed));
             }
             if let Some(decisions) = activity_decisions {
                 pane = pane.child(decisions);
@@ -891,14 +896,13 @@ fn pane_shell(edge: gpui::Hsla) -> Div {
         .overflow_hidden()
 }
 
-/// The Pane, plus its focus ring. gpui has no `outline-offset`, and a ring
-/// painted inside the shell's `overflow_hidden()` is clipped away
-/// entirely — so the ring lives in a **non-clipping** wrapper as an
-/// absolute overlay at `inset(-4px)`: 2px wide, 2px outside the border
-/// box, radii following the offset (inner 10, outer 12). It reaches 4px
-/// into the 8px board gap, which the gap exactly accommodates, and it
-/// coexists with the innermost 1px state border rather than nesting inside
-/// it.
+/// The Pane, plus its focus ring. The ring is **not** offset: it lands
+/// exactly on the Pane's own border box, same rectangle and same 8px
+/// radius, so a focused Pane is the same size and shape as an unfocused
+/// one and the board's gaps stay clean. A ring painted inside the shell's
+/// `overflow_hidden()` would be clipped away, so it still lives in a
+/// non-clipping wrapper as an absolute overlay — it simply covers the
+/// resting edge rather than sitting outside it.
 fn focus_wrapper(shell: Div, focused: bool) -> Div {
     div()
         .relative()
@@ -910,10 +914,8 @@ fn focus_wrapper(shell: Div, focused: bool) -> Div {
         .children(focused.then(|| {
             div()
                 .absolute()
-                .inset(px(-(theme::FOCUS_RING_OFFSET + theme::FOCUS_RING_W)))
-                .rounded(px(theme::R_SURFACE
-                    + theme::FOCUS_RING_OFFSET
-                    + theme::FOCUS_RING_W))
+                .inset_0()
+                .rounded(px(theme::R_SURFACE))
                 .border(px(theme::FOCUS_RING_W))
                 .border_color(rgb(FOCUS))
         }))
@@ -989,7 +991,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
 
     focus_wrapper(
         shell
-            .child(pane_head(view, None, None, None, None, None))
+            .child(pane_head(view, None, None, None, None, None, None, None))
             .child(div().flex().flex_1().min_h_0())
             .child(composer_region(
                 view,
@@ -1578,18 +1580,24 @@ fn l2_decision_body(decision: &Decision, decide: Option<AnyElement>) -> Div {
 
 // ---------------------------------------------------------------- L1 pane
 
-/// The Pane head (§D.2): 32px, 12px inline padding, an 8px gap, muted ink.
-/// Status dot · Thread id · checkout. No background, no border, and **no
-/// rule beneath it** —
-/// Soft separates by fill contrast alone. There is no model chip here (the
-/// Composer's picker is the only model surface) and no window controls
-/// (park and zoom stay on the keyboard).
+/// The Pane head (§D.2): a banded header on its own `--pane-head` ground,
+/// closed by a single hairline. Its first line is 32px — status dot ·
+/// Thread id · agents · attention — and beneath it, when the checkout is
+/// known, a 20px line saying where the work is: the branch, its drift from
+/// its upstream, its dirt, and its PR and CI. The band is chrome; the
+/// hairline is the one rule Soft draws inside a Pane, and it earns its
+/// place by separating two header lines from the transcript below.
+///
+/// There is no model chip here (the Composer's picker is the only model
+/// surface) and no window controls (park and zoom stay on the keyboard).
 fn pane_head(
     view: &PaneView,
     branch: Option<&SharedString>,
+    checkout: Option<&BranchStatus>,
     status: Option<Status>,
     title: Option<AnyElement>,
     agents: Option<AnyElement>,
+    ci: Option<AnyElement>,
     attention: Option<AnyElement>,
 ) -> Div {
     // The dot's base is the muted ink — the parked look — and each live
@@ -1602,7 +1610,7 @@ fn pane_head(
         _ => TEXT_MUTED,
     };
     let has_agents = agents.is_some();
-    let mut head = div()
+    let mut top = div()
         .flex()
         .flex_shrink_0()
         .items_center()
@@ -1631,33 +1639,310 @@ fn pane_head(
                     None => div().truncate().child(view.name.clone()).into_any_element(),
                 }),
         );
-    // The checkout slot (#29): the branch mark and the cached branch name.
-    // Pure text — no hover, no click target: the CWD is immutable once the
-    // Thread runs and the head must never look otherwise. No `·` seam
-    // before it; the 8px gap is the whole separation.
-    if let Some(branch) = branch {
-        head = head.child(
+    if let Some(agents) = agents {
+        top = top.child(agents);
+    }
+    if let Some(attention) = attention {
+        top = top.child(attention);
+    }
+    // The checkout keeps its own line now, so the title line no longer
+    // has to share its width with a branch name.
+    let checkout_line = checkout_strip(checkout, branch, ci);
+    div()
+        .flex()
+        .flex_col()
+        .flex_shrink_0()
+        .bg(rgb(PANE_HEAD))
+        // The shell's radius is 8 outside a 1px border, so its padding box
+        // curves at 7 — the band's own ground must follow that curve or it
+        // paints square shoulders into the Pane's rounded top.
+        .rounded_t(px(theme::R_SURFACE - 1.))
+        .border_b_1()
+        .border_color(rgba(PANE_HEAD_EDGE))
+        .child(top)
+        .children(checkout_line)
+}
+
+/// The header's second line (#29): the branch mark and name, then only
+/// what is actually true of it — `↑2 ↓1` against its upstream, `3±` of
+/// working-tree dirt, its PR by number, and its CI rollup. A branch with
+/// no upstream simply has no drift marks, and a checkout with no PR says
+/// nothing about one — silence here always means unknown or absent, never
+/// "fine".
+///
+/// The one control on the line is the `ci` mark, and only when the cockpit
+/// hands it down wired (`ci`): a press opens the card listing the runs
+/// behind the rollup. Unwired, the same mark is drawn as flat text, so the
+/// line reads identically in a screenshot test and below L1.
+fn checkout_strip(
+    checkout: Option<&BranchStatus>,
+    branch: Option<&SharedString>,
+    ci: Option<AnyElement>,
+) -> Option<Div> {
+    // A branch label with no status behind it still deserves the line: the
+    // first refresh has simply not landed yet.
+    let name: SharedString = match (checkout.and_then(|status| status.branch.as_ref()), branch) {
+        (Some(name), _) => SharedString::from(name.clone()),
+        (None, Some(name)) => name.clone(),
+        (None, None) => return None,
+    };
+    let mut strip = div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(theme::CHECKOUT_GAP))
+        .h(px(theme::PANE_CHECKOUT_H))
+        .px(px(theme::PANE_PAD_X))
+        .pb(px(2.))
+        .text_size(px(theme::FS_MONO))
+        .line_height(relative(theme::LINE_UI))
+        .text_color(rgb(TEXT_MUTED))
+        .child(
             div()
                 .flex()
                 .min_w_0()
+                .flex_shrink(1.)
                 .items_center()
                 .gap(px(theme::ROW_ICON_GAP))
-                .when(has_agents, |branch| branch.max_w(relative(0.20)))
-                .text_size(px(theme::FS_MONO))
-                .line_height(relative(theme::LINE_UI))
                 .child(icon(icons::BRANCH, theme::ROW_ICON, TEXT_MUTED))
-                // Same one-pixel lift as the Thread id; the mark keeps its
-                // own centring.
-                .child(div().min_w_0().truncate().pb(px(2.)).child(branch.clone())),
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(rgb(TEXT_2))
+                        .child(name),
+                ),
         );
+    let Some(status) = checkout else {
+        return Some(strip);
+    };
+    // Drift, only where there is an upstream to drift from.
+    if status.ahead > 0 || status.behind > 0 {
+        let mut drift = div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(px(theme::ROW_ICON_GAP));
+        if status.ahead > 0 {
+            drift = drift.child(mark(format!("↑{}", status.ahead), TEXT_2));
+        }
+        if status.behind > 0 {
+            drift = drift.child(mark(format!("↓{}", status.behind), ATTENTION));
+        }
+        strip = strip.child(drift);
     }
-    if let Some(agents) = agents {
-        head = head.child(agents);
+    if status.dirty > 0 {
+        strip = strip.child(mark(format!("{}±", status.dirty), ATTENTION));
     }
-    if let Some(attention) = attention {
-        head = head.child(attention);
+    // The PR, by number, in the ink of what became of it — and its checks
+    // as a dot beside it, because a rollup is a state, not a count.
+    if let Some(pr) = &status.pr {
+        let ink = match (pr.state, pr.draft) {
+            (PrState::Merged, _) => TEXT_2,
+            (PrState::Closed, _) => BLOCKED,
+            (PrState::Open, true) => TEXT_MUTED,
+            (PrState::Open, false) => RUNNING,
+        };
+        let label = match (pr.state, pr.draft) {
+            (PrState::Merged, _) => format!("#{} merged", pr.number),
+            (PrState::Closed, _) => format!("#{} closed", pr.number),
+            (PrState::Open, true) => format!("#{} draft", pr.number),
+            (PrState::Open, false) => format!("#{}", pr.number),
+        };
+        strip = strip.child(mark(label, ink));
+        if pr.checks.is_some() {
+            strip = strip.child(match ci {
+                Some(ci) => ci,
+                // Unwired — below L1, or in a pane-only test. The face
+                // without the wash: nothing offers a press that no
+                // listener would answer.
+                None => ci_face(pr).into_any_element(),
+            });
+        }
     }
-    head
+    Some(strip)
+}
+
+/// The CI mark's face: the rollup's dot, the word `ci`, and the one number
+/// that matters most about it — how many runs failed while any has, else
+/// how many of them have settled. A rollup is a state, not a count, so the
+/// ink carries the state and the digits only say how far along it is.
+///
+/// Padded and rounded as a chip, with that padding pulled back out again
+/// by a negative margin: the mark keeps the gap the rest of the line is
+/// spaced on, and its wash still reaches a chip's width around the glyphs.
+fn ci_face(pr: &PullRequest) -> Div {
+    let checks = pr.checks.unwrap_or(CheckState::Pending);
+    let tally = pr.tally();
+    let ink = check_ink(checks);
+    let count = if tally.failing > 0 {
+        format!("{}✗", tally.failing)
+    } else {
+        format!("{}/{}", tally.settled(), tally.total())
+    };
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(theme::ROW_ICON_GAP))
+        .h(px(theme::CHIP_H))
+        .px(px(theme::CHIP_PAD_X))
+        .mx(px(-theme::CHIP_PAD_X))
+        .rounded(px(theme::R_TIGHT))
+        .child(led(px(theme::STATUS_DOT), ink))
+        .child(div().text_color(rgb(ink)).child("ci"))
+        .child(
+            div()
+                .text_color(rgb(TEXT_MUTED))
+                .child(SharedString::from(count)),
+        )
+}
+
+/// The CI mark as the control it is: the same face, wearing the hover and
+/// press faces every self-grounded control in the app wears, so the one
+/// pressable thing on the checkout line says so before it is pressed. It
+/// carries its own id — `.active()` needs element identity — and the
+/// cockpit adds only the listener.
+///
+/// `key` is the Thread the mark belongs to, which is what makes the id
+/// unique across a board of Panes.
+pub fn ci_mark(pr: &PullRequest, key: u64) -> Stateful<Div> {
+    ci_face(pr)
+        .id(("ci-mark", key as usize))
+        .debug_selector(move || format!("ci-mark-{key}"))
+        .hover_control()
+        .press_control()
+}
+
+/// A check's ink, the Pane's own status inks: green for a run that passed,
+/// red for one that did not, amber while it is still going, and the
+/// quietest ink for a run that claims nothing at all.
+pub fn check_ink(state: CheckState) -> u32 {
+    match state {
+        CheckState::Passing => RUNNING,
+        CheckState::Failing => BLOCKED,
+        CheckState::Pending => ATTENTION,
+        CheckState::Skipped => TEXT_MUTED,
+    }
+}
+
+/// The checks card's column, for the cockpit to fill with `checks_head`
+/// and the `check_row`s it has wired. Its own width, because the runs it
+/// lists are named by the forge and a job name is longer than a menu row.
+pub fn checks_card() -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .w(px(theme::CHECKS_CARD_W))
+        .gap(px(theme::CHECKS_CARD_GAP))
+        .p(px(theme::CHECKS_CARD_PAD))
+        .text_size(px(theme::FS_MONO))
+        .text_color(rgb(TEXT))
+}
+
+/// The card's heading: the PR by number at the left, and how its runs
+/// divide at the right — the counts the one-glyph mark on the header line
+/// had no room for. Only states with runs in them are named, so the line
+/// never reads `0 failed`.
+pub fn checks_head(pr: &PullRequest) -> Div {
+    let tally = pr.tally();
+    let mut parts: Vec<String> = Vec::new();
+    if tally.failing > 0 {
+        parts.push(format!("{} failed", tally.failing));
+    }
+    if tally.pending > 0 {
+        parts.push(format!("{} running", tally.pending));
+    }
+    if tally.passing > 0 {
+        parts.push(format!("{} passed", tally.passing));
+    }
+    if tally.skipped > 0 {
+        parts.push(format!("{} skipped", tally.skipped));
+    }
+    div()
+        .flex()
+        .items_baseline()
+        .justify_between()
+        .gap(px(theme::EVENT_GAP))
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_color(rgb(TEXT_STRONG))
+                .child(SharedString::from(format!("#{} checks", pr.number))),
+        )
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_color(rgb(TEXT_MUTED))
+                .child(SharedString::from(parts.join(" · "))),
+        )
+}
+
+/// A workflow's heading in the card, above the runs it owns. Actions
+/// groups its jobs under a workflow and the card says so; a run that
+/// belongs to no workflow — a posted commit status — is grouped under
+/// `status` rather than being given a heading it does not have.
+pub fn checks_group(workflow: Option<&str>, first: bool) -> Div {
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .h(px(theme::CHECKS_GROUP_H))
+        .when(!first, |group| group.mt(px(theme::CHECKS_GROUP_GAP)))
+        .text_color(rgb(TEXT_MUTED))
+        .child(SharedString::from(workflow.unwrap_or("status").to_string()))
+}
+
+/// One run in the card: its state's dot, its name, and the forge's own
+/// word for where it stands at the trailing edge. The name is what gives
+/// way when it is longer than the card — the state word is the shorter
+/// string and the one the row exists to pair with the name.
+///
+/// The row is a control only where the run has a log to open; the cockpit
+/// wires the press, and a run with no URL is drawn without the hover wash
+/// so nothing offers a press that would do nothing.
+pub fn check_row(index: usize, run: &Check) -> Stateful<Div> {
+    let ink = check_ink(run.state);
+    let openable = run.url.is_some();
+    div()
+        .id(("check-row", index))
+        .debug_selector(move || format!("check-row-{index}"))
+        .flex()
+        .items_center()
+        .gap(px(theme::ROW_ICON_GAP))
+        .h(px(theme::CHECKS_ROW_H))
+        .px(px(theme::CHIP_PAD_X))
+        .rounded(px(theme::R_TIGHT))
+        .child(led(px(theme::STATUS_DOT), ink))
+        .child(
+            div()
+                .min_w_0()
+                .flex_1()
+                .truncate()
+                .child(SharedString::from(run.name.clone())),
+        )
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_color(rgb(ink))
+                .child(SharedString::from(run.detail.replace('_', " "))),
+        )
+        // Only a run with a log to open is a control, and only a control
+        // wears the wash: `hover_control` brings the pointer cursor with
+        // it, and the press face pairs with the hover the same way the
+        // header's own mark does.
+        .when(openable, |row| row.hover_control().press_control())
+}
+
+/// One mark on the checkout line: a short run in its own ink that never
+/// shrinks — these are the facts the line exists to carry, and the branch
+/// name is what gives way when the Pane is narrow.
+fn mark(text: String, ink: u32) -> Div {
+    div()
+        .flex_shrink_0()
+        .text_color(rgb(ink))
+        .child(SharedString::from(text))
 }
 
 /// The head's title, saying it can be renamed: the name in its own ink
@@ -2305,8 +2590,8 @@ struct ComposerStack<'a> {
 /// in all, until the text wraps or breaks), growing upward to
 /// `composer::MAX_ROWS` rows and then scrolling. The Pane lays the region
 /// out `flex_shrink_0` below the body, so the transcript above gives way.
-/// No top border: Soft draws no separators, and the ground change is the
-/// whole separation.
+/// A hairline matching the header's bottom edge closes the transcript at the
+/// top of the input region.
 ///
 /// The draft's setup chips occupy the controls row, so a new Thread and an
 /// existing Thread share the same input silhouette. A queued prompt may add
@@ -2340,6 +2625,8 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         .gap(px(theme::COMPOSER_GAP))
         .min_w_0()
         .bg(rgb(RAISED))
+        .border_t_1()
+        .border_color(rgba(COMPOSER_EDGE))
         // gpui's `overflow_hidden()` content mask is an axis-aligned rect, so
         // the shell's 8px radius never clips this ground. The bottom-most
         // child carries the shell's padding-box radius itself: 8 - 1 border.
@@ -2886,66 +3173,6 @@ fn hollow_dot(size: gpui::Pixels) -> Div {
         .rounded_full()
         .border_1()
         .border_color(rgb(SEP))
-}
-
-/// The changed-files strip (§D.6): 24px, 12px inline padding, an 8px gap —
-/// the word `CHANGED`, then one chip per file carrying its diff stat. No
-/// top border: Soft draws no separators.
-fn changed_strip(changed: &[ferrite_core::docview::FileChange]) -> Div {
-    let mut strip = div()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .min_w_0()
-        .gap(px(theme::EVENT_GAP))
-        .h(px(theme::CHANGED_STRIP_H))
-        .px(px(theme::PANE_PAD_X))
-        .text_size(px(theme::FS_MONO))
-        .line_height(relative(theme::LINE_UI))
-        .text_color(rgb(TEXT_2))
-        .overflow_hidden()
-        .child(tracked("CHANGED", TEXT_MUTED));
-    for file in changed {
-        let name = Path::new(&file.path)
-            .file_name()
-            .map(|name| name.to_string_lossy().to_string())
-            .unwrap_or_else(|| file.path.clone());
-        strip = strip.child(
-            div()
-                .flex()
-                .flex_shrink_0()
-                .items_center()
-                .min_w_0()
-                .gap(px(theme::FILE_CHIP_GAP))
-                .px(px(theme::CHIP_PAD_X))
-                .py(px(theme::CHIP_PAD_Y))
-                .rounded(px(theme::R_CHIP))
-                .bg(rgb(RAISED))
-                .child(div().min_w_0().truncate().child(SharedString::from(name)))
-                .child(diff_stat(file.added, file.removed)),
-        );
-    }
-    strip
-}
-
-/// `CHANGED` at 0.08em tracking — the only letter-spacing in Soft + Sans.
-/// gpui's `TextStyle` has no tracking field, so the label is one element
-/// per character on a 0.84px flex gap. CSS also adds a trailing gap after
-/// the last character; this row is 0.84px narrower for it, which is below
-/// the noise floor on a seven-character string (R-04).
-fn tracked(label: &'static str, ink: u32) -> Div {
-    div()
-        .flex()
-        .flex_shrink_0()
-        .gap(px(theme::CHANGED_TRACKING))
-        .font_weight(FontWeight::MEDIUM)
-        .text_color(rgb(ink))
-        .children(label.chars().map(|glyph| {
-            div()
-                .flex_shrink_0()
-                .w(px(theme::FS_MONO * theme::MONO_ADVANCE))
-                .child(glyph.to_string())
-        }))
 }
 
 /// `+N −N` (§E.12): the added count in `--running`, **a literal space**,
@@ -4342,6 +4569,12 @@ pub fn tool_disclosure_control(
 ///
 /// The code cells route through the overlay — their lines copy honestly;
 /// the number and sign columns are chrome and never do (#27).
+///
+/// The card draws at most `HUNK_MAX_ROWS` rows and then names what it left
+/// out. A patch is normally a handful of lines, but a written file's patch
+/// is the whole file, and the card is a note about a change rather than the
+/// change itself. The count it reports is the truth — `Diff::added` counts
+/// every line, drawn or not.
 fn render_diff(block: BlockId, diff: &Diff, selection: &TextRuns) -> impl IntoElement {
     let mut lines = div()
         .flex()
@@ -4358,10 +4591,16 @@ fn render_diff(block: BlockId, diff: &Diff, selection: &TextRuns) -> impl IntoEl
         // unpainted seam between them.
         .line_height(px((theme::FS_MD * theme::LINE_HUNK).round()))
         .text_color(rgb(TEXT_MUTED));
+    let (cap, omitted) = hunk_rows(diff.hunks.iter().map(|hunk| hunk.lines.len()).sum());
+    let mut drawn = 0usize;
     for hunk in &diff.hunks {
         let mut old = hunk.old_start;
         let mut new = hunk.new_start;
         for line in &hunk.lines {
+            if drawn == cap {
+                break;
+            }
+            drawn += 1;
             // The prototype signs a removal with U+2212 MINUS SIGN, never a
             // hyphen; the source line still carries whatever it carries, so
             // the sign column is drawn and the body is the bare code — the
@@ -4432,7 +4671,37 @@ fn render_diff(block: BlockId, diff: &Diff, selection: &TextRuns) -> impl IntoEl
             );
         }
     }
+    // What the cap left out, in the card's quietest ink and on the same
+    // grid as the rows above it — never a silent truncation.
+    if omitted > 0 {
+        lines = lines.child(
+            div()
+                .flex()
+                .gap(px(theme::DIFF_GAP))
+                .px(px(theme::HUNK_PAD_X))
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .w(px(theme::DIFF_NUM_W + theme::DIFF_SIGN_W + theme::DIFF_GAP)),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(rgb(SEP))
+                        .child(SharedString::from(format!("… {omitted} more lines"))),
+                ),
+        );
+    }
     lines
+}
+
+/// How many of a diff's rows the card draws, and how many are left for
+/// the omission line to account for. Split out so the arithmetic the card
+/// depends on is assertable without a window.
+fn hunk_rows(total: usize) -> (usize, usize) {
+    let drawn = total.min(theme::HUNK_MAX_ROWS);
+    (drawn, total - drawn)
 }
 
 /// What a unified-diff line is, read from its first byte.
@@ -5281,6 +5550,24 @@ mod tests {
                 .context
                 .as_ref(),
             "unreadable permission request"
+        );
+    }
+
+    /// A written file's patch is the whole file, so the card draws a
+    /// bounded number of rows and accounts for the rest. Every line is
+    /// still counted — the cap is what is drawn, never what is claimed.
+    #[test]
+    fn a_hunk_card_draws_a_bounded_number_of_rows_and_says_what_it_left() {
+        assert_eq!(hunk_rows(0), (0, 0));
+        assert_eq!(hunk_rows(4), (4, 0));
+        assert_eq!(
+            hunk_rows(theme::HUNK_MAX_ROWS),
+            (theme::HUNK_MAX_ROWS, 0),
+            "a patch that exactly fills the card is not truncated"
+        );
+        assert_eq!(
+            hunk_rows(theme::HUNK_MAX_ROWS + 900),
+            (theme::HUNK_MAX_ROWS, 900)
         );
     }
 

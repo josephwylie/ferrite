@@ -1925,7 +1925,16 @@ fn paint_text_selection(state: &Entity<WindowSelectionState>, window: &mut Windo
             && let Some(state) = mouse_move_state.upgrade()
         {
             state.update(cx, |state, cx| {
-                state.update_in_window(event.position, window, cx)
+                if event.dragging() {
+                    state.update_in_window(event.position, window, cx);
+                } else {
+                    // Native window moves and resizes can consume the mouse-up
+                    // event. The button state on the next move is authoritative:
+                    // stop the stale gesture instead of selecting text as the
+                    // pointer returns to the window.
+                    state.mouse_down_prepared = false;
+                    state.end(cx);
+                }
             });
             WindowSelectionState::resolve_content_keys(&state, cx);
         }

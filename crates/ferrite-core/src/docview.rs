@@ -11,9 +11,9 @@ use crate::transcript::{Body, Todos, ToolBlock, ToolState, Transcript};
 pub struct Instruments {
     pub added: usize,
     pub removed: usize,
-    /// Every file this Thread's edits touched, rolled up — the CHANGED
-    /// strip's chips, in first-touch order. `added`/`removed` above are the
-    /// same numbers summed.
+    /// Every file this Thread's edits touched, rolled up, in first-touch
+    /// order — what `files()` counts for the L2 instruments line.
+    /// `added`/`removed` above are the same numbers summed.
     pub changed: Vec<FileChange>,
     /// How the most recent test run ended, if one has run at all.
     pub tests: Option<Tests>,
@@ -52,11 +52,11 @@ impl Instruments {
     /// Read the Blocks a Pane already holds. Nothing here asks the provider
     /// for anything it did not already say.
     ///
-    /// Cost: O(blocks), paid per frame by every L2 cell and by L1's CHANGED
-    /// strip — never by the wall, whose 24-cell frame budget is why L3 reads
-    /// status words instead. If a grid of near Panes ever dips, the deepening
-    /// is instruments folded incrementally on `apply` — its own ticket, not a
-    /// render-side cache.
+    /// Cost: O(blocks), paid per frame by every L2 cell — never by L1,
+    /// which reads its own Blocks, and never by the wall, whose 24-cell
+    /// frame budget is why L3 reads status words instead. If a grid of near
+    /// Panes ever dips, the deepening is instruments folded incrementally
+    /// on `apply` — its own ticket, not a render-side cache.
     pub fn of(transcript: &Transcript) -> Self {
         let mut instruments = Instruments::default();
         for block in transcript.blocks() {

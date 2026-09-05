@@ -11,9 +11,9 @@
 //! are `0xRRGGBBAA` and drawn with `gpui::rgba`. The alpha byte is the
 //! prototype's fraction × 255, rounded.
 //!
-//! Soft draws **no hairline separators at all**. There is no border between
-//! the nav and the Cockpit, no rule above the changed strip, none above the
-//! Composer, none under the Pane head. Separation is by fill contrast only.
+//! Soft draws very few hairline separators. There is no border between the
+//! nav and the Cockpit, but the Pane header and Composer bracket the content
+//! with matching rules where fill contrast alone is too soft.
 
 // ---------------------------------------------------------------- grounds
 
@@ -27,6 +27,17 @@ pub const PANE: u32 = 0x171717;
 /// nearer than the Cockpit, which is the inversion the Soft mode makes.
 #[allow(dead_code)]
 pub const NAV: u32 = 0x232323;
+/// `#1d1d1d` — `--pane-head`: the Pane header band, one step lighter than
+/// the Pane's own ground so the title and its checkout line read as chrome
+/// and the transcript reads as content.
+pub const PANE_HEAD: u32 = 0x1d1d1d;
+/// `rgba(255,255,255,0.07)` — the hairline under the Pane header.
+pub const PANE_HEAD_EDGE: u32 = 0xffffff12;
+/// `rgba(255,255,255,0.10)` — the hairline above the Composer. Slightly
+/// brighter than the header edge to hold the same visual weight against the
+/// lighter raised input ground.
+pub const COMPOSER_EDGE: u32 = 0xffffff1a;
+
 /// `#282828` — `--raised`: inline-code chips, code blocks, keycaps, the
 /// changed strip's file chips, and the Composer's own ground.
 pub const RAISED: u32 = 0x282828;
@@ -89,10 +100,12 @@ pub const SEP: u32 = 0x6e6e6e;
 
 // -------------------------------------------------------- state + signals
 
-/// `#9a9a9a` — `--focus`: the focused Pane's 2px ring, and every
+/// `#5e5e5e` — `--focus`: the focused Pane's hairline ring, and every
 /// `:focus-visible` outline. A quiet neutral, never an accent hue: the
-/// system has no accent.
-pub const FOCUS: u32 = 0x9a9a9a;
+/// system has no accent. Dimmer than the ink it sits beside — at 1px the
+/// ring is read as an edge, not as a highlight, and a brighter value at
+/// this width reads as a glare around the Pane rather than as focus.
+pub const FOCUS: u32 = 0x5e5e5e;
 /// `#7fbf95` — `--running`: the running status dot, a running signal line,
 /// the pass chip, diff `+`.
 pub const RUNNING: u32 = 0x7fbf95;
@@ -245,13 +258,8 @@ pub const LINE_BODY: f32 = 1.55;
 #[allow(dead_code)]
 pub const LINE_HUNK: f32 = 1.65;
 
-/// 0.84px — the *only* letter-spacing in Soft + Sans: `CHANGED` at 0.08em
-/// on 10.5px. gpui has no tracking; see the port note on `changed_strip`.
-#[allow(dead_code)]
-pub const CHANGED_TRACKING: f32 = 0.84;
-/// 0.6em — JetBrains Mono's advance width, the pitch a tracked mono label
-/// must be laid out on so a per-character cell cannot round up to a whole
-/// pixel.
+/// 0.6em — JetBrains Mono's advance width, the pitch a per-character cell
+/// must be laid out on so it cannot round up to a whole pixel.
 #[allow(dead_code)]
 pub const MONO_ADVANCE: f32 = 0.6;
 
@@ -389,12 +397,16 @@ pub const ROW_ICON_GAP: f32 = 5.0;
 
 // --------------------------------------------------------- geometry: pane
 
-/// 32px — the Pane head. No background, no border, no rule beneath it.
+/// 32px — the Pane head's title row, inside the grounded header band.
 pub const PANE_HEAD_H: f32 = 32.0;
-/// 24px — the tasks strip, and the changed-files strip.
+/// The checkout line beneath the Pane head's title: 20px, sharing the
+/// head's inline padding and its ground, so the two read as one band.
+pub const PANE_CHECKOUT_H: f32 = 20.0;
+/// The gap between the checkout line's own marks — tighter than the head's
+/// gap, because these are one reading, not separate slots.
+pub const CHECKOUT_GAP: f32 = 8.0;
+/// 24px — the tasks strip.
 pub const TASKS_STRIP_H: f32 = 24.0;
-#[allow(dead_code)]
-pub const CHANGED_STRIP_H: f32 = 24.0;
 /// 12px — the inline padding every Pane strip shares.
 pub const PANE_PAD_X: f32 = 12.0;
 /// The Pane body's padding: 6px top, 12px inline, 12px bottom.
@@ -451,15 +463,30 @@ pub const USAGE_CARD_BAR_H: f32 = 4.0;
 pub const USAGE_TIGHT: f32 = 0.6;
 pub const USAGE_SPENT: f32 = 0.85;
 /// Compact context / five-hour / weekly lines beside the Composer's model.
-pub const USAGE_LINE_W: f32 = 24.0;
+/// 48px, not 24: at half this length a percentage point was a third of a
+/// pixel, so the three lines read as one block rather than as three
+/// readings, and the control was smaller than the thing it opens.
+pub const USAGE_LINE_W: f32 = 48.0;
 pub const USAGE_LINE_H: f32 = 2.0;
 pub const USAGE_LINE_GAP: f32 = 2.0;
-/// The focused Pane's ring: 2px wide, 2px outside the Pane's border box.
-/// gpui has no `outline-offset`, so it is an absolutely positioned overlay
-/// at `inset(-4px)` inside a non-clipping wrapper; its radii follow the
-/// offset — inner 10, outer 12.
-pub const FOCUS_RING_W: f32 = 2.0;
-pub const FOCUS_RING_OFFSET: f32 = 2.0;
+/// The focused Pane's ring: a 1px hairline lying exactly on the Pane's own
+/// border box — no offset, so focus changes colour and nothing else. It is
+/// an absolutely positioned overlay inside a non-clipping wrapper, since a
+/// ring drawn inside the shell's `overflow_hidden()` would be clipped.
+pub const FOCUS_RING_W: f32 = 1.0;
+/// The checks card the header's `ci` mark opens (#29): wide enough for a
+/// matrix job's own name — `test (windows-latest, stable)` — beside its
+/// state word, which is the whole reason the card exists.
+pub const CHECKS_CARD_W: f32 = 312.0;
+pub const CHECKS_CARD_PAD: f32 = 8.0;
+/// Between the card's heading and its runs.
+pub const CHECKS_CARD_GAP: f32 = 8.0;
+/// One run's line.
+pub const CHECKS_ROW_H: f32 = 22.0;
+/// A workflow's heading above the runs it owns, and the space that sets
+/// that group off from the one before it.
+pub const CHECKS_GROUP_H: f32 = 18.0;
+pub const CHECKS_GROUP_GAP: f32 = 6.0;
 /// The Decision card: 12px inline margin, 8px below, 8/10 padding, a 10px
 /// gap, and a 15px warning mark.
 #[allow(dead_code)]
@@ -576,14 +603,17 @@ pub const DIFF_SIGN_W: f32 = 7.0;
 pub const DIFF_GAP: f32 = 10.0;
 #[allow(dead_code)]
 pub const HUNK_MARGIN_T: f32 = 4.0;
+/// How many rows one hunk card draws before it stops and says how many it
+/// did not. An edit's patch is a handful of lines; a written file's is
+/// however long the file is, and a card that redrew a 900-line file would
+/// be the transcript rather than a note in it.
+pub const HUNK_MAX_ROWS: usize = 24;
 /// A chip's padding — the pass chip, the changed strip's file chip: 1px
 /// block, 6px inline.
 #[allow(dead_code)]
 pub const CHIP_PAD_X: f32 = 6.0;
 #[allow(dead_code)]
 pub const CHIP_PAD_Y: f32 = 1.0;
-#[allow(dead_code)]
-pub const FILE_CHIP_GAP: f32 = 6.0;
 
 // ------------------------------------- geometry: levels below L1 (unspecified)
 
