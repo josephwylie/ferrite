@@ -4,9 +4,9 @@
 use gpui::prelude::*;
 use gpui::{div, point, px, rgb, rgba, App, Axis, BoxShadow, Div, FontWeight, SharedString};
 
-use gpui_component::button::Button;
-use gpui_component::setting::{SettingField, SettingGroup, SettingItem, SettingPage, Settings};
-use gpui_component::{switch::Switch, Sizable};
+use gpui::component::button::Button;
+use gpui::component::setting::{SettingField, SettingGroup, SettingItem, SettingPage, Settings};
+use gpui::component::{switch::Switch, Sizable};
 use std::rc::Rc;
 
 use crate::components;
@@ -53,12 +53,14 @@ pub fn card() -> Div {
         .font_family(FONT_UI)
         .shadow(vec![
             BoxShadow {
+                inset: false,
                 color: rgba(SHADOW_FAR).into(),
                 offset: point(px(0.), px(SHADOW_FAR_Y)),
                 blur_radius: px(SHADOW_FAR_BLUR),
                 spread_radius: px(SHADOW_FAR_SPREAD),
             },
             BoxShadow {
+                inset: false,
                 color: rgba(SHADOW_NEAR).into(),
                 offset: point(px(0.), px(SHADOW_NEAR_Y)),
                 blur_radius: px(SHADOW_NEAR_BLUR),
@@ -111,24 +113,26 @@ pub fn close_button() -> Button {
         .child(icon(icons::CLOSE, ICON_BUTTON_GLYPH, TEXT_MUTED))
 }
 
-/// One page keeps search across every group, with sidebar links into the
-/// virtualized list. Labels and descriptions stay native searchable items.
+/// Categories are native Settings pages, so navigation changes pages without
+/// relying on estimated positions in a virtualized list. Search spans them all.
 pub fn body(groups: Vec<SettingGroup>) -> Div {
     let mut sidebar = gpui::StyleRefinement::default();
     sidebar.background = Some(rgb(MENU).into());
-    let group_count = groups.len();
-    div().flex_1().min_h_0().child(components::MeasuredSettings {
-        groups: group_count,
-        settings: Settings::new("ferrite-settings")
-            .small()
-            .sidebar_width(px(172.))
-            .sidebar_style(&sidebar)
-            .page(SettingPage::new("Ferrite")
-                .description("Changes save automatically. Session defaults apply when a new Session starts.")
-                .default_open(true)
-                .resettable(false)
-                .groups(groups)),
-    })
+    let settings = Settings::new("ferrite-settings")
+        .small()
+        .sidebar_width(px(172.))
+        .sidebar_style(&sidebar);
+    let settings = groups
+        .into_iter()
+        .zip(["New Threads", "Permissions", "Behaviour", "About"])
+        .fold(settings, |settings, (group, title)| {
+            settings.page(
+                SettingPage::new(title)
+                    .resettable(false)
+                    .groups(vec![group]),
+            )
+        });
+    div().flex_1().min_h_0().child(settings)
 }
 
 pub fn choices<T: Clone + 'static>(

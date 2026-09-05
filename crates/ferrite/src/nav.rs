@@ -436,12 +436,14 @@ pub fn filter_menu() -> Div {
         .bg(rgb(MENU))
         .shadow(vec![
             BoxShadow {
+                inset: false,
                 color: rgba(SHADOW_FAR).into(),
                 offset: point(px(0.), px(SHADOW_FAR_Y)),
                 blur_radius: px(SHADOW_FAR_BLUR),
                 spread_radius: px(SHADOW_FAR_SPREAD),
             },
             BoxShadow {
+                inset: false,
                 color: rgba(SHADOW_NEAR).into(),
                 offset: point(px(0.), px(SHADOW_NEAR_Y)),
                 blur_radius: px(SHADOW_NEAR_BLUR),

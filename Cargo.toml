@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/ferrite-core", "crates/ferrite"]
 # Spikes build standalone with their own lockfiles; panes24 is the pinned
 # perf fixture and must not churn with workspace dependency updates.
-exclude = ["spikes/panes24"]
+exclude = ["spikes/panes24", "vendor/gpui-base", "vendor/taffy"]
 
 [workspace.package]
 version = "0.1.0"
@@ -13,6 +13,10 @@ license = "MIT OR Apache-2.0"
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+[patch.crates-io]
+gpui-base = { path = "vendor/gpui-base" }
+taffy = { path = "vendor/taffy" }
 
 [profile.release]
 lto = "thin"

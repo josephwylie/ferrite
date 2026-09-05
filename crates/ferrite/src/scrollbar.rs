@@ -14,13 +14,13 @@ use std::{
     time::{Duration, Instant},
 };
 
+use gpui::component::ActiveTheme;
 use gpui::{
-    fill, point, px, relative, size, App, Axis, BorderStyle, Bounds, ContentMask, Corner,
-    CursorStyle, Edges, Element, ElementId, GlobalElementId, Hitbox, HitboxBehavior, Hsla,
-    InspectorElementId, IntoElement, IsZero, LayoutId, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, PaintQuad, Pixels, Point, Position, ScrollWheelEvent, Size, Style, Timer, Window,
+    fill, point, px, relative, size, App, Axis, BorderStyle, Bounds, ContentMask, CursorStyle,
+    Edges, Element, ElementId, GlobalElementId, Hitbox, HitboxBehavior, Hsla, InspectorElementId,
+    IntoElement, IsZero, LayoutId, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels,
+    Point, Position, ScrollWheelEvent, Size, Style, Window,
 };
-use gpui_component::ActiveTheme;
 
 /// The width of the scrollbar (THUMB_ACTIVE_INSET * 2 + THUMB_ACTIVE_WIDTH)
 const WIDTH: Pixels = px(4. * 2. + 8.);
@@ -37,7 +37,7 @@ const THUMB_ACTIVE_INSET: Pixels = px(4.);
 const FADE_OUT_DURATION: f32 = 3.0;
 const FADE_OUT_DELAY: f32 = 2.0;
 
-use gpui_component::scroll::{ScrollbarHandle, ScrollbarShow};
+use gpui::component::scroll::{ScrollbarHandle, ScrollbarMode as ScrollbarShow};
 
 #[doc(hidden)]
 #[derive(Debug, Clone)]
@@ -277,7 +277,7 @@ impl Scrollbar {
         self
     }
 
-    /// Set the scrollbar show mode [`ScrollbarShow`], if not set use the `cx.theme().scrollbar_show`.
+    /// Set the scrollbar show mode [`ScrollbarShow`], if not set use the `cx.theme().scrollbar_mode`.
     pub fn scrollbar_show(mut self, scrollbar_show: ScrollbarShow) -> Self {
         self.scrollbar_show = Some(scrollbar_show);
         self
@@ -346,7 +346,7 @@ impl Scrollbar {
     }
 
     fn style_for_normal(&self, cx: &App) -> (Hsla, Hsla, Hsla, Pixels, Pixels, Pixels) {
-        let scrollbar_show = self.scrollbar_show.unwrap_or(cx.theme().scrollbar_show);
+        let scrollbar_show = self.scrollbar_show.unwrap_or(cx.theme().scrollbar_mode);
         let (width, inset, radius) = match scrollbar_show {
             ScrollbarShow::Scrolling => (THUMB_WIDTH, THUMB_INSET, THUMB_RADIUS),
             _ => (THUMB_ACTIVE_WIDTH, THUMB_ACTIVE_INSET, THUMB_ACTIVE_RADIUS),
@@ -363,7 +363,7 @@ impl Scrollbar {
     }
 
     fn style_for_idle(&self, cx: &App) -> (Hsla, Hsla, Hsla, Pixels, Pixels, Pixels) {
-        let scrollbar_show = self.scrollbar_show.unwrap_or(cx.theme().scrollbar_show);
+        let scrollbar_show = self.scrollbar_show.unwrap_or(cx.theme().scrollbar_mode);
         let (width, inset, radius) = match scrollbar_show {
             ScrollbarShow::Scrolling => (THUMB_WIDTH, THUMB_INSET, THUMB_RADIUS),
             _ => (THUMB_ACTIVE_WIDTH, THUMB_ACTIVE_INSET, THUMB_ACTIVE_RADIUS),
@@ -524,7 +524,7 @@ impl Element for Scrollbar {
                 },
             };
 
-            let scrollbar_show = self.scrollbar_show.unwrap_or(cx.theme().scrollbar_show);
+            let scrollbar_show = self.scrollbar_show.unwrap_or(cx.theme().scrollbar_mode);
             let is_always_to_show = matches!(scrollbar_show, ScrollbarShow::Always);
             let is_hover_to_show = matches!(scrollbar_show, ScrollbarShow::Hover);
             let is_hovered_on_bar = state.get().hovered_axis == Some(axis);
@@ -570,7 +570,7 @@ impl Element for Scrollbar {
                                 let next_delay = Duration::from_secs_f32(FADE_OUT_DELAY - elapsed);
                                 window
                                     .spawn(cx, async move |cx| {
-                                        Timer::after(next_delay).await;
+                                        cx.background_executor().timer(next_delay).await;
                                         state.set(state.get().with_idle_timer_scheduled(false));
                                         cx.update(|_, cx| cx.notify(current_view)).ok();
                                     })
@@ -594,15 +594,13 @@ impl Element for Scrollbar {
 
             // The actual render area of the thumb
             let thumb_fill_bounds = if is_vertical {
-                Bounds::from_corner_and_size(
-                    Corner::TopRight,
-                    bounds.top_right() + point(-inset, inset + thumb_start),
+                Bounds::new(
+                    bounds.top_right() + point(-inset - thumb_width, inset + thumb_start),
                     size(thumb_width, thumb_length),
                 )
             } else {
-                Bounds::from_corner_and_size(
-                    Corner::BottomLeft,
-                    bounds.bottom_left() + point(inset + thumb_start, -inset),
+                Bounds::new(
+                    bounds.bottom_left() + point(inset + thumb_start, -inset - thumb_width),
                     size(thumb_length, thumb_width),
                 )
             };
@@ -646,7 +644,7 @@ impl Element for Scrollbar {
         cx: &mut App,
     ) {
         let scrollbar_state = &prepaint.scrollbar_state;
-        let scrollbar_show = self.scrollbar_show.unwrap_or(cx.theme().scrollbar_show);
+        let scrollbar_show = self.scrollbar_show.unwrap_or(cx.theme().scrollbar_mode);
         let view_id = window.current_view();
         let hitbox_bounds = prepaint.hitbox.bounds;
         let is_visible = scrollbar_state.get().is_scrollbar_visible()
@@ -901,15 +899,13 @@ fn thumb_hit_bounds(
     // across the gutter moves it outside the bar's mouse/cursor bounds and
     // leaves the opposite padding acting as a track click instead of a drag.
     if is_vertical {
-        Bounds::from_corner_and_size(
-            Corner::TopRight,
-            bounds.top_right() + point(px(0.), inset + thumb_start),
+        Bounds::new(
+            bounds.top_right() + point(-WIDTH, inset + thumb_start),
             size(WIDTH, thumb_length),
         )
     } else {
-        Bounds::from_corner_and_size(
-            Corner::BottomLeft,
-            bounds.bottom_left() + point(inset + thumb_start, px(0.)),
+        Bounds::new(
+            bounds.bottom_left() + point(inset + thumb_start, -WIDTH),
             size(thumb_length, WIDTH),
         )
     }
@@ -949,7 +945,7 @@ mod tests {
         cx.simulate_resize(size(px(200.), px(300.)));
         cx.run_until_parked();
         assert_eq!(scroll.bounds().size, size(px(200.), px(300.)));
-        assert!(scroll.max_offset().height > px(0.));
+        assert!(scroll.max_offset().y > px(0.));
         // Both sides of the painted thumb belong to its draggable gutter.
         for x in [185., 199.] {
             scroll.set_offset(point(px(0.), px(0.)));

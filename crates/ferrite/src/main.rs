@@ -13,6 +13,7 @@ mod nav;
 mod pane;
 mod pointer;
 mod prefs;
+mod rich;
 mod scrollbar;
 mod select;
 mod session;
@@ -20,12 +21,14 @@ mod shell;
 mod theme;
 mod titlebar;
 
+use ::gpui;
+use ::gpui as kit;
+use ::gpui::*;
 use ferrite_core::cockpit::Cockpit;
 use ferrite_core::settings::Settings;
 use ferrite_core::store::{Provider, Store};
 use ferrite_core::workspace::WorkspaceBinding;
 use ferrite_core::ThreadId;
-use gpui::*;
 
 use cockpit::CockpitView;
 use session::{ProcessRss, SessionDefaults};
@@ -90,7 +93,7 @@ fn main() {
     // The icons are registered on the application, before `run`:
     // `with_assets` replaces both the asset source and the SVG renderer,
     // and `svg()` finds neither afterwards.
-    Application::new()
+    kit::application()
         .with_assets(icons::Assets)
         .run(move |cx: &mut App| {
             theme::init_components(cx);
@@ -156,7 +159,10 @@ fn main() {
             }
             if core.threads().is_empty() {
                 if demo || panes > 1 {
-                    demo::seed_panes(&mut core, panes, provider, demo);
+                    demo::seed_panes(&mut core, panes, provider, demo && !load);
+                    if load {
+                        demo::seed_load_group(&mut core);
+                    }
                 } else {
                     // The default launch revives the newest parked Thread; an
                     // empty store starts as a draft Pane (#29) — nothing
@@ -213,7 +219,7 @@ fn main() {
                             }
                             view
                         });
-                        cx.new(|cx| gpui_component::Root::new(view, window, cx))
+                        cx.new(|cx| kit::component::Root::new(view, window, cx))
                     },
                 )
                 .unwrap();
@@ -337,6 +343,7 @@ fn app_menus() -> Vec<Menu> {
     };
     vec![
         Menu {
+            disabled: false,
             name: "Ferrite".into(),
             items: vec![
                 MenuItem::action("Settings…", OpenSettings),
@@ -347,6 +354,7 @@ fn app_menus() -> Vec<Menu> {
             ],
         },
         Menu {
+            disabled: false,
             name: "File".into(),
             items: vec![
                 MenuItem::action("New Thread", NewThread),
@@ -357,6 +365,7 @@ fn app_menus() -> Vec<Menu> {
             ],
         },
         Menu {
+            disabled: false,
             name: "Edit".into(),
             items: vec![
                 MenuItem::os_action("Undo", composer::Undo, OsAction::Undo),
@@ -369,6 +378,7 @@ fn app_menus() -> Vec<Menu> {
             ],
         },
         Menu {
+            disabled: false,
             name: "View".into(),
             items: vec![
                 MenuItem::action("Toggle Sidebar", ToggleNav),
@@ -380,6 +390,7 @@ fn app_menus() -> Vec<Menu> {
             ],
         },
         Menu {
+            disabled: false,
             name: "Window".into(),
             items: vec![],
         },
