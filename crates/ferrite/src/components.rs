@@ -75,7 +75,7 @@ pub fn scrollbar(id: impl Into<ElementId>, scroll: &gpui::ScrollHandle) -> gpui:
         .right_0()
         .bottom_0()
         .child(
-            gpui_component::scroll::Scrollbar::vertical(scroll)
+            crate::scrollbar::Scrollbar::vertical(scroll)
                 .id(id)
                 .scrollbar_show(gpui_component::scroll::ScrollbarShow::Hover),
         )
