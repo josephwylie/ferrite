@@ -717,6 +717,18 @@ impl CockpitView {
     /// changed are worth a repaint; a frame where nothing moved costs nothing.
     fn pump(&mut self, cx: &mut Context<Self>) {
         let frame = self.cockpit.pump();
+        let completions = self.cockpit.take_bootstrap_results();
+        let startup_changed = !completions.is_empty();
+        for completion in completions {
+            if let Some(draft) = completion.draft {
+                self.finish_draft_start(
+                    draft,
+                    &completion.prompt,
+                    completion.result.map(Some).map_err(|e| e.to_string()),
+                    cx,
+                );
+            }
+        }
         self.sync_question_drafts();
         let mut restarted = Vec::new();
         let mut branch_tick = false;
@@ -735,7 +747,7 @@ impl CockpitView {
         // A restart writes a Notice even when no Session streamed this frame —
         // and a failed respawn will never stream again, so this notify is that
         // notice's only ride to the screen.
-        if frame.is_empty() && restarted.is_empty() && !branch_tick {
+        if frame.is_empty() && restarted.is_empty() && !branch_tick && !startup_changed {
             return;
         }
         for update in &frame {
@@ -2298,6 +2310,10 @@ impl CockpitView {
             self.finish_rename(false, cx);
             return;
         }
+        if !self.cancel_focused_draft_start() {
+            cx.notify();
+            return;
+        }
         // On a draft, escape returns to the prompt (#29): the band's tab
         // focus clears. (An open band popover holds the ComposerMenu keys,
         // so escape there dismisses through `menu_dismiss` instead.)
@@ -3398,12 +3414,34 @@ impl CockpitView {
     /// A band row's pick, applied to the focused draft. Changing the
     /// project resets the workspace chip to `main` — the old choice named
     /// another repo's rows.
+    fn cancel_focused_draft_start(&mut self) -> bool {
+        let Some(id) = self
+            .panes
+            .get(self.focused())
+            .and_then(|pane| pane.identity.draft())
+        else {
+            return true;
+        };
+        match self.cockpit.cancel_draft_start(id) {
+            Ok(_) => true,
+            Err(error) => {
+                if let Some(draft) = self.focused_draft_mut() {
+                    draft.error = Some(error.to_string().into());
+                }
+                false
+            }
+        }
+    }
+
     fn pick_band(
         &mut self,
         choice: &BandChoice,
         composer: &Entity<Composer>,
         cx: &mut Context<Self>,
     ) {
+        if !self.cancel_focused_draft_start() {
+            return;
+        }
         match choice {
             BandChoice::Provider(provider) => {
                 let announced = self.cockpit.announced_models(provider.provider);
@@ -3494,6 +3532,9 @@ impl CockpitView {
         match self.cockpit.register_project(&path) {
             Ok(project) => match then {
                 BrowseThen::Draft => {
+                    if !self.cancel_focused_draft_start() {
+                        return;
+                    }
                     if let Some(draft) = self.focused_draft_mut() {
                         draft.binding.choose_checkout(project);
                         draft.error = None;
@@ -3539,11 +3580,6 @@ impl CockpitView {
         }
         let provider = draft.binding.provider().clone();
         let effort = draft.binding.effort().map(str::to_owned);
-        let deferred = self
-            .cockpit
-            .roster()
-            .draft_scope(id)
-            .is_some_and(|scope| scope.pending_leave.is_some());
         let resolved = draft
             .binding
             .resolve(self.cockpit.registry())
@@ -3553,47 +3589,63 @@ impl CockpitView {
                 .bootstrap_draft(id, provider, choice, &text, effort.clone())
                 .map_err(|e| e.to_string())
         });
+        self.finish_draft_start(id, &text, opened, cx);
+        cx.notify();
+    }
+
+    fn finish_draft_start(
+        &mut self,
+        id: ferrite_core::roster::DraftId,
+        text: &str,
+        opened: Result<Option<ferrite_core::cockpit::Bootstrapped>, String>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = self
+            .panes
+            .iter()
+            .position(|pane| pane.identity.draft() == Some(id))
+        else {
+            return;
+        };
         match opened {
-            Ok(done) => {
+            Ok(Some(done)) => {
+                let composer = self.panes[index].composer.clone();
                 composer.update(cx, |composer, cx| {
-                    composer.take(cx);
-                });
-                let index = self.focused();
-                self.panes[index].adopt_thread(done.thread);
-                // The leave this draft was holding open (see the core's
-                // `close`) applied with the bootstrap; a refusal lands in
-                // the nav's banner like any other Group change.
-                match done.refused_leave {
-                    Some(error) => {
-                        eprintln!("ferrite: group change refused: {error}");
-                        self.group_error = Some(error.to_string().into());
+                    // Edits made while startup ran belong to the operator.
+                    if composer.text().trim() == text {
+                        composer.take(cx);
                     }
-                    None if deferred => self.group_error = None,
-                    None => {}
+                });
+                self.panes[index].adopt_thread(done.thread);
+                if done.applied_leave {
+                    self.group_error = None;
                 }
-                if self
-                    .popover
-                    .as_ref()
-                    .is_some_and(|open| matches!(open.kind, Kind::Band(_)))
-                {
+                if let Some(error) = done.refused_leave {
+                    eprintln!("ferrite: group change refused: {error}");
+                    self.group_error = Some(error.to_string().into());
+                }
+                if self.popover.as_ref().is_some_and(|open| {
+                    open.pane == PaneIdentity::Draft(id) && matches!(open.kind, Kind::Band(_))
+                }) {
                     self.popover = None;
                 }
                 self.sync_panes(cx);
-                // The Pane kept its slot, so the mirror saw nothing open.
                 self.facts.opened(&self.cockpit, done.thread);
-                // The first prompt named the Thread; the head and the nav
-                // row must say so now, not at the next naming moment.
                 self.refresh_names();
-                self.start_titling(done.thread, text.clone(), cx);
+                self.start_titling(done.thread, text.to_string(), cx);
                 self.panes[index].scroll.scroll_to_bottom();
             }
+            Ok(None) => {
+                if let Some(draft) = self.panes[index].draft_mut() {
+                    draft.error = None;
+                }
+            }
             Err(message) => {
-                if let Some(draft) = self.focused_draft_mut() {
+                if let Some(draft) = self.panes[index].draft_mut() {
                     draft.error = Some(SharedString::from(message));
                 }
             }
         }
-        cx.notify();
     }
 
     /// The focused draft's band — chips wired to their popovers (#29). A
@@ -7108,6 +7160,158 @@ mod tests {
                 blocks[1].body
             );
         });
+    }
+
+    /// Background readiness must settle the submitted Pane, preserving any
+    /// later edits and the operator's current focus/picker elsewhere.
+    #[gpui::test]
+    fn delayed_bootstrap_preserves_edited_composer_focus_and_another_drafts_picker(
+        cx: &mut TestAppContext,
+    ) {
+        use ferrite_core::session::SessionLifecycle;
+        use std::sync::{Arc, Mutex};
+        struct Ready {
+            events: Receiver<SessionEvent>,
+            sent: Arc<Mutex<Vec<String>>>,
+        }
+        impl Session for Ready {
+            fn events(&self) -> &Receiver<SessionEvent> {
+                &self.events
+            }
+            fn send(&mut self, text: &str) -> std::io::Result<()> {
+                self.sent.lock().unwrap().push(text.into());
+                Ok(())
+            }
+            fn interrupt(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+            fn respond_to_decision(&mut self, _: &str, _: DecisionAnswer) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        struct Delayed {
+            gates: std::collections::VecDeque<Receiver<()>>,
+            sent: Arc<Mutex<Vec<String>>>,
+        }
+        impl Spawner for Delayed {
+            fn spawn(
+                &mut self,
+                _: ferrite_core::cockpit::SpawnRequest,
+            ) -> std::io::Result<Box<dyn Session>> {
+                panic!("use start")
+            }
+            fn start(
+                &mut self,
+                _: ferrite_core::cockpit::SpawnRequest,
+            ) -> std::io::Result<SessionLifecycle> {
+                let gate = self.gates.pop_front().expect("one start per submission");
+                let sent = self.sent.clone();
+                SessionLifecycle::background(move || {
+                    gate.recv().unwrap();
+                    let (_, events) = mpsc::channel();
+                    Ok(Box::new(Ready { events, sent }) as Box<dyn Session + Send>)
+                })
+            }
+        }
+        let base = scratch("delayed-bootstrap-edits");
+        let repo = repo_in(&base);
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let (first_tx, first_rx) = mpsc::channel();
+        let (cancel_tx, cancel_rx) = mpsc::channel();
+        let (escape_tx, escape_rx) = mpsc::channel();
+        let core = Cockpit::new(
+            Store::open(base.join("threads")).unwrap(),
+            Box::new(Delayed {
+                gates: [first_rx, cancel_rx, escape_rx].into(),
+                sent: sent.clone(),
+            }),
+        );
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (submitted, other) = view.update(cx, |view, cx| {
+            view.aim_launch(&repo);
+            let submitted = view.panes[view.focused()].identity.draft().unwrap();
+            view.panes[view.focused()]
+                .composer
+                .update(cx, |composer, cx| composer.set("first".into(), cx));
+            view.bootstrap_draft(cx);
+            assert!(view.cockpit.draft_starting(submitted));
+            view.panes[view.focused()]
+                .composer
+                .update(cx, |composer, cx| {
+                    composer.set("edited while starting".into(), cx)
+                });
+            view.open_draft(DraftTarget::Main, cx);
+            let other = view.panes[view.focused()].identity.draft().unwrap();
+            view.open_band_popover(pane::BandChip::Provider, cx);
+            (submitted, other)
+        });
+        first_tx.send(()).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let finished = view.update(cx, |view, cx| {
+                view.pump(cx);
+                !view.cockpit.draft_starting(submitted)
+            });
+            if finished {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "startup did not settle"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        view.update(cx, |view, cx| {
+            assert_eq!(
+                view.cockpit.roster().focused(),
+                Some(PaneIdentity::Draft(other))
+            );
+            assert_eq!(
+                view.popover.as_ref().unwrap().pane,
+                PaneIdentity::Draft(other)
+            );
+            let first = view
+                .panes
+                .iter()
+                .find(|pane| pane.thread().is_some())
+                .unwrap();
+            assert_eq!(first.composer.read(cx).text(), "edited while starting");
+            assert_eq!(sent.lock().unwrap().as_slice(), ["first"]);
+            // A changed draft choice cancels the submitted startup before
+            // applying the new choice, so the old request can never send.
+            view.popover = None;
+            let composer = view.panes[view.focused()].composer.clone();
+            composer.update(cx, |composer, cx| {
+                composer.set("cancel on choice".into(), cx)
+            });
+            view.bootstrap_draft(cx);
+            assert!(view.cockpit.draft_starting(other));
+            view.pick_band(
+                &BandChoice::Provider(ProviderChoice {
+                    provider: Provider::Codex,
+                    model: None,
+                }),
+                &composer,
+                cx,
+            );
+            assert!(!view.cockpit.draft_starting(other));
+            assert_eq!(composer.read(cx).text(), "cancel on choice");
+        });
+        cancel_tx.send(()).unwrap();
+        view.update(cx, |view, cx| {
+            view.bootstrap_draft(cx);
+            assert!(view.cockpit.draft_starting(other));
+        });
+        cx.update(|window, cx| view.update(cx, |view, cx| view.interrupt(&Interrupt, window, cx)));
+        view.read_with(cx, |view, cx| {
+            assert!(!view.cockpit.draft_starting(other));
+            assert_eq!(
+                view.panes[view.focused()].composer.read(cx).text(),
+                "cancel on choice"
+            );
+        });
+        escape_tx.send(()).unwrap();
+        assert_eq!(sent.lock().unwrap().as_slice(), ["first"]);
     }
 
     /// AC (#29): a failed bootstrap is a no-op with words — no Thread, the

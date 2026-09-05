@@ -16,6 +16,7 @@ pub use crate::prompt_history::HistoryDirection;
 use crate::prompt_history::PromptHistory;
 use crate::providers::Session;
 use crate::roster::{DraftId, DraftScope, Layout, PaneIdentity, Roster, View};
+use crate::session::SessionLifecycle;
 use crate::store::{LoadError, Provider, Store, ThreadWriter};
 use crate::transcript::{BlockId, Input, Lexer, Transcript, Update};
 use crate::workspace::registry::{self, ProjectId, Registry};
@@ -50,6 +51,12 @@ pub struct SpawnRequest<'a> {
 /// scripted Sessions in tests — nothing below this line spawns a process.
 pub trait Spawner {
     fn spawn(&mut self, request: SpawnRequest) -> io::Result<Box<dyn Session>>;
+
+    /// A ready adapter completes synchronously; production overrides this
+    /// to start off-thread. Only readiness, never queue admission, is success.
+    fn start(&mut self, request: SpawnRequest) -> io::Result<SessionLifecycle> {
+        self.spawn(request).map(SessionLifecycle::ready)
+    }
 }
 
 /// Resident memory per Session, injected. The cockpit never shells out for
@@ -189,6 +196,34 @@ impl std::fmt::Display for ReviveGroupError {
 
 impl std::error::Error for ReviveGroupError {}
 
+enum ReplacementKind {
+    Fresh,
+    Handover,
+    Retune,
+}
+
+struct Replacement {
+    session: SessionLifecycle,
+    provider: Provider,
+    model: Option<String>,
+    effort: Option<String>,
+    kind: ReplacementKind,
+}
+
+struct PendingBootstrap {
+    prompt: String,
+    group: Option<GroupId>,
+    draft: Option<DraftId>,
+}
+
+/// A deferred first send settled by `pump`. The draft and submitted text
+/// identify the original Pane even if the operator has since moved focus.
+pub struct BootstrapResult {
+    pub draft: Option<DraftId>,
+    pub prompt: String,
+    pub result: io::Result<Bootstrapped>,
+}
+
 struct Thread {
     transcript: Transcript,
     /// Highlighting answers for this Thread's own Blocks. Per Thread because
@@ -196,7 +231,8 @@ struct Thread {
     /// Pane an answer belonged to.
     highlights: Receiver<Input>,
     /// The live Session, or None for a parked Thread.
-    session: Option<Box<dyn Session>>,
+    session: Option<SessionLifecycle>,
+    replacement: Option<Replacement>,
     writer: ThreadWriter,
     provider: Provider,
     /// The model this Thread chose before its first prompt (#25), verbatim
@@ -266,7 +302,7 @@ impl Thread {
     /// A Thread ready to serve: its own Lexer, a fresh Transcript, a live
     /// Session. Revival replays history into the Transcript afterwards.
     fn fresh(
-        session: Box<dyn Session>,
+        session: SessionLifecycle,
         writer: ThreadWriter,
         provider: Provider,
         model: Option<String>,
@@ -280,6 +316,7 @@ impl Thread {
             transcript: Transcript::new(std::sync::Arc::new(lexer)),
             highlights,
             session: Some(session),
+            replacement: None,
             writer,
             provider,
             model,
@@ -335,6 +372,8 @@ pub struct Cockpit {
     /// below, which keep it showing exactly the open Threads plus drafts.
     roster: Roster,
     spawner: Box<dyn Spawner>,
+    bootstraps: HashMap<ThreadId, PendingBootstrap>,
+    bootstrap_results: Vec<BootstrapResult>,
     sampler: Option<Box<dyn RssSampler>>,
     /// Bytes one Session may hold before the watchdog replaces it.
     limit: u64,
@@ -353,6 +392,8 @@ impl Cockpit {
             groups,
             roster: Roster::default(),
             spawner,
+            bootstraps: HashMap::new(),
+            bootstrap_results: Vec::new(),
             sampler: None,
             limit: u64::MAX,
             #[cfg(test)]
@@ -463,7 +504,7 @@ impl Cockpit {
             .iter()
             .filter_map(|(id, thread)| {
                 let session = thread.session.as_ref()?;
-                Some((*id, sampler.sample(*id, session.pid())?))
+                Some((*id, sampler.sample(*id, session.session()?.pid())?))
             })
             .filter(|(_, rss)| *rss > self.limit)
             .collect();
@@ -482,7 +523,8 @@ impl Cockpit {
             // Drop the old Session before asking for a new one: the leaking
             // process must not outlive its replacement.
             thread.session = None;
-            let spawned = self.spawner.spawn(SpawnRequest {
+            thread.replacement = None;
+            let spawned = self.spawner.start(SpawnRequest {
                 provider: thread.provider,
                 model: thread.model.as_deref(),
                 effort: thread.effort.as_deref(),
@@ -508,9 +550,9 @@ impl Cockpit {
 
     /// Start a Thread: a durable log, a workspace to work in, and a Session
     /// serving it. Called at first send (#29) — the draft Pane's bootstrap —
-    /// so a failure anywhere leaves NO Thread behind: a worktree that cannot
-    /// be created or adopted, and a Session that will not spawn, both take
-    /// the half-born Thread with them and the Pane stays draft.
+    /// through `bootstrap_draft`, which rolls back any failed first send.
+    /// Direct callers receive a provisional id during startup; a later
+    /// failure leaves its open Thread showing the error for retry.
     ///
     /// The choice's repo registers as a project (idempotent — this is how
     /// the registry grows as Threads bind roots); a new worktree is placed
@@ -591,7 +633,7 @@ impl Cockpit {
                 return Err(io::Error::other(e.to_string()));
             }
         }
-        let session = match self.spawner.spawn(SpawnRequest {
+        let session = match self.spawner.start(SpawnRequest {
             provider,
             model: model.as_deref(),
             effort: effort.as_deref(),
@@ -624,6 +666,10 @@ impl Cockpit {
         Ok(id)
     }
 
+    /// Start the first send. The returned id is provisional while startup
+    /// is pending; `take_bootstrap_results` reports its delivery or rollback.
+    /// Ready adapters complete before this returns.
+    ///
     /// Turn one draft into a live, locked Thread. The Thread log and Session
     /// are implementation details of this transaction: if the first prompt
     /// cannot reach the Session, both are removed and the caller still owns
@@ -645,31 +691,9 @@ impl Cockpit {
         prompt: &str,
         effort: Option<String>,
     ) -> io::Result<ThreadId> {
-        let id = self.open_choice(choice, workspace, effort)?;
-        if let Some(binding) = self.thread(id).and_then(|open| open.workspace()) {
-            let notice = format!("opened in {}", binding.cwd().display());
-            self.threads
-                .get_mut(&id)
-                .expect("open inserted the Thread")
-                .transcript
-                .apply(Input::Notice(notice));
-        }
-        let delivered = deliver(
-            self.threads.get_mut(&id).expect("open inserted the Thread"),
-            prompt.to_string(),
-        );
-        if let Err(error) = delivered {
-            self.threads.remove(&id);
-            self.roster.remove_thread(id);
-            self.store.delete(id)?;
-            return Err(error);
-        }
-        Ok(id)
+        self.begin_bootstrap(choice, workspace, prompt, effort, None)
     }
 
-    /// Bootstrap a draft into an existing group as one operator transaction.
-    /// Expected group failures happen before a Thread or prompt is created;
-    /// a later persistence failure rolls the new Thread back.
     pub fn bootstrap_in_group(
         &mut self,
         choice: ProviderChoice,
@@ -680,7 +704,6 @@ impl Cockpit {
         self.bootstrap_in_group_with(choice, workspace, prompt, group, None)
     }
 
-    /// `bootstrap_in_group` with the Thread's own effort from the start.
     fn bootstrap_in_group_with(
         &mut self,
         choice: ProviderChoice,
@@ -691,47 +714,76 @@ impl Cockpit {
     ) -> io::Result<ThreadId> {
         let root = match &workspace {
             WorkspaceChoice::Main { checkout } => checkout,
-            WorkspaceChoice::NewWorktree { repo } => repo,
-            WorkspaceChoice::ExistingWorktree { repo, .. } => repo,
+            WorkspaceChoice::NewWorktree { repo }
+            | WorkspaceChoice::ExistingWorktree { repo, .. } => repo,
         };
         let project = self.registry.register(root)?;
         self.groups
             .validate_join_project(group, Some(project))
             .map_err(io::Error::other)?;
+        self.begin_bootstrap(choice, workspace, prompt, effort, Some(group))
+    }
 
+    fn begin_bootstrap(
+        &mut self,
+        choice: ProviderChoice,
+        workspace: WorkspaceChoice,
+        prompt: &str,
+        effort: Option<String>,
+        group: Option<GroupId>,
+    ) -> io::Result<ThreadId> {
         let id = self.open_choice(choice, workspace, effort)?;
-        if let Err(error) = self.groups.apply(GroupChange::Join {
-            thread: id,
+        let pending = PendingBootstrap {
+            prompt: prompt.to_string(),
             group,
-            index: None,
-        }) {
-            self.threads.remove(&id);
-            self.roster.remove_thread(id);
-            self.store.delete(id)?;
-            return Err(io::Error::other(error));
-        }
-        if let Some(binding) = self.thread(id).and_then(|open| open.workspace()) {
-            let notice = format!("opened in {}", binding.cwd().display());
-            self.threads
-                .get_mut(&id)
-                .expect("open inserted the Thread")
-                .transcript
-                .apply(Input::Notice(notice));
-        }
-        if let Err(error) = deliver(
-            self.threads.get_mut(&id).expect("open inserted the Thread"),
-            prompt.to_string(),
-        ) {
-            // Membership is removed durably before the Thread it references.
-            self.groups
-                .apply(GroupChange::Leave { thread: id })
-                .map_err(io::Error::other)?;
-            self.threads.remove(&id);
-            self.roster.remove_thread(id);
-            self.store.delete(id)?;
+            draft: None,
+        };
+        if self.threads[&id]
+            .session
+            .as_ref()
+            .is_some_and(SessionLifecycle::is_starting)
+        {
+            self.bootstraps.insert(id, pending);
+        } else if let Err(error) = self.finish_bootstrap(id, &pending) {
+            self.rollback_bootstrap(id)?;
             return Err(error);
         }
         Ok(id)
+    }
+
+    /// Membership is durable before delivery; readiness precedes both.
+    fn finish_bootstrap(&mut self, id: ThreadId, pending: &PendingBootstrap) -> io::Result<()> {
+        if let Some(group) = pending.group {
+            self.groups
+                .apply(GroupChange::Join {
+                    thread: id,
+                    group,
+                    index: None,
+                })
+                .map_err(io::Error::other)?;
+        }
+        let state = self.threads.get_mut(&id).expect("pending Thread exists");
+        if let Some(binding) = &state.workspace {
+            state.transcript.apply(Input::Notice(format!(
+                "opened in {}",
+                binding.cwd().display()
+            )));
+        }
+        deliver(state, pending.prompt.clone())?;
+        Ok(())
+    }
+
+    fn rollback_bootstrap(&mut self, id: ThreadId) -> io::Result<()> {
+        // Roll back membership before its durable Thread; if persistence
+        // refuses, preserve the Thread so the Group never points to nothing.
+        if self.groups.of(id).is_some() {
+            self.groups
+                .apply(GroupChange::Leave { thread: id })
+                .map_err(io::Error::other)?;
+        }
+        self.threads.remove(&id);
+        self.roster.remove_thread(id);
+        self.store.delete(id)
     }
 
     // Legacy #24 fixtures exercise persisted `session_project_root` loading.
@@ -745,6 +797,7 @@ impl Cockpit {
         match self.threads.get_mut(&thread) {
             Some(state) => {
                 state.session = None;
+                state.replacement = None;
                 state.pending = None;
                 state.busy = false;
                 self.store.set_session_project_root(
@@ -767,6 +820,9 @@ impl Cockpit {
     }
 
     /// Re-aim a Thread onto a provider (and optionally a model) (#25).
+    /// `Ok` accepts the request; `ThreadView::starting` reports a deferred
+    /// replacement. A later refusal is a Notice, leaving the prior choices
+    /// and Session intact. Ready adapters still settle before returning.
     /// Spawn-new-first, swap second: a CLI that fails to spawn leaves the
     /// old Session serving and the header untouched, and the error carries
     /// the provider's words. Durable before anything in memory changes, so
@@ -805,6 +861,7 @@ impl Cockpit {
                 .map_err(ProvisionError::Store);
         };
         if state.provider == choice.provider && state.model == choice.model {
+            self.threads.get_mut(&thread).expect("checked").replacement = None;
             return Ok(());
         }
         if state.first_prompt_sent {
@@ -820,10 +877,6 @@ impl Cockpit {
         self.provision(thread, choice.provider, choice.model, effort)
     }
 
-    /// The pre-lock swap `set_provider` and `retune` share: spawn the new
-    /// Session first, persist the header, then replace everything the old
-    /// Session owned. Nothing operator-authored exists yet, so the
-    /// Transcript starts over.
     fn provision(
         &mut self,
         thread: ThreadId,
@@ -831,131 +884,153 @@ impl Cockpit {
         model: Option<String>,
         effort: Option<String>,
     ) -> Result<(), ProvisionError> {
-        let state = self.threads.get(&thread).expect("checked by the caller");
+        self.replace_session(thread, provider, model, effort, ReplacementKind::Fresh)
+    }
+
+    fn hand_over(
+        &mut self,
+        thread: ThreadId,
+        choice: ProviderChoice,
+    ) -> Result<(), ProvisionError> {
+        self.replace_session(
+            thread,
+            choice.provider,
+            choice.model,
+            None,
+            ReplacementKind::Handover,
+        )
+    }
+
+    /// The old Session and durable choices stay authoritative until startup
+    /// succeeds. All replacement paths share this transaction.
+    fn replace_session(
+        &mut self,
+        thread: ThreadId,
+        provider: Provider,
+        model: Option<String>,
+        effort: Option<String>,
+        kind: ReplacementKind,
+    ) -> Result<(), ProvisionError> {
+        let state = self.threads.get(&thread).expect("checked by caller");
+        if (state.busy && !matches!(kind, ReplacementKind::Fresh))
+            || state.replacement.is_some()
+            || self.bootstraps.contains_key(&thread)
+        {
+            return Err(ProvisionError::Busy);
+        }
         let cwd = workspace::effective_cwd(
             state.session_project_root.as_deref(),
             state.workspace.as_ref(),
-        )
-        .map(Path::to_path_buf);
-        // No resume: pre-lock there is no conversation for the new
-        // provider to reload, and the old provider's id means nothing to it.
+        );
+        let resume = match kind {
+            ReplacementKind::Retune => Some(state.resume.as_deref().ok_or(ProvisionError::Locked)?),
+            _ => None,
+        };
         let session = self
             .spawner
-            .spawn(SpawnRequest {
+            .start(SpawnRequest {
                 provider,
                 model: model.as_deref(),
                 effort: effort.as_deref(),
-                resume: None,
-                cwd: cwd.as_deref(),
+                resume,
+                cwd,
                 name: state.title.as_deref(),
             })
             .map_err(ProvisionError::Spawn)?;
-        let state = self.threads.get_mut(&thread).expect("checked above");
-        // Durable before the swap: on a refused rewrite the new Session is
-        // dropped and the old one keeps serving under the old header.
-        self.store
-            .set_provider(
-                thread,
-                provider,
-                model.clone(),
-                effort.clone(),
-                Some(&mut state.writer),
+        let replacement = Replacement {
+            session,
+            provider,
+            model,
+            effort,
+            kind,
+        };
+        if replacement.session.is_starting() {
+            self.threads.get_mut(&thread).expect("checked").replacement = Some(replacement);
+            Ok(())
+        } else {
+            self.commit_replacement(thread, replacement)
+        }
+    }
+
+    fn commit_replacement(
+        &mut self,
+        thread: ThreadId,
+        replacement: Replacement,
+    ) -> Result<(), ProvisionError> {
+        let Replacement {
+            session,
+            provider,
+            model,
+            effort,
+            kind,
+        } = replacement;
+        let state = self.threads.get_mut(&thread).expect("checked");
+        let handover = if matches!(kind, ReplacementKind::Handover) {
+            Some(
+                self.store
+                    .hand_over(thread, provider, model.clone(), &mut state.writer)
+                    .map_err(ProvisionError::Store)?,
             )
-            .map_err(ProvisionError::Store)?;
-        // The swap. Session-scoped state dies with the old Session; the
-        // fresh Transcript drops its Init, so the footer relabels only when
-        // the new Provider speaks. A queued prompt is the operator's own
-        // and stays held.
-        let (lexer, highlights) = Lexer::new();
-        state.transcript = Transcript::new(std::sync::Arc::new(lexer));
-        state.highlights = highlights;
+        } else {
+            self.store
+                .set_provider(
+                    thread,
+                    provider,
+                    model.clone(),
+                    effort.clone(),
+                    Some(&mut state.writer),
+                )
+                .map_err(ProvisionError::Store)?;
+            None
+        };
+        match kind {
+            ReplacementKind::Fresh => {
+                let (lexer, highlights) = Lexer::new();
+                state.transcript = Transcript::new(std::sync::Arc::new(lexer));
+                state.highlights = highlights;
+                state.resume = None;
+                state.carry = None;
+                state.timings.clear();
+            }
+            ReplacementKind::Handover => {
+                let handover = handover.expect("committed with header");
+                state.carry = Some(carry_digest(handover.from, &handover.exchanges));
+                state.resume = None;
+                state
+                    .transcript
+                    .apply(Input::Notice(crate::store::handover_notice(
+                        provider,
+                        model.as_deref(),
+                    )));
+            }
+            ReplacementKind::Retune => {
+                if state.model != model {
+                    let label = crate::providers::models::label(
+                        model.as_deref().unwrap_or("default"),
+                        &state.models,
+                    );
+                    state
+                        .transcript
+                        .apply(Input::Notice(format!("model changed to {label}")));
+                }
+                if state.effort != effort {
+                    state.transcript.apply(Input::Notice(format!(
+                        "effort changed to {}",
+                        effort.as_deref().unwrap_or("default")
+                    )));
+                }
+            }
+        }
         state.session = Some(session);
         state.provider = provider;
         state.model = model;
         state.effort = effort;
         state.pending = None;
         state.busy = false;
-        state.resume = None;
-        state.preface_pending = true;
-        state.carry = None;
-        state.commands.clear();
-        state.models.clear();
-        state.permission_mode = None;
-        state.timings.clear();
-        Ok(())
-    }
-
-    /// The post-lock half of `set_provider`: a live, spoken-in Thread moves
-    /// to another Provider with its conversation handed over as context.
-    fn hand_over(
-        &mut self,
-        thread: ThreadId,
-        choice: ProviderChoice,
-    ) -> Result<(), ProvisionError> {
-        let state = self.threads.get(&thread).expect("checked by the caller");
-        if state.busy {
-            return Err(ProvisionError::Busy);
-        }
-        let cwd = workspace::effective_cwd(
-            state.session_project_root.as_deref(),
-            state.workspace.as_ref(),
-        )
-        .map(Path::to_path_buf);
-        let session = self
-            .spawner
-            .spawn(SpawnRequest {
-                provider: choice.provider,
-                model: choice.model.as_deref(),
-                effort: None,
-                resume: None,
-                cwd: cwd.as_deref(),
-                name: state.title.as_deref(),
-            })
-            .map_err(ProvisionError::Spawn)?;
-        let from = state.provider;
-        let state = self.threads.get_mut(&thread).expect("checked above");
-        // The handover goes into the log before the header changes, so the
-        // rewrite carries it and a crash between the two still leaves a
-        // log whose last Init is marked as the old provider's.
-        state
-            .writer
-            .record_handover(from, choice.provider, choice.model.clone())
-            .map_err(|e| ProvisionError::Store(LoadError::Io(e)))?;
-        self.store
-            .set_provider(
-                thread,
-                choice.provider,
-                choice.model.clone(),
-                None,
-                Some(&mut state.writer),
-            )
-            .map_err(ProvisionError::Store)?;
-        // The digest reads the log, not the Transcript: the Transcript
-        // shows a bounded tail, the log has the whole conversation.
-        let handover = self
-            .store
-            .load(thread)
-            .map_err(ProvisionError::Store)?
-            .last_handover()
-            .expect("just recorded");
-        state.carry = Some(carry_digest(handover.from, &handover.exchanges));
-        state.session = Some(session);
-        state.provider = choice.provider;
-        state.model = choice.model.clone();
-        state.effort = None;
-        state.pending = None;
-        state.busy = false;
-        state.resume = None;
         state.preface_pending = true;
         state.commands.clear();
         state.models.clear();
         state.permission_mode = None;
-        state
-            .transcript
-            .apply(Input::Notice(crate::store::handover_notice(
-                choice.provider,
-                choice.model.as_deref(),
-            )));
         Ok(())
     }
 
@@ -972,6 +1047,9 @@ impl Cockpit {
     /// legacy unregistered worktree binding is removed, and then only when
     /// clean (`git status` defines clean); its branch is never deleted.
     pub fn delete(&mut self, thread: ThreadId) -> Result<(), DeleteError> {
+        if self.bootstraps.contains_key(&thread) {
+            return self.park(thread).map_err(DeleteError::Io);
+        }
         let snapshot = self.store.load(thread).map_err(DeleteError::Load)?;
         let groups_before = self.groups.clone();
         let grouped = self.groups.of(thread).is_some();
@@ -1027,11 +1105,24 @@ impl Cockpit {
     /// Close a Pane: the Session ends, the log is flushed, and the Thread
     /// keeps nothing in memory until it is opened again.
     pub fn park(&mut self, thread: ThreadId) -> io::Result<()> {
+        if let Some(pending) = self.bootstraps.remove(&thread) {
+            self.rollback_bootstrap(thread)?;
+            self.bootstrap_results.push(BootstrapResult {
+                draft: pending.draft,
+                prompt: pending.prompt,
+                result: Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "Session startup cancelled",
+                )),
+            });
+            return Ok(());
+        }
         let Some(mut state) = self.threads.remove(&thread) else {
             return Ok(());
         };
         self.roster.remove_thread(thread);
         state.session = None;
+        state.replacement = None;
         #[cfg(test)]
         if self.refuse_park.contains(&thread) {
             return Err(io::Error::other("stub refused to park"));
@@ -1060,7 +1151,7 @@ impl Cockpit {
         let title = snapshot.title().map(str::to_string);
         let session = self
             .spawner
-            .spawn(SpawnRequest {
+            .start(SpawnRequest {
                 provider,
                 model: model.as_deref(),
                 effort: effort.as_deref(),
@@ -1159,6 +1250,9 @@ impl Cockpit {
     /// root, a failed watchdog restart — respawns here through the same
     /// resume path a revive uses, which re-arms the preface.
     pub fn send(&mut self, thread: ThreadId, text: String) {
+        if self.bootstraps.contains_key(&thread) {
+            return;
+        }
         let Some(state) = self.threads.get_mut(&thread) else {
             return;
         };
@@ -1177,7 +1271,7 @@ impl Cockpit {
                 state.workspace.as_ref(),
             )
             .map(Path::to_path_buf);
-            match self.spawner.spawn(SpawnRequest {
+            match self.spawner.start(SpawnRequest {
                 provider: state.provider,
                 model: state.model.as_deref(),
                 effort: state.effort.as_deref(),
@@ -1197,7 +1291,17 @@ impl Cockpit {
                 }
             }
         }
-        if let Err(error) = deliver(state, text) {
+        if state.replacement.is_some()
+            || state
+                .session
+                .as_ref()
+                .is_some_and(SessionLifecycle::is_starting)
+        {
+            state.queued = Some(text);
+            return;
+        }
+        if let Err(error) = deliver(state, text.clone()) {
+            state.queued = Some(text);
             state
                 .transcript
                 .apply(Input::Notice(format!("send failed: {error}")));
@@ -1206,10 +1310,26 @@ impl Cockpit {
 
     /// Stop the running turn.
     pub fn interrupt(&mut self, thread: ThreadId) {
+        if self.bootstraps.contains_key(&thread) {
+            let _ = self.park(thread);
+            return;
+        }
         let Some(state) = self.threads.get_mut(&thread) else {
             return;
         };
-        if let Some(session) = &mut state.session {
+        if state
+            .session
+            .as_ref()
+            .is_some_and(SessionLifecycle::is_starting)
+        {
+            state.session = None;
+        }
+        state.replacement = None;
+        if let Some(session) = state
+            .session
+            .as_mut()
+            .and_then(SessionLifecycle::session_mut)
+        {
             if let Err(e) = session.interrupt() {
                 state
                     .transcript
@@ -1227,7 +1347,11 @@ impl Cockpit {
         let Some(state) = self.threads.get_mut(&thread) else {
             return;
         };
-        if let Some(session) = &mut state.session {
+        if let Some(session) = state
+            .session
+            .as_mut()
+            .and_then(SessionLifecycle::session_mut)
+        {
             if let Err(e) = session.respond_to_decision(&decision.id, answer) {
                 state
                     .transcript
@@ -1348,19 +1472,158 @@ impl Cockpit {
             // The live Session's own list follows, where its wire allows;
             // a refusal is cosmetic and the next spawn carries the title
             // anyway.
-            if let Some(session) = &mut state.session {
+            if let Some(session) = state
+                .session
+                .as_mut()
+                .and_then(SessionLifecycle::session_mut)
+            {
                 let _ = session.set_name(title);
             }
         }
         Ok(())
     }
 
+    /// Settle startup transactions before reading provider events. Background
+    /// workers only construct Sessions; all delivery and durable changes
+    /// happen here, under the same owner as synchronous adapters.
+    fn advance_startups(&mut self) -> Vec<PaneUpdate> {
+        let mut changed = Vec::new();
+        let ids: Vec<_> = self.threads.keys().copied().collect();
+        for id in ids {
+            let mut release = false;
+            let replacement = self
+                .threads
+                .get_mut(&id)
+                .and_then(|state| state.replacement.take());
+            if let Some(mut replacement) = replacement {
+                let result = match replacement.session.poll() {
+                    Ok(false) => {
+                        self.threads.get_mut(&id).expect("exists").replacement = Some(replacement);
+                        continue;
+                    }
+                    Ok(true) => {
+                        if let (Some(title), Some(session)) = (
+                            self.threads[&id].title.as_deref(),
+                            replacement.session.session_mut(),
+                        ) {
+                            let _ = session.set_name(title);
+                        }
+                        self.commit_replacement(id, replacement)
+                    }
+                    Err(error) => Err(ProvisionError::Spawn(error)),
+                };
+                match result {
+                    Ok(()) => release = true,
+                    Err(error) => {
+                        self.threads
+                            .get_mut(&id)
+                            .expect("exists")
+                            .transcript
+                            .apply(Input::Notice(format!("Session change failed: {error}")));
+                    }
+                }
+                changed.push(id);
+            }
+            let state = self.threads.get_mut(&id).expect("exists");
+            let starting = state
+                .session
+                .as_ref()
+                .is_some_and(SessionLifecycle::is_starting);
+            if starting {
+                let result = state.session.as_mut().expect("exists").poll();
+                if matches!(result, Ok(false)) {
+                    continue;
+                }
+                if let Some(pending) = self.bootstraps.remove(&id) {
+                    let delivered = result.and_then(|_| self.finish_bootstrap(id, &pending));
+                    let result = match delivered {
+                        Ok(()) => Ok(match pending.draft {
+                            Some(draft) => self.complete_draft(draft, id),
+                            None => Bootstrapped {
+                                thread: id,
+                                refused_leave: None,
+                                applied_leave: false,
+                            },
+                        }),
+                        Err(error) => match self.rollback_bootstrap(id) {
+                            Ok(()) => Err(error),
+                            Err(rollback) => Err(io::Error::other(format!(
+                                "{error}; rollback failed: {rollback}"
+                            ))),
+                        },
+                    };
+                    self.bootstrap_results.push(BootstrapResult {
+                        draft: pending.draft,
+                        prompt: pending.prompt,
+                        result,
+                    });
+                    changed.push(id);
+                    continue;
+                }
+                let state = self.threads.get_mut(&id).expect("exists");
+                match result {
+                    Ok(_) => {
+                        if let (Some(title), Some(session)) = (
+                            &state.title,
+                            state
+                                .session
+                                .as_mut()
+                                .and_then(SessionLifecycle::session_mut),
+                        ) {
+                            let _ = session.set_name(title);
+                        }
+                        release = true;
+                    }
+                    Err(error) => {
+                        state.session = None;
+                        state
+                            .transcript
+                            .apply(Input::Notice(format!("could not start: {error}")));
+                    }
+                }
+                changed.push(id);
+            }
+            if release {
+                let state = self.threads.get_mut(&id).expect("exists");
+                if let Some(text) = state.queued.take() {
+                    if let Err(error) = deliver(state, text.clone()) {
+                        state.queued = Some(text);
+                        state
+                            .transcript
+                            .apply(Input::Notice(format!("send failed: {error}")));
+                    }
+                }
+            }
+        }
+        changed.sort_unstable();
+        changed.dedup();
+        changed
+            .into_iter()
+            .map(|thread| PaneUpdate {
+                thread,
+                dirty: self
+                    .threads
+                    .get(&thread)
+                    .map(|state| {
+                        state
+                            .transcript
+                            .blocks()
+                            .iter()
+                            .map(|block| block.id)
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                evicted: Vec::new(),
+            })
+            .collect()
+    }
+
     /// One frame: drain every live Session, fold what arrived, and write it
     /// down. What comes back is only the Panes that actually changed.
     pub fn pump(&mut self) -> Vec<PaneUpdate> {
-        let mut frame = Vec::new();
+        let mut frame = self.advance_startups();
         for (id, thread) in &mut self.threads {
-            let Some(session) = &thread.session else {
+            let Some(session) = thread.session.as_ref().and_then(SessionLifecycle::session) else {
                 continue;
             };
             let events: Vec<SessionEvent> = session.events().try_iter().collect();
@@ -1391,11 +1654,27 @@ impl Cockpit {
                 update.dirty.extend(thread.transcript.apply(answer).dirty);
             }
             if let Some(held) = release {
-                if thread.session.is_some() {
+                if thread.replacement.is_some()
+                    || thread
+                        .session
+                        .as_ref()
+                        .is_some_and(SessionLifecycle::is_starting)
+                {
+                    thread.queued = Some(held);
+                } else if thread.session.is_some() {
                     // Through `deliver`, like any prompt: the preface and
                     // the vanished-root guard apply to held prompts too.
-                    if let Ok(sent) = deliver(thread, held) {
-                        update.dirty.extend(sent.dirty);
+                    match deliver(thread, held.clone()) {
+                        Ok(sent) => update.dirty.extend(sent.dirty),
+                        Err(error) => {
+                            thread.queued = Some(held);
+                            update.dirty.extend(
+                                thread
+                                    .transcript
+                                    .apply(Input::Notice(format!("send failed: {error}")))
+                                    .dirty,
+                            );
+                        }
                     }
                 }
             }
@@ -1532,70 +1811,15 @@ impl Cockpit {
                 .map_err(ProvisionError::Store);
         };
         if state.model == model && state.effort == effort {
+            self.threads.get_mut(&thread).expect("checked").replacement = None;
             return Ok(());
         }
         if !state.first_prompt_sent {
             let provider = state.provider;
             return self.provision(thread, provider, model, effort);
         }
-        if state.busy {
-            return Err(ProvisionError::Busy);
-        }
-        // The conversation must be resumable for the new Session to carry
-        // it: a Session that never named itself has nothing to resume.
-        let Some(resume) = state.resume.clone() else {
-            return Err(ProvisionError::Locked);
-        };
-        let cwd = workspace::effective_cwd(
-            state.session_project_root.as_deref(),
-            state.workspace.as_ref(),
-        )
-        .map(Path::to_path_buf);
-        let session = self
-            .spawner
-            .spawn(SpawnRequest {
-                provider: state.provider,
-                model: model.as_deref(),
-                effort: effort.as_deref(),
-                resume: Some(&resume),
-                cwd: cwd.as_deref(),
-                name: state.title.as_deref(),
-            })
-            .map_err(ProvisionError::Spawn)?;
-        let state = self.threads.get_mut(&thread).expect("checked above");
-        self.store
-            .set_provider(
-                thread,
-                state.provider,
-                model.clone(),
-                effort.clone(),
-                Some(&mut state.writer),
-            )
-            .map_err(ProvisionError::Store)?;
-        // The old Session goes as the new one arrives; the transcript is
-        // the conversation and stays. The new process has not been told the
-        // workspace yet, so the next prompt carries the preface again.
-        state.session = Some(session);
-        state.preface_pending = true;
-        state.pending = None;
-        if state.model != model {
-            let label = crate::providers::models::label(
-                model.as_deref().unwrap_or("default"),
-                &state.models,
-            );
-            state
-                .transcript
-                .apply(Input::Notice(format!("model changed to {label}")));
-        }
-        if state.effort != effort {
-            state.transcript.apply(Input::Notice(format!(
-                "effort changed to {}",
-                effort.as_deref().unwrap_or("default")
-            )));
-        }
-        state.model = model;
-        state.effort = effort;
-        Ok(())
+        let provider = state.provider;
+        self.replace_session(thread, provider, model, effort, ReplacementKind::Retune)
     }
 
     /// The next Thread waiting on the operator, after `from`, wrapping. One
@@ -1669,8 +1893,19 @@ impl<'a> ThreadView<'a> {
     }
 
     /// Is a turn running? A prompt written now has to wait for it.
+    /// Startup/replacement is pending; its choices and first prompt have
+    /// not committed yet. Ready adapters never enter this state.
+    pub fn starting(&self) -> bool {
+        self.state.replacement.is_some()
+            || self
+                .state
+                .session
+                .as_ref()
+                .is_some_and(SessionLifecycle::is_starting)
+    }
+
     pub fn busy(&self) -> bool {
-        self.state.busy
+        self.state.busy || self.starting()
     }
 
     /// The checkout this Thread works in — what the Pane's chrome shows.
@@ -1751,6 +1986,8 @@ pub struct Bootstrapped {
     /// The deferred leave the Groups module refused, if it did — the Thread
     /// is live and in its Group regardless.
     pub refused_leave: Option<ApplyError>,
+    /// A deferred Group leave applied with this first send.
+    pub applied_leave: bool,
 }
 
 /// A session file adopted through `adopt_into` (#11): durable the moment
@@ -1897,7 +2134,8 @@ impl Cockpit {
     /// draft was holding open (see `close`) applies now, and only now: the
     /// new member is already in, so the pair never dissolves. On any
     /// failure nothing is half-born: no Thread, the Pane stays draft, and
-    /// the prompt stays with the caller.
+    /// the prompt stays with the caller. `None` means startup is pending;
+    /// the draft stays in place until `take_bootstrap_results` reports it.
     pub fn bootstrap_draft(
         &mut self,
         draft: DraftId,
@@ -1905,7 +2143,10 @@ impl Cockpit {
         workspace: WorkspaceChoice,
         prompt: &str,
         effort: Option<String>,
-    ) -> io::Result<Bootstrapped> {
+    ) -> io::Result<Option<Bootstrapped>> {
+        if self.draft_starting(draft) {
+            return Ok(None);
+        }
         let scope = self
             .roster
             .draft_scope(draft)
@@ -1916,15 +2157,54 @@ impl Cockpit {
             }
             None => self.bootstrap_with(choice, workspace, prompt, effort)?,
         };
+        if let Some(pending) = self.bootstraps.get_mut(&thread) {
+            pending.draft = Some(draft);
+            self.roster.remove_thread(thread);
+            return Ok(None);
+        }
+        Ok(Some(self.complete_draft(draft, thread)))
+    }
+
+    fn complete_draft(&mut self, draft: DraftId, thread: ThreadId) -> Bootstrapped {
+        let scope = self
+            .roster
+            .draft_scope(draft)
+            .expect("draft retained during startup");
         self.roster.draft_became(draft, thread);
         let refused_leave = scope.pending_leave.and_then(|leaving| {
             self.apply_group(GroupChange::Leave { thread: leaving })
                 .err()
         });
-        Ok(Bootstrapped {
+        Bootstrapped {
             thread,
+            applied_leave: scope.pending_leave.is_some() && refused_leave.is_none(),
             refused_leave,
-        })
+        }
+    }
+
+    /// Cancel a submitted startup before changing a draft's choices. The
+    /// draft slot and Composer remain; cancellation emits no completion.
+    pub fn cancel_draft_start(&mut self, draft: DraftId) -> io::Result<bool> {
+        let Some(thread) = self
+            .bootstraps
+            .iter()
+            .find_map(|(id, pending)| (pending.draft == Some(draft)).then_some(*id))
+        else {
+            return Ok(false);
+        };
+        self.bootstraps.remove(&thread);
+        self.rollback_bootstrap(thread)?;
+        Ok(true)
+    }
+
+    pub fn draft_starting(&self, draft: DraftId) -> bool {
+        self.bootstraps
+            .values()
+            .any(|pending| pending.draft == Some(draft))
+    }
+
+    pub fn take_bootstrap_results(&mut self) -> Vec<BootstrapResult> {
+        std::mem::take(&mut self.bootstrap_results)
     }
 
     /// Discard a draft Pane (#29): nothing durable dies with it. A leave it
@@ -1932,6 +2212,8 @@ impl Cockpit {
     /// Thread, so the pair dissolves exactly as closing that Pane would
     /// have done without a draft in the way.
     pub fn discard_draft(&mut self, draft: DraftId) -> Result<(), ApplyError> {
+        self.cancel_draft_start(draft)
+            .map_err(|error| ApplyError::Io(error.to_string()))?;
         let Some(scope) = self.roster.remove_draft(draft) else {
             return Ok(());
         };
@@ -2073,6 +2355,8 @@ impl Cockpit {
             Ok(()) => {
                 match from {
                     PaneIdentity::Draft(draft) => {
+                        self.cancel_draft_start(draft)
+                            .map_err(crate::import::ImportError::Io)?;
                         self.roster.draft_became(draft, thread);
                     }
                     PaneIdentity::Thread(blank) => {
@@ -2167,7 +2451,11 @@ fn deliver(state: &mut Thread, text: String) -> io::Result<Update> {
     if let Some(refusal) = vanished_root_refusal(state) {
         return Err(io::Error::new(io::ErrorKind::NotFound, refusal));
     }
-    let Some(session) = &mut state.session else {
+    let Some(session) = state
+        .session
+        .as_mut()
+        .and_then(SessionLifecycle::session_mut)
+    else {
         return Err(io::Error::new(io::ErrorKind::NotConnected, "no Session"));
     };
     let prefaced = match (&state.session_project_root, &state.workspace) {
@@ -5105,6 +5393,7 @@ mod tests {
                 "join",
                 None,
             )
+            .unwrap()
             .unwrap();
         assert!(done.refused_leave.is_none());
         assert_eq!(
@@ -5271,3 +5560,7 @@ mod tests {
         assert_eq!(cockpit.roster().focused_thread(), Some(threads[2]));
     }
 }
+
+#[cfg(test)]
+#[path = "cockpit/lifecycle_tests.rs"]
+mod lifecycle_tests;
