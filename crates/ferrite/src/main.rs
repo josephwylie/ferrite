@@ -12,6 +12,7 @@ mod keymap;
 mod line;
 mod menu;
 mod nav;
+mod notifications;
 mod pane;
 mod pointer;
 mod prefs;
@@ -342,7 +343,7 @@ fn load_bindings(platform: keymap::Platform, cx: &mut App) -> Vec<KeyBinding> {
 fn app_menus() -> Vec<Menu> {
     use cockpit::{
         CloseThread, NewThread, NewWorktreeThread, NextDecision, NextPane, OpenSettings,
-        PreviousPane, ReopenThread, ToggleFullscreen, ToggleNav,
+        PreviousPane, ReopenThread, ToggleFullscreen, ToggleNav, ToggleNotifications,
     };
     vec![
         Menu {
@@ -385,6 +386,7 @@ fn app_menus() -> Vec<Menu> {
             name: "View".into(),
             items: vec![
                 MenuItem::action("Toggle Sidebar", ToggleNav),
+                MenuItem::action("Notifications", ToggleNotifications),
                 MenuItem::action("Toggle Pane Fullscreen", ToggleFullscreen),
                 MenuItem::separator(),
                 MenuItem::action("Next Pane", NextPane),

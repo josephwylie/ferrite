@@ -122,6 +122,14 @@ Claude Code's own UI sends.
 The checkout a Thread works in: a per-Thread worktree or the main checkout —
 chosen at Thread creation. Nothing else in v1.
 
+**Notice**
+Ferrite's own record that a Thread's Main finished for good: its turn ended
+and no Subagent is still working, so the operator is wanted back. Unread
+until they land on the Thread; shown by the bell, a toast, and the Pane's
+pulsing ring. A Subagent finishing, an interrupt, or a held prompt going
+out is never a Notice.
+_Avoid_: alert, ping, notification (the bell's whole surface is that).
+
 **Draft**
 A Pane's pending Provider, Effort, Project, and Workspace choices before its
 first prompt creates a Thread. It has no durable history or Session.

@@ -50,6 +50,16 @@ impl Decoder {
             return Vec::new();
         };
         let mut events = Vec::new();
+        // The CLI announces `init` at the head of every turn, the first one
+        // at Session start. A repeat is therefore the head of a turn — an
+        // operator's, or an autonomous one a task notification started —
+        // and the earliest fact that Main is at work, well before the API
+        // has answered. It is what keeps a Main between its own result
+        // and its resume from reading as finished.
+        let turn_head = value["type"] == "system"
+            && value["subtype"] == "init"
+            && !self.root.is_empty()
+            && string(&value, "session_id") == Some(self.root.as_str());
         if let Some(root) = string(&value, "session_id") {
             if value["type"] == "system"
                 && value["subtype"] == "init"
@@ -147,6 +157,14 @@ impl Decoder {
             _ => {
                 if let Some(event) = wire::parse_value(&value) {
                     events.push(event);
+                }
+                if turn_head {
+                    events.push(SessionEvent::Progress {
+                        event: crate::progress::ProgressEvent::Phase {
+                            phase: crate::progress::Phase::Working,
+                            detail: String::new(),
+                        },
+                    });
                 }
                 self.progress(&value, &mut events);
             }

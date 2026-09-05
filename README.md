@@ -80,6 +80,7 @@ Shortcuts are spelled with `cmd` below; on Windows the same shortcuts use
   sends. While a question is up the letters only type.
 - `cmd-]` / `cmd-[` — next / previous Pane; `cmd-d` — jump to the next Decision
 - `cmd-f` — the focused Pane fullscreen, and back; `cmd-b` — fold the nav
+- `cmd-i` — the bell: every Thread that finished while you were elsewhere
 - `cmd-w` — park a Thread; `cmd-o` — revive the newest parked one
 - `cmd-,` — Settings: the Provider, model and effort new Threads start on,
   Claude's permission mode, Codex's approval policy and sandbox, naming and
@@ -121,6 +122,14 @@ With the pointer:
   in the background (haiku, low effort, one turn, no tools). Your own
   rename always wins. The title reaches the Session too: Codex's thread
   name, Claude's `--name`.
+- When a Thread's agent **finishes** — its turn is over and it is not
+  waiting on subagents of its own — the **bell** at the top of the nav
+  counts it, a toast appears at the board's top-right, and if the Pane is
+  on screen its focus ring pulses. Click either, or the bell's row, to land
+  on that Pane; landing on it (or focusing it any other way) reads the
+  Notice and stops the pulse. Subagents finishing never notify; neither
+  does an interrupt, or a turn end that sends a prompt you had queued.
+  Toasts are in-app and silent.
 - Every nav row carries a **status dot**: green working, amber waiting on
   you, red closed, dim idle, hollow parked.
 - In a **Group**, drag the seam between two Panes to resize them, and

@@ -299,6 +299,11 @@ pub struct ActivityUpdate {
     pub blocks: Vec<(Subject, transcript::Update)>,
     pub accepted: Vec<ActivityEvent>,
     pub main_turn_ended: bool,
+    /// A live Main turn ended this frame and settled Main — the root
+    /// signal, or an autonomous turn's end that was not undone by a
+    /// foreground operator turn. `main_turn_ended` is the narrower fact
+    /// that releases operator input; this one is what Notifications reads.
+    pub main_settled: bool,
     pub attention_changed: bool,
     pub order_changed: bool,
     pub rejected: bool,
@@ -964,6 +969,7 @@ impl Activity {
         let mut update = ActivityUpdate {
             changed: vec![Subject::Main],
             main_turn_ended: live && ended,
+            main_settled: live && ended,
             ..ActivityUpdate::default()
         };
         if live && ended {
@@ -1170,6 +1176,7 @@ impl Activity {
                 self.pending = pending;
                 if let Some(runtime) = runtime {
                     runtime.restore(&mut self.main);
+                    update.main_settled = false;
                 }
                 update.attention_changed = false;
             }
@@ -1358,6 +1365,7 @@ impl Activity {
             changed: vec![subject.clone()],
             blocks: vec![(subject.clone(), blocks)],
             main_turn_ended: live && root_signal && ended && subject == Subject::Main,
+            main_settled: live && ended && subject == Subject::Main,
             ..ActivityUpdate::default()
         };
         if live && ended {
@@ -1719,6 +1727,16 @@ impl<'a> ActivityView<'a> {
                 state.fresh && state.status == AgentStatus::Working
             })
             .count()
+    }
+    /// Is an operator prompt out and unanswered — from the live prompt
+    /// until the root turn end that answers it? True before the provider
+    /// has streamed a byte, which `SubjectView::busy` is not.
+    pub fn main_operator_turn(self) -> bool {
+        self.activity.main_operator_turn
+    }
+    /// Is a live Session feeding this Activity?
+    pub fn connected(self) -> bool {
+        self.activity.connected
     }
 }
 

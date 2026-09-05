@@ -18,6 +18,7 @@ use crate::activity::{
     Subject,
 };
 use crate::groups::{Applied, ApplyError, Drag, DropTarget, GroupChange, GroupId, Groups, Plan};
+use crate::notifications::{Frame, NoticeId, Notifications};
 pub use crate::prompt_history::HistoryDirection;
 use crate::prompt_history::PromptHistory;
 use crate::providers::Session;
@@ -482,6 +483,9 @@ pub struct Cockpit {
     bootstraps: HashMap<ThreadId, PendingBootstrap>,
     bootstrap_results: Vec<BootstrapResult>,
     history_loader: Option<history::Loader>,
+    /// What every Thread has to tell the operator once they look away:
+    /// the Notices, and the per-Thread deferrals behind them.
+    notifications: Notifications,
     sampler: Option<Box<dyn RssSampler>>,
     /// Bytes one Session may hold before the watchdog replaces it.
     limit: u64,
@@ -510,6 +514,7 @@ impl Cockpit {
             bootstraps: HashMap::new(),
             bootstrap_results: Vec::new(),
             history_loader: None,
+            notifications: Notifications::default(),
             sampler: None,
             limit: u64::MAX,
             #[cfg(test)]
@@ -1184,6 +1189,7 @@ impl Cockpit {
             }
             self.threads.remove(&thread);
             self.roster.remove_thread(thread);
+            self.notifications.forget(thread);
             self.store.delete(thread).map_err(DeleteError::Io)
         })();
 
@@ -1807,6 +1813,8 @@ impl Cockpit {
                 continue;
             }
             let mut closed = false;
+            let mut settled = false;
+            let mut resumed = false;
             for _ in 0..256 {
                 if thread.store_error.is_some() || thread.history_backpressure() {
                     break;
@@ -1866,6 +1874,7 @@ impl Cockpit {
                     }),
                 };
                 thread.queued_ready |= applied.main_turn_ended;
+                settled |= applied.main_settled;
                 if matches!(&event, SessionEvent::Activity(_)) {
                     for accepted in &applied.accepted {
                         if !matches!(accepted, ActivityEvent::Status { .. })
@@ -1924,6 +1933,7 @@ impl Cockpit {
                             update.dirty.extend(sent.dirty);
                             update.evicted.extend(sent.evicted);
                             update.activity_changed = true;
+                            resumed = true;
                         }
                         Err(error) => {
                             thread.queued = Some(held);
@@ -1938,10 +1948,26 @@ impl Cockpit {
                     thread.queued_ready = false;
                 }
             }
+            // Every frame, every Thread: the deferral's grace is a clock
+            // only the pump ticks.
+            let born = self.notifications.observe(
+                *id,
+                Frame {
+                    activity: thread.activity.view(),
+                    settled,
+                    resumed,
+                },
+                Instant::now(),
+            );
+            update.activity_changed |= born.is_some();
             if update.activity_changed || !update.dirty.is_empty() || !update.subjects.is_empty() {
                 frame.push(update);
             }
         }
+        // The operator is on the focused Pane; whatever it had to say is
+        // seen. Here rather than only at the focus doors, so a focus that
+        // moved by a close or a Group entry reads the same.
+        self.acknowledge_focus();
         for (thread, subject) in history_reloads {
             if let Err(error) = self.ensure_subject_history(thread, &subject) {
                 if let (Some(state), Subject::Subagent(key)) =
@@ -2202,6 +2228,47 @@ impl Cockpit {
     }
 }
 
+impl Cockpit {
+    /// Every Notice, and each Thread's deferral behind it — read-only.
+    pub fn notifications(&self) -> &Notifications {
+        &self.notifications
+    }
+
+    /// How long Main may sit idle after its last child settles before a
+    /// deferred finish is called: a provider that never resumes Main on
+    /// its own is given this much to prove it. Tests set it to zero.
+    pub fn set_notification_grace(&mut self, grace: Duration) {
+        self.notifications = Notifications::with_grace(grace);
+    }
+
+    /// The operator opened a Notice — from a toast or the bell: it is
+    /// read, and they land on its Thread's Pane in the view that shows
+    /// it, reviving a parked one. The Thread landed on, or None when it
+    /// is gone.
+    pub fn open_notice(&mut self, id: NoticeId) -> Option<ThreadId> {
+        let thread = self.notifications.open(id)?;
+        if !self.focus_thread(thread) {
+            self.reopen(thread).ok()?;
+        }
+        self.acknowledge_focus();
+        Some(thread)
+    }
+
+    pub fn dismiss_notice(&mut self, id: NoticeId) -> bool {
+        self.notifications.dismiss(id)
+    }
+
+    pub fn clear_notices(&mut self) {
+        self.notifications.clear();
+    }
+
+    fn acknowledge_focus(&mut self) {
+        if let Some(thread) = self.roster.focused_thread() {
+            self.notifications.acknowledge(thread);
+        }
+    }
+}
+
 /// An open Thread's facts, read through `Cockpit::thread`. Every accessor
 /// hands back a borrow of the Cockpit itself (`'a`), so a caller keeps the
 /// facts it read after the handle is gone.
@@ -2395,7 +2462,9 @@ impl Cockpit {
     /// here, so fullscreen re-aims with focus. False for a Pane that is not
     /// open.
     pub fn focus(&mut self, identity: PaneIdentity) -> bool {
-        self.roster.focus(identity)
+        let landed = self.roster.focus(identity);
+        self.acknowledge_focus();
+        landed
     }
 
     /// A running nav row's click (#21): land on that Thread's Pane, in the
@@ -2410,7 +2479,9 @@ impl Cockpit {
                 .of(thread)
                 .map_or(View::Solo, |group| View::Group(group.id)),
         );
-        self.roster.focus(identity)
+        let landed = self.roster.focus(identity);
+        self.acknowledge_focus();
+        landed
     }
 
     /// cmd-] / cmd-[: walk the visible Panes, wrapping.

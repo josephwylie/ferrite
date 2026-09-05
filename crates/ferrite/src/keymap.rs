@@ -186,6 +186,8 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
         (with_primary("b"), "cockpit::ToggleNav", None),
         // The platform's own Settings chord.
         (with_primary(","), "cockpit::OpenSettings", None),
+        // The bell: what finished while the operator looked elsewhere.
+        (with_primary("i"), "cockpit::ToggleNotifications", None),
         // Shift: the same draft, aimed straight at "new worktree" instead
         // of the checkout the operator is sitting in.
         (with_primary("shift-n"), "cockpit::NewWorktreeThread", None),
