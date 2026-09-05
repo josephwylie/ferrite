@@ -420,6 +420,14 @@ pub const USAGE_RING_D: f32 = 14.0;
 #[allow(dead_code)]
 pub const USAGE_RING_R: f32 = 5.4;
 pub const USAGE_RING_W: f32 = 2.0;
+/// The usage meter's detail card: one column of labelled bars, sized so
+/// the three windows read at a glance without the card becoming a panel.
+pub const USAGE_CARD_W: f32 = 216.0;
+pub const USAGE_CARD_PAD: f32 = 10.0;
+/// Between one window's block and the next, and inside one block.
+pub const USAGE_CARD_GAP: f32 = 12.0;
+pub const USAGE_CARD_ROW_GAP: f32 = 5.0;
+pub const USAGE_CARD_BAR_H: f32 = 4.0;
 /// Where a usage bar turns from RUNNING to ATTENTION, and from ATTENTION
 /// to BLOCKED — a fraction of the window, not a count.
 pub const USAGE_TIGHT: f32 = 0.6;

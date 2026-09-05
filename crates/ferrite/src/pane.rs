@@ -2679,7 +2679,11 @@ fn duration_label(elapsed: Duration) -> SharedString {
     }
 }
 
-/// The usage meter's detail card. Counts are reported values, never estimates.
+/// The usage meter's detail card: the meter's own three windows, in the
+/// meter's own order, each a labelled bar over the reading behind it.
+/// Counts are reported values, never estimates — a window the provider has
+/// not reported keeps its empty track and says so, rather than reading as
+/// zero used.
 pub fn context_usage(
     usage: ferrite_core::transcript::Usage,
     limits: ferrite_core::transcript::RateLimits,
@@ -2693,34 +2697,44 @@ pub fn context_usage(
             }
             label.push(digit);
         }
-        format!("{label} tokens")
+        label
     }
     let maximum = usage.context_window.filter(|limit| *limit > 0);
-    let row = |key: &'static str, label: &'static str, count: Option<u64>| {
+    // One 4px bar, full width: the same track and the same status ink as
+    // the meter that opened the card, at a size a card can afford.
+    let bar = |fraction: Option<f32>| {
+        let used = fraction.unwrap_or(0.).clamp(0., 1.);
         div()
-            .id(key)
-            .debug_selector(move || {
-                format!(
-                    "context-usage-{key}-{}",
-                    count.map_or("unknown".into(), |n| n.to_string())
-                )
-            })
-            .flex()
-            .justify_between()
-            .gap(px(12.))
-            .child(div().text_color(rgb(TEXT_MUTED)).child(label))
+            .w_full()
+            .h(px(theme::USAGE_CARD_BAR_H))
+            .rounded(px(theme::USAGE_CARD_BAR_H / 2.))
+            .bg(rgba(METER_OFF))
             .child(
-                div().child(SharedString::from(
-                    count
-                        .map(count_label)
-                        .unwrap_or_else(|| "Not reported".into()),
-                )),
+                div()
+                    .h_full()
+                    .w(relative(used))
+                    .rounded(px(theme::USAGE_CARD_BAR_H / 2.))
+                    .bg(rgb(usage_ink(used))),
             )
     };
-    let limit_row = |key: &'static str,
-                     label: &'static str,
-                     limit: Option<ferrite_core::RateLimitWindow>| {
-        let percent = limit.map(|limit| (limit.used_fraction.clamp(0., 1.) * 100.).round() as u32);
+    // A window's heading: its name at the left, what it reads at the
+    // right — the one line that answers the question at a glance.
+    let heading = |label: &'static str, value: AnyElement| {
+        div()
+            .flex()
+            .items_baseline()
+            .justify_between()
+            .gap(px(12.))
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .text_color(rgb(TEXT_MUTED))
+                    .child(label),
+            )
+            .child(value)
+    };
+    let percent_value = |key: &'static str, fraction: Option<f32>| {
+        let percent = fraction.map(|fraction| (fraction.clamp(0., 1.) * 100.).round() as u32);
         div()
             .id(key)
             .debug_selector(move || {
@@ -2729,34 +2743,78 @@ pub fn context_usage(
                     percent.map_or("unknown".into(), |n| n.to_string())
                 )
             })
-            .flex()
-            .justify_between()
-            .gap(px(12.))
-            .child(div().text_color(rgb(TEXT_MUTED)).child(label))
-            .child(
-                div().child(SharedString::from(
-                    percent
-                        .map(|percent| format!("{percent}% used"))
-                        .unwrap_or_else(|| "Not reported".into()),
-                )),
-            )
+            .flex_shrink_0()
+            .when(percent.is_none(), |value| value.text_color(rgb(TEXT_MUTED)))
+            .child(SharedString::from(
+                percent
+                    .map(|percent| format!("{percent}%"))
+                    .unwrap_or_else(|| "Not reported".into()),
+            ))
     };
+    let count_value = |key: &'static str, count: Option<u64>| {
+        div()
+            .id(key)
+            .debug_selector(move || {
+                format!(
+                    "context-usage-{key}-{}",
+                    count.map_or("unknown".into(), |n| n.to_string())
+                )
+            })
+            .flex_shrink_0()
+            .child(SharedString::from(
+                count
+                    .map(count_label)
+                    .unwrap_or_else(|| "not reported".into()),
+            ))
+    };
+    let window =
+        |label: &'static str, key: &'static str, fraction: Option<f32>, detail: Option<Div>| {
+            let mut block = div()
+                .flex()
+                .flex_col()
+                .gap(px(theme::USAGE_CARD_ROW_GAP))
+                .child(heading(
+                    label,
+                    percent_value(key, fraction).into_any_element(),
+                ))
+                .child(bar(fraction));
+            if let Some(detail) = detail {
+                block = block.child(detail);
+            }
+            block
+        };
+    let context_fraction = maximum.map(|maximum| usage.total_tokens as f32 / maximum as f32);
+    // The counts behind the context bar, in the card's quietest ink: the
+    // bar says how full, this says of what.
+    let counts = div()
+        .flex()
+        .gap(px(4.))
+        .text_color(rgb(TEXT_MUTED))
+        .child(count_value("current", Some(usage.total_tokens)))
+        .child("/")
+        .child(count_value("maximum", maximum))
+        .child("tokens");
     div()
         .flex()
         .flex_col()
-        .gap(px(8.))
-        .p(px(8.))
+        .w(px(theme::USAGE_CARD_W))
+        .gap(px(theme::USAGE_CARD_GAP))
+        .p(px(theme::USAGE_CARD_PAD))
         .text_size(px(theme::FS_MONO))
-        .text_color(rgb(TEXT_STRONG))
-        .child(
-            div()
-                .font_weight(FontWeight::SEMIBOLD)
-                .child("Context window"),
-        )
-        .child(row("current", "Current", Some(usage.total_tokens)))
-        .child(row("maximum", "Maximum", maximum))
-        .child(limit_row("five-hour", "5-hour limit", limits.five_hour))
-        .child(limit_row("weekly", "Weekly limit", limits.weekly))
+        .text_color(rgb(TEXT))
+        .child(window("Context", "context", context_fraction, Some(counts)))
+        .child(window(
+            "5-hour limit",
+            "five-hour",
+            limits.five_hour.map(|limit| limit.used_fraction),
+            None,
+        ))
+        .child(window(
+            "Weekly limit",
+            "weekly",
+            limits.weekly.map(|limit| limit.used_fraction),
+            None,
+        ))
 }
 
 /// A usage bar's ink: the Pane's own status inks, so a budget reads like
