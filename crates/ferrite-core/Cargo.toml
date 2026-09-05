@@ -8,6 +8,7 @@ description = "Ferrite headless core: providers, transcript, store, workspace. N
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+base64 = "0.22"
 
 # An npm-installed provider CLI on Windows is a `.cmd` shim: the Session's
 # child is cmd.exe with the real CLI beneath it, and only a Job Object can

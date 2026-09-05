@@ -642,6 +642,7 @@ pub fn init_components(cx: &mut gpui::App) {
     }
     gpui::component::init(cx);
     Theme::change(ThemeMode::Dark, None, cx);
+    crate::attachments::init(cx);
     let theme = Theme::global_mut(cx);
     theme.font_family = FONT_UI.into();
     theme.font_size = px(FS_MD);

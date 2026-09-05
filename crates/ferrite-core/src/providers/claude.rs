@@ -189,6 +189,7 @@ pub struct ClaudeSession {
     /// Held open for the life of the Session: closing it ends the Session,
     /// so multi-turn depends on this staying alive.
     stdin: ChildStdin,
+    cwd: Option<PathBuf>,
     events: Receiver<SessionEvent>,
     capabilities: ClaudeCapabilities,
     effort_reply: EffortReply,
@@ -283,6 +284,7 @@ impl ClaudeSession {
             #[cfg(windows)]
             job,
             stdin,
+            cwd: config.cwd.clone(),
             events,
             capabilities: ClaudeCapabilities::default(),
             effort_reply,
@@ -339,7 +341,7 @@ impl ClaudeSession {
             "type": "user",
             "message": {
                 "role": "user",
-                "content": [{"type": "text", "text": text}],
+                "content": wire::input_content(text, self.cwd.as_deref()),
             },
         }))
     }

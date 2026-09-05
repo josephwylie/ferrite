@@ -150,6 +150,8 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
         // the key does nothing (the Composer has no selection of its own).
         (with_primary("c"), "cockpit::CopySelection", None),
         ("enter".into(), "cockpit::Submit", None),
+        // Kit buttons synthesize clicks from Enter/Space; do not submit a prompt.
+        ("enter".into(), "zed::NoAction", Some("PromptAttachment")),
         ("escape".into(), "cockpit::Interrupt", None),
         // Only while a Decision holds the keyboard: elsewhere these are
         // just letters going into the Composer.

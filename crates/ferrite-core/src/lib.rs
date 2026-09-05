@@ -10,6 +10,7 @@ pub mod draft;
 pub mod groups;
 pub mod import;
 pub mod layout;
+pub mod prompt_files;
 mod prompt_history;
 pub mod providers;
 pub mod questions;

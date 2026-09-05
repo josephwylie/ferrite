@@ -7,6 +7,9 @@
 //! table of visual rows, so wrapped and hard-broken lines read alike.
 
 use std::ops::Range;
+use std::path::PathBuf;
+
+use ferrite_core::prompt_files;
 
 use gpui::prelude::*;
 use gpui::{
@@ -71,7 +74,10 @@ pub struct Edited;
 
 pub struct Composer {
     focus_handle: FocusHandle,
+    files_focus: FocusHandle,
     line: Line,
+    files: Vec<PathBuf>,
+    files_generation: usize,
     /// Mention tokens (`@rel/path`) the operator picked from the `@` menu:
     /// any occurrence still standing in the text paints as the comp's
     /// @-pill, whichever provider serves the Thread. Display only — the
@@ -107,9 +113,13 @@ impl EventEmitter<Edited> for Composer {}
 
 impl Composer {
     pub fn new(cx: &mut Context<Self>) -> Self {
+        crate::theme::init_components(cx);
         Self {
             focus_handle: cx.focus_handle(),
+            files_focus: cx.focus_handle(),
             line: Line::default(),
+            files: Vec::new(),
+            files_generation: 0,
             mentions: Vec::new(),
             menu_open: false,
             history_available: false,
@@ -119,6 +129,69 @@ impl Composer {
             goal_x: None,
             dragging: false,
         }
+    }
+
+    /// Files stay separate from editable prose until the send/history seam.
+    pub fn attachments(entity: &Entity<Self>, cx: &App) -> Option<gpui::AnyElement> {
+        let composer = entity.read(cx);
+        if composer.files.is_empty() {
+            return None;
+        }
+        let files = composer.files.clone();
+        let focus = composer.files_focus.clone();
+        let generation = composer.files_generation;
+        let composer = entity.downgrade();
+        Some(
+            div()
+                .id("pending-attachment-tray")
+                .debug_selector(|| "pending-attachment-tray".into())
+                .track_focus(&focus)
+                .tab_stop(true)
+                .child(
+                    crate::attachments::Attachments::new("prompt-attachments", files)
+                        .in_island(generation)
+                        .on_remove(move |remove, window, cx| {
+                            let _ = composer.update(cx, |composer, cx| {
+                                composer.files.retain(|path| path != remove);
+                                composer.focus_handle.focus(window, cx);
+                                composer.edited(cx);
+                            });
+                        }),
+                )
+                .into_any_element(),
+        )
+    }
+
+    pub fn focus_target(&self, window: &Window, cx: &App) -> FocusHandle {
+        if self.files_focus.contains_focused(window, cx) {
+            self.files_focus.clone()
+        } else {
+            self.focus_handle.clone()
+        }
+    }
+
+    /// Visit the kit's attachment controls before the cockpit's band/tools.
+    /// Leaving this Composer restores its caret and resumes normal traversal.
+    pub fn cycle_files(&self, reverse: bool, window: &mut Window, cx: &mut App) -> bool {
+        if self.files.is_empty()
+            || (!self.focus_handle.is_focused(window)
+                && !self.files_focus.contains_focused(window, cx))
+        {
+            return false;
+        }
+        if !reverse && self.focus_handle.is_focused(window) {
+            self.files_focus.focus(window, cx);
+        }
+        if reverse {
+            window.focus_prev(cx);
+        } else {
+            window.focus_next(cx);
+        }
+        if self.files_focus.is_focused(window) || !self.files_focus.contains_focused(window, cx) {
+            self.focus_handle.focus(window, cx);
+            return false;
+        }
+        !self.focus_handle.is_focused(window)
     }
 
     /// Told by the cockpit as its menu opens or closes over this line.
@@ -138,13 +211,20 @@ impl Composer {
 
     /// Put a line back into the Composer, ready to edit at its end.
     pub fn set(&mut self, text: String, cx: &mut Context<Self>) {
+        let (text, files) = prompt_files::split(text);
+        if !files.is_empty() && files != self.files {
+            self.files_generation = self.files_generation.wrapping_add(1);
+        }
+        self.files = files;
         self.line.set(text);
         self.edited(cx);
     }
 
     /// Hand the line to the Pane and clear it — pills and all.
     pub fn take(&mut self, cx: &mut Context<Self>) -> String {
-        let text = self.line.take();
+        let text = self.prompt();
+        self.line.take();
+        self.files.clear();
         self.mentions.clear();
         self.edited(cx);
         text
@@ -153,7 +233,24 @@ impl Composer {
     /// Whether the line holds no text — what gives Backspace its
     /// `⌫ unqueue` meaning up in the cockpit.
     pub fn is_empty(&self) -> bool {
-        self.line.text().is_empty()
+        self.line.text().is_empty() && self.files.is_empty()
+    }
+
+    pub fn prompt(&self) -> String {
+        prompt_files::compose(self.line.text(), &self.files)
+    }
+
+    pub fn add_files(&mut self, paths: &[PathBuf], cx: &mut Context<Self>) {
+        let before = self.files.len();
+        for path in paths {
+            if !self.files.contains(path) {
+                self.files.push(path.clone());
+            }
+        }
+        if self.files.len() > before {
+            self.files_generation = self.files_generation.wrapping_add(1);
+        }
+        self.edited(cx);
     }
 
     pub fn text(&self) -> &str {
@@ -573,6 +670,7 @@ impl Render for Composer {
                 (false, false) => "Composer",
             })
             .track_focus(&self.focus_handle(cx))
+            .tab_stop(true)
             .on_action(cx.listener(Self::backspace))
             .on_action(cx.listener(Self::delete))
             .on_action(cx.listener(Self::left))
@@ -600,6 +698,7 @@ impl Render for Composer {
             .on_action(cx.listener(Self::newline))
             .on_action(cx.listener(Self::up))
             .on_action(cx.listener(Self::down))
+            .flex_col()
             .child(LineElement {
                 composer: cx.entity(),
             })
