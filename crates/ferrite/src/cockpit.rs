@@ -13,6 +13,7 @@ use ferrite_core::layout::{self, Edge, SeamId, Tree, Zone};
 use ferrite_core::roster::{PaneIdentity, View};
 use ferrite_core::store::Provider;
 use ferrite_core::workspace::registry::ProjectId;
+#[cfg(test)]
 use ferrite_core::workspace::WorkspaceChoice;
 use ferrite_core::{DecisionAnswer, ThreadId};
 use gpui::prelude::*;
@@ -3411,9 +3412,7 @@ impl CockpitView {
         }
     }
 
-    /// A band row's pick, applied to the focused draft. Changing the
-    /// project resets the workspace chip to `main` — the old choice named
-    /// another repo's rows.
+    /// Stop the submitted startup before Escape or a choice changes its draft.
     fn cancel_focused_draft_start(&mut self) -> bool {
         let Some(id) = self
             .panes
@@ -3433,6 +3432,9 @@ impl CockpitView {
         }
     }
 
+    /// A band row's pick, applied to the focused draft. Changing the
+    /// project resets the workspace chip to `main` — the old choice named
+    /// another repo's rows.
     fn pick_band(
         &mut self,
         choice: &BandChoice,
