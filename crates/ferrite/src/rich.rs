@@ -57,13 +57,6 @@ impl gpui::RenderOnce for Markdown {
             // into its natural-height path without truncating the document.
             .max_lines(usize::MAX)
             .style(style())
-            .code_block_highlighter(|block| {
-                let source = block.code();
-                let language = block.lang();
-                let tokens =
-                    ferrite_core::transcript::highlight_tokens(language.as_deref(), &source);
-                crate::pane::code(&source, Some(&tokens))
-            })
             .code_block_actions(|block, _, _| {
                 if !block
                     .lang()

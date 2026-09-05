@@ -623,6 +623,20 @@ pub fn init_components(cx: &mut gpui::App) {
     use gpui::component::{Theme, ThemeMode};
     use gpui::{px, rgb, rgba};
 
+    let defaults = gpui::base::text::TextViewDefaults::global(cx);
+    if !defaults.has_code_block_highlighter() {
+        // GPUI caches highlighting by callback identity. Install it once so
+        // unrelated pane renders do not highlight completed code again.
+        defaults
+            .with_code_block_highlighter(|block| {
+                let source = block.code();
+                let language = block.lang();
+                let tokens =
+                    ferrite_core::transcript::highlight_tokens(language.as_deref(), &source);
+                crate::pane::code(&source, Some(&tokens))
+            })
+            .install(cx);
+    }
     if cx.has_global::<Theme>() {
         return;
     }
