@@ -692,8 +692,12 @@ fn ring_overlay(color: u32, radius: f32) -> Div {
 /// Everything a draft Pane draws (#29), assembled in the cockpit where the
 /// clicks are wired — the Pane only lays it out.
 pub struct DraftState<'a> {
-    /// The pre-prompt band: the [provider][project][workspace] chip row.
+    /// The draft's setup chips — project and workspace — riding the left
+    /// of the controls row, where a live Composer's mode chip rides.
     pub band: AnyElement,
+    /// The draft's model and effort controls, in the trailing slot a live
+    /// Composer's model picker occupies.
+    pub picker: AnyElement,
     /// The open band popover, hung above the Composer like every menu.
     pub menu: Option<AnyElement>,
     pub composer_empty: bool,
@@ -709,6 +713,7 @@ pub struct DraftState<'a> {
 pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> impl IntoElement {
     let DraftState {
         band,
+        picker,
         menu,
         composer_empty,
         focused,
@@ -748,7 +753,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
                     history_available: false,
                     menu,
                     mode: None,
-                    model_picker: None,
+                    model_picker: Some(picker),
                     usage_meter: None,
                     setup_controls: Some(band),
                     draft_error: error.cloned(),
@@ -763,7 +768,6 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
 pub fn draft_band() -> Div {
     div()
         .flex()
-        .flex_1()
         .flex_shrink_0()
         .min_w_0()
         .items_center()
@@ -794,14 +798,33 @@ pub fn band_chip(slot: usize, label: SharedString, accent: bool, focused: bool) 
         .rounded(px(theme::R_CHIP))
         .px(px(theme::CHIP_PAD_X))
         .py(px(theme::CHIP_PAD_Y))
-        .hover_control()
-        .press_control()
+        .hover_raised()
+        .press_raised()
         .child(label)
 }
 
 /// A band chip's text: the choice plus the ⌵ that says it answers clicks.
 pub fn band_chip_label(choice: &str) -> SharedString {
     SharedString::from(format!("{choice} ⌵"))
+}
+
+/// A draft's model or effort control: the live Composer's own picker
+/// recipe, wrapped in the band chip's focus border so tab still says where
+/// ↵ will land. The 1px border is always in layout and only changes colour.
+pub fn draft_picker(id: &'static str, focused: bool, control: Div) -> Stateful<Div> {
+    let edge: gpui::Hsla = if focused {
+        rgb(FOCUS).into()
+    } else {
+        rgba(TRANSPARENT).into()
+    };
+    div()
+        .id(id)
+        .flex()
+        .flex_shrink_0()
+        .border_1()
+        .border_color(edge)
+        .rounded(px(theme::R_CHIP))
+        .child(control)
 }
 
 fn wall_cell(
@@ -1521,7 +1544,7 @@ pub fn model_picker(provider: Option<Provider>, label: SharedString) -> Div {
         .children(mark)
         .child(div().flex_shrink_0().child(label))
         .child(icon(icons::CHEVRON_DOWN, theme::ICON_CHEVRON, TEXT_MUTED))
-        .hover_control()
+        .hover_raised()
 }
 
 /// The effort chip beside the model picker: the level in force and a
@@ -1540,7 +1563,7 @@ pub fn effort_picker(label: SharedString) -> Div {
         .text_color(rgb(TEXT_2))
         .child(div().flex_shrink_0().child(label))
         .child(icon(icons::CHEVRON_DOWN, theme::ICON_CHEVRON, TEXT_MUTED))
-        .hover_control()
+        .hover_raised()
 }
 
 /// The rendered tail of a transcript at one level — the window `body`
@@ -2736,9 +2759,23 @@ pub fn context_usage(
         .child(limit_row("weekly", "Weekly limit", limits.weekly))
 }
 
-/// Three quiet horizontal lines for context, five-hour and weekly usage.
-/// The fixed order makes the tiny meter scannable; unknown provider values
-/// retain their tracks and are explained as such in the click-through card.
+/// A usage bar's ink: the Pane's own status inks, so a budget reads like
+/// every other state in the app — RUNNING while there is room, ATTENTION
+/// as it tightens, BLOCKED once it is nearly spent. The thresholds are the
+/// same for all three windows; a fraction is a fraction.
+pub fn usage_ink(fraction: f32) -> u32 {
+    match fraction {
+        fraction if fraction >= theme::USAGE_SPENT => BLOCKED,
+        fraction if fraction >= theme::USAGE_TIGHT => ATTENTION,
+        _ => RUNNING,
+    }
+}
+
+/// Three quiet horizontal lines for context, five-hour and weekly usage,
+/// on the same 20px chip body the model picker beside them wears — the
+/// meter is a button, and its hover says so. The fixed order makes the tiny
+/// meter scannable; unknown provider values retain their tracks and are
+/// explained as such in the click-through card.
 pub fn usage_lines(context: f32, limits: ferrite_core::transcript::RateLimits) -> Div {
     let line = |key: &'static str, fraction: Option<f32>| {
         let used = fraction.unwrap_or(0.).clamp(0., 1.);
@@ -2755,7 +2792,7 @@ pub fn usage_lines(context: f32, limits: ferrite_core::transcript::RateLimits) -
                     .h_full()
                     .w(relative(used))
                     .rounded(px(theme::USAGE_LINE_H / 2.))
-                    .bg(rgb(TEXT_2)),
+                    .bg(rgb(usage_ink(used))),
             )
     };
     div()
@@ -2764,7 +2801,9 @@ pub fn usage_lines(context: f32, limits: ferrite_core::transcript::RateLimits) -
         .flex_shrink_0()
         .justify_center()
         .gap(px(theme::USAGE_LINE_GAP))
-        .h(px(theme::COMPOSER_ROW_H))
+        .h(px(theme::CHIP_H))
+        .px(px(theme::CHIP_PAD_X))
+        .rounded(px(theme::R_CHIP))
         .child(line("context", Some(context)))
         .child(line(
             "five-hour",

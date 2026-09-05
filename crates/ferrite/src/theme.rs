@@ -420,8 +420,12 @@ pub const USAGE_RING_D: f32 = 14.0;
 #[allow(dead_code)]
 pub const USAGE_RING_R: f32 = 5.4;
 pub const USAGE_RING_W: f32 = 2.0;
+/// Where a usage bar turns from RUNNING to ATTENTION, and from ATTENTION
+/// to BLOCKED — a fraction of the window, not a count.
+pub const USAGE_TIGHT: f32 = 0.6;
+pub const USAGE_SPENT: f32 = 0.85;
 /// Compact context / five-hour / weekly lines beside the Composer's model.
-pub const USAGE_LINE_W: f32 = 20.0;
+pub const USAGE_LINE_W: f32 = 24.0;
 pub const USAGE_LINE_H: f32 = 2.0;
 pub const USAGE_LINE_GAP: f32 = 2.0;
 /// The focused Pane's ring: 2px wide, 2px outside the Pane's border box.

@@ -28,6 +28,7 @@ use crate::facts::Facts;
 use crate::menu;
 use crate::nav;
 use crate::pane::{self, PaneView};
+use crate::pointer::{Pointer, PointerPressed};
 use crate::prefs;
 use crate::select::TranscriptSelection;
 
@@ -876,11 +877,10 @@ impl CockpitView {
         let chrome = self.nav_width() + crate::theme::GRID_PAD * 2.0;
         let width =
             (f32::from(viewport.width) - chrome) / layout.columns as f32 - crate::theme::GRID_GAP;
-        let height = (f32::from(viewport.height)
-            - crate::theme::BOARD_TOP
-            - crate::theme::GRID_PAD)
-            / layout.rows as f32
-            - crate::theme::GRID_GAP;
+        let height =
+            (f32::from(viewport.height) - crate::theme::BOARD_TOP - crate::theme::GRID_PAD)
+                / layout.rows as f32
+                - crate::theme::GRID_GAP;
         Cell::new(width.max(0.0), height.max(0.0))
     }
 
@@ -3647,10 +3647,14 @@ impl CockpitView {
         }
     }
 
-    /// The focused draft's band — chips wired to their popovers (#29). A
-    /// chip click shares `open_band_popover` with ↵ on a tab-focused chip;
-    /// the closure re-finds the Pane by its Composer, a draft's one stable
-    /// identity.
+    /// The focused draft's setup chips — project and workspace, wired to
+    /// their popovers (#29) and riding the left of the controls row. The
+    /// model and effort controls sit in the trailing slot instead, where a
+    /// live Thread's Composer draws them: `draft_model_picker`.
+    ///
+    /// A chip click shares `open_band_popover` with ↵ on a tab-focused
+    /// chip; the closure re-finds the Pane by its Composer, a draft's one
+    /// stable identity.
     fn draft_band_element(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
         let Some(draft) = self.panes[index].draft() else {
             return div().into_any_element();
@@ -3667,54 +3671,21 @@ impl CockpitView {
             DraftTarget::Existing { branch } => SharedString::from(branch.clone()),
             DraftTarget::New => SharedString::from("new worktree"),
         };
-        let effort_label = match draft.binding.effort() {
-            Some(effort) => SharedString::from(effort_title(effort)),
-            None => match self
-                .prefs
-                .settings
-                .effort_for(draft.binding.provider().provider)
-            {
-                Some(effort) => SharedString::from(effort_title(effort)),
-                None => SharedString::from("effort"),
-            },
-        };
         let chips = [
-            (
-                pane::BandChip::Provider,
-                // The provider's own word until a model is chosen; the
-                // groomed model name after — one spelling, wherever it shows.
-                match draft.binding.provider().model.as_deref() {
-                    Some(model) => SharedString::from(ferrite_core::providers::models::label(
-                        model,
-                        &self
-                            .cockpit
-                            .model_catalog(draft.binding.provider().provider),
-                    )),
-                    None => SharedString::from(provider_title(draft.binding.provider().provider)),
-                },
-                true,
-            ),
-            (
-                pane::BandChip::Effort,
-                pane::band_chip_label(&effort_label),
-                false,
-            ),
             (
                 pane::BandChip::Project,
                 pane::band_chip_label(&project_title),
-                false,
             ),
             (
                 pane::BandChip::Workspace,
                 pane::band_chip_label(&workspace_label),
-                false,
             ),
         ];
         let mut band = pane::draft_band();
-        for (slot, (chip, label, accent)) in chips.into_iter().enumerate() {
+        for (slot, (chip, label)) in chips.into_iter().enumerate() {
             let focused = draft.band_focus == Some(chip);
             let chip_composer = composer.clone();
-            band = band.child(pane::band_chip(slot, label, accent, focused).on_mouse_down(
+            band = band.child(pane::band_chip(slot, label, false, focused).on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |view, _: &MouseDownEvent, _, cx| {
                     // The chip is this Pane's: land on it first, then
@@ -3733,6 +3704,75 @@ impl CockpitView {
             ));
         }
         band.into_any_element()
+    }
+
+    /// The focused draft's model and effort controls (#29): the same
+    /// pickers a live Thread's Composer draws, in the same trailing slot,
+    /// so a new Thread and an existing one share one input silhouette.
+    /// They open the band's popovers rather than the Thread's.
+    fn draft_model_picker(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+        let Some(draft) = self.panes[index].draft() else {
+            return div().into_any_element();
+        };
+        let composer = self.panes[index].composer.clone();
+        let provider = draft.binding.provider().provider;
+        // The provider's own word until a model is chosen; the groomed
+        // model name after — one spelling, wherever it shows.
+        let model_label = match draft.binding.provider().model.as_deref() {
+            Some(model) => SharedString::from(ferrite_core::providers::models::label(
+                model,
+                &self.cockpit.model_catalog(provider),
+            )),
+            None => SharedString::from(provider_title(provider)),
+        };
+        let effort_label = match draft.binding.effort() {
+            Some(effort) => SharedString::from(effort_title(effort)),
+            None => match self.prefs.settings.effort_for(provider) {
+                Some(effort) => SharedString::from(effort_title(effort)),
+                None => SharedString::from("effort"),
+            },
+        };
+        let controls = [
+            (
+                pane::BandChip::Provider,
+                pane::draft_picker(
+                    "draft-model-picker",
+                    draft.band_focus == Some(pane::BandChip::Provider),
+                    pane::model_picker(Some(provider), model_label),
+                ),
+            ),
+            (
+                pane::BandChip::Effort,
+                pane::draft_picker(
+                    "draft-effort-picker",
+                    draft.band_focus == Some(pane::BandChip::Effort),
+                    pane::effort_picker(effort_label),
+                ),
+            ),
+        ];
+        let mut row = div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(px(crate::theme::KEYS_GAP));
+        for (chip, control) in controls {
+            let chip_composer = composer.clone();
+            row = row.child(control.on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    if let Some(at) = view
+                        .panes
+                        .iter()
+                        .position(|pane| pane.composer == chip_composer)
+                    {
+                        view.focus_pane(at);
+                    }
+                    view.open_band_popover(chip, cx);
+                }),
+            ));
+        }
+        row.into_any_element()
     }
 
     /// Test-only: aim the launch project at a scratch repo — production
@@ -4898,6 +4938,7 @@ impl CockpitView {
                 pane,
                 pane::DraftState {
                     band: self.draft_band_element(index, cx),
+                    picker: self.draft_model_picker(index, cx),
                     menu: (level == Level::Transcript)
                         .then(|| self.popover_element(index, cx))
                         .flatten(),
@@ -5431,16 +5472,20 @@ impl CockpitView {
             .context_window
             .filter(|window| *window > 0)
             .map_or(0., |window| usage.total_tokens as f32 / window as f32);
-        let limits = self.cockpit.thread(thread)?.transcript().rate_limits();
+        // Account-wide and remembered across launches, so the meter is
+        // not blank until this Thread's first turn happens to report.
+        let limits = self
+            .cockpit
+            .account_limits(self.cockpit.thread(thread)?.provider());
         let was_open = self.context_usage.is_some_and(|(shown, _)| shown == thread);
         Some(
             div()
                 .id(("usage-meter", thread.get() as usize))
                 .debug_selector(move || format!("usage-meter-{}", thread.get()))
-                .cursor_pointer()
-                .p(px(4.))
-                .m(px(-4.))
+                .rounded(px(crate::theme::R_CHIP))
                 .child(pane::usage_lines(fraction, limits))
+                .hover_raised()
+                .press_raised()
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |view, event: &MouseDownEvent, _, cx| {
@@ -5467,7 +5512,8 @@ impl CockpitView {
             .debug_selector(|| "context-usage-card".into())
             .child(pane::context_usage(
                 usage,
-                self.cockpit.thread(thread)?.transcript().rate_limits(),
+                self.cockpit
+                    .account_limits(self.cockpit.thread(thread)?.provider()),
             ))
             .on_mouse_down(
                 MouseButton::Left,
