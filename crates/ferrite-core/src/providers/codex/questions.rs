@@ -94,7 +94,7 @@ impl Replies {
             params["expectedTurnId"] = turn.into();
             "turn/steer"
         } else {
-            params["summary"] = "concise".into();
+            params["summary"] = "detailed".into();
             "turn/start"
         };
         self.pending.insert(rpc, id.into());
@@ -231,6 +231,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(packet["method"], "turn/start");
+        assert_eq!(packet["params"]["summary"], "detailed");
         assert!(packet["params"].get("expectedTurnId").is_none());
         activity.apply(ActivityInput::AnswerSubmitted {
             handle: pending.handle,
