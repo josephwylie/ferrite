@@ -1047,7 +1047,7 @@ impl Element for LineElement {
                 return;
             }
             composer.update(cx, |composer, cx| {
-                window.focus(&composer.focus_handle);
+                window.focus(&composer.focus_handle, cx);
                 composer.press(event, cx);
             });
         });
@@ -1250,7 +1250,8 @@ mod tests {
         });
         let (host, cx) = cx.add_window_view(|window, cx| {
             let composer = cx.new(Composer::new);
-            window.focus(&composer.read(cx).focus_handle);
+            let focus = composer.read(cx).focus_handle.clone();
+            window.focus(&focus, cx);
             Host {
                 composer,
                 width: px(BOX_W),

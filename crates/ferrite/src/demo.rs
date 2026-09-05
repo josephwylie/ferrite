@@ -894,6 +894,12 @@ pub fn seed_panes(core: &mut Cockpit, panes: usize, first: Provider, demo: bool)
     }
 }
 
+/// A load run shows every requested Pane together, rather than the demo census.
+pub fn seed_load_group(core: &mut Cockpit) {
+    let threads = core.threads();
+    form_group(core, &threads, "Streaming load");
+}
+
 /// Fill the cockpit for a multi-pane run (`--panes N`, the perf load).
 ///
 /// The seed deals the two Providers alternately, because the nav is meant

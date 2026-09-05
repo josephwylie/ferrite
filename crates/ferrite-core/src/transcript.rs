@@ -9,7 +9,7 @@ use std::sync::Arc;
 use crate::{Hunk, SessionEvent, ToolResult, TurnOutcome};
 
 mod highlight;
-pub use highlight::Lexer;
+pub use highlight::{tokens as highlight_tokens, Lexer};
 
 /// A Block's identity, stable for as long as the Block lives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -20,6 +20,13 @@ pub struct BlockId(u64);
 pub struct Block {
     pub id: BlockId,
     pub body: Body,
+    /// Exact Markdown for answer sections. The renderer can join adjacent
+    /// sections without losing links, nesting, HTML or list numbering.
+    /// Provider events remain the durable source; replay rebuilds this cache.
+    pub markdown: Option<String>,
+    /// Original identity of adjacent Markdown sections. Carried by every
+    /// section so history eviction cannot remount a streaming document.
+    pub markdown_run: Option<BlockId>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -73,6 +80,52 @@ pub struct ToolBlock {
     /// Exact provider output retained for inline disclosure, bounded so one
     /// noisy call cannot dominate a many-Pane cockpit.
     pub output: Option<ToolOutput>,
+}
+
+/// A compact display run, never an assertion that calls executed in parallel.
+/// Visible prose, edits, prompts and notices remain chronological boundaries.
+pub struct ShellActivity<'a> {
+    pub blocks: &'a [Block],
+    pub running: usize,
+    pub failed: usize,
+}
+
+impl ToolBlock {
+    pub fn is_shell(&self) -> bool {
+        matches!(self.name.as_str(), "Bash" | "commandExecution") && self.diff.is_none()
+    }
+}
+
+impl<'a> ShellActivity<'a> {
+    pub fn at_start(blocks: &'a [Block]) -> Option<Self> {
+        let len = blocks
+            .iter()
+            .take_while(|block| matches!(&block.body, Body::Tool(tool) if tool.is_shell()))
+            .count();
+        if len < 2 {
+            return None;
+        }
+        let blocks = &blocks[..len];
+        let running = blocks
+            .iter()
+            .filter(
+                |block| matches!(&block.body, Body::Tool(tool) if tool.state == ToolState::Running),
+            )
+            .count();
+        let failed = blocks.iter().filter(|block| matches!(&block.body, Body::Tool(tool) if matches!(tool.state, ToolState::Failed(_)))).count();
+        Some(Self {
+            blocks,
+            running,
+            failed,
+        })
+    }
+
+    pub fn leader(&self) -> &'a ToolBlock {
+        let Body::Tool(tool) = &self.blocks[0].body else {
+            unreachable!("shell activity contains tools")
+        };
+        tool
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -638,18 +691,26 @@ impl Transcript {
             self.source = self.source[used..].to_string();
             if let Some(body) = parse_section(&section) {
                 // A section that settled unchanged is still worth highlighting,
-                // but it is not dirty — dirty means the body actually moved.
-                let changed = self.write_open(body);
+                // but it is not dirty unless its body or retained Markdown moved.
+                let changed = self.write_open(body, &section);
                 let settled = changed.or(self.open);
                 dirty.extend(changed);
                 if let Some(id) = settled {
                     self.ask_to_highlight(id);
                 }
+            } else if let Some(block) = self.blocks.last_mut() {
+                // Blank lines carry Markdown structure even though they do
+                // not have a visual block of their own.
+                if let Some(markdown) = &mut block.markdown {
+                    markdown.push_str(&section);
+                    dirty.push(block.id);
+                }
             }
             self.open = None;
         }
         if let Some(body) = parse_section(&self.source) {
-            dirty.extend(self.write_open(body));
+            let source = self.source.clone();
+            dirty.extend(self.write_open(body, &source));
         }
         dirty
     }
@@ -679,6 +740,7 @@ impl Transcript {
         if let Some(Block {
             id,
             body: Body::Thinking(thought),
+            ..
         }) = self.blocks.last_mut()
         {
             thought.push_str(text);
@@ -691,9 +753,9 @@ impl Transcript {
     }
 
     /// Write a folded body into the open Block, creating it on first content.
-    /// Reports the Block only when its body actually changed — a delta that
-    /// adds nothing renderable (a lone newline) dirties nothing.
-    fn write_open(&mut self, body: Body) -> Option<BlockId> {
+    /// Reports changes to either the folded body or the original Markdown,
+    /// since whitespace can change rich-text structure without changing plain text.
+    fn write_open(&mut self, body: Body, source: &str) -> Option<BlockId> {
         match self.open {
             Some(id) => {
                 // The open Block is the tail by construction. Scanning for it
@@ -703,15 +765,26 @@ impl Transcript {
                     Some(block) if block.id == id => block,
                     _ => self.blocks.iter_mut().find(|b| b.id == id)?,
                 };
-                if block.body == body {
+                if block.body == body && block.markdown.as_deref() == Some(source) {
                     return None;
                 }
                 block.body = body;
+                block.markdown = Some(source.to_string());
                 Some(id)
             }
             None => {
                 let id = self.mint();
-                self.blocks.push(Block { id, body });
+                let markdown_run = self
+                    .blocks
+                    .last()
+                    .and_then(|block| block.markdown_run)
+                    .unwrap_or(id);
+                self.blocks.push(Block {
+                    id,
+                    body,
+                    markdown: Some(source.to_string()),
+                    markdown_run: Some(markdown_run),
+                });
                 self.open = Some(id);
                 Some(id)
             }
@@ -789,7 +862,12 @@ impl Transcript {
     /// Append a Block that no further text can join.
     fn push(&mut self, body: Body) -> BlockId {
         let id = self.mint();
-        self.blocks.push(Block { id, body });
+        self.blocks.push(Block {
+            id,
+            body,
+            markdown: None,
+            markdown_run: None,
+        });
         self.open = None;
         self.source.clear();
         id
@@ -1118,7 +1196,10 @@ mod tests {
         assert_eq!(transcript.blocks().len(), 2);
         assert_eq!(body_text(&transcript.blocks()[0]), "first para");
         assert_eq!(body_text(&transcript.blocks()[1]), "second para");
-        assert_eq!(update.dirty, vec![transcript.blocks()[1].id]);
+        assert_eq!(
+            update.dirty,
+            vec![transcript.blocks()[0].id, transcript.blocks()[1].id]
+        );
     }
 
     #[test]
@@ -1149,6 +1230,50 @@ mod tests {
         assert!(matches!(bodies[3], Body::Paragraph { .. }));
         assert_eq!(body_text(&transcript.blocks()[1]), "one");
         assert_eq!(body_text(&transcript.blocks()[3]), "back to prose");
+    }
+
+    #[test]
+    fn rich_markdown_source_survives_stream_chunk_boundaries() {
+        let source = "# Result\n\n1. first\n   - nested **bold**\n2. second\n\n| Name | Value |\n| --- | --- |\n| café | [link](https://example.com) |\n\n```html\n<h2>Preview</h2>\n<p>Exact text</p>\n```\n\nlast\n\n";
+        for chunks in [
+            vec![source.to_string()],
+            source.chars().map(|ch| ch.to_string()).collect(),
+        ] {
+            let mut transcript = Transcript::default();
+            for chunk in chunks {
+                transcript.apply(text(&chunk));
+            }
+            let restored: String = transcript
+                .blocks()
+                .iter()
+                .filter_map(|block| block.markdown.as_deref())
+                .collect();
+            assert_eq!(
+                restored, source,
+                "rich rendering needs the original structure and URLs"
+            );
+        }
+    }
+
+    #[test]
+    fn markdown_run_identity_survives_core_eviction_and_changes_at_boundaries() {
+        let mut transcript = Transcript::with_capacity(Arc::new(Unhighlighted), 2);
+        transcript.apply(text("first\n\n"));
+        let original = transcript.blocks()[0].markdown_run;
+        for index in 0..8 {
+            transcript.apply(text(&format!("paragraph {index}\n\n")));
+            assert!(transcript
+                .blocks()
+                .iter()
+                .all(|block| block.markdown_run == original));
+        }
+        assert!(transcript
+            .blocks()
+            .iter()
+            .all(|block| Some(block.id) != original));
+        transcript.apply(Input::Prompt("next answer".into()));
+        transcript.apply(text("new\n\n"));
+        assert_ne!(transcript.blocks().last().unwrap().markdown_run, original);
     }
 
     #[test]

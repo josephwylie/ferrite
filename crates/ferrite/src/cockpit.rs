@@ -29,7 +29,7 @@ use crate::menu;
 use crate::nav;
 use crate::pane::{self, PaneView};
 use crate::prefs;
-use crate::select::TranscriptSelection;
+use crate::select::TranscriptText;
 
 actions!(
     cockpit,
@@ -100,11 +100,9 @@ pub struct CockpitView {
     /// When the watchdog last swept. Sweeping costs a `ps`/`tasklist` per
     /// live Session, so it runs on its own slow cadence, never per frame.
     swept: std::time::Instant,
-    /// The one live text selection, at character grain (#27). The cockpit
-    /// speaks raw positions — begin on press, extend on drag, copied_text
-    /// on cmd-c — and select.rs owns every offset behind that seam. A plain
-    /// click selects nothing; the next press anywhere clears it.
-    selection: TranscriptSelection,
+    /// Stable text-run identities; selection itself belongs to GPUI.
+    selection: TranscriptText,
+    native_copy: Option<String>,
     /// cmd-b (#21): the nav folded to its 40px LED rail. In memory only —
     /// a preference store is not this ticket.
     nav_collapsed: bool,
@@ -385,6 +383,16 @@ enum Kind {
 }
 
 impl Kind {
+    fn picker_slot(&self) -> Option<(bool, bool)> {
+        match self {
+            Kind::Provider => Some((false, false)),
+            Kind::Effort => Some((true, false)),
+            Kind::Band(pane::BandChip::Provider) => Some((false, true)),
+            Kind::Band(pane::BandChip::Effort) => Some((true, true)),
+            _ => None,
+        }
+    }
+
     /// Text-derived popovers follow the line: `sync_menu` rebuilds them on
     /// every edit and escape mutes them until the text moves. The rest are
     /// opened by an act, closed by one, and dismissed by typing a prompt
@@ -478,24 +486,9 @@ enum BandChoice {
     Browse,
 }
 
-/// How near the tail still counts as riding it, written as the two facts
-/// that bound it rather than as a number. It must swallow the transcript's
-/// own padding — gpui reports a not-yet-overflowing scroll as having
-/// exactly that much room — and Soft's 6px above and 12px below the rows
-/// are 18 together where Dense's 8 and 8 were 16, so the hardcoded 17
-/// silently stopped every Pane following its tail. It must also stay
-/// **under one body line** (`FS_MD * LINE_BODY` = 18.6px) so a deliberate
-/// one-line scroll still detaches: 18 < 18.6 holds, and a future ramp that
-/// closes that gap needs a better heuristic, not a retuned number.
-const TAIL_SLACK: Pixels = px(crate::theme::BODY_PAD_T + crate::theme::BODY_PAD_B);
-
-/// Whether this scrollback is riding the tail. An operator who wheeled up is
-/// reading history: new content must not yank them down until they scroll
-/// back to the bottom (the standard terminal contract). The offset runs
-/// negative as the view descends, so at the tail it equals -max.
-fn follows_tail(scroll: &ScrollHandle) -> bool {
-    scroll.max_offset().height + scroll.offset().y <= TAIL_SLACK
-}
+/// Allow only pixel rounding at the bottom of a native scroll container.
+#[cfg(test)]
+const TAIL_SLACK: Pixels = px(2.);
 
 /// How often the watchdog sweeps. Leaks grow over seconds, not frames; a
 /// sweep per frame would spawn a `ps`/`tasklist` per Session per tick.
@@ -553,7 +546,8 @@ impl CockpitView {
                 since: std::time::Instant::now(),
             }),
             swept: std::time::Instant::now(),
-            selection: TranscriptSelection::default(),
+            selection: TranscriptText::default(),
+            native_copy: None,
             nav_filter: None,
             nav_filter_open: false,
             nav_scroll: ScrollHandle::new(),
@@ -760,7 +754,7 @@ impl CockpitView {
                 // New content follows the tail; colour arriving late does
                 // not, and neither does an operator who scrolled back into
                 // history — they reattach by scrolling to the bottom.
-                if !update.dirty.is_empty() && follows_tail(&self.panes[pane].scroll) {
+                if !update.dirty.is_empty() && self.panes[pane].follow_tail.get() {
                     self.panes[pane].scroll.scroll_to_bottom();
                 }
             }
@@ -789,7 +783,9 @@ impl CockpitView {
             .into_iter()
             .flat_map(|transcript| transcript.blocks())
             .filter_map(|block| match &block.body {
-                ferrite_core::transcript::Body::Tool(tool) if pane::tool_has_details(tool) => {
+                ferrite_core::transcript::Body::Tool(tool)
+                    if pane::tool_has_details(tool) || tool.is_shell() =>
+                {
                     Some(tool.call.clone())
                 }
                 _ => None,
@@ -1110,7 +1106,7 @@ impl CockpitView {
             // nav's act; the transcript never offers it.
             MenuTarget::Pane(thread) => {
                 let grouped = self.cockpit.groups().of(thread).is_some();
-                let selected = self.selection.copied_text().is_some();
+                let selected = self.native_copy.is_some();
                 rows.push(Some((
                     menu::Item::new("Copy").hint("⌘C").disabled(!selected),
                     MenuVerb::CopySelection,
@@ -1290,7 +1286,7 @@ impl CockpitView {
                 self.facts.parked_changed(&self.cockpit);
             }
             (MenuTarget::Pane(_), MenuVerb::CopySelection) => {
-                if let Some(text) = self.selection.copied_text() {
+                if let Some(text) = self.native_copy.clone() {
                     cx.write_to_clipboard(ClipboardItem::new_string(text));
                 }
             }
@@ -1753,7 +1749,7 @@ impl CockpitView {
 
     /// Searchable toolkit Settings, drawn above the cockpit's overlays.
     fn settings_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        use gpui_component::setting::SettingGroup;
+        use gpui::component::setting::SettingGroup;
         if !self.settings_open {
             return None;
         }
@@ -2139,6 +2135,7 @@ impl CockpitView {
             self.cockpit.queue(thread, text.clone());
         } else {
             self.cockpit.send(thread, text.clone());
+            self.panes[self.focused()].follow_tail.set(true);
             self.panes[self.focused()].scroll.scroll_to_bottom();
         }
         self.facts.acted(&self.cockpit, thread);
@@ -2212,7 +2209,7 @@ impl CockpitView {
     /// disclosures before returning to the Composer.
     fn band_cycle(&mut self, _: &BandCycle, window: &mut Window, cx: &mut Context<Self>) {
         if self.settings_open {
-            window.focus_next();
+            window.focus_next(cx);
             return;
         }
         let Some(draft) = self.focused_draft_mut() else {
@@ -2238,7 +2235,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         if self.settings_open {
-            window.focus_prev();
+            window.focus_prev(cx);
         } else {
             self.cycle_tools(true, window, cx);
         }
@@ -2258,7 +2255,7 @@ impl CockpitView {
         } else {
             self.panes[focused].composer.focus_handle(cx)
         };
-        window.focus(&focus);
+        window.focus(&focus, cx);
         cx.notify();
     }
 
@@ -3521,6 +3518,7 @@ impl CockpitView {
                 self.facts.opened(&self.cockpit, done.thread);
                 self.refresh_names();
                 self.start_titling(done.thread, text.to_string(), cx);
+                self.panes[index].follow_tail.set(true);
                 self.panes[index].scroll.scroll_to_bottom();
             }
             Ok(None) => {
@@ -3602,6 +3600,14 @@ impl CockpitView {
         let mut band = pane::draft_band();
         for (slot, (chip, label, accent)) in chips.into_iter().enumerate() {
             let focused = draft.band_focus == Some(chip);
+            if matches!(chip, pane::BandChip::Provider | pane::BandChip::Effort) {
+                let trigger = crate::components::button(("draft-choice", slot))
+                    .p_0()
+                    .h_auto()
+                    .child(pane::band_chip(slot, label, accent, focused));
+                band = band.child(self.choice_menu(index, Kind::Band(chip), trigger, cx));
+                continue;
+            }
             let chip_composer = composer.clone();
             band = band.child(pane::band_chip(slot, label, accent, focused).on_mouse_down(
                 MouseButton::Left,
@@ -3652,6 +3658,9 @@ impl CockpitView {
             .popover
             .as_ref()
             .filter(|open| open.pane == self.panes[index].identity)?;
+        if open.kind.picker_slot().is_some() {
+            return None;
+        }
         // A press on the popover's own dead space is not a press outside
         // it: swallowed, so the root's dismissal never sees it.
         let mut popover = pane::menu_popover().on_mouse_down(
@@ -3855,6 +3864,9 @@ impl CockpitView {
     /// re-aims to the clicked Thread like every other deliberate move.
     fn focus_thread(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
         if self.cockpit.focus_thread(thread) {
+            if let Some(index) = self.pane_for(thread) {
+                self.focus_pane(index);
+            }
             cx.notify();
         }
     }
@@ -4001,6 +4013,7 @@ impl CockpitView {
     /// a Group you cannot read all of at once.
     fn next_decision(&mut self, _: &NextDecision, _window: &mut Window, cx: &mut Context<Self>) {
         if self.cockpit.next_decision().is_some() {
+            self.focus_pane(self.focused());
             cx.notify();
         }
     }
@@ -4016,52 +4029,28 @@ impl CockpitView {
     /// the standing selection was already cleared by the root's capture
     /// handler, and the root's bubble handler dismisses any open selector —
     /// this Pane included.
-    fn pointer_down(&mut self, index: usize, event: &MouseDownEvent, cx: &mut Context<Self>) {
+    fn pointer_down(
+        &mut self,
+        index: usize,
+        _event: &MouseDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(pane) = self.panes.get_mut(index) {
             pane.clear_tool_target();
         }
         self.focus_pane(index);
-        // A draft has no transcript to select in (#29).
-        if let Some(pane) = self.panes.get(index) {
-            if let Some(thread) = pane.thread() {
-                self.selection.begin(
-                    thread,
-                    event.position,
-                    event.click_count,
-                    pane.scroll.bounds(),
-                );
-            }
-        }
         cx.notify();
-    }
-
-    /// Dragging with the button held sweeps characters into the selection.
-    /// Wired on the root, not the Pane, so the sweep keeps following a
-    /// pointer that has left the Pane div — and it aims only at the
-    /// gripped Thread's own transcript body, whose rect `extend` clamps
-    /// into: leaving through the Composer or the Pane's edge selects to
-    /// the boundary, never into chrome or a neighbour.
-    fn pointer_drag(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
-        if event.pressed_button != Some(MouseButton::Left) {
-            return;
-        }
-        let Some(thread) = self.selection.gripping_thread() else {
-            return;
-        };
-        let Some(index) = self.pane_for(thread) else {
-            return;
-        };
-        let body = self.panes[index].scroll.bounds();
-        if self.selection.extend(thread, event.position, body) {
-            cx.notify();
-        }
     }
 
     /// Exactly the highlighted text to the clipboard. With nothing visibly
     /// selected — cleared, or every selected row gone from the rendered
     /// window — the clipboard is left alone.
-    fn copy_selection(&mut self, _: &CopySelection, _window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(text) = self.selection.copied_text() {
+    fn copy_selection(&mut self, _: &CopySelection, window: &mut Window, cx: &mut Context<Self>) {
+        let text = gpui::base::TextSelection::selected_text(window, cx)
+            .trim_end_matches('\n')
+            .to_string();
+        if !text.is_empty() {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
         }
     }
@@ -4084,7 +4073,7 @@ impl CockpitView {
         }
         let composer = pane.composer.clone();
         composer.update(cx, |composer, cx| composer.insert(&text, cx));
-        window.focus(&composer.focus_handle(cx));
+        window.focus(&composer.focus_handle(cx), cx);
         cx.notify();
     }
 }
@@ -4330,6 +4319,12 @@ fn provider_of_title(title: &str) -> Option<Provider> {
 impl Render for CockpitView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.measure();
+        if self.context_menu.is_none() {
+            let copied = gpui::base::TextSelection::selected_text(window, cx)
+                .trim_end_matches('\n')
+                .to_string();
+            self.native_copy = (!copied.is_empty()).then_some(copied);
+        }
         // The fullscreened Pane, if the roster still shows it: a Pane gone
         // by any path is the roster's to notice, and it falls back to the
         // grid — never a blank cockpit.
@@ -4365,25 +4360,6 @@ impl Render for CockpitView {
                 pane.clear_tool_target();
             }
         }
-
-        // A selection is only real while its rows draw (#27): zooming below
-        // L1, parking the Pane, or fullscreening another Thread clears it
-        // here rather than leaving invisible clipboard state behind cmd-c.
-        // The registries of Threads without a Pane go with it.
-        if self.selection.active_thread().is_some_and(|thread| {
-            level != Level::Transcript
-                || self.pane_for(thread).is_none()
-                || self
-                    .cockpit
-                    .roster()
-                    .fullscreen()
-                    .is_some_and(|shown| shown != PaneIdentity::Thread(thread))
-        }) {
-            self.selection.clear();
-        }
-        let panes = &self.panes;
-        self.selection
-            .retain_threads(|thread| panes.iter().any(|pane| pane.thread() == Some(thread)));
 
         if self.context_usage.is_some_and(|(thread, _)| {
             level != Level::Transcript
@@ -4485,13 +4461,26 @@ impl Render for CockpitView {
                 })
             })
             .unwrap_or_else(|| self.focus.clone());
-        if self.settings_open {
+        use gpui::component::WindowExt as _;
+        let native_text_focused = gpui::base::TextSelection::has_selection(window, cx)
+            && self
+                .panes
+                .get(self.focused())
+                .is_some_and(|pane| pane.transcript_focus.contains_focused(window, cx));
+        if window.has_active_dialog(cx) || native_text_focused {
+            // Native text and dialogs keep their own keyboard focus.
+        } else if self.settings_open {
             // The pump must not steal focus from Settings search or controls.
             if !self.settings_focus.contains_focused(window, cx) {
-                window.focus(&self.settings_focus);
+                window.focus(&self.settings_focus, cx);
             }
-        } else if !wanted.is_focused(window) {
-            window.focus(&wanted);
+        } else if !self
+            .popover
+            .as_ref()
+            .is_some_and(|open| open.kind.picker_slot().is_some())
+            && !wanted.is_focused(window)
+        {
+            window.focus(&wanted, cx);
         }
 
         let frame = || {
@@ -4609,7 +4598,6 @@ impl Render for CockpitView {
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|view, _: &MouseUpEvent, _, cx| {
-                    view.selection.release();
                     view.end_seam_drag(cx);
                     if view.drop_preview.take().is_some() {
                         cx.notify();
@@ -4623,9 +4611,7 @@ impl Render for CockpitView {
                     } else {
                         view.end_seam_drag(cx);
                     }
-                    return;
                 }
-                view.pointer_drag(event, cx)
             }))
             // A press anywhere the popovers did not swallow dismisses the
             // open Composer menu, picker and band popover — Pane bodies,
@@ -4670,11 +4656,6 @@ impl Render for CockpitView {
             // phase, so it runs before a Pane's own press anchors a fresh
             // one. A press on the nav or the strip deselects exactly like
             // one on a transcript (#27).
-            .capture_any_mouse_down(cx.listener(|view, _: &MouseDownEvent, _, cx| {
-                if view.selection.clear() {
-                    cx.notify();
-                }
-            }))
             // The nav on the left at its own width, the Cockpit filling the
             // rest on the `--ground`. Fullscreen keeps the nav visible — a
             // deliberate override of sidebar-and-impl.md §3 ("the nav hides
@@ -4695,6 +4676,7 @@ impl Render for CockpitView {
             .children(self.context_menu_element(cx))
             .children(self.context_usage_element(cx))
             .children(self.settings_element(cx))
+            .children(gpui::component::Root::render_dialog_layer(window, cx))
     }
 }
 
@@ -4714,17 +4696,21 @@ impl CockpitView {
             .min_h_0()
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |view, event: &MouseDownEvent, _, cx| {
-                    view.pointer_down(index, event, cx)
+                cx.listener(move |view, event: &MouseDownEvent, window, cx| {
+                    view.pointer_down(index, event, window, cx)
                 }),
             )
             .on_mouse_down(
                 MouseButton::Right,
-                cx.listener(move |view, event: &MouseDownEvent, _, cx| {
+                cx.listener(move |view, event: &MouseDownEvent, window, cx| {
                     let Some(thread) = view.panes.get(index).and_then(PaneView::thread) else {
                         return;
                     };
                     cx.stop_propagation();
+                    let copied = gpui::base::TextSelection::selected_text(window, cx)
+                        .trim_end_matches('\n')
+                        .to_string();
+                    view.native_copy = (!copied.is_empty()).then_some(copied);
                     view.focus_pane(index);
                     view.open_context_menu(MenuTarget::Pane(thread), event.position, cx);
                 }),
@@ -4884,9 +4870,9 @@ impl CockpitView {
             return;
         };
         self.focus_pane(index);
-        self.selection.clear();
+        gpui::base::TextSelection::clear(window, cx);
         self.panes[index].toggle_tool(call);
-        window.focus(&self.panes[index].tool_focus());
+        window.focus(&self.panes[index].tool_focus(), cx);
         cx.notify();
     }
 
@@ -5378,24 +5364,15 @@ impl CockpitView {
             }
             None => SharedString::from(provider_title(provider)),
         };
-        let model_chip = div()
-            .id(("model-picker", thread.get() as usize))
-            .flex()
-            .flex_shrink_0()
-            .child(pane::model_picker(Some(provider), label))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                    // The control is this Pane's: land on it first, then
-                    // toggle — and stop the press so the root's
-                    // dismissal cannot close what this just opened.
-                    cx.stop_propagation();
-                    if let Some(index) = view.pane_for(thread) {
-                        view.focus_pane(index);
-                    }
-                    view.toggle_provider_picker(thread, cx);
-                }),
-            );
+        let model_chip = self.choice_menu(
+            index,
+            Kind::Provider,
+            crate::components::button(("model-picker", thread.get() as usize))
+                .p_0()
+                .h_auto()
+                .child(pane::model_picker(Some(provider), label)),
+            cx,
+        );
         // The effort chip beside it — only when the model takes one; a
         // model with no ladder (haiku) draws no chip rather than a dead one.
         let ladder =
@@ -5408,21 +5385,15 @@ impl CockpitView {
                     None => SharedString::from("effort"),
                 },
             };
-            div()
-                .id(("effort-picker", thread.get() as usize))
-                .flex()
-                .flex_shrink_0()
-                .child(pane::effort_picker(label))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                        cx.stop_propagation();
-                        if let Some(index) = view.pane_for(thread) {
-                            view.focus_pane(index);
-                        }
-                        view.toggle_effort_picker(thread, cx);
-                    }),
-                )
+            self.choice_menu(
+                index,
+                Kind::Effort,
+                crate::components::button(("effort-picker", thread.get() as usize))
+                    .p_0()
+                    .h_auto()
+                    .child(pane::effort_picker(label)),
+                cx,
+            )
         });
         Some(
             div()
@@ -5436,17 +5407,95 @@ impl CockpitView {
         )
     }
 
-    /// The effort chip's click: the root chip's toggle grammar.
-    fn toggle_effort_picker(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        if self.popover.as_ref().is_some_and(|open| {
-            open.pane == PaneIdentity::Thread(thread) && matches!(open.kind, Kind::Effort)
-        }) {
-            self.popover = None;
-            cx.notify();
-            return;
+    fn choice_menu(
+        &self,
+        index: usize,
+        kind: Kind,
+        trigger: gpui::component::button::Button,
+        cx: &mut Context<Self>,
+    ) -> crate::components::ChoiceMenu {
+        let identity = self.panes[index].identity;
+        let slot = kind.picker_slot().expect("native choice menu");
+        let (effort, band) = slot;
+        let open = self
+            .popover
+            .as_ref()
+            .filter(|open| open.pane == identity && open.kind.picker_slot() == Some(slot));
+        let choices = open
+            .map(|open| {
+                let mut provider = None;
+                open.rows
+                    .iter()
+                    .map(|row| {
+                        let section = row.inert
+                            && row.consequence_is_inert()
+                            && provider_of_title(&row.name).is_some();
+                        if section {
+                            provider = provider_of_title(&row.name);
+                        }
+                        crate::components::Choice {
+                            label: row.name.clone(),
+                            checked: row.active,
+                            disabled: row.inert,
+                            section,
+                            icon: provider.map(|provider| match provider {
+                                Provider::Claude => {
+                                    (crate::icons::CLAUDE, crate::theme::PROVIDER_CLAUDE)
+                                }
+                                Provider::Codex => {
+                                    (crate::icons::CODEX, crate::theme::PROVIDER_CODEX)
+                                }
+                            }),
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let weak = cx.entity().downgrade();
+        let picker = weak.clone();
+        crate::components::ChoiceMenu {
+            id: format!("choice-{identity:?}-{effort}").into(),
+            trigger,
+            choices,
+            open: open.is_some(),
+            return_focus: self.panes[index].composer.focus_handle(cx),
+            on_open: std::rc::Rc::new(move |open, _, cx| {
+                let _ = weak.update(cx, |view, cx| {
+                    if open {
+                        if let Some(index) = view.index_of(identity) {
+                            view.focus_pane(index);
+                        }
+                        if band {
+                            view.open_band_popover(
+                                if effort {
+                                    pane::BandChip::Effort
+                                } else {
+                                    pane::BandChip::Provider
+                                },
+                                cx,
+                            );
+                        } else if let Some(thread) = identity.thread() {
+                            if effort {
+                                view.open_effort_picker(thread, cx);
+                            } else {
+                                view.open_provider_picker(thread, cx);
+                            }
+                        }
+                    } else if view.popover.as_ref().is_some_and(|open| {
+                        open.pane == identity && open.kind.picker_slot() == Some(slot)
+                    }) {
+                        view.popover = None;
+                        cx.notify();
+                    }
+                });
+            }),
+            on_pick: std::rc::Rc::new(move |at, _, cx| {
+                let _ = picker.update(cx, |view, cx| view.pick(at, cx));
+            }),
         }
-        self.open_effort_picker(thread, cx);
     }
+
+    /// The effort chip's click: the root chip's toggle grammar.
 
     /// The effort picker in the Composer slot: the operator's default for
     /// the provider on top (what it resolves to, named), then the ladder
@@ -5518,16 +5567,6 @@ impl CockpitView {
 
     /// The chip's click: close an open provider picker on this Thread, or
     /// open one — the root chip's toggle grammar.
-    fn toggle_provider_picker(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
-        if self.popover.as_ref().is_some_and(|open| {
-            open.pane == PaneIdentity::Thread(thread) && matches!(open.kind, Kind::Provider)
-        }) {
-            self.popover = None;
-            cx.notify();
-            return;
-        }
-        self.open_provider_picker(thread, cx);
-    }
 
     /// The whole nav column for this frame, rows wired to their Threads
     /// (#21). It paints inside the cockpit's own render — same entity, same
@@ -6110,7 +6149,7 @@ mod tests {
             .group
             .unwrap();
         cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-w", CloseThread, None)]));
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
 
         view.update(cx, |view, cx| view.enter_group(group, cx));
         view.read_with(cx, |view, _| {
@@ -6142,7 +6181,7 @@ mod tests {
                 KeyBinding::new("enter", Submit, None),
             ])
         });
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, cx| view.enter_group(group, cx));
         cx.simulate_keystrokes("cmd-t");
         view.read_with(cx, |view, _| {
@@ -6183,7 +6222,7 @@ mod tests {
             .unwrap()
             .group
             .unwrap();
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, cx| {
             view.enter_group(group, cx);
             view.open_draft(DraftTarget::Main, cx);
@@ -6299,7 +6338,7 @@ mod tests {
             })
             .unwrap();
         }
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1200.), px(800.)));
         view.update(cx, |view, cx| {
             view.nav_filter = Some(project);
@@ -6313,6 +6352,21 @@ mod tests {
                 [ids[0], ids[1], fourth, third]
             );
         });
+    }
+
+    // Match main: Root mounts the toolkit selection layer, menus and dialogs.
+    fn add_cockpit_window(
+        cx: &mut TestAppContext,
+        build: impl FnOnce(&mut Window, &mut Context<CockpitView>) -> CockpitView,
+    ) -> (Entity<CockpitView>, &mut gpui::VisualTestContext) {
+        let (root, cx) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|cx| build(window, cx));
+            gpui::component::Root::new(view, window, cx)
+        });
+        let view = root.read_with(cx, |root, _| {
+            root.view().clone().downcast::<CockpitView>().unwrap()
+        });
+        (view, cx)
     }
 
     /// Let the pump's timer fire: the test clock does not move on its own.
@@ -6339,7 +6393,7 @@ mod tests {
     fn clicking_the_context_ring_shows_current_and_maximum_tokens(cx: &mut TestAppContext) {
         let (core, fake) = cockpit("context-click", 1);
         bind_production_keys(cx);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         fake.streams.borrow()[0]
             .send(SessionEvent::TokenUsage {
@@ -6415,7 +6469,7 @@ mod tests {
         cx.update(|cx| {
             cx.bind_keys([KeyBinding::new("y", Allow, Some("Decision"))]);
         });
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         fake.streams.borrow()[0].send(decision("perm_01")).unwrap();
         tick(cx);
         view.read_with(cx, |view, _| {
@@ -6476,7 +6530,7 @@ mod tests {
     fn a_question_decision_is_answered_by_its_form(cx: &mut TestAppContext) {
         let (core, fake) = cockpit("question-form", 1);
         bind_production_keys(cx);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
         fake.streams.borrow()[0].send(question("q_01")).unwrap();
         tick(cx);
@@ -6534,7 +6588,7 @@ mod tests {
     fn a_typed_line_answers_a_question_in_the_operators_words(cx: &mut TestAppContext) {
         let (core, fake) = cockpit("question-typed", 1);
         bind_production_keys(cx);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
         fake.streams.borrow()[0].send(question("q_02")).unwrap();
         tick(cx);
@@ -6566,7 +6620,7 @@ mod tests {
     #[gpui::test]
     fn a_titlers_answer_names_only_an_untitled_thread(cx: &mut TestAppContext) {
         let (core, _fake) = cockpit("titler-adopt", 2);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         let (first, second) = view.read_with(cx, |view, _| {
             let threads = view.cockpit.threads();
             (threads[0], threads[1])
@@ -6596,7 +6650,7 @@ mod tests {
     #[gpui::test]
     fn clicking_a_keycap_runs_its_own_decide_verb(cx: &mut TestAppContext) {
         let (core, fake) = cockpit("keycap-click", 1);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
         fake.streams.borrow()[0].send(decision("perm_01")).unwrap();
         cx.simulate_resize(gpui::size(px(1440.), px(900.)));
@@ -6675,7 +6729,7 @@ mod tests {
                 KeyBinding::new("backspace", crate::composer::Backspace, None),
             ]);
         });
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         tick(cx);
         let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
         // A streaming turn makes the Session busy; the next prompt queues.
@@ -6741,7 +6795,7 @@ mod tests {
         cx.update(|cx| {
             cx.bind_keys([KeyBinding::new("cmd-w", CloseThread, None)]);
         });
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         tick(cx);
         let closed = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
 
@@ -6771,7 +6825,7 @@ mod tests {
                 KeyBinding::new("cmd-o", ReopenThread, None),
             ]);
         });
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         tick(cx);
         let closed = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
         cx.simulate_keystrokes("cmd-w");
@@ -6828,7 +6882,7 @@ mod tests {
                 KeyBinding::new("cmd-o", ReopenThread, None),
             ]);
         });
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         tick(cx);
         let (a, b) = created(&view, cx);
 
@@ -6858,7 +6912,7 @@ mod tests {
                 KeyBinding::new("cmd-o", ReopenThread, None),
             ]);
         });
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         tick(cx);
         let (a, b) = created(&view, cx);
 
@@ -6911,7 +6965,7 @@ mod tests {
                 KeyBinding::new("cmd-o", ReopenThread, None),
             ]);
         });
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         tick(cx);
         view.read_with(cx, |view, _| assert_eq!(view.panes.len(), 1));
 
@@ -6945,7 +6999,7 @@ mod tests {
         cx.update(|cx| {
             cx.bind_keys([KeyBinding::new("y", Allow, Some("Wall"))]);
         });
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, cx| view.enter_group(group, cx));
         // A 24-member Group lays out on `groups::grid`, which gives 5 columns
         // here, not the 6 the old global wall's `columns()` gave — so 1440
@@ -7009,7 +7063,7 @@ mod tests {
     #[gpui::test]
     fn resizing_the_window_changes_every_panes_level(cx: &mut TestAppContext) {
         let (core, _fake) = cockpit("resize", 4);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.run_until_parked();
 
         let wide = cx.update(|window, cx| view.read(cx).level_now(window));
@@ -7063,7 +7117,7 @@ mod tests {
                 KeyBinding::new("enter", Submit, None),
             ]);
         });
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, _| view.aim_launch(&repo));
         tick(cx);
 
@@ -7107,7 +7161,7 @@ mod tests {
         cx.update(|cx| {
             cx.bind_keys([KeyBinding::new("a", Always, Some("Wall"))]);
         });
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         // Wall range, as above: the "Wall" key context only exists there.
         cx.simulate_resize(gpui::size(px(1440.), px(900.)));
         // `decision()` offers no standing answer.
@@ -7145,7 +7199,7 @@ mod tests {
                 KeyBinding::new("enter", Submit, None),
             ]);
         });
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, _| view.aim_launch(&repo));
         tick(cx);
 
@@ -7211,7 +7265,7 @@ mod tests {
         let store = Store::open(base.join("threads")).unwrap();
         let core = Cockpit::new(store, Box::new(fake));
         bind_band_keys(cx);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, cx| {
             view.aim_launch(&repo_one);
             // The second project holds one registered worktree — made
@@ -7331,7 +7385,7 @@ mod tests {
         let store = Store::open(base.join("threads")).unwrap();
         let core = Cockpit::new(store, Box::new(fake.clone()));
         bind_band_keys(cx);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, _| view.aim_launch(&repo));
         tick(cx);
 
@@ -7432,7 +7486,7 @@ mod tests {
                 sent: sent.clone(),
             }),
         );
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         let (submitted, other) = view.update(cx, |view, cx| {
             view.aim_launch(&repo);
             let submitted = view.panes[view.focused()].identity.draft().unwrap();
@@ -7531,7 +7585,7 @@ mod tests {
         let store = Store::open(base.join("threads")).unwrap();
         let core = Cockpit::new(store, Box::new(fake.clone()));
         bind_band_keys(cx);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, _| view.aim_launch(&repo));
         tick(cx);
         *fake.fail_send.borrow_mut() = true;
@@ -7585,7 +7639,7 @@ mod tests {
         let store = Store::open(base.join("threads")).unwrap();
         let core = Cockpit::new(store, Box::new(fake));
         bind_band_keys(cx);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, _| view.aim_launch(&repo));
         tick(cx);
 
@@ -7641,7 +7695,7 @@ mod tests {
         cx.update(|cx| {
             cx.bind_keys([KeyBinding::new("y", Allow, Some("Decision"))]);
         });
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         tick(cx);
 
         cx.simulate_keystrokes("y");
@@ -7660,7 +7714,7 @@ mod tests {
     fn clicking_a_pane_focuses_it_and_the_keyboard_follows(cx: &mut TestAppContext) {
         let (mut core, _fake) = cockpit("click-focus", 2);
         let group = group_all(&mut core);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, cx| view.enter_group(group, cx));
         // Two Panes side by side, each big enough to hold a Composer even
         // with the 208px nav (#21) taken off the left.
@@ -7696,7 +7750,7 @@ mod tests {
     #[gpui::test]
     fn wheel_scroll_detaches_from_the_tail_and_scrolling_back_reattaches(cx: &mut TestAppContext) {
         let (core, fake) = cockpit("scroll-detach", 1);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         let say = |line: usize| {
             fake.streams.borrow()[0]
@@ -7711,7 +7765,7 @@ mod tests {
         tick(cx);
         let (offset, max) = view.read_with(cx, |view, _| {
             let scroll = &view.panes[0].scroll;
-            (scroll.offset().y, scroll.max_offset().height)
+            (scroll.offset().y, scroll.max_offset().y)
         });
         assert!(max > px(0.), "the transcript must overflow for this test");
         assert!(
@@ -7752,7 +7806,7 @@ mod tests {
         tick(cx);
         view.read_with(cx, |view, _| {
             let scroll = &view.panes[0].scroll;
-            let gap = scroll.max_offset().height + scroll.offset().y;
+            let gap = scroll.max_offset().y + scroll.offset().y;
             assert!(
                 gap <= TAIL_SLACK,
                 "scrolling to the bottom reattaches the tail: {gap:?}"
@@ -7771,7 +7825,7 @@ mod tests {
         cx.update(|cx| {
             cx.bind_keys([KeyBinding::new("cmd-c", CopySelection, None)]);
         });
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         fake.streams.borrow()[0]
             .send(SessionEvent::TextDelta {
@@ -7805,25 +7859,54 @@ mod tests {
         block: usize,
         byte: usize,
     ) -> gpui::Point<gpui::Pixels> {
-        view.read_with(cx, |view, _| {
+        cx.update(|window, cx| {
+            let view = view.read(cx);
             let thread = view.panes[0].thread().unwrap();
-            let id = view
-                .cockpit
-                .thread(thread)
-                .map(|open| open.transcript())
-                .expect("a transcript")
-                .blocks()[block]
-                .id;
-            let at = view
-                .selection
-                .caret_position(thread, id, 0, byte)
-                .expect("a rendered caret");
-            // Half a pixel INTO the character to the right of the boundary.
-            // Pressing exactly on a boundary is a rounding tie, and which
-            // way it falls moves with the type ramp — Soft's 12px body
-            // tipped every one of these presses a glyph left. The test is
-            // about the character, so it presses inside it.
-            gpui::point(at.x + px(0.5), at.y)
+            let blocks = view.cockpit.thread(thread).unwrap().transcript().blocks();
+            let current = &blocks[block];
+            let (id, item, paragraphs, text) = if current.markdown.is_some() {
+                let start = (0..=block)
+                    .rev()
+                    .take_while(|index| blocks[*index].markdown.is_some())
+                    .last()
+                    .unwrap();
+                let text = match &current.body {
+                    ferrite_core::transcript::Body::Paragraph { spans } => spans
+                        .iter()
+                        .map(|span| span.text.as_str())
+                        .collect::<String>(),
+                    _ => current.markdown.clone().unwrap(),
+                };
+                (
+                    format!(
+                        "markdown-{}-{:?}",
+                        thread.get(),
+                        current.markdown_run.unwrap_or(blocks[start].id)
+                    ),
+                    block - start,
+                    blocks[start..]
+                        .iter()
+                        .take_while(|block| block.markdown.is_some())
+                        .count(),
+                    text,
+                )
+            } else {
+                let text = view
+                    .selection
+                    .registered(thread)
+                    .into_iter()
+                    .find(|(id, ordinal, _, _)| *id == current.id && *ordinal == 0)
+                    .unwrap()
+                    .3;
+                (
+                    format!("literal-{}-{:?}-0", thread.get(), current.id),
+                    0,
+                    1,
+                    text,
+                )
+            };
+            crate::rich::testing::caret(&id, item, paragraphs, &text, byte, window, cx)
+                .expect("a rendered native caret")
         })
     }
 
@@ -7843,15 +7926,14 @@ mod tests {
         });
     }
 
-    /// #27: double-click takes the word under the pointer, and dragging on
-    /// extends word-wise; triple-click takes the whole rendered run.
+    /// Native selection: double-click takes a word; triple-click a paragraph.
     #[gpui::test]
     fn double_click_selects_the_word_and_triple_click_the_line(cx: &mut TestAppContext) {
         let (core, fake) = cockpit("select-clicks", 1);
         cx.update(|cx| {
             cx.bind_keys([KeyBinding::new("cmd-c", CopySelection, None)]);
         });
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         fake.streams.borrow()[0]
             .send(SessionEvent::TextDelta {
@@ -7868,20 +7950,8 @@ mod tests {
         cx.simulate_keystrokes("cmd-c");
         assert_eq!(clipboard(cx).as_deref(), Some("make"));
 
-        // Held down, the drag extends word-wise: mid "honest" sweeps both
-        // whole words and everything between.
-        cx.simulate_click(on_make, gpui::Modifiers::none());
-        press(cx, on_make, 2);
-        let on_honest = caret(&view, cx, 1, 10);
-        cx.simulate_mouse_move(on_honest, gpui::MouseButton::Left, gpui::Modifiers::none());
-        cx.simulate_mouse_up(on_honest, gpui::MouseButton::Left, gpui::Modifiers::none());
-        cx.simulate_keystrokes("cmd-c");
-        assert_eq!(
-            clipboard(cx).as_deref(),
-            Some("make it fast\nkeep it honest")
-        );
-
         // Triple-click takes the rendered run whole.
+        let on_honest = caret(&view, cx, 1, 10);
         press(cx, on_honest, 3);
         cx.simulate_mouse_up(on_honest, gpui::MouseButton::Left, gpui::Modifiers::none());
         cx.simulate_keystrokes("cmd-c");
@@ -7899,7 +7969,7 @@ mod tests {
         cx.update(|cx| {
             cx.bind_keys([KeyBinding::new("cmd-c", CopySelection, None)]);
         });
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         fake.streams.borrow()[0]
             .send(SessionEvent::TextDelta {
@@ -7940,7 +8010,7 @@ mod tests {
         cx.update(|cx| {
             cx.bind_keys([KeyBinding::new("cmd-c", CopySelection, None)]);
         });
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         let stream = fake.streams.borrow();
         stream[0]
@@ -7980,15 +8050,89 @@ mod tests {
         cx.simulate_keystrokes("cmd-c");
         assert_eq!(
             clipboard(cx).as_deref(),
-            Some("before\nBash(echo hi)\ndone\nafter"),
+            Some("before\n\nBash(echo hi)\n\ndone\n\nafter"),
             "the exit-0 chip and the ⏺ are chrome and must not copy"
         );
     }
 
     #[gpui::test]
+    fn consecutive_shell_calls_share_one_disclosure_and_keep_failures_visible(
+        cx: &mut TestAppContext,
+    ) {
+        let (core, fake) = cockpit("shell-group", 1);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+        for (index, command) in ["uname -srm", "date", "pwd", "git status --short"]
+            .iter()
+            .enumerate()
+        {
+            fake.streams.borrow()[0]
+                .send(SessionEvent::ToolStarted {
+                    id: format!("shell-{index}"),
+                    name: "commandExecution".into(),
+                    input: serde_json::json!({"command": command}),
+                })
+                .unwrap();
+            fake.streams.borrow()[0]
+                .send(SessionEvent::ToolCompleted {
+                    id: format!("shell-{index}"),
+                    output: format!("output {index}"),
+                    is_error: index == 2,
+                    result: ferrite_core::ToolResult::Opaque,
+                })
+                .unwrap();
+        }
+        tick(cx);
+        assert!(
+            cx.debug_bounds("tool-group-shell-0").is_some(),
+            "four calls should render one activity summary"
+        );
+        assert!(
+            cx.debug_bounds("tool-group-failures-shell-0").is_some(),
+            "failure remains visible when closed"
+        );
+        view.read_with(cx, |view, _| {
+            let runs = view.selection.registered(thread);
+            assert!(
+                !runs.iter().any(|(_, _, _, text)| text == "output 0"),
+                "successful output starts collapsed"
+            );
+        });
+        let chevron = view.read_with(cx, |view, _| {
+            view.panes[0].tool_bounds("shell-0").unwrap().center()
+        });
+        cx.simulate_click(chevron, gpui::Modifiers::none());
+        tick(cx);
+        view.read_with(cx, |view, _| {
+            let runs = view.selection.registered(thread);
+            for index in 0..4 {
+                assert!(runs
+                    .iter()
+                    .any(|(_, _, _, text)| text == &format!("output {index}")));
+            }
+        });
+        fake.streams.borrow()[0]
+            .send(SessionEvent::ToolStarted {
+                id: "shell-4".into(),
+                name: "Bash".into(),
+                input: serde_json::json!({"command": "echo next"}),
+            })
+            .unwrap();
+        tick(cx);
+        assert!(cx.debug_bounds("tool-group-running-shell-0").is_some());
+        view.read_with(cx, |view, _| {
+            assert!(
+                view.panes[0].tool_expanded("shell-0"),
+                "streaming preserves disclosure choice"
+            )
+        });
+    }
+
+    #[gpui::test]
     fn multiline_tool_input_is_compact_and_disclosable_while_running(cx: &mut TestAppContext) {
         let (core, fake) = cockpit("multiline-tool-disclosure", 1);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
         let command = "cat <<'EOF'\nlet answer = 42;\nEOF";
@@ -8008,27 +8152,32 @@ mod tests {
             .unwrap();
         tick(cx);
 
-        let chevron = view.read_with(cx, |view, _| {
+        let chevron = view.read_with(cx, |view, cx| {
             let runs = view.selection.registered(thread);
-            assert!(runs.iter().any(|(_, _, _, text)| text == "cat <<'EOF' …"));
+            assert!(runs
+                .iter()
+                .any(|(_, _, _, text)| text.contains("cat <<'EOF' …")));
             assert!(!runs
                 .iter()
                 .any(|(_, _, _, text)| text.contains("let answer")));
             let first = runs
                 .iter()
-                .find(|(_, _, _, text)| text == "Bash")
+                .find(|(_, _, _, text)| text.starts_with("Bash("))
                 .unwrap()
                 .0;
             let next = runs
                 .iter()
-                .find(|(_, _, _, text)| text == "Read")
+                .find(|(_, _, _, text)| text.starts_with("Read("))
                 .unwrap()
                 .0;
             let y = |block| {
-                view.selection
-                    .caret_position(thread, block, 0, 0)
-                    .unwrap()
-                    .y
+                crate::rich::testing::bounds(
+                    &format!("literal-{}-{block:?}-0", thread.get()),
+                    0,
+                    cx,
+                )
+                .unwrap()
+                .top()
             };
             assert!(
                 y(next) - y(first) < px(30.),
@@ -8078,7 +8227,7 @@ mod tests {
         cx: &mut TestAppContext,
     ) {
         let (core, fake) = cockpit("tool-disclosure-pointer", 1);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
         let output = format!("first line\n{}TAIL", "x".repeat(65_540));
@@ -8108,7 +8257,7 @@ mod tests {
         drop(stream);
         tick(cx);
 
-        view.read_with(cx, |view, _| {
+        view.read_with(cx, |view, cx| {
             let transcript = view.cockpit.thread(thread).unwrap().transcript();
             let id = |call: &str| {
                 transcript
@@ -8121,10 +8270,13 @@ mod tests {
                     .unwrap()
             };
             let x = |block| {
-                view.selection
-                    .caret_position(thread, block, 0, 0)
-                    .unwrap()
-                    .x
+                crate::rich::testing::bounds(
+                    &format!("literal-{}-{block:?}-0", thread.get()),
+                    0,
+                    cx,
+                )
+                .unwrap()
+                .left()
             };
             assert_eq!(
                 x(id("toolu_9")),
@@ -8212,7 +8364,7 @@ mod tests {
         bind_production_keys(cx);
         let (root, cx) = cx.add_window_view(|window, cx| {
             let view = cx.new(|cx| CockpitView::new(core, cx));
-            gpui_component::Root::new(view, window, cx)
+            gpui::component::Root::new(view, window, cx)
         });
         let view = root.read_with(cx, |root, _| {
             root.view().clone().downcast::<CockpitView>().unwrap()
@@ -8295,12 +8447,14 @@ mod tests {
     /// window clamps the copy to the window start; with both ends gone the
     /// selection dies instead of resurrecting elsewhere.
     #[gpui::test]
-    fn a_selection_survives_eviction_instead_of_sliding_onto_later_blocks(cx: &mut TestAppContext) {
+    fn an_evicted_native_selection_clears_instead_of_sliding_onto_later_blocks(
+        cx: &mut TestAppContext,
+    ) {
         let (core, fake) = cockpit("select-evict", 1);
         cx.update(|cx| {
             cx.bind_keys([KeyBinding::new("cmd-c", CopySelection, None)]);
         });
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         let say = |from: usize, to: usize| {
             for line in from..to {
@@ -8335,38 +8489,21 @@ mod tests {
         cx.simulate_keystrokes("cmd-c");
         assert_eq!(clipboard(cx).as_deref(), Some(texts.join("\n").as_str()));
 
-        // 203 total: the window is Blocks 3.., every rendered position
-        // shifts by three.
+        // A native document that leaves the rendered window loses its
+        // selection. Copy must never silently move onto replacement text.
+        cx.update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string("kept".into())));
         say(60, 203);
         tick(cx);
         cx.simulate_keystrokes("cmd-c");
-        assert_eq!(
-            clipboard(cx).as_deref(),
-            Some(texts.join("\n").as_str()),
-            "the window slid positions; the selection must not slide"
-        );
-
-        // 206 total: the anchor (Block 5) left the window, the head (7)
-        // lives — the selection clamps to the window start, now Block 6.
-        say(203, 206);
-        tick(cx);
-        cx.simulate_keystrokes("cmd-c");
-        assert_eq!(
-            clipboard(cx).as_deref(),
-            Some(texts[1..].join("\n").as_str()),
-            "an evicted anchor clamps to the surviving remainder"
-        );
-
-        // 208 total: both endpoints gone — the selection dies, and the
-        // clipboard is left alone.
-        cx.update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string("kept".into())));
-        say(206, 208);
+        assert_eq!(clipboard(cx).as_deref(), Some("kept"));
+        cx.update(|window, cx| assert!(!gpui::base::TextSelection::has_selection(window, cx)));
+        say(203, 208);
         tick(cx);
         cx.simulate_keystrokes("cmd-c");
         assert_eq!(
             clipboard(cx).as_deref(),
             Some("kept"),
-            "a fully evicted selection must not resurrect on other Blocks"
+            "evicted selection must not resurrect on other Blocks"
         );
     }
 
@@ -8383,7 +8520,7 @@ mod tests {
         cx.update(|cx| {
             cx.bind_keys([KeyBinding::new("cmd-c", CopySelection, None)]);
         });
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         for line in 0..60 {
             fake.streams.borrow()[0]
@@ -8404,18 +8541,10 @@ mod tests {
         cx.run_until_parked();
         // The first row fully inside the viewport — nonzero, or the wheel
         // did not actually scroll anything back.
-        let row = view.read_with(cx, |view, _| {
-            let scroll = &view.panes[0].scroll;
-            let (bounds, offset) = (scroll.bounds(), scroll.offset().y);
-            let mut row = 0;
-            loop {
-                let item = scroll.bounds_for_item(row).expect("a row in the viewport");
-                if item.top() + offset > bounds.top() + px(20.) {
-                    return row;
-                }
-                row += 1;
-            }
-        });
+        let viewport = view.read_with(cx, |view, _| view.panes[0].scroll.bounds());
+        let row = (0..58)
+            .find(|row| caret(&view, cx, *row, 0).y > viewport.top() + px(20.))
+            .expect("a paragraph in the viewport");
         assert!(row > 0, "the wheel put earlier rows above the viewport");
         // All 60 Blocks render, so row indices are block indices here.
         let expected: Vec<String> = (row..=row + 2)
@@ -8444,7 +8573,7 @@ mod tests {
                 KeyBinding::new("cmd-]", NextPane, None),
             ]);
         });
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, cx| view.enter_group(group, cx));
         fake.streams.borrow()[2].send(decision("perm_03")).unwrap();
         tick(cx);
@@ -8473,7 +8602,7 @@ mod tests {
                 KeyBinding::new("cmd-n", NewThread, None),
             ]);
         });
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         tick(cx);
 
         cx.simulate_keystrokes("cmd-t");
@@ -8498,7 +8627,7 @@ mod tests {
         cx.update(|cx| {
             cx.bind_keys([KeyBinding::new("cmd-f", ToggleFullscreen, None)]);
         });
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, cx| view.enter_group(group, cx));
         // Four Panes in this window sit at Instruments (a 2×2 board of
         // ~273px columns beside the nav). An L2 cell keeps its Composer,
@@ -8568,7 +8697,7 @@ mod tests {
         cx.update(|cx| {
             cx.bind_keys([KeyBinding::new("cmd-f", ToggleFullscreen, None)]);
         });
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, cx| {
             for _ in 0..5 {
                 view.open_draft(DraftTarget::Main, cx);
@@ -8597,8 +8726,9 @@ mod tests {
         let fake = Fake::default();
         let store = Store::open(scratch("launch-provider-draft")).unwrap();
         let core = Cockpit::new(store, Box::new(fake));
-        let (view, cx) =
-            cx.add_window_view(|_, cx| CockpitView::new_with_provider(core, Provider::Codex, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| {
+            CockpitView::new_with_provider(core, Provider::Codex, cx)
+        });
 
         view.read_with(cx, |view, _| {
             assert_eq!(
@@ -8628,7 +8758,7 @@ mod tests {
         };
         let store = Store::open(dir).unwrap();
         let core = Cockpit::new(store, Box::new(Fake::default()));
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
 
         view.read_with(cx, |view, _| {
             assert!(
@@ -8652,7 +8782,7 @@ mod tests {
         cx.update(|cx| {
             cx.bind_keys([KeyBinding::new("cmd-f", ToggleFullscreen, None)]);
         });
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(240.), px(200.)));
         tick(cx);
         let natural = cx.update(|window, cx| view.read(cx).level_now(window));
@@ -8685,7 +8815,7 @@ mod tests {
                 KeyBinding::new("cmd-]", NextPane, None),
             ]);
         });
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, cx| view.enter_group(group, cx));
         tick(cx);
         cx.simulate_keystrokes("cmd-f");
@@ -8720,7 +8850,7 @@ mod tests {
                 KeyBinding::new("cmd-w", CloseThread, None),
             ]);
         });
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         tick(cx);
         cx.simulate_keystrokes("cmd-f");
         let closed = view.read_with(cx, |view, _| {
@@ -8759,7 +8889,7 @@ mod tests {
                 KeyBinding::new("cmd-w", CloseThread, None),
             ]);
         });
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         tick(cx);
         cx.simulate_keystrokes("cmd-f");
         view.read_with(cx, |view, _| {
@@ -8791,7 +8921,7 @@ mod tests {
         cx.update(|cx| {
             cx.bind_keys([KeyBinding::new("cmd-f", ToggleFullscreen, None)]);
         });
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         tick(cx);
         cx.simulate_keystrokes("cmd-f");
         let gone = view.read_with(cx, |view, _| {
@@ -8830,7 +8960,7 @@ mod tests {
         cx.update(|cx| {
             cx.bind_keys([KeyBinding::new("cmd-w", CloseThread, None)]);
         });
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         tick(cx);
         let (grid_order, parked_thread) = view.read_with(cx, |view, _| {
             (
@@ -8885,7 +9015,7 @@ mod tests {
         cx.update(|cx| {
             cx.bind_keys([KeyBinding::new("cmd-f", ToggleFullscreen, None)]);
         });
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         tick(cx);
         view.read_with(cx, |view, _| assert_eq!(view.focused(), 0));
 
@@ -8937,7 +9067,7 @@ mod tests {
                 KeyBinding::new("cmd-o", ReopenThread, None),
             ]);
         });
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         tick(cx);
         let parked = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
         cx.simulate_keystrokes("cmd-w");
@@ -8986,7 +9116,7 @@ mod tests {
         cx.update(|cx| {
             cx.bind_keys([KeyBinding::new("cmd-b", ToggleNav, None)]);
         });
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         tick(cx);
         let before = view.read_with(cx, |view, _| describe_nav(&view.nav_state()));
 
@@ -9037,7 +9167,7 @@ mod tests {
         cx.update(|cx| {
             cx.bind_keys([KeyBinding::new("cmd-b", ToggleNav, None)]);
         });
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         // Sized so the Transcript threshold sits between the two nav
         // widths: Instruments beside the 208px column (330px cell),
         // Transcript beside the 40px rail (498px cell).
@@ -9131,7 +9261,7 @@ mod tests {
         core.send(thread, "one".into());
         core.send(thread, "two".into());
         bind_production_keys(cx);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, cx| {
             view.panes[0]
                 .composer
@@ -9192,7 +9322,7 @@ mod tests {
         core.send(thread, "older".into());
         core.send(thread, "/".into());
         bind_production_keys(cx);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         tick(cx);
 
         cx.simulate_keystrokes("up");
@@ -9228,7 +9358,7 @@ mod tests {
         let thread = core.threads()[0];
         core.send(thread, "history".into());
         bind_production_keys(cx);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         tick(cx);
         cx.update(|window, cx| {
             assert!(view
@@ -9353,7 +9483,7 @@ mod tests {
     fn typing_slash_opens_the_command_menu_and_enter_inserts_the_pick(cx: &mut TestAppContext) {
         let (core, fake) = cockpit("slash-menu", 1);
         bind_production_keys(cx);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         tick(cx);
         // The Session announces its menu — the popover's only source.
@@ -9409,7 +9539,7 @@ mod tests {
     fn escape_dismisses_the_menu_keeps_the_text_and_typing_reopens(cx: &mut TestAppContext) {
         let (core, fake) = cockpit("slash-escape", 1);
         bind_production_keys(cx);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         tick(cx);
         fake.streams.borrow()[0]
@@ -9452,7 +9582,7 @@ mod tests {
     fn typing_at_completes_files_from_the_workspace_binding(cx: &mut TestAppContext) {
         let (core, _fake, _checkout) = bound_cockpit("mention-menu", Provider::Claude);
         bind_production_keys(cx);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         tick(cx);
 
@@ -9504,7 +9634,7 @@ mod tests {
         let store = Store::open(scratch("draft-mentions-store")).unwrap();
         let core = Cockpit::new(store, Box::new(fake));
         bind_production_keys(cx);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, _| view.aim_launch(&project));
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         tick(cx);
@@ -9533,7 +9663,7 @@ mod tests {
         let store = Store::open(base.join("threads")).unwrap();
         let core = Cockpit::new(store, Box::new(fake));
         bind_production_keys(cx);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, _| {
             view.aim_launch(&repo);
             let thread = view
@@ -9642,7 +9772,7 @@ mod tests {
             Box::new(fake.clone()),
         );
         bind_production_keys(cx);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, _| {
             view.aim_launch(&repo);
             view.focused_draft_mut()
@@ -9687,7 +9817,7 @@ mod tests {
         let mut core = Cockpit::new(store, Box::new(fake));
         core.revive(ThreadId::new(9)).unwrap();
         bind_production_keys(cx);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         tick(cx);
 
@@ -9706,7 +9836,7 @@ mod tests {
     fn a_press_on_the_transcript_dismisses_the_open_menu(cx: &mut TestAppContext) {
         let (core, fake) = cockpit("menu-press-dismiss", 1);
         bind_production_keys(cx);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         tick(cx);
         fake.streams.borrow()[0]
@@ -9745,7 +9875,7 @@ mod tests {
         cx.update(|cx| {
             cx.bind_keys([KeyBinding::new("y", Allow, Some("Decision"))]);
         });
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         tick(cx);
         let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
@@ -9817,7 +9947,7 @@ mod tests {
         cx.update(|cx| {
             cx.bind_keys([KeyBinding::new("y", Allow, Some("Decision"))]);
         });
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         tick(cx);
         let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
@@ -9852,7 +9982,7 @@ mod tests {
     #[gpui::test]
     fn the_announced_permission_mode_reaches_the_meta_row_state(cx: &mut TestAppContext) {
         let (core, fake) = cockpit("mode-chip", 1);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         tick(cx);
         let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
@@ -9890,7 +10020,7 @@ mod tests {
     fn picking_a_mention_on_a_codex_thread_stages_the_pill(cx: &mut TestAppContext) {
         let (core, _fake, _checkout) = bound_cockpit("mention-codex", Provider::Codex);
         bind_production_keys(cx);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         tick(cx);
 
@@ -9953,7 +10083,7 @@ mod tests {
     fn a_fresh_thread_lists_the_local_import_entry_atop_the_slash_menu(cx: &mut TestAppContext) {
         let (core, fake) = cockpit("import-entry", 1);
         bind_production_keys(cx);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         tick(cx);
 
@@ -10064,7 +10194,7 @@ mod tests {
             30 * 60,
         );
         bind_production_keys(cx);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, _| view.session_file_roots = roots);
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         tick(cx);
@@ -10148,7 +10278,7 @@ mod tests {
             60,
         );
         bind_production_keys(cx);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, _| view.session_file_roots = roots);
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         tick(cx);
@@ -10204,7 +10334,7 @@ mod tests {
             60,
         );
         bind_production_keys(cx);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, _| view.session_file_roots = roots);
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         tick(cx);
@@ -10256,7 +10386,7 @@ mod tests {
         let (core, _fake) = cockpit("import-none", 1);
         let base = scratch("import-none-roots");
         bind_production_keys(cx);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, _| view.session_file_roots = session_roots(&base));
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         tick(cx);
@@ -10294,7 +10424,7 @@ mod tests {
             1,
         );
         bind_production_keys(cx);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, _| view.session_file_roots = roots);
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         tick(cx);
@@ -10339,7 +10469,7 @@ mod tests {
             1,
         );
         bind_production_keys(cx);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, _| view.session_file_roots = roots);
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         tick(cx);
@@ -10373,7 +10503,7 @@ mod tests {
             60,
         );
         bind_production_keys(cx);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, _| view.session_file_roots = roots);
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         tick(cx);
@@ -10408,7 +10538,7 @@ mod tests {
     fn the_slash_provider_row_opens_the_picker_and_picks_codex(cx: &mut TestAppContext) {
         let (core, fake) = cockpit("provider-pick", 1);
         bind_production_keys(cx);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         tick(cx);
         let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
@@ -10494,7 +10624,7 @@ mod tests {
     fn announced_models_ride_the_picker_and_a_pick_reaims_the_model(cx: &mut TestAppContext) {
         let (core, fake) = cockpit("provider-models", 1);
         bind_production_keys(cx);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         tick(cx);
         let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
@@ -10570,7 +10700,7 @@ mod tests {
     fn a_draft_inherits_the_focused_provider_model_and_only_live_models(cx: &mut TestAppContext) {
         let (core, fake) = cockpit("draft-provider-choice", 2);
         bind_production_keys(cx);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
         fake.streams.borrow()[1]
             .send(SessionEvent::Models {
@@ -10635,7 +10765,7 @@ mod tests {
     ) {
         let (core, _fake) = cockpit("provider-lock-ui", 1);
         bind_production_keys(cx);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         tick(cx);
         let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
@@ -10717,7 +10847,7 @@ mod tests {
     fn reopening_the_picker_and_pressing_enter_keeps_the_standing_choice(cx: &mut TestAppContext) {
         let (core, fake) = cockpit("provider-reopen-noop", 1);
         bind_production_keys(cx);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         tick(cx);
         let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
@@ -10787,7 +10917,7 @@ mod tests {
     fn a_right_click_summons_the_menu_and_delete_takes_two_presses(cx: &mut TestAppContext) {
         let (core, _fake) = cockpit("context-menu", 2);
         bind_production_keys(cx);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         tick(cx);
         let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
@@ -10869,7 +10999,7 @@ mod tests {
         bind_production_keys(cx);
         let (root, cx) = cx.add_window_view(|window, cx| {
             let view = cx.new(|cx| CockpitView::new(core, cx));
-            gpui_component::Root::new(view, window, cx)
+            gpui::component::Root::new(view, window, cx)
         });
         let view = root.read_with(cx, |root, _| {
             root.view().clone().downcast::<CockpitView>().unwrap()
@@ -10884,7 +11014,7 @@ mod tests {
         });
         let card = cx.debug_bounds("settings-card").unwrap();
         cx.simulate_click(
-            card.origin + gpui::point(px(60.), px(200.)),
+            card.origin + gpui::point(px(60.), px(180.)),
             gpui::Modifiers::none(),
         );
         tick(cx);
@@ -10896,7 +11026,7 @@ mod tests {
             "About must scroll into the panel"
         );
         cx.simulate_click(
-            card.origin + gpui::point(px(60.), px(128.)),
+            card.origin + gpui::point(px(60.), px(90.)),
             gpui::Modifiers::none(),
         );
         tick(cx);
@@ -11020,7 +11150,7 @@ mod tests {
             .group
             .unwrap();
         bind_production_keys(cx);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1200.), px(700.)));
         view.update(cx, |view, cx| view.enter_group(group, cx));
         tick(cx);
@@ -11104,7 +11234,7 @@ mod tests {
     fn the_effort_picker_lists_the_models_ladder_and_a_pick_reaims_it(cx: &mut TestAppContext) {
         let (core, fake) = cockpit("effort-picker", 1);
         bind_production_keys(cx);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
         fake.streams.borrow()[0]
             .send(SessionEvent::Models {
@@ -11168,7 +11298,7 @@ mod tests {
     ) {
         let (core, fake) = cockpit("effort-typed", 1);
         bind_production_keys(cx);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
         fake.streams.borrow()[0]
             .send(SessionEvent::Commands {
@@ -11219,7 +11349,7 @@ mod tests {
     fn the_effort_chip_starts_the_thread_on_its_pick(cx: &mut TestAppContext) {
         let (core, _fake) = cockpit("draft-effort", 0);
         bind_production_keys(cx);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         tick(cx);
         view.update(cx, |view, cx| {
             view.open_band_popover(pane::BandChip::Effort, cx);
@@ -11248,7 +11378,7 @@ mod tests {
     fn clicking_the_footer_chip_opens_the_provider_picker(cx: &mut TestAppContext) {
         let (core, _fake) = cockpit("provider-chip-click", 1);
         bind_production_keys(cx);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         tick(cx);
 
@@ -11336,7 +11466,7 @@ mod tests {
                 KeyBinding::new("enter", Submit, None),
             ])
         });
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
 
         view.read_with(cx, |view, _| {
             assert_eq!(view.cockpit.roster().view(), View::Solo);
@@ -11406,7 +11536,7 @@ mod tests {
                 KeyBinding::new("enter", Submit, None),
             ])
         });
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
 
         view.update(cx, |view, cx| view.enter_group(sending, cx));
         cx.simulate_keystrokes("cmd-t");
@@ -11484,7 +11614,7 @@ mod tests {
             .unwrap();
         core.park(threads[1]).unwrap();
         cx.update(|cx| cx.bind_keys([KeyBinding::new("enter", Submit, None)]));
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         cx.run_until_parked();
 
@@ -11566,7 +11696,7 @@ mod tests {
             .unwrap();
         core.rename_thread(threads[2], "Durable drag title")
             .unwrap();
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         cx.run_until_parked();
 
@@ -11608,7 +11738,7 @@ mod tests {
             .group
             .unwrap();
         cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-t", NewThread, None)]));
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, cx| view.enter_group(group, cx));
         cx.simulate_keystrokes("cmd-t");
         let draft = view.read_with(cx, |view, _| view.panes[view.focused()].composer.clone());
@@ -11647,7 +11777,7 @@ mod tests {
     fn a_hundred_member_group_remains_reachable_through_nav_scroll(cx: &mut TestAppContext) {
         let (mut core, _) = cockpit("group-nav-scroll", 100);
         group_all(&mut core);
-        let (_view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1000.), px(320.)));
         cx.run_until_parked();
         let before = cx.debug_bounds("nav-thread-100").unwrap();
@@ -11685,7 +11815,7 @@ mod tests {
             .unwrap()
             .group
             .unwrap();
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, cx| {
             view.enter_group(group, cx);
             view.apply_drop(
@@ -11719,7 +11849,7 @@ mod tests {
         let thread = core.threads()[0];
         core.send(thread, "history".into());
         bind_production_keys(cx);
-        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         tick(cx);
 
         view.update(cx, |view, cx| {

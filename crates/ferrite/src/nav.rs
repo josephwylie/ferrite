@@ -343,12 +343,14 @@ pub fn filter_menu() -> Div {
         .bg(rgb(MENU))
         .shadow(vec![
             BoxShadow {
+                inset: false,
                 color: rgba(SHADOW_FAR).into(),
                 offset: point(px(0.), px(SHADOW_FAR_Y)),
                 blur_radius: px(SHADOW_FAR_BLUR),
                 spread_radius: px(SHADOW_FAR_SPREAD),
             },
             BoxShadow {
+                inset: false,
                 color: rgba(SHADOW_NEAR).into(),
                 offset: point(px(0.), px(SHADOW_NEAR_Y)),
                 blur_radius: px(SHADOW_NEAR_BLUR),
@@ -454,7 +456,7 @@ pub fn nav_tree(scroll: &ScrollHandle) -> Stateful<Div> {
 /// Hang it as a *sibling* of `nav_tree` inside a shared `relative()` parent,
 /// never as a child, or it scrolls away with the content.
 pub fn scrollbar(scroll: &ScrollHandle) -> Div {
-    let max = scroll.max_offset().height;
+    let max = scroll.max_offset().y;
     if max <= px(0.) {
         return div();
     }

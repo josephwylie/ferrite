@@ -85,7 +85,7 @@ impl AssetSource for Assets {
             .iter()
             .find(|(name, _)| *name == path)
             .map(|(_, bytes)| Cow::Borrowed(*bytes))
-            .or_else(|| gpui_component_assets::Assets::get(path).map(|asset| asset.data)))
+            .or_else(|| gpui::assets::Assets::get(path).map(|asset| asset.data)))
     }
 
     fn list(&self, path: &str) -> gpui::Result<Vec<SharedString>> {

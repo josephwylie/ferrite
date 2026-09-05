@@ -7,12 +7,9 @@ description = "Ferrite: native multi-provider agent cockpit (GPUI app)"
 
 [dependencies]
 ferrite-core = { path = "../ferrite-core" }
-# Pinned published release (ADR-0001); upgrades are deliberate events.
-gpui = "=0.2.2"
-# A Longbridge component release on the same GPUI API. Kit 0.6 uses
-# gpui-pre 0.3; adopting that renderer is a separate migration.
-gpui-component = "=0.5.1"
-gpui-component-assets = "=0.5.1"
+# The kit facade keeps the renderer, native platform and components on one
+# compatible stack. Keep the gpui import name for derives and existing code.
+gpui = { package = "gpui-kit", version = "=0.6.0" }
 # The demo script builds real provider events, whose payloads are the vendors'
 # own JSON. Already in the tree via ferrite-core.
 serde_json = { workspace = true }
@@ -20,4 +17,4 @@ serde_json = { workspace = true }
 [dev-dependencies]
 # The smoke render needs a window; gpui's own test harness provides a headless
 # one, so the app's rendering is exercised without a display.
-gpui = { version = "=0.2.2", features = ["test-support"] }
+gpui = { package = "gpui-kit", version = "=0.6.0", features = ["test-support"] }

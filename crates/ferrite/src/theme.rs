@@ -193,6 +193,10 @@ pub const SHADOW_NEAR_BLUR: f32 = 6.0;
 
 /// `#3f3f3f` — `::selection` background; `#ffffff` foreground.
 pub const SELECTION: u32 = 0x3f3f3f;
+/// Native text selection paints over glyphs: a neutral wash keeps the ink visible.
+pub const TEXT_SELECTION_WASH: u32 = 0xffffff2d;
+/// Quiet rules between transcript table rows.
+pub const TABLE_RULE: u32 = 0x333333;
 /// The pressed shade — one step past `FILL`, the only value the prototype
 /// offers above it. An alias like `IDLE`: the prototype declares no press
 /// state (its only `:active` is a 0.96 scale on the collapse button), so a
@@ -596,13 +600,13 @@ pub const FONT_UI: &str = ".SystemUIFont";
 /// existing tokens. Constructors also call this for standalone test windows.
 /// The window mounts the toolkit Root for Settings search input and focus.
 pub fn init_components(cx: &mut gpui::App) {
+    use gpui::component::{Theme, ThemeMode};
     use gpui::{px, rgb, rgba};
-    use gpui_component::{Theme, ThemeMode};
 
     if cx.has_global::<Theme>() {
         return;
     }
-    gpui_component::init(cx);
+    gpui::component::init(cx);
     Theme::change(ThemeMode::Dark, None, cx);
     let theme = Theme::global_mut(cx);
     theme.font_family = FONT_UI.into();
@@ -630,7 +634,7 @@ pub fn init_components(cx: &mut gpui::App) {
     theme.popover = rgb(MENU).into();
     theme.popover_foreground = rgb(TEXT).into();
     theme.ring = rgb(FOCUS).into();
-    theme.selection = rgb(SELECTION).into();
+    theme.selection = rgba(TEXT_SELECTION_WASH).into();
     theme.sidebar = rgb(MENU).into();
     theme.sidebar_foreground = rgb(TEXT_2).into();
     theme.sidebar_accent = rgb(HOVER).into();
