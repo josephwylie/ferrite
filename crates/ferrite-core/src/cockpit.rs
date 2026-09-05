@@ -2473,10 +2473,19 @@ impl Cockpit {
         Some((thread, self.reopen(thread)))
     }
 
-    /// cmd-t (#29): a draft Pane in the current view's scope — a Group's
-    /// pending member, or a loose Solo draft. Nothing durable until its
-    /// first send; it takes focus.
+    /// cmd-t (#29): open a loose Draft and switch the Cockpit to Solo, even
+    /// when the action is invoked from inside a Group. Nothing durable exists
+    /// until the first send; the Draft takes focus.
     pub fn open_draft(&mut self) -> DraftId {
+        let draft = self.roster.open_draft(DraftScope::default());
+        self.roster.set_view(View::Solo);
+        draft
+    }
+
+    /// Open a Draft in the current view. Shortcuts use this path so invoking
+    /// one from a Group preserves that context and the Thread joins the Group
+    /// after its first send succeeds.
+    pub fn open_draft_in_current_view(&mut self) -> DraftId {
         let group = match self.roster.view() {
             View::Group(group) => Some(group),
             View::Solo => None,
@@ -5886,32 +5895,20 @@ mod tests {
     }
 
     #[test]
-    fn a_pending_draft_defers_a_pairs_leave_until_it_sends_or_is_discarded() {
-        let (mut cockpit, _) = cockpit("roster-defer");
-        let threads = opened(&mut cockpit, 4);
-        let sending = pair(&mut cockpit, threads[0], threads[1]);
-        cockpit.enter_group(sending).unwrap();
+    fn a_new_thread_started_from_a_group_remains_outside_the_group() {
+        let (mut cockpit, _) = cockpit("roster-loose-draft");
+        let threads = opened(&mut cockpit, 2);
+        let group = pair(&mut cockpit, threads[0], threads[1]);
+        cockpit.enter_group(group).unwrap();
         let draft = cockpit.open_draft();
-        assert_eq!(
-            cockpit.roster().draft_scope(draft).unwrap().group,
-            Some(sending)
-        );
-        assert_eq!(cockpit.visible().len(), 3, "the pending draft shows");
-
-        cockpit.close(PaneIdentity::Thread(threads[0])).unwrap();
-        assert_eq!(
-            cockpit.groups().get(sending).unwrap().members,
-            threads[..2],
-            "the pair stands while the draft is pending"
-        );
-        assert_eq!(cockpit.roster().pending_leave(sending), Some(threads[0]));
+        assert_eq!(cockpit.roster().view(), View::Solo);
         assert_eq!(
             cockpit.visible(),
-            [PaneIdentity::Thread(threads[1]), PaneIdentity::Draft(draft)],
-            "the leaving member is already gone from view"
+            [PaneIdentity::Draft(draft)],
+            "the new draft Pane opens outside the Group"
         );
-        // The operator writes in the draft, so it holds focus when it sends.
-        cockpit.focus(PaneIdentity::Draft(draft));
+        assert_eq!(cockpit.roster().draft_scope(draft).unwrap().group, None);
+
         let done = cockpit
             .bootstrap_draft(
                 draft,
@@ -5920,35 +5917,23 @@ mod tests {
                     model: None,
                 },
                 main_choice(),
-                "join",
+                "new card",
                 None,
             )
             .unwrap()
             .unwrap();
-        assert!(done.refused_leave.is_none());
         assert_eq!(
-            cockpit.groups().get(sending).unwrap().members,
-            [threads[1], done.thread],
-            "the deferred leave applied once the new member was in"
+            cockpit.groups().get(group).unwrap().members,
+            threads,
+            "sending the draft does not add the Thread to the Group"
         );
+        assert!(cockpit.groups().of(done.thread).is_none());
         assert_eq!(
             cockpit.roster().focused_thread(),
             Some(done.thread),
             "the Thread took the draft's own slot"
         );
         assert_eq!(cockpit.roster().draft_scope(draft), None);
-
-        // The other way out: discarding the draft dissolves the pair as a
-        // plain close would have.
-        let closing = pair(&mut cockpit, threads[2], threads[3]);
-        cockpit.enter_group(closing).unwrap();
-        let draft = cockpit.open_draft();
-        cockpit.close(PaneIdentity::Thread(threads[2])).unwrap();
-        assert_eq!(cockpit.groups().get(closing).unwrap().members.len(), 2);
-        cockpit.close(PaneIdentity::Draft(draft)).unwrap();
-        assert!(cockpit.groups().get(closing).is_none());
-        assert_eq!(cockpit.roster().view(), View::Solo);
-        assert_eq!(cockpit.roster().focused_thread(), Some(threads[3]));
     }
 
     #[test]

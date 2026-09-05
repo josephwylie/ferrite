@@ -29,6 +29,7 @@ use gpui::component::spinner::Spinner;
 use gpui::component::{Sizable as _, Size};
 use std::time::Duration;
 
+use gpui::component::button::Button;
 use gpui::prelude::*;
 use gpui::{
     div, point, pulsating_between, px, radians, relative, rgb, rgba, Animation, AnimationExt,
@@ -382,6 +383,19 @@ pub fn nav_head() -> Div {
         .h(px(NAV_HEAD_H))
         .px(px(ROW_PAD_X))
         .gap(px(ROW_PAD_Y))
+}
+
+/// The persistent door to a new Thread. It sits beside the Project filter,
+/// reusing the same compact icon-control grammar as the rest of the nav.
+/// The cockpit owns the click because opening a draft changes its roster.
+pub fn add_thread_button() -> Button {
+    components::button("add-thread")
+        .debug_selector(|| "add-thread".into())
+        .w(px(ICON_BUTTON))
+        .h(px(ICON_BUTTON))
+        .p_0()
+        .tooltip("New Thread")
+        .child(icon(icons::PLUS, ICON_BUTTON_GLYPH, TEXT_MUTED))
 }
 
 /// The Project filter trigger — the one dropdown navigation has. The

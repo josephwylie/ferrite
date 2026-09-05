@@ -28,7 +28,7 @@
 //! they read.
 
 use gpui::prelude::*;
-use gpui::{div, px, rgb, Div, Stateful, WindowControlArea};
+use gpui::{div, px, rgb, Div, MouseButton, Stateful, WindowControlArea};
 
 use crate::icons::{self, icon};
 use crate::pointer::{Pointer, PointerPressed};
@@ -91,6 +91,13 @@ pub fn drag_region(id: &'static str, maximized: bool) -> Div {
                 // hovered under a caption region, or the press is marked
                 // handled and Windows never starts the move.
                 .occlude()
+                // Window-level text selection otherwise treats this
+                // out-of-transcript press as a drag from the nearest run.
+                // Suppression does not consume the non-client event, so
+                // Windows still receives it and starts the window move.
+                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                    gpui::base::GlobalState::suppress_text_selection(cx);
+                })
                 .window_control_area(WindowControlArea::Drag),
         )
 }
@@ -157,6 +164,12 @@ fn button(
         // hover count at this hitbox, so the root's never runs and the
         // press reaches the frame.
         .occlude()
+        // Caption presses share the window's pointer stream with native
+        // selectable text. Keep them from anchoring a selection at the
+        // nearest transcript run without handling the frame event itself.
+        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+            gpui::base::GlobalState::suppress_text_selection(cx);
+        })
         .window_control_area(area)
         .child(
             icon(glyph, CAPTION_GLYPH, TEXT_MUTED)

@@ -1140,7 +1140,10 @@ impl WindowSelectionState {
         window: &Window,
         cx: &mut Context<Self>,
     ) {
-        if !cx.has_active_drag() {
+        // Auto-scroll must only follow an in-progress drag. A plain click
+        // leaves an anchor behind, so recomputing it on every subsequent mouse
+        // move would synthesize wheel events with no button held.
+        if !cx.has_active_drag() && self.is_selecting {
             self.update_impl(position, Some(window), cx);
             self.update_auto_scroll(position, Some(window), cx);
         }

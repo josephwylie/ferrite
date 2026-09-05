@@ -3190,6 +3190,7 @@ mod tests {
 
     use crate::theme::Theme;
     use gpui::{TestAppContext, VisualTestContext};
+    use instant::Duration;
 
     use crate::input::{EditorMode, InputMode, TextareaMode};
 
@@ -3324,6 +3325,31 @@ mod tests {
             })
         });
         assert_eq!(calls.get(), 1);
+    }
+
+    #[gpui::test]
+    fn focused_cursor_is_visible_immediately_and_then_blinks(cx: &mut TestAppContext) {
+        let input_view = InputView::new(cx);
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        let input = input_view.input;
+
+        cx.update(|window, _| window.activate_window());
+        cx.run_until_parked();
+        cx.update(|window, cx| input.update(cx, |state, cx| state.focus(window, cx)));
+
+        let shown = |cx: &mut VisualTestContext| {
+            cx.update(|window, cx| input.read(cx).show_cursor(window, cx))
+        };
+
+        assert!(shown(&mut cx), "cursor must be visible as soon as it focuses");
+
+        cx.executor().advance_clock(Duration::from_millis(600));
+        cx.run_until_parked();
+        assert!(!shown(&mut cx), "cursor must blink off after one interval");
+
+        cx.executor().advance_clock(Duration::from_millis(600));
+        cx.run_until_parked();
+        assert!(shown(&mut cx), "cursor must blink back on");
     }
 
     #[gpui::test]

@@ -34,13 +34,24 @@ impl BlinkCursor {
         }
     }
 
-    /// Start the blinking
+    /// Start the blinking.
+    ///
+    /// Always restarts from a visible cursor so focusing an input shows the
+    /// caret immediately, and so repeated calls (focus handler plus an
+    /// explicit `focus()`) stay idempotent instead of toggling it back off.
     pub(crate) fn start(&mut self, cx: &mut Context<Self>) {
-        self.blink(self.epoch, cx);
+        self.paused = false;
+        self.visible = true;
+        cx.notify();
+        self.schedule_next(cx);
     }
 
+    /// Stop the blinking and hide the cursor, cancelling any pending toggle.
     pub(crate) fn stop(&mut self, cx: &mut Context<Self>) {
-        self.epoch = 0;
+        self.next_epoch();
+        self.paused = false;
+        self.visible = false;
+        self._task = Task::ready(());
         cx.notify();
     }
 
@@ -50,15 +61,18 @@ impl BlinkCursor {
     }
 
     fn blink(&mut self, epoch: usize, cx: &mut Context<Self>) {
+        // A superseded epoch means a newer start/stop/pause owns the cursor.
         if self.paused || epoch != self.epoch {
-            self.visible = true;
             return;
         }
 
         self.visible = !self.visible;
         cx.notify();
+        self.schedule_next(cx);
+    }
 
-        // Schedule the next blink
+    /// Schedule the next toggle one interval out, superseding any pending one.
+    fn schedule_next(&mut self, cx: &mut Context<Self>) {
         let epoch = self.next_epoch();
         self._task = cx.spawn(async move |this, cx| {
             cx.background_executor().timer(INTERVAL).await;
