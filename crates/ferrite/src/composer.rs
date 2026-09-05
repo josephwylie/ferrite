@@ -8,6 +8,7 @@
 
 use std::ops::Range;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use ferrite_core::prompt_files;
 
@@ -17,7 +18,8 @@ use gpui::{
     ContentMask, Context, DispatchPhase, Element, ElementId, ElementInputHandler, Entity,
     EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId, LayoutId,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, SharedString,
-    Style, TextAlign, TextRun, TextStyle, UTF16Selection, UnderlineStyle, Window, WrappedLine,
+    Style, TextAlign, Task, TextRun, TextStyle, UTF16Selection, UnderlineStyle, Window,
+    WrappedLine,
 };
 
 use crate::line::Line;
@@ -64,6 +66,10 @@ actions!(
     ]
 );
 
+/// Half a blink cycle: the caret is solid this long, then hidden this long,
+/// the rate every platform's native text field uses.
+const BLINK: Duration = Duration::from_millis(500);
+
 /// The most visual rows the box grows to before it scrolls: the prompt
 /// grows with its text, but the transcript above keeps most of the Pane.
 pub const MAX_ROWS: usize = 8;
@@ -107,6 +113,15 @@ pub struct Composer {
     /// A press landed in the line and has not been released: moves extend
     /// the selection from where it landed.
     dragging: bool,
+    /// The caret's current blink phase. Solid whenever the line is unfocused,
+    /// so focusing always lands on a visible caret.
+    caret_visible: bool,
+    /// The running blink cycle — `None` while the line does not hold focus.
+    caret_blink: Option<Task<()>>,
+    /// Bumped whenever the cycle is restarted or stopped, so a timer from a
+    /// superseded cycle retires instead of toggling the caret behind the
+    /// current one.
+    caret_epoch: usize,
 }
 
 impl EventEmitter<Edited> for Composer {}
@@ -128,6 +143,9 @@ impl Composer {
             scroll: 0,
             goal_x: None,
             dragging: false,
+            caret_visible: true,
+            caret_blink: None,
+            caret_epoch: 0,
         }
     }
 
@@ -310,8 +328,57 @@ impl Composer {
 
     fn edited(&mut self, cx: &mut Context<Self>) {
         self.goal_x = None;
+        // The caret just moved: show it solid again and restart the cycle, so
+        // it is never invisible at the moment the operator is looking for it.
+        if self.caret_blink.is_some() {
+            self.start_caret_blink(cx);
+        }
         cx.emit(Edited);
         cx.notify();
+    }
+
+    /// Match the blink cycle to whether this line holds focus. Called from
+    /// the element's prepaint, which sees the window's focus each frame.
+    fn sync_caret_blink(&mut self, focused: bool, cx: &mut Context<Self>) {
+        match (focused, self.caret_blink.is_some()) {
+            (true, false) => self.start_caret_blink(cx),
+            (false, true) => self.stop_caret_blink(),
+            _ => {}
+        }
+    }
+
+    /// Restart the cycle from the solid phase.
+    fn start_caret_blink(&mut self, cx: &mut Context<Self>) {
+        self.caret_visible = true;
+        self.caret_epoch = self.caret_epoch.wrapping_add(1);
+        let epoch = self.caret_epoch;
+        self.caret_blink = Some(cx.spawn(async move |composer, cx| {
+            loop {
+                cx.background_executor().timer(BLINK).await;
+                let Some(composer) = composer.upgrade() else {
+                    return;
+                };
+                let current = composer.update(cx, |composer, cx| {
+                    if composer.caret_epoch != epoch {
+                        return false;
+                    }
+                    composer.caret_visible = !composer.caret_visible;
+                    cx.notify();
+                    true
+                });
+                if !current {
+                    return;
+                }
+            }
+        }));
+        cx.notify();
+    }
+
+    /// Drop the cycle and leave the caret solid for the next focus.
+    fn stop_caret_blink(&mut self) {
+        self.caret_epoch = self.caret_epoch.wrapping_add(1);
+        self.caret_blink = None;
+        self.caret_visible = true;
     }
 
     fn backspace(&mut self, _: &Backspace, _: &mut Window, cx: &mut Context<Self>) {
@@ -1052,6 +1119,14 @@ impl Element for LineElement {
         cx: &mut App,
     ) -> Self::PrepaintState {
         let line_height = window.line_height();
+        // The blink cycle runs only while this line holds focus. Prepaint is
+        // the seam that sees the window's focus every drawn frame, so a click
+        // that lands anywhere else retires the cycle on that same frame.
+        let focused = self.composer.read(cx).focus_handle.is_focused(window);
+        let caret_visible = self.composer.update(cx, |composer, cx| {
+            composer.sync_caret_blink(focused, cx);
+            composer.caret_visible
+        });
         let composer = self.composer.read(cx);
         let selected = composer.line.selection();
         let cursor = composer.line.cursor();
@@ -1075,10 +1150,11 @@ impl Element for LineElement {
         }
         let row_top = |row: usize| bounds.top() + line_height * row - line_height * scroll;
 
-        let (selection, cursor) = if selected.is_empty() {
+        let (selection, cursor) = if selected.is_empty() && focused && caret_visible {
             let at = layout.position(cursor);
-            // The Soft caret: a 2 × 14 `--text-2` bar, square, no radius, no
-            // blink, centred in its row (y = row top + 3 in the 20px row).
+            // The Soft caret: a 2 × 14 `--text-2` bar, square, no radius,
+            // centred in its row (y = row top + 3 in the 20px row). It blinks
+            // on the standard 500ms cycle while the line holds focus.
             let inset = (line_height - px(crate::theme::CARET_H)) / 2.;
             (
                 Vec::new(),
@@ -1401,6 +1477,48 @@ mod tests {
 
     /// The box is one row tall while the text fits and grows a row per
     /// wrapped line, to `MAX_ROWS`; past that it scrolls to the caret.
+    #[gpui::test]
+    fn the_caret_is_solid_on_focus_then_blinks_and_typing_resets_it(cx: &mut TestAppContext) {
+        let (host, cx) = host(cx);
+        let composer = composer(&host, cx);
+        cx.run_until_parked();
+
+        let visible = |cx: &mut VisualTestContext| composer.read_with(cx, |c, _| c.caret_visible);
+
+        assert!(visible(cx), "focusing the line must show the caret at once");
+
+        cx.executor().advance_clock(BLINK + Duration::from_millis(10));
+        cx.run_until_parked();
+        assert!(!visible(cx), "the caret must blink off after half a cycle");
+
+        cx.executor().advance_clock(BLINK + Duration::from_millis(10));
+        cx.run_until_parked();
+        assert!(visible(cx), "the caret must blink back on");
+
+        // Typing while the caret is hidden must bring it straight back.
+        cx.executor().advance_clock(BLINK + Duration::from_millis(10));
+        cx.run_until_parked();
+        assert!(!visible(cx));
+        composer.update(cx, |composer, cx| composer.insert("a", cx));
+        assert!(visible(cx), "typing must restart the cycle solid");
+
+        // Losing focus leaves the caret solid and retires the cycle.
+        cx.update(|window, cx| window.focus(&cx.focus_handle(), cx));
+        cx.run_until_parked();
+        composer.read_with(cx, |composer, _| {
+            assert!(composer.caret_blink.is_none(), "the cycle must retire");
+            assert!(composer.caret_visible);
+        });
+
+        // And it stays solid: an unfocused line has no caret to blink.
+        cx.executor().advance_clock(BLINK * 4);
+        cx.run_until_parked();
+        composer.read_with(cx, |composer, _| {
+            assert!(composer.caret_blink.is_none());
+            assert!(composer.caret_visible);
+        });
+    }
+
     #[gpui::test]
     fn the_box_grows_with_its_text_and_scrolls_past_eight_rows(cx: &mut TestAppContext) {
         let (host, cx) = host(cx);
