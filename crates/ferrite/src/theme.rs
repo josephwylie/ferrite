@@ -477,12 +477,11 @@ pub const USAGE_LINE_GAP: f32 = 2.0;
 /// 320px — a toast's width: a Thread's name, a detail line, room for the
 /// kit's icon and close button.
 pub const TOAST_W: f32 = 320.0;
-/// The focused Pane's ring: a 1px hairline, 2px outside the Pane's border
-/// box. gpui has no `outline-offset`, so it is an absolutely positioned
-/// overlay at `inset(-3px)` inside a non-clipping wrapper; its radii follow
-/// the offset — inner 10, outer 11.
+/// The focused Pane's ring: a 1px hairline lying exactly on the Pane's own
+/// border box — no offset, so focus changes colour and nothing else. It is
+/// an absolutely positioned overlay inside a non-clipping wrapper, since a
+/// ring drawn inside the shell's `overflow_hidden()` would be clipped.
 pub const FOCUS_RING_W: f32 = 1.0;
-pub const FOCUS_RING_OFFSET: f32 = 2.0;
 /// The Decision card: 12px inline margin, 8px below, 8/10 padding, a 10px
 /// gap, and a 15px warning mark.
 #[allow(dead_code)]
