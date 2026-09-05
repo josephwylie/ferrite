@@ -6011,6 +6011,9 @@ mod tests {
     }
 
     impl Session for Scripted {
+        fn set_effort(&mut self, _effort: Option<&str>) -> std::io::Result<()> {
+            Ok(())
+        }
         fn events(&self) -> &Receiver<SessionEvent> {
             &self.rx
         }

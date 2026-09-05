@@ -8,6 +8,7 @@ use std::sync::{mpsc, Arc, Mutex};
 struct Scripted {
     events: Receiver<SessionEvent>,
     sent: Arc<Mutex<Vec<String>>>,
+    efforts: Arc<Mutex<Vec<Option<String>>>>,
     fail_send: Arc<AtomicBool>,
     dropped: Arc<AtomicUsize>,
 }
@@ -17,6 +18,10 @@ impl Drop for Scripted {
     }
 }
 impl Session for Scripted {
+    fn set_effort(&mut self, effort: Option<&str>) -> io::Result<()> {
+        self.efforts.lock().unwrap().push(effort.map(str::to_owned));
+        Ok(())
+    }
     fn events(&self) -> &Receiver<SessionEvent> {
         &self.events
     }
@@ -38,6 +43,7 @@ struct Control {
     gate: Option<mpsc::Sender<io::Result<()>>>,
     events: mpsc::Sender<SessionEvent>,
     sent: Arc<Mutex<Vec<String>>>,
+    efforts: Arc<Mutex<Vec<Option<String>>>>,
     fail_send: Arc<AtomicBool>,
     dropped: Arc<AtomicUsize>,
 }
@@ -71,11 +77,13 @@ enum Plan {
 fn planned(delayed: bool) -> (Plan, Control) {
     let (tx, rx) = mpsc::channel();
     let sent = Arc::new(Mutex::new(Vec::new()));
+    let efforts = Arc::new(Mutex::new(Vec::new()));
     let dropped = Arc::new(AtomicUsize::new(0));
     let fail_send = Arc::new(AtomicBool::new(false));
     let session = Box::new(Scripted {
         events: rx,
         sent: sent.clone(),
+        efforts: efforts.clone(),
         dropped: dropped.clone(),
         fail_send: fail_send.clone(),
     });
@@ -94,6 +102,7 @@ fn planned(delayed: bool) -> (Plan, Control) {
             gate,
             events: tx,
             sent,
+            efforts,
             dropped,
             fail_send,
         },
@@ -403,4 +412,82 @@ fn grouped_draft_revalidates_membership_before_delivering() {
     assert!(replacement.sent().is_empty());
     assert!(cockpit.roster().draft_scope(draft).is_some());
     assert_eq!(cockpit.threads().len(), 2);
+}
+
+#[test]
+fn effort_waits_for_startup_without_losing_the_pending_prompt() {
+    let (plan, mut provider) = planned(true);
+    let mut cockpit = cockpit("startup-effort", vec![plan]);
+    let thread = cockpit.open(Provider::Claude, workspace()).unwrap();
+    cockpit.send(thread, "waiting".into());
+    assert!(matches!(
+        cockpit.set_effort(thread, Some("high".into())),
+        Err(ProvisionError::Busy)
+    ));
+    assert_eq!(cockpit.peek(thread).unwrap().effort, None);
+    assert_eq!(cockpit.thread(thread).unwrap().queued(), Some("waiting"));
+    provider.ready();
+    until(|| {
+        cockpit.pump();
+        !cockpit.thread(thread).unwrap().starting()
+    });
+    assert_eq!(provider.sent(), ["waiting"]);
+    provider.ended();
+    cockpit.pump();
+    cockpit.set_effort(thread, Some("high".into())).unwrap();
+    cockpit.set_effort(thread, None).unwrap();
+    // Default is refreshable even when the stored choice was already None.
+    cockpit.set_effort(thread, None).unwrap();
+    assert_eq!(
+        *provider.efforts.lock().unwrap(),
+        [Some("high".into()), None, None]
+    );
+    assert_eq!(provider.dropped.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn effort_waits_for_handover_then_tunes_in_place_without_consuming_context() {
+    let (old, original) = planned(false);
+    let (new, mut replacement) = planned(true);
+    let mut cockpit = cockpit("handover-effort", vec![old, new]);
+    let thread = cockpit.open(Provider::Claude, workspace()).unwrap();
+    cockpit.send(thread, "before".into());
+    original.ended();
+    cockpit.pump();
+    cockpit
+        .set_provider(thread, choice(Provider::Codex))
+        .unwrap();
+    cockpit.send(thread, "after".into());
+    assert!(matches!(
+        cockpit.set_effort(thread, Some("high".into())),
+        Err(ProvisionError::Busy)
+    ));
+    assert_eq!(cockpit.peek(thread).unwrap().provider, Provider::Claude);
+    assert_eq!(cockpit.thread(thread).unwrap().queued(), Some("after"));
+    let prompt = cockpit.unqueue(thread).unwrap();
+    replacement.ready();
+    until(|| {
+        cockpit.pump();
+        !cockpit.thread(thread).unwrap().starting()
+    });
+    cockpit.set_effort(thread, Some("high".into())).unwrap();
+    assert_eq!(replacement.dropped.load(Ordering::SeqCst), 0);
+    assert_eq!(*replacement.efforts.lock().unwrap(), [Some("high".into())]);
+    assert!(
+        !cockpit
+            .store
+            .load(thread)
+            .unwrap()
+            .last_handover()
+            .unwrap()
+            .delivered
+    );
+    cockpit.send(thread, prompt);
+    let sent = replacement.sent();
+    assert_eq!(sent.len(), 1);
+    assert!(sent[0].contains("before") && sent[0].ends_with("after"));
+    assert_eq!(
+        cockpit.peek(thread).unwrap().effort.as_deref(),
+        Some("high")
+    );
 }

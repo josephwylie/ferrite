@@ -61,7 +61,7 @@ pub struct ClaudeConfig {
     /// Model override passed through to the CLI.
     pub model: Option<String>,
     /// Reasoning effort (`"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`)
-    /// passed through as `--effort`. `None` leaves the CLI's own default.
+    /// applied through flag settings. `None` leaves the CLI's own default.
     pub effort: Option<String>,
     /// The Thread's title, handed to the CLI as the session's display name
     /// (`--name`) so its own session list reads like Ferrite's. Spawn-time
@@ -176,6 +176,8 @@ pub struct ClaudeCapabilities {
     pub commands: Vec<crate::SessionCommand>,
 }
 
+type EffortReply = Arc<Mutex<Option<(String, SyncSender<io::Result<()>>)>>>;
+
 /// A live Claude Session: one CLI process serving one Thread.
 pub struct ClaudeSession {
     child: Arc<Mutex<Child>>,
@@ -189,6 +191,7 @@ pub struct ClaudeSession {
     stdin: ChildStdin,
     events: Receiver<SessionEvent>,
     capabilities: ClaudeCapabilities,
+    effort_reply: EffortReply,
     next_request_id: u64,
 }
 
@@ -225,9 +228,6 @@ impl ClaudeSession {
         }
         if let Some(model) = &config.model {
             command.args(["--model", model.as_str()]);
-        }
-        if let Some(effort) = &config.effort {
-            command.args(["--effort", effort.as_str()]);
         }
         if let Some(mode) = &config.permission_mode {
             command.args(["--permission-mode", mode.as_str()]);
@@ -269,7 +269,14 @@ impl ClaudeSession {
 
         let (sender, events) = sync_channel(EVENT_CHANNEL_CAPACITY);
         let child = Arc::new(Mutex::new(child));
-        let capabilities = read_stdout(stdout, sender, Arc::clone(&child), stderr_tail);
+        let effort_reply = Arc::new(Mutex::new(None));
+        let capabilities = read_stdout(
+            stdout,
+            sender,
+            Arc::clone(&child),
+            stderr_tail,
+            effort_reply.clone(),
+        );
 
         let mut session = Self {
             child,
@@ -278,6 +285,7 @@ impl ClaudeSession {
             stdin,
             events,
             capabilities: ClaudeCapabilities::default(),
+            effort_reply,
             next_request_id: 1,
         };
         // Before the operator is offered anything: ask the CLI what it can do.
@@ -294,7 +302,35 @@ impl ClaudeSession {
         session.capabilities = capabilities
             .recv_timeout(HANDSHAKE_TIMEOUT)
             .unwrap_or_default();
+        // Use the same override layer at startup and later: a CLI --effort
+        // flag would survive clearing effortLevel back to Default.
+        if config.effort.is_some() {
+            session
+                .set_effort(config.effort.as_deref())
+                .map_err(ClaudeSpawnError::Io)?;
+        }
         Ok(session)
+    }
+
+    /// The SDK's applyFlagSettings control, effective from the next turn.
+    /// Wait for acceptance so a rejected setting cannot look successful.
+    pub fn set_effort(&mut self, effort: Option<&str>) -> io::Result<()> {
+        let request_id = self.take_request_id();
+        let (tx, rx) = sync_channel(1);
+        *lock(&self.effort_reply) = Some((request_id.clone(), tx));
+        let result = self
+            .write_line(&serde_json::json!({
+                "type": "control_request",
+                "request_id": request_id,
+                "request": {"subtype": "apply_flag_settings", "settings": {"effortLevel": effort}},
+            }))
+            .and_then(|()| {
+                rx.recv_timeout(HANDSHAKE_TIMEOUT).map_err(|e| {
+                    io::Error::other(format!("effort change was not acknowledged: {e}"))
+                })?
+            });
+        *lock(&self.effort_reply) = None;
+        result
     }
 
     /// Send one user prompt; the CLI starts (or queues) a turn.
@@ -414,6 +450,7 @@ fn read_stdout(
     sender: SyncSender<SessionEvent>,
     child: Arc<Mutex<Child>>,
     stderr_tail: Arc<Mutex<StderrTail>>,
+    effort_reply: EffortReply,
 ) -> Receiver<ClaudeCapabilities> {
     let (handshake, capabilities) = sync_channel(1);
     thread::spawn(move || {
@@ -430,6 +467,28 @@ fn read_stdout(
             // Session.
             let text = String::from_utf8_lossy(&line);
             let text = text.trim_end();
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(text) {
+                let response = &value["response"];
+                let mut pending = lock(&effort_reply);
+                if value["type"] == "control_response"
+                    && pending
+                        .as_ref()
+                        .is_some_and(|(id, _)| response["request_id"].as_str() == Some(id.as_str()))
+                {
+                    let (_, reply) = pending.take().expect("matched above");
+                    let result = if response["subtype"] == "success" {
+                        Ok(())
+                    } else {
+                        Err(io::Error::other(
+                            response["error"]
+                                .as_str()
+                                .unwrap_or("effort change refused"),
+                        ))
+                    };
+                    let _ = reply.send(result);
+                    continue;
+                }
+            }
             if handshake.is_some() {
                 if let Some(capabilities) = wire::parse_capabilities(text, HANDSHAKE_REQUEST_ID) {
                     // The command menu rides the same handshake line; announce

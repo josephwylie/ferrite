@@ -71,9 +71,8 @@ pub struct CodexConfig {
     /// Model override passed through in thread/start.
     pub model: Option<String>,
     /// Reasoning effort (`"low"` … `"xhigh"`, `"max"`, `"ultra"` where the
-    /// model takes it), passed as `config.model_reasoning_effort` on
-    /// thread/start and thread/resume. `None` leaves the server's own
-    /// default; `capabilities().reasoning_effort` reports what took effect.
+    /// model takes it), passed on turn/start. `None` leaves the server's own
+    /// default; `capabilities().reasoning_effort` reports that default.
     pub effort: Option<String>,
     /// Approval posture for this Thread (`"untrusted"`, `"on-request"`,
     /// `"never"`). `None` leaves the server's own configuration alone — which
@@ -206,6 +205,9 @@ pub struct CodexSession {
     events: Receiver<SessionEvent>,
     capabilities: CodexCapabilities,
     thread_id: String,
+    model: String,
+    effort: Option<String>,
+    models: Arc<Mutex<Vec<crate::ModelInfo>>>,
     /// The running turn's id, tracked by the reader from turn/started:
     /// turn/interrupt must name the turn it stops.
     current_turn: Arc<Mutex<Option<String>>>,
@@ -263,6 +265,7 @@ impl CodexSession {
         let child = Arc::new(Mutex::new(child));
         let current_turn = Arc::new(Mutex::new(None));
         let skills = Arc::new(Mutex::new(Vec::new()));
+        let models = Arc::new(Mutex::new(Vec::new()));
         let handshake = read_stdout(
             stdout,
             sender,
@@ -270,6 +273,7 @@ impl CodexSession {
             Arc::clone(&stderr_tail),
             Arc::clone(&current_turn),
             Arc::clone(&skills),
+            Arc::clone(&models),
         );
 
         let mut session = Self {
@@ -280,6 +284,9 @@ impl CodexSession {
             events,
             capabilities: CodexCapabilities::default(),
             thread_id: String::new(),
+            model: String::new(),
+            effort: config.effort.clone(),
+            models,
             current_turn,
             skills,
             cwd: config.cwd.clone(),
@@ -377,12 +384,8 @@ impl CodexSession {
         if let Some(sandbox) = &config.sandbox {
             params["sandbox"] = serde_json::json!(sandbox);
         }
-        if let Some(effort) = &config.effort {
-            // Probed on 0.144.4: both thread/start and thread/resume take
-            // the config override, and the response echoes it back as
-            // `reasoningEffort`.
-            params["config"] = serde_json::json!({"model_reasoning_effort": effort});
-        }
+        // Capture the CLI's default independently of Ferrite's override;
+        // turn/start carries the chosen effort.
         self.write_line(&serde_json::json!({
             "jsonrpc": "2.0",
             "id": id,
@@ -393,11 +396,36 @@ impl CodexSession {
         match await_step(steps, method)? {
             HandshakeStep::Thread(thread) => {
                 self.thread_id = thread.thread_id;
+                self.model = thread.model;
                 self.capabilities = thread.capabilities;
                 Ok(())
             }
             HandshakeStep::Initialized => Err("initialize answered twice".into()),
         }
+    }
+
+    /// Set effort on the existing thread's next turn. Omitting effort after
+    /// an override retains it, so Default must name the server's default.
+    pub fn set_effort(&mut self, effort: Option<&str>) -> io::Result<()> {
+        let effort = match effort {
+            Some(effort) => effort.to_string(),
+            None => self
+                .capabilities
+                .reasoning_effort
+                .clone()
+                .or_else(|| {
+                    lock(&self.models)
+                        .iter()
+                        .find(|row| {
+                            row.value == self.model
+                                || row.resolved.as_deref() == Some(self.model.as_str())
+                        })
+                        .and_then(|row| row.default_effort.clone())
+                })
+                .ok_or_else(|| io::Error::other("Codex has not reported its default effort"))?,
+        };
+        self.effort = Some(effort);
+        Ok(())
     }
 
     /// Send one user prompt; the server starts a turn on the Session's thread.
@@ -409,15 +437,16 @@ impl CodexSession {
     /// Composer's picks become real.
     pub fn send(&mut self, text: &str) -> io::Result<()> {
         let input = wire::input_items(text, &lock(&self.skills), self.cwd.as_deref());
+        let mut params = serde_json::json!({"threadId": self.thread_id, "input": input});
+        if let Some(effort) = &self.effort {
+            params["effort"] = serde_json::json!(effort);
+        }
         let id = self.take_request_id();
         self.write_line(&serde_json::json!({
             "jsonrpc": "2.0",
             "id": id,
             "method": "turn/start",
-            "params": {
-                "threadId": self.thread_id,
-                "input": input,
-            },
+            "params": params,
         }))
     }
 
@@ -573,6 +602,7 @@ fn read_stdout(
     stderr_tail: Arc<Mutex<StderrTail>>,
     current_turn: Arc<Mutex<Option<String>>>,
     skills: Arc<Mutex<Vec<crate::SessionCommand>>>,
+    model_catalog: Arc<Mutex<Vec<crate::ModelInfo>>>,
 ) -> Receiver<Result<HandshakeStep, String>> {
     let (step_sender, steps) = sync_channel(2);
     thread::spawn(move || {
@@ -654,6 +684,7 @@ fn read_stdout(
                     models_pending = false;
                     if let Ok(result) = response {
                         let models = wire::parse_models(&result);
+                        *lock(&model_catalog) = models.clone();
                         // The picker's rows (#25); a server listing none
                         // announces nothing and the fallback catalog stands.
                         if !models.is_empty()

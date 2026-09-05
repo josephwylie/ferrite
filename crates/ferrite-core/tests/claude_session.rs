@@ -630,7 +630,9 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
     let program = stub(
         "claude-echoes",
         &format!(
-            "{PRELUDE}\necho \"$@\" > '{}'\ncat >> '{}'",
+            "{PRELUDE}\necho \"$@\" > '{}'\nIFS= read -r line\necho \"$line\" >> '{}'\nIFS= read -r line\necho \"$line\" >> '{}'\necho '{{\"type\":\"control_response\",\"response\":{{\"subtype\":\"success\",\"request_id\":\"req_2\",\"response\":{{}}}}}}'\ncat >> '{}'",
+            log.display(),
+            log.display(),
             log.display(),
             log.display()
         ),
@@ -652,7 +654,7 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
     // writes nothing.
     ferrite_core::providers::Session::set_name(&mut session, "renamed").unwrap();
 
-    let recorded = read_lines(&log, 5);
+    let recorded = read_lines(&log, 6);
     drop(session);
     let sent: Vec<serde_json::Value> = recorded[1..]
         .iter()
@@ -666,9 +668,9 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
         recorded[0],
         "-p --input-format stream-json --output-format stream-json \
          --include-partial-messages --verbose --permission-prompt-tool stdio \
-         --model haiku --effort high --permission-mode default --name CI flake"
+         --model haiku --permission-mode default --name CI flake"
     );
-    assert_eq!(sent.len(), 4, "the rename wrote nothing");
+    assert_eq!(sent.len(), 5, "the rename wrote nothing");
     // Feature detection comes first, before a word of the Thread.
     assert_eq!(
         sent[0],
@@ -681,19 +683,26 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
     assert_eq!(
         sent[1],
         serde_json::json!({
-            "type": "user",
-            "message": {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+            "type": "control_request", "request_id": "req_2",
+            "request": {"subtype": "apply_flag_settings", "settings": {"effortLevel": "high"}},
         })
     );
     assert_eq!(
         sent[2],
         serde_json::json!({
+            "type": "user",
+            "message": {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+        })
+    );
+    assert_eq!(
+        sent[3],
+        serde_json::json!({
             "type": "control_request",
-            "request_id": "req_2",
+            "request_id": "req_3",
             "request": {"subtype": "interrupt"},
         })
     );
-    assert_eq!(sent[3]["request_id"], "req_3");
+    assert_eq!(sent[4]["request_id"], "req_4");
 }
 
 /// Ferrite must not smuggle in a model or a permission posture the operator
@@ -716,6 +725,75 @@ fn no_model_or_permission_mode_is_passed_when_the_config_names_none() {
         "-p --input-format stream-json --output-format stream-json \
          --include-partial-messages --verbose --permission-prompt-tool stdio"
     );
+}
+
+#[test]
+fn effort_changes_clear_the_override_without_replacing_the_process() {
+    let log = log_path("live-effort.log");
+    let _ = fs::remove_file(&log);
+    let program = stub(
+        "claude-live-effort",
+        &format!(
+            r#"{PRELUDE}
+IFS= read -r line
+echo "$line" >> '{log}'
+for id in req_2 req_3 req_4; do
+    IFS= read -r line
+    echo "$line" >> '{log}'
+    echo '{{"type":"control_response","response":{{"subtype":"success","request_id":"'"$id"'","response":{{}}}}}}'
+done
+cat >> '{log}'"#,
+            log = log.display()
+        ),
+    );
+    let mut session = ClaudeSession::spawn(config(program)).unwrap();
+    let pid = session.pid();
+    session.set_effort(Some("max")).unwrap();
+    session.set_effort(Some("low")).unwrap();
+    session.set_effort(None).unwrap();
+    session.send("next").unwrap();
+    assert_eq!(session.pid(), pid);
+    let recorded = read_lines(&log, 5);
+    let sent: Vec<Value> = recorded
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    for (request, effort) in sent[1..4].iter().zip([
+        serde_json::json!("max"),
+        serde_json::json!("low"),
+        Value::Null,
+    ]) {
+        assert_eq!(request["type"], "control_request");
+        assert_eq!(request["request"]["subtype"], "apply_flag_settings");
+        assert_eq!(request["request"]["settings"]["effortLevel"], effort);
+    }
+    assert_eq!(sent[4]["type"], "user");
+}
+
+#[test]
+fn a_rejected_effort_is_reported_and_the_session_can_still_send() {
+    let log = log_path("rejected-effort.log");
+    let _ = fs::remove_file(&log);
+    let program = stub(
+        "claude-rejected-effort",
+        &format!(
+            r#"{PRELUDE}
+IFS= read -r line
+echo "$line" >> '{log}'
+IFS= read -r line
+echo "$line" >> '{log}'
+echo '{{"type":"control_response","response":{{"subtype":"error","request_id":"req_2","error":"unsupported effort"}}}}'
+cat >> '{log}'"#,
+            log = log.display()
+        ),
+    );
+    let mut session = ClaudeSession::spawn(config(program)).unwrap();
+    let error = session.set_effort(Some("max")).unwrap_err();
+    assert!(error.to_string().contains("unsupported effort"));
+    session.send("still here").unwrap();
+    let recorded = read_lines(&log, 3);
+    let user: Value = serde_json::from_str(&recorded[2]).unwrap();
+    assert_eq!(user["type"], "user");
 }
 
 /// The Thread's workspace binding is exactly the CLI's working directory —

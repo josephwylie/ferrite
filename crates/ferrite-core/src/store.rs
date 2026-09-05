@@ -1064,9 +1064,15 @@ impl ThreadSnapshot {
     /// The provider-native id the next Session resumes with — the latest the
     /// provider announced, so a provider that renames its session on resume
     /// still resumes from the newest name. `None` before any Session spoke,
-    /// and `None` again after a handover the new provider has not yet
-    /// spoken past: the Init before the switch is the old provider's.
+    /// and `None` while a handover is undelivered. An Init can arrive before
+    /// the first prompt creates any provider-side conversation to resume.
     pub fn resume_target(&self) -> Option<&str> {
+        if self
+            .last_handover()
+            .is_some_and(|handover| !handover.delivered)
+        {
+            return None;
+        }
         self.records.iter().rev().find_map(|record| match record {
             Record::Init { session_id, .. } => Some(Some(session_id.as_str())),
             Record::Handover { .. } => Some(None),
@@ -1760,6 +1766,34 @@ mod tests {
             "continued on Codex · GPT-5.6 Sol — the earlier conversation is handed over as context"
                 .into()
         )));
+
+        // Init alone does not mean the new provider has saved a conversation.
+        // Recover logs stranded by the old effort-change restart too.
+        writer
+            .record_event(
+                &SessionEvent::Init {
+                    session_id: "empty-codex-thread".into(),
+                    model: "gpt-5.6-sol".into(),
+                },
+                None,
+            )
+            .unwrap();
+        writer
+            .record_event(
+                &SessionEvent::Closed {
+                    reason: "no rollout found for thread id empty-codex-thread".into(),
+                },
+                None,
+            )
+            .unwrap();
+        writer.flush().unwrap();
+        let thread = Store::open(&dir).unwrap().load(id).unwrap();
+        assert_eq!(
+            thread.resume_target(),
+            None,
+            "the new provider has received no prompt"
+        );
+        assert!(!thread.last_handover().unwrap().delivered);
 
         // The new provider speaks and a prompt goes out: resume is its own
         // id again and the carry is spent.

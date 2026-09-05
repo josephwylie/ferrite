@@ -64,13 +64,14 @@ impl Spawn {
 impl Spawner for Spawn {
     fn spawn(&mut self, request: SpawnRequest) -> io::Result<Box<dyn Session>> {
         self.config(request)
-            .spawn()
+            .spawn(self.defaults.clone())
             .map(|session| session as Box<dyn Session>)
     }
 
     fn start(&mut self, request: SpawnRequest) -> io::Result<SessionLifecycle> {
         let config = self.config(request);
-        SessionLifecycle::background(move || config.spawn())
+        let defaults = self.defaults.clone();
+        SessionLifecycle::background(move || config.spawn(defaults))
     }
 }
 
@@ -83,17 +84,75 @@ enum SessionConfig {
 }
 
 impl SessionConfig {
-    fn spawn(self) -> io::Result<Box<dyn Session + Send>> {
-        match self {
-            SessionConfig::Claude(config) => ClaudeSession::spawn(config)
-                .map(|session| Box::new(session) as Box<dyn Session + Send>)
-                // The typed spawn error keeps its words, which is what the
-                // Pane shows; only its type is lost crossing this seam.
-                .map_err(|e| io::Error::other(e.to_string())),
-            SessionConfig::Codex(config) => CodexSession::spawn(config)
-                .map(|session| Box::new(session) as Box<dyn Session + Send>)
-                .map_err(|e| io::Error::other(e.to_string())),
-        }
+    fn spawn(self, defaults: Arc<Mutex<SessionDefaults>>) -> io::Result<Box<dyn Session + Send>> {
+        let (provider, inner): (Provider, Box<dyn Session + Send>) = match self {
+            SessionConfig::Claude(config) => (
+                Provider::Claude,
+                Box::new(
+                    ClaudeSession::spawn(config).map_err(|e| io::Error::other(e.to_string()))?,
+                ),
+            ),
+            SessionConfig::Codex(config) => (
+                Provider::Codex,
+                Box::new(CodexSession::spawn(config).map_err(|e| io::Error::other(e.to_string()))?),
+            ),
+        };
+        Ok(Box::new(SessionWithDefaults {
+            inner,
+            provider,
+            defaults,
+        }))
+    }
+}
+
+/// A ready production Session resolves a cleared Thread effort against the
+/// current Settings. Startup and delivery remain owned by the headless core;
+/// this adapter adds only the app's provider-specific defaults.
+struct SessionWithDefaults {
+    inner: Box<dyn Session + Send>,
+    provider: Provider,
+    defaults: Arc<Mutex<SessionDefaults>>,
+}
+
+impl Session for SessionWithDefaults {
+    fn events(&self) -> &std::sync::mpsc::Receiver<ferrite_core::SessionEvent> {
+        self.inner.events()
+    }
+
+    fn send(&mut self, text: &str) -> io::Result<()> {
+        self.inner.send(text)
+    }
+
+    fn set_effort(&mut self, effort: Option<&str>) -> io::Result<()> {
+        let effort = match effort {
+            Some(effort) => Some(effort.to_string()),
+            None => self
+                .defaults
+                .lock()
+                .map_err(|_| io::Error::other("Session defaults are unavailable"))?
+                .effort_for(self.provider),
+        };
+        self.inner.set_effort(effort.as_deref())
+    }
+
+    fn interrupt(&mut self) -> io::Result<()> {
+        self.inner.interrupt()
+    }
+
+    fn respond_to_decision(
+        &mut self,
+        id: &str,
+        answer: ferrite_core::DecisionAnswer,
+    ) -> io::Result<()> {
+        self.inner.respond_to_decision(id, answer)
+    }
+
+    fn set_name(&mut self, name: &str) -> io::Result<()> {
+        self.inner.set_name(name)
+    }
+
+    fn pid(&self) -> Option<u32> {
+        self.inner.pid()
     }
 }
 
@@ -195,6 +254,68 @@ fn tasklist_rss(row: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_effort_reads_current_settings_for_the_ready_sessions_provider() {
+        use std::sync::mpsc::{channel, Receiver};
+        struct Recording {
+            events: Receiver<ferrite_core::SessionEvent>,
+            efforts: Arc<Mutex<Vec<Option<String>>>>,
+        }
+        impl Session for Recording {
+            fn events(&self) -> &Receiver<ferrite_core::SessionEvent> {
+                &self.events
+            }
+            fn send(&mut self, _: &str) -> io::Result<()> {
+                Ok(())
+            }
+            fn interrupt(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+            fn respond_to_decision(
+                &mut self,
+                _: &str,
+                _: ferrite_core::DecisionAnswer,
+            ) -> io::Result<()> {
+                Ok(())
+            }
+            fn set_effort(&mut self, effort: Option<&str>) -> io::Result<()> {
+                self.efforts.lock().unwrap().push(effort.map(str::to_owned));
+                Ok(())
+            }
+        }
+        for provider in [Provider::Claude, Provider::Codex] {
+            let (_, events) = channel();
+            let efforts = Arc::new(Mutex::new(Vec::new()));
+            let defaults = Arc::new(Mutex::new(SessionDefaults {
+                claude_effort: Some("high".into()),
+                codex_effort: Some("low".into()),
+                ..Default::default()
+            }));
+            let mut session = SessionWithDefaults {
+                inner: Box::new(Recording {
+                    events,
+                    efforts: efforts.clone(),
+                }),
+                provider,
+                defaults: defaults.clone(),
+            };
+            session.set_effort(Some("max")).unwrap();
+            session.set_effort(None).unwrap();
+            let expected = if provider == Provider::Claude {
+                "high"
+            } else {
+                "low"
+            };
+            assert_eq!(
+                *efforts.lock().unwrap(),
+                [Some("max".into()), Some(expected.into())]
+            );
+            *defaults.lock().unwrap() = SessionDefaults::default();
+            session.set_effort(None).unwrap();
+            assert_eq!(efforts.lock().unwrap().last(), Some(&None));
+        }
+    }
 
     /// The Thread's effort wins; the Settings default fills in only when
     /// the Thread chose none; and each provider reads its own.

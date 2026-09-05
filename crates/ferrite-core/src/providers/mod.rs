@@ -70,6 +70,14 @@ pub trait Session {
     /// The bounded event stream. The pump drains this per frame.
     fn events(&self) -> &Receiver<SessionEvent>;
     fn send(&mut self, text: &str) -> io::Result<()>;
+    /// Change effort for the next turn without replacing this Session or
+    /// its conversation. `None` restores the provider's configured default.
+    fn set_effort(&mut self, _effort: Option<&str>) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "this Session cannot change effort",
+        ))
+    }
     fn interrupt(&mut self) -> io::Result<()>;
     fn respond_to_decision(&mut self, id: &str, answer: DecisionAnswer) -> io::Result<()>;
 
@@ -92,6 +100,9 @@ pub trait Session {
 }
 
 impl Session for ClaudeSession {
+    fn set_effort(&mut self, effort: Option<&str>) -> io::Result<()> {
+        ClaudeSession::set_effort(self, effort)
+    }
     fn events(&self) -> &Receiver<SessionEvent> {
         ClaudeSession::events(self)
     }
@@ -114,6 +125,9 @@ impl Session for ClaudeSession {
 }
 
 impl Session for CodexSession {
+    fn set_effort(&mut self, effort: Option<&str>) -> io::Result<()> {
+        CodexSession::set_effort(self, effort)
+    }
     fn events(&self) -> &Receiver<SessionEvent> {
         CodexSession::events(self)
     }

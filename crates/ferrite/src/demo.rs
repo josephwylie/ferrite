@@ -29,6 +29,9 @@ pub struct DemoSession {
 }
 
 impl Session for DemoSession {
+    fn set_effort(&mut self, _effort: Option<&str>) -> io::Result<()> {
+        Ok(())
+    }
     fn events(&self) -> &Receiver<SessionEvent> {
         &self.rx
     }

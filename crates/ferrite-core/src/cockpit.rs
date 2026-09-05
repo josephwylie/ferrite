@@ -118,6 +118,8 @@ pub enum ProvisionError {
     /// The new provider's CLI would not spawn. The words are the
     /// provider's own.
     Spawn(io::Error),
+    /// The live Session refused an in-place setting change.
+    Tune(io::Error),
     /// The durable header rewrite failed.
     Store(LoadError),
 }
@@ -133,6 +135,7 @@ impl std::fmt::Display for ProvisionError {
             }
             ProvisionError::Busy => write!(f, "a turn is running; change the model when it ends"),
             ProvisionError::Spawn(e) => write!(f, "{e}"),
+            ProvisionError::Tune(e) => write!(f, "{e}"),
             ProvisionError::Store(e) => write!(f, "{e}"),
         }
     }
@@ -1770,16 +1773,70 @@ impl Cockpit {
         self.retune(thread, model, effort)
     }
 
-    /// Re-aim one Thread's reasoning effort, whenever, by the same path as
-    /// `set_model`: eager pre-lock, a resume post-lock, refused mid-turn.
+    /// Change the next turn's effort on the existing Session. A turn or
+    /// Session startup/replacement must finish first; refusal preserves its
+    /// submitted choices and prompts. No Session is replaced by this action.
     /// `None` is the operator's default for the provider.
     pub fn set_effort(
         &mut self,
         thread: ThreadId,
         effort: Option<String>,
     ) -> Result<(), ProvisionError> {
-        let model = self.tuning(thread)?.0;
-        self.retune(thread, model, effort)
+        let Some(state) = self.threads.get_mut(&thread) else {
+            let meta = self.store.peek(thread).map_err(ProvisionError::Store)?;
+            return self
+                .store
+                .set_provider(thread, meta.provider, meta.model, effort, None)
+                .map_err(ProvisionError::Store);
+        };
+        if state.busy
+            || state.replacement.is_some()
+            || state
+                .session
+                .as_ref()
+                .is_some_and(SessionLifecycle::is_starting)
+        {
+            return Err(ProvisionError::Busy);
+        }
+        if state.effort == effort && effort.is_some() {
+            return Ok(());
+        }
+        if let Some(session) = state
+            .session
+            .as_mut()
+            .and_then(SessionLifecycle::session_mut)
+        {
+            session
+                .set_effort(effort.as_deref())
+                .map_err(ProvisionError::Tune)?;
+        }
+        // Re-selecting Default reapplies the latest Settings even when the
+        // durable choice was already None; there is no header change then.
+        if state.effort == effort {
+            return Ok(());
+        }
+        if let Err(error) = self.store.set_provider(
+            thread,
+            state.provider,
+            state.model.clone(),
+            effort.clone(),
+            Some(&mut state.writer),
+        ) {
+            if let Some(session) = state
+                .session
+                .as_mut()
+                .and_then(SessionLifecycle::session_mut)
+            {
+                let _ = session.set_effort(state.effort.as_deref());
+            }
+            return Err(ProvisionError::Store(error));
+        }
+        state.transcript.apply(Input::Notice(format!(
+            "effort changed to {}",
+            effort.as_deref().unwrap_or("default")
+        )));
+        state.effort = effort;
+        Ok(())
     }
 
     /// A Thread's current model and effort, live or off the header.
@@ -1793,7 +1850,7 @@ impl Cockpit {
         }
     }
 
-    /// The one path both tunings share: the header always; pre-lock the
+    /// Model changes: the header always; pre-lock the
     /// eager respawn; post-lock a respawn resuming the same conversation,
     /// refused mid-turn (`Busy`) and when the Session never named itself
     /// (`Locked` — nothing to resume). The transcript says what changed.
@@ -2669,9 +2726,20 @@ mod tests {
         sent: Rc<RefCell<Vec<String>>>,
         fail_send: Rc<RefCell<bool>>,
         named: Rc<RefCell<Vec<String>>>,
+        tuned_efforts: Rc<RefCell<Vec<Option<String>>>>,
+        fail_effort: Rc<RefCell<bool>>,
     }
 
     impl crate::providers::Session for Scripted {
+        fn set_effort(&mut self, effort: Option<&str>) -> io::Result<()> {
+            if *self.fail_effort.borrow() {
+                return Err(io::Error::other("stub refused effort"));
+            }
+            self.tuned_efforts
+                .borrow_mut()
+                .push(effort.map(str::to_string));
+            Ok(())
+        }
         fn events(&self) -> &Receiver<SessionEvent> {
             &self.rx
         }
@@ -2711,6 +2779,8 @@ mod tests {
         providers: Rc<RefCell<Vec<Provider>>>,
         models: Rc<RefCell<Vec<Option<String>>>>,
         efforts: Rc<RefCell<Vec<Option<String>>>>,
+        tuned_efforts: Rc<RefCell<Vec<Option<String>>>>,
+        fail_effort: Rc<RefCell<bool>>,
         resumed: Rc<RefCell<Vec<Option<String>>>>,
         cwds: Rc<RefCell<Vec<Option<std::path::PathBuf>>>>,
         /// The title each spawn was handed.
@@ -2773,6 +2843,8 @@ mod tests {
                 sent: self.sent.clone(),
                 fail_send: self.fail_send.clone(),
                 named: self.named.clone(),
+                tuned_efforts: self.tuned_efforts.clone(),
+                fail_effort: self.fail_effort.clone(),
             }))
         }
     }
@@ -4735,6 +4807,52 @@ mod tests {
         assert_eq!(cockpit.peek(thread).unwrap().provider, Provider::Codex);
     }
 
+    #[test]
+    fn changing_effort_after_handover_keeps_the_session_and_delivers_context() {
+        let (mut cockpit, fake) = cockpit("handover-live-effort");
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        cockpit.send(thread, "hello".into());
+        fake.streams.borrow()[0].send(text("hi")).unwrap();
+        fake.streams.borrow()[0].send(ended()).unwrap();
+        cockpit.pump();
+        cockpit
+            .set_provider(
+                thread,
+                ProviderChoice {
+                    provider: Provider::Codex,
+                    model: Some("gpt-5.6-sol".into()),
+                },
+            )
+            .unwrap();
+        // A choice before Init must not require a resume target either.
+        cockpit.set_effort(thread, Some("high".into())).unwrap();
+        fake.streams.borrow()[1]
+            .send(SessionEvent::Init {
+                session_id: "empty-codex-thread".into(),
+                model: "gpt-5.6-sol".into(),
+            })
+            .unwrap();
+        cockpit.pump();
+
+        cockpit.set_effort(thread, Some("max".into())).unwrap();
+        cockpit.send(thread, "next".into());
+
+        assert_eq!(*fake.attempts.borrow(), 2, "effort must not replace Codex");
+        assert_eq!(
+            *fake.tuned_efforts.borrow(),
+            [Some("high".into()), Some("max".into())]
+        );
+        assert_eq!(
+            fake.sent.borrow().last().unwrap(),
+            "Earlier in this Thread (on Claude):\n\nUser: hello\nAssistant: hi\n\nnext"
+        );
+        assert_eq!(
+            cockpit.thread(thread).unwrap().transcript().session_id(),
+            Some("empty-codex-thread")
+        );
+        assert_eq!(cockpit.peek(thread).unwrap().effort.as_deref(), Some("max"));
+    }
+
     /// The carry rides between the session-context preface and the
     /// operator's text, so the new Provider reads where it works before
     /// what was said.
@@ -4973,6 +5091,21 @@ mod tests {
                 },
             )
             .unwrap();
+        // Codex can name a thread before a first prompt creates its rollout.
+        // Old Ferrite versions then tried to resume it when effort changed.
+        let codex = fake.streams.borrow().last().unwrap().clone();
+        codex
+            .send(SessionEvent::Init {
+                session_id: "empty-codex-thread".into(),
+                model: "gpt-5.6-sol".into(),
+            })
+            .unwrap();
+        codex
+            .send(SessionEvent::Closed {
+                reason: "could not start: no rollout found for thread id empty-codex-thread".into(),
+            })
+            .unwrap();
+        cockpit.pump();
         // Parked again before any prompt reached Codex.
         cockpit.park(thread).unwrap();
         cockpit.revive(thread).unwrap();
@@ -4981,7 +5114,7 @@ mod tests {
         assert_eq!(
             fake.resumed.borrow().last().unwrap(),
             &None,
-            "the Init before the switch is Claude's, not Codex's to resume"
+            "the undelivered handover needs a fresh Session, not the empty Codex id"
         );
         let blocks = cockpit.thread(thread).unwrap().transcript().blocks();
         assert!(
@@ -5001,21 +5134,52 @@ mod tests {
         assert_eq!(sent[sent.len() - 1], "after");
     }
 
-    /// The effort is tuned like the model, by the one path: eagerly before
-    /// the first prompt, by resuming after it, refused mid-turn, the header
-    /// following every time, and a model change keeping it. A provider
+    #[test]
+    fn a_refused_effort_keeps_the_choice_and_pending_handover() {
+        let (mut cockpit, fake) = cockpit("refused-effort");
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        cockpit.send(thread, "hello".into());
+        fake.streams.borrow()[0].send(text("hi")).unwrap();
+        fake.streams.borrow()[0].send(ended()).unwrap();
+        cockpit.pump();
+        cockpit
+            .set_provider(
+                thread,
+                ProviderChoice {
+                    provider: Provider::Codex,
+                    model: None,
+                },
+            )
+            .unwrap();
+        *fake.fail_effort.borrow_mut() = true;
+        assert!(matches!(
+            cockpit.set_effort(thread, Some("max".into())),
+            Err(ProvisionError::Tune(_))
+        ));
+        assert_eq!(cockpit.peek(thread).unwrap().effort, None);
+        assert_eq!(cockpit.thread(thread).unwrap().effort(), None);
+        assert_eq!(*fake.attempts.borrow(), 2);
+        cockpit.send(thread, "next".into());
+        assert_eq!(
+            fake.sent.borrow().last().unwrap(),
+            "Earlier in this Thread (on Claude):\n\nUser: hello\nAssistant: hi\n\nnext"
+        );
+    }
+
+    /// Effort changes in place before and after the first prompt, refused
+    /// mid-turn, with the header following and a model change keeping it. A provider
     /// change resets it — the old provider's word may mean nothing.
     #[test]
-    fn the_effort_is_tuned_like_the_model_and_persists() {
+    fn effort_changes_in_place_and_persists() {
         let (mut cockpit, fake) = cockpit("effort");
         let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
         assert_eq!(cockpit.thread(thread).and_then(|open| open.effort()), None);
         assert_eq!(fake.efforts.borrow().last().unwrap(), &None);
 
         cockpit.set_effort(thread, Some("high".into())).unwrap();
-        assert_eq!(fake.streams.borrow().len(), 2, "eager respawn pre-lock");
+        assert_eq!(fake.streams.borrow().len(), 1, "no respawn pre-lock");
         assert_eq!(
-            fake.efforts.borrow().last().unwrap().as_deref(),
+            fake.tuned_efforts.borrow().last().unwrap().as_deref(),
             Some("high")
         );
         assert_eq!(fake.resumed.borrow().last().unwrap(), &None);
@@ -5029,7 +5193,7 @@ mod tests {
         );
 
         cockpit.send(thread, "hello".into());
-        let stream = fake.streams.borrow()[1].clone();
+        let stream = fake.streams.borrow()[0].clone();
         stream
             .send(SessionEvent::Init {
                 session_id: "sess-1".into(),
@@ -5049,13 +5213,10 @@ mod tests {
 
         cockpit.set_effort(thread, Some("max".into())).unwrap();
         assert_eq!(
-            fake.efforts.borrow().last().unwrap().as_deref(),
+            fake.tuned_efforts.borrow().last().unwrap().as_deref(),
             Some("max")
         );
-        assert_eq!(
-            fake.resumed.borrow().last().unwrap().as_deref(),
-            Some("sess-1")
-        );
+        assert_eq!(*fake.attempts.borrow(), 1, "no respawn post-lock");
         assert_eq!(cockpit.peek(thread).unwrap().effort.as_deref(), Some("max"));
         let blocks = cockpit.thread(thread).unwrap().transcript().blocks();
         assert!(matches!(
@@ -5066,6 +5227,7 @@ mod tests {
         let attempts = *fake.attempts.borrow();
         cockpit.set_effort(thread, Some("max".into())).unwrap();
         assert_eq!(*fake.attempts.borrow(), attempts);
+        assert_eq!(fake.tuned_efforts.borrow().len(), 2);
 
         // A model change keeps the effort.
         cockpit

@@ -816,7 +816,6 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
                 "model": "gpt-5.4-mini",
                 "approvalPolicy": "on-request",
                 "sandbox": "read-only",
-                "config": {"model_reasoning_effort": "high"},
             },
         })
     );
@@ -849,6 +848,7 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
             "params": {
                 "threadId": "stub-thread",
                 "input": [{"type": "text", "text": "hi"}],
+                "effort": "high",
             },
         })
     );
@@ -922,23 +922,24 @@ fn the_model_list_is_announced_on_the_event_stream() {
     assert_eq!(models[0].default_effort.as_deref(), Some("low"));
 }
 
-/// A resume carries the effort the same way a start does.
+/// A resume preserves the CLI default; the next turn carries Ferrite's effort.
 #[test]
-fn a_resume_passes_the_effort_in_its_config() {
+fn a_resumed_session_passes_effort_on_its_next_turn() {
     let log = log_path("resume-effort.log");
     let _ = fs::remove_file(&log);
     let program = stub(
         "codex-resume-effort",
         &format!("{PRELUDE}\ncat >> '{}'", log.display()),
     );
-    let session = CodexSession::spawn(CodexConfig {
+    let mut session = CodexSession::spawn(CodexConfig {
         program,
         effort: Some("xhigh".into()),
         resume: Some("stub-thread".into()),
         ..Default::default()
     })
     .unwrap();
-    let recorded = read_lines(&log, 3);
+    session.send("next").unwrap();
+    let recorded = read_lines(&log, 6);
     drop(session);
     let resume: Value = serde_json::from_str(&recorded[2]).unwrap();
     assert_eq!(resume["method"], "thread/resume");
@@ -946,9 +947,12 @@ fn a_resume_passes_the_effort_in_its_config() {
         resume["params"],
         serde_json::json!({
             "threadId": "stub-thread",
-            "config": {"model_reasoning_effort": "xhigh"},
         })
     );
+    let turn: Value = serde_json::from_str(&recorded[5]).unwrap();
+    assert_eq!(turn["method"], "turn/start");
+    assert_eq!(turn["params"]["threadId"], "stub-thread");
+    assert_eq!(turn["params"]["effort"], "xhigh");
 }
 
 /// Ferrite must not smuggle in a model, posture or sandbox the operator did
@@ -966,6 +970,68 @@ fn nothing_is_passed_when_the_config_names_nothing() {
     let thread_start: Value = serde_json::from_str(&recorded[2]).unwrap();
     assert_eq!(thread_start["method"], "thread/start");
     assert_eq!(thread_start["params"], serde_json::json!({}));
+}
+
+#[test]
+fn effort_changes_and_default_stay_on_the_same_thread() {
+    let log = log_path("live-effort.log");
+    let _ = fs::remove_file(&log);
+    let program = stub("codex-live-effort", &format!(
+        "{VERSION_CASE}\necho '{{\"id\":1,\"result\":{{}}}}'\necho '{{\"id\":2,\"result\":{{\"thread\":{{\"id\":\"stub-thread\"}},\"model\":\"stub-model\",\"reasoningEffort\":\"medium\"}}}}'\ncat >> '{}'", log.display()
+    ));
+    let mut session = CodexSession::spawn(CodexConfig {
+        program,
+        effort: Some("high".into()),
+        ..Default::default()
+    })
+    .unwrap();
+    let pid = session.pid();
+    session.send("initial").unwrap();
+    session.set_effort(Some("max")).unwrap();
+    session.send("higher").unwrap();
+    session.set_effort(Some("low")).unwrap();
+    session.send("lower").unwrap();
+    session.set_effort(None).unwrap();
+    session.send("default").unwrap();
+    assert_eq!(session.pid(), pid);
+    let recorded = read_lines(&log, 9);
+    let sent: Vec<Value> = recorded
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert!(sent[2]["params"].get("config").is_none());
+    for (turn, effort) in sent[5..].iter().zip(["high", "max", "low", "medium"]) {
+        assert_eq!(turn["method"], "turn/start");
+        assert_eq!(turn["params"]["threadId"], "stub-thread");
+        assert_eq!(turn["params"]["effort"], effort);
+    }
+}
+
+#[test]
+fn default_effort_uses_the_models_default_when_the_cli_has_no_override() {
+    let log = log_path("model-default-effort.log");
+    let _ = fs::remove_file(&log);
+    let program = stub("codex-model-default-effort", &format!(
+        "{PRELUDE}\necho '{{\"id\":4,\"result\":{{\"data\":[{{\"id\":\"stub-model\",\"model\":\"stub-model\",\"displayName\":\"Stub\",\"defaultReasoningEffort\":\"low\",\"supportedReasoningEfforts\":[]}}]}}}}'\ncat >> '{}'", log.display()
+    ));
+    let mut session = CodexSession::spawn(config(program)).unwrap();
+    loop {
+        if matches!(
+            session
+                .events()
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap(),
+            SessionEvent::Models { .. }
+        ) {
+            break;
+        }
+    }
+    session.set_effort(Some("max")).unwrap();
+    session.set_effort(None).unwrap();
+    session.send("default").unwrap();
+    let recorded = read_lines(&log, 6);
+    let turn: Value = serde_json::from_str(&recorded[5]).unwrap();
+    assert_eq!(turn["params"]["effort"], "low");
 }
 
 /// A finished turn is no longer interruptible: once turn/completed has
