@@ -30,6 +30,7 @@ use crate::composer::{Composer, Edited};
 use crate::facts::Facts;
 use crate::menu;
 use crate::nav;
+use crate::notifications::{Bell, Handle, Row as NoticeRow, Verb};
 use crate::pane::{self, PaneView};
 use crate::pointer::{Pointer, PointerPressed};
 use crate::prefs;
@@ -62,6 +63,7 @@ actions!(
         OpenSettings,
         ToggleFullscreen,
         ToggleNav,
+        ToggleNotifications,
         MenuNext,
         MenuPrevious,
         MenuPick,
@@ -182,6 +184,9 @@ pub struct CockpitView {
     /// panel first opens: (claude, codex).
     cli_versions: Option<(SharedString, SharedString)>,
     group_error: Option<SharedString>,
+    /// The bell: whether its panel is down, and which Notices have had
+    /// their toast. The Notices themselves are core's.
+    bell: Bell,
 }
 
 /// What an inline rename is aimed at. Both are titles the operator owns:
@@ -584,6 +589,7 @@ impl CockpitView {
             maximized: false,
             cli_versions: None,
             group_error: None,
+            bell: Bell::new(),
         };
         // Every Thread the launch opened is on the roster already, and
         // every Thread it did not open is a parked row from the first
@@ -925,6 +931,7 @@ impl CockpitView {
             || self.nav_filter_open
             || self.popover.is_some()
             || self.context_menu.is_some()
+            || self.bell.open
     }
 
     /// How much of the window the nav holds right now: the 208px column, or
@@ -4643,6 +4650,7 @@ fn provider_of_title(title: &str) -> Option<Provider> {
 impl Render for CockpitView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.measure();
+        self.present_notices(window, cx);
         if self.context_menu.is_none() {
             let copied = gpui::base::TextSelection::selected_text(window, cx)
                 .trim_end_matches('\n')
@@ -4829,8 +4837,12 @@ impl Render for CockpitView {
                     && !pane.controls_focus.is_focused(window)
                     && (!pane.is_main() || !pane.transcript_focus.is_focused(window)))
         });
-        if window.has_active_dialog(cx) || native_text_focused || pane_control_focused {
-            // Native text and dialogs keep their own keyboard focus.
+        if window.has_active_dialog(cx)
+            || self.bell.open
+            || native_text_focused
+            || pane_control_focused
+        {
+            // Native text, dialogs, and the bell keep their own keyboard focus.
         } else if self.settings_open {
             // The pump must not steal focus from Settings search or controls.
             if !self.settings_focus.contains_focused(window, cx) {
@@ -4952,6 +4964,7 @@ impl Render for CockpitView {
             }))
             .on_action(cx.listener(Self::toggle_fullscreen))
             .on_action(cx.listener(Self::toggle_nav))
+            .on_action(cx.listener(Self::toggle_notifications))
             .on_action(cx.listener(Self::menu_next))
             .on_action(cx.listener(Self::menu_previous))
             .on_action(cx.listener(Self::history_older))
@@ -5056,6 +5069,7 @@ impl Render for CockpitView {
             .children(self.context_usage_element(cx))
             .children(self.settings_element(cx))
             .children(gpui::component::Root::render_dialog_layer(window, cx))
+            .children(gpui::component::Root::render_notification_layer(window, cx))
     }
 }
 
@@ -5212,6 +5226,7 @@ impl CockpitView {
             composer_empty: pane.composer.read(cx).is_empty(),
             history_available: self.history_available(index, level),
             focused,
+            attention: !focused && self.cockpit.notifications().attention(thread),
             wall: cached.and_then(|facts| facts.wall_for(&pane.selected)),
             selection,
         };
@@ -5819,6 +5834,111 @@ impl CockpitView {
     /// (#21). It paints inside the cockpit's own render — same entity, same
     /// pump, no second timer — and every fact it shows came from
     /// `nav_state`'s O(1) reads or the project/branch/parked caches.
+    /// cmd-i: the bell's panel, down or up. Opening it closes the other
+    /// popovers, like every overlay here.
+    fn toggle_notifications(
+        &mut self,
+        _: &ToggleNotifications,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.bell.open = !self.bell.open;
+        if self.bell.open {
+            self.popover = None;
+            self.context_menu = None;
+            self.nav_filter_open = false;
+        }
+        cx.notify();
+    }
+
+    /// Every click on the bell's surfaces — a toast, a row, its ×, Clear
+    /// — lands here and is answered against core. Opening lands the
+    /// operator on the Notice's Pane: the core's one focus door, so a
+    /// fullscreen re-aims and a parked Thread revives, and the mirror
+    /// follows.
+    pub(crate) fn notice_verb(&mut self, verb: Verb, cx: &mut Context<Self>) {
+        match verb {
+            Verb::Open(id) => {
+                if self.cockpit.open_notice(id).is_some() {
+                    self.sync_panes(cx);
+                }
+                self.bell.open = false;
+            }
+            Verb::Dismiss(id) => {
+                self.cockpit.dismiss_notice(id);
+            }
+            Verb::Clear => {
+                self.cockpit.clear_notices();
+                self.bell.open = false;
+            }
+        }
+        cx.notify();
+    }
+
+    /// The bell's verbs, as a closure the kit's own handlers can hold.
+    fn notice_handle(&self, cx: &mut Context<Self>) -> Handle {
+        let view = cx.entity().downgrade();
+        std::rc::Rc::new(move |verb, _, cx| {
+            let _ = view.update(cx, |view, cx| view.notice_verb(verb, cx));
+        })
+    }
+
+    /// One Notice with the window's words on it: the Thread's cached name
+    /// and Project, and how long ago.
+    fn notice_row(
+        &self,
+        notice: &ferrite_core::notifications::Notice,
+        now: std::time::SystemTime,
+    ) -> NoticeRow {
+        NoticeRow::new(
+            notice,
+            self.facts.name(notice.thread),
+            self.facts
+                .get(notice.thread)
+                .and_then(|facts| facts.project_label.clone()),
+            crate::facts::since_label(notice.at, now),
+        )
+    }
+
+    /// Toast what finished since the last frame. Render is the one place
+    /// with a Window in hand every frame; the pump has none.
+    fn present_notices(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let now = std::time::SystemTime::now();
+        let rows: Vec<NoticeRow> = self
+            .cockpit
+            .notifications()
+            .since(self.bell.presented())
+            .map(|notice| self.notice_row(notice, now))
+            .collect();
+        if rows.is_empty() {
+            return;
+        }
+        let handle = self.notice_handle(cx);
+        self.bell.present(rows, &handle, window, cx);
+    }
+
+    /// The bell in the nav's chrome band, its badge, and its panel.
+    fn bell_element(&self, cx: &mut Context<Self>) -> AnyElement {
+        let now = std::time::SystemTime::now();
+        let notifications = self.cockpit.notifications();
+        let rows: Vec<NoticeRow> = notifications
+            .notices()
+            .take(50)
+            .map(|notice| self.notice_row(notice, now))
+            .collect();
+        let handle = self.notice_handle(cx);
+        let view = cx.entity().downgrade();
+        self.bell
+            .element(notifications.unread(), rows, handle, move |open, _, cx| {
+                let _ = view.update(cx, |view, cx| {
+                    if view.bell.open != open {
+                        view.bell.open = open;
+                        cx.notify();
+                    }
+                });
+            })
+    }
+
     fn nav(&self, cx: &mut Context<Self>) -> AnyElement {
         let state = self.nav_state();
         let gear = prefs::gear_button().on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
@@ -5844,7 +5964,9 @@ impl CockpitView {
                 div().flex_1()
             });
         }
-        chrome = chrome.child(gear);
+        // The bell sits beside the gear: both are the app's, not the
+        // tree's. Folded, the two stack under the collapse button.
+        chrome = chrome.child(self.bell_element(cx)).child(gear);
         let content = div()
             .flex()
             .flex_col()
@@ -6388,6 +6510,7 @@ mod tests {
 
     struct Scripted {
         rx: Receiver<SessionEvent>,
+        interrupts: Rc<RefCell<usize>>,
         fail_send: Rc<RefCell<bool>>,
         sent: Rc<RefCell<Vec<String>>>,
         answered: Rc<RefCell<Vec<(String, DecisionAnswer)>>>,
@@ -6408,6 +6531,7 @@ mod tests {
             Ok(())
         }
         fn interrupt(&mut self) -> std::io::Result<()> {
+            *self.interrupts.borrow_mut() += 1;
             Ok(())
         }
         fn respond_to_decision(&mut self, id: &str, answer: DecisionAnswer) -> std::io::Result<()> {
@@ -6418,6 +6542,7 @@ mod tests {
 
     #[derive(Clone, Default)]
     struct Fake {
+        interrupts: Rc<RefCell<usize>>,
         model_discovery: Rc<RefCell<Option<Receiver<(Provider, Vec<ferrite_core::ModelInfo>)>>>>,
         streams: Rc<RefCell<Vec<Sender<SessionEvent>>>>,
         /// Every spawn's choice, in call order — what the provider-picker
@@ -6453,6 +6578,7 @@ mod tests {
             });
             Ok(Box::new(Scripted {
                 rx,
+                interrupts: self.interrupts.clone(),
                 fail_send: self.fail_send.clone(),
                 sent: self.sent.clone(),
                 answered: self.answered.clone(),
@@ -13249,6 +13375,192 @@ mod tests {
                     .history_available(0, view.read(cx).level_now(window)),
                 "the visible Thread Composer must not advertise or arm history while rename owns focus"
             )
+        });
+    }
+
+    #[gpui::test]
+    fn notifications_keep_focus_until_escape_dismisses_the_bell(cx: &mut TestAppContext) {
+        let (mut core, fake) = cockpit("bell-escape", 1);
+        core.send(core.threads()[0], "keep working".into());
+        bind_production_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        tick(cx);
+        cx.simulate_keystrokes("cmd-i");
+        tick(cx);
+        // An unrelated render must leave the Popover's dismiss handler focused.
+        view.update(cx, |_, cx| cx.notify());
+        tick(cx);
+        view.read_with(cx, |view, _| assert!(view.bell.open));
+        cx.simulate_keystrokes("escape");
+        tick(cx);
+        assert_eq!(
+            *fake.interrupts.borrow(),
+            0,
+            "Escape only dismisses the bell"
+        );
+        view.read_with(cx, |view, _| assert!(!view.bell.open));
+        cx.simulate_keystrokes("escape");
+        assert_eq!(
+            *fake.interrupts.borrow(),
+            1,
+            "Composer regains its interrupt key"
+        );
+    }
+
+    #[gpui::test]
+    fn notifications_scroll_to_and_open_the_oldest_row(cx: &mut TestAppContext) {
+        let (mut core, fake) = cockpit("bell-scroll", 1);
+        for _ in 0..50 {
+            core.send(core.threads()[0], "go".into());
+            fake.streams.borrow()[0]
+                .send(SessionEvent::TurnEnded {
+                    outcome: ferrite_core::TurnOutcome::Completed,
+                    cost_usd: None,
+                })
+                .unwrap();
+            core.pump();
+        }
+        bind_production_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1440.), px(1080.)));
+        tick(cx);
+        cx.simulate_keystrokes("cmd-i");
+        tick(cx);
+        let first = cx.debug_bounds("notice-row-0").unwrap();
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: first.center(),
+            delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-10000.))),
+            modifiers: gpui::Modifiers::none(),
+            touch_phase: gpui::TouchPhase::default(),
+        });
+        cx.run_until_parked();
+        let last = cx.debug_bounds("notice-row-49").unwrap();
+        assert!(
+            last.bottom() < px(1080.),
+            "oldest Notice must scroll into the window: {last:?}"
+        );
+        cx.simulate_click(last.center(), gpui::Modifiers::none());
+        tick(cx);
+        view.read_with(cx, |view, _| {
+            assert!(!view.bell.open, "oldest Notice is clickable")
+        });
+    }
+
+    /// A Thread that finishes while the operator is on another Pane rings
+    /// the bell: an unread Notice, a toast in the kit's stack, and its own
+    /// focus ring pulsing until the keyboard lands on it — which reads it.
+    #[gpui::test]
+    fn a_finished_thread_rings_the_bell_and_pulses_until_focused(cx: &mut TestAppContext) {
+        let (mut core, fake) = cockpit("finished-bell", 2);
+        let group = group_all(&mut core);
+        cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-]", NextPane, None)]));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, cx| view.enter_group(group, cx));
+        let threads = view.read_with(cx, |view, _| view.cockpit.threads());
+        fake.streams.borrow()[1]
+            .send(SessionEvent::TextDelta {
+                text: "done".into(),
+            })
+            .unwrap();
+        fake.streams.borrow()[1]
+            .send(SessionEvent::TurnEnded {
+                outcome: ferrite_core::TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+        tick(cx);
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.focused(), 0);
+            let notifications = view.cockpit.notifications();
+            assert_eq!(notifications.unread(), 1);
+            assert!(
+                notifications.attention(threads[1]),
+                "the finished Pane pulses"
+            );
+            assert!(!notifications.attention(threads[0]));
+        });
+        cx.update(|window, cx| {
+            use gpui::component::WindowExt as _;
+            assert_eq!(
+                window.notifications(cx).len(),
+                1,
+                "one toast for one finish"
+            );
+        });
+
+        cx.simulate_keystrokes("cmd-]");
+        tick(cx);
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.focused(), 1);
+            let notifications = view.cockpit.notifications();
+            assert_eq!(notifications.unread(), 0, "landing on the Pane reads it");
+            assert!(!notifications.attention(threads[1]));
+            assert_eq!(
+                notifications.notices().count(),
+                1,
+                "the bell still lists it"
+            );
+        });
+    }
+
+    /// A finish on the Pane the operator is already on is read as it is
+    /// born: it joins the bell's list, but nothing shouts.
+    #[gpui::test]
+    fn a_finish_on_the_focused_pane_is_read_at_once_and_never_toasts(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("finished-focused", 1);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TurnEnded {
+                outcome: ferrite_core::TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+        tick(cx);
+        view.read_with(cx, |view, _| {
+            let notifications = view.cockpit.notifications();
+            assert_eq!(notifications.notices().count(), 1);
+            assert_eq!(notifications.unread(), 0);
+        });
+        cx.update(|window, cx| {
+            use gpui::component::WindowExt as _;
+            assert!(
+                window.notifications(cx).is_empty(),
+                "no toast for the Pane in view"
+            );
+        });
+    }
+
+    /// Opening a Notice — a toast, or a row of the bell — lands the
+    /// operator on its Pane and closes the panel.
+    #[gpui::test]
+    fn opening_a_notice_lands_on_its_pane_and_reads_it(cx: &mut TestAppContext) {
+        let (mut core, fake) = cockpit("open-notice", 4);
+        let group = group_all(&mut core);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, cx| view.enter_group(group, cx));
+        fake.streams.borrow()[2]
+            .send(SessionEvent::TurnEnded {
+                outcome: ferrite_core::TurnOutcome::Error("rate limited".into()),
+                cost_usd: None,
+            })
+            .unwrap();
+        tick(cx);
+        let id = view.read_with(cx, |view, _| {
+            assert_eq!(view.focused(), 0);
+            view.cockpit.notifications().newest().unwrap()
+        });
+        view.update(cx, |view, cx| {
+            view.bell.open = true;
+            view.notice_verb(Verb::Open(id), cx);
+        });
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.focused(), 2, "focus landed on the finished Pane");
+            assert!(!view.bell.open);
+            assert!(view.cockpit.notifications().get(id).unwrap().read);
+        });
+        view.update(cx, |view, cx| view.notice_verb(Verb::Dismiss(id), cx));
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.cockpit.notifications().notices().count(), 0);
         });
     }
 }

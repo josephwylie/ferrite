@@ -25,9 +25,10 @@ use ferrite_core::workspace::WorkspaceBinding;
 use ferrite_core::{Decision, ThreadId};
 use gpui::prelude::*;
 use gpui::{
-    canvas, deferred, div, point, px, relative, rgb, rgba, AnimationExt, AnyElement, BoxShadow,
-    Context, Div, Entity, FocusHandle, FontFeatures, FontWeight, HighlightStyle, PathBuilder,
-    ScrollHandle, SharedString, Stateful, Styled, StyledText,
+    canvas, deferred, div, point, pulsating_between, px, relative, rgb, rgba, Animation,
+    AnimationExt, AnyElement, BoxShadow, Context, Div, Entity, FocusHandle, FontFeatures,
+    FontWeight, HighlightStyle, PathBuilder, ScrollHandle, SharedString, Stateful, Styled,
+    StyledText,
 };
 #[cfg(test)]
 use std::cell::RefCell;
@@ -468,6 +469,10 @@ pub struct PaneFacts<'a> {
     pub composer_empty: bool,
     pub history_available: bool,
     pub focused: bool,
+    /// This Thread finished while the operator looked elsewhere and they
+    /// have not landed on it since (an unread Notice): the focus ring
+    /// pulses in its place until they do. Never true with `focused`.
+    pub attention: bool,
     /// The wall cell's folded reading, cached by the cockpit's facts —
     /// everything the L3 recipe needs that is not an O(1) transcript read.
     /// None for a Thread the facts have not met, which draws as empty.
@@ -643,9 +648,11 @@ pub fn render_pane(
         composer_empty,
         history_available,
         focused,
+        attention,
         wall,
         selection,
     } = facts;
+    let pulse = attention.then(|| view.thread()).flatten();
     let empty = WallCard::default();
     let wall = wall.unwrap_or(&empty);
     let PaneWiring {
@@ -717,6 +724,7 @@ pub fn render_pane(
         return focus_wrapper(
             shell.child(wall_cell(view, wall, state, focused, title)),
             focused,
+            pulse,
         );
     }
 
@@ -762,6 +770,7 @@ pub fn render_pane(
                 ))
                 .children(activity_decisions),
             focused,
+            pulse,
         );
     }
 
@@ -866,7 +875,7 @@ pub fn render_pane(
             pane = pane.child(parked_body());
         }
     }
-    focus_wrapper(pane, focused)
+    focus_wrapper(pane, focused, pulse)
 }
 
 /// The Pane box (§D.1): `--pane` ground, 8px radius, and a 1px border that
@@ -898,8 +907,20 @@ fn pane_shell(edge: gpui::Hsla) -> Div {
 /// box, radii following the offset (inner 10, outer 12). It reaches 4px
 /// into the 8px board gap, which the gap exactly accommodates, and it
 /// coexists with the innermost 1px state border rather than nesting inside
-/// it.
-fn focus_wrapper(shell: Div, focused: bool) -> Div {
+/// it. `pulse` names a Thread that finished while the operator looked
+/// elsewhere: the very same ring, breathing on the nav's pulse until they
+/// land on it — motion, not a second colour, says which Pane wants them.
+fn focus_wrapper(shell: Div, focused: bool, pulse: Option<ThreadId>) -> Div {
+    let ring = || {
+        div()
+            .absolute()
+            .inset(px(-(theme::FOCUS_RING_OFFSET + theme::FOCUS_RING_W)))
+            .rounded(px(theme::R_SURFACE
+                + theme::FOCUS_RING_OFFSET
+                + theme::FOCUS_RING_W))
+            .border(px(theme::FOCUS_RING_W))
+            .border_color(rgb(FOCUS))
+    };
     div()
         .relative()
         .flex()
@@ -907,15 +928,17 @@ fn focus_wrapper(shell: Div, focused: bool) -> Div {
         .min_h_0()
         .min_w_0()
         .child(shell)
-        .children(focused.then(|| {
-            div()
-                .absolute()
-                .inset(px(-(theme::FOCUS_RING_OFFSET + theme::FOCUS_RING_W)))
-                .rounded(px(theme::R_SURFACE
-                    + theme::FOCUS_RING_OFFSET
-                    + theme::FOCUS_RING_W))
-                .border(px(theme::FOCUS_RING_W))
-                .border_color(rgb(FOCUS))
+        .children(focused.then(|| ring().into_any_element()))
+        .children(pulse.filter(|_| !focused).map(|thread| {
+            ring()
+                .with_animation(
+                    ("attention-ring", thread.get() as usize),
+                    Animation::new(Duration::from_millis(theme::STATUS_PULSE_MS))
+                        .repeat()
+                        .with_easing(pulsating_between(theme::PULSE_MIN, 1.0)),
+                    |ring, delta| ring.opacity(delta),
+                )
+                .into_any_element()
         }))
 }
 
@@ -984,6 +1007,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
                     .child("draft"),
             ),
             focused,
+            None,
         );
     }
 
@@ -1011,6 +1035,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
                 },
             )),
         focused,
+        None,
     )
 }
 
@@ -4734,6 +4759,7 @@ mod tests {
         selection: crate::select::TranscriptText,
         blocks: Vec<Block>,
         expanded: HashSet<String>,
+        reasoning_expanded: bool,
         /// The Thread's Provider, which colours the prompt block.
         provider: Option<Provider>,
     }
@@ -4753,10 +4779,11 @@ mod tests {
                 .font_family(crate::theme::FONT_MONO)
                 .text_size(px(12.))
                 .children(self.blocks.iter().map(|block| {
-                    let expanded = matches!(
-                        &block.body,
-                        Body::Tool(tool) if self.expanded.contains(&tool.call)
-                    );
+                    let expanded = match &block.body {
+                        Body::Tool(tool) => self.expanded.contains(&tool.call),
+                        Body::Thinking(_) => self.reasoning_expanded,
+                        _ => false,
+                    };
                     render_block(
                         block,
                         &overlay,
@@ -4778,6 +4805,7 @@ mod tests {
             selection: crate::select::TranscriptText::default(),
             blocks,
             expanded: HashSet::new(),
+            reasoning_expanded: false,
             provider: Some(Provider::Claude),
         }
     }
@@ -4996,6 +5024,11 @@ mod tests {
         let blocks: Vec<Block> = transcript.blocks().to_vec();
         let ids: Vec<ferrite_core::transcript::BlockId> =
             blocks.iter().map(|block| block.id).collect();
+        let reasoning: Vec<_> = blocks
+            .iter()
+            .filter(|block| matches!(block.body, Body::Thinking(_)))
+            .map(|block| block.id)
+            .collect();
         let thread = ThreadId::new(1);
         let (view, cx) = cx.add_window_view(|_, cx| {
             gpui::component::init(cx);
@@ -5004,6 +5037,18 @@ mod tests {
         cx.simulate_resize(size(px(900.), px(600.)));
         cx.run_until_parked();
 
+        let collapsed = view.read_with(cx, |view, _| view.selection.registered(thread));
+        assert!(
+            collapsed
+                .iter()
+                .all(|(block, _, _, _)| !reasoning.contains(block)),
+            "hidden reasoning must not join copied text"
+        );
+        view.update(cx, |view, cx| {
+            view.reasoning_expanded = true;
+            cx.notify();
+        });
+        cx.run_until_parked();
         let runs = view.read_with(cx, |view, _| view.selection.registered(thread));
         for id in &ids {
             assert!(
@@ -5022,6 +5067,7 @@ mod tests {
             all.push_str(text);
         }
         assert!(all.contains("run the tests"), "the prompt line: {all}");
+        assert!(all.contains("weighing it up"), "expanded reasoning: {all}");
         assert!(
             all.contains("fn main() {}"),
             "code registers its source: {all}"

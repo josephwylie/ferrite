@@ -459,6 +459,9 @@ pub const USAGE_LINE_GAP: f32 = 2.0;
 /// at `inset(-4px)` inside a non-clipping wrapper; its radii follow the
 /// offset — inner 10, outer 12.
 pub const FOCUS_RING_W: f32 = 2.0;
+/// 320px — a toast's width: a Thread's name, a detail line, room for the
+/// kit's icon and close button.
+pub const TOAST_W: f32 = 320.0;
 pub const FOCUS_RING_OFFSET: f32 = 2.0;
 /// The Decision card: 12px inline margin, 8px below, 8/10 padding, a 10px
 /// gap, and a 15px warning mark.
@@ -716,4 +719,17 @@ pub fn init_components(cx: &mut gpui::App) {
     theme.scrollbar = rgba(TRANSPARENT).into();
     theme.scrollbar_thumb = rgb(SCROLLBAR).into();
     theme.scrollbar_thumb_hover = rgb(SEP).into();
+    // Toasts stack at the board's top-right corner, inside its own
+    // padding, so they cover a Pane's head and never the nav or the bell
+    // that lists them. Five at once is a wall's worth; the bell holds the
+    // rest.
+    theme.notification.placement = gpui::Anchor::TopRight;
+    theme.notification.margins = gpui::base::Edges {
+        top: px(BOARD_TOP),
+        right: px(GRID_PAD),
+        bottom: px(GRID_PAD),
+        left: px(GRID_PAD),
+    };
+    theme.notification.width = px(TOAST_W);
+    theme.notification.max_items = 5;
 }
