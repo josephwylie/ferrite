@@ -1028,14 +1028,19 @@ pub fn band_chip_label(choice: &str) -> SharedString {
 /// A draft's model or effort control: the live Composer's own picker
 /// recipe, wrapped in the band chip's focus border so tab still says where
 /// ↵ will land. The 1px border is always in layout and only changes colour.
-pub fn draft_picker(id: &'static str, focused: bool, control: Div) -> Stateful<Div> {
+pub fn draft_picker(
+    id: &'static str,
+    focused: bool,
+    control: Div,
+) -> gpui::component::button::Button {
     let edge: gpui::Hsla = if focused {
         rgb(FOCUS).into()
     } else {
         rgba(TRANSPARENT).into()
     };
-    div()
-        .id(id)
+    crate::components::button(id)
+        .p_0()
+        .h_auto()
         .flex()
         .flex_shrink_0()
         .border_1()

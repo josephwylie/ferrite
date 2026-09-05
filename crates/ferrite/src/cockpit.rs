@@ -3822,7 +3822,6 @@ impl CockpitView {
         let Some(draft) = self.panes[index].draft() else {
             return div().into_any_element();
         };
-        let composer = self.panes[index].composer.clone();
         let provider = draft.binding.provider().provider;
         // The provider's own word until a model is chosen; the groomed
         // model name after — one spelling, wherever it shows.
@@ -3864,21 +3863,7 @@ impl CockpitView {
             .items_center()
             .gap(px(crate::theme::KEYS_GAP));
         for (chip, control) in controls {
-            let chip_composer = composer.clone();
-            row = row.child(control.on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                    cx.stop_propagation();
-                    if let Some(at) = view
-                        .panes
-                        .iter()
-                        .position(|pane| pane.composer == chip_composer)
-                    {
-                        view.focus_pane(at);
-                    }
-                    view.open_band_popover(chip, cx);
-                }),
-            ));
+            row = row.child(self.choice_menu(index, Kind::Band(chip), control, cx));
         }
         row.into_any_element()
     }
