@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use crate::{Hunk, SessionEvent, ToolResult};
+use crate::{Hunk, SessionEvent, ToolResult, TurnOutcome};
 
 mod highlight;
 pub use highlight::Lexer;
@@ -255,6 +255,9 @@ pub struct Transcript {
     model: Option<String>,
     session_id: Option<String>,
     last_cost: Option<f64>,
+    /// The current turn's result, cleared when another turn starts. Cost
+    /// cannot stand in for this: Codex completes without reporting dollars.
+    turn_outcome: Option<TurnOutcome>,
     usage: Option<Usage>,
     /// When the running turn began — the operator's prompt went out — for
     /// the working line's clock. None between turns.
@@ -301,6 +304,7 @@ impl Transcript {
             model: None,
             session_id: None,
             last_cost: None,
+            turn_outcome: None,
             usage: None,
             turn_started: None,
             turn_output_tokens: 0,
@@ -325,6 +329,18 @@ impl Transcript {
 
     pub fn last_cost(&self) -> Option<f64> {
         self.last_cost
+    }
+
+    /// The current turn's result; None before a turn ends or after new
+    /// activity. Session closure and revival preserve the recorded result.
+    pub fn turn_outcome(&self) -> Option<&TurnOutcome> {
+        self.turn_outcome.as_ref()
+    }
+
+    /// At rest after a successful turn, independent of whether its provider
+    /// reported a cost. A closed Session still needs attention.
+    pub fn turn_completed(&self) -> bool {
+        self.status == Status::Idle && self.turn_outcome == Some(TurnOutcome::Completed)
     }
 
     pub fn usage(&self) -> Option<Usage> {
@@ -384,6 +400,11 @@ impl Transcript {
 
     pub fn apply(&mut self, input: Input) -> Update {
         let update = self.apply_inner(input);
+        // Activity can resume without a prompt in this window (replay or a
+        // revived Session). The previous turn's result must not follow it.
+        if matches!(self.status, Status::Streaming | Status::Blocked) {
+            self.turn_outcome = None;
+        }
         // The turn's clock starts with the prompt — or, for a Thread revived
         // mid-turn with no prompt of this turn in its window, with the
         // first thing that streams.
@@ -488,6 +509,7 @@ impl Transcript {
                 ..Update::default()
             },
             Input::Prompt(line) => {
+                self.turn_outcome = None;
                 // A Closed session stays closed and a Blocked one stays
                 // blocked: nothing is streaming in either.
                 if let Status::Idle | Status::Streaming = self.status {
@@ -529,6 +551,7 @@ impl Transcript {
                 }
             }
             Input::Event(SessionEvent::ToolStarted { id, name, input }) => {
+                self.status = Status::Streaming;
                 self.plan(&name, &input);
                 let block = self.push(Body::Tool(ToolBlock {
                     call: id,
@@ -558,18 +581,19 @@ impl Transcript {
                 self.last_cost = cost_usd;
                 self.turn_started = None;
                 let mut dirty = Vec::new();
-                match outcome {
+                match &outcome {
                     // The cost is kept (`last_cost`) but never rendered —
                     // no dollar value appears anywhere (#22 operator
                     // amendment); a completed turn ends without a row.
-                    crate::TurnOutcome::Completed => {}
-                    crate::TurnOutcome::Interrupted => {
+                    TurnOutcome::Completed => {}
+                    TurnOutcome::Interrupted => {
                         dirty.push(self.push(Body::Meta("interrupted".into())))
                     }
-                    crate::TurnOutcome::Error(message) => {
-                        dirty.push(self.push(Body::Notice(message)))
+                    TurnOutcome::Error(message) => {
+                        dirty.push(self.push(Body::Notice(message.clone())))
                     }
                 }
+                self.turn_outcome = Some(outcome);
                 Update {
                     dirty,
                     boundary: Some(Boundary::TurnEnded),
@@ -1352,6 +1376,104 @@ mod tests {
             before,
             "a completed turn ends without a row"
         );
+    }
+
+    #[test]
+    fn turn_completion_reads_the_outcome_independently_of_cost() {
+        for cost_usd in [None, Some(0.038)] {
+            for outcome in [
+                TurnOutcome::Completed,
+                TurnOutcome::Interrupted,
+                TurnOutcome::Error("model overloaded".into()),
+            ] {
+                let mut transcript = Transcript::default();
+                assert_eq!(transcript.turn_outcome(), None);
+                assert!(!transcript.turn_completed());
+                transcript.apply(Input::Prompt("go".into()));
+                let update = transcript.apply(Input::Event(SessionEvent::TurnEnded {
+                    outcome: outcome.clone(),
+                    cost_usd,
+                }));
+
+                assert_eq!(transcript.turn_outcome(), Some(&outcome));
+                assert_eq!(
+                    transcript.turn_completed(),
+                    outcome == TurnOutcome::Completed,
+                    "{outcome:?}, cost {cost_usd:?}"
+                );
+                assert_eq!(transcript.last_cost(), cost_usd);
+                assert_eq!(transcript.status(), Status::Idle);
+                assert_eq!(transcript.turn_elapsed(), None);
+                assert_eq!(update.boundary, Some(Boundary::TurnEnded));
+
+                transcript.apply(Input::Prompt("next turn".into()));
+                assert_eq!(transcript.turn_outcome(), None);
+                assert!(!transcript.turn_completed());
+                assert_eq!(transcript.status(), Status::Streaming);
+                assert!(transcript.turn_elapsed().is_some());
+                assert_eq!(transcript.last_cost(), cost_usd, "cost remains history");
+            }
+        }
+    }
+
+    #[test]
+    fn revived_activity_retires_the_previous_turns_outcome() {
+        let activities = [
+            text("more answer"),
+            Input::Event(SessionEvent::ThinkingDelta { text: "".into() }),
+            reasoning("more reasoning", 0),
+            started(
+                "toolu_1",
+                "Read",
+                serde_json::json!({ "path": "README.md" }),
+            ),
+            Input::Event(SessionEvent::DecisionRequested {
+                decision: Decision {
+                    id: "perm_01".into(),
+                    tool_use_id: "toolu_01".into(),
+                    tool_name: "AskUserQuestion".into(),
+                    description: "which approach?".into(),
+                    input: serde_json::Value::Null,
+                    suggestions: vec![],
+                },
+            }),
+            Input::Answered {
+                allowed: true,
+                tool_name: "Read".into(),
+            },
+        ];
+        for closed in [false, true] {
+            for activity in &activities {
+                let mut transcript = Transcript::default();
+                transcript.apply(Input::Event(SessionEvent::TurnEnded {
+                    outcome: TurnOutcome::Completed,
+                    cost_usd: Some(0.038),
+                }));
+                if closed {
+                    transcript.apply(Input::Event(SessionEvent::Closed {
+                        reason: "Session exited".into(),
+                    }));
+                }
+                transcript.apply(Input::Revived);
+                assert_eq!(transcript.turn_outcome(), Some(&TurnOutcome::Completed));
+                assert_eq!(transcript.turn_completed(), !closed);
+
+                transcript.apply(activity.clone());
+
+                assert_eq!(transcript.turn_outcome(), None, "{activity:?}");
+                assert!(!transcript.turn_completed(), "{activity:?}");
+                assert_eq!(transcript.last_cost(), Some(0.038));
+                if matches!(
+                    activity,
+                    Input::Event(SessionEvent::DecisionRequested { .. })
+                ) {
+                    assert_eq!(transcript.status(), Status::Blocked);
+                } else {
+                    assert_eq!(transcript.status(), Status::Streaming);
+                    assert!(transcript.turn_elapsed().is_some());
+                }
+            }
+        }
     }
 
     #[test]

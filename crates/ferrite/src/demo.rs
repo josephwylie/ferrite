@@ -1158,12 +1158,7 @@ mod tests {
                 transcript.apply(Input::Event(step.event));
             }
             let card = wall_card(Some(&transcript), None);
-            census.push(wall_state(
-                Some(transcript.status()),
-                pending,
-                card.tests_failing,
-                transcript.last_cost().is_some(),
-            ));
+            census.push(wall_state(Some(&transcript), pending, card.tests_failing));
         }
         use WallState::*;
         for wanted in [Working, Failing, Decision, Blocked, Done, Idle] {

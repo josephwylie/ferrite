@@ -3934,12 +3934,7 @@ impl CockpitView {
             None => nav::RowStatus::Parked,
             Some(open) => {
                 let failing = facts.is_some_and(|facts| facts.wall.tests_failing);
-                match pane::wall_state(
-                    Some(open.transcript().status()),
-                    open.pending().is_some(),
-                    failing,
-                    false,
-                ) {
+                match pane::wall_state(Some(open.transcript()), open.pending().is_some(), failing) {
                     pane::WallState::Working => nav::RowStatus::Working,
                     pane::WallState::Failing => nav::RowStatus::Failing,
                     pane::WallState::Decision => nav::RowStatus::Attention,
