@@ -10,6 +10,7 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
@@ -691,6 +692,17 @@ impl Store {
     /// chunks only up to the first newline, so the records after the header
     /// are never read off the disk, and a huge log peeks at the same cost
     /// as an empty one.
+    /// When a Thread was last written to — its log's modification time.
+    /// The log is appended on every prompt, every stream and every act, so
+    /// its mtime *is* "last used", and it costs one `stat` rather than a
+    /// replay. A log that cannot be stat'd has no time; a row with no time
+    /// simply says nothing, and sorts last.
+    pub fn last_used(&self, id: ThreadId) -> Option<SystemTime> {
+        fs::metadata(self.log_path(id))
+            .and_then(|meta| meta.modified())
+            .ok()
+    }
+
     pub fn peek(&self, id: ThreadId) -> Result<ThreadMeta, LoadError> {
         use std::io::BufRead;
         let mut first = Vec::new();

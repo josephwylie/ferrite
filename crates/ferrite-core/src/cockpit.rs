@@ -1412,6 +1412,13 @@ impl Cockpit {
         self.store.peek(thread)
     }
 
+    /// When a Thread was last used, live or parked — the nav's default
+    /// order and its "3 days" line. One `stat`, so callers still cache it
+    /// rather than ask per frame.
+    pub fn last_used(&self, thread: ThreadId) -> Option<std::time::SystemTime> {
+        self.store.last_used(thread)
+    }
+
     pub fn threads(&self) -> Vec<ThreadId> {
         self.threads.keys().copied().collect()
     }

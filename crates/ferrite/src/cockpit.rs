@@ -1101,7 +1101,13 @@ impl CockpitView {
         nav::rename_target_group(group, title)
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                cx.listener(move |view, event: &MouseDownEvent, _, cx| {
+                    // A single click belongs to the row under the title —
+                    // it enters the Group. Only the second click renames,
+                    // and only then is the press worth swallowing.
+                    if event.click_count < 2 {
+                        return;
+                    }
                     cx.stop_propagation();
                     view.start_rename(RenameTarget::Group(group), cx);
                 }),
@@ -2121,7 +2127,12 @@ impl CockpitView {
         nav::rename_target_thread(thread, title)
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                cx.listener(move |view, event: &MouseDownEvent, _, cx| {
+                    // As on the Group title, and as on the Pane head: the
+                    // first click focuses the Thread, the second renames it.
+                    if event.click_count < 2 {
+                        return;
+                    }
                     cx.stop_propagation();
                     view.start_rename(RenameTarget::Thread(thread), cx);
                 }),
@@ -3912,6 +3923,20 @@ impl CockpitView {
                 })
             })
             .collect();
+        // A Group is as recent as its most recently used member, and the
+        // Groups sort by that alongside the solos below. A Group's own
+        // members keep the operator's order — that order is the Group.
+        let mut groups = groups;
+        groups.sort_by_key(|block| {
+            std::cmp::Reverse(
+                block
+                    .members
+                    .iter()
+                    .map(|row| self.last_used(row.thread))
+                    .max()
+                    .unwrap_or(std::time::UNIX_EPOCH),
+            )
+        });
 
         // ...and so it lands in the solos below, which is where a Thread on
         // its way out of a Group belongs.
@@ -3944,6 +3969,10 @@ impl CockpitView {
             .map(|thread| self.thread_row(thread))
             .collect();
         solos.dedup_by_key(|row| row.thread);
+        // The nav's default order (#21): most recently used first, across
+        // open and parked alike. `sort_by_key` is stable, so Threads that
+        // share a second keep the pane-then-park order they arrived in.
+        solos.sort_by_key(|row| std::cmp::Reverse(self.last_used(row.thread)));
 
         nav::NavState {
             filter,
@@ -3985,6 +4014,7 @@ impl CockpitView {
                 }
             }
         };
+        let now = std::time::SystemTime::now();
         nav::ThreadRow {
             thread,
             name: self.facts.name(thread),
@@ -3996,7 +4026,20 @@ impl CockpitView {
                 .thread(thread)
                 .map(|open| open.provider())
                 .or_else(|| facts.and_then(|facts| facts.provider)),
+            current: self.cockpit.roster().focused_thread() == Some(thread),
+            last_used: facts
+                .and_then(|facts| facts.last_used)
+                .map(|at| crate::facts::since_label(at, now)),
         }
+    }
+
+    /// When a Thread was last used, for the nav's default order. A Thread
+    /// whose log cannot be stat'd sorts to the bottom rather than to the
+    /// top: an unknown time is not a recent one.
+    fn last_used(&self, thread: ThreadId) -> std::time::SystemTime {
+        self.facts
+            .last_used(thread)
+            .unwrap_or(std::time::UNIX_EPOCH)
     }
 
     /// A running nav row's click: land on that Thread's Pane, in the view
@@ -9126,12 +9169,12 @@ mod tests {
         });
     }
 
-    /// #21 AC1: the nav lists every Thread — open Panes first in grid
-    /// order, then the parked ones — each row naming its Project, its
-    /// checkout and its provider. There is no section header between them:
-    /// one list, split only by Group membership.
+    /// #21 AC1: the nav lists every Thread — most recently used first,
+    /// open and parked alike — each row naming its Project, its checkout
+    /// and its provider. There is no section header between them: one
+    /// list, split only by Group membership.
     #[gpui::test]
-    fn the_nav_lists_running_threads_in_grid_order_and_parked_below(cx: &mut TestAppContext) {
+    fn the_nav_lists_every_thread_most_recently_used_first(cx: &mut TestAppContext) {
         let (core, _fake) = cockpit("nav-order", 3);
         cx.update(|cx| {
             cx.bind_keys([KeyBinding::new("cmd-w", CloseThread, None)]);
@@ -9155,17 +9198,23 @@ mod tests {
             let state = view.nav_state();
             assert!(state.groups.is_empty(), "no Group claims these Threads");
             let rows: Vec<ThreadId> = state.solos.iter().map(|row| row.thread).collect();
-            let mut expected: Vec<ThreadId> = grid_order
-                .iter()
-                .copied()
-                .filter(|thread| *thread != parked_thread)
-                .collect();
-            expected.push(parked_thread);
-            assert_eq!(rows, expected, "open Panes in grid order, parked below");
+            let mut expected: Vec<ThreadId> = grid_order.to_vec();
+            // The nav's default order, and the only one it has: last used
+            // first. Parking does not move a row — using it does.
+            expected.sort_by_key(|thread| std::cmp::Reverse(view.last_used(*thread)));
+            assert_eq!(rows, expected, "most recently used first");
+            assert!(
+                rows.contains(&parked_thread),
+                "a parked Thread is a row like any other"
+            );
             assert_eq!(
                 state.solos[0].name.as_ref(),
                 format!("thread-{:02}", expected[0]),
                 "rows say what the Pane head says"
+            );
+            assert!(
+                state.solos.iter().all(|row| row.last_used.is_some()),
+                "every row says how long since it was used"
             );
             assert_eq!(
                 state.solos[0].provider,
@@ -9195,14 +9244,24 @@ mod tests {
         tick(cx);
         view.read_with(cx, |view, _| assert_eq!(view.focused(), 0));
 
-        // The second row: the 42px window band, the 42px nav head, the
-        // tree's 8px inset, one 56.5px row and the 2px between siblings,
-        // then halfway down its own row. No strip, no section header.
+        // Which row is which is the nav's order to decide (last used
+        // first), so the test asks it rather than assuming the grid's.
+        let row_of = |view: &CockpitView, pane: usize| {
+            let thread = view.panes[pane].thread().unwrap();
+            view.nav_state()
+                .solos
+                .iter()
+                .position(|row| row.thread == thread)
+                .expect("every open Thread has a row")
+        };
+        // Row `n`: the 42px window band, the 42px nav head, the tree's 8px
+        // inset, n rows of 56.5px each with the 2px between siblings, then
+        // halfway down its own row. No strip, no section header.
+        let row_y =
+            |n: usize| px(42. + 42. + 8. + n as f32 * (crate::theme::THREAD_ROW_H + 2.) + 28.);
+        let (second, first) = view.read_with(cx, |view, _| (row_of(view, 1), row_of(view, 0)));
         cx.simulate_click(
-            gpui::point(
-                px(104.),
-                px(42. + 42. + 8. + crate::theme::THREAD_ROW_H + 2. + 28.),
-            ),
+            gpui::point(px(104.), row_y(second)),
             gpui::Modifiers::none(),
         );
         view.read_with(cx, |view, _| {
@@ -9216,11 +9275,8 @@ mod tests {
                 Some(PaneIdentity::Thread(view.panes[1].thread().unwrap()))
             );
         });
-        // And back to the first row, halfway down it.
-        cx.simulate_click(
-            gpui::point(px(104.), px(42. + 42. + 8. + 28.)),
-            gpui::Modifiers::none(),
-        );
+        // And back to the other Pane's row.
+        cx.simulate_click(gpui::point(px(104.), row_y(first)), gpui::Modifiers::none());
         view.read_with(cx, |view, _| {
             assert_eq!(view.focused(), 0, "the nav still answers while fullscreen");
             assert_eq!(
@@ -11888,7 +11944,17 @@ mod tests {
         let thread_title = cx
             .debug_bounds("rename-thread-2")
             .expect("the parked title is rendered");
+        // A single click on a title is not a rename — it is the row's own
+        // click, which focuses the Thread. Only the second press opens the
+        // editor.
         cx.simulate_click(thread_title.center(), gpui::Modifiers::none());
+        view.read_with(cx, |view, _| {
+            assert!(
+                view.rename.is_none(),
+                "one click never opens the inline editor"
+            );
+        });
+        press(cx, thread_title.center(), 2);
         view.read_with(cx, |view, cx| {
             let editor = &view.rename.as_ref().expect("inline Thread editor").1;
             assert_eq!(editor.read(cx).text(), "Existing parked title");
@@ -11907,7 +11973,7 @@ mod tests {
         });
 
         let thread_title = cx.debug_bounds("rename-thread-2").unwrap();
-        cx.simulate_click(thread_title.center(), gpui::Modifiers::none());
+        press(cx, thread_title.center(), 2);
         view.update(cx, |view, cx| {
             let editor = view.rename.as_ref().unwrap().1.clone();
             editor.update(cx, |line, cx| line.set("Saved parked title".into(), cx));
@@ -11916,6 +11982,13 @@ mod tests {
 
         let group_title = cx.debug_bounds("rename-group-1").unwrap();
         cx.simulate_click(group_title.center(), gpui::Modifiers::none());
+        view.read_with(cx, |view, _| {
+            assert!(
+                view.rename.is_none(),
+                "a Group title takes two clicks too — one enters the Group"
+            );
+        });
+        press(cx, group_title.center(), 2);
         view.update(cx, |view, cx| {
             let editor = view.rename.as_ref().unwrap().1.clone();
             editor.update(cx, |line, cx| line.set("Saved Group title".into(), cx));

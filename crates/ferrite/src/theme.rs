@@ -38,11 +38,15 @@ pub const MENU: u32 = 0x282828;
 /// `#2c2c2c` — `--hover`: every control's hover face, the nav row hover,
 /// and the mode chip's *resting* ground.
 pub const HOVER: u32 = 0x2c2c2c;
-/// `#343434` — `--fill`: the selected fill. It lands on the Group row and
-/// on a collapsed rail item, never on a Thread row.
+/// `#343434` — `--fill`: the selected fill. It lands on the focused
+/// Thread's row, the Group that holds it, and a collapsed rail item.
 pub const FILL: u32 = 0x343434;
-/// `#3b3b3b` — `--fill-hover`: a selected Group row under the pointer.
+/// `#3b3b3b` — `--fill-hover`: a filled row under the pointer.
 pub const FILL_HOVER: u32 = 0x3b3b3b;
+/// `#ffffff` — the current Thread's leading mark in the nav. The fill
+/// alone is one step of grey and reads as hover at a glance; the mark is
+/// the unambiguous part, so it is the brightest ink the system has.
+pub const CURRENT_MARK: u32 = TEXT_STRONG;
 /// `rgba(255,255,255,0.13)` — `--meter-off`: an unlit tasks-meter segment,
 /// and the compact usage lines' tracks.
 #[allow(dead_code)]
@@ -395,6 +399,9 @@ pub const BODY_PAD_T: f32 = 6.0;
 pub const BODY_PAD_B: f32 = 12.0;
 /// 6px — the Pane head's status dot.
 pub const STATUS_DOT: f32 = 6.0;
+
+/// 2px — the width of the current Thread's leading mark.
+pub const CURRENT_MARK_W: f32 = 2.0;
 /// The tasks meter: 12 × 4 segments, 1px radius, 3px apart (15px pitch).
 #[allow(dead_code)]
 pub const METER_SEG_W: f32 = 12.0;

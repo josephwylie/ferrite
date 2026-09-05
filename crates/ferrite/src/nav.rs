@@ -35,14 +35,14 @@ use crate::components;
 use crate::icons::{self, icon};
 use crate::pointer::{Pointer, PointerPressed};
 use crate::theme::{
-    ATTENTION, BLOCKED, FILL, FONT_UI, FS_LG, FS_MD, FS_SM, GROUP_GAP, GROUP_RAIL, GROUP_ROW_H,
-    HOVER, ICON_BUTTON, ICON_BUTTON_GLYPH, ICON_CHEVRON_LG, IDLE, LINE_TIGHT, MEMBERS_TOP,
-    MEMBER_GAP, MEMBER_INDENT, MENU, MENU_PAD, MENU_ROW_H, MENU_TOP, NAV, NAV_HEAD_H, NAV_TREE_PAD,
-    NAV_TREE_PAD_B, PROVIDER_CLAUDE, PROVIDER_CODEX, PROVIDER_MARK, RAIL_INSET, RAIL_OFFSET,
-    ROW_GAP, ROW_ICON, ROW_ICON_GAP, ROW_PAD_X, ROW_PAD_Y, ROW_TEXT_W, RUNNING, R_CONTROL, R_MENU,
-    R_TIGHT, SEP, SHADOW_FAR, SHADOW_FAR_BLUR, SHADOW_FAR_SPREAD, SHADOW_FAR_Y, SHADOW_NEAR,
-    SHADOW_NEAR_BLUR, SHADOW_NEAR_Y, SOLOS_TOP, STATUS_DOT, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG,
-    THREAD_ROW_H, TRAFFIC_RESERVE, WIN_CHROME_H,
+    ATTENTION, BLOCKED, CURRENT_MARK, CURRENT_MARK_W, FILL, FONT_UI, FS_LG, FS_MD, FS_SM,
+    GROUP_GAP, GROUP_RAIL, GROUP_ROW_H, HOVER, ICON_BUTTON, ICON_BUTTON_GLYPH, ICON_CHEVRON_LG,
+    IDLE, LINE_TIGHT, MEMBERS_TOP, MEMBER_GAP, MEMBER_INDENT, MENU, MENU_PAD, MENU_ROW_H, MENU_TOP,
+    NAV, NAV_HEAD_H, NAV_TREE_PAD, NAV_TREE_PAD_B, PROVIDER_CLAUDE, PROVIDER_CODEX, PROVIDER_MARK,
+    RAIL_INSET, RAIL_OFFSET, ROW_GAP, ROW_ICON, ROW_ICON_GAP, ROW_PAD_X, ROW_PAD_Y, ROW_TEXT_W,
+    RUNNING, R_CONTROL, R_MENU, R_TIGHT, SEP, SHADOW_FAR, SHADOW_FAR_BLUR, SHADOW_FAR_SPREAD,
+    SHADOW_FAR_Y, SHADOW_NEAR, SHADOW_NEAR_BLUR, SHADOW_NEAR_Y, SOLOS_TOP, STATUS_DOT, TEXT,
+    TEXT_2, TEXT_MUTED, TEXT_STRONG, THREAD_ROW_H, TRAFFIC_RESERVE, WIN_CHROME_H,
 };
 
 /// The nav's two widths — 286px, and the 56px rail cmd-b folds it to.
@@ -155,6 +155,13 @@ pub struct ThreadRow {
     pub branch: Option<SharedString>,
     /// `None` → no logomark. Never a `cl`/`cx` string.
     pub provider: Option<Provider>,
+    /// This is the focused Pane's Thread: it carries the selected fill, the
+    /// white title, and the current mark down its leading edge. The Group
+    /// around it carries the fill too, so the pair reads as one selection.
+    pub current: bool,
+    /// How long since the Thread was last used — `40m`, `2h`, `3d` — at the
+    /// tail of the checkout line. `None` says nothing at all.
+    pub last_used: Option<SharedString>,
 }
 
 /// A Thread row's state, for its dot. The nav's original no-dot ruling
@@ -610,8 +617,9 @@ pub fn thread_row_with_title(row: &ThreadRow, title: impl IntoElement) -> Statef
     row_frame(
         ("nav-thread", row.thread.get() as usize),
         THREAD_ROW_H,
-        false,
+        row.current,
     )
+    .when(row.current, |row| row.child(current_mark()))
     .debug_selector({
         let thread = row.thread;
         move || format!("nav-thread-{}", thread.get())
@@ -631,13 +639,46 @@ pub fn thread_row_with_title(row: &ThreadRow, title: impl IntoElement) -> Statef
                     .text_size(px(FS_MD))
                     .font_weight(FontWeight::SEMIBOLD)
                     .line_height(relative(LINE_TIGHT))
-                    .text_color(rgb(TEXT))
+                    .text_color(rgb(if row.current { TEXT_STRONG } else { TEXT }))
                     .child(title),
             )
             .child(provider_mark(row.provider, PROVIDER_MARK)),
     )
     .child(meta_line(icons::FOLDER, row.project.clone(), TEXT_2))
-    .child(meta_line(icons::BRANCH, row.branch.clone(), TEXT_MUTED))
+    .child(
+        meta_line(icons::BRANCH, row.branch.clone(), TEXT_MUTED)
+            .child(since_tail(row.last_used.clone())),
+    )
+}
+
+/// The age at the tail of a row's last line — `40m`, `2h`, `3d`. It is
+/// pushed right by its own auto margin rather than by a spacer, so a line
+/// whose branch is unknown still puts the age where every other row's age
+/// is. Never a date: the nav says how long ago, and the Pane says when.
+fn since_tail(label: Option<SharedString>) -> Div {
+    let cell = div().flex_shrink_0().ml_auto().pl(px(ROW_ICON_GAP));
+    let Some(label) = label else {
+        return cell;
+    };
+    cell.text_size(px(FS_SM))
+        .line_height(relative(LINE_TIGHT))
+        .text_color(rgb(TEXT_MUTED))
+        .child(label)
+}
+
+/// The current Thread's leading mark: a 2px bar down the row's left edge,
+/// inset by the row's own radius so it reads as part of the filled box
+/// rather than a rule beside it. Absolute — it takes no layout, so a row
+/// gains it without any of its three lines moving.
+fn current_mark() -> Div {
+    div()
+        .absolute()
+        .left_0()
+        .top(px(R_CONTROL))
+        .bottom(px(R_CONTROL))
+        .w(px(CURRENT_MARK_W))
+        .rounded_r(px(CURRENT_MARK_W))
+        .bg(rgb(CURRENT_MARK))
 }
 
 /// The solo section: Threads no Group claims, at root indent with no rail.
@@ -794,6 +835,8 @@ pub fn rail_item(row: &ThreadRow, current: bool) -> Stateful<Div> {
 fn row_frame(id: (&'static str, usize), height: f32, carries_fill: bool) -> Stateful<Div> {
     let frame = div()
         .id(id)
+        // The current mark hangs off this box's left edge.
+        .relative()
         .flex()
         .flex_col()
         .flex_shrink_0()
@@ -858,6 +901,10 @@ mod tests {
     use ferrite_core::ThreadId;
 
     fn thread(provider: Option<Provider>) -> ThreadRow {
+        current_thread(provider, false)
+    }
+
+    fn current_thread(provider: Option<Provider>, current: bool) -> ThreadRow {
         ThreadRow {
             thread: ThreadId::new(8),
             status: RowStatus::Idle,
@@ -865,6 +912,8 @@ mod tests {
             project: Some("ferrite".into()),
             branch: Some("codex/prototype-32".into()),
             provider,
+            current,
+            last_used: Some("2h".into()),
         }
     }
 
@@ -878,11 +927,11 @@ mod tests {
         }
     }
 
-    /// The one selection rule the prototype makes, asserted where it is
-    /// drawn: the **Group** carries the fill, and a Thread row never does —
-    /// not when its Group is current, not ever.
+    /// The selection rule: the fill lands on the focused Thread's row and
+    /// on the Group holding it — and on nothing else. A Thread that merely
+    /// sits in the current Group is not itself current.
     #[test]
-    fn only_the_group_row_carries_the_selected_fill() {
+    fn only_the_current_row_carries_the_selected_fill() {
         let fill = |mut drawn: Stateful<Div>| drawn.style().background.clone();
         assert_eq!(
             fill(group_row(&group(true))),
@@ -891,9 +940,14 @@ mod tests {
         );
         assert_eq!(fill(group_row(&group(false))), None);
         assert_eq!(
+            fill(thread_row(&current_thread(Some(Provider::Claude), true))),
+            Some(rgb(FILL).into()),
+            "the focused Thread's own row carries it too"
+        );
+        assert_eq!(
             fill(thread_row(&thread(Some(Provider::Claude)))),
             None,
-            "a Thread row is never filled, whatever its Group is doing"
+            "a Thread that is not focused is not filled by its Group's state"
         );
     }
 
@@ -931,9 +985,16 @@ mod tests {
             project: None,
             branch: None,
             provider: None,
+            current: false,
+            last_used: None,
         };
         let height = |mut drawn: Stateful<Div>| drawn.style().size.height;
         assert_eq!(height(thread_row(&bare)), height(thread_row(&thread(None))));
+        assert_eq!(
+            height(thread_row(&bare)),
+            height(thread_row(&current_thread(None, true))),
+            "the current mark is absolute: a row's height never moves with it"
+        );
         assert_eq!(
             height(thread_row(&bare)),
             Some(px(THREAD_ROW_H).into()),
