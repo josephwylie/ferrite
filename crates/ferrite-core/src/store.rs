@@ -10,6 +10,7 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
@@ -17,6 +18,11 @@ use crate::workspace::registry::ProjectId;
 use crate::workspace::WorkspaceBinding;
 use crate::SessionEvent;
 use crate::{transcript::Input, ThreadId};
+
+mod activity;
+use activity::{Execution as PersistedExecution, PersistedActivity};
+#[cfg(test)]
+mod activity_tests;
 
 /// The schema this store writes. Every log names the schema it was written
 /// at in its header line; `load` accepts this version and every version
@@ -51,12 +57,16 @@ use crate::{transcript::Input, ThreadId};
 ///   which tells a revive that the last Init belongs to a provider no
 ///   longer serving. A v1–v7 log loads with no effort — the provider's
 ///   default, which is also what absent means — and no handovers.
+/// - **9** — attributed subagent facts, kept separate from Main records.
+///   Old logs remain Main-only; live Decision handles are never persisted.
+/// - **10** — native progress, identified summary sections, and live tool output
+///   in both Main and attributed execution records.
+const SCHEMA_VERSION: u32 = 10;
+
 /// How far `peek_first_prompt` reads before giving up: the first prompt
 /// is normally the second line, and a log whose first prompt sits past
 /// this much preamble is named by its number instead.
 const FIRST_PROMPT_SCAN: usize = 64 * 1024;
-
-const SCHEMA_VERSION: u32 = 8;
 
 /// Which agent backend serves this Thread — persisted so a restart knows
 /// which provider to revive the Thread on.
@@ -197,6 +207,24 @@ impl PersistedBinding {
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Record {
+    SummaryPart {
+        item_id: String,
+        summary_index: u64,
+        text: String,
+        snapshot: bool,
+    },
+    Progress {
+        event: PersistedProgress,
+    },
+    ToolOutput {
+        id: String,
+        text: String,
+    },
+    ContentBoundary,
+    /// Schema 9: a durable attributed fact, never a pending request handle.
+    Activity {
+        observation: PersistedActivity,
+    },
     Init {
         session_id: String,
         model: String,
@@ -354,6 +382,252 @@ impl PersistedToolResult {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum PersistedProgress {
+    Phase {
+        phase: StoredPhase,
+        detail: String,
+    },
+    Tool {
+        id: String,
+        message: String,
+        elapsed_ms: Option<u64>,
+    },
+    Plan {
+        steps: Vec<StoredStep>,
+        explanation: String,
+    },
+    Task {
+        id: String,
+        subject: String,
+        status: Option<StoredStepStatus>,
+        deleted: bool,
+    },
+    Background {
+        id: String,
+        label: String,
+        status: StoredTaskStatus,
+        detail: String,
+    },
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct StoredStep {
+    text: String,
+    status: StoredStepStatus,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum StoredPhase {
+    Working,
+    Thinking,
+    Answering,
+    Compacting,
+    Retrying,
+    Waiting,
+}
+impl StoredPhase {
+    fn from_live(value: crate::progress::Phase) -> Self {
+        match value {
+            crate::progress::Phase::Working => Self::Working,
+            crate::progress::Phase::Thinking => Self::Thinking,
+            crate::progress::Phase::Answering => Self::Answering,
+            crate::progress::Phase::Compacting => Self::Compacting,
+            crate::progress::Phase::Retrying => Self::Retrying,
+            crate::progress::Phase::Waiting => Self::Waiting,
+        }
+    }
+    fn live(self) -> crate::progress::Phase {
+        match self {
+            Self::Working => crate::progress::Phase::Working,
+            Self::Thinking => crate::progress::Phase::Thinking,
+            Self::Answering => crate::progress::Phase::Answering,
+            Self::Compacting => crate::progress::Phase::Compacting,
+            Self::Retrying => crate::progress::Phase::Retrying,
+            Self::Waiting => crate::progress::Phase::Waiting,
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum StoredStepStatus {
+    Pending,
+    InProgress,
+    Completed,
+}
+impl StoredStepStatus {
+    fn from_live(value: crate::progress::StepStatus) -> Self {
+        match value {
+            crate::progress::StepStatus::Pending => Self::Pending,
+            crate::progress::StepStatus::InProgress => Self::InProgress,
+            crate::progress::StepStatus::Completed => Self::Completed,
+        }
+    }
+    fn live(self) -> crate::progress::StepStatus {
+        match self {
+            Self::Pending => crate::progress::StepStatus::Pending,
+            Self::InProgress => crate::progress::StepStatus::InProgress,
+            Self::Completed => crate::progress::StepStatus::Completed,
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum StoredTaskStatus {
+    Working,
+    Completed,
+    Failed,
+    Stopped,
+    Unknown,
+}
+impl StoredTaskStatus {
+    fn from_live(value: crate::progress::TaskStatus) -> Self {
+        match value {
+            crate::progress::TaskStatus::Working => Self::Working,
+            crate::progress::TaskStatus::Completed => Self::Completed,
+            crate::progress::TaskStatus::Failed => Self::Failed,
+            crate::progress::TaskStatus::Stopped => Self::Stopped,
+            crate::progress::TaskStatus::Unknown => Self::Unknown,
+        }
+    }
+    fn live(self) -> crate::progress::TaskStatus {
+        match self {
+            Self::Working => crate::progress::TaskStatus::Working,
+            Self::Completed => crate::progress::TaskStatus::Completed,
+            Self::Failed => crate::progress::TaskStatus::Failed,
+            Self::Stopped => crate::progress::TaskStatus::Stopped,
+            Self::Unknown => crate::progress::TaskStatus::Unknown,
+        }
+    }
+}
+impl PersistedProgress {
+    fn coalesce(&mut self, next: &Self) -> bool {
+        match (self, next) {
+            (
+                Self::Tool {
+                    id,
+                    message,
+                    elapsed_ms,
+                },
+                Self::Tool {
+                    id: next,
+                    message: more,
+                    elapsed_ms: elapsed,
+                },
+            ) if id == next => {
+                if !more.is_empty() {
+                    *message = more.clone();
+                }
+                if let Some(elapsed) = elapsed {
+                    *elapsed_ms = Some(elapsed_ms.unwrap_or(0).max(*elapsed));
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+    fn from_live(event: &crate::progress::ProgressEvent) -> Self {
+        use crate::progress::ProgressEvent as E;
+        match event {
+            E::Phase { phase, detail } => Self::Phase {
+                phase: StoredPhase::from_live(*phase),
+                detail: detail.clone(),
+            },
+            E::Tool {
+                id,
+                message,
+                elapsed_ms,
+            } => Self::Tool {
+                id: id.clone(),
+                message: message.clone(),
+                elapsed_ms: *elapsed_ms,
+            },
+            E::Plan { steps, explanation } => Self::Plan {
+                steps: steps
+                    .iter()
+                    .map(|step| StoredStep {
+                        text: step.text.clone(),
+                        status: StoredStepStatus::from_live(step.status),
+                    })
+                    .collect(),
+                explanation: explanation.clone(),
+            },
+            E::Task {
+                id,
+                subject,
+                status,
+                deleted,
+            } => Self::Task {
+                id: id.clone(),
+                subject: subject.clone(),
+                status: status.map(StoredStepStatus::from_live),
+                deleted: *deleted,
+            },
+            E::Background {
+                id,
+                label,
+                status,
+                detail,
+            } => Self::Background {
+                id: id.clone(),
+                label: label.clone(),
+                status: StoredTaskStatus::from_live(*status),
+                detail: detail.clone(),
+            },
+        }
+    }
+    fn live(&self) -> crate::progress::ProgressEvent {
+        use crate::progress::ProgressEvent as E;
+        match self {
+            Self::Phase { phase, detail } => E::Phase {
+                phase: phase.live(),
+                detail: detail.clone(),
+            },
+            Self::Tool {
+                id,
+                message,
+                elapsed_ms,
+            } => E::Tool {
+                id: id.clone(),
+                message: message.clone(),
+                elapsed_ms: *elapsed_ms,
+            },
+            Self::Plan { steps, explanation } => E::Plan {
+                steps: steps
+                    .iter()
+                    .map(|step| crate::progress::PlanStep {
+                        text: step.text.clone(),
+                        status: step.status.live(),
+                    })
+                    .collect(),
+                explanation: explanation.clone(),
+            },
+            Self::Task {
+                id,
+                subject,
+                status,
+                deleted,
+            } => E::Task {
+                id: id.clone(),
+                subject: subject.clone(),
+                status: status.map(StoredStepStatus::live),
+                deleted: *deleted,
+            },
+            Self::Background {
+                id,
+                label,
+                status,
+                detail,
+            } => E::Background {
+                id: id.clone(),
+                label: label.clone(),
+                status: status.live(),
+                detail: detail.clone(),
+            },
+        }
+    }
+}
+
 impl Record {
     /// The persisted form of one live event, or `None` for events that are
     /// Session state rather than durable history (a pending Decision dies
@@ -362,6 +636,28 @@ impl Record {
     /// thing in the record no event carries.
     fn from_event(event: &SessionEvent, duration: Option<std::time::Duration>) -> Option<Record> {
         Some(match event {
+            SessionEvent::ReasoningSummaryPart {
+                item_id,
+                summary_index,
+                text,
+                snapshot,
+            } => Record::SummaryPart {
+                item_id: item_id.clone(),
+                summary_index: *summary_index,
+                text: text.clone(),
+                snapshot: *snapshot,
+            },
+            SessionEvent::Progress { event } => Record::Progress {
+                event: PersistedProgress::from_live(event),
+            },
+            SessionEvent::ToolOutputDelta { id, text } => Record::ToolOutput {
+                id: id.clone(),
+                text: text.clone(),
+            },
+            SessionEvent::ContentBoundary => Record::ContentBoundary,
+            SessionEvent::Activity(observation) => Record::Activity {
+                observation: PersistedActivity::from_live(observation, duration)?,
+            },
             SessionEvent::Init { session_id, model } => Record::Init {
                 session_id: session_id.clone(),
                 model: model.clone(),
@@ -425,12 +721,35 @@ impl Record {
             SessionEvent::Commands { .. } => return None,
             SessionEvent::PermissionMode { .. } => return None,
             SessionEvent::Models { .. } => return None,
+            SessionEvent::RateLimits { .. } => return None,
         })
     }
 
     /// Replay this record as the transcript input it stands for.
     fn input(&self) -> Input {
         match self {
+            Record::SummaryPart {
+                item_id,
+                summary_index,
+                text,
+                snapshot,
+            } => Input::Event(SessionEvent::ReasoningSummaryPart {
+                item_id: item_id.clone(),
+                summary_index: *summary_index,
+                text: text.clone(),
+                snapshot: *snapshot,
+            }),
+            Record::Progress { event } => Input::Event(SessionEvent::Progress {
+                event: event.live(),
+            }),
+            Record::ToolOutput { id, text } => Input::Event(SessionEvent::ToolOutputDelta {
+                id: id.clone(),
+                text: text.clone(),
+            }),
+            Record::ContentBoundary => Input::Event(SessionEvent::ContentBoundary),
+            Record::Activity { observation } => {
+                Input::Event(SessionEvent::Activity(observation.live()))
+            }
             Record::Init { session_id, model } => Input::Event(SessionEvent::Init {
                 session_id: session_id.clone(),
                 model: model.clone(),
@@ -502,16 +821,53 @@ impl Record {
     /// seen from the store's side of the conversion. A handover is one too:
     /// the header rewrite that follows it must find it on disk.
     fn is_boundary(&self) -> bool {
-        matches!(
-            self,
-            Record::TurnEnded { .. } | Record::Closed { .. } | Record::Handover { .. }
-        )
+        matches!(self, Record::Activity { observation } if observation.is_boundary())
+            || matches!(
+                self,
+                Record::TurnEnded { .. } | Record::Closed { .. } | Record::Handover { .. }
+            )
     }
 
     /// Extend this record with a later delta of the same kind, if the two
     /// coalesce. A run of deltas is one record; anything else keeps its line.
     fn coalesce(&mut self, next: &Record) -> bool {
         match (self, next) {
+            (
+                Record::SummaryPart {
+                    item_id,
+                    summary_index,
+                    text,
+                    snapshot: false,
+                },
+                Record::SummaryPart {
+                    item_id: next,
+                    summary_index: part,
+                    text: more,
+                    snapshot: false,
+                },
+            ) if item_id == next && summary_index == part => {
+                text.push_str(more);
+                true
+            }
+
+            (
+                Record::ToolOutput { id, text },
+                Record::ToolOutput {
+                    id: next,
+                    text: more,
+                },
+            ) if id == next => {
+                text.push_str(more);
+                true
+            }
+            (
+                Record::Progress {
+                    event: event @ PersistedProgress::Tool { .. },
+                },
+                Record::Progress {
+                    event: next @ PersistedProgress::Tool { .. },
+                },
+            ) => event.coalesce(next),
             (Record::Text { text }, Record::Text { text: more }) => {
                 text.push_str(more);
                 true
@@ -649,6 +1005,7 @@ impl Store {
                 buffer: Vec::new(),
                 flush_interval: self.flush_interval,
                 buffered_since: None,
+                pending_flush: None,
             },
         ))
     }
@@ -690,6 +1047,17 @@ impl Store {
     /// chunks only up to the first newline, so the records after the header
     /// are never read off the disk, and a huge log peeks at the same cost
     /// as an empty one.
+    /// When a Thread was last written to — its log's modification time.
+    /// The log is appended on every prompt, every stream and every act, so
+    /// its mtime *is* "last used", and it costs one `stat` rather than a
+    /// replay. A log that cannot be stat'd has no time; a row with no time
+    /// simply says nothing, and sorts last.
+    pub fn last_used(&self, id: ThreadId) -> Option<SystemTime> {
+        fs::metadata(self.log_path(id))
+            .and_then(|meta| meta.modified())
+            .ok()
+    }
+
     pub fn peek(&self, id: ThreadId) -> Result<ThreadMeta, LoadError> {
         use std::io::BufRead;
         let mut first = Vec::new();
@@ -814,6 +1182,7 @@ impl Store {
                 buffer: Vec::new(),
                 flush_interval: self.flush_interval,
                 buffered_since: None,
+                pending_flush: None,
             };
         }
         Ok(())
@@ -847,6 +1216,7 @@ impl Store {
                 buffer: Vec::new(),
                 flush_interval: self.flush_interval,
                 buffered_since: None,
+                pending_flush: None,
             };
         }
         Ok(())
@@ -879,6 +1249,7 @@ impl Store {
             buffer: Vec::new(),
             flush_interval: self.flush_interval,
             buffered_since: None,
+            pending_flush: None,
         };
         Ok(handover)
     }
@@ -901,6 +1272,7 @@ impl Store {
                 buffer: Vec::new(),
                 flush_interval: self.flush_interval,
                 buffered_since: None,
+                pending_flush: None,
             };
         }
         Ok(())
@@ -931,7 +1303,50 @@ impl Store {
             buffer: Vec::new(),
             flush_interval: self.flush_interval,
             buffered_since: None,
+            pending_flush: None,
         })
+    }
+
+    /// Recover one child's recent persisted content for an off-thread cache
+    /// reload. No current status or actionable request is restored. The return
+    /// value is bounded by Activity's default rendering budget; omitted local
+    /// history is explicitly Partial. Two scans retain the alias graph and a
+    /// bounded target projection, plus one line/decoded record at a time.
+    /// A single externally supplied line can still be arbitrarily large.
+    /// Call this on a worker, never from the paint path.
+    pub fn agent_inputs(
+        &self,
+        thread: ThreadId,
+        key: &crate::activity::AgentKey,
+    ) -> Result<Vec<crate::activity::ActivityInput>, LoadError> {
+        let file = File::open(self.log_path(thread))?;
+        let through = file.metadata()?.len();
+        activity::read_agent_inputs(
+            file,
+            thread,
+            key,
+            through,
+            crate::activity::ActivityLimits::default(),
+        )
+    }
+
+    /// Read only the complete prefix returned by `ThreadWriter::checkpoint`.
+    /// Later appends belong to the caller's live-event buffer, so streamed
+    /// deltas are replayed exactly once when an evicted cache is restored.
+    /// The caller invalidates this work on a header rewrite or Thread change.
+    pub fn agent_inputs_at(
+        &self,
+        thread: ThreadId,
+        key: &crate::activity::AgentKey,
+        through: u64,
+    ) -> Result<Vec<crate::activity::ActivityInput>, LoadError> {
+        activity::read_agent_inputs(
+            File::open(self.log_path(thread))?,
+            thread,
+            key,
+            through,
+            crate::activity::ActivityLimits::default(),
+        )
     }
 
     /// Replace a Thread's log with the loaded snapshot at the current
@@ -1020,6 +1435,46 @@ pub(crate) struct Handover {
     pub delivered: bool,
 }
 
+/// The Main-only answer projection used for Handover. An authoritative item
+/// replaces its own accumulated deltas, not the whole answer or another actor.
+#[derive(Default)]
+struct AnswerText {
+    parts: Vec<String>,
+    ids: std::collections::HashMap<String, usize>,
+    settled: std::collections::HashSet<String>,
+}
+
+impl AnswerText {
+    fn observe(&mut self, id: Option<&str>, event: &PersistedExecution) {
+        let (text, complete) = match event {
+            PersistedExecution::TextDelta { text } => (text, false),
+            PersistedExecution::Text { text } | PersistedExecution::TextSnapshot { text } => {
+                (text, true)
+            }
+            _ => return,
+        };
+        let Some(id) = id else {
+            self.parts.push(text.clone());
+            return;
+        };
+        if matches!(event, PersistedExecution::Text { .. }) && self.settled.contains(id) {
+            return;
+        }
+        let index = *self.ids.entry(id.into()).or_insert_with(|| {
+            self.parts.push(String::new());
+            self.parts.len() - 1
+        });
+        if complete {
+            self.parts[index] = text.clone();
+            if matches!(event, PersistedExecution::Text { .. }) {
+                self.settled.insert(id.into());
+            }
+        } else {
+            self.parts[index].push_str(text);
+        }
+    }
+}
+
 impl ThreadSnapshot {
     pub fn provider(&self) -> Provider {
         self.provider
@@ -1092,13 +1547,20 @@ impl ThreadSnapshot {
         let Record::Handover { from, .. } = &self.records[at] else {
             unreachable!("rposition matched a handover");
         };
-        let mut exchanges: Vec<(String, String)> = Vec::new();
+        let mut exchanges: Vec<(String, AnswerText)> = Vec::new();
         for record in &self.records[..at] {
             match record {
-                Record::Prompt { text } => exchanges.push((text.clone(), String::new())),
+                Record::Prompt { text } => exchanges.push((text.clone(), AnswerText::default())),
                 Record::Text { text } => {
                     if let Some((_, answer)) = exchanges.last_mut() {
-                        answer.push_str(text);
+                        answer.parts.push(text.clone());
+                    }
+                }
+                Record::Activity {
+                    observation: PersistedActivity::MainContent { id, event, .. },
+                } => {
+                    if let Some((_, answer)) = exchanges.last_mut() {
+                        answer.observe(id.as_deref(), event);
                     }
                 }
                 _ => {}
@@ -1106,17 +1568,80 @@ impl ThreadSnapshot {
         }
         Some(Handover {
             from: *from,
-            exchanges,
+            exchanges: exchanges
+                .into_iter()
+                .map(|(prompt, answer)| (prompt, answer.parts.concat()))
+                .collect(),
             delivered: self.records[at + 1..]
                 .iter()
                 .any(|record| matches!(record, Record::Prompt { .. })),
         })
     }
 
-    /// The history, in transcript vocabulary: replay these through a fresh
-    /// `Transcript` and the Pane shows what it showed before the restart.
+    /// Legacy Main-only inputs. Child facts and identity-bearing Main content
+    /// require `activity_inputs`; flattening them here would duplicate snapshots
+    /// or attribute child prompts to the operator.
     pub fn inputs(&self) -> Vec<Input> {
-        self.records.iter().map(Record::input).collect()
+        self.records
+            .iter()
+            .filter_map(|record| match record {
+                Record::Activity {
+                    observation: PersistedActivity::BackgroundTurnEnded { outcome, cost_usd },
+                } => Some(Input::Event(SessionEvent::TurnEnded {
+                    outcome: outcome.live(),
+                    cost_usd: *cost_usd,
+                })),
+                Record::Activity { .. } => None,
+                _ => Some(record.input()),
+            })
+            .collect()
+    }
+
+    /// Full chronological replay through Activity's historical Interface.
+    /// Request handles were never recorded; replay cannot restore them. Tool
+    /// durations follow content and alias restoration, scoped by their subject.
+    pub fn activity_inputs(&self) -> Vec<crate::activity::ActivityInput> {
+        use crate::activity::{ActivityInput, Subject};
+        let mut inputs: Vec<_> = self
+            .records
+            .iter()
+            .map(|record| match record {
+                Record::Activity { observation } => ActivityInput::ReplayEvent(observation.live()),
+                _ => ActivityInput::Replay(record.input()),
+            })
+            .collect();
+        let mut timings: std::collections::BTreeMap<
+            Subject,
+            std::collections::HashMap<String, std::time::Duration>,
+        > = std::collections::BTreeMap::new();
+        let aliases = activity::Aliases::new(&self.records);
+        for record in &self.records {
+            let timing = match record {
+                Record::Activity { observation } => observation.tool_duration(),
+                Record::ToolCompleted {
+                    id,
+                    duration_ms: Some(ms),
+                    ..
+                } => Some((
+                    Subject::Main,
+                    id.clone(),
+                    std::time::Duration::from_millis(*ms),
+                )),
+                _ => None,
+            };
+            if let Some((subject, id, duration)) = timing {
+                timings
+                    .entry(aliases.subject(subject))
+                    .or_default()
+                    .insert(id, duration);
+            }
+        }
+        inputs.extend(
+            timings
+                .into_iter()
+                .map(|(subject, timings)| ActivityInput::RestoreTimings { subject, timings }),
+        );
+        inputs
     }
 
     /// Every settled tool call's wall clock, keyed by the provider's call
@@ -1124,6 +1649,7 @@ impl ThreadSnapshot {
     /// into the cockpit's timings so a revived Thread's rows still carry
     /// the durations they were drawn with; calls logged before the clock
     /// was persisted are simply absent.
+    #[cfg(test)]
     pub(crate) fn tool_durations(&self) -> Vec<(String, std::time::Duration)> {
         self.records
             .iter()
@@ -1157,6 +1683,60 @@ pub struct ThreadWriter {
     flush_interval: std::time::Duration,
     /// When the oldest unflushed record was buffered; `None` while empty.
     buffered_since: Option<std::time::Instant>,
+    /// An unsuccessful append retains both its records and exact byte offset.
+    /// A retry writes only bytes not accepted yet and retries a failed sync.
+    pending_flush: Option<PendingFlush>,
+}
+
+struct PendingFlush {
+    bytes: Vec<u8>,
+    written: usize,
+    records: usize,
+}
+
+/// The private durability seam lets failures exercise the same retry path as
+/// a file, including partial writes followed by errors and failed syncs.
+trait DurableWrite: Write {
+    fn sync_data(&self) -> io::Result<()>;
+}
+
+impl DurableWrite for File {
+    fn sync_data(&self) -> io::Result<()> {
+        File::sync_data(self)
+    }
+}
+
+fn flush_records(
+    file: &mut impl DurableWrite,
+    buffer: &mut Vec<Record>,
+    pending: &mut Option<PendingFlush>,
+) -> io::Result<()> {
+    while !buffer.is_empty() {
+        if pending.is_none() {
+            let mut bytes = Vec::new();
+            for record in buffer.iter() {
+                bytes.extend_from_slice(line(record)?.as_bytes());
+            }
+            *pending = Some(PendingFlush {
+                bytes,
+                written: 0,
+                records: buffer.len(),
+            });
+        }
+        let append = pending.as_mut().expect("prepared above");
+        while append.written < append.bytes.len() {
+            match file.write(&append.bytes[append.written..]) {
+                Ok(0) => return Err(io::Error::from(io::ErrorKind::WriteZero)),
+                Ok(written) => append.written += written,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        file.sync_data()?;
+        buffer.drain(..append.records);
+        *pending = None;
+    }
+    Ok(())
 }
 
 impl ThreadWriter {
@@ -1195,23 +1775,30 @@ impl ThreadWriter {
     /// Everything buffered, durably on disk. The caller's lever for the
     /// moments the writer cannot see: parking a Thread, quitting the app.
     pub fn flush(&mut self) -> io::Result<()> {
+        flush_records(&mut self.file, &mut self.buffer, &mut self.pending_flush)?;
         self.buffered_since = None;
-        if self.buffer.is_empty() {
-            return Ok(());
-        }
-        let mut lines = String::new();
-        for record in self.buffer.drain(..) {
-            lines.push_str(&line(&record)?);
-        }
-        self.file.write_all(lines.as_bytes())?;
-        self.file.sync_data()
+        Ok(())
+    }
+
+    /// Flush all accepted facts and freeze the readable byte boundary for
+    /// an asynchronous child-cache reload. Failure retains the same retry
+    /// contract as `flush`; the caller must not resubmit buffered events.
+    pub fn checkpoint(&mut self) -> io::Result<u64> {
+        self.flush()?;
+        Ok(self.file.metadata()?.len())
     }
 
     fn push(&mut self, record: Record) -> io::Result<()> {
-        let coalesced = match self.buffer.last_mut() {
-            Some(last) => last.coalesce(&record),
-            None => false,
-        };
+        // Records already encoded for a retry are immutable until committed.
+        let frozen = self
+            .pending_flush
+            .as_ref()
+            .map_or(0, |append| append.records);
+        let coalesced = self.buffer.len() > frozen
+            && self
+                .buffer
+                .last_mut()
+                .is_some_and(|last| last.coalesce(&record));
         let flush_now = record.is_boundary();
         if !coalesced {
             self.buffer.push(record);
@@ -2241,7 +2828,7 @@ mod tests {
             &dir,
             "3",
             concat!(
-                r#"{"schema":9,"provider":"claude"}"#,
+                r#"{"schema":999,"provider":"claude"}"#,
                 "\n",
                 r#"{"type":"init","session_id":"from-the-future","model":"m"}"#,
                 "\n",
@@ -2251,7 +2838,7 @@ mod tests {
         let store = Store::open(&dir).unwrap();
         match store.load(ThreadId::new(3)) {
             Err(LoadError::FutureSchema { found, supported }) => {
-                assert_eq!(found, 9);
+                assert_eq!(found, 999);
                 assert_eq!(supported, SCHEMA_VERSION);
             }
             Ok(_) => panic!("a future schema must not load"),
@@ -2456,8 +3043,11 @@ mod tests {
                 active.apply(Input::Revived);
                 assert_eq!(active.turn_outcome(), None);
                 assert!(!active.turn_completed());
-                assert_eq!(active.status(), crate::transcript::Status::Streaming);
-                assert!(active.turn_elapsed().is_some());
+                assert_eq!(active.status(), crate::transcript::Status::Idle);
+                assert!(
+                    active.turn_elapsed().is_none(),
+                    "replayed activity has no live clock"
+                );
             }
         }
     }

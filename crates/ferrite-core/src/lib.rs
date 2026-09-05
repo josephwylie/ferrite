@@ -4,12 +4,14 @@
 //! is swappable at exactly this seam). Modules follow the spec: providers,
 //! transcript, store, cockpit — added as their tickets land.
 
+pub mod activity;
 pub mod cockpit;
 pub mod docview;
 pub mod draft;
 pub mod groups;
 pub mod import;
 pub mod layout;
+pub mod progress;
 mod prompt_history;
 pub mod providers;
 pub mod questions;
@@ -24,7 +26,7 @@ pub mod workspace;
 mod session_event;
 mod thread;
 pub use session_event::{
-    Decision, DecisionAnswer, Hunk, ModelInfo, SessionCommand, SessionEvent, ToolResult,
-    TurnOutcome,
+    Decision, DecisionAnswer, Hunk, ModelInfo, RateLimitWindow, SessionCommand, SessionEvent,
+    ToolResult, TurnOutcome,
 };
 pub use thread::ThreadId;

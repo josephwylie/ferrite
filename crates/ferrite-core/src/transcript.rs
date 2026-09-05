@@ -6,7 +6,8 @@
 
 use std::sync::Arc;
 
-use crate::{Hunk, SessionEvent, ToolResult, TurnOutcome};
+use crate::progress::{Phase, Progress, ProgressEvent, StepStatus};
+use crate::{Hunk, RateLimitWindow, SessionEvent, ToolResult, TurnOutcome};
 
 mod highlight;
 pub use highlight::{tokens as highlight_tokens, Lexer};
@@ -159,6 +160,8 @@ impl Diff {
 pub enum ToolState {
     Running,
     Ok,
+    /// The stream ended before the provider reported this call’s result.
+    Unavailable,
     /// The provider handed the model a failure; the operator sees why.
     Failed(String),
 }
@@ -276,6 +279,15 @@ pub struct Usage {
     pub context_window: Option<u64>,
 }
 
+/// Latest live account windows. These are deliberately not restored from the
+/// transcript log: a persisted percentage becomes misleading as soon as its
+/// rolling window resets.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct RateLimits {
+    pub five_hour: Option<RateLimitWindow>,
+    pub weekly: Option<RateLimitWindow>,
+}
+
 /// What the Session is doing, as the transcript last saw it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Status {
@@ -311,6 +323,7 @@ pub struct Transcript {
     /// cannot stand in for this: Codex completes without reporting dollars.
     turn_outcome: Option<TurnOutcome>,
     usage: Option<Usage>,
+    rate_limits: RateLimits,
     /// When the running turn began — the operator's prompt went out — for
     /// the working line's clock. None between turns.
     turn_started: Option<std::time::Instant>,
@@ -321,11 +334,67 @@ pub struct Transcript {
     last_report: u64,
     /// Which reasoning summary part the tail Block belongs to.
     summary_index: Option<u64>,
+    progress: Progress,
+    output_tails: std::collections::BTreeMap<String, OutputTail>,
+    thinking_open: bool,
+    latest_reasoning_part: Option<BlockId>,
+    reasoning_parts: std::collections::BTreeMap<(String, u64), BlockId>,
     /// The Thread's plan: every step's subject in creation order, and which
     /// steps it has finished. Ids in a set rather than a count, because a
     /// step can be completed twice.
     subjects: Vec<String>,
     completed: std::collections::BTreeSet<String>,
+}
+
+/// Keep the latest output line even after the disclosed prefix reaches its
+/// byte limit. A line can span native chunks; carriage returns replace it.
+#[derive(Clone, Default)]
+struct OutputTail {
+    line: String,
+    last: String,
+}
+impl OutputTail {
+    fn push(&mut self, text: &str) -> Option<String> {
+        for ch in text.chars() {
+            if matches!(ch, '\n' | '\r') {
+                let line = crate::progress::one_line(&self.line, RESULT_CHARS);
+                if !line.is_empty() {
+                    self.last = line;
+                }
+                self.line.clear();
+            } else {
+                self.line.push(ch);
+                if self.line.len() > 2048 {
+                    let mut start = self.line.len() - 2048;
+                    while !self.line.is_char_boundary(start) {
+                        start += 1;
+                    }
+                    self.line.drain(..start);
+                }
+            }
+        }
+        let line = crate::progress::one_line(&self.line, RESULT_CHARS);
+        let line = if line.is_empty() { &self.last } else { &line };
+        (!line.is_empty()).then(|| line.clone())
+    }
+}
+
+/// Runtime observations travel separately from replayable content. Activity
+/// preserves these while rebuilding an item or loading older child history.
+#[derive(Clone)]
+pub(crate) struct Runtime {
+    progress: Progress,
+    output_tails: std::collections::BTreeMap<String, OutputTail>,
+    running_calls: std::collections::BTreeSet<String>,
+    status: Status,
+    model: Option<String>,
+    session_id: Option<String>,
+    last_cost: Option<f64>,
+    turn_outcome: Option<TurnOutcome>,
+    usage: Option<Usage>,
+    turn_started: Option<std::time::Instant>,
+    turn_output_tokens: u64,
+    last_report: u64,
 }
 
 /// Blocks a long-running Thread keeps in memory. Generous enough that a Pane
@@ -358,10 +427,16 @@ impl Transcript {
             last_cost: None,
             turn_outcome: None,
             usage: None,
+            rate_limits: RateLimits::default(),
             turn_started: None,
             turn_output_tokens: 0,
             last_report: 0,
             summary_index: None,
+            progress: Progress::default(),
+            output_tails: Default::default(),
+            thinking_open: false,
+            latest_reasoning_part: None,
+            reasoning_parts: Default::default(),
             subjects: Vec::new(),
             completed: std::collections::BTreeSet::new(),
         }
@@ -369,6 +444,81 @@ impl Transcript {
 
     pub fn status(&self) -> Status {
         self.status
+    }
+
+    pub(crate) fn set_attention(&mut self, pending: bool, busy: bool) {
+        if pending {
+            self.status = Status::Blocked;
+        } else if self.status == Status::Blocked {
+            self.status = if busy {
+                Status::Streaming
+            } else {
+                Status::Idle
+            };
+        }
+    }
+
+    pub(crate) fn clear_activity(&mut self) -> Update {
+        if matches!(self.status, Status::Streaming | Status::Blocked) {
+            self.status = Status::Idle;
+        }
+        self.turn_started = None;
+        self.progress.disconnected();
+        Update {
+            dirty: self.retire_tools(),
+            ..Update::default()
+        }
+    }
+
+    pub(crate) fn runtime(&self) -> Runtime {
+        Runtime {
+            progress: self.progress.clone(),
+            output_tails: self.output_tails.clone(),
+            running_calls: self
+                .blocks
+                .iter()
+                .filter_map(|block| match &block.body {
+                    Body::Tool(tool) if tool.state == ToolState::Running => Some(tool.call.clone()),
+                    _ => None,
+                })
+                .collect(),
+            status: self.status,
+            model: self.model.clone(),
+            session_id: self.session_id.clone(),
+            last_cost: self.last_cost,
+            turn_outcome: self.turn_outcome.clone(),
+            usage: self.usage,
+            turn_started: self.turn_started,
+            turn_output_tokens: self.turn_output_tokens,
+            last_report: self.last_report,
+        }
+    }
+
+    pub(crate) fn restore_runtime(&mut self, runtime: Runtime) {
+        self.progress = runtime.progress;
+        self.output_tails = runtime.output_tails;
+        for block in &mut self.blocks {
+            if let Body::Tool(tool) = &mut block.body {
+                match tool.state {
+                    ToolState::Running if !runtime.running_calls.contains(&tool.call) => {
+                        tool.state = ToolState::Unavailable
+                    }
+                    ToolState::Unavailable if runtime.running_calls.contains(&tool.call) => {
+                        tool.state = ToolState::Running
+                    }
+                    _ => {}
+                }
+            }
+        }
+        self.status = runtime.status;
+        self.model = runtime.model;
+        self.session_id = runtime.session_id;
+        self.last_cost = runtime.last_cost;
+        self.turn_outcome = runtime.turn_outcome;
+        self.usage = runtime.usage;
+        self.turn_started = runtime.turn_started;
+        self.turn_output_tokens = runtime.turn_output_tokens;
+        self.last_report = runtime.last_report;
     }
 
     pub fn model(&self) -> Option<&str> {
@@ -399,6 +549,10 @@ impl Transcript {
         self.usage
     }
 
+    pub fn rate_limits(&self) -> RateLimits {
+        self.rate_limits
+    }
+
     /// How long the running turn has been going; None between turns.
     pub fn turn_elapsed(&self) -> Option<std::time::Duration> {
         self.turn_started.map(|started| started.elapsed())
@@ -410,7 +564,22 @@ impl Transcript {
     }
 
     /// The Thread's plan, once it has made one.
+    pub fn progress(&self) -> &Progress {
+        &self.progress
+    }
+
     pub fn todos(&self) -> Option<Todos> {
+        if self.progress.has_plan {
+            return Some(Todos {
+                done: self
+                    .progress
+                    .plan
+                    .iter()
+                    .filter(|step| step.status == StepStatus::Completed)
+                    .count(),
+                total: self.progress.plan.len(),
+            });
+        }
         (!self.subjects.is_empty()).then_some(Todos {
             // The CLI assigns task ids and TaskCreate never echoes them, so a
             // completion cannot be matched to the step it finished. Clamping
@@ -426,6 +595,9 @@ impl Transcript {
     /// their steps, so order stands in — and a step created without a
     /// subject names nothing.
     pub fn current_task(&self) -> Option<&str> {
+        if self.progress.has_plan {
+            return self.progress.current_step();
+        }
         let done = self.completed.len().min(self.subjects.len());
         self.subjects
             .get(done)
@@ -473,6 +645,12 @@ impl Transcript {
     fn apply_inner(&mut self, input: Input) -> Update {
         let mut update = self.fold(input);
         update.evicted = self.evict();
+        if !update.evicted.is_empty() {
+            let first = self.blocks.first().map(|block| block.id);
+            self.reasoning_parts
+                .retain(|_, id| first.is_some_and(|first| *id >= first));
+            self.output_tails.retain(|id, _| self.blocks.iter().any(|block| matches!(&block.body, Body::Tool(tool) if &tool.call == id && tool.state == ToolState::Running)));
+        }
         update
     }
 
@@ -481,7 +659,153 @@ impl Transcript {
     /// of a superset event model — a wildcard would silently render nothing.
     fn fold(&mut self, input: Input) -> Update {
         match input {
+            Input::Event(SessionEvent::ReasoningSummaryPart {
+                item_id,
+                summary_index,
+                text,
+                snapshot,
+            }) => {
+                if text.is_empty() && !snapshot {
+                    return Update::default();
+                }
+                let key = (item_id, summary_index);
+                let existing = self.reasoning_parts.get(&key).copied();
+                let (id, changed) = if let Some(id) = existing {
+                    let block = self
+                        .blocks
+                        .iter_mut()
+                        .rev()
+                        .find(|block| block.id == id)
+                        .expect("pruned with blocks");
+                    let Body::Thinking(thought) = &mut block.body else {
+                        unreachable!()
+                    };
+                    if snapshot {
+                        let changed = *thought != text;
+                        *thought = text;
+                        (id, changed)
+                    } else {
+                        thought.push_str(&text);
+                        (id, true)
+                    }
+                } else {
+                    if text.is_empty() {
+                        return Update::default();
+                    }
+                    let id = self.push(Body::Thinking(text));
+                    self.latest_reasoning_part = Some(id);
+                    self.reasoning_parts.insert(key, id);
+                    (id, true)
+                };
+                if changed
+                    && self.latest_reasoning_part == Some(id)
+                    && !(snapshot && (self.turn_outcome.is_some() || self.status == Status::Closed))
+                {
+                    if let Some(Block {
+                        body: Body::Thinking(thought),
+                        ..
+                    }) = self.blocks.iter().rev().find(|block| block.id == id)
+                    {
+                        self.progress.summary(thought);
+                    }
+                    self.progress.phase(Phase::Thinking);
+                    self.status = Status::Streaming;
+                }
+                Update {
+                    dirty: if changed { vec![id] } else { vec![] },
+                    ..Update::default()
+                }
+            }
+            Input::Event(SessionEvent::Progress { event }) => {
+                if let ProgressEvent::Tool { id, .. } = &event {
+                    let settled = self.blocks.iter().any(|block| matches!(&block.body, Body::Tool(tool) if &tool.call == id && tool.state != ToolState::Running));
+                    if settled || self.turn_outcome.is_some() || self.status == Status::Closed {
+                        return Update::default();
+                    }
+                }
+                if matches!(
+                    &event,
+                    ProgressEvent::Phase { .. } | ProgressEvent::Tool { .. }
+                ) && self.status != Status::Blocked
+                    && self.status != Status::Closed
+                {
+                    self.status = Status::Streaming;
+                }
+                let changed = match &event {
+                    ProgressEvent::Phase { phase, detail } => {
+                        self.progress.phase != Some(*phase)
+                            || self.progress.detail != crate::progress::one_line(detail, 512)
+                    }
+                    _ => false,
+                };
+                self.progress.apply(&event);
+                // Keep exceptional waits in history, but periodic ticks never
+                // append rows or interrupt the Markdown currently streaming.
+                let mut dirty = vec![];
+                if changed {
+                    if let ProgressEvent::Phase {
+                        phase: phase @ (Phase::Retrying | Phase::Compacting | Phase::Waiting),
+                        detail,
+                    } = event
+                    {
+                        let detail = crate::progress::one_line(&detail, 512);
+                        let text = if detail.is_empty() {
+                            phase.label().to_string()
+                        } else {
+                            format!("{} — {detail}", phase.label())
+                        };
+                        dirty.push(self.push(Body::Notice(text)));
+                    }
+                }
+                Update {
+                    dirty,
+                    ..Update::default()
+                }
+            }
+            Input::Event(SessionEvent::ContentBoundary) => {
+                if let Some(block) = self.open {
+                    self.ask_to_highlight(block);
+                }
+                self.open = None;
+                self.source.clear();
+                self.summary_index = None;
+                self.thinking_open = false;
+                Update::default()
+            }
+            Input::Event(SessionEvent::ToolOutputDelta { id, text }) => {
+                let Some(block) = self.blocks.iter_mut().rev().find(|block| matches!(&block.body, Body::Tool(tool) if tool.call == id && tool.state == ToolState::Running)) else { return Update::default(); };
+                let Body::Tool(tool) = &mut block.body else {
+                    unreachable!()
+                };
+                let output = tool.output.get_or_insert_with(|| ToolOutput {
+                    text: String::new(),
+                    omitted_bytes: 0,
+                });
+                let mut end = if output.omitted_bytes > 0 {
+                    0
+                } else {
+                    text.len()
+                        .min(TOOL_OUTPUT_BYTES.saturating_sub(output.text.len()))
+                };
+                while !text.is_char_boundary(end) {
+                    end -= 1;
+                }
+                output.text.push_str(&text[..end]);
+                output.omitted_bytes = output.omitted_bytes.saturating_add(text.len() - end);
+                // The latest complete/partial output line is visible while the
+                // bounded full output stays available through disclosure.
+                tool.result_line = self.output_tails.entry(id).or_default().push(&text);
+                Update {
+                    dirty: vec![block.id],
+                    ..Update::default()
+                }
+            }
+            // Activity owns attribution and feeds each subject's execution
+            // into its own Transcript. Legacy callers cannot fold children
+            // into Main by accidentally replaying an attributed observation.
+            Input::Event(SessionEvent::Activity(_)) => Update::default(),
             Input::Event(SessionEvent::TextDelta { text }) => {
+                self.progress.phase(Phase::Answering);
                 self.status = Status::Streaming;
                 Update {
                     dirty: self.grow(&text),
@@ -489,6 +813,7 @@ impl Transcript {
                 }
             }
             Input::Event(SessionEvent::ThinkingDelta { text }) => {
+                self.progress.phase(Phase::Thinking);
                 self.status = Status::Streaming;
                 self.summary_index = None;
                 // Claude sends an empty thinking delta for every redacted
@@ -508,12 +833,16 @@ impl Transcript {
                 summary_index,
             }) => {
                 self.status = Status::Streaming;
+                self.progress.phase(Phase::Thinking);
                 // The provider decides where its reasoning breaks; a new index
                 // is a new paragraph, not a continuation of the last one.
                 if self.summary_index != Some(summary_index) {
                     self.summary_index = Some(summary_index);
                     return Update {
-                        dirty: vec![self.push(Body::Thinking(text))],
+                        dirty: vec![{
+                            self.thinking_open = false;
+                            self.grow_thinking(&text)
+                        }],
                         ..Update::default()
                     };
                 }
@@ -542,6 +871,10 @@ impl Transcript {
                 self.last_report = output_tokens;
                 Update::default()
             }
+            Input::Event(SessionEvent::RateLimits { five_hour, weekly }) => {
+                self.rate_limits = RateLimits { five_hour, weekly };
+                Update::default()
+            }
             Input::Answered { allowed, tool_name } => {
                 self.status = Status::Streaming;
                 let verb = if allowed { "allowed" } else { "denied" };
@@ -550,18 +883,30 @@ impl Transcript {
                     ..Update::default()
                 }
             }
-            Input::Revived => Update {
-                dirty: vec![self.push(Body::Meta(
+            Input::Revived => {
+                self.progress.disconnected();
+                if matches!(self.status, Status::Streaming | Status::Blocked) {
+                    self.status = Status::Idle;
+                }
+                self.turn_started = None;
+                let mut dirty = self.retire_tools();
+                dirty.push(self.push(Body::Meta(
                     "revived — new Session, history from the log".into(),
-                ))],
-                ..Update::default()
-            },
+                )));
+                Update {
+                    dirty,
+                    ..Update::default()
+                }
+            }
             Input::Notice(line) => Update {
                 dirty: vec![self.push(Body::Notice(line))],
                 ..Update::default()
             },
             Input::Prompt(line) => {
                 self.turn_outcome = None;
+                self.progress.end_turn();
+                self.latest_reasoning_part = None;
+                self.progress.phase(Phase::Working);
                 // A Closed session stays closed and a Blocked one stays
                 // blocked: nothing is streaming in either.
                 if let Status::Idle | Status::Streaming = self.status {
@@ -581,6 +926,7 @@ impl Transcript {
                 is_error,
                 result,
             }) => {
+                self.progress.finish_tool(&id);
                 let state = if is_error {
                     ToolState::Failed(trim(&output, ERROR_CHARS))
                 } else {
@@ -592,6 +938,7 @@ impl Transcript {
                 };
                 // A failure already carries its message in the state; a
                 // success keeps its first output line for the `⎿` row.
+                self.output_tails.remove(&id);
                 let result_line = (!is_error).then(|| result_line(&output)).flatten();
                 let output = retained_output(&output);
                 Update {
@@ -603,7 +950,17 @@ impl Transcript {
                 }
             }
             Input::Event(SessionEvent::ToolStarted { id, name, input }) => {
+                // A completed-message snapshot can repeat an already streamed
+                // tool. Its native id owns one row and one lifecycle.
+                if self
+                    .blocks
+                    .iter()
+                    .any(|block| matches!(&block.body, Body::Tool(tool) if tool.call == id))
+                {
+                    return Update::default();
+                }
                 self.status = Status::Streaming;
+                self.progress.phase(Phase::Working);
                 self.plan(&name, &input);
                 let block = self.push(Body::Tool(ToolBlock {
                     call: id,
@@ -629,10 +986,12 @@ impl Transcript {
                 Update::default()
             }
             Input::Event(SessionEvent::TurnEnded { outcome, cost_usd }) => {
+                self.progress.end_turn();
+                self.latest_reasoning_part = None;
                 self.status = Status::Idle;
                 self.last_cost = cost_usd;
                 self.turn_started = None;
-                let mut dirty = Vec::new();
+                let mut dirty = self.retire_tools();
                 match &outcome {
                     // The cost is kept (`last_cost`) but never rendered —
                     // no dollar value appears anywhere (#22 operator
@@ -669,9 +1028,13 @@ impl Transcript {
             Input::Event(SessionEvent::PermissionMode { .. }) => Update::default(),
             Input::Event(SessionEvent::Models { .. }) => Update::default(),
             Input::Event(SessionEvent::Closed { reason }) => {
+                self.progress.disconnected();
+                self.latest_reasoning_part = None;
                 self.status = Status::Closed;
+                let mut dirty = self.retire_tools();
+                dirty.push(self.push(Body::Notice(reason)));
                 Update {
-                    dirty: vec![self.push(Body::Notice(reason))],
+                    dirty,
                     boundary: Some(Boundary::Closed),
                     ..Update::default()
                 }
@@ -735,21 +1098,39 @@ impl Transcript {
         }
     }
 
+    fn retire_tools(&mut self) -> Vec<BlockId> {
+        self.output_tails.clear();
+        self.blocks
+            .iter_mut()
+            .filter_map(|block| match &mut block.body {
+                Body::Tool(tool) if tool.state == ToolState::Running => {
+                    tool.state = ToolState::Unavailable;
+                    Some(block.id)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Thinking streams like prose but never shares a Block with the answer.
     fn grow_thinking(&mut self, text: &str) -> BlockId {
         if let Some(Block {
             id,
             body: Body::Thinking(thought),
             ..
-        }) = self.blocks.last_mut()
+        }) = self.blocks.last_mut().filter(|_| self.thinking_open)
         {
             thought.push_str(text);
+            self.progress.summary(thought);
             let id = *id;
             self.open = None;
             self.source.clear();
             return id;
         }
-        self.push(Body::Thinking(text.to_string()))
+        self.progress.summary(text);
+        let id = self.push(Body::Thinking(text.to_string()));
+        self.thinking_open = true;
+        id
     }
 
     /// Write a folded body into the open Block, creating it on first content.
@@ -852,15 +1233,21 @@ impl Transcript {
         {
             return None;
         }
+        let was_running = tool.state == ToolState::Running;
         tool.state = state;
         tool.diff = diff;
-        tool.result_line = result_line;
-        tool.output = output;
+        if result_line.is_some() || !was_running {
+            tool.result_line = result_line;
+        }
+        if output.is_some() || !was_running {
+            tool.output = output;
+        }
         Some(block.id)
     }
 
     /// Append a Block that no further text can join.
     fn push(&mut self, body: Body) -> BlockId {
+        self.thinking_open = false;
         let id = self.mint();
         self.blocks.push(Block {
             id,
@@ -921,10 +1308,23 @@ fn result_line(output: &str) -> Option<String> {
 /// schema, so this reads the few keys that name a subject and gives up
 /// quietly on anything else rather than guessing.
 fn tool_summary(input: &serde_json::Value) -> String {
-    for key in ["command", "file_path", "path", "pattern", "url", "subject"] {
+    for key in [
+        "command",
+        "file_path",
+        "path",
+        "pattern",
+        "url",
+        "subject",
+        "query",
+        "description",
+        "prompt",
+    ] {
         if let Some(value) = input.get(key).and_then(|v| v.as_str()) {
             return value.to_string();
         }
+    }
+    if let Some(args) = input.get("arguments").filter(|value| value.is_object()) {
+        return tool_summary(args);
     }
     String::new()
 }
@@ -1842,6 +2242,32 @@ mod tests {
             .expect("usage after the provider reports");
         assert_eq!(usage.total_tokens, 12_400);
         assert_eq!(usage.context_window, Some(200_000));
+    }
+
+    #[test]
+    fn live_rate_limits_are_kept_separately_from_persisted_token_usage() {
+        let mut transcript = Transcript::default();
+        let five_hour = RateLimitWindow {
+            used_fraction: 0.52,
+            resets_at: Some(11),
+        };
+        let weekly = RateLimitWindow {
+            used_fraction: 0.08,
+            resets_at: Some(22),
+        };
+        transcript.apply(Input::Event(SessionEvent::RateLimits {
+            five_hour: Some(five_hour),
+            weekly: Some(weekly),
+        }));
+
+        assert_eq!(
+            transcript.rate_limits(),
+            RateLimits {
+                five_hour: Some(five_hour),
+                weekly: Some(weekly),
+            }
+        );
+        assert_eq!(transcript.usage(), None, "limits do not invent token usage");
     }
 
     #[test]

@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 use ferrite_core::providers::{ClaudeCapabilities, ClaudeConfig, ClaudeSession, ClaudeSpawnError};
-use ferrite_core::{Decision, DecisionAnswer, SessionEvent, TurnOutcome};
+use ferrite_core::{Decision, DecisionAnswer, RateLimitWindow, SessionEvent, TurnOutcome};
 
 const VERSION_CASE: &str = "case \"$1\" in --version) echo '2.1.243 (Claude Code)'; exit 0;; esac";
 
@@ -205,10 +205,17 @@ fn the_reader_thread_delivers_the_captured_stream() {
     );
     let events: Vec<SessionEvent> = all
         .into_iter()
-        .filter(|event| !matches!(event, SessionEvent::TokenUsage { .. }))
+        .filter(|event| {
+            !matches!(
+                event,
+                SessionEvent::TokenUsage { .. }
+                    | SessionEvent::Progress { .. }
+                    | SessionEvent::ContentBoundary
+            )
+        })
         .collect();
 
-    assert_eq!(events.len(), 10, "unexpected stream: {events:?}");
+    assert_eq!(events.len(), 11, "unexpected stream: {events:?}");
     let inits: Vec<_> = events
         .iter()
         .filter_map(|e| match e {
@@ -231,6 +238,21 @@ fn the_reader_thread_delivers_the_captured_stream() {
     assert!(events
         .iter()
         .any(|e| matches!(e, SessionEvent::ThinkingDelta { .. })));
+    assert!(events.iter().any(|event| {
+        matches!(
+            event,
+            SessionEvent::RateLimits {
+                five_hour: Some(RateLimitWindow {
+                    used_fraction: 0.52,
+                    resets_at: Some(1_787_635_800),
+                }),
+                weekly: Some(RateLimitWindow {
+                    used_fraction: 0.08,
+                    resets_at: Some(1_788_174_000),
+                }),
+            }
+        )
+    }));
     assert_eq!(
         events.last(),
         Some(&SessionEvent::TurnEnded {
@@ -559,7 +581,7 @@ fn a_resumed_session_answers_from_the_previous_process_history() {
         recorded[0],
         format!(
             "-p --input-format stream-json --output-format stream-json \
-             --include-partial-messages --verbose --permission-prompt-tool stdio \
+             --include-partial-messages --forward-subagent-text --verbose --permission-prompt-tool stdio \
              --resume {resumed}"
         )
     );
@@ -667,7 +689,7 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
     assert_eq!(
         recorded[0],
         "-p --input-format stream-json --output-format stream-json \
-         --include-partial-messages --verbose --permission-prompt-tool stdio \
+         --include-partial-messages --forward-subagent-text --verbose --permission-prompt-tool stdio \
          --model haiku --permission-mode default --name CI flake"
     );
     assert_eq!(sent.len(), 5, "the rename wrote nothing");
@@ -723,7 +745,7 @@ fn no_model_or_permission_mode_is_passed_when_the_config_names_none() {
     assert_eq!(
         recorded[0],
         "-p --input-format stream-json --output-format stream-json \
-         --include-partial-messages --verbose --permission-prompt-tool stdio"
+         --include-partial-messages --forward-subagent-text --verbose --permission-prompt-tool stdio"
     );
 }
 

@@ -15,6 +15,12 @@ renders what they stream.
 **Keyboard-first, pointer-complete.** Everything has a key; the pointer
 clicks, drags, selects, right-clicks and resizes as well.
 
+Provider **subagents** appear as tabs inside their owning Pane. Working
+agents come first, with animated dots. Select a tab to read its transcript
+and answer its requests; the small Main marker restores the parent view
+and draft. Tabs share the available header space, with overflow only when
+needed. Viewing a subagent never launches or resumes it.
+
 ## Requirements
 
 - A working `claude` or `codex` CLI on your PATH, already logged in.
@@ -122,6 +128,13 @@ With the pointer:
   ladder the model takes (from the Provider's own announcement), with
   your Settings default on top.
 
+While a turn runs, the latest native thinking or reasoning-summary heading stays
+above the Composer with tool activity and elapsed time. The same progress appears
+in compact Panes and the selected agent's tab. Native retries, compaction, tool
+output, and plans update this view through the existing Claude and Codex adapters.
+Codex turns request concise native summaries; a provider that emits no summary
+still shows its tool and phase activity. Saved history never restarts live clocks.
+
 Flags:
 
 - `--provider claude|codex` — Provider for the first Thread (default: `claude`)
@@ -143,6 +156,11 @@ accessibility bridge upstream.
 Rust workspace; the renderer decision and the gpui `=0.2.2` pin are recorded
 in `docs/adr/0001-gpui-renderer.md`, project vocabulary in `CONTEXT.md`, and
 the original 24-pane render spike in `spikes/panes24/`.
+
+Subagent architecture is recorded in
+[ADR 0002](docs/adr/0002-subagent-activity.md); requirements, validation
+evidence, and review findings live on
+[issue #1](https://github.com/josephwylie/ferrite/issues/1).
 
 ## License
 

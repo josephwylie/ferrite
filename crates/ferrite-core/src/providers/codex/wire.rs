@@ -11,18 +11,32 @@
 //! [`parse_thread_response`]; every other response — turn/start
 //! acknowledgements, interrupt receipts — is ignored.
 
-use std::path::Path;
+use std::{io, path::Path};
 
 use serde_json::Value;
 
 use super::CodexCapabilities;
-use crate::{Decision, ModelInfo, SessionCommand, SessionEvent, ToolResult, TurnOutcome};
+use crate::progress::{Phase, PlanStep, ProgressEvent, StepStatus};
+use crate::{
+    Decision, ModelInfo, RateLimitWindow, SessionCommand, SessionEvent, ToolResult, TurnOutcome,
+};
 
 /// The item types Ferrite reads as tool runs. Everything else the server
 /// wraps in an item — user messages, agent messages, reasoning — either
 /// arrives as deltas already or is not modelled; parsing those items too
 /// would double what the deltas said.
-const TOOL_ITEM_TYPES: [&str; 2] = ["commandExecution", "fileChange"];
+const TOOL_ITEM_TYPES: [&str; 10] = [
+    "commandExecution",
+    "fileChange",
+    "mcpToolCall",
+    "dynamicToolCall",
+    "webSearch",
+    "imageView",
+    "imageGeneration",
+    "sleep",
+    "collabAgentToolCall",
+    "collabToolCall",
+];
 
 /// What the thread/start (or thread/resume) response said: the identity the
 /// Session announces and the capabilities the operator may rely on.
@@ -54,9 +68,266 @@ pub(super) fn parse_line(line: &str) -> Option<SessionEvent> {
         }
         "item/fileChange/requestApproval" => parse_approval_request(&value, params, "fileChange"),
         "thread/tokenUsage/updated" => parse_token_usage(params),
+        "account/rateLimits/updated" => parse_rate_limits(params),
         "turn/completed" => parse_turn_completed(params),
         _ => None,
     }
+}
+
+/// Content state is per native thread, so interleaved child observations
+/// cannot split Main's heading or discard its snapshot deduplication state.
+#[derive(Default)]
+pub(super) struct Decoder {
+    threads: std::collections::BTreeMap<String, ContentDecoder>,
+}
+impl Decoder {
+    pub fn parse(&mut self, line: &str) -> Vec<SessionEvent> {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            return vec![];
+        };
+        let thread = value["params"]["threadId"].as_str().unwrap_or("");
+        let method = value["method"].as_str().unwrap_or("");
+        if !method.starts_with("item/") && method != "turn/completed" {
+            return parse_events(line);
+        }
+        if self.threads.len() >= 128 && !self.threads.contains_key(thread) {
+            return parse_events(line);
+        }
+        let events = self.threads.entry(thread.into()).or_default().parse(line);
+        if method == "turn/completed" {
+            self.threads.remove(thread);
+        }
+        events
+    }
+}
+
+/// Only answer/plan text needs duplicate-detection state. Reasoning sections
+/// keep their native identity all the way to the transcript and store.
+#[derive(Default)]
+struct ContentDecoder {
+    texts: std::collections::BTreeMap<String, Option<String>>,
+}
+impl ContentDecoder {
+    fn parse(&mut self, line: &str) -> Vec<SessionEvent> {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            return vec![];
+        };
+        let p = &value["params"];
+        let method = value["method"].as_str().unwrap_or("");
+        let id = p["itemId"]
+            .as_str()
+            .or(p["item"]["id"].as_str())
+            .unwrap_or("");
+        let mut before = vec![];
+        if matches!(method, "item/agentMessage/delta" | "item/plan/delta") {
+            if let Some(delta) = p["delta"].as_str() {
+                if self.texts.len() < 128 || self.texts.contains_key(id) {
+                    let seen = self
+                        .texts
+                        .entry(id.into())
+                        .or_insert_with(|| Some(String::new()));
+                    if let Some(text) = seen {
+                        if text.len().saturating_add(delta.len()) <= 256 * 1024 {
+                            text.push_str(delta);
+                        } else {
+                            *seen = None;
+                        } // Streamed in full; never repeat a truncated prefix.
+                    }
+                }
+            }
+        } else if method == "item/completed"
+            && matches!(p["item"]["type"].as_str(), Some("agentMessage" | "plan"))
+        {
+            if self.texts.len() < 128 || self.texts.contains_key(id) {
+                let seen = self
+                    .texts
+                    .entry(id.into())
+                    .or_insert_with(|| Some(String::new()));
+                if let (Some(seen), Some(text)) = (seen.as_mut(), p["item"]["text"].as_str()) {
+                    if let Some(rest) = text
+                        .strip_prefix(seen.as_str())
+                        .filter(|rest| !rest.is_empty())
+                    {
+                        before.push(SessionEvent::TextDelta { text: rest.into() });
+                        *seen = text.into();
+                    }
+                }
+                if seen.as_ref().is_some_and(|text| text.len() > 256 * 1024) {
+                    *seen = None;
+                }
+            }
+        }
+        before.extend(parse_events(line));
+        before
+    }
+}
+
+/// One native observation can carry content, a status, and a boundary. Keep
+/// those facts together at ingestion rather than silently choosing one.
+pub(super) fn parse_events(line: &str) -> Vec<SessionEvent> {
+    let Ok(value) = serde_json::from_str::<Value>(line) else {
+        return vec![];
+    };
+    let params = &value["params"];
+    let method = value["method"].as_str().unwrap_or("");
+    let mut events: Vec<_> = parse_line(line)
+        .into_iter()
+        .map(|event| match event {
+            SessionEvent::ReasoningSummaryDelta {
+                text,
+                summary_index,
+            } if params["itemId"].is_string() => SessionEvent::ReasoningSummaryPart {
+                item_id: params["itemId"].as_str().unwrap().into(),
+                summary_index,
+                text,
+                snapshot: false,
+            },
+            other => other,
+        })
+        .collect();
+    if method == "item/completed" && params["item"]["type"] == "reasoning" {
+        if let (Some(id), Some(parts)) = (
+            params["item"]["id"].as_str(),
+            params["item"]["summary"].as_array(),
+        ) {
+            events.extend(parts.iter().enumerate().filter_map(|(index, part)| {
+                Some(SessionEvent::ReasoningSummaryPart {
+                    item_id: id.into(),
+                    summary_index: index as u64,
+                    text: part.as_str()?.into(),
+                    snapshot: true,
+                })
+            }));
+        }
+    }
+    let phase = |phase, detail| SessionEvent::Progress {
+        event: ProgressEvent::Phase { phase, detail },
+    };
+    let extra = match method {
+        "item/commandExecution/outputDelta" | "item/fileChange/outputDelta" => params["itemId"]
+            .as_str()
+            .zip(params["delta"].as_str())
+            .map(|(id, text)| SessionEvent::ToolOutputDelta {
+                id: id.into(),
+                text: text.into(),
+            }),
+        "item/mcpToolCall/progress" => params["itemId"].as_str().map(|id| SessionEvent::Progress {
+            event: ProgressEvent::Tool {
+                id: id.into(),
+                message: params["message"].as_str().unwrap_or("").into(),
+                elapsed_ms: None,
+            },
+        }),
+        "turn/plan/updated" => params["plan"]
+            .as_array()
+            .map(|plan| SessionEvent::Progress {
+                event: ProgressEvent::Plan {
+                    explanation: params["explanation"].as_str().unwrap_or("").into(),
+                    steps: plan
+                        .iter()
+                        .filter_map(|step| {
+                            Some(PlanStep {
+                                text: step["step"].as_str()?.into(),
+                                status: match step["status"].as_str()? {
+                                    "pending" => StepStatus::Pending,
+                                    "inProgress" => StepStatus::InProgress,
+                                    "completed" => StepStatus::Completed,
+                                    _ => return None,
+                                },
+                            })
+                        })
+                        .collect(),
+                },
+            }),
+        "item/reasoning/summaryPartAdded" => Some(SessionEvent::ContentBoundary),
+        "item/plan/delta" => params["delta"]
+            .as_str()
+            .map(|text| SessionEvent::TextDelta { text: text.into() }),
+        "error" => Some(phase(
+            if params["willRetry"].as_bool() == Some(true) {
+                Phase::Retrying
+            } else {
+                Phase::Waiting
+            },
+            params["error"]["message"]
+                .as_str()
+                .unwrap_or("Provider error")
+                .into(),
+        )),
+        "turn/started" => Some(phase(Phase::Working, String::new())),
+        "thread/status/changed" => match params["status"]["type"].as_str() {
+            Some("active") => {
+                let flags = params["status"]["activeFlags"].as_array();
+                if flags.is_some_and(|flags| flags.iter().any(|v| v == "waitingOnApproval")) {
+                    Some(phase(Phase::Waiting, "Approval needed".into()))
+                } else if flags.is_some_and(|flags| flags.iter().any(|v| v == "waitingOnUserInput"))
+                {
+                    Some(phase(Phase::Waiting, "Answer needed".into()))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        },
+        "item/started" | "item/completed" => {
+            let item = &params["item"];
+            let done = method == "item/completed";
+            match item["type"].as_str() {
+                Some("reasoning") if !done => {
+                    events.push(SessionEvent::ContentBoundary);
+                    Some(phase(Phase::Thinking, String::new()))
+                }
+                Some("agentMessage" | "plan") if !done => Some(SessionEvent::ContentBoundary),
+                Some("reasoning" | "agentMessage" | "plan") if done => {
+                    Some(SessionEvent::ContentBoundary)
+                }
+                Some("contextCompaction") => Some(phase(
+                    if done {
+                        Phase::Working
+                    } else {
+                        Phase::Compacting
+                    },
+                    String::new(),
+                )),
+                Some("enteredReviewMode") => Some(phase(
+                    Phase::Working,
+                    item["review"].as_str().unwrap_or("Reviewing").into(),
+                )),
+                Some("exitedReviewMode") => Some(phase(Phase::Working, String::new())),
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+    events.extend(extra);
+    events
+}
+
+fn parse_rate_limits(params: &Value) -> Option<SessionEvent> {
+    let limits = params.get("rateLimits")?;
+    let mut five_hour = None;
+    let mut weekly = None;
+    for window in [limits.get("primary"), limits.get("secondary")]
+        .into_iter()
+        .flatten()
+    {
+        let Some(minutes) = window.get("windowDurationMins").and_then(Value::as_u64) else {
+            continue;
+        };
+        let Some(used_percent) = window.get("usedPercent").and_then(Value::as_f64) else {
+            continue;
+        };
+        let limit = RateLimitWindow {
+            used_fraction: (used_percent / 100.0) as f32,
+            resets_at: window.get("resetsAt").and_then(Value::as_u64),
+        };
+        match minutes {
+            300 => five_hour = Some(limit),
+            10_080 => weekly = Some(limit),
+            _ => {}
+        }
+    }
+    Some(SessionEvent::RateLimits { five_hour, weekly })
 }
 
 /// A tool run, as the server reports one: the item announces itself when the
@@ -64,7 +335,7 @@ pub(super) fn parse_line(line: &str) -> Option<SessionEvent> {
 /// Codex shaped it — command and cwd for an execution, the per-file changes
 /// for a patch — because inventing a Ferrite schema over it would be a guess
 /// that goes stale on the vendor's next release.
-fn parse_item(params: &Value, completed: bool) -> Option<SessionEvent> {
+pub(super) fn parse_item(params: &Value, completed: bool) -> Option<SessionEvent> {
     let item = params.get("item")?;
     let kind = item.get("type")?.as_str()?;
     if !TOOL_ITEM_TYPES.contains(&kind) {
@@ -74,7 +345,17 @@ fn parse_item(params: &Value, completed: bool) -> Option<SessionEvent> {
     if !completed {
         return Some(SessionEvent::ToolStarted {
             id,
-            name: kind.to_string(),
+            name: match kind {
+                "mcpToolCall" => format!(
+                    "{} · {}",
+                    item["server"].as_str().unwrap_or("MCP"),
+                    item["tool"].as_str().unwrap_or("tool")
+                ),
+                "dynamicToolCall" | "collabAgentToolCall" | "collabToolCall" => {
+                    item["tool"].as_str().unwrap_or(kind).to_string()
+                }
+                _ => kind.to_string(),
+            },
             input: item.clone(),
         });
     }
@@ -85,15 +366,24 @@ fn parse_item(params: &Value, completed: bool) -> Option<SessionEvent> {
         // JSON.
         output: match item.get("aggregatedOutput") {
             Some(Value::String(text)) => text.clone(),
-            _ => item
-                .get("changes")
-                .map(|changes| changes.to_string())
+            _ => ["error", "result", "contentItems", "results", "changes"]
+                .iter()
+                .find_map(|key| item.get(*key).filter(|v| !v.is_null()))
+                .map(|v| {
+                    v.as_str()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| v.to_string())
+                })
                 .unwrap_or_default(),
         },
         // "completed" is the only success; "failed" and "declined" both mean
         // the tool did not do its work (a declined tool fails without failing
         // the turn — see the approval-deny fixture).
-        is_error: item.get("status").and_then(Value::as_str) != Some("completed"),
+        is_error: matches!(
+            item["status"].as_str(),
+            Some("failed" | "declined" | "error")
+        ) || item["success"].as_bool() == Some(false)
+            || !item.get("error").unwrap_or(&Value::Null).is_null(),
         // Opaque by decision, not omission: Codex merges stdout and stderr
         // into one aggregate (not the two streams `ToolResult::Command`
         // promises), and its patches arrive as per-file diff *text*, not the
@@ -134,14 +424,26 @@ fn parse_approval_request(value: &Value, params: &Value, tool_name: &str) -> Opt
     })
 }
 
-/// The server numbers its requests in its own id space (integers observed on
-/// 0.149.1, strings allowed by its schema). The string form is what travels
-/// in the Decision; `respond_to_decision` restores the original type.
+/// Keep the ID's JSON representation as the opaque Decision handle. Encoding
+/// strings, including their quotes and escapes, distinguishes integer `0`
+/// from string `"0"` without changing the provider-neutral Decision type.
 fn rpc_id_string(id: &Value) -> Option<String> {
     match id {
-        Value::Number(n) => Some(n.to_string()),
-        Value::String(s) => Some(s.clone()),
+        Value::Number(_) | Value::String(_) => Some(id.to_string()),
         _ => None,
+    }
+}
+
+/// Restore only a handle emitted by the approval decoder. Invalid handles
+/// fail before a reply is written; treating them as raw strings would make
+/// malformed handles address a different provider request.
+pub(super) fn decision_request_id(handle: &str) -> io::Result<Value> {
+    match serde_json::from_str(handle) {
+        Ok(id @ (Value::Number(_) | Value::String(_))) => Ok(id),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid Codex Decision request handle",
+        )),
     }
 }
 
@@ -336,10 +638,12 @@ pub(super) fn input_items(text: &str, skills: &[SessionCommand], cwd: Option<&Pa
 
 /// Is this line the response to request `id`? `Some(Ok)` carries its result,
 /// `Some(Err)` the server's error message — a refused thread/start must fail
-/// spawn with the server's own words, not a timeout.
+/// spawn with the server's own words, not a timeout. Server requests use a
+/// separate ID space: a matching ID never makes a method-bearing frame a
+/// response to one of our requests.
 pub(super) fn parse_response(line: &str, id: u64) -> Option<Result<Value, String>> {
     let value: Value = serde_json::from_str(line).ok()?;
-    if value.get("id")?.as_u64()? != id {
+    if value.get("method").is_some() || value.get("id")?.as_u64()? != id {
         return None;
     }
     if let Some(error) = value.get("error") {
@@ -349,7 +653,7 @@ pub(super) fn parse_response(line: &str, id: u64) -> Option<Result<Value, String
             .unwrap_or("unexplained JSON-RPC error");
         return Some(Err(format!("{message} ({error})")));
     }
-    Some(Ok(value.get("result").cloned().unwrap_or(Value::Null)))
+    Some(Ok(value.get("result")?.clone()))
 }
 
 /// The thread/start (or thread/resume) result: the Session's identity and its
@@ -554,6 +858,15 @@ mod tests {
     /// that no codex line can.
     fn variant(event: &SessionEvent) -> Option<&'static str> {
         Some(match event {
+            // Shared progress is proved through the public Session replay in
+            // tests/provider_progress.rs, including captured native messages.
+            SessionEvent::ReasoningSummaryPart { .. }
+            | SessionEvent::Progress { .. }
+            | SessionEvent::ToolOutputDelta { .. }
+            | SessionEvent::ContentBoundary => return None,
+            // Attributed observations require the stateful ancestry decoder;
+            // its real child captures are covered in activity::tests.
+            SessionEvent::Activity(_) => return None,
             SessionEvent::Init { .. } => "Init",
             SessionEvent::TextDelta { .. } => "TextDelta",
             SessionEvent::ReasoningSummaryDelta { .. } => "ReasoningSummaryDelta",
@@ -561,6 +874,7 @@ mod tests {
             SessionEvent::ToolCompleted { .. } => "ToolCompleted",
             SessionEvent::DecisionRequested { .. } => "DecisionRequested",
             SessionEvent::TokenUsage { .. } => "TokenUsage",
+            SessionEvent::RateLimits { .. } => "RateLimits",
             SessionEvent::TurnEnded { .. } => "TurnEnded",
             // The skills menu: a correlated response like Init, read by the
             // reader against its own request id, so it is chained into the
@@ -639,6 +953,24 @@ mod tests {
     }
 
     #[test]
+    fn rate_limits_are_named_by_duration_not_provider_order() {
+        let event = parse_line(r#"{"method":"account/rateLimits/updated","params":{"rateLimits":{"primary":{"usedPercent":14,"windowDurationMins":10080,"resetsAt":22},"secondary":{"usedPercent":52,"windowDurationMins":300,"resetsAt":11}}}}"#).unwrap();
+        assert_eq!(
+            event,
+            SessionEvent::RateLimits {
+                five_hour: Some(RateLimitWindow {
+                    used_fraction: 0.52,
+                    resets_at: Some(11),
+                }),
+                weekly: Some(RateLimitWindow {
+                    used_fraction: 0.14,
+                    resets_at: Some(22),
+                }),
+            }
+        );
+    }
+
+    #[test]
     fn fixture_reports_token_usage_against_the_context_window() {
         let usage: Vec<_> = fixture_events()
             .into_iter()
@@ -697,6 +1029,7 @@ mod tests {
                 "Commands",
                 "DecisionRequested",
                 "Init",
+                "RateLimits",
                 "ReasoningSummaryDelta",
                 "TextDelta",
                 "TokenUsage",
@@ -726,20 +1059,20 @@ mod tests {
         assert_eq!(
             counted,
             [
-                // 3 text deltas, 1 summary delta, 1 usage, 1 turn end.
-                ("hello", 29, 6),
+                // 3 text deltas, 1 summary delta, 1 usage, 1 rate limit, 1 turn end.
+                ("hello", 29, 7),
                 // ... plus a command run and its completion.
-                ("tool", 46, 22),
+                ("tool", 46, 24),
                 // ... plus the Decision that gated the command.
-                ("approval-allow", 44, 17),
-                ("approval-deny", 66, 37),
+                ("approval-allow", 44, 19),
+                ("approval-deny", 66, 39),
                 // The same command twice, gated once: the execpolicy amendment
                 // was accepted, so the repeat ran unasked.
-                ("approval-always", 75, 45),
+                ("approval-always", 75, 48),
                 // The same gate for a patch instead of a command.
-                ("approval-patch", 52, 20),
-                ("interrupt", 25, 3),
-                ("resume", 32, 9),
+                ("approval-patch", 52, 22),
+                ("interrupt", 25, 4),
+                ("resume", 32, 10),
                 // Ten retry errors and a warning, all ignored: only the failed
                 // turn itself is an event.
                 ("error", 22, 1),
@@ -818,6 +1151,64 @@ mod tests {
             )),
             "no ToolStarted for {tool_use_id}: {events:?}"
         );
+    }
+
+    #[test]
+    fn decision_handles_preserve_id_types_and_string_escapes() {
+        let ids = [
+            serde_json::json!(0),
+            serde_json::json!("0"),
+            serde_json::json!(-1),
+            serde_json::json!("-1"),
+            serde_json::json!(i64::MAX),
+            serde_json::json!(""),
+            serde_json::json!("request \"quoted\"\n\\slash"),
+            serde_json::json!("\"0\""),
+        ];
+        for method in [
+            "item/commandExecution/requestApproval",
+            "item/fileChange/requestApproval",
+        ] {
+            let mut handles = std::collections::HashSet::new();
+            for id in &ids {
+                let line = serde_json::json!({
+                    "method": method, "id": id, "params": {"itemId": "gated-item"}
+                });
+                let Some(SessionEvent::DecisionRequested { decision }) =
+                    parse_line(&line.to_string())
+                else {
+                    panic!("valid request did not produce a Decision: {line}");
+                };
+                assert_eq!(decision_request_id(&decision.id).unwrap(), *id);
+                assert!(handles.insert(decision.id), "request IDs collided: {id}");
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_decision_ids_are_not_accepted_or_reinterpreted_as_strings() {
+        for id in [
+            serde_json::json!(null),
+            serde_json::json!(true),
+            serde_json::json!([]),
+            serde_json::json!({}),
+        ] {
+            let line = serde_json::json!({
+                "method": "item/commandExecution/requestApproval", "id": id,
+                "params": {"itemId": "gated-item"}
+            });
+            assert!(parse_line(&line.to_string()).is_none());
+            assert_eq!(
+                decision_request_id(&id.to_string()).unwrap_err().kind(),
+                io::ErrorKind::InvalidInput
+            );
+        }
+        for handle in ["", "raw-request-id", "01", "\"unterminated", "0 trailing"] {
+            assert_eq!(
+                decision_request_id(handle).unwrap_err().kind(),
+                io::ErrorKind::InvalidInput
+            );
+        }
     }
 
     /// The same gate for a patch: no command to quote (and a null reason), so
@@ -1013,6 +1404,53 @@ mod tests {
     }
 
     #[test]
+    fn server_requests_do_not_answer_host_requests_with_matching_ids() {
+        for id in [1, 2, 3, 4] {
+            let request = serde_json::json!({
+                "id": id, "method": "item/commandExecution/requestApproval",
+                "params": {"itemId": "gated-item"}
+            });
+            assert_eq!(parse_response(&request.to_string(), id), None);
+            assert!(matches!(
+                parse_line(&request.to_string()),
+                Some(SessionEvent::DecisionRequested { .. })
+            ));
+            for payload in [
+                serde_json::json!({"result": {}}),
+                serde_json::json!({"error": {"message": "error"}}),
+            ] {
+                let mut mixed = request.clone();
+                mixed
+                    .as_object_mut()
+                    .unwrap()
+                    .extend(payload.as_object().unwrap().clone());
+                assert_eq!(
+                    parse_response(&mixed.to_string(), id),
+                    None,
+                    "a method-bearing frame cannot be a host response"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn response_envelopes_require_a_result_or_error() {
+        assert_eq!(parse_response(r#"{"id":3}"#, 3), None);
+        assert_eq!(parse_response(r#"{"id":3,"params":{}}"#, 3), None);
+        assert_eq!(parse_response(r#"{"id":"3","result":null}"#, 3), None);
+        assert_eq!(
+            parse_response(r#"{"id":3,"result":null}"#, 3),
+            Some(Ok(Value::Null))
+        );
+        assert!(
+            parse_response(r#"{"id":3,"error":{"message":"refused"}}"#, 3)
+                .unwrap()
+                .unwrap_err()
+                .contains("refused")
+        );
+    }
+
+    #[test]
     fn junk_lines_are_ignored_never_fatal() {
         for line in [
             "",
@@ -1025,7 +1463,6 @@ mod tests {
             // Items Ferrite does not model: the deltas already carried these.
             r#"{"method":"item/started","params":{"item":{"type":"agentMessage","id":"m","text":"hi"}}}"#,
             r#"{"method":"item/completed","params":{"item":{"type":"reasoning","id":"r"}}}"#,
-            r#"{"method":"item/started","params":{"item":{"type":"webSearch","id":"w","query":"q"}}}"#,
             // Server requests Ferrite does not answer (yet): ignoring one
             // strands that request, but the stream keeps flowing.
             r#"{"method":"item/tool/requestUserInput","id":9,"params":{}}"#,

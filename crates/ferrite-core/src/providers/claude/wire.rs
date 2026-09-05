@@ -1,4 +1,7 @@
-//! One stdout line of the CLI's stream-json to at most one SessionEvent.
+//! Claude's legacy Main event shapes and control-protocol fields.
+//!
+//! The stateful activity decoder classifies each live frame before calling
+//! these helpers. Their line wrappers remain the Main-only fixture baseline.
 //!
 //! The vendor extends this stream without notice, so every line is read as a
 //! `Value` and anything unrecognised — new event types, changed field types,
@@ -7,7 +10,8 @@
 use serde_json::Value;
 
 use super::ClaudeCapabilities;
-use crate::{Decision, Hunk, SessionEvent, ToolResult, TurnOutcome};
+use crate::progress::{Phase, ProgressEvent, StepStatus, TaskStatus};
+use crate::{Decision, Hunk, RateLimitWindow, SessionEvent, ToolResult, TurnOutcome};
 
 /// The answer to spawn's initialize control request, if this line is it.
 ///
@@ -115,17 +119,169 @@ pub(super) fn parse_capabilities(line: &str, request_id: &str) -> Option<ClaudeC
 
 /// `None` means "nothing Ferrite models": hook chatter, status lines,
 /// assistant snapshots, rate limits, unparseable junk.
+#[cfg(test)]
 pub(super) fn parse_line(line: &str) -> Option<SessionEvent> {
     let value: Value = serde_json::from_str(line).ok()?;
+    parse_value(&value)
+}
+
+pub(super) fn parse_value(value: &Value) -> Option<SessionEvent> {
     match value.get("type")?.as_str()? {
-        "system" => parse_system(&value),
-        "stream_event" => parse_stream_event(&value),
-        "assistant" => parse_assistant(&value),
-        "user" => parse_user(&value),
-        "control_request" => parse_control_request(&value),
-        "result" => Some(parse_result(&value)),
+        "system" => parse_system(value),
+        "stream_event" => parse_stream_event(value),
+        "assistant" => parse_assistant(value),
+        "user" => parse_user(value),
+        "control_request" => parse_control_request(value),
+        "result" => Some(parse_result(value)),
         _ => None,
     }
+}
+
+/// Decode every fact in a native SDK message. A single assistant/user
+/// snapshot can contain several tools; progress messages contain no prose delta.
+pub(super) fn parse_events_value(value: &Value) -> Vec<SessionEvent> {
+    let kind = value["type"].as_str().unwrap_or("");
+    let mut events = Vec::new();
+    match kind {
+        "assistant" | "user" => {
+            if let Some(blocks) = value["message"]["content"].as_array() {
+                for block in blocks {
+                    let mut single = value.clone();
+                    single["message"]["content"] = serde_json::json!([block]);
+                    events.extend(if kind == "assistant" {
+                        parse_assistant(&single)
+                    } else {
+                        parse_user(&single)
+                    });
+                }
+            }
+        }
+        _ => events.extend(parse_value(value)),
+    }
+    let phase = |phase, detail| SessionEvent::Progress {
+        event: ProgressEvent::Phase { phase, detail },
+    };
+    let string = |key| value[key].as_str().unwrap_or("").to_string();
+    let extra = match kind {
+        "tool_progress" => value["tool_use_id"]
+            .as_str()
+            .map(|id| SessionEvent::Progress {
+                event: ProgressEvent::Tool {
+                    id: id.into(),
+                    message: string("tool_name"),
+                    elapsed_ms: value["elapsed_time_seconds"]
+                        .as_f64()
+                        .filter(|v| v.is_finite() && *v >= 0.)
+                        .map(|s| (s * 1000.) as u64),
+                },
+            }),
+        "tool_use_summary" => Some(phase(Phase::Working, string("summary"))),
+        "stream_event" => match value["event"]["type"].as_str() {
+            Some("content_block_stop") => Some(SessionEvent::ContentBoundary),
+            Some("content_block_start") => match value["event"]["content_block"]["type"].as_str() {
+                Some("thinking" | "redacted_thinking") => {
+                    Some(phase(Phase::Thinking, String::new()))
+                }
+                Some("tool_use" | "server_tool_use") => Some(phase(
+                    Phase::Working,
+                    value["event"]["content_block"]["name"]
+                        .as_str()
+                        .unwrap_or("")
+                        .into(),
+                )),
+                _ => None,
+            },
+            _ => None,
+        },
+        "system" => match value["subtype"].as_str() {
+            Some("api_retry") => {
+                let error = value["error"].as_str().unwrap_or("Request failed");
+                let attempt = value["attempt"].as_u64().unwrap_or(0);
+                let max = value["max_retries"].as_u64().unwrap_or(0);
+                let delay = value["retry_delay_ms"]
+                    .as_u64()
+                    .map(|ms| format!(" · next attempt in {:.1}s", ms as f64 / 1000.))
+                    .unwrap_or_default();
+                Some(phase(
+                    Phase::Retrying,
+                    format!("{error} · attempt {attempt}/{max}{delay}"),
+                ))
+            }
+            Some("status") => Some(phase(
+                if value["status"] == "compacting" {
+                    Phase::Compacting
+                } else {
+                    Phase::Working
+                },
+                string("message"),
+            )),
+            Some("compact_boundary") => Some(phase(Phase::Working, "Context compacted".into())),
+            Some("thinking_tokens") => Some(phase(Phase::Thinking, String::new())),
+            Some("task_started" | "task_progress" | "task_notification" | "task_updated") => {
+                value["task_id"].as_str().map(|id| SessionEvent::Progress {
+                    event: ProgressEvent::Background {
+                        id: id.into(),
+                        label: string("description"),
+                        status: match value["status"]
+                            .as_str()
+                            .or(value["patch"]["status"].as_str())
+                        {
+                            Some("completed") => TaskStatus::Completed,
+                            Some("failed") => TaskStatus::Failed,
+                            Some("stopped") => TaskStatus::Stopped,
+                            Some("running" | "in_progress") => TaskStatus::Working,
+                            _ if value["subtype"] == "task_started"
+                                || value["subtype"] == "task_progress" =>
+                            {
+                                TaskStatus::Working
+                            }
+                            _ => TaskStatus::Unknown,
+                        },
+                        detail: value["summary"]
+                            .as_str()
+                            .or(value["description"].as_str())
+                            .or(value["last_tool_name"].as_str())
+                            .unwrap_or("")
+                            .into(),
+                    },
+                })
+            }
+            _ => None,
+        },
+        _ => None,
+    };
+    events.extend(extra);
+    // The successful tool receipt supplies the actual task id. Starts alone
+    // cannot establish a plan step or mark one complete.
+    if kind == "user" && value["tool_use_result"]["success"] != false {
+        let result = &value["tool_use_result"];
+        if let Some(id) = result["task"]["id"].as_str() {
+            events.push(SessionEvent::Progress {
+                event: ProgressEvent::Task {
+                    id: id.into(),
+                    subject: result["task"]["subject"].as_str().unwrap_or("").into(),
+                    status: Some(StepStatus::Pending),
+                    deleted: false,
+                },
+            });
+        } else if let Some(id) = result["taskId"].as_str() {
+            let status = result["statusChange"]["to"].as_str();
+            events.push(SessionEvent::Progress {
+                event: ProgressEvent::Task {
+                    id: id.into(),
+                    subject: result["subject"].as_str().unwrap_or("").into(),
+                    deleted: status == Some("deleted"),
+                    status: match status {
+                        Some("pending") => Some(StepStatus::Pending),
+                        Some("in_progress") => Some(StepStatus::InProgress),
+                        Some("completed") => Some(StepStatus::Completed),
+                        _ => None,
+                    },
+                },
+            });
+        }
+    }
+    events
 }
 
 /// The token count a line carries beside its event, if any: every
@@ -134,10 +290,15 @@ pub(super) fn parse_line(line: &str) -> Option<SessionEvent> {
 /// point), and the `result` line reports the turn's totals with the
 /// model's `contextWindow`. Between results the window is read off the
 /// model id: Claude's 1M models carry `[1m]` (or `-1m`), the rest are 200k.
-/// The reader sends this after the line's own event, so a turn's ring
-/// moves with every message and lands exactly at the result.
+/// The decoder sends scoped usage before content, so a turn's ring moves
+/// with every message and lands exactly at the result.
+#[cfg(test)]
 pub(super) fn parse_usage(line: &str) -> Option<SessionEvent> {
     let value: Value = serde_json::from_str(line).ok()?;
+    parse_usage_value(&value)
+}
+
+pub(super) fn parse_usage_value(value: &Value) -> Option<SessionEvent> {
     let count = |usage: &Value, key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
     match value.get("type")?.as_str()? {
         "assistant" => {
@@ -194,6 +355,28 @@ pub(super) fn parse_usage(line: &str) -> Option<SessionEvent> {
     }
 }
 
+/// Subscription windows arrive as their own line, independently of token
+/// usage. Keep their provider reset instants, but normalize utilization so
+/// both providers feed the same compact meter.
+pub(super) fn parse_rate_limits(line: &str) -> Option<SessionEvent> {
+    let value: Value = serde_json::from_str(line).ok()?;
+    if value.get("type")?.as_str()? != "rate_limit_event" {
+        return None;
+    }
+    let windows = value.get("rate_limit_info")?.get("unifiedWindows")?;
+    let window = |key: &str| {
+        let value = windows.get(key)?;
+        Some(RateLimitWindow {
+            used_fraction: value.get("utilization")?.as_f64()? as f32,
+            resets_at: value.get("resetsAt").and_then(Value::as_u64),
+        })
+    };
+    Some(SessionEvent::RateLimits {
+        five_hour: window("five_hour"),
+        weekly: window("seven_day"),
+    })
+}
+
 /// The context window a Claude model id implies, until a result says.
 fn window_of_model(model: &str) -> u64 {
     let lower = model.to_ascii_lowercase();
@@ -240,7 +423,7 @@ fn parse_user(value: &Value) -> Option<SessionEvent> {
 /// The CLI hangs its structured result off the same line as the prose one.
 /// Each arm below matches a shape in the committed captures; a payload that
 /// fits none of them is Opaque rather than half-read.
-fn parse_tool_result(value: Option<&Value>) -> ToolResult {
+pub(super) fn parse_tool_result(value: Option<&Value>) -> ToolResult {
     let Some(value) = value else {
         return ToolResult::Opaque;
     };
@@ -501,6 +684,24 @@ mod tests {
         assert_eq!(parse_usage(r#"{"type":"user"}"#), None);
     }
 
+    #[test]
+    fn unified_rate_limit_windows_are_normalized() {
+        let event = parse_rate_limits(r#"{"type":"rate_limit_event","rate_limit_info":{"unifiedWindows":{"five_hour":{"utilization":0.52,"resetsAt":11},"seven_day":{"utilization":0.08,"resetsAt":22}}}}"#).unwrap();
+        assert_eq!(
+            event,
+            SessionEvent::RateLimits {
+                five_hour: Some(RateLimitWindow {
+                    used_fraction: 0.52,
+                    resets_at: Some(11),
+                }),
+                weekly: Some(RateLimitWindow {
+                    used_fraction: 0.08,
+                    resets_at: Some(22),
+                }),
+            }
+        );
+    }
+
     fn events_of(name: &str) -> Vec<SessionEvent> {
         let (_, text) = FIXTURES
             .iter()
@@ -513,6 +714,15 @@ mod tests {
     /// here until someone decides which fixture proves it.
     fn variant(event: &SessionEvent) -> Option<&'static str> {
         Some(match event {
+            // Shared progress is proved through the public Session replay in
+            // tests/provider_progress.rs, including captured native messages.
+            SessionEvent::ReasoningSummaryPart { .. }
+            | SessionEvent::Progress { .. }
+            | SessionEvent::ToolOutputDelta { .. }
+            | SessionEvent::ContentBoundary => return None,
+            // Stateful child attribution is proved by the activity decoder's
+            // captures; these legacy parser fixtures are Main-only.
+            SessionEvent::Activity(_) => return None,
             SessionEvent::Init { .. } => "Init",
             SessionEvent::TextDelta { .. } => "TextDelta",
             SessionEvent::ThinkingDelta { .. } => "ThinkingDelta",
@@ -536,6 +746,8 @@ mod tests {
             // Rides beside a line's own event (`parse_usage`), proved by
             // `every_message_and_the_result_report_the_context_in_use`.
             SessionEvent::TokenUsage { .. } => return None,
+            // Parsed alongside the ordinary event path by the reader.
+            SessionEvent::RateLimits { .. } => return None,
         })
     }
 
