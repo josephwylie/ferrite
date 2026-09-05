@@ -289,6 +289,7 @@ pub fn shell(collapsed: bool) -> Div {
         .flex_shrink_0()
         .h_full()
         .w(px(if collapsed { RAIL_WIDTH } else { WIDTH }))
+        .overflow_hidden()
         .bg(rgb(NAV))
         .font_family(FONT_UI)
 }

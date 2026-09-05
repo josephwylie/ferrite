@@ -18,9 +18,10 @@ use ferrite_core::workspace::WorkspaceChoice;
 use ferrite_core::{DecisionAnswer, ThreadId};
 use gpui::prelude::*;
 use gpui::{
-    actions, anchored, deferred, div, px, rgb, rgba, AnyElement, ClickEvent, ClipboardItem,
-    Context, Corner, Div, Entity, FocusHandle, Focusable, FontWeight, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle, SharedString, Stateful, Window,
+    actions, anchored, deferred, div, ease_out_quint, px, rgb, rgba, Animation, AnimationExt,
+    AnyElement, ClickEvent, ClipboardItem, Context, Corner, Div, Entity, FocusHandle, Focusable,
+    FontWeight, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
+    ScrollHandle, SharedString, Stateful, Window,
 };
 
 use crate::composer::{Composer, Edited};
@@ -84,6 +85,8 @@ fn pump_interval() -> Duration {
 }
 
 const PUMP_MS: u64 = 8;
+const NAV_OPEN_MS: u64 = 260;
+const NAV_CLOSE_MS: u64 = 190;
 
 pub struct CockpitView {
     cockpit: Cockpit,
@@ -111,6 +114,10 @@ pub struct CockpitView {
     /// cmd-b (#21): the nav folded to its 40px LED rail. In memory only —
     /// a preference store is not this ticket.
     nav_collapsed: bool,
+    /// False on launch so a restored preference never performs entrance
+    /// choreography. Once the operator acts, the shell may animate between
+    /// its two widths; the state itself remains immediately authoritative.
+    nav_has_toggled: bool,
     /// What the nav and the Pane head say about a Thread beyond an O(1)
     /// read — checkout, Project, a parked row's provider, the L3 card —
     /// refreshed by moment, never per frame.
@@ -577,6 +584,7 @@ impl CockpitView {
             context_menu: None,
             context_usage: None,
             nav_collapsed: prefs.settings.nav_collapsed,
+            nav_has_toggled: false,
             facts: Facts::with_auto_title(prefs.settings.auto_title),
             seam_drag: None,
             drop_preview: None,
@@ -2504,7 +2512,15 @@ impl CockpitView {
     /// the 208px column. The width change feeds `cell()`, so Panes may
     /// legitimately change Level — size decides, no special case.
     fn toggle_nav(&mut self, _: &ToggleNav, _window: &mut Window, cx: &mut Context<Self>) {
-        self.nav_collapsed = !self.nav_collapsed;
+        self.set_nav_collapsed(!self.nav_collapsed, cx);
+    }
+
+    fn set_nav_collapsed(&mut self, collapsed: bool, cx: &mut Context<Self>) {
+        if self.nav_collapsed == collapsed {
+            return;
+        }
+        self.nav_collapsed = collapsed;
+        self.nav_has_toggled = true;
         cx.notify();
     }
 
@@ -5767,7 +5783,7 @@ impl CockpitView {
     /// (#21). It paints inside the cockpit's own render — same entity, same
     /// pump, no second timer — and every fact it shows came from
     /// `nav_state`'s O(1) reads or the project/branch/parked caches.
-    fn nav(&self, cx: &mut Context<Self>) -> Div {
+    fn nav(&self, cx: &mut Context<Self>) -> AnyElement {
         let state = self.nav_state();
         let gear = prefs::gear_button().on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
             cx.stop_propagation();
@@ -5778,8 +5794,7 @@ impl CockpitView {
                 MouseButton::Left,
                 cx.listener(|view, _: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();
-                    view.nav_collapsed = !view.nav_collapsed;
-                    cx.notify();
+                    view.set_nav_collapsed(!view.nav_collapsed, cx);
                 }),
             ));
         // The gear sits hard right of the band; folded, it stacks under
@@ -5794,20 +5809,54 @@ impl CockpitView {
             });
         }
         chrome = chrome.child(gear);
-        let column = nav::shell(state.collapsed).child(chrome);
-        if state.collapsed {
-            return column.child(self.rail(&state, cx));
+        let content = div()
+            .flex()
+            .flex_col()
+            .flex_shrink_0()
+            .h_full()
+            .w(px(if state.collapsed {
+                nav::RAIL_WIDTH
+            } else {
+                nav::WIDTH
+            }))
+            .child(chrome);
+        let content = if state.collapsed {
+            content.child(self.rail(&state, cx))
+        } else {
+            content.child(self.nav_head(&state, cx)).child(
+                div()
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .child(self.nav_tree(&state, cx))
+                    .child(nav::scrollbar(&self.nav_scroll)),
+            )
+        };
+        if !self.nav_has_toggled {
+            return nav::shell(state.collapsed)
+                .child(content)
+                .into_any_element();
         }
-        column.child(self.nav_head(&state, cx)).child(
-            div()
-                .relative()
-                .flex()
-                .flex_col()
-                .flex_1()
-                .min_h_0()
-                .child(self.nav_tree(&state, cx))
-                .child(nav::scrollbar(&self.nav_scroll)),
-        )
+        let (from, to, duration) = if state.collapsed {
+            (nav::WIDTH, nav::RAIL_WIDTH, NAV_CLOSE_MS)
+        } else {
+            (nav::RAIL_WIDTH, nav::WIDTH, NAV_OPEN_MS)
+        };
+        let content = content.with_animation(
+            ("nav-content", usize::from(state.collapsed)),
+            Animation::new(Duration::from_millis(duration)).with_easing(ease_out_quint()),
+            |content, delta| content.opacity(0.35 + 0.65 * delta),
+        );
+        nav::shell(state.collapsed)
+            .child(content)
+            .with_animation(
+                ("nav-resize", usize::from(state.collapsed)),
+                Animation::new(Duration::from_millis(duration)).with_easing(ease_out_quint()),
+                move |column, delta| column.w(px(from + (to - from) * delta)),
+            )
+            .into_any_element()
     }
 
     /// The 42px head: the one Project dropdown, and its menu when it is
@@ -6179,7 +6228,7 @@ impl CockpitView {
                 MouseButton::Left,
                 cx.listener(|view, _: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();
-                    view.nav_collapsed = false;
+                    view.set_nav_collapsed(false, cx);
                     view.nav_filter_open = true;
                     cx.notify();
                 }),
