@@ -308,6 +308,11 @@ pub const CAPTION_RESIZE_EDGE: f32 = 4.0;
 /// rule restores 10px. Port 10px.)
 pub const GRID_GAP: f32 = 8.0;
 pub const GRID_PAD: f32 = 10.0;
+/// Where the board starts: under the titlebar band, then the same 10px it
+/// keeps on its other three sides. Flush to the band, a Pane's top-right
+/// corner sits directly beneath the caption buttons, and their hover face
+/// — edge-to-edge by design — reads as lying over the Pane.
+pub const BOARD_TOP: f32 = WIN_CHROME_H + GRID_PAD;
 
 // ---------------------------------------------------------- geometry: nav
 
