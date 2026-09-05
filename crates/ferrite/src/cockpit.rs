@@ -18,9 +18,10 @@ use ferrite_core::workspace::WorkspaceChoice;
 use ferrite_core::{DecisionAnswer, ThreadId};
 use gpui::prelude::*;
 use gpui::{
-    actions, anchored, deferred, div, px, rgb, rgba, AnyElement, ClickEvent, ClipboardItem,
-    Context, Corner, Div, Entity, FocusHandle, Focusable, FontWeight, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle, SharedString, Stateful, Window,
+    actions, anchored, deferred, div, ease_out_quint, px, rgb, rgba, Animation, AnimationExt,
+    AnyElement, ClickEvent, ClipboardItem, Context, Corner, Div, Entity, FocusHandle, Focusable,
+    FontWeight, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
+    ScrollHandle, SharedString, Stateful, Window,
 };
 
 use crate::composer::{Composer, Edited};
@@ -84,6 +85,8 @@ fn pump_interval() -> Duration {
 }
 
 const PUMP_MS: u64 = 8;
+const NAV_OPEN_MS: u64 = 260;
+const NAV_CLOSE_MS: u64 = 190;
 
 pub struct CockpitView {
     cockpit: Cockpit,
@@ -111,6 +114,10 @@ pub struct CockpitView {
     /// cmd-b (#21): the nav folded to its 40px LED rail. In memory only —
     /// a preference store is not this ticket.
     nav_collapsed: bool,
+    /// False on launch so a restored preference never performs entrance
+    /// choreography. Once the operator acts, the shell may animate between
+    /// its two widths; the state itself remains immediately authoritative.
+    nav_has_toggled: bool,
     /// What the nav and the Pane head say about a Thread beyond an O(1)
     /// read — checkout, Project, a parked row's provider, the L3 card —
     /// refreshed by moment, never per frame.
@@ -577,6 +584,7 @@ impl CockpitView {
             context_menu: None,
             context_usage: None,
             nav_collapsed: prefs.settings.nav_collapsed,
+            nav_has_toggled: false,
             facts: Facts::with_auto_title(prefs.settings.auto_title),
             seam_drag: None,
             drop_preview: None,
@@ -1101,7 +1109,13 @@ impl CockpitView {
         nav::rename_target_group(group, title)
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                cx.listener(move |view, event: &MouseDownEvent, _, cx| {
+                    // A single click belongs to the row under the title —
+                    // it enters the Group. Only the second click renames,
+                    // and only then is the press worth swallowing.
+                    if event.click_count < 2 {
+                        return;
+                    }
                     cx.stop_propagation();
                     view.start_rename(RenameTarget::Group(group), cx);
                 }),
@@ -2121,7 +2135,12 @@ impl CockpitView {
         nav::rename_target_thread(thread, title)
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                cx.listener(move |view, event: &MouseDownEvent, _, cx| {
+                    // As on the Group title, and as on the Pane head: the
+                    // first click focuses the Thread, the second renames it.
+                    if event.click_count < 2 {
+                        return;
+                    }
                     cx.stop_propagation();
                     view.start_rename(RenameTarget::Thread(thread), cx);
                 }),
@@ -2493,7 +2512,15 @@ impl CockpitView {
     /// the 208px column. The width change feeds `cell()`, so Panes may
     /// legitimately change Level — size decides, no special case.
     fn toggle_nav(&mut self, _: &ToggleNav, _window: &mut Window, cx: &mut Context<Self>) {
-        self.nav_collapsed = !self.nav_collapsed;
+        self.set_nav_collapsed(!self.nav_collapsed, cx);
+    }
+
+    fn set_nav_collapsed(&mut self, collapsed: bool, cx: &mut Context<Self>) {
+        if self.nav_collapsed == collapsed {
+            return;
+        }
+        self.nav_collapsed = collapsed;
+        self.nav_has_toggled = true;
         cx.notify();
     }
 
@@ -3945,10 +3972,42 @@ impl CockpitView {
             .collect();
         solos.dedup_by_key(|row| row.thread);
 
+        // The nav's default order (#21): most recently used first, across
+        // open and parked alike, and across Groups and solo Threads alike —
+        // one list, not a Groups shelf above a Threads shelf. A Group is as
+        // recent as its most recently used member; its own members keep the
+        // operator's order, because that order *is* the Group.
+        //
+        // `sort_by_key` is stable, so items sharing a second keep the order
+        // they were gathered in: Groups in the roster's order, Threads in
+        // pane-then-park order.
+        let mut order: Vec<(std::time::SystemTime, nav::NavItem)> = groups
+            .iter()
+            .enumerate()
+            .map(|(index, block)| {
+                let recency = block
+                    .members
+                    .iter()
+                    .map(|row| self.last_used(row.thread))
+                    .max()
+                    .unwrap_or(std::time::UNIX_EPOCH);
+                (recency, nav::NavItem::Group(index))
+            })
+            .chain(
+                solos
+                    .iter()
+                    .enumerate()
+                    .map(|(index, row)| (self.last_used(row.thread), nav::NavItem::Solo(index))),
+            )
+            .collect();
+        order.sort_by_key(|(recency, _)| std::cmp::Reverse(*recency));
+        let order = order.into_iter().map(|(_, item)| item).collect();
+
         nav::NavState {
             filter,
             groups,
             solos,
+            order,
             collapsed: self.nav_collapsed,
         }
     }
@@ -3985,6 +4044,7 @@ impl CockpitView {
                 }
             }
         };
+        let now = std::time::SystemTime::now();
         nav::ThreadRow {
             thread,
             name: self.facts.name(thread),
@@ -3996,7 +4056,20 @@ impl CockpitView {
                 .thread(thread)
                 .map(|open| open.provider())
                 .or_else(|| facts.and_then(|facts| facts.provider)),
+            current: self.cockpit.roster().focused_thread() == Some(thread),
+            last_used: facts
+                .and_then(|facts| facts.last_used)
+                .map(|at| crate::facts::since_label(at, now)),
         }
+    }
+
+    /// When a Thread was last used, for the nav's default order. A Thread
+    /// whose log cannot be stat'd sorts to the bottom rather than to the
+    /// top: an unknown time is not a recent one.
+    fn last_used(&self, thread: ThreadId) -> std::time::SystemTime {
+        self.facts
+            .last_used(thread)
+            .unwrap_or(std::time::UNIX_EPOCH)
     }
 
     /// A running nav row's click: land on that Thread's Pane, in the view
@@ -5710,7 +5783,7 @@ impl CockpitView {
     /// (#21). It paints inside the cockpit's own render — same entity, same
     /// pump, no second timer — and every fact it shows came from
     /// `nav_state`'s O(1) reads or the project/branch/parked caches.
-    fn nav(&self, cx: &mut Context<Self>) -> Div {
+    fn nav(&self, cx: &mut Context<Self>) -> AnyElement {
         let state = self.nav_state();
         let gear = prefs::gear_button().on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
             cx.stop_propagation();
@@ -5721,8 +5794,7 @@ impl CockpitView {
                 MouseButton::Left,
                 cx.listener(|view, _: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();
-                    view.nav_collapsed = !view.nav_collapsed;
-                    cx.notify();
+                    view.set_nav_collapsed(!view.nav_collapsed, cx);
                 }),
             ));
         // The gear sits hard right of the band; folded, it stacks under
@@ -5737,20 +5809,54 @@ impl CockpitView {
             });
         }
         chrome = chrome.child(gear);
-        let column = nav::shell(state.collapsed).child(chrome);
-        if state.collapsed {
-            return column.child(self.rail(&state, cx));
+        let content = div()
+            .flex()
+            .flex_col()
+            .flex_shrink_0()
+            .h_full()
+            .w(px(if state.collapsed {
+                nav::RAIL_WIDTH
+            } else {
+                nav::WIDTH
+            }))
+            .child(chrome);
+        let content = if state.collapsed {
+            content.child(self.rail(&state, cx))
+        } else {
+            content.child(self.nav_head(&state, cx)).child(
+                div()
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .child(self.nav_tree(&state, cx))
+                    .child(nav::scrollbar(&self.nav_scroll)),
+            )
+        };
+        if !self.nav_has_toggled {
+            return nav::shell(state.collapsed)
+                .child(content)
+                .into_any_element();
         }
-        column.child(self.nav_head(&state, cx)).child(
-            div()
-                .relative()
-                .flex()
-                .flex_col()
-                .flex_1()
-                .min_h_0()
-                .child(self.nav_tree(&state, cx))
-                .child(nav::scrollbar(&self.nav_scroll)),
-        )
+        let (from, to, duration) = if state.collapsed {
+            (nav::WIDTH, nav::RAIL_WIDTH, NAV_CLOSE_MS)
+        } else {
+            (nav::RAIL_WIDTH, nav::WIDTH, NAV_OPEN_MS)
+        };
+        let content = content.with_animation(
+            ("nav-content", usize::from(state.collapsed)),
+            Animation::new(Duration::from_millis(duration)).with_easing(ease_out_quint()),
+            |content, delta| content.opacity(0.35 + 0.65 * delta),
+        );
+        nav::shell(state.collapsed)
+            .child(content)
+            .with_animation(
+                ("nav-resize", usize::from(state.collapsed)),
+                Animation::new(Duration::from_millis(duration)).with_easing(ease_out_quint()),
+                move |column, delta| column.w(px(from + (to - from) * delta)),
+            )
+            .into_any_element()
     }
 
     /// The 42px head: the one Project dropdown, and its menu when it is
@@ -5813,9 +5919,11 @@ impl CockpitView {
         head.child(deferred(menu))
     }
 
-    /// The scrolling tree: the Groups with their members, then the solos.
-    /// The 16px between Group blocks is also the `GroupGap` drop zone, so
-    /// reordering costs no layout of its own.
+    /// The scrolling tree: Groups with their members and solo Threads in
+    /// one order, most recently used first. The 16px band above a Group
+    /// block is also its `GroupGap` drop zone, so reordering costs no
+    /// layout of its own, and every run of solo rows is a `LooseZone` — a
+    /// place to drop a row to get it out of its Group.
     fn nav_tree(&self, state: &nav::NavState, cx: &mut Context<Self>) -> Stateful<Div> {
         // Every drag started from this frame started from this View.
         let origin = self.cockpit.roster().view();
@@ -5832,28 +5940,117 @@ impl CockpitView {
                     .child(error.clone()),
             );
         }
-        for (index, group) in state.groups.iter().enumerate() {
-            let id = group.id;
-            let full_index = self
-                .cockpit
-                .groups()
-                .iter()
-                .position(|group| group.id == id)
-                .expect("navigation only shows existing Groups");
-            let gap = DropTarget::GroupGap(full_index);
-            if index > 0 {
-                tree = tree.child(
-                    drop_feedback(nav::group_gap(index), self.cockpit.groups().clone(), gap)
-                        .on_drop(cx.listener(move |view, drag: &NavDrag, _, cx| {
-                            view.apply_drop(*drag, gap, cx)
-                        })),
-                );
+        // Solo rows the order puts next to each other are drawn as one run,
+        // so the 2px between siblings stays a container's gap rather than a
+        // margin on every row.
+        let mut zones = 0usize;
+        let mut run: Vec<AnyElement> = Vec::new();
+        let mut after_group = false;
+        for (position, item) in state.order.iter().enumerate() {
+            match item {
+                nav::NavItem::Solo(index) => {
+                    run.push(self.thread_element(&state.solos[*index], None, cx));
+                }
+                nav::NavItem::Group(index) => {
+                    if !run.is_empty() {
+                        tree = tree.child(self.loose_run(
+                            zones,
+                            std::mem::take(&mut run),
+                            after_group,
+                            cx,
+                        ));
+                        zones += 1;
+                        after_group = false;
+                    }
+                    tree = tree.child(self.group_element(
+                        state,
+                        *index,
+                        position == 0,
+                        after_group,
+                        origin,
+                        cx,
+                    ));
+                    after_group = true;
+                }
             }
-            let head = nav::group_row_with_title(
-                group,
-                self.editable_group_title(id, group.title.clone(), cx),
-            );
-            let mut block = nav::group_block().child(
+        }
+        if !run.is_empty() {
+            tree = tree.child(self.loose_run(zones, run, after_group, cx));
+            zones += 1;
+            after_group = false;
+        }
+        // The ground under the last row is a drop target too — with every
+        // Thread in a Group it is the only place left to drop one to get it
+        // out — and it takes the tree's slack, so that ground is never dead.
+        let ground = nav::loose_ground(zones)
+            .when(after_group, |ground| ground.mt(px(crate::theme::SOLOS_TOP)));
+        tree = tree.child(
+            drop_feedback(ground, self.cockpit.groups().clone(), DropTarget::LooseZone).on_drop(
+                cx.listener(|view, drag: &NavDrag, _, cx| {
+                    view.apply_drop(*drag, DropTarget::LooseZone, cx)
+                }),
+            ),
+        );
+        if state.order.is_empty() {
+            tree = tree.child(nav::empty_filter(&state.filter.label));
+        }
+        tree
+    }
+
+    /// One run of solo rows, which is also a `LooseZone`. `after_group` is
+    /// what separates it from the Group above it; a run that opens the tree
+    /// starts at the tree's own padding.
+    fn loose_run(
+        &self,
+        zone: usize,
+        rows: Vec<AnyElement>,
+        after_group: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let run =
+            nav::solos(zone, rows).when(after_group, |run| run.mt(px(crate::theme::SOLOS_TOP)));
+        drop_feedback(run, self.cockpit.groups().clone(), DropTarget::LooseZone)
+            .on_drop(cx.listener(|view, drag: &NavDrag, _, cx| {
+                view.apply_drop(*drag, DropTarget::LooseZone, cx)
+            }))
+            .into_any_element()
+    }
+
+    /// One Group block: the 16px band above it when another Group precedes
+    /// it — the "insert between these two" drop target — then the header,
+    /// which is the drag handle, the rename target and the way in, then the
+    /// member rows.
+    fn group_element(
+        &self,
+        state: &nav::NavState,
+        index: usize,
+        first_in_tree: bool,
+        after_group: bool,
+        origin: View,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let group = &state.groups[index];
+        let id = group.id;
+        let full_index = self
+            .cockpit
+            .groups()
+            .iter()
+            .position(|group| group.id == id)
+            .expect("navigation only shows existing Groups");
+        let gap = DropTarget::GroupGap(full_index);
+        let head = nav::group_row_with_title(
+            group,
+            self.editable_group_title(id, group.title.clone(), cx),
+        );
+        let mut block = nav::group_block()
+            // A Group separates itself from whatever is above it: nothing
+            // when it opens the tree, the 16px band from another Group —
+            // prepended below, because that band is a drop target and not a
+            // margin — and the solos' own 24px from a run of rows.
+            .when(!first_in_tree && !after_group, |block| {
+                block.mt(px(crate::theme::SOLOS_TOP))
+            })
+            .child(
                 drop_feedback(
                     head,
                     self.cockpit.groups().clone(),
@@ -5881,77 +6078,65 @@ impl CockpitView {
                     }),
                 ),
             );
-            // Gap 0 has no band of its own; it rides the header instead.
-            if index == 0 {
-                block = block.child(
-                    drop_feedback(
-                        nav::group_gap_lead(index),
-                        self.cockpit.groups().clone(),
-                        gap,
-                    )
-                    .on_drop(cx.listener(
-                        move |view, drag: &NavDrag, _, cx| view.apply_drop(*drag, gap, cx),
-                    )),
+        // The first block in the tree has no band above it to drop into, so
+        // "insert above this Group" rides its header instead.
+        if first_in_tree {
+            block = block.child(
+                drop_feedback(
+                    nav::group_gap_lead(index),
+                    self.cockpit.groups().clone(),
+                    gap,
+                )
+                .on_drop(
+                    cx.listener(move |view, drag: &NavDrag, _, cx| view.apply_drop(*drag, gap, cx)),
+                ),
+            );
+        }
+        if !group.members.is_empty() {
+            let rows = group
+                .members
+                .iter()
+                .map(|row| self.thread_element(row, Some(id), cx))
+                .collect();
+            let mut members = nav::members(rows);
+            // Appending to the Group means dropping past its last row —
+            // an index one beyond the end, aimed at the last member.
+            if let Some(last) = group.members.last().map(|row| row.thread) {
+                let tail = DropTarget::ThreadRow {
+                    thread: last,
+                    group: Some(id),
+                    index: self
+                        .cockpit
+                        .groups()
+                        .get(id)
+                        .expect("Group exists")
+                        .members
+                        .len(),
+                };
+                members = members.child(
+                    drop_feedback(nav::member_tail(id), self.cockpit.groups().clone(), tail)
+                        .on_drop(cx.listener(move |view, drag: &NavDrag, _, cx| {
+                            view.apply_drop(*drag, tail, cx)
+                        })),
                 );
             }
-            if !group.members.is_empty() {
-                let rows = group
-                    .members
-                    .iter()
-                    .map(|row| self.thread_element(row, Some(id), cx))
-                    .collect();
-                let mut members = nav::members(rows);
-                // Appending to the Group means dropping past its last row —
-                // an index one beyond the end, aimed at the last member.
-                if let Some(last) = group.members.last().map(|row| row.thread) {
-                    let tail = DropTarget::ThreadRow {
-                        thread: last,
-                        group: Some(id),
-                        index: self
-                            .cockpit
-                            .groups()
-                            .get(id)
-                            .expect("Group exists")
-                            .members
-                            .len(),
-                    };
-                    members = members.child(
-                        drop_feedback(nav::member_tail(id), self.cockpit.groups().clone(), tail)
-                            .on_drop(cx.listener(move |view, drag: &NavDrag, _, cx| {
-                                view.apply_drop(*drag, tail, cx)
-                            })),
-                    );
-                }
-                block = block.child(members);
-            }
-            tree = tree.child(block);
+            block = block.child(members);
         }
-        let rows = state
-            .solos
-            .iter()
-            .map(|row| self.thread_element(row, None, cx))
-            .collect();
-        // `nav::solos` carries the 24px that separates it from the last
-        // Group. With no Group above it there is nothing to separate
-        // from, and the section starts at the tree's own padding. With no
-        // solo rows at all it separates nothing either — but it still
-        // renders, as the empty ground below the tree: with every Thread in
-        // a Group that is the only place left to drop one to get it out.
-        let empty = state.solos.is_empty();
-        let solos = nav::solos(rows)
-            .when(empty || state.groups.is_empty(), |solos| solos.mt(px(0.)))
-            .when(empty, |solos| solos.flex_1());
-        tree = tree.child(
-            drop_feedback(solos, self.cockpit.groups().clone(), DropTarget::LooseZone).on_drop(
-                cx.listener(|view, drag: &NavDrag, _, cx| {
-                    view.apply_drop(*drag, DropTarget::LooseZone, cx)
-                }),
-            ),
-        );
-        if state.groups.is_empty() && state.solos.is_empty() {
-            tree = tree.child(nav::empty_filter(&state.filter.label));
+        if !after_group {
+            return block.into_any_element();
         }
-        tree
+        // Two Groups in a row: the band between them, drawn above this one.
+        div()
+            .flex()
+            .flex_col()
+            .flex_shrink_0()
+            .child(
+                drop_feedback(nav::group_gap(index), self.cockpit.groups().clone(), gap).on_drop(
+                    cx.listener(move |view, drag: &NavDrag, _, cx| view.apply_drop(*drag, gap, cx)),
+                ),
+            )
+            .child(block)
+            .into_any_element()
     }
 
     /// One Thread row, with the whole drag/drop and click wiring a row has
@@ -6023,18 +6208,8 @@ impl CockpitView {
     /// dropdown, and this is how a 56px column reaches it.
     fn rail(&self, state: &nav::NavState, cx: &mut Context<Self>) -> Div {
         let mut items = nav::rail_items();
-        let focused = self.cockpit.roster().focused_thread();
-        for (row, current) in state
-            .groups
-            .iter()
-            .flat_map(|group| group.members.iter().map(move |row| (row, group.current)))
-            .chain(
-                state
-                    .solos
-                    .iter()
-                    .map(|row| (row, focused == Some(row.thread))),
-            )
-        {
+        for row in state.ordered_rows() {
+            let current = row.current;
             let thread = row.thread;
             let open = self.pane_for(thread).is_some();
             items = items.child(nav::rail_item(row, current).on_mouse_down(
@@ -6053,7 +6228,7 @@ impl CockpitView {
                 MouseButton::Left,
                 cx.listener(|view, _: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();
-                    view.nav_collapsed = false;
+                    view.set_nav_collapsed(false, cx);
                     view.nav_filter_open = true;
                     cx.notify();
                 }),
@@ -6452,6 +6627,78 @@ mod tests {
                     .unwrap()
                     .cwd(),
                 repo.canonicalize().unwrap()
+            );
+        });
+    }
+
+    /// The age at the tail of a row's last line hangs under the provider
+    /// logomark: one right edge down the row, not two.
+    #[gpui::test]
+    fn the_age_hangs_under_the_provider_mark(cx: &mut TestAppContext) {
+        let (core, _) = cockpit("nav-age-align", 1);
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        cx.run_until_parked();
+        let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+
+        let mark_id: &'static str = format!("nav-mark-{}", thread.get()).leak();
+        let age_id: &'static str = format!("nav-since-{}", thread.get()).leak();
+        let mark = cx.debug_bounds(mark_id).expect("the row draws a logomark");
+        let age = cx.debug_bounds(age_id).expect("the row draws its age");
+        assert_eq!(mark.right(), age.right(), "one right edge, not two");
+    }
+
+    /// The tree draws one list, not a Groups shelf above a Threads shelf:
+    /// Groups and solo Threads sort together by when they were last used,
+    /// a Group counting as its most recently used member. Threads created
+    /// back to back can share a timestamp, so the assertion is the rule
+    /// itself — the order never climbs — plus every item drawn exactly once.
+    #[gpui::test]
+    fn groups_and_solo_threads_share_one_recency_order(cx: &mut TestAppContext) {
+        let (mut core, _) = cockpit("nav-interleave", 4);
+        let ids = core.threads();
+        core.apply_group(GroupChange::Create {
+            first: ids[0],
+            second: ids[1],
+        })
+        .unwrap();
+        let (view, cx) = cx.add_window_view(|_, cx| CockpitView::new(core, cx));
+        tick(cx);
+
+        view.read_with(cx, |view, _| {
+            let state = view.nav_state();
+            assert_eq!(state.groups.len(), 1);
+            assert_eq!(state.solos.len(), 2);
+            assert_eq!(
+                state.order.len(),
+                3,
+                "one entry per Group and per solo Thread, and no other"
+            );
+            let recency = |item: &nav::NavItem| match item {
+                nav::NavItem::Group(index) => state.groups[*index]
+                    .members
+                    .iter()
+                    .map(|row| view.last_used(row.thread))
+                    .max()
+                    .unwrap(),
+                nav::NavItem::Solo(index) => view.last_used(state.solos[*index].thread),
+            };
+            let times: Vec<_> = state.order.iter().map(recency).collect();
+            assert!(
+                times.windows(2).all(|pair| pair[0] >= pair[1]),
+                "most recently used first, whichever kind of item it is"
+            );
+            let mut seen: Vec<nav::NavItem> = state.order.clone();
+            seen.sort_by_key(|item| match item {
+                nav::NavItem::Group(index) => (0, *index),
+                nav::NavItem::Solo(index) => (1, *index),
+            });
+            seen.dedup();
+            assert_eq!(seen.len(), 3, "nothing is drawn twice and nothing is lost");
+            assert_eq!(
+                view.nav_state().ordered_rows().len(),
+                4,
+                "every Thread has a row, member or solo"
             );
         });
     }
@@ -9126,12 +9373,12 @@ mod tests {
         });
     }
 
-    /// #21 AC1: the nav lists every Thread — open Panes first in grid
-    /// order, then the parked ones — each row naming its Project, its
-    /// checkout and its provider. There is no section header between them:
-    /// one list, split only by Group membership.
+    /// #21 AC1: the nav lists every Thread — most recently used first,
+    /// open and parked alike — each row naming its Project, its checkout
+    /// and its provider. There is no section header between them: one
+    /// list, split only by Group membership.
     #[gpui::test]
-    fn the_nav_lists_running_threads_in_grid_order_and_parked_below(cx: &mut TestAppContext) {
+    fn the_nav_lists_every_thread_most_recently_used_first(cx: &mut TestAppContext) {
         let (core, _fake) = cockpit("nav-order", 3);
         cx.update(|cx| {
             cx.bind_keys([KeyBinding::new("cmd-w", CloseThread, None)]);
@@ -9154,28 +9401,35 @@ mod tests {
         view.read_with(cx, |view, _| {
             let state = view.nav_state();
             assert!(state.groups.is_empty(), "no Group claims these Threads");
-            let rows: Vec<ThreadId> = state.solos.iter().map(|row| row.thread).collect();
-            let mut expected: Vec<ThreadId> = grid_order
-                .iter()
-                .copied()
-                .filter(|thread| *thread != parked_thread)
-                .collect();
-            expected.push(parked_thread);
-            assert_eq!(rows, expected, "open Panes in grid order, parked below");
+            let ordered = state.ordered_solos();
+            let rows: Vec<ThreadId> = ordered.iter().map(|row| row.thread).collect();
+            let mut expected: Vec<ThreadId> = grid_order.to_vec();
+            // The nav's default order, and the only one it has: last used
+            // first. Parking does not move a row — using it does.
+            expected.sort_by_key(|thread| std::cmp::Reverse(view.last_used(*thread)));
+            assert_eq!(rows, expected, "most recently used first");
+            assert!(
+                rows.contains(&parked_thread),
+                "a parked Thread is a row like any other"
+            );
             assert_eq!(
-                state.solos[0].name.as_ref(),
+                ordered[0].name.as_ref(),
                 format!("thread-{:02}", expected[0]),
                 "rows say what the Pane head says"
             );
+            assert!(
+                ordered.iter().all(|row| row.last_used.is_some()),
+                "every row says how long since it was used"
+            );
             assert_eq!(
-                state.solos[0].provider,
+                ordered[0].provider,
                 Some(Provider::Claude),
                 "the provider is the logomark's own value, never a `cl` tag"
             );
             let parked: Vec<ThreadId> = view.facts.parked().to_vec();
             assert_eq!(parked, vec![parked_thread], "the parked Thread moved below");
             assert_eq!(
-                state.solos.last().unwrap().provider,
+                ordered.last().unwrap().provider,
                 Some(Provider::Claude),
                 "a parked row still names its provider — peeked, not loaded"
             );
@@ -9195,14 +9449,24 @@ mod tests {
         tick(cx);
         view.read_with(cx, |view, _| assert_eq!(view.focused(), 0));
 
-        // The second row: the 42px window band, the 42px nav head, the
-        // tree's 8px inset, one 56.5px row and the 2px between siblings,
-        // then halfway down its own row. No strip, no section header.
+        // Which row is which is the nav's order to decide (last used
+        // first), so the test asks it rather than assuming the grid's.
+        let row_of = |view: &CockpitView, pane: usize| {
+            let thread = view.panes[pane].thread().unwrap();
+            view.nav_state()
+                .ordered_solos()
+                .iter()
+                .position(|row| row.thread == thread)
+                .expect("every open Thread has a row")
+        };
+        // Row `n`: the 42px window band, the 42px nav head, the tree's 8px
+        // inset, n rows of 56.5px each with the 2px between siblings, then
+        // halfway down its own row. No strip, no section header.
+        let row_y =
+            |n: usize| px(42. + 42. + 8. + n as f32 * (crate::theme::THREAD_ROW_H + 2.) + 28.);
+        let (second, first) = view.read_with(cx, |view, _| (row_of(view, 1), row_of(view, 0)));
         cx.simulate_click(
-            gpui::point(
-                px(104.),
-                px(42. + 42. + 8. + crate::theme::THREAD_ROW_H + 2. + 28.),
-            ),
+            gpui::point(px(104.), row_y(second)),
             gpui::Modifiers::none(),
         );
         view.read_with(cx, |view, _| {
@@ -9216,11 +9480,8 @@ mod tests {
                 Some(PaneIdentity::Thread(view.panes[1].thread().unwrap()))
             );
         });
-        // And back to the first row, halfway down it.
-        cx.simulate_click(
-            gpui::point(px(104.), px(42. + 42. + 8. + 28.)),
-            gpui::Modifiers::none(),
-        );
+        // And back to the other Pane's row.
+        cx.simulate_click(gpui::point(px(104.), row_y(first)), gpui::Modifiers::none());
         view.read_with(cx, |view, _| {
             assert_eq!(view.focused(), 0, "the nav still answers while fullscreen");
             assert_eq!(
@@ -9321,9 +9582,8 @@ mod tests {
     /// signal ever creeps back in, this is what catches it.
     fn describe_nav(state: &nav::NavState) -> Vec<String> {
         state
-            .solos
-            .iter()
-            .chain(state.groups.iter().flat_map(|group| group.members.iter()))
+            .ordered_rows()
+            .into_iter()
             .map(|row| {
                 format!(
                     "{}|{:?}|{:?}|{:?}",
@@ -11888,7 +12148,17 @@ mod tests {
         let thread_title = cx
             .debug_bounds("rename-thread-2")
             .expect("the parked title is rendered");
+        // A single click on a title is not a rename — it is the row's own
+        // click, which focuses the Thread. Only the second press opens the
+        // editor.
         cx.simulate_click(thread_title.center(), gpui::Modifiers::none());
+        view.read_with(cx, |view, _| {
+            assert!(
+                view.rename.is_none(),
+                "one click never opens the inline editor"
+            );
+        });
+        press(cx, thread_title.center(), 2);
         view.read_with(cx, |view, cx| {
             let editor = &view.rename.as_ref().expect("inline Thread editor").1;
             assert_eq!(editor.read(cx).text(), "Existing parked title");
@@ -11907,7 +12177,7 @@ mod tests {
         });
 
         let thread_title = cx.debug_bounds("rename-thread-2").unwrap();
-        cx.simulate_click(thread_title.center(), gpui::Modifiers::none());
+        press(cx, thread_title.center(), 2);
         view.update(cx, |view, cx| {
             let editor = view.rename.as_ref().unwrap().1.clone();
             editor.update(cx, |line, cx| line.set("Saved parked title".into(), cx));
@@ -11916,6 +12186,13 @@ mod tests {
 
         let group_title = cx.debug_bounds("rename-group-1").unwrap();
         cx.simulate_click(group_title.center(), gpui::Modifiers::none());
+        view.read_with(cx, |view, _| {
+            assert!(
+                view.rename.is_none(),
+                "a Group title takes two clicks too — one enters the Group"
+            );
+        });
+        press(cx, group_title.center(), 2);
         view.update(cx, |view, cx| {
             let editor = view.rename.as_ref().unwrap().1.clone();
             editor.update(cx, |line, cx| line.set("Saved Group title".into(), cx));

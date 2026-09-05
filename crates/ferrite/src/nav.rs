@@ -25,10 +25,13 @@ use ferrite_core::groups::GroupId;
 use ferrite_core::store::Provider;
 use ferrite_core::workspace::registry::ProjectId;
 use ferrite_core::ThreadId;
+use std::time::Duration;
+
 use gpui::prelude::*;
 use gpui::{
-    div, point, px, radians, relative, rgb, rgba, AnyElement, BoxShadow, CursorStyle, Div,
-    FontWeight, ScrollHandle, SharedString, Stateful, Transformation,
+    div, point, pulsating_between, px, radians, relative, rgb, rgba, Animation, AnimationExt,
+    AnyElement, BoxShadow, CursorStyle, Div, FontWeight, ScrollHandle, SharedString, Stateful,
+    Transformation,
 };
 
 use crate::components;
@@ -38,11 +41,12 @@ use crate::theme::{
     ATTENTION, BLOCKED, FILL, FONT_UI, FS_LG, FS_MD, FS_SM, GROUP_GAP, GROUP_RAIL, GROUP_ROW_H,
     HOVER, ICON_BUTTON, ICON_BUTTON_GLYPH, ICON_CHEVRON_LG, IDLE, LINE_TIGHT, MEMBERS_TOP,
     MEMBER_GAP, MEMBER_INDENT, MENU, MENU_PAD, MENU_ROW_H, MENU_TOP, NAV, NAV_HEAD_H, NAV_TREE_PAD,
-    NAV_TREE_PAD_B, PROVIDER_CLAUDE, PROVIDER_CODEX, PROVIDER_MARK, RAIL_INSET, RAIL_OFFSET,
-    ROW_GAP, ROW_ICON, ROW_ICON_GAP, ROW_PAD_X, ROW_PAD_Y, ROW_TEXT_W, RUNNING, R_CONTROL, R_MENU,
-    R_TIGHT, SEP, SHADOW_FAR, SHADOW_FAR_BLUR, SHADOW_FAR_SPREAD, SHADOW_FAR_Y, SHADOW_NEAR,
-    SHADOW_NEAR_BLUR, SHADOW_NEAR_Y, SOLOS_TOP, STATUS_DOT, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG,
-    THREAD_ROW_H, TRAFFIC_RESERVE, WIN_CHROME_H,
+    NAV_TREE_PAD_B, PROVIDER_CLAUDE, PROVIDER_CODEX, PROVIDER_MARK, PULSE_MIN, RAIL_INSET,
+    RAIL_OFFSET, ROW_GAP, ROW_ICON, ROW_ICON_GAP, ROW_PAD_X, ROW_PAD_Y, ROW_TEXT_W, RUNNING,
+    RUNNING_HALO, R_CONTROL, R_MENU, R_TIGHT, SEP, SHADOW_FAR, SHADOW_FAR_BLUR, SHADOW_FAR_SPREAD,
+    SHADOW_FAR_Y, SHADOW_NEAR, SHADOW_NEAR_BLUR, SHADOW_NEAR_Y, SOLOS_TOP, STATUS_DOT,
+    STATUS_HALO_INSET, STATUS_PULSE_MS, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG, THREAD_ROW_H,
+    TRAFFIC_RESERVE, WIN_CHROME_H,
 };
 
 /// The nav's two widths — 286px, and the 56px rail cmd-b folds it to.
@@ -107,7 +111,46 @@ pub struct NavState {
     pub filter: FilterState,
     pub groups: Vec<GroupBlock>,
     pub solos: Vec<ThreadRow>,
+    /// The one order the tree draws in — Groups and solo Threads
+    /// interleaved, most recently used first. The two lists above are the
+    /// membership; this is the sequence.
+    pub order: Vec<NavItem>,
     pub collapsed: bool,
+}
+
+impl NavState {
+    /// Every row in the order the tree draws it: a Group's members where
+    /// their Group sits, a solo where it sits. The rail folds to exactly
+    /// this sequence, and tests read the tree's order from it.
+    pub fn ordered_rows(&self) -> Vec<&ThreadRow> {
+        self.order
+            .iter()
+            .flat_map(|item| match item {
+                NavItem::Group(index) => self.groups[*index].members.iter(),
+                NavItem::Solo(index) => std::slice::from_ref(&self.solos[*index]).iter(),
+            })
+            .collect()
+    }
+
+    /// The solo Threads alone, in the tree's order.
+    pub fn ordered_solos(&self) -> Vec<&ThreadRow> {
+        self.order
+            .iter()
+            .filter_map(|item| match item {
+                NavItem::Solo(index) => Some(&self.solos[*index]),
+                NavItem::Group(_) => None,
+            })
+            .collect()
+    }
+}
+
+/// One entry in the tree's order: an index into `NavState::groups`, or one
+/// into `NavState::solos`. Indices rather than the blocks themselves, so
+/// the two kinds keep their own types and nothing is cloned to be ordered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NavItem {
+    Group(usize),
+    Solo(usize),
 }
 
 /// The single Project dropdown at the top of navigation. Default label
@@ -155,6 +198,13 @@ pub struct ThreadRow {
     pub branch: Option<SharedString>,
     /// `None` → no logomark. Never a `cl`/`cx` string.
     pub provider: Option<Provider>,
+    /// This is the focused Pane's Thread: it carries the selected fill and
+    /// the white title. The Group around it carries the fill too, so the
+    /// pair reads as one selection.
+    pub current: bool,
+    /// How long since the Thread was last used — `40m`, `2h`, `3d` — at the
+    /// tail of the checkout line. `None` says nothing at all.
+    pub last_used: Option<SharedString>,
 }
 
 /// A Thread row's state, for its dot. The nav's original no-dot ruling
@@ -177,20 +227,52 @@ pub enum RowStatus {
 /// The status dot before a row's title: the Pane head's own colours, so
 /// the tree and the Pane can never disagree. An idle Thread keeps a dim
 /// dot — it is alive, just quiet — and a parked one a hollow ring.
-fn status_dot(status: RowStatus) -> Div {
+///
+/// A **working** Thread's dot breathes: a halo behind it swells and fades
+/// on a 1.4s loop. Motion is the one thing a still row cannot fake, and
+/// inference is the one fact the operator scans the tree for — every other
+/// state stays as still as the column around it. The halo is absolute and
+/// the box is a fixed `STATUS_DOT`, so nothing in the row moves with it.
+fn status_dot(thread: ThreadId, status: RowStatus) -> AnyElement {
     let dot = div()
         .flex_shrink_0()
         .w(px(STATUS_DOT))
         .h(px(STATUS_DOT))
         .rounded_full();
-    match status {
+    let dot = match status {
         RowStatus::Working => dot.bg(rgb(RUNNING)),
         RowStatus::Failing => dot.bg(rgb(RUNNING)).border_1().border_color(rgb(BLOCKED)),
         RowStatus::Attention => dot.bg(rgb(ATTENTION)),
         RowStatus::Blocked => dot.bg(rgb(BLOCKED)),
         RowStatus::Idle => dot.bg(rgb(IDLE)),
         RowStatus::Parked => dot.border_1().border_color(rgb(SEP)),
+    };
+    if !matches!(status, RowStatus::Working | RowStatus::Failing) {
+        return dot.into_any_element();
     }
+    let halo = div()
+        .absolute()
+        .left(px(-STATUS_HALO_INSET))
+        .top(px(-STATUS_HALO_INSET))
+        .w(px(STATUS_DOT + 2. * STATUS_HALO_INSET))
+        .h(px(STATUS_DOT + 2. * STATUS_HALO_INSET))
+        .rounded_full()
+        .bg(rgba(RUNNING_HALO))
+        .with_animation(
+            ("nav-working", thread.get() as usize),
+            Animation::new(Duration::from_millis(STATUS_PULSE_MS))
+                .repeat()
+                .with_easing(pulsating_between(PULSE_MIN, 1.0)),
+            |halo, delta| halo.opacity(delta),
+        );
+    div()
+        .relative()
+        .flex_shrink_0()
+        .w(px(STATUS_DOT))
+        .h(px(STATUS_DOT))
+        .child(halo)
+        .child(dot)
+        .into_any_element()
 }
 
 /// The nav column itself: full height, the `--nav` ground, and **no border
@@ -207,6 +289,7 @@ pub fn shell(collapsed: bool) -> Div {
         .flex_shrink_0()
         .h_full()
         .w(px(if collapsed { RAIL_WIDTH } else { WIDTH }))
+        .overflow_hidden()
         .bg(rgb(NAV))
         .font_family(FONT_UI)
 }
@@ -610,7 +693,7 @@ pub fn thread_row_with_title(row: &ThreadRow, title: impl IntoElement) -> Statef
     row_frame(
         ("nav-thread", row.thread.get() as usize),
         THREAD_ROW_H,
-        false,
+        row.current,
     )
     .debug_selector({
         let thread = row.thread;
@@ -621,7 +704,7 @@ pub fn thread_row_with_title(row: &ThreadRow, title: impl IntoElement) -> Statef
             .flex()
             .items_center()
             .gap(px(ROW_PAD_X))
-            .child(status_dot(row.status))
+            .child(status_dot(row.thread, row.status))
             .child(
                 div()
                     .flex_1()
@@ -631,27 +714,85 @@ pub fn thread_row_with_title(row: &ThreadRow, title: impl IntoElement) -> Statef
                     .text_size(px(FS_MD))
                     .font_weight(FontWeight::SEMIBOLD)
                     .line_height(relative(LINE_TIGHT))
-                    .text_color(rgb(TEXT))
+                    .text_color(rgb(if row.current { TEXT_STRONG } else { TEXT }))
                     .child(title),
             )
-            .child(provider_mark(row.provider, PROVIDER_MARK)),
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .debug_selector({
+                        let thread = row.thread;
+                        move || format!("nav-mark-{}", thread.get())
+                    })
+                    .child(provider_mark(row.provider, PROVIDER_MARK)),
+            ),
     )
     .child(meta_line(icons::FOLDER, row.project.clone(), TEXT_2))
-    .child(meta_line(icons::BRANCH, row.branch.clone(), TEXT_MUTED))
+    .child(
+        meta_line(icons::BRANCH, row.branch.clone(), TEXT_MUTED)
+            .child(since_tail(row.thread, row.last_used.clone())),
+    )
 }
 
-/// The solo section: Threads no Group claims, at root indent with no rail.
-/// 24px below the last Group — and nothing above it when the filter has
-/// left no Groups at all, which is the caller's `first` to decide.
-pub fn solos(rows: Vec<AnyElement>) -> Stateful<Div> {
+/// The age at the tail of a row's last line — `40m`, `2h`, `3d`. It is
+/// pushed right by its own auto margin rather than by a spacer, so a line
+/// whose branch is unknown still puts the age where every other row's age
+/// is. Never a date: the nav says how long ago, and the Pane says when.
+fn since_tail(thread: ThreadId, label: Option<SharedString>) -> Div {
+    let cell = div()
+        .flex_shrink_0()
+        .ml_auto()
+        .pl(px(ROW_ICON_GAP))
+        .debug_selector(move || format!("nav-since-{}", thread.get()));
+    let Some(label) = label else {
+        return cell;
+    };
+    cell.text_size(px(FS_SM))
+        .line_height(relative(LINE_TIGHT))
+        .text_color(rgb(TEXT_MUTED))
+        .child(label)
+}
+
+/// One run of solo Threads — those no Group claims — at root indent with
+/// no rail. A run is however many solo rows the recency order happens to
+/// put together between two Groups, so the tree holds several; each is a
+/// place to drop a row to get it out of its Group, and each carries its
+/// own id. The caller sets the margin above: a run that follows a Group
+/// takes `SOLOS_TOP`, and a run that opens the tree takes none.
+pub fn solos(index: usize, rows: Vec<AnyElement>) -> Stateful<Div> {
     div()
-        .id("loose-zone")
-        .debug_selector(|| "loose-zone".into())
+        .id(("loose-zone", index))
+        .debug_selector(move || {
+            if index == 0 {
+                "loose-zone".into()
+            } else {
+                format!("loose-zone-{index}")
+            }
+        })
         .flex()
         .flex_col()
+        .flex_shrink_0()
         .gap(px(MEMBER_GAP))
-        .mt(px(SOLOS_TOP))
         .children(rows)
+}
+
+/// The empty ground under the last row: the tree's own remainder, and the
+/// drop target that gets a row out of its Group when every Thread is in
+/// one and there is no solo run to aim at.
+pub fn loose_ground(index: usize) -> Stateful<Div> {
+    div()
+        .id(("loose-zone", index))
+        .debug_selector(move || {
+            if index == 0 {
+                "loose-zone".into()
+            } else {
+                format!("loose-zone-{index}")
+            }
+        })
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_h(px(SOLOS_TOP))
 }
 
 /// What a Project filter that matches nothing says. It names the Project
@@ -669,10 +810,11 @@ pub fn empty_filter(project: &str) -> Div {
 
 /// The badge that follows the pointer while a row is being dragged into a
 /// Group. It rides the menu ground — it is floating, like a menu is.
-/// A Group title that says it can be renamed: the row's own title text,
-/// plus the hover wash every other control in the system wears. No border
-/// and no field ground — a title that looked like an input would read as a
-/// second control in a row that has none.
+/// A Group title that can be renamed: the row's own title text, and
+/// nothing else. It wears **no** hover wash — the wash would advertise a
+/// control the single click no longer operates, and a title box lighting
+/// up inside an already-hovered row reads as a second target where there
+/// is one. The double click is the affordance; the row is the control.
 pub fn rename_target_group(id: GroupId, title: SharedString) -> Stateful<Div> {
     div()
         .id(("rename-group", id.get() as usize))
@@ -681,11 +823,10 @@ pub fn rename_target_group(id: GroupId, title: SharedString) -> Stateful<Div> {
         .truncate()
         .rounded(px(R_TIGHT))
         .child(title)
-        .hover_control()
 }
 
-/// A Thread title that says it can be renamed — `rename_target_group`'s
-/// twin, on the smaller row.
+/// A Thread title that can be renamed — `rename_target_group`'s twin, on
+/// the smaller row, and equally unwashed.
 pub fn rename_target_thread(thread: ThreadId, title: SharedString) -> Stateful<Div> {
     div()
         .id(("rename-thread", thread.get() as usize))
@@ -694,7 +835,6 @@ pub fn rename_target_thread(thread: ThreadId, title: SharedString) -> Stateful<D
         .truncate()
         .rounded(px(R_TIGHT))
         .child(title)
-        .hover_control()
 }
 
 pub fn drag_badge(label: SharedString) -> Div {
@@ -794,6 +934,8 @@ pub fn rail_item(row: &ThreadRow, current: bool) -> Stateful<Div> {
 fn row_frame(id: (&'static str, usize), height: f32, carries_fill: bool) -> Stateful<Div> {
     let frame = div()
         .id(id)
+        // The current mark hangs off this box's left edge.
+        .relative()
         .flex()
         .flex_col()
         .flex_shrink_0()
@@ -827,6 +969,7 @@ fn meta_line(mark: &'static str, label: Option<SharedString>, ink: u32) -> Div {
         .child(icon(mark, ROW_ICON, ink))
         .child(
             div()
+                .flex_1()
                 .min_w_0()
                 .truncate()
                 .text_size(px(FS_SM))
@@ -858,6 +1001,10 @@ mod tests {
     use ferrite_core::ThreadId;
 
     fn thread(provider: Option<Provider>) -> ThreadRow {
+        current_thread(provider, false)
+    }
+
+    fn current_thread(provider: Option<Provider>, current: bool) -> ThreadRow {
         ThreadRow {
             thread: ThreadId::new(8),
             status: RowStatus::Idle,
@@ -865,6 +1012,8 @@ mod tests {
             project: Some("ferrite".into()),
             branch: Some("codex/prototype-32".into()),
             provider,
+            current,
+            last_used: Some("2h".into()),
         }
     }
 
@@ -878,11 +1027,11 @@ mod tests {
         }
     }
 
-    /// The one selection rule the prototype makes, asserted where it is
-    /// drawn: the **Group** carries the fill, and a Thread row never does —
-    /// not when its Group is current, not ever.
+    /// The selection rule: the fill lands on the focused Thread's row and
+    /// on the Group holding it — and on nothing else. A Thread that merely
+    /// sits in the current Group is not itself current.
     #[test]
-    fn only_the_group_row_carries_the_selected_fill() {
+    fn only_the_current_row_carries_the_selected_fill() {
         let fill = |mut drawn: Stateful<Div>| drawn.style().background.clone();
         assert_eq!(
             fill(group_row(&group(true))),
@@ -891,9 +1040,14 @@ mod tests {
         );
         assert_eq!(fill(group_row(&group(false))), None);
         assert_eq!(
+            fill(thread_row(&current_thread(Some(Provider::Claude), true))),
+            Some(rgb(FILL).into()),
+            "the focused Thread's own row carries it too"
+        );
+        assert_eq!(
             fill(thread_row(&thread(Some(Provider::Claude)))),
             None,
-            "a Thread row is never filled, whatever its Group is doing"
+            "a Thread that is not focused is not filled by its Group's state"
         );
     }
 
@@ -931,9 +1085,16 @@ mod tests {
             project: None,
             branch: None,
             provider: None,
+            current: false,
+            last_used: None,
         };
         let height = |mut drawn: Stateful<Div>| drawn.style().size.height;
         assert_eq!(height(thread_row(&bare)), height(thread_row(&thread(None))));
+        assert_eq!(
+            height(thread_row(&bare)),
+            height(thread_row(&current_thread(None, true))),
+            "the current row is the same box as any other, only filled"
+        );
         assert_eq!(
             height(thread_row(&bare)),
             Some(px(THREAD_ROW_H).into()),
@@ -944,6 +1105,23 @@ mod tests {
             Some(px(GROUP_ROW_H).into()),
             "6 + 16.25 + 1 + 13.75 + 6"
         );
+    }
+
+    /// The working halo is absolute inside a fixed dot box, so a Thread
+    /// that starts inferring does not shift its own row — or any row under
+    /// it — by a pixel.
+    #[test]
+    fn a_working_row_is_the_same_box_as_a_quiet_one() {
+        let working = ThreadRow {
+            status: RowStatus::Working,
+            ..thread(Some(Provider::Claude))
+        };
+        let height = |mut drawn: Stateful<Div>| drawn.style().size.height;
+        assert_eq!(
+            height(thread_row(&working)),
+            height(thread_row(&thread(Some(Provider::Claude))))
+        );
+        assert_eq!(height(thread_row(&working)), Some(px(THREAD_ROW_H).into()));
     }
 
     /// The nav column draws no border on any edge: Soft separates the
