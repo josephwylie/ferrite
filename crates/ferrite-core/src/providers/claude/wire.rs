@@ -472,8 +472,8 @@ pub(super) fn parse_tool_result(value: Option<&Value>) -> ToolResult {
         if hunks.is_empty() {
             // A creation has nothing to diff against, so the CLI sends an
             // empty patch and the whole written file instead. Without this
-            // the file arrived as a change of nothing — a CHANGED chip
-            // reading `+0 −0` for a file that had just been written.
+            // the file arrived as a change of nothing: a diff card and a
+            // `+N −N` stat reading zero for a file just written whole.
             match creation_hunk(value) {
                 Some(hunk) => hunks.push(hunk),
                 // An empty patch that is not a creation is a tool that
@@ -510,7 +510,7 @@ fn is_creation(value: &Value) -> bool {
 /// The patch the CLI does not send for a creation: every line it wrote, as
 /// additions, in the shape git gives a new file — `@@ -0,0 +1,n @@`. Built
 /// here so nothing downstream has to know a creation from an edit; the
-/// diff card, the CHANGED strip and the L2 counts all read the one shape.
+/// diff card, the `+N −N` stats and the L2 counts all read one shape.
 ///
 /// `None` for a file created empty. It is a real change with no lines in
 /// it, and a hunk of nothing would be a lie in the other direction.
@@ -1029,8 +1029,8 @@ mod tests {
     }
 
     /// A creation arrives with an empty patch and its whole content, and
-    /// is read as the additions it is — the CHANGED strip counted such a
-    /// file as `+0 −0` until it was.
+    /// is read as the additions it is — such a file counted as `+0 −0`
+    /// until it was.
     #[test]
     fn a_creation_counts_the_lines_it_wrote() {
         let result = parse_tool_result(Some(&serde_json::json!({
@@ -1085,9 +1085,8 @@ mod tests {
         assert!(hunks.is_empty());
     }
 
-    /// A tool that touched a file and changed nothing in it earns no card
-    /// and no CHANGED chip: an empty patch that is not a creation is not a
-    /// change at all.
+    /// A tool that touched a file and changed nothing in it earns no diff
+    /// card: an empty patch that is not a creation is not a change at all.
     #[test]
     fn an_empty_patch_that_is_no_creation_is_no_change() {
         let result = parse_tool_result(Some(&serde_json::json!({

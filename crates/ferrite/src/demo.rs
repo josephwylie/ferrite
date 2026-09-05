@@ -463,8 +463,8 @@ fn settled(steps: &mut Vec<Step>, id: &str, output: &str) {
     ));
 }
 
-/// A real edit with real hunks — what diff cards, `+N −N` stats and the
-/// CHANGED strip render from.
+/// A real edit with real hunks — what diff cards and `+N −N` stats render
+/// from.
 fn edit(steps: &mut Vec<Step>, id: &str, path: &str) {
     tool(steps, id, "Edit", serde_json::json!({ "file_path": path }));
     steps.push(Step::new(
