@@ -7,7 +7,7 @@ use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -454,8 +454,7 @@ fn a_subagents_own_end_never_notifies_and_a_deleted_thread_is_forgotten() {
 // ------------------------------------------------------------- captures
 
 /// A spawner that runs a stub CLI which answers the handshake, plays one
-/// committed capture into the real adapter a line every 10ms — a live
-/// Session arrives over frames, never all in one — then marks the end and
+/// committed capture into the real adapter, then marks the end and
 /// keeps stdin open so the Session stays alive.
 struct Replay {
     provider: Provider,
@@ -463,9 +462,40 @@ struct Replay {
     /// The capture plays for the first Session only; the other Thread —
     /// the one the operator sits on — gets a quiet scripted one.
     played: bool,
+    frame: Arc<AtomicBool>,
 }
 
 const MARK: &str = "REPLAY_FINISHED";
+
+/// Release one real adapter event per pump. Sleeping between wire lines
+/// cannot enforce frame boundaries on a loaded runner: a finish and its
+/// next resume may otherwise land in the same frame and correctly coalesce.
+struct ReplaySession {
+    inner: Box<dyn Session>,
+    sender: mpsc::Sender<SessionEvent>,
+    events: mpsc::Receiver<SessionEvent>,
+    frame: Arc<AtomicBool>,
+}
+
+impl Session for ReplaySession {
+    fn events(&self) -> &mpsc::Receiver<SessionEvent> {
+        if self.frame.swap(false, Ordering::Relaxed) {
+            if let Ok(event) = self.inner.events().try_recv() {
+                self.sender.send(event).unwrap();
+            }
+        }
+        &self.events
+    }
+    fn send(&mut self, text: &str) -> io::Result<()> {
+        self.inner.send(text)
+    }
+    fn interrupt(&mut self) -> io::Result<()> {
+        self.inner.interrupt()
+    }
+    fn respond_to_decision(&mut self, id: &str, answer: DecisionAnswer) -> io::Result<()> {
+        self.inner.respond_to_decision(id, answer)
+    }
+}
 
 impl Replay {
     fn claude(dir: &Path, fixture: &str) -> Self {
@@ -476,7 +506,7 @@ impl Replay {
         fs::write(&program, format!(
             "#!/bin/sh\ncase \"$1\" in --version) echo '2.1.261 (Claude Code)'; exit 0;; esac\n\
              echo '{{\"type\":\"control_response\",\"response\":{{\"subtype\":\"success\",\"request_id\":\"req_1\",\"response\":{{}}}}}}'\n\
-             while IFS= read -r line; do printf '%s\\n' \"$line\"; sleep 0.01; done < {}\nprintf '%s\\n' '{}'\nexec cat > /dev/null\n",
+             cat {}\nprintf '%s\\n' '{}'\nexec cat > /dev/null\n",
             quoted(&fixture), mark,
         ))
         .unwrap();
@@ -485,6 +515,7 @@ impl Replay {
             provider: Provider::Claude,
             program,
             played: false,
+            frame: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -493,18 +524,23 @@ impl Replay {
         let program = dir.join("codex");
         let mark = serde_json::json!({"method":"item/agentMessage/delta","params":{
             "threadId":root,"turnId":"mark","itemId":"mark","delta":MARK}});
-        fs::write(&program, format!(
-            "#!/bin/sh\ncase \"$1\" in --version) echo 'codex-cli 0.153.4'; exit 0;; esac\n\
+        fs::write(
+            &program,
+            format!(
+                "#!/bin/sh\ncase \"$1\" in --version) echo 'codex-cli 0.153.4'; exit 0;; esac\n\
              echo '{{\"id\":1,\"result\":{{\"userAgent\":\"stub\"}}}}'\n\
-             while IFS= read -r line; do printf '%s\\n' \"$line\"; sleep 0.01; done < {}\nprintf '%s\\n' '{}'\nexec cat > /dev/null\n",
-            quoted(&fixture), mark,
-        ))
+             cat {}\nprintf '%s\\n' '{}'\nexec cat > /dev/null\n",
+                quoted(&fixture),
+                mark,
+            ),
+        )
         .unwrap();
         fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
         Self {
             provider: Provider::Codex,
             program,
             played: false,
+            frame: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -533,22 +569,29 @@ impl Spawner for Replay {
             return Ok(Box::new(Scripted(events)));
         }
         let program = self.program.display().to_string();
-        match self.provider {
-            Provider::Claude => Ok(Box::new(
+        let inner: Box<dyn Session> = match self.provider {
+            Provider::Claude => Box::new(
                 ClaudeSession::spawn(ClaudeConfig {
                     program,
                     ..Default::default()
                 })
                 .map_err(io::Error::other)?,
-            )),
-            Provider::Codex => Ok(Box::new(
+            ),
+            Provider::Codex => Box::new(
                 CodexSession::spawn(CodexConfig {
                     program,
                     ..Default::default()
                 })
                 .map_err(io::Error::other)?,
-            )),
-        }
+            ),
+        };
+        let (sender, events) = mpsc::channel();
+        Ok(Box::new(ReplaySession {
+            inner,
+            sender,
+            events,
+            frame: self.frame.clone(),
+        }))
     }
 }
 
@@ -581,11 +624,14 @@ fn replay(label: &str, spawner: Replay) -> Vec<TurnOutcome> {
     let checkout = scratch.0.join("checkout");
     fs::create_dir(&checkout).unwrap();
     let provider = spawner.provider;
+    let frame = spawner.frame.clone();
     let mut cockpit = Cockpit::new(
         Store::open(scratch.0.join("store")).unwrap(),
         Box::new(spawner),
     );
-    cockpit.set_notification_grace(Duration::from_millis(200));
+    // These captures resume Main explicitly. Grace expiry is covered by
+    // the injected-clock unit tests, not the replay runner's wall clock.
+    cockpit.set_notification_grace(Duration::MAX);
     let watched = cockpit
         .open(
             provider,
@@ -605,14 +651,25 @@ fn replay(label: &str, spawner: Replay) -> Vec<TurnOutcome> {
             Instant::now() < deadline,
             "the capture never finished replaying"
         );
+        let before = cockpit.notifications().newest();
+        frame.store(true, Ordering::Relaxed);
         cockpit.pump();
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    // Past the mark, past every grace: nothing else may be born.
-    let settle = Instant::now() + Duration::from_millis(600);
-    while Instant::now() < settle {
-        cockpit.pump();
-        std::thread::sleep(Duration::from_millis(5));
+        if cockpit.notifications().newest() != before {
+            let activity = cockpit.thread(watched).unwrap().activity();
+            assert!(!activity.main().busy(), "Main has not finished");
+            assert!(activity.pending_decisions().is_empty());
+            assert!(
+                activity.children().iter().all(|child| {
+                    !child.fresh()
+                        || !matches!(
+                            child.status(),
+                            AgentStatus::Working | AgentStatus::Pending | AgentStatus::Waiting
+                        )
+                }),
+                "a Notice must not precede an unfinished child"
+            );
+        }
+        std::thread::sleep(Duration::from_millis(1));
     }
     let notices: Vec<_> = cockpit
         .notifications()
