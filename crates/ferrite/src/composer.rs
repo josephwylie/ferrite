@@ -18,7 +18,7 @@ use gpui::{
     ContentMask, Context, DispatchPhase, Element, ElementId, ElementInputHandler, Entity,
     EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId, LayoutId,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, SharedString,
-    Style, TextAlign, Task, TextRun, TextStyle, UTF16Selection, UnderlineStyle, Window,
+    Style, Task, TextAlign, TextRun, TextStyle, UTF16Selection, UnderlineStyle, Window,
     WrappedLine,
 };
 
@@ -352,23 +352,21 @@ impl Composer {
         self.caret_visible = true;
         self.caret_epoch = self.caret_epoch.wrapping_add(1);
         let epoch = self.caret_epoch;
-        self.caret_blink = Some(cx.spawn(async move |composer, cx| {
-            loop {
-                cx.background_executor().timer(BLINK).await;
-                let Some(composer) = composer.upgrade() else {
-                    return;
-                };
-                let current = composer.update(cx, |composer, cx| {
-                    if composer.caret_epoch != epoch {
-                        return false;
-                    }
-                    composer.caret_visible = !composer.caret_visible;
-                    cx.notify();
-                    true
-                });
-                if !current {
-                    return;
+        self.caret_blink = Some(cx.spawn(async move |composer, cx| loop {
+            cx.background_executor().timer(BLINK).await;
+            let Some(composer) = composer.upgrade() else {
+                return;
+            };
+            let current = composer.update(cx, |composer, cx| {
+                if composer.caret_epoch != epoch {
+                    return false;
                 }
+                composer.caret_visible = !composer.caret_visible;
+                cx.notify();
+                true
+            });
+            if !current {
+                return;
             }
         }));
         cx.notify();
@@ -1487,16 +1485,19 @@ mod tests {
 
         assert!(visible(cx), "focusing the line must show the caret at once");
 
-        cx.executor().advance_clock(BLINK + Duration::from_millis(10));
+        cx.executor()
+            .advance_clock(BLINK + Duration::from_millis(10));
         cx.run_until_parked();
         assert!(!visible(cx), "the caret must blink off after half a cycle");
 
-        cx.executor().advance_clock(BLINK + Duration::from_millis(10));
+        cx.executor()
+            .advance_clock(BLINK + Duration::from_millis(10));
         cx.run_until_parked();
         assert!(visible(cx), "the caret must blink back on");
 
         // Typing while the caret is hidden must bring it straight back.
-        cx.executor().advance_clock(BLINK + Duration::from_millis(10));
+        cx.executor()
+            .advance_clock(BLINK + Duration::from_millis(10));
         cx.run_until_parked();
         assert!(!visible(cx));
         composer.update(cx, |composer, cx| composer.insert("a", cx));

@@ -46,12 +46,11 @@ use crate::select::TextRuns;
 // survives in render code, which is #22's grep-able law.
 use crate::theme;
 use crate::theme::{
-    ATTENTION, ATTENTION_EDGE, ATTENTION_WASH, BLOCKED, BLOCKED_WASH, DIFF_ADDED_INK,
-    DIFF_REMOVED_INK, FOCUS, HOVER, IDLE, INLINE_CODE_INK, LINK_INK, METER_OFF, PANE, PANE_HEAD,
-    COMPOSER_EDGE, PANE_HEAD_EDGE, PROMPT_WASH_CLAUDE, PROMPT_WASH_CODEX, PROVIDER_CLAUDE,
-    PROVIDER_CODEX, RAISED,
-    RUNNING, RUNNING_WASH, SELECTION, SEP, SYN_KEYWORD, SYN_NUMBER, SYN_STRING, TEXT, TEXT_2,
-    TEXT_MUTED, TEXT_STRONG, TRANSPARENT,
+    ATTENTION, ATTENTION_EDGE, ATTENTION_WASH, BLOCKED, BLOCKED_WASH, COMPOSER_EDGE,
+    DIFF_ADDED_INK, DIFF_REMOVED_INK, FOCUS, HOVER, IDLE, INLINE_CODE_INK, LINK_INK, METER_OFF,
+    PANE, PANE_HEAD, PANE_HEAD_EDGE, PROMPT_WASH_CLAUDE, PROMPT_WASH_CODEX, PROVIDER_CLAUDE,
+    PROVIDER_CODEX, RAISED, RUNNING, RUNNING_WASH, SELECTION, SEP, SYN_KEYWORD, SYN_NUMBER,
+    SYN_STRING, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG, TRANSPARENT,
 };
 
 /// One Pane's view state: what the window owns per Pane. Everything it
@@ -841,22 +840,9 @@ pub fn render_pane(
             if let Some(decision) = decision.filter(|_| activity_decisions.is_none()) {
                 pane = pane.child(decision_card(decision, decide.take()));
             }
-<<<<<<< HEAD
-            // The CHANGED strip rides above the Composer whenever the
-            // Thread has touched files (#22 C11). `Instruments::of` walks
-            // every Block, per frame — the same price every L2 cell already
-            // pays, and a window shows few L1 Panes; if a wall of L1 Panes
-            // ever dips, the fix is the incremental fold docview.rs already
-            // names, not a render-side cache.
-            let changed = Instruments::of(transcript).changed;
-            if !changed.is_empty() {
-                pane = pane.child(changed_strip(&changed));
-            }
             if let Some(decisions) = activity_decisions {
                 pane = pane.child(decisions);
             }
-=======
->>>>>>> 5a69801 (Drop the CHANGED strip from the Pane)
             if let Some(footer) = child_footer {
                 pane = pane.child(footer);
             } else {
