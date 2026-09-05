@@ -5608,11 +5608,7 @@ impl CockpitView {
             .context_checks
             .is_some_and(|(shown, _)| shown == thread);
         Some(
-            div()
-                .id(("ci-mark", thread.get() as usize))
-                .debug_selector(move || format!("ci-mark-{}", thread.get()))
-                .child(pane::ci_mark(pr))
-                .cursor_pointer()
+            pane::ci_mark(pr, thread.get())
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |view, event: &MouseDownEvent, _, cx| {

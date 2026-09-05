@@ -1761,21 +1761,25 @@ fn checkout_strip(
         if pr.checks.is_some() {
             strip = strip.child(match ci {
                 Some(ci) => ci,
-                None => ci_mark(pr).into_any_element(),
+                // Unwired — below L1, or in a pane-only test. The face
+                // without the wash: nothing offers a press that no
+                // listener would answer.
+                None => ci_face(pr).into_any_element(),
             });
         }
     }
     Some(strip)
 }
 
-/// The CI mark: the rollup's dot, the word `ci`, and the one number that
-/// matters most about it — how many runs failed while any has, else how
-/// many of them have settled. A rollup is a state, not a count, so the ink
-/// carries the state and the digits only say how far along it is.
+/// The CI mark's face: the rollup's dot, the word `ci`, and the one number
+/// that matters most about it — how many runs failed while any has, else
+/// how many of them have settled. A rollup is a state, not a count, so the
+/// ink carries the state and the digits only say how far along it is.
 ///
-/// Sized and padded as a chip so the cockpit's wired copy can wear the
-/// hover wash without the line reflowing when it does.
-pub fn ci_mark(pr: &PullRequest) -> Div {
+/// Padded and rounded as a chip, with that padding pulled back out again
+/// by a negative margin: the mark keeps the gap the rest of the line is
+/// spaced on, and its wash still reaches a chip's width around the glyphs.
+fn ci_face(pr: &PullRequest) -> Div {
     let checks = pr.checks.unwrap_or(CheckState::Pending);
     let tally = pr.tally();
     let ink = check_ink(checks);
@@ -1789,6 +1793,7 @@ pub fn ci_mark(pr: &PullRequest) -> Div {
         .flex_shrink_0()
         .items_center()
         .gap(px(theme::ROW_ICON_GAP))
+        .h(px(theme::CHIP_H))
         .px(px(theme::CHIP_PAD_X))
         .mx(px(-theme::CHIP_PAD_X))
         .rounded(px(theme::R_TIGHT))
@@ -1799,6 +1804,22 @@ pub fn ci_mark(pr: &PullRequest) -> Div {
                 .text_color(rgb(TEXT_MUTED))
                 .child(SharedString::from(count)),
         )
+}
+
+/// The CI mark as the control it is: the same face, wearing the hover and
+/// press faces every self-grounded control in the app wears, so the one
+/// pressable thing on the checkout line says so before it is pressed. It
+/// carries its own id — `.active()` needs element identity — and the
+/// cockpit adds only the listener.
+///
+/// `key` is the Thread the mark belongs to, which is what makes the id
+/// unique across a board of Panes.
+pub fn ci_mark(pr: &PullRequest, key: u64) -> Stateful<Div> {
+    ci_face(pr)
+        .id(("ci-mark", key as usize))
+        .debug_selector(move || format!("ci-mark-{key}"))
+        .hover_control()
+        .press_control()
 }
 
 /// A check's ink, the Pane's own status inks: green for a run that passed,
@@ -1915,7 +1936,11 @@ pub fn check_row(index: usize, run: &Check) -> Stateful<Div> {
                 .text_color(rgb(ink))
                 .child(SharedString::from(run.detail.replace('_', " "))),
         )
-        .when(openable, |row| row.hover_control().cursor_pointer())
+        // Only a run with a log to open is a control, and only a control
+        // wears the wash: `hover_control` brings the pointer cursor with
+        // it, and the press face pairs with the hover the same way the
+        // header's own mark does.
+        .when(openable, |row| row.hover_control().press_control())
 }
 
 /// One mark on the checkout line: a short run in its own ink that never
