@@ -8480,6 +8480,15 @@ mod tests {
                 .any(|(_, _, _, text)| text.contains('▾') || text.contains("bytes omitted")));
         });
 
+        // Expanding long output can scroll the header out of view while
+        // following the tail. Bring it back before clicking its disclosure.
+        view.update(cx, |view, cx| {
+            view.panes[0].follow_tail.set(false);
+            view.panes[0].scroll.set_offset(gpui::point(px(0.), px(0.)));
+            cx.notify();
+        });
+        cx.run_until_parked();
+
         let chevron = view.read_with(cx, |view, _| {
             view.panes[0].tool_bounds("toolu_9").unwrap().center()
         });
