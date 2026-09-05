@@ -48,7 +48,8 @@ use crate::theme;
 use crate::theme::{
     ATTENTION, ATTENTION_EDGE, ATTENTION_WASH, BLOCKED, BLOCKED_WASH, DIFF_ADDED_INK,
     DIFF_REMOVED_INK, FOCUS, HOVER, IDLE, INLINE_CODE_INK, LINK_INK, METER_OFF, PANE, PANE_HEAD,
-    PANE_HEAD_EDGE, PROMPT_WASH_CLAUDE, PROMPT_WASH_CODEX, PROVIDER_CLAUDE, PROVIDER_CODEX, RAISED,
+    COMPOSER_EDGE, PANE_HEAD_EDGE, PROMPT_WASH_CLAUDE, PROMPT_WASH_CODEX, PROVIDER_CLAUDE,
+    PROVIDER_CODEX, RAISED,
     RUNNING, RUNNING_WASH, SELECTION, SEP, SYN_KEYWORD, SYN_NUMBER, SYN_STRING, TEXT, TEXT_2,
     TEXT_MUTED, TEXT_STRONG, TRANSPARENT,
 };
@@ -2639,7 +2640,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         .min_w_0()
         .bg(rgb(RAISED))
         .border_t_1()
-        .border_color(rgba(PANE_HEAD_EDGE))
+        .border_color(rgba(COMPOSER_EDGE))
         // gpui's `overflow_hidden()` content mask is an axis-aligned rect, so
         // the shell's 8px radius never clips this ground. The bottom-most
         // child carries the shell's padding-box radius itself: 8 - 1 border.
