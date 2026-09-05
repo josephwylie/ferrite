@@ -398,7 +398,9 @@ fn grouped_draft_revalidates_membership_before_delivering() {
         .group
         .unwrap();
     cockpit.enter_group(group).unwrap();
-    let draft = cockpit.open_draft();
+    // The shortcut path is the one that still scopes a Draft to its Group;
+    // plain `open_draft` is deliberately loose.
+    let draft = cockpit.open_draft_in_current_view();
     cockpit
         .bootstrap_draft(draft, choice(Provider::Claude), workspace(), "join", None)
         .unwrap();
