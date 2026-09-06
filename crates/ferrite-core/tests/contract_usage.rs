@@ -63,3 +63,11 @@ fn codex_second_turn_output_excludes_previous_turns() {
     assert_eq!(a.view().main().transcript().turn_output_tokens(),5,"thread-wide native totals need a per-turn baseline");
     assert_eq!(a.view().main().transcript().usage_details().unwrap().output_tokens,15);
 }
+
+#[test]
+fn child_accounting_never_changes_mains_context_cache() {
+    let message=|uuid:&str,parent:serde_json::Value,input:u64,window:u64|json!({"type":"assistant","uuid":uuid,"session_id":"root","parent_tool_use_id":parent,"context_usage":{"total_tokens":input,"raw_max_tokens":window},"message":{"id":uuid,"content":[],"usage":{"input_tokens":input,"output_tokens":1}}});
+    let r=Replay::new("claude",vec![message("main",json!(null),100,1000),message("child",json!("spawn"),500,5000),json!({"type":"result","session_id":"root","subtype":"success","usage":{"input_tokens":100,"output_tokens":2}})]);
+    let a=fold(r.drain());let usage=a.view().main().transcript().usage().unwrap();
+    assert_eq!(usage.total_tokens,100);assert_eq!(usage.context_window,Some(1000));
+}
