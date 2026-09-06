@@ -73,6 +73,15 @@ impl TextViewDefaults {
 pub(crate) type TableActionsFn =
     dyn Fn(&TableData, &mut Window, &mut App) -> AnyElement + Send + Sync;
 
+pub(crate) type LinkRendererFn = dyn Fn(
+        &SharedString,
+        &SharedString,
+        &mut Window,
+        &mut App,
+    ) -> Option<(gpui::Size<Pixels>, AnyElement)>
+    + Send
+    + Sync;
+
 pub(crate) type LinkClickHandlerFn =
     dyn Fn(&SharedString, &ClickEvent, &mut Window, &mut App) + Send + Sync;
 
@@ -128,6 +137,7 @@ pub struct TextView {
     code_block_highlighter: Option<Arc<CodeBlockHighlighterFn>>,
     table_actions: Option<Arc<TableActionsFn>>,
     link_click_handler: Option<Arc<LinkClickHandlerFn>>,
+    link_renderer: Option<Arc<LinkRendererFn>>,
     markdown_extensions: Arc<MarkdownExtensions>,
 }
 
@@ -172,6 +182,7 @@ impl TextView {
             code_block_highlighter: None,
             table_actions: None,
             link_click_handler: None,
+            link_renderer: None,
             markdown_extensions: Arc::default(),
         }
     }
@@ -193,6 +204,7 @@ impl TextView {
             code_block_highlighter: None,
             table_actions: None,
             link_click_handler: None,
+            link_renderer: None,
             markdown_extensions: Arc::default(),
         }
     }
@@ -214,6 +226,7 @@ impl TextView {
             code_block_highlighter: None,
             table_actions: None,
             link_click_handler: None,
+            link_renderer: None,
             markdown_extensions: Arc::default(),
         }
     }
@@ -318,6 +331,24 @@ impl TextView {
         self.table_actions = Some(Arc::new(move |table, window, cx| {
             f(table, window, cx).into_any_element()
         }));
+        self
+    }
+
+    /// Replace chosen links with an application-owned inline element and its preferred size.
+    /// Returning None retains the native link. The original Markdown and selection remain intact.
+    pub fn link_renderer<F>(mut self, renderer: F) -> Self
+    where
+        F: Fn(
+                &SharedString,
+                &SharedString,
+                &mut Window,
+                &mut App,
+            ) -> Option<(gpui::Size<Pixels>, AnyElement)>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.link_renderer = Some(Arc::new(renderer));
         self
     }
 
@@ -554,6 +585,7 @@ impl Element for TextView {
             state.code_block_highlighter = code_block_highlighter.clone();
             state.table_actions = self.table_actions.clone();
             state.link_click_handler = self.link_click_handler.clone();
+            state.link_renderer = self.link_renderer.clone();
             state.set_markdown_extensions(self.markdown_extensions.clone(), cx);
             state.selectable = self.selectable;
             state.selection_format = self.selection_format;

@@ -7,11 +7,20 @@
 upstream commit `94a313a72a2513aee2780240cd322d552b2395f0`.
 Its Apache-2.0 license and upstream README are retained in that directory.
 
-One source change: `Inline::text_line_bounds` returns immediately when its
+Rendering patches:
+
+- `Inline::text_line_bounds` returns immediately when its
 text layout is entirely outside the content mask. This avoids per-character
 hitbox calculations for clipped transcript paragraphs during streaming.
 The original function already clipped every returned hitbox to that mask;
 selection calculation and copying of offscreen text remain unchanged.
+
+- `TextView::link_renderer` lets Ferrite replace local file links with native
+  inline attachment cards. The callback leaves ordinary links alone and never
+  rewrites Markdown. InlineFlow measures/wraps each card as one element, scopes
+  its interaction identity, and maps fragment selections back to the original
+  text run, including wrapped text. Remove this extension when upstream offers
+  equivalent inline link rendering and selection support.
 
 Cargo applies this through the root `[patch.crates-io]`. Remove the patch when
 an upstream release includes equivalent clipping. Registry cache markers and

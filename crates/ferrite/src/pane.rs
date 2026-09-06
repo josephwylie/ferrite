@@ -820,6 +820,7 @@ pub fn render_pane(
                     timings,
                     &mut tool_controls,
                     thread.map(|thread| thread.provider()),
+                    workspace.map(WorkspaceBinding::cwd),
                 ),
             ));
             // Short transcripts keep progress directly after their last block.
@@ -2305,7 +2306,9 @@ fn body(
     timings: Option<&HashMap<String, ToolTiming>>,
     tool_controls: &mut HashMap<DisclosureId, AnyElement>,
     provider: Option<Provider>,
+    cwd: Option<&std::path::Path>,
 ) -> impl IntoElement {
+    view.rich.file_context(cwd, &view.preview);
     use gpui::base::ElementExt as _;
     if view.follow_tail.get() {
         view.scroll.scroll_to_bottom();

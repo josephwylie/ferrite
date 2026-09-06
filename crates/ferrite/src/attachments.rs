@@ -161,11 +161,17 @@ impl RenderOnce for Attachments {
                                     .text_color(tokens.colors.muted_foreground),
                             ),
                     )
-                    .when(image, |attachment| {
-                        attachment.on_click(move |_, window, cx| {
-                            cx.stop_propagation();
+                    .on_click(move |_, window, cx| {
+                        cx.stop_propagation();
+                        if image {
                             card_host.open(preview.clone(), title.clone(), window, cx);
-                        })
+                        } else {
+                            crate::file_links::FileLink {
+                                path: preview.clone(),
+                                location: None,
+                            }
+                            .open(window, cx);
+                        }
                     })
                     .when_some(self.on_remove.clone(), |attachment, remove| {
                         attachment.actions(
@@ -230,6 +236,142 @@ impl RenderOnce for Attachments {
             rem_size: stock.font_size,
         }
     }
+}
+
+/// The existing Attachment family, reduced to a single transcript-height row.
+/// The native Markdown flow reserves this size and wraps the card atomically.
+pub fn inline_file(
+    file: crate::file_links::FileLink,
+    label: &str,
+    preview: Option<&Preview>,
+    window: &mut Window,
+    cx: &mut App,
+) -> (gpui::Size<gpui::Pixels>, gpui::AnyElement) {
+    let stock = &cx.global::<Appearance>().0;
+    let tokens = stock.semantic_tokens();
+    let name = file
+        .path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let extension = file
+        .path
+        .extension()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_ascii_uppercase();
+    let kind = if extension.is_empty() || extension.len() > 8 {
+        "FILE".to_string()
+    } else {
+        extension
+    };
+    let location = file
+        .location
+        .as_ref()
+        .map(|line| format!(":{line}"))
+        .unwrap_or_default();
+    let title = format!("{name}{location}");
+    let image = gpui::Img::extensions().contains(&kind.to_ascii_lowercase().as_str());
+    let font_size = px(crate::theme::FS_MD);
+    let run = window.text_style().to_run(title.len() + kind.len());
+    let width = window
+        .text_system()
+        .shape_line(format!("{title}{kind}").into(), font_size, &[run], None)
+        .width()
+        + px(46.);
+    let size = gpui::size(width.clamp(px(88.), px(240.)), px(26.));
+    let host = preview.cloned();
+    let name_for_open = name.clone();
+    let tooltip = format!("{label}\n{}", file.path.display());
+    let selector = format!("file-attachment-{}", file.path.display());
+    let accessibility = format!("Open {name}");
+    let thumbnail = file.path.clone();
+    let open = move |_: &gpui::ClickEvent, window: &mut Window, cx: &mut App| {
+        gpui::base::TextSelection::end(window, cx);
+        cx.stop_propagation();
+        if image && file.path.exists() {
+            if let Some(host) = &host {
+                host.open(file.path.clone(), name_for_open.clone(), window, cx);
+                return;
+            }
+        }
+        file.open(window, cx);
+    };
+    let card = Attachment::new()
+        .id("inline-file-open")
+        .xsmall()
+        .axis(Axis::Horizontal)
+        .w_full()
+        .min_w_0()
+        .h(size.height)
+        .py_0()
+        .px(px(4.))
+        .bg(tokens.colors.background)
+        .text_color(tokens.colors.foreground)
+        .border_color(tokens.colors.border)
+        .rounded(tokens.radius.sm)
+        .font_family(crate::theme::FONT_UI)
+        .text_size(font_size)
+        .media(
+            AttachmentMedia::new()
+                .size(px(16.))
+                .rounded(tokens.radius.sm)
+                .bg(tokens.colors.muted)
+                .text_color(tokens.colors.foreground)
+                .map(|media| {
+                    if image {
+                        media.src(thumbnail.clone())
+                    } else {
+                        media.child(Icon::new(IconName::FileText).size(px(13.)))
+                    }
+                }),
+        )
+        .content(
+            AttachmentContent::new()
+                .min_w_0()
+                .title(AttachmentTitle::new(title).text_size(font_size)),
+        )
+        .actions(
+            AttachmentActions::new().child(
+                gpui::div()
+                    .text_size(px(9.))
+                    .text_color(tokens.colors.muted_foreground)
+                    .child(kind),
+            ),
+        );
+    let rem_size = stock.font_size;
+    (
+        size,
+        KitScale {
+            child: gpui::div()
+                .id("inline-file")
+                .debug_selector(move || selector.clone())
+                .relative()
+                .w_full()
+                .h(size.height)
+                .cursor_pointer()
+                .tooltip(move |window, cx| {
+                    gpui::component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)
+                })
+                .child(card)
+                .child(
+                    Button::new("inline-file-action")
+                        .ghost()
+                        .absolute()
+                        .inset_0()
+                        .size_full()
+                        .min_w_0()
+                        .p_0()
+                        .key_context("PromptAttachment")
+                        .accessibility_label(accessibility)
+                        .on_click(open),
+                )
+                .into_any_element(),
+            rem_size,
+        }
+        .into_any_element(),
+    )
 }
 
 /// Concave shoulders turn the kit container's sides into the prompt's top
