@@ -743,6 +743,7 @@ impl CockpitView {
             && all
                 .iter()
                 .all(|request| matches!(request.decision.kind, ferrite_core::DecisionKind::Approval))
+            && all.iter().all(|request| request.decision.suggestions.is_empty())
             && all.len() <= 1
             && all
                 .iter()
@@ -1248,7 +1249,7 @@ impl CockpitView {
             let url = url.clone();
             let complete_handle = handle.clone();
             let cancel_handle = handle.clone();
-            return GroupBox::new().fill().child(
+            return card.child(
                 div().flex().flex_col().gap(px(10.))
                     .child(components::label("Complete this request in your browser, then confirm here.", theme::TEXT_2))
                     .child(gpui::component::button::Button::new("external-open").small().label("Open link").disabled(!safe_external_url(&url)).on_click(cx.listener(move |_, _, _, cx| cx.open_url(&url))))
@@ -1258,7 +1259,7 @@ impl CockpitView {
             ).into_any_element();
         } else if let ferrite_core::DecisionKind::Unsupported { reason } = &request.decision.kind {
             let cancel_handle = handle.clone();
-            return GroupBox::new().fill().child(
+            return card.child(
                 div().flex().flex_col().gap(px(10.))
                     .child(components::label(reason.clone(), theme::TEXT_2))
                     .child(gpui::component::button::Button::new("unsupported-cancel").small().label("Cancel").disabled(!request.decision.policy.deny || request.submitting).on_click(cx.listener(move |view, _, _, cx| view.respond_exact(thread, &cancel_handle, DecisionAnswer::Cancel, cx)))),
@@ -1266,6 +1267,7 @@ impl CockpitView {
         } else {
             let accepted = request.decision.input.clone();
             let allow_handle = handle.clone();
+            let choice_handle = handle.clone();
             card = card.child(
                 div()
                     .flex()
@@ -1315,6 +1317,28 @@ impl CockpitView {
                         })),
                     ),
             );
+            for (choice_index, choice) in request.decision.suggestions.iter().enumerate() {
+                let handle = choice_handle.clone();
+                let value = choice.value.clone();
+                let label = choice.label.clone();
+                card = card.child(
+                    components::button(SharedString::from(format!(
+                        "approval-choice-{}-{}", handle.serial, choice_index
+                    )))
+                    .tab_stop(true)
+                    .label(label.clone())
+                    .disabled(request.submitting)
+                    .debug_selector(move || format!("approval-choice-{choice_index}"))
+                    .on_click(cx.listener(move |view, _, _, cx| {
+                        view.respond_exact(
+                            thread,
+                            &handle,
+                            DecisionAnswer::Choose { value: value.clone() },
+                            cx,
+                        )
+                    })),
+                );
+            }
         }
         card.into_any_element()
     }
