@@ -923,24 +923,43 @@ fn elicitation_response(
 }
 
 fn claude_choice(value: &Value) -> Option<DecisionChoice> {
-    let destination = value["destination"].as_str().unwrap_or("this session");
-    let label = match value["type"].as_str()? {
-        "setMode" => format!("Use {} in {destination}", value["mode"].as_str()?),
-        "addRules" | "replaceRules" => {
-            let rule = value["rules"].as_array()?.first()?;
-            format!("Allow {} in {destination}", rule["toolName"].as_str()?)
+    let destination = match value["destination"].as_str()? {
+        "session" => "this session",
+        "userSettings" => "user settings",
+        "projectSettings" => "project settings",
+        "localSettings" => "local settings",
+        other => other,
+    };
+    let kind = value["type"].as_str()?;
+    let label = match kind {
+        "setMode" => {
+            let mode = match value["mode"].as_str()? {
+                "acceptEdits" => "Accept edits", "bypassPermissions" => "Bypass permissions",
+                "default" => "Default", "plan" => "Plan", "dontAsk" => "Don't ask", "auto" => "Auto", _ => return None,
+            };
+            format!("Use {mode} for {destination}")
         }
-        "addDirectories" => {
-            let directory = value["directories"].as_array()?.first()?.as_str()?;
-            format!("Allow {directory} in {destination}")
+        "addRules" | "replaceRules" | "removeRules" => {
+            let rules = value["rules"].as_array()?.iter().map(|rule| {
+                let tool = rule["toolName"].as_str()?;
+                Some(match rule["ruleContent"].as_str() { Some(content) => format!("{tool}({content})"), None => tool.into() })
+            }).collect::<Option<Vec<String>>>()?;
+            if rules.is_empty() { return None; }
+            let action = if kind == "removeRules" { "Remove rules for" } else {
+                match value["behavior"].as_str()? { "allow" => "Allow", "deny" => "Block", "ask" => "Ask before", _ => return None }
+            };
+            let replacement = if kind == "replaceRules" { "Replace rules: " } else { "" };
+            format!("{replacement}{action} {} in {destination}", rules.join(", "))
+        }
+        "addDirectories" | "removeDirectories" => {
+            let directories = value["directories"].as_array()?.iter().map(Value::as_str).collect::<Option<Vec<_>>>()?;
+            if directories.is_empty() { return None; }
+            let action = if kind == "addDirectories" { "Allow" } else { "Remove access to" };
+            format!("{action} {} in {destination}", directories.join(", "))
         }
         _ => return None,
     };
-    Some(DecisionChoice {
-        label,
-        value: value.clone(),
-        standing: standing_choice(value),
-    })
+    Some(DecisionChoice { label, value: value.clone(), standing: standing_choice(value) })
 }
 
 fn standing_choice(value: &Value) -> bool {

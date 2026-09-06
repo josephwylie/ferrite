@@ -614,7 +614,7 @@ fn approval_policy(params: &Value) -> DecisionPolicy {
         allow: choices.iter().any(|choice| choice == "accept"),
         deny: choices
             .iter()
-            .any(|choice| choice == "decline" || choice == "cancel"),
+            .any(|choice| choice == "decline"),
         ..DecisionPolicy::default()
     }
 }
@@ -622,19 +622,16 @@ fn approval_policy(params: &Value) -> DecisionPolicy {
 fn codex_choice(value: &Value) -> Option<DecisionChoice> {
     let (label, standing) = match value {
         Value::String(choice) => match choice.as_str() {
-            "accept" => ("Allow".into(), false),
-            "decline" => ("Deny".into(), false),
+            "accept" | "decline" => return None,
             "cancel" => ("Cancel turn".into(), false),
             "acceptForSession" => ("Allow for this session".into(), true),
             _ => return None,
         },
         Value::Object(object) if object.len() == 1 => {
             if let Some(amendment) = object.get("acceptWithExecpolicyAmendment") {
-                let command = amendment["execpolicy_amendment"]
-                    .as_array()?
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .next()?;
+                let parts = amendment["execpolicy_amendment"].as_array()?;
+                if parts.is_empty() { return None; }
+                let command = parts.iter().map(Value::as_str).collect::<Option<Vec<_>>>()?.join(" ");
                 (format!("Always allow {command}"), true)
             } else if let Some(amendment) = object.get("applyNetworkPolicyAmendment") {
                 let policy = &amendment["network_policy_amendment"];

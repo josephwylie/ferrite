@@ -1208,7 +1208,7 @@ impl CockpitView {
                 gpui::component::button::Button::new("form-cancel").small().label("Cancel").disabled(!request.decision.policy.deny || request.submitting).debug_selector(|| "form-cancel".into()).on_click(cx.listener(move |view, _, _, cx| view.respond_exact(thread, &cancel_handle, DecisionAnswer::Cancel, cx)))
             ).child(
                 gpui::component::button::Button::new("form-send")
-                    .primary().small().label("Send").disabled(request.submitting)
+                    .primary().small().label("Send").disabled(!request.decision.policy.allow || request.submitting)
                     .debug_selector(move || selector.clone())
                     .on_click(cx.listener(move |view, _, _, cx| {
                         let mut state = forms.0.borrow_mut();
@@ -1419,7 +1419,7 @@ impl CockpitView {
         if request.decision.policy.interaction_required && answer != Answer::Deny {
             return;
         }
-        if matches!(answer, Answer::Allow | Answer::Always) && !request.decision.policy.allow {
+        if answer == Answer::Allow && !request.decision.policy.allow {
             return;
         }
         if answer == Answer::Deny && !request.decision.policy.deny {
@@ -1486,7 +1486,7 @@ fn form_defaults(fields: &[ferrite_core::FormField]) -> serde_json::Map<String, 
                 ferrite_core::FormFieldKind::Integer { default, .. } => {
                     default.map(serde_json::Value::from)
                 }
-                ferrite_core::FormFieldKind::Boolean { default } => default.map(serde_json::Value::from),
+                ferrite_core::FormFieldKind::Boolean { default } => default.or(field.required.then_some(false)).map(serde_json::Value::from),
                 ferrite_core::FormFieldKind::Enum { options, multi_select, default, .. } => {
                     let allowed = |value: &str| options.iter().any(|option| option.value == value);
                     match default {

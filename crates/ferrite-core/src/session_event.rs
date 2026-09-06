@@ -543,6 +543,9 @@ impl FormField {
                 {
                     return Err(format!("{} has an unavailable choice", self.label));
                 }
+                if *multi_select && values.iter().enumerate().any(|(i, value)| values[..i].contains(value)) {
+                    return Err(format!("{} contains duplicate choices", self.label));
+                }
                 if *multi_select
                     && (min_items.is_some_and(|min| values.len() < min)
                         || max_items.is_some_and(|max| values.len() > max))

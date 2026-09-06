@@ -165,7 +165,8 @@ impl DemoSession {
             DecisionAnswer::Allow { .. }
             | DecisionAnswer::AllowAlways { .. }
             | DecisionAnswer::Questions { .. }
-            | DecisionAnswer::Form { .. } => {
+            | DecisionAnswer::Form { .. }
+            | DecisionAnswer::Choose { .. } => {
                 let mut steps = vec![Step::new(
                     60,
                     SessionEvent::ToolCompleted {

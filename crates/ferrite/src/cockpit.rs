@@ -5920,7 +5920,8 @@ impl CockpitView {
                 .debug_selector(move || format!("session-controls-{}", thread.get()))
                 .tooltip("Session controls")
                 .child("•••")
-                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                .on_click(cx.listener(move |view, event: &ClickEvent, window, cx| {
+                    cx.stop_propagation();
                     view.focus_pane(index);
                     if !was_open
                         && view.cockpit.thread(thread).is_some_and(|open| {
@@ -5938,7 +5939,7 @@ impl CockpitView {
                     view.context_menu = None;
                     view.context_usage = None;
                     view.context_checks = None;
-                    view.session_controls = (!was_open).then_some((thread, generation, gpui::point(px(0.), px(0.))));
+                    view.session_controls = (!was_open).then_some((thread, generation, match event { ClickEvent::Mouse(event) => event.up.position, _ => window.mouse_position() }));
                     cx.notify();
                 }))
                 .into_any_element(),
@@ -5983,7 +5984,10 @@ impl CockpitView {
             };
             let mut row = div()
                 .flex()
-                .items_center()
+                .flex_col()
+                .w_full()
+                .min_w_0()
+                .items_start()
                 .gap(px(6.))
                 .child(server.name.clone())
                 .child(div().debug_selector(move || format!("mcp-status-{index}-{status}")).text_color(rgb(crate::theme::TEXT_MUTED)).child(status));
@@ -6012,7 +6016,10 @@ impl CockpitView {
         for (index, task) in transcript.progress().background().iter().enumerate() {
             let mut row = div()
                 .flex()
-                .items_center()
+                .flex_col()
+                .w_full()
+                .min_w_0()
+                .items_start()
                 .gap(px(6.))
                 .child(task.label.clone());
             if task.status == ferrite_core::progress::TaskStatus::Working
