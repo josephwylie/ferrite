@@ -37,15 +37,47 @@ pub(super) struct Inline {
 }
 
 /// The inline text state, used RefCell to keep the selection state.
-#[derive(Debug, Default, PartialEq)]
+#[derive(Debug, Default)]
 pub(crate) struct InlineState {
     hovered_index: Option<usize>,
     /// The text that actually rendering, matched with selection.
     pub(super) text: SharedString,
     pub(super) selection: Option<Selection>,
+    // Wrapped/custom inline fragments retain offsets into the original run.
+    pub(super) fragments: Vec<(Range<usize>, Arc<Mutex<InlineState>>)>,
+}
+
+impl PartialEq for InlineState {
+    fn eq(&self, other: &Self) -> bool {
+        self.hovered_index == other.hovered_index
+            && self.text == other.text
+            && self.selected_range() == other.selected_range()
+    }
 }
 
 impl InlineState {
+    pub(super) fn selected_range(&self) -> Option<Range<usize>> {
+        if self.fragments.is_empty() {
+            return self.selection.as_ref().map(|s| s.start..s.end);
+        }
+        self.fragments
+            .iter()
+            .filter_map(|(range, state)| {
+                let selected = state.lock().ok()?.selected_range()?;
+                Some((range.start + selected.start)..(range.start + selected.end))
+            })
+            .reduce(|a, b| a.start.min(b.start)..a.end.max(b.end))
+    }
+
+    pub(super) fn clear_selection(&mut self) {
+        self.selection = None;
+        for (_, state) in &self.fragments {
+            if let Ok(mut state) = state.lock() {
+                state.clear_selection();
+            }
+        }
+    }
+
     /// Save actually rendered text for selected text to use.
     pub(crate) fn set_text(&mut self, text: SharedString) {
         self.text = text;

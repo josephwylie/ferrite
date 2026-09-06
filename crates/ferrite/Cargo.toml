@@ -13,6 +13,8 @@ gpui = { package = "gpui-kit", version = "=0.6.0" }
 # The demo script builds real provider events, whose payloads are the vendors'
 # own JSON. Already in the tree via ferrite-core.
 serde_json = { workspace = true }
+url = "2"
+percent-encoding = "2"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_ProcessStatus", "Win32_System_Threading"] }

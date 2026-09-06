@@ -6,9 +6,10 @@ use std::{
 use gpui::{
     AbsoluteLength, AnyElement, App, AvailableSpace, Bounds, DefiniteLength, Element, ElementId,
     GlobalElementId, HighlightStyle, InspectorElementId, InteractiveElement as _, IntoElement,
-    LayoutId, LineFragment as WrapLineFragment, ObjectFit, Pixels, ShapedLine, SharedString,
-    SharedUri, Size, StatefulInteractiveElement as _, Styled, StyledImage as _, TextRun, TextStyle,
-    WhiteSpace, Window, img, point, prelude::FluentBuilder as _, px, relative, size,
+    LayoutId, LineFragment as WrapLineFragment, ObjectFit, ParentElement as _, Pixels, ShapedLine,
+    SharedString, SharedUri, Size, StatefulInteractiveElement as _, Styled, StyledImage as _,
+    TextRun, TextStyle, WhiteSpace, Window, img, point, prelude::FluentBuilder as _, px, relative,
+    size,
 };
 
 use crate::text::text_view::{LinkClickHandlerFn, handle_link_click};
@@ -28,6 +29,11 @@ pub(super) struct InlineFlow {
 }
 
 pub(super) enum InlineFlowItem {
+    Element {
+        element: Option<AnyElement>,
+        size: Size<Pixels>,
+        state: Arc<Mutex<InlineState>>,
+    },
     Text {
         state: Arc<Mutex<InlineState>>,
         text: SharedString,
@@ -73,6 +79,9 @@ enum PositionedFragment {
 }
 
 enum MeasureItem {
+    Element {
+        size: Size<Pixels>,
+    },
     Text {
         text: SharedString,
         links: Vec<(Range<usize>, LinkMark)>,
@@ -112,6 +121,104 @@ impl InlineFlow {
             items,
             link_click_handler,
         }
+    }
+
+    pub(super) fn has_elements(&self) -> bool {
+        self.items
+            .iter()
+            .any(|item| matches!(item, InlineFlowItem::Element { .. }))
+    }
+
+    pub(super) fn render_links(
+        mut self,
+        renderer: Option<&Arc<super::text_view::LinkRendererFn>>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self {
+        let Some(renderer) = renderer else {
+            return self;
+        };
+        let mut items = Vec::new();
+        for item in self.items {
+            let InlineFlowItem::Text {
+                state,
+                text,
+                links,
+                highlights,
+            } = item
+            else {
+                items.push(item);
+                continue;
+            };
+            let mut replacements = Vec::new();
+            let mut linked_runs: Vec<(Range<usize>, LinkMark)> = Vec::new();
+            for (range, link) in &links {
+                if let Some((prior, mark)) = linked_runs.last_mut() {
+                    if prior.end == range.start && mark == link {
+                        prior.end = range.end;
+                        continue;
+                    }
+                }
+                linked_runs.push((range.clone(), link.clone()));
+            }
+            for (range, link) in &linked_runs {
+                if replacements
+                    .last()
+                    .is_some_and(|(prior, _, _): &(Range<usize>, _, _)| prior.end > range.start)
+                {
+                    continue;
+                }
+                if let Some((size, element)) = renderer(
+                    &link.url,
+                    &text[range.clone()].to_owned().into(),
+                    window,
+                    cx,
+                ) {
+                    replacements.push((range.clone(), size, element));
+                }
+            }
+            state.lock().unwrap().fragments.clear();
+            if replacements.is_empty() {
+                items.push(InlineFlowItem::Text {
+                    state,
+                    text,
+                    links,
+                    highlights,
+                });
+                continue;
+            }
+            let fragment = |range: Range<usize>| {
+                let mut child = InlineState::default();
+                child.set_text(text[range.clone()].to_string().into());
+                let child = Arc::new(Mutex::new(child));
+                state.lock().unwrap().fragments.push((range, child.clone()));
+                child
+            };
+            let push_text = |items: &mut Vec<InlineFlowItem>, range: Range<usize>| {
+                if range.is_empty() {
+                    return;
+                }
+                items.push(InlineFlowItem::Text {
+                    state: fragment(range.clone()),
+                    text: text[range.clone()].to_string().into(),
+                    links: slice_ranges(&links, range.start, range.end, |r, l| (r, l.clone())),
+                    highlights: slice_ranges(&highlights, range.start, range.end, |r, h| (r, *h)),
+                });
+            };
+            let mut start = 0;
+            for (range, size, element) in replacements {
+                push_text(&mut items, start..range.start);
+                items.push(InlineFlowItem::Element {
+                    element: Some(element),
+                    size,
+                    state: fragment(range.clone()),
+                });
+                start = range.end;
+            }
+            push_text(&mut items, start..text.len());
+        }
+        self.items = items;
+        self
     }
 
     fn image_element(
@@ -203,6 +310,7 @@ impl Element for InlineFlow {
                     window,
                     cx,
                 )),
+                MeasureItem::Element { size } => Some(*size),
                 MeasureItem::Text { .. } => None,
             })
             .collect::<Vec<_>>();
@@ -220,6 +328,16 @@ impl Element for InlineFlow {
                 } else {
                     None
                 };
+                let mut image_sizes = image_sizes.clone();
+                if let Some(width) = wrap_width {
+                    for (item, size) in measure_items.iter().zip(&mut image_sizes) {
+                        if matches!(item, MeasureItem::Element { .. }) {
+                            if let Some(size) = size {
+                                size.width = size.width.min(width);
+                            }
+                        }
+                    }
+                }
                 let layout = layout_flow(
                     &measure_items,
                     &image_sizes,
@@ -254,6 +372,11 @@ impl Element for InlineFlow {
             .and_then(|layout| layout.as_ref().map(|layout| layout.fragments.clone()))
             .unwrap_or_default();
         let mut elements = Vec::with_capacity(fragments.len());
+        for item in &self.items {
+            if let InlineFlowItem::Text { state, .. } = item {
+                state.lock().unwrap().fragments.clear();
+            }
+        }
 
         for fragment in fragments {
             match fragment {
@@ -273,7 +396,16 @@ impl Element for InlineFlow {
                             text: source,
                             ..
                         } if source_range == (0..source.len()) => state.clone(),
-                        _ => Arc::new(Mutex::new(InlineState::default())),
+                        InlineFlowItem::Text { state, .. } => {
+                            let child = Arc::new(Mutex::new(InlineState::default()));
+                            state
+                                .lock()
+                                .unwrap()
+                                .fragments
+                                .push((source_range.clone(), child.clone()));
+                            child
+                        }
+                        _ => unreachable!("text fragment belongs to text item"),
                     };
                     if let Ok(mut state) = state.lock() {
                         state.set_text(text);
@@ -303,20 +435,64 @@ impl Element for InlineFlow {
                     origin,
                     size: fragment_size,
                 } => {
-                    let InlineFlowItem::Image {
-                        url, link, title, ..
-                    } = &self.items[item_ix]
-                    else {
-                        continue;
+                    let mut element = match &mut self.items[item_ix] {
+                        InlineFlowItem::Image {
+                            url, link, title, ..
+                        } => Self::image_element(
+                            elements.len(),
+                            url,
+                            link,
+                            title.as_str(),
+                            fragment_size,
+                            self.link_click_handler.clone(),
+                        ),
+                        InlineFlowItem::Element { element, state, .. } => {
+                            let Some(element) = element.take() else {
+                                continue;
+                            };
+                            let state = state.clone();
+                            // A selection crossing the card copies its original link label/source.
+                            gpui::div()
+                                .id(("inline-link", item_ix))
+                                .relative()
+                                .w(fragment_size.width)
+                                .h(fragment_size.height)
+                                .child(element)
+                                .child(
+                                    gpui::canvas(
+                                        |_, _, _| {},
+                                        move |bounds, _, _window, cx| {
+                                            let selected = crate::GlobalState::global(cx)
+                                                .text_view_state()
+                                                .is_some_and(|view| {
+                                                    let view = view.read(cx);
+                                                    view.is_all_selected()
+                                                        || view.selection_points(cx).is_some_and(
+                                                            |(a, b)| {
+                                                                let center = bounds.center();
+                                                                let after =
+                                                                    |p: gpui::Point<Pixels>| {
+                                                                        bounds.top() > p.y
+                                                                            || (bounds.bottom()
+                                                                                > p.y
+                                                                                && center.x >= p.x)
+                                                                    };
+                                                                after(a) != after(b)
+                                                            },
+                                                        )
+                                                });
+                                            let mut state = state.lock().unwrap();
+                                            state.selection =
+                                                selected.then(|| (0..state.text.len()).into());
+                                        },
+                                    )
+                                    .absolute()
+                                    .inset_0(),
+                                )
+                                .into_any_element()
+                        }
+                        _ => continue,
                     };
-                    let mut element = Self::image_element(
-                        elements.len(),
-                        url,
-                        link,
-                        title.as_str(),
-                        fragment_size,
-                        self.link_click_handler.clone(),
-                    );
                     element.prepaint_as_root(
                         bounds.origin + origin,
                         size(
@@ -353,6 +529,7 @@ impl Element for InlineFlow {
 impl From<&InlineFlowItem> for MeasureItem {
     fn from(item: &InlineFlowItem) -> Self {
         match item {
+            InlineFlowItem::Element { size, .. } => MeasureItem::Element { size: *size },
             InlineFlowItem::Text {
                 state: _,
                 text,
@@ -379,7 +556,7 @@ impl MeasureItem {
     fn len(&self) -> usize {
         match self {
             MeasureItem::Text { text, .. } => text.len(),
-            MeasureItem::Image { .. } => IMAGE_LEN,
+            MeasureItem::Image { .. } | MeasureItem::Element { .. } => IMAGE_LEN,
         }
     }
 }
@@ -453,7 +630,7 @@ fn layout_flow(
                         });
                     }
                 }
-                MeasureItem::Image { .. } => {
+                MeasureItem::Image { .. } | MeasureItem::Element { .. } => {
                     if line_range.start <= item_start && item_end <= line_range.end {
                         let size = image_sizes[item_ix]
                             .expect("image size should be measured before layout");
@@ -559,16 +736,18 @@ fn line_ranges(
                             let end = hard_line.end.min(item_end) - item_start;
                             (start < end).then(|| WrapLineFragment::text(&text[start..end]))
                         }
-                        MeasureItem::Image { .. } => (hard_line.start <= item_start
-                            && item_end <= hard_line.end)
-                            .then(|| {
-                                WrapLineFragment::element(
-                                    image_sizes[ix]
-                                        .expect("image size should be measured before wrapping")
-                                        .width,
-                                    IMAGE_LEN,
-                                )
-                            }),
+                        MeasureItem::Image { .. } | MeasureItem::Element { .. } => {
+                            (hard_line.start <= item_start && item_end <= hard_line.end).then(
+                                || {
+                                    WrapLineFragment::element(
+                                        image_sizes[ix]
+                                            .expect("image size should be measured before wrapping")
+                                            .width,
+                                        IMAGE_LEN,
+                                    )
+                                },
+                            )
+                        }
                     }
                 };
                 item_start = item_end;
