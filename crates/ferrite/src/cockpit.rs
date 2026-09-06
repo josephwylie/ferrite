@@ -5282,11 +5282,18 @@ impl CockpitView {
         // A draft Pane (#29): the band and its popover instead of a
         // transcript — nothing in core exists to read yet.
         let Some(thread) = pane.thread() else {
+            let draft_id = pane.identity.draft().expect("this is a Draft Pane");
             let draft = pane.draft().expect("a Pane is a Thread or a draft");
             return cell.child(pane::render_draft(
                 pane,
                 pane::DraftState {
                     attachments: Composer::attachments(&pane.composer, &pane.preview, cx),
+                    discard: pane::draft_close_button(draft_id)
+                        .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                            cx.stop_propagation();
+                            view.close_pane(PaneIdentity::Draft(draft_id), cx);
+                        }))
+                        .into_any_element(),
                     band: self.draft_band_element(index, cx),
                     picker: self.draft_model_picker(index, cx),
                     menu: (level == Level::Transcript)
@@ -6961,6 +6968,47 @@ mod tests {
                 .expect("the new Thread belongs to a Group");
             assert_eq!(group.members, [original, focused]);
             assert_eq!(view.cockpit.roster().view(), View::Group(group.id));
+        });
+    }
+
+    #[gpui::test]
+    fn a_draft_close_button_discards_it_and_restores_the_original_thread(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("draft-close-button", 1);
+        let original = core.threads()[0];
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        tick(cx);
+
+        let add = cx
+            .debug_bounds("titlebar-add-thread")
+            .expect("the titlebar add button is visible");
+        cx.simulate_click(add.center(), gpui::Modifiers::none());
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            view.cockpit
+                .roster()
+                .focused()
+                .and_then(PaneIdentity::draft)
+                .expect("the new Draft is focused")
+        });
+
+        let close = cx
+            .debug_bounds("discard-draft")
+            .expect("the Draft close button is visible");
+        cx.simulate_click(close.center(), gpui::Modifiers::none());
+        cx.run_until_parked();
+
+        view.read_with(cx, |view, _| {
+            assert_eq!(
+                view.cockpit.roster().panes(),
+                [PaneIdentity::Thread(original)]
+            );
+            assert_eq!(view.cockpit.visible(), [PaneIdentity::Thread(original)]);
+            assert_eq!(
+                view.cockpit.roster().focused_thread(),
+                Some(original),
+                "discarding the Draft returns focus to the surviving Thread"
+            );
+            assert!(view.cockpit.groups().of(original).is_none());
         });
     }
 

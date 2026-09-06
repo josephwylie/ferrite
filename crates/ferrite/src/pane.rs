@@ -793,6 +793,7 @@ pub fn render_pane(
         agents,
         ci,
         activity_attention,
+        None,
     ));
     match transcript {
         Some(transcript) => {
@@ -964,6 +965,8 @@ fn ring_overlay(color: u32, radius: f32) -> Div {
 /// clicks are wired — the Pane only lays it out.
 pub struct DraftState<'a> {
     pub attachments: Option<AnyElement>,
+    /// The draft-only close control in the Pane header.
+    pub discard: AnyElement,
     /// The draft's setup chips — project and workspace — riding the left
     /// of the controls row, where a live Composer's mode chip rides.
     pub band: AnyElement,
@@ -985,6 +988,7 @@ pub struct DraftState<'a> {
 pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> impl IntoElement {
     let DraftState {
         attachments,
+        discard,
         band,
         picker,
         menu,
@@ -996,17 +1000,19 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
 
     if level != Level::Transcript {
         return focus_wrapper(
-            shell.child(
-                div()
-                    .flex()
-                    .flex_1()
-                    .min_h_0()
-                    .items_center()
-                    .justify_center()
-                    .text_size(px(theme::FS_SM))
-                    .text_color(rgb(TEXT_MUTED))
-                    .child("draft"),
-            ),
+            shell
+                .child(
+                    div()
+                        .flex()
+                        .flex_1()
+                        .min_h_0()
+                        .items_center()
+                        .justify_center()
+                        .text_size(px(theme::FS_SM))
+                        .text_color(rgb(TEXT_MUTED))
+                        .child("draft"),
+                )
+                .child(div().absolute().top(px(2.)).right(px(2.)).child(discard)),
             focused,
             None,
         );
@@ -1014,7 +1020,17 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
 
     focus_wrapper(
         shell
-            .child(pane_head(view, None, None, None, None, None, None, None))
+            .child(pane_head(
+                view,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(discard),
+            ))
             .child(div().flex().flex_1().min_h_0())
             .child(composer_region(
                 view,
@@ -1038,6 +1054,20 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
         focused,
         None,
     )
+}
+
+/// A Draft is disposable state, so its Pane advertises the same close action
+/// as cmd-w directly in the header. Live Threads deliberately keep keyboard
+/// and context-menu closure instead of adding this control to every Pane.
+pub fn draft_close_button(draft: DraftId) -> gpui::component::button::Button {
+    components::button(("discard-draft", draft.get() as usize))
+        .debug_selector(|| "discard-draft".into())
+        .ml_auto()
+        .w(px(theme::ICON_BUTTON))
+        .h(px(theme::ICON_BUTTON))
+        .p_0()
+        .tooltip("Discard Draft")
+        .child(icon(icons::CLOSE, theme::ICON_BUTTON_GLYPH, TEXT_MUTED))
 }
 
 /// Draft setup controls use the same 20px controls row as a live Composer.
@@ -1623,6 +1653,7 @@ fn pane_head(
     agents: Option<AnyElement>,
     ci: Option<AnyElement>,
     attention: Option<AnyElement>,
+    action: Option<AnyElement>,
 ) -> Div {
     // The dot's base is the muted ink — the parked look — and each live
     // state takes its own signal colour. The no-dot ruling is scoped to
@@ -1668,6 +1699,9 @@ fn pane_head(
     }
     if let Some(attention) = attention {
         top = top.child(attention);
+    }
+    if let Some(action) = action {
+        top = top.child(action);
     }
     // The checkout keeps its own line now, so the title line no longer
     // has to share its width with a branch name.
