@@ -786,14 +786,16 @@ pub fn render_pane(
 
     let mut pane = shell.child(pane_head(
         view,
-        branch.as_ref(),
-        checkout,
-        status,
-        title,
-        agents,
-        ci,
-        activity_attention,
-        None,
+        PaneHeadState {
+            branch: branch.as_ref(),
+            checkout,
+            status,
+            title,
+            agents,
+            ci,
+            attention: activity_attention,
+            action: None,
+        },
     ));
     match transcript {
         Some(transcript) => {
@@ -1022,14 +1024,10 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
         shell
             .child(pane_head(
                 view,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                Some(discard),
+                PaneHeadState {
+                    action: Some(discard),
+                    ..Default::default()
+                },
             ))
             .child(div().flex().flex_1().min_h_0())
             .child(composer_region(
@@ -1644,17 +1642,29 @@ fn l2_decision_body(decision: &Decision, decide: Option<AnyElement>) -> Div {
 ///
 /// There is no model chip here (the Composer's picker is the only model
 /// surface) and no window controls (park and zoom stay on the keyboard).
-fn pane_head(
-    view: &PaneView,
-    branch: Option<&SharedString>,
-    checkout: Option<&BranchStatus>,
+#[derive(Default)]
+struct PaneHeadState<'a> {
+    branch: Option<&'a SharedString>,
+    checkout: Option<&'a BranchStatus>,
     status: Option<Status>,
     title: Option<AnyElement>,
     agents: Option<AnyElement>,
     ci: Option<AnyElement>,
     attention: Option<AnyElement>,
     action: Option<AnyElement>,
-) -> Div {
+}
+
+fn pane_head(view: &PaneView, state: PaneHeadState<'_>) -> Div {
+    let PaneHeadState {
+        branch,
+        checkout,
+        status,
+        title,
+        agents,
+        ci,
+        attention,
+        action,
+    } = state;
     // The dot's base is the muted ink — the parked look — and each live
     // state takes its own signal colour. The no-dot ruling is scoped to
     // navigation; a Pane head keeps its dot.
