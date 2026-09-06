@@ -72,3 +72,19 @@ fn contract_mcp_required_input_without_default_is_editable_and_validated(cx:&mut
     cx.simulate_click(cancel.center(),gpui::Modifiers::none());cx.run_until_parked();
     assert!(matches!(&fake.answered.borrow()[0].1,DecisionAnswer::Cancel));
 }
+
+#[gpui::test]
+fn contract_every_native_approval_choice_is_selectable(cx:&mut TestAppContext) {
+    let(core,fake)=cockpit("approval-choice-ui",1);bind_production_keys(cx);
+    let(_view,cx)=add_cockpit_window(cx,|_,cx|CockpitView::new(core,cx));cx.simulate_resize(gpui::size(px(1100.),px(800.)));
+    let SessionEvent::DecisionRequested{mut decision}=typed_decision(DecisionKind::Approval) else{unreachable!()};
+    decision.policy.allow=false;
+    decision.suggestions=vec![
+        ferrite_core::DecisionChoice{label:"Allow this session".into(),value:serde_json::json!({"opaque":"first"}),standing:true},
+        ferrite_core::DecisionChoice{label:"Block example.com".into(),value:serde_json::json!({"opaque":"second"}),standing:false},
+    ];
+    fake.streams.borrow()[0].send(SessionEvent::DecisionRequested{decision}).unwrap();tick(cx);
+    let choice=cx.debug_bounds("approval-choice-1").expect("all native choices need a shared labeled button");
+    cx.simulate_click(choice.center(),gpui::Modifiers::none());cx.run_until_parked();
+    assert!(matches!(&fake.answered.borrow()[0].1,DecisionAnswer::Choose{value} if *value==serde_json::json!({"opaque":"second"})),"opaque native choices survive UI unchanged even when plain Allow is forbidden");
+}
