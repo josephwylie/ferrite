@@ -123,3 +123,56 @@ fn claude_content_block_start_can_carry_the_entire_visible_text() {
     );
     assert_eq!(prose(&fold(r.drain())), ["Already present"]);
 }
+
+#[test]
+fn claude_refusal_fallback_retracts_top_level_native_message_uuids() {
+    let r = Replay::new(
+        "claude",
+        vec![
+            json!({"type":"system","subtype":"init","session_id":"root","model":"fixture"}),
+            json!({"type":"assistant","uuid":"old","session_id":"root","parent_tool_use_id":null,"message":{"id":"old-msg","content":[{"type":"text","text":"Retracted answer"}]}}),
+            json!({"type":"system","subtype":"model_refusal_fallback","session_id":"root","uuid":"fallback","retracted_message_uuids":["old"]}),
+        ],
+    );
+    assert!(prose(&fold(r.drain())).is_empty());
+}
+#[test]
+fn claude_retraction_before_a_multiblock_delivery_suppresses_every_block() {
+    let r = Replay::new(
+        "claude",
+        vec![
+            json!({"type":"system","subtype":"init","session_id":"root","model":"fixture"}),
+            json!({"type":"assistant","uuid":"replacement","supersedes":["late"],"session_id":"root","parent_tool_use_id":null,"message":{"id":"replacement-msg","content":[{"type":"text","text":"Keep replacement"}]}}),
+            json!({"type":"assistant","uuid":"late","session_id":"root","parent_tool_use_id":null,"message":{"id":"late-msg","content":[{"type":"text","text":"Stale first"},{"type":"text","text":"Stale second"}]}}),
+        ],
+    );
+    assert_eq!(prose(&fold(r.drain())), ["Keep replacement"]);
+}
+#[test]
+fn codex_reused_summary_item_id_in_another_turn_does_not_replace_history() {
+    let mut frames = vec![];
+    for (turn, text) in [("one", "First reasoning"), ("two", "Second reasoning")] {
+        frames.push(json!({"method":"item/reasoning/summaryTextDelta","params":{"threadId":"root","turnId":turn,"itemId":"r","summaryIndex":0,"delta":text}}));
+        frames.push(json!({"method":"item/completed","params":{"threadId":"root","turnId":turn,"item":{"id":"r","type":"reasoning","summary":[text],"content":[]}}}));
+        frames.push(json!({"method":"turn/completed","params":{"threadId":"root","turn":{"id":turn,"status":"completed"}}}));
+    }
+    let r = Replay::new("codex", frames);
+    assert_eq!(
+        reasoning(&fold(r.drain())),
+        ["First reasoning", "Second reasoning"]
+    );
+}
+#[test]
+fn claude_conversation_reset_immediately_clears_visible_old_content() {
+    let r = Replay::new(
+        "claude",
+        vec![
+            json!({"type":"system","subtype":"init","session_id":"root","model":"fixture"}),
+            json!({"type":"assistant","uuid":"old","session_id":"root","parent_tool_use_id":null,"message":{"id":"old-msg","content":[{"type":"text","text":"Old conversation"}]}}),
+            json!({"type":"conversation_reset","session_id":"root","uuid":"reset","new_conversation_id":"fresh"}),
+        ],
+    );
+    let a = fold(r.drain());
+    assert!(prose(&a).is_empty());
+    assert_eq!(a.view().main().transcript().session_id(), Some("fresh"));
+}
