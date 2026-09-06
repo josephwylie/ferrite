@@ -155,6 +155,14 @@ pub enum ExecutionEvent {
         id: String,
         text: String,
     },
+    FileChanges {
+        id: String,
+        edits: Vec<crate::FileEdit>,
+    },
+    TurnDiff {
+        turn_id: String,
+        diff: String,
+    },
     TextDelta {
         text: String,
     },
@@ -1968,6 +1976,14 @@ impl ExecutionEvent {
                 id: id.clone(),
                 text: text.clone(),
             },
+            SessionEvent::FileChanges { id, edits } => Self::FileChanges {
+                id: id.clone(),
+                edits: edits.clone(),
+            },
+            SessionEvent::TurnDiff { turn_id, diff } => Self::TurnDiff {
+                turn_id: turn_id.clone(),
+                diff: diff.clone(),
+            },
             SessionEvent::TextDelta { text } => Self::TextDelta { text: text.clone() },
             SessionEvent::ThinkingDelta { text } => Self::ThinkingDelta { text: text.clone() },
             SessionEvent::ReasoningSummaryDelta {
@@ -2032,6 +2048,8 @@ impl ExecutionEvent {
                 snapshot,
             },
             Self::ToolOutputDelta { id, text } => SessionEvent::ToolOutputDelta { id, text },
+            Self::FileChanges { id, edits } => SessionEvent::FileChanges { id, edits },
+            Self::TurnDiff { turn_id, diff } => SessionEvent::TurnDiff { turn_id, diff },
             Self::TextDelta { text } | Self::TextSnapshot { text } => {
                 SessionEvent::TextDelta { text }
             }

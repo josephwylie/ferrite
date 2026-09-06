@@ -191,6 +191,12 @@ pub struct ToolOutput {
     pub text: String,
     pub omitted_bytes: usize,
 }
+#[derive(Debug, Clone, PartialEq)]
+pub struct TurnDiff {
+    pub turn_id: String,
+    pub diff: String,
+    pub omitted_bytes: usize,
+}
 
 /// A file edit, ready to draw red and green.
 #[derive(Debug, Clone, PartialEq)]
@@ -379,6 +385,7 @@ pub struct Transcript {
     /// The current turn's result, cleared when another turn starts. Cost
     /// cannot stand in for this: Codex completes without reporting dollars.
     turn_outcome: Option<TurnOutcome>,
+    turn_diff: Option<TurnDiff>,
     usage: Option<Usage>,
     context_details: Option<crate::ContextDetails>,
     mcp_servers: Vec<crate::McpServer>,
@@ -463,6 +470,9 @@ impl Default for Transcript {
 }
 
 impl Transcript {
+    pub fn turn_diff(&self) -> Option<&TurnDiff> {
+        self.turn_diff.as_ref()
+    }
     pub fn new(highlighter: Arc<dyn Highlighter>) -> Self {
         Self::with_capacity(highlighter, DEFAULT_CAPACITY)
     }
@@ -480,6 +490,7 @@ impl Transcript {
             session_id: None,
             last_cost: None,
             turn_outcome: None,
+            turn_diff: None,
             usage: None,
             context_details: None,
             mcp_servers: Vec::new(),
@@ -852,6 +863,34 @@ impl Transcript {
                     ..Update::default()
                 }
             }
+            Input::Event(SessionEvent::FileChanges { id, edits }) => {
+                let Some(block) = self
+                    .blocks
+                    .iter_mut()
+                    .find(|block| matches!(&block.body, Body::Tool(tool) if tool.call == id))
+                else {
+                    return Update::default();
+                };
+                let Body::Tool(tool) = &mut block.body else {
+                    unreachable!()
+                };
+                tool.diffs = edits
+                    .into_iter()
+                    .map(|edit| Diff::new(edit.path, edit.hunks))
+                    .collect();
+                Update {
+                    dirty: vec![block.id],
+                    ..Update::default()
+                }
+            }
+            Input::Event(SessionEvent::TurnDiff { turn_id, diff }) => {
+                self.turn_diff = retained_output(&diff).map(|output| TurnDiff {
+                    turn_id,
+                    diff: output.text,
+                    omitted_bytes: output.omitted_bytes,
+                });
+                Update::default()
+            }
             // Activity owns attribution and feeds each subject's execution
             // into its own Transcript. Legacy callers cannot fold children
             // into Main by accidentally replaying an attributed observation.
@@ -959,6 +998,7 @@ impl Transcript {
                 ..Update::default()
             },
             Input::Prompt(line) => {
+                self.turn_diff = None;
                 self.turn_outcome = None;
                 self.progress.end_turn();
                 self.latest_reasoning_part = None;

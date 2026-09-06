@@ -11,16 +11,27 @@ pub enum SessionEvent {
     Activity(crate::activity::ActivityEvent),
     /// The provider session is live. `session_id` is the provider-native id
     /// later used for resume.
-    Init { session_id: String, model: String },
+    Init {
+        session_id: String,
+        model: String,
+    },
     /// The provider rerouted the live Session to a different effective model.
     /// The Session identity and the Thread's chosen model do not change.
-    ModelChanged { model: String },
+    ModelChanged {
+        model: String,
+    },
     /// The provider replaced its native conversation while this Session stays live.
-    ConversationReset { session_id: String },
+    ConversationReset {
+        session_id: String,
+    },
     /// Assistant text streamed in.
-    TextDelta { text: String },
+    TextDelta {
+        text: String,
+    },
     /// Extended thinking streamed in (Claude).
-    ThinkingDelta { text: String },
+    ThinkingDelta {
+        text: String,
+    },
     /// A tool call the provider has settled and is about to run. `input` is
     /// the tool's own schema, so it stays a `Value`: inventing a Ferrite type
     /// per tool would be a guess that goes stale on the vendor's next release.
@@ -48,7 +59,9 @@ pub enum SessionEvent {
     /// Operator input is requested. `Decision::blocks_execution` distinguishes
     /// tool approvals from questions delivered while execution continues. Answer
     /// with the provider's respond-to-Decision call, quoting the Decision's `id`.
-    DecisionRequested { decision: Decision },
+    DecisionRequested {
+        decision: Decision,
+    },
     /// One native reasoning-summary section. Identity survives deltas and
     /// authoritative snapshots, so a completion can correct an earlier part.
     ReasoningSummaryPart {
@@ -62,7 +75,18 @@ pub enum SessionEvent {
         event: crate::progress::ProgressEvent,
     },
     /// Incremental output for an existing tool, before it completes.
-    ToolOutputDelta { id: String, text: String },
+    ToolOutputDelta {
+        id: String,
+        text: String,
+    },
+    FileChanges {
+        id: String,
+        edits: Vec<FileEdit>,
+    },
+    TurnDiff {
+        turn_id: String,
+        diff: String,
+    },
     /// The provider closed a content item. The next item must not merge
     /// with its predecessor merely because no tool separated their text.
     ContentBoundary,
@@ -73,7 +97,9 @@ pub enum SessionEvent {
     },
     /// The provider's current Main runtime state. This is a snapshot, never
     /// evidence that a turn finished.
-    RunState { state: RunState },
+    RunState {
+        state: RunState,
+    },
     /// A slice of a reasoning summary streamed in (Codex). Not a thinking
     /// delta: Codex never streams raw chain-of-thought over app-server —
     /// these are the model-authored summaries of hidden reasoning, arriving
@@ -109,25 +135,37 @@ pub enum SessionEvent {
     /// handshake's `commands[]`; Codex answers a `skills/list` request. Session
     /// state like a Decision, not durable history: a replacement Session
     /// announces its own.
-    Commands { commands: Vec<SessionCommand> },
+    Commands {
+        commands: Vec<SessionCommand>,
+    },
     /// The permission mode the Session started in, in the provider's own
     /// word (`"acceptEdits"`, `"bypassPermissions"`, …) — the Composer's
     /// meta-row mode chip (#23). Claude lifts it from the same initialize
     /// handshake; display-only, and Session state like the menu above.
-    PermissionMode { mode: String },
+    PermissionMode {
+        mode: String,
+    },
     /// The models this install offers, each with the name the provider's
     /// own menu shows — the model picker's rows (#25). Claude lifts the
     /// list from the same initialize handshake; Codex asks `model/list`
     /// once its thread is up. Until either speaks the picker falls back
     /// to the catalog in `providers::models`. Session state exactly like
     /// the command menu: gone with the Session.
-    Models { models: Vec<ModelInfo> },
+    Models {
+        models: Vec<ModelInfo>,
+    },
     /// A native context refresh with provider-neutral detail.
-    ContextDetails { details: ContextDetails },
+    ContextDetails {
+        details: ContextDetails,
+    },
     /// Current MCP server state for this Session.
-    McpServers { servers: Vec<McpServer> },
+    McpServers {
+        servers: Vec<McpServer>,
+    },
     /// The session process exited; no further events will arrive.
-    Closed { reason: String },
+    Closed {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -514,7 +552,10 @@ pub fn validate_form(fields: &[FormField], values: &serde_json::Value) -> Result
             _ => {}
         }
     }
-    if values.keys().any(|id| !fields.iter().any(|field| field.id == *id)) {
+    if values
+        .keys()
+        .any(|id| !fields.iter().any(|field| field.id == *id))
+    {
         return Err("form contains an unsupported field".into());
     }
     Ok(())

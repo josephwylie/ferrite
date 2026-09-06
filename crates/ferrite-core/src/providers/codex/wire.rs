@@ -67,6 +67,24 @@ pub(super) fn parse_line(line: &str) -> Option<SessionEvent> {
         }),
         "item/started" => parse_item(params, false),
         "item/completed" => parse_item(params, true),
+        "item/fileChange/patchUpdated" => Some(SessionEvent::FileChanges {
+            id: params.get("itemId")?.as_str()?.into(),
+            edits: params
+                .get("changes")?
+                .as_array()?
+                .iter()
+                .filter_map(|change| {
+                    Some(FileEdit {
+                        path: change.get("path")?.as_str()?.into(),
+                        hunks: parse_file_change(change),
+                    })
+                })
+                .collect(),
+        }),
+        "turn/diff/updated" => Some(SessionEvent::TurnDiff {
+            turn_id: params.get("turnId")?.as_str()?.into(),
+            diff: params.get("diff")?.as_str()?.into(),
+        }),
         "item/commandExecution/requestApproval" => {
             parse_approval_request(&value, params, "commandExecution")
         }
