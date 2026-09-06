@@ -20,7 +20,6 @@ pub(crate) struct ParsedDocument {
 #[derive(Default, Clone, Copy)]
 pub(crate) struct NodeRenderOptions {
     pub(crate) ix: usize,
-    pub(crate) in_list: bool,
     pub(crate) todo: bool,
     pub(crate) ordered: bool,
     pub(crate) depth: usize,
@@ -183,11 +182,11 @@ impl ParsedDocument {
         cx: &mut App,
     ) -> impl IntoElement {
         let Some(list_state) = list_state else {
-            let blocks_len = self.blocks.len();
+            let last = self.blocks.iter().rposition(BlockNode::is_visible);
             return div()
                 .id("document")
                 .children(self.blocks.iter().enumerate().map(move |(ix, node)| {
-                    let is_last = ix + 1 == blocks_len;
+                    let is_last = Some(ix) == last;
                     node.render_block(
                         NodeRenderOptions {
                             ix,
@@ -215,8 +214,9 @@ impl ParsedDocument {
             gpui::list(list_state, {
                 let node_cx = node_cx.clone();
                 let blocks = blocks.clone();
+                let last = blocks.iter().rposition(BlockNode::is_visible);
                 move |ix, window, cx| {
-                    let is_last = ix + 1 == blocks.len();
+                    let is_last = Some(ix) == last;
                     blocks[ix]
                         .render_block(
                             NodeRenderOptions {

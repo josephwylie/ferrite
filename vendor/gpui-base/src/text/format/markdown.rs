@@ -171,6 +171,10 @@ fn parse_paragraph(paragraph: &mut Paragraph, node: &mdast::Node, cx: &mut NodeC
                 text.push_str(&parse_paragraph(paragraph, c, cx));
             });
         }
+        Node::Break(_) => {
+            text.push('\n');
+            paragraph.push_str("\n");
+        }
         Node::Text(val) => {
             text = val.value.clone();
             paragraph.push_str(&val.value)

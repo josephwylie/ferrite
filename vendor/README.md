@@ -22,6 +22,15 @@ selection calculation and copying of offscreen text remain unchanged.
   text run, including wrapped text. Remove this extension when upstream offers
   equivalent inline link rendering and selection support.
 
+Markdown block spacing is centralized in `BlockNode::render_block`. The
+configured paragraph gap applies to headings, paragraphs, code, quotes, lists,
+tables, rules and custom blocks, including nested siblings and virtualized
+documents. List items share that gap; final visible children have no trailing
+padding, and reference definitions introduce no spacing. Code line spacing and
+table cell padding remain independent. The Markdown parser also preserves hard
+line breaks instead of dropping them. Ferrite's native geometry tests in
+`rich.rs` cover block pairs, nesting, zero-gap overrides and hard breaks.
+
 Cargo applies this through the root `[patch.crates-io]`. Remove the patch when
 an upstream release includes equivalent clipping. Registry cache markers and
 the dependency's own lockfile are omitted. Source fixtures and the small test

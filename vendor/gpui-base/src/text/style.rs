@@ -138,7 +138,8 @@ impl TextViewStyle {
         self
     }
 
-    /// Sets the gap between paragraphs. Defaults to 1 rem.
+    /// Sets the gap between Markdown blocks and list items. Defaults to 1 rem.
+    /// Nested containers use the same rhythm; final blocks have no trailing gap.
     pub fn with_paragraph_gap(mut self, gap: Rems) -> Self {
         self.paragraph_gap = gap;
         self
