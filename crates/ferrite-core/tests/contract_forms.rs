@@ -1,0 +1,84 @@
+#![cfg(unix)]
+#[allow(dead_code)]
+#[path = "support/provider_contract.rs"]
+mod support;
+use ferrite_core::{DecisionAnswer, DecisionKind};
+use serde_json::json;
+use support::*;
+
+#[test]
+fn question_presentation_and_answers_are_provider_neutral() {
+    for provider in ["claude", "codex"] {
+        let frame = if provider == "claude" {
+            json!({"type":"control_request","request_id":"q","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","tool_use_id":"tool","input":{"questions":[{"question":"Choose","header":"Choice","options":[{"label":"Red, green","description":"Both"},{"label":"Blue","description":"One"}]}]}}})
+        } else {
+            json!({"id":"q","method":"item/tool/requestUserInput","params":{"threadId":"root","turnId":"turn","itemId":"tool","questions":[{"id":"stable","question":"Choose","header":"Choice","options":[{"label":"Red, green","description":"Both"},{"label":"Blue","description":"One"}],"isOther":false,"isSecret":true}]}})
+        };
+        let mut r = Replay::new(provider, vec![frame]);
+        let ds = decisions(&r.drain());
+        let DecisionKind::Questions(qs) = &ds[0].kind else { panic!("adapter must fill the typed shared form") };
+        assert_eq!(qs[0].question, "Choose");
+        if provider == "codex" {
+            assert!(qs[0].secret);
+            assert!(!qs[0].allow_other);
+        }
+        r.session.respond_to_decision(&ds[0].id, DecisionAnswer::Questions {
+            answers: vec![ferrite_core::questions::Answer { picks: vec![0], other: None }],
+        }).unwrap();
+        if provider == "codex" {
+            let reply = r.wait_host(|v| v["id"] == "q" && v.get("result").is_some());
+            assert_eq!(reply["result"], json!({"answers":{"stable":{"answers":["Red, green"]}}}));
+        } else {
+            let reply = r.wait_host(|v| v["type"] == "control_response");
+            assert_eq!(reply["response"]["response"]["updatedInput"]["answers"], json!({"Choose":"Red, green"}));
+        }
+    }
+}
+
+#[test]
+fn both_providers_offer_the_same_typed_elicitation_form() {
+    for provider in ["claude", "codex"] {
+        let schema = json!({"type":"object","properties":{"count":{"type":"integer","title":"Count","minimum":1,"maximum":3},"enabled":{"type":"boolean","title":"Enabled"}},"required":["count"]});
+        let frame = if provider == "claude" {
+            json!({"type":"control_request","request_id":"form","request":{"subtype":"elicitation","mcp_server_name":"server","message":"Configure search","mode":"form","requested_schema":schema}})
+        } else {
+            json!({"id":71,"method":"mcpServer/elicitation/request","params":{"threadId":"root","turnId":"turn","serverName":"server","mode":"form","message":"Configure search","requestedSchema":schema,"_meta":null}})
+        };
+        let mut r = Replay::new(provider, vec![frame]);
+        let ds = decisions(&r.drain());
+        assert_eq!(ds.len(), 1, "elicitation must not strand the provider");
+        let DecisionKind::Form { fields } = &ds[0].kind else { panic!("MCP schema must normalize before the UI") };
+        assert_eq!(fields.len(), 2);
+        assert!(fields.iter().any(|f| f.id == "count" && f.required));
+        assert!(r.session.respond_to_decision(&ds[0].id, DecisionAnswer::Form { values: json!({"count":9}) }).is_err(), "native field constraints must be enforced");
+        r.session.respond_to_decision(&ds[0].id, DecisionAnswer::Form { values: json!({"count":2,"enabled":true}) }).unwrap();
+        let reply = if provider == "codex" {
+            r.wait_host(|v| v["id"] == 71 && v.get("result").is_some())["result"].clone()
+        } else {
+            r.wait_host(|v| v["type"] == "control_response")["response"]["response"].clone()
+        };
+        assert_eq!(reply["action"], "accept");
+        assert_eq!(reply["content"], json!({"count":2,"enabled":true}));
+    }
+}
+
+#[test]
+fn resolved_native_question_cannot_be_answered_as_an_approval() {
+    let mut r = Replay::new("codex", vec![
+        json!({"id":"q","method":"item/tool/requestUserInput","params":{"threadId":"root","turnId":"turn","itemId":"tool","questions":[{"id":"q","question":"Why?","header":"Reason","options":null,"isOther":true,"isSecret":false}]}}),
+        json!({"method":"serverRequest/resolved","params":{"threadId":"root","requestId":"q"}}),
+    ]);
+    let ds = decisions(&r.drain());
+    assert_eq!(ds.len(), 1);
+    assert!(r.session.respond_to_decision(&ds[0].id, DecisionAnswer::Deny { message: "cancel".into() }).is_err(), "resolved request must not fall through to another response schema");
+}
+
+#[test]
+fn permission_profile_approval_grants_only_the_requested_profile() {
+    let mut r = Replay::new("codex", vec![json!({"id":92,"method":"item/permissions/requestApproval","params":{"threadId":"root","turnId":"turn","itemId":"permissions","environmentId":null,"startedAtMs":1,"cwd":"/workspace","reason":"Fetch dependencies","permissions":{"network":{"enabled":true},"fileSystem":null}}})]);
+    let ds = decisions(&r.drain());
+    assert_eq!(ds.len(), 1);
+    r.session.respond_to_decision(&ds[0].id, DecisionAnswer::Allow { input: ds[0].input.clone() }).unwrap();
+    let reply = r.wait_host(|v| v["id"] == 92 && v.get("result").is_some());
+    assert_eq!(reply["result"], json!({"permissions":{"network":{"enabled":true}},"scope":"turn"}));
+}
