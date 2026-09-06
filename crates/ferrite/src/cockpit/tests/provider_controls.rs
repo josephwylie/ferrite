@@ -58,3 +58,18 @@ fn contract_permission_and_mcp_auth_controls_are_native(cx:&mut TestAppContext) 
     fake.streams.borrow()[0].send(SessionEvent::McpAuthorization{server:"search".into(),url:None}).unwrap();tick(cx);
     assert!(cx.debug_bounds("mcp-authorize-0").is_none());
 }
+
+#[gpui::test]
+fn contract_native_accounting_and_cost_are_visible(cx:&mut TestAppContext) {
+    let(core,fake)=cockpit("native-usage-details-ui",1);
+    let(_view,cx)=add_cockpit_window(cx,|_,cx|CockpitView::new(core,cx));cx.simulate_resize(gpui::size(px(1100.),px(1000.)));
+    for event in [
+        SessionEvent::ContextUsage{total_tokens:12000,context_window:Some(180000)},
+        SessionEvent::UsageDetails{details:ferrite_core::UsageDetails{scope:ferrite_core::UsageScope::Turn,input_tokens:100,cached_input_tokens:20,output_tokens:30,reasoning_output_tokens:10}},
+        SessionEvent::TurnEnded{outcome:TurnOutcome::Completed,cost_usd:Some(0.04)},
+    ]{fake.streams.borrow()[0].send(event).unwrap();}tick(cx);
+    let meter=cx.debug_bounds("usage-meter-1").unwrap();cx.simulate_mouse_down(meter.center(),MouseButton::Left,gpui::Modifiers::none());cx.run_until_parked();
+    for selector in ["usage-scope-turn","usage-input-100","usage-cached-input-20","usage-output-30","usage-reasoning-output-10","usage-cost-0.04"] {
+        assert!(cx.debug_bounds(selector).is_some(),"missing native accounting field: {selector}");
+    }
+}
