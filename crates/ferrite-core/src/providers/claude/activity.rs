@@ -202,8 +202,13 @@ impl Decoder {
                     .filter_map(Value::as_str)
                     .collect::<Vec<_>>()
                     .join("\n");
-                let text = value["error"].as_str().unwrap_or(&output);
-                self.notice(&value, (!text.is_empty()).then_some(text), &mut events);
+                let error = value["error"].as_str().unwrap_or("");
+                let text = [output.as_str(), error]
+                    .into_iter()
+                    .filter(|text| !text.is_empty())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                self.notice(&value, (!text.is_empty()).then_some(&text), &mut events);
             }
             Some("control_request") => self.decision(&value, &mut events),
             Some("control_cancel_request") => {

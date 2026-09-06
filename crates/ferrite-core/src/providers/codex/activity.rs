@@ -250,18 +250,11 @@ impl Router {
             return;
         }
         if matches!(method, "warning" | "configWarning" | "deprecationNotice") && scope.is_none() {
-            if self.root.is_some() {
-                let text = frame["params"]["message"].as_str().or_else(|| {
-                    frame["params"]["details"]
-                        .as_str()
-                        .or(frame["params"]["summary"].as_str())
+            if let Some(text) = diagnostic(&frame["params"]) {
+                update.activity(ActivityEvent::MainContent {
+                    id: None,
+                    event: ExecutionEvent::Notice { text },
                 });
-                if let Some(text) = text {
-                    update.activity(ActivityEvent::MainContent {
-                        id: None,
-                        event: ExecutionEvent::Notice { text: text.into() },
-                    });
-                }
             }
             return;
         }
@@ -311,11 +304,8 @@ impl Router {
         let scope = scope.expect("known scope");
         let params = &frame["params"];
         if matches!(method, "warning" | "configWarning" | "deprecationNotice") {
-            let text = params["message"]
-                .as_str()
-                .or_else(|| params["details"].as_str().or(params["summary"].as_str()));
-            if let Some(text) = text {
-                let event = ExecutionEvent::Notice { text: text.into() };
+            if let Some(text) = diagnostic(params) {
+                let event = ExecutionEvent::Notice { text };
                 if self.root.as_deref() == Some(scope.as_str()) {
                     update.activity(ActivityEvent::MainContent { id: None, event });
                 } else {
@@ -1053,6 +1043,16 @@ impl Router {
             _ => {}
         }
     }
+}
+
+fn diagnostic(params: &Value) -> Option<String> {
+    let text = ["message", "summary", "details", "path"]
+        .into_iter()
+        .filter_map(|key| params[key].as_str())
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    (!text.is_empty()).then_some(text)
 }
 
 pub(super) fn frame_scope(value: &Value) -> Option<&str> {

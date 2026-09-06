@@ -85,14 +85,12 @@ pub(super) fn parse_line(line: &str) -> Option<SessionEvent> {
                     model: model.into(),
                 })
         }
-        "thread/settings/updated" => {
-            params
-                .get("model")
-                .and_then(Value::as_str)
-                .map(|model| SessionEvent::ModelChanged {
-                    model: model.into(),
-                })
-        }
+        "thread/settings/updated" => params["threadSettings"]
+            .get("model")
+            .and_then(Value::as_str)
+            .map(|model| SessionEvent::ModelChanged {
+                model: model.into(),
+            }),
         "turn/completed" => parse_turn_completed(params),
         _ => None,
     }
@@ -205,7 +203,7 @@ pub(super) fn parse_events(line: &str) -> Vec<SessionEvent> {
         }
     }
     if method == "thread/settings/updated" {
-        if let Some(mode) = params["approvalPolicy"].as_str() {
+        if let Some(mode) = params["threadSettings"]["approvalPolicy"].as_str() {
             events.push(SessionEvent::PermissionMode { mode: mode.into() });
         }
     }
