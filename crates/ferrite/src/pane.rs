@@ -2759,15 +2759,12 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         // Focused too, not only at rest: a follow-up the operator cannot
         // read while their cursor is in the box is a suggestion they never
         // see. The Composer paints its own caret at the line origin, so the
-        // focused ghost starts clear of it (the caret plus the Composer own
-        // 3px); the unfocused ghost keeps the origin it has always had.
-        let inset = if focused {
-            theme::CARET_W + theme::COMPOSER_GAP
-        } else {
-            0.
-        };
+        // focused ghost starts immediately after its width; the unfocused
+        // ghost keeps the origin it has always had.
+        let inset = if focused { theme::CARET_W } else { 0. };
         line = line.child(
             div()
+                .debug_selector(|| "prompt-placeholder".into())
                 .absolute()
                 .left(px(inset))
                 .top_0()

@@ -10840,6 +10840,24 @@ mod tests {
     }
 
     #[gpui::test]
+    fn focused_placeholder_starts_immediately_after_the_caret(cx: &mut TestAppContext) {
+        let fake = Fake::default();
+        let store = Store::open(scratch("placeholder-caret-gap")).unwrap();
+        let core = Cockpit::new(store, Box::new(fake));
+        let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        cx.run_until_parked();
+
+        let editor = cx.debug_bounds("focused-prompt-editor").unwrap();
+        let placeholder = cx.debug_bounds("prompt-placeholder").unwrap();
+        assert_eq!(
+            placeholder.left() - editor.left(),
+            px(crate::theme::CARET_W),
+            "the caret width is the only separation before placeholder text"
+        );
+    }
+
+    #[gpui::test]
     fn launch_provider_seeds_the_first_empty_store_draft(cx: &mut TestAppContext) {
         let fake = Fake::default();
         let store = Store::open(scratch("launch-provider-draft")).unwrap();
