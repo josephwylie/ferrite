@@ -39,6 +39,10 @@ pub(super) struct Decoder {
     /// Main's last provider-reported occupancy. Result aggregates account for
     /// a turn but do not always carry a new occupancy snapshot.
     usage: Usage,
+    rate_limits: (
+        Option<crate::RateLimitWindow>,
+        Option<crate::RateLimitWindow>,
+    ),
 }
 
 #[derive(Default)]
@@ -100,8 +104,22 @@ impl Decoder {
                 self.root = root.to_owned();
             }
         }
-        if let Some(limits) = wire::parse_rate_limits(line) {
-            events.push(limits);
+        if let Some(SessionEvent::RateLimits { five_hour, weekly }) = wire::parse_rate_limits(line)
+        {
+            if value["rate_limit_info"]["unifiedWindows"].is_object() {
+                self.rate_limits = (five_hour, weekly);
+            } else {
+                if five_hour.is_some() {
+                    self.rate_limits.0 = five_hour;
+                }
+                if weekly.is_some() {
+                    self.rate_limits.1 = weekly;
+                }
+            }
+            events.push(SessionEvent::RateLimits {
+                five_hour: self.rate_limits.0,
+                weekly: self.rate_limits.1,
+            });
         }
         match string(&value, "type") {
             Some("system") if string(&value, "subtype") != Some("init") => {

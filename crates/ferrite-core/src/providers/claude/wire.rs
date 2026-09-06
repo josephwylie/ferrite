@@ -244,14 +244,16 @@ pub(super) fn parse_events_value(value: &Value) -> Vec<SessionEvent> {
                     format!("{error} · attempt {attempt}/{max}{delay}"),
                 ))
             }
-            Some("status") => Some(phase(
-                if value["status"] == "compacting" {
-                    Phase::Compacting
-                } else {
-                    Phase::Working
-                },
-                string("message"),
-            )),
+            Some("status") => value["status"].as_str().map(|status| {
+                phase(
+                    if status == "compacting" {
+                        Phase::Compacting
+                    } else {
+                        Phase::Working
+                    },
+                    string("message"),
+                )
+            }),
             Some("compact_boundary") => Some(phase(Phase::Working, "Context compacted".into())),
             Some("thinking_tokens") => Some(phase(Phase::Thinking, String::new())),
             Some("task_started" | "task_progress" | "task_notification" | "task_updated") => {
@@ -337,15 +339,15 @@ pub(super) fn parse_usage_value(value: &Value) -> Option<SessionEvent> {
     match value.get("type")?.as_str()? {
         "assistant" => {
             let message = value.get("message")?;
+            let context = value.get("context_usage");
             let usage = message.get("usage").unwrap_or(&Value::Null);
-            if usage.is_null() && value.get("context_usage").is_none() {
+            if usage.is_null() && context.is_none() {
                 return None;
             }
             let input = count(usage, "input_tokens");
             let cached = count(usage, "cache_read_input_tokens");
             let created = count(usage, "cache_creation_input_tokens");
             let output = count(usage, "output_tokens");
-            let context = value.get("context_usage");
             Some(SessionEvent::TokenUsage {
                 total_tokens: context
                     .and_then(|context| context.get("total_tokens"))
@@ -421,29 +423,35 @@ pub(super) fn parse_rate_limits(line: &str) -> Option<SessionEvent> {
     if value.get("type")?.as_str()? != "rate_limit_event" {
         return None;
     }
-    let windows = value.get("rate_limit_info")?.get("unifiedWindows")?;
+    let info = value.get("rate_limit_info")?;
+    let windows = info.get("unifiedWindows");
     let window = |key: &str| {
-        let value = windows.get(key)?;
+        let value = windows?.get(key)?;
         Some(RateLimitWindow {
             used_fraction: value.get("utilization")?.as_f64()? as f32,
             resets_at: value.get("resetsAt").and_then(Value::as_u64),
         })
     };
-    Some(SessionEvent::RateLimits {
-        five_hour: window("five_hour"),
-        weekly: window("seven_day"),
-    })
-}
-
-/// Kept only so pre-stateful decoder fixtures continue to compile. Production
-/// decoding never derives context windows from a model name.
-#[cfg(test)]
-fn window_of_model(model: &str) -> u64 {
-    let lower = model.to_ascii_lowercase();
-    if lower.contains("[1m]") || lower.ends_with("-1m") {
-        1_000_000
-    } else {
-        200_000
+    if windows.is_some() {
+        return Some(SessionEvent::RateLimits {
+            five_hour: window("five_hour"),
+            weekly: window("seven_day"),
+        });
+    }
+    let flat = RateLimitWindow {
+        used_fraction: info.get("utilization")?.as_f64()? as f32,
+        resets_at: info.get("resetsAt").and_then(Value::as_u64),
+    };
+    match info.get("rateLimitType").and_then(Value::as_str) {
+        Some("five_hour") => Some(SessionEvent::RateLimits {
+            five_hour: Some(flat),
+            weekly: None,
+        }),
+        Some("seven_day") => Some(SessionEvent::RateLimits {
+            five_hour: None,
+            weekly: Some(flat),
+        }),
+        _ => None,
     }
 }
 
@@ -674,6 +682,10 @@ fn parse_system(value: &Value) -> Option<SessionEvent> {
                 })
                 .collect(),
         }),
+        "status" => value
+            .get("permissionMode")
+            .and_then(Value::as_str)
+            .map(|mode| SessionEvent::PermissionMode { mode: mode.into() }),
         _ => None,
     }
 }

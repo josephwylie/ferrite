@@ -249,6 +249,17 @@ impl Router {
         {
             return;
         }
+        if method == "warning" && scope.is_none() {
+            if self.root.is_some() {
+                if let Some(text) = frame["params"]["message"].as_str() {
+                    update.activity(ActivityEvent::MainContent {
+                        id: None,
+                        event: ExecutionEvent::Notice { text: text.into() },
+                    });
+                }
+            }
+            return;
+        }
         if method == "serverRequest/resolved" {
             let raw = &frame["params"]["requestId"];
             if raw.is_string() || raw.is_number() {
@@ -294,6 +305,21 @@ impl Router {
         }
         let scope = scope.expect("known scope");
         let params = &frame["params"];
+        if method == "warning" {
+            if let Some(text) = params["message"].as_str() {
+                let event = ExecutionEvent::Notice { text: text.into() };
+                if self.root.as_deref() == Some(scope.as_str()) {
+                    update.activity(ActivityEvent::MainContent { id: None, event });
+                } else {
+                    update.activity(ActivityEvent::Content {
+                        key: self.key(&scope),
+                        id: None,
+                        event,
+                    });
+                }
+            }
+            return;
+        }
         let turn = params["turnId"]
             .as_str()
             .or_else(|| params["turn"]["id"].as_str());
