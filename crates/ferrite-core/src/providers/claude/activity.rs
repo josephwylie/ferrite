@@ -72,6 +72,7 @@ struct Usage {
     occupancy: Option<u64>,
     context_window: Option<u64>,
     message_outputs: HashMap<Subject, HashMap<String, u64>>,
+    retired_outputs: HashMap<Subject, u64>,
     message_order: VecDeque<(Subject, String)>,
 }
 
@@ -85,19 +86,36 @@ impl Usage {
             self.message_order.push_back((subject.clone(), message.clone()));
             if self.message_order.len() > 8192 {
                 if let Some((old_subject, old_message)) = self.message_order.pop_front() {
+                    let mut empty = false;
                     if let Some(outputs) = self.message_outputs.get_mut(&old_subject) {
-                        outputs.remove(&old_message);
+                        if let Some(old_output) = outputs.remove(&old_message) {
+                            let retired = self
+                                .retired_outputs
+                                .entry(old_subject.clone())
+                                .or_default();
+                            *retired = retired.saturating_add(old_output);
+                        }
+                        empty = outputs.is_empty();
+                    }
+                    if empty {
+                        self.message_outputs.remove(&old_subject);
                     }
                 }
             }
         }
-        let outputs = self.message_outputs.entry(subject).or_default();
+        let outputs = self.message_outputs.entry(subject.clone()).or_default();
         outputs.insert(message, output);
-        outputs.values().copied().sum()
+        let live = outputs.values().copied().sum::<u64>();
+        self.retired_outputs
+            .get(&subject)
+            .copied()
+            .unwrap_or_default()
+            .saturating_add(live)
     }
 
     fn clear_message_outputs(&mut self, subject: &Subject) {
         self.message_outputs.remove(subject);
+        self.retired_outputs.remove(subject);
         self.message_order.retain(|(owner, _)| owner != subject);
     }
 }
@@ -815,17 +833,20 @@ impl Decoder {
         else {
             return usage;
         };
-        let has_occupancy = value["type"] == "assistant"
-            || value["usage"]["iterations"]
-                .as_array()
-                .is_some_and(|iterations| !iterations.is_empty());
-        if has_occupancy {
-            self.usage.occupancy = Some(total_tokens);
-        } else if let Some(occupancy) = self.usage.occupancy {
-            total_tokens = occupancy;
-        }
-        if let Some(window) = context_window {
-            self.usage.context_window = Some(window);
+        let main = *subject == Subject::Main;
+        if main {
+            let has_occupancy = value["type"] == "assistant"
+                || value["usage"]["iterations"]
+                    .as_array()
+                    .is_some_and(|iterations| !iterations.is_empty());
+            if has_occupancy {
+                self.usage.occupancy = Some(total_tokens);
+            } else if let Some(occupancy) = self.usage.occupancy {
+                total_tokens = occupancy;
+            }
+            if let Some(window) = context_window {
+                self.usage.context_window = Some(window);
+            }
         }
         let output_tokens = if value["type"] == "assistant" {
             string(&value["message"], "id")
@@ -841,7 +862,10 @@ impl Decoder {
             cached_input_tokens,
             output_tokens,
             reasoning_output_tokens,
-            context_window: self.usage.context_window,
+            context_window: main
+                .then_some(self.usage.context_window)
+                .flatten()
+                .or(context_window),
         }
     }
 
@@ -1262,6 +1286,8 @@ impl Decoder {
         // Progress descriptions describe the current tool; they must not rename
         // the tab's durable task description on every tool call.
         if subtype == "task_started" {
+            self.usage
+                .clear_message_outputs(&Subject::Subagent(key.clone()));
             info.description = string(value, "description")
                 .map(str::to_owned)
                 .or(info.description);
