@@ -74,3 +74,13 @@ fn reconnect_never_displays_previous_sessions_live_mcp_status() {
     t.apply(ferrite_core::transcript::Input::Revived);
     assert!(t.mcp_servers().is_empty(),"live connection state cannot be inherited by a new Session");
 }
+
+#[test]
+fn adapters_supply_permission_choices_for_the_shared_ui() {
+    for(provider,expected) in [("claude",vec!["default","acceptEdits","plan","dontAsk","bypassPermissions","auto"]),("codex",vec!["untrusted","on-request","never"])] {
+        let r=Replay::new(provider,vec![]);r.drain();
+        let choices=r.session.permission_modes();
+        assert_eq!(choices.iter().map(|c|c.value.as_str()).collect::<Vec<_>>(),expected);
+        assert!(choices.iter().all(|c|!c.label.is_empty()));
+    }
+}
