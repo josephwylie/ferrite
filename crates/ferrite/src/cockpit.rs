@@ -6908,6 +6908,7 @@ fn transcript_text(blocks: &[ferrite_core::transcript::Block]) -> String {
 #[cfg(test)]
 mod tests {
     mod provider_forms;
+    mod provider_controls;
     mod subagents;
     use super::*;
     use std::cell::RefCell;
@@ -6928,9 +6929,14 @@ mod tests {
         fail_send: Rc<RefCell<bool>>,
         sent: Rc<RefCell<Vec<String>>>,
         answered: Rc<RefCell<Vec<(String, DecisionAnswer)>>>,
+        controls: Rc<RefCell<Vec<ferrite_core::SessionControl>>>,
+        native_controls: Rc<RefCell<bool>>,
     }
 
     impl Session for Scripted {
+        fn supports_control(&self, _: ferrite_core::ControlKind) -> bool { *self.native_controls.borrow() }
+        fn control(&mut self, action:ferrite_core::SessionControl) -> std::io::Result<()> { self.controls.borrow_mut().push(action); Ok(()) }
+
         fn set_effort(&mut self, _effort: Option<&str>) -> std::io::Result<()> {
             Ok(())
         }
@@ -6968,6 +6974,8 @@ mod tests {
         sent: Rc<RefCell<Vec<String>>>,
         /// Every Decision answer that went out, with the Decision's id.
         answered: Rc<RefCell<Vec<(String, DecisionAnswer)>>>,
+        controls: Rc<RefCell<Vec<ferrite_core::SessionControl>>>,
+        native_controls: Rc<RefCell<bool>>,
     }
 
     impl Spawner for Fake {
@@ -6996,6 +7004,8 @@ mod tests {
                 fail_send: self.fail_send.clone(),
                 sent: self.sent.clone(),
                 answered: self.answered.clone(),
+                controls:self.controls.clone(),
+                native_controls:self.native_controls.clone(),
             }))
         }
     }

@@ -5478,7 +5478,7 @@ mod tests {
         }));
         transcript.apply(Input::Event(SessionEvent::ToolCompleted {
             id: "structured".into(), output: String::new(), is_error: false,
-            result: ToolResult::Structured { value: serde_json::json!({"detail":"visible-provider-detail"}) },
+            result: ToolResult::Structured { value: serde_json::json!({"detail":"visible-provider-detail"}), duration_ms: None },
         }));
         let (view, cx) = cx.add_window_view(|_, cx| {
             gpui::component::init(cx);
