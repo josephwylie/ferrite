@@ -19,7 +19,7 @@ fn context_refresh_uses_native_summary_control_and_updates_shared_usage() {
     for _ in 0..8 {
         let e = r.session.events().recv_timeout(std::time::Duration::from_secs(3)).unwrap();
         match e {
-            SessionEvent::TokenUsage { total_tokens:12000, context_window:Some(180000), .. } => usage = true,
+            SessionEvent::ContextUsage { total_tokens:12000, context_window:Some(180000) } => usage = true,
             SessionEvent::ContextDetails { details: d } => {
                 assert_eq!(d.usable_window, Some(150000));
                 assert_eq!(d.auto_compact_threshold, Some(140000));
