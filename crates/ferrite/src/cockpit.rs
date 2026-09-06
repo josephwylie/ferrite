@@ -5965,6 +5965,36 @@ impl CockpitView {
         if let Some((_, _, error)) = self.session_control_error.as_ref().filter(|(shown, shown_generation, _)| *shown == thread && *shown_generation == generation) {
             card = card.child(div().id("session-control-error").text_color(rgb(crate::theme::ATTENTION)).child(error.clone()));
         }
+        for (index, mode) in open.permission_modes().into_iter().enumerate() {
+            let value = mode.value;
+            card = card.child(
+                crate::components::button(SharedString::from(format!("permission-mode-{index}")))
+                    .debug_selector(move || format!("permission-mode-{index}"))
+                    .tab_stop(true)
+                    .accessibility_label(mode.label.clone())
+                    .child(mode.label)
+                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                        view.run_session_control(
+                            thread,
+                            generation,
+                            ferrite_core::SessionControl::SetPermissionMode { mode: value.clone() },
+                        );
+                        cx.notify();
+                    })),
+            );
+        }
+        if open.supports_control(ferrite_core::ControlKind::ReloadMcp) {
+            card = card.child(
+                crate::components::button("mcp-reload")
+                    .debug_selector(|| "mcp-reload".into())
+                    .tab_stop(true)
+                    .child("Reload MCP")
+                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                        view.run_session_control(thread, generation, ferrite_core::SessionControl::ReloadMcp);
+                        cx.notify();
+                    })),
+            );
+        }
         if transcript.mcp_servers().is_empty() {
             card = card.child(
                 div()
@@ -5993,6 +6023,39 @@ impl CockpitView {
                 .child(div().debug_selector(move || format!("mcp-status-{index}-{status}")).text_color(rgb(crate::theme::TEXT_MUTED)).child(status));
             if let Some(error) = server.error.as_ref() {
                 row = row.child(div().text_color(rgb(crate::theme::ATTENTION)).child(error.clone()));
+            }
+            if server.status == ferrite_core::McpStatus::NeedsAuth
+                && open.supports_control(ferrite_core::ControlKind::LoginMcp)
+            {
+                let login_name = server.name.clone();
+                row = row.child(
+                    crate::components::button(SharedString::from(format!("mcp-login-{index}")))
+                        .debug_selector(move || format!("mcp-login-{index}"))
+                        .tab_stop(true)
+                        .child("Sign in")
+                        .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                            let exists = view.cockpit.thread(thread).is_some_and(|open| {
+                                open.generation() == generation
+                                    && open.transcript().mcp_servers().iter().any(|server| server.name == login_name)
+                            });
+                            if exists {
+                                view.run_session_control(thread, generation, ferrite_core::SessionControl::LoginMcp { server: login_name.clone() });
+                            }
+                            cx.notify();
+                        })),
+                );
+            }
+            if let Some(url) = transcript.mcp_authorizations().get(&server.name).filter(|url| {
+                url.starts_with("https://") || url.starts_with("http://")
+            }) {
+                let url = url.clone();
+                row = row.child(
+                    crate::components::button(SharedString::from(format!("mcp-authorize-{index}")))
+                        .debug_selector(move || format!("mcp-authorize-{index}"))
+                        .tab_stop(true)
+                        .child("Open sign-in")
+                        .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| cx.open_url(&url))),
+                );
             }
             if open.supports_control(ferrite_core::ControlKind::ReconnectMcp) {
                 row = row.child(
