@@ -84,3 +84,46 @@ fn claude_native_context_report_does_not_require_api_usage() {
         "native context report without API usage was dropped"
     );
 }
+
+#[test]
+fn claude_flat_rate_limit_updates_preserve_the_other_window() {
+    let r = Replay::new(
+        "claude",
+        vec![
+            json!({"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","rateLimitType":"five_hour","utilization":0.72,"resetsAt":1800000000}}),
+            json!({"type":"rate_limit_event","rate_limit_info":{"status":"allowed","rateLimitType":"seven_day","utilization":0.21,"resetsAt":1800500000}}),
+        ],
+    );
+    let a = fold(r.drain());
+    let limits = a.view().main().transcript().rate_limits();
+    assert!((limits.five_hour.unwrap().used_fraction - 0.72).abs() < 0.0001);
+    assert!((limits.weekly.unwrap().used_fraction - 0.21).abs() < 0.0001);
+}
+#[test]
+fn codex_thread_warning_is_visible_without_finishing_the_turn() {
+    let r = Replay::new(
+        "codex",
+        vec![
+            json!({"method":"warning","params":{"threadId":"root","message":"Configured plugin could not start"}}),
+        ],
+    );
+    let events = r.drain();
+    assert!(!events
+        .iter()
+        .any(|e| matches!(e, SessionEvent::TurnEnded { .. })));
+    let a = fold(events);
+    assert!(a.view().main().transcript().blocks().iter().any(|b|matches!(&b.body,ferrite_core::transcript::Body::Notice(s) if s.contains("Configured plugin could not start"))));
+}
+#[test]
+fn claude_live_permission_mode_is_reflected_from_native_status() {
+    let r = Replay::new(
+        "claude",
+        vec![
+            json!({"type":"system","subtype":"status","session_id":"root","uuid":"mode","status":null,"permissionMode":"plan"}),
+        ],
+    );
+    assert!(r
+        .drain()
+        .iter()
+        .any(|e| matches!(e,SessionEvent::PermissionMode{mode} if mode=="plan")));
+}

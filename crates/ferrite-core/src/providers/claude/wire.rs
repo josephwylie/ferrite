@@ -337,7 +337,10 @@ pub(super) fn parse_usage_value(value: &Value) -> Option<SessionEvent> {
     match value.get("type")?.as_str()? {
         "assistant" => {
             let message = value.get("message")?;
-            let usage = message.get("usage")?;
+            let usage = message.get("usage").unwrap_or(&Value::Null);
+            if usage.is_null() && value.get("context_usage").is_none() {
+                return None;
+            }
             let input = count(usage, "input_tokens");
             let cached = count(usage, "cache_read_input_tokens");
             let created = count(usage, "cache_creation_input_tokens");
