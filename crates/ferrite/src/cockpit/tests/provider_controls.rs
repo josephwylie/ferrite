@@ -66,7 +66,7 @@ fn contract_native_accounting_and_cost_are_visible(cx:&mut TestAppContext) {
     for event in [
         SessionEvent::ContextUsage{total_tokens:12000,context_window:Some(180000)},
         SessionEvent::UsageDetails{details:ferrite_core::UsageDetails{scope:ferrite_core::UsageScope::Turn,input_tokens:100,cached_input_tokens:20,output_tokens:30,reasoning_output_tokens:10}},
-        SessionEvent::TurnEnded{outcome:TurnOutcome::Completed,cost_usd:Some(0.04)},
+        SessionEvent::TurnEnded{outcome:ferrite_core::TurnOutcome::Completed,cost_usd:Some(0.04)},
     ]{fake.streams.borrow()[0].send(event).unwrap();}tick(cx);
     let meter=cx.debug_bounds("usage-meter-1").unwrap();cx.simulate_mouse_down(meter.center(),MouseButton::Left,gpui::Modifiers::none());cx.run_until_parked();
     for selector in ["usage-scope-turn","usage-input-100","usage-cached-input-20","usage-output-30","usage-reasoning-output-10","usage-cost-0.04"] {
