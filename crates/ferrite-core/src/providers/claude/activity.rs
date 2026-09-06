@@ -489,6 +489,9 @@ impl Decoder {
             }
         }
         if let Some(text) = value["message"]["content"].as_str() {
+            if child.is_none() && !assistant {
+                return;
+            }
             let event = if assistant {
                 ExecutionEvent::Text {
                     text: text.to_owned(),
@@ -532,6 +535,9 @@ impl Decoder {
                 .or_else(|| delivery_id(value, &ordinal.to_string()));
             match string(block, "type") {
                 Some("text" | "thinking") => {
+                    if child.is_none() && !assistant {
+                        continue;
+                    }
                     let thinking = block["type"] == "thinking";
                     let Some(text) = block
                         .get(if thinking { "thinking" } else { "text" })
@@ -897,11 +903,10 @@ impl Decoder {
         let candidates: Vec<_> = self
             .main_stream_blocks
             .values()
-            .enumerate()
-            .filter(|(_, block)| {
+            .filter(|block| {
                 block.message == message && block.kind == kind && block.delivery.is_none()
             })
-            .map(|(_, block)| (block.message.clone(), block.index))
+            .map(|block| (block.message.clone(), block.index))
             .collect();
         let [key] = candidates.as_slice() else {
             return None;
