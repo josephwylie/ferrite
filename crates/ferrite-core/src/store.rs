@@ -284,6 +284,9 @@ enum Record {
         outcome: Outcome,
         cost_usd: Option<f64>,
     },
+    RunState {
+        state: StoredRunState,
+    },
     Closed {
         reason: String,
     },
@@ -314,6 +317,30 @@ enum Outcome {
     Completed,
     Interrupted,
     Error(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum StoredRunState {
+    Running,
+    RequiresAction,
+    Idle,
+}
+impl StoredRunState {
+    fn from_live(state: crate::RunState) -> Self {
+        match state {
+            crate::RunState::Running => Self::Running,
+            crate::RunState::RequiresAction => Self::RequiresAction,
+            crate::RunState::Idle => Self::Idle,
+        }
+    }
+    fn live(self) -> crate::RunState {
+        match self {
+            Self::Running => crate::RunState::Running,
+            Self::RequiresAction => crate::RunState::RequiresAction,
+            Self::Idle => crate::RunState::Idle,
+        }
+    }
 }
 
 /// The structured half of a persisted tool result, mirroring
@@ -816,6 +843,9 @@ impl Record {
                 },
                 cost_usd: *cost_usd,
             },
+            SessionEvent::RunState { state } => Record::RunState {
+                state: StoredRunState::from_live(*state),
+            },
             SessionEvent::Closed { reason } => Record::Closed {
                 reason: reason.clone(),
             },
@@ -925,6 +955,9 @@ impl Record {
                 },
                 cost_usd: *cost_usd,
             }),
+            Record::RunState { state } => Input::Event(SessionEvent::RunState {
+                state: state.live(),
+            }),
             Record::ReasoningSummary {
                 text,
                 summary_index,
@@ -947,11 +980,9 @@ impl Record {
                 reasoning_output_tokens: *reasoning_output_tokens,
                 context_window: *context_window,
             }),
-            Record::ContextDetails { details } => {
-                Input::Event(SessionEvent::ContextDetails {
-                    details: details.clone(),
-                })
-            }
+            Record::ContextDetails { details } => Input::Event(SessionEvent::ContextDetails {
+                details: details.clone(),
+            }),
             Record::Closed { reason } => Input::Event(SessionEvent::Closed {
                 reason: reason.clone(),
             }),

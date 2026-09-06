@@ -71,6 +71,9 @@ pub enum SessionEvent {
         outcome: TurnOutcome,
         cost_usd: Option<f64>,
     },
+    /// The provider's current Main runtime state. This is a snapshot, never
+    /// evidence that a turn finished.
+    RunState { state: RunState },
     /// A slice of a reasoning summary streamed in (Codex). Not a thinking
     /// delta: Codex never streams raw chain-of-thought over app-server —
     /// these are the model-authored summaries of hidden reasoning, arriving
@@ -184,6 +187,13 @@ pub enum McpStatus {
 pub struct RateLimitWindow {
     pub used_fraction: f32,
     pub resets_at: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunState {
+    Running,
+    RequiresAction,
+    Idle,
 }
 
 /// One model a provider offers: the value its CLI accepts, and the name a

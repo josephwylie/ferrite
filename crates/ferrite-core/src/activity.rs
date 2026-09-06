@@ -437,6 +437,14 @@ impl SubjectState {
                 self.busy = false;
                 self.stop_timings(at);
             }
+            Input::Event(SessionEvent::RunState { state }) => {
+                self.status = match state {
+                    crate::RunState::Running => AgentStatus::Working,
+                    crate::RunState::RequiresAction => AgentStatus::Waiting,
+                    crate::RunState::Idle => AgentStatus::Idle,
+                };
+                self.busy = live && !matches!(state, crate::RunState::Idle);
+            }
             Input::Event(SessionEvent::DecisionRequested { decision }) => {
                 if live && decision.blocks_execution() {
                     self.status = AgentStatus::Waiting;

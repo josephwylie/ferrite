@@ -1102,6 +1102,14 @@ impl Transcript {
                     ..Update::default()
                 }
             }
+            Input::Event(SessionEvent::RunState { state }) => {
+                self.status = match state {
+                    crate::RunState::Running => Status::Streaming,
+                    crate::RunState::RequiresAction => Status::Blocked,
+                    crate::RunState::Idle => Status::Idle,
+                };
+                Update::default()
+            }
             Input::Event(SessionEvent::DecisionRequested { decision }) => {
                 if decision.blocks_execution() {
                     self.status = Status::Blocked;

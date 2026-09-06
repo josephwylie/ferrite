@@ -956,6 +956,18 @@ fn parse_system(value: &Value) -> Option<SessionEvent> {
             .get("permissionMode")
             .and_then(Value::as_str)
             .map(|mode| SessionEvent::PermissionMode { mode: mode.into() }),
+        "session_state_changed" => match value.get("state").and_then(Value::as_str) {
+            Some("running") => Some(SessionEvent::RunState {
+                state: crate::RunState::Running,
+            }),
+            Some("requires_action") => Some(SessionEvent::RunState {
+                state: crate::RunState::RequiresAction,
+            }),
+            Some("idle") => Some(SessionEvent::RunState {
+                state: crate::RunState::Idle,
+            }),
+            _ => None,
+        },
         _ => None,
     }
 }
