@@ -11,6 +11,7 @@ mod queue;
 mod suggestions;
 mod wire;
 
+use crate::spawn::NoConsoleWindow;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
@@ -214,6 +215,7 @@ impl ClaudeSession {
         check_version(&program)?;
 
         let mut command = Command::new(&program);
+        command.no_console_window();
         command.args([
             "-p",
             "--input-format",
@@ -723,6 +725,7 @@ fn spawn_error(program: &str, e: io::Error) -> ClaudeSpawnError {
 fn check_version(program: &str) -> Result<(), ClaudeSpawnError> {
     let output = Command::new(program)
         .arg("--version")
+        .no_console_window()
         .output()
         .map_err(|e| spawn_error(program, e))?;
     if !output.status.success() {

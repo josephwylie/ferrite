@@ -1,5 +1,6 @@
 //! Model discovery without a Thread: initialize, model/list, then exit.
 
+use crate::spawn::NoConsoleWindow;
 use std::io::{self, BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
@@ -20,6 +21,7 @@ fn list_with_timeout(program: &str, timeout: Duration) -> io::Result<Vec<ModelIn
     super::check_version(&program).map_err(io::Error::other)?;
     let mut child = Command::new(program)
         .arg("app-server")
+        .no_console_window()
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
