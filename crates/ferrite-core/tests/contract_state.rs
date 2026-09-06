@@ -14,6 +14,7 @@ fn claude_background_snapshots_replace_tasks_and_exclude_ambient_work() {
     let tasks = a.view().main().transcript().progress().background();
     assert_eq!(tasks.len(), 1);
     assert_eq!(tasks[0].id, "work");
+    assert_eq!(a.view().main().transcript().progress().working_background(), 1, "snapshot membership itself means live background activity");
     let r = Replay::new("claude", vec![first, json!({"type":"system","subtype":"background_tasks_changed","session_id":"root","uuid":"snapshot-2","tasks":[]})]);
     assert!(fold(r.drain()).view().main().transcript().progress().background().is_empty(), "empty native snapshot must remove stale tasks");
 }
@@ -51,6 +52,14 @@ fn codex_rerouted_model_updates_effective_model_without_resetting_conversation()
     let a = fold(r.drain());
     assert_eq!(a.view().main().transcript().model(), Some("fallback"));
     assert_eq!(a.view().main().transcript().session_id(), Some("root"));
+}
+
+#[test]
+fn codex_settings_notification_reads_the_native_nested_settings() {
+    let r = Replay::new("codex", vec![json!({"method":"thread/settings/updated","params":{"threadId":"root","threadSettings":{"model":"native-model","approvalPolicy":"never"}}})]);
+    let events = r.drain();
+    assert!(events.iter().any(|e| matches!(e, SessionEvent::PermissionMode { mode } if mode == "never")));
+    assert_eq!(fold(events).view().main().transcript().model(), Some("native-model"));
 }
 #[test]
 fn claude_native_context_report_owns_the_meter_without_model_name_guessing() {
