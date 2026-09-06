@@ -49,7 +49,7 @@ use serde_json::Value;
 use super::ClaudeCapabilities;
 use crate::progress::{Phase, PlanTask, ProgressEvent, StepStatus, TaskStatus};
 use crate::{
-    validate_form, Decision, DecisionKind, DecisionPolicy, FormField, Hunk,
+    validate_form, Decision, DecisionChoice, DecisionKind, DecisionPolicy, FormField, Hunk,
     RateLimitWindow, SessionEvent, ToolResult, TurnOutcome,
 };
 
@@ -701,10 +701,8 @@ fn parse_tool_request(value: &Value, request: &Value) -> Option<SessionEvent> {
                 .and_then(Value::as_array)
                 .into_iter()
                 .flatten()
-                .filter(|choice| {
-                    request["suppress_always_allow_rule"] != true && standing_choice(choice)
-                })
-                .cloned()
+                .filter_map(claude_choice)
+                .filter(|choice| request["suppress_always_allow_rule"] != true || !choice.standing)
                 .collect(),
         },
     })
@@ -764,7 +762,7 @@ enum Request {
         allow: bool,
         deny: bool,
         input: Value,
-        suggestions: Vec<Value>,
+        suggestions: Vec<DecisionChoice>,
     },
 }
 
@@ -831,7 +829,7 @@ fn approval_response(
     allow: bool,
     deny: bool,
     _input: &Value,
-    suggestions: &[Value],
+    suggestions: &[DecisionChoice],
     answer: &crate::DecisionAnswer,
 ) -> std::io::Result<Value> {
     match answer {
@@ -842,11 +840,19 @@ fn approval_response(
             Ok(serde_json::json!({"behavior":"deny","message":message}))
         }
         crate::DecisionAnswer::AllowAlways { input, suggestion }
-            if allow && suggestions.iter().any(|offered| offered == suggestion) =>
+            if allow && suggestions.iter().any(|offered| offered.value == *suggestion) =>
         {
             Ok(serde_json::json!({
                 "behavior":"allow", "updatedInput":input,
                 "updatedPermissions":[suggestion],
+            }))
+        }
+        crate::DecisionAnswer::Choose { value }
+            if suggestions.iter().any(|offered| offered.value == *value) =>
+        {
+            Ok(serde_json::json!({
+                "behavior":"allow", "updatedInput":_input,
+                "updatedPermissions":[value],
             }))
         }
         _ => Err(std::io::Error::new(
@@ -914,6 +920,27 @@ fn elicitation_response(
             "elicitation answer does not match its form",
         )),
     }
+}
+
+fn claude_choice(value: &Value) -> Option<DecisionChoice> {
+    let destination = value["destination"].as_str().unwrap_or("this session");
+    let label = match value["type"].as_str()? {
+        "setMode" => format!("Use {} in {destination}", value["mode"].as_str()?),
+        "addRules" | "replaceRules" => {
+            let rule = value["rules"].as_array()?.first()?;
+            format!("Allow {} in {destination}", rule["toolName"].as_str()?)
+        }
+        "addDirectories" => {
+            let directory = value["directories"].as_array()?.first()?.as_str()?;
+            format!("Allow {directory} in {destination}")
+        }
+        _ => return None,
+    };
+    Some(DecisionChoice {
+        label,
+        value: value.clone(),
+        standing: standing_choice(value),
+    })
 }
 
 fn standing_choice(value: &Value) -> bool {

@@ -18,7 +18,7 @@ use serde_json::Value;
 use super::CodexCapabilities;
 use crate::progress::{Phase, PlanStep, ProgressEvent, StepStatus};
 use crate::{
-    Decision, DecisionPolicy, FileEdit, Hunk, ModelInfo, RateLimitWindow, SessionCommand,
+    Decision, DecisionChoice, DecisionPolicy, FileEdit, Hunk, ModelInfo, RateLimitWindow, SessionCommand,
     SessionEvent, ToolResult, TurnOutcome,
 };
 
@@ -591,15 +591,14 @@ fn parse_approval_request(value: &Value, params: &Value, tool_name: &str) -> Opt
                 .unwrap_or_default()
                 .to_string(),
             input: params.clone(),
-            // The standing answers Codex offers ("acceptForSession", execpolicy
-            // amendments), raw and in its own words.
+            // Every documented native choice stays selectable; only entries
+            // marked standing feed the compact always shortcut.
             suggestions: params
                 .get("availableDecisions")
                 .and_then(Value::as_array)
                 .into_iter()
                 .flatten()
-                .filter(|choice| standing_choice(choice))
-                .cloned()
+                .filter_map(codex_choice)
                 .collect(),
         },
     })
@@ -612,9 +611,7 @@ fn approval_policy(params: &Value) -> DecisionPolicy {
         return DecisionPolicy::default();
     };
     DecisionPolicy {
-        allow: choices.iter().any(|choice| {
-            choice == "accept" || choice == "acceptForSession" || standing_choice(choice)
-        }),
+        allow: choices.iter().any(|choice| choice == "accept"),
         deny: choices
             .iter()
             .any(|choice| choice == "decline" || choice == "cancel"),
@@ -622,27 +619,39 @@ fn approval_policy(params: &Value) -> DecisionPolicy {
     }
 }
 
-/// Only documented permission expansions may be offered as standing approval.
-fn standing_choice(value: &Value) -> bool {
-    if value == "acceptForSession" {
-        return true;
-    }
-    let Some(object) = value.as_object().filter(|object| object.len() == 1) else {
-        return false;
+fn codex_choice(value: &Value) -> Option<DecisionChoice> {
+    let (label, standing) = match value {
+        Value::String(choice) => match choice.as_str() {
+            "accept" => ("Allow".into(), false),
+            "decline" => ("Deny".into(), false),
+            "cancel" => ("Cancel turn".into(), false),
+            "acceptForSession" => ("Allow for this session".into(), true),
+            _ => return None,
+        },
+        Value::Object(object) if object.len() == 1 => {
+            if let Some(amendment) = object.get("acceptWithExecpolicyAmendment") {
+                let command = amendment["execpolicy_amendment"]
+                    .as_array()?
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .next()?;
+                (format!("Always allow {command}"), true)
+            } else if let Some(amendment) = object.get("applyNetworkPolicyAmendment") {
+                let policy = &amendment["network_policy_amendment"];
+                let host = policy["host"].as_str()?.trim();
+                if host.is_empty() { return None; }
+                match policy["action"].as_str()? {
+                    "allow" => (format!("Allow {host}"), true),
+                    "deny" => (format!("Block {host}"), false),
+                    _ => return None,
+                }
+            } else {
+                return None;
+            }
+        }
+        _ => return None,
     };
-    if let Some(amendment) = object.get("acceptWithExecpolicyAmendment") {
-        return amendment["execpolicy_amendment"]
-            .as_array()
-            .is_some_and(|command| !command.is_empty() && command.iter().all(Value::is_string));
-    }
-    object
-        .get("applyNetworkPolicyAmendment")
-        .is_some_and(|amendment| {
-            amendment["network_policy_amendment"]["action"] == "allow"
-                && amendment["network_policy_amendment"]["host"]
-                    .as_str()
-                    .is_some_and(|host| !host.is_empty())
-        })
+    Some(DecisionChoice { label, value: value.clone(), standing })
 }
 
 /// Keep the ID's JSON representation as the opaque Decision handle. Encoding

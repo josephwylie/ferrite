@@ -393,6 +393,14 @@ pub struct DecisionPolicy {
     pub interaction_required: bool,
 }
 
+/// One provider-normalized label paired with its opaque reply token.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DecisionChoice {
+    pub label: String,
+    pub value: serde_json::Value,
+    pub standing: bool,
+}
+
 impl Default for DecisionPolicy {
     fn default() -> Self {
         Self {
@@ -578,10 +586,8 @@ pub struct Decision {
     /// `input` (the wall answers Decisions without focusing).
     pub description: String,
     pub input: serde_json::Value,
-    /// Standing answers this request offers ("allow edits for this session"),
-    /// verbatim. Empty means this request has none to offer — Codex's
-    /// file-change approvals carry none — and the card offers no "always".
-    pub suggestions: Vec<serde_json::Value>,
+    /// Provider-labelled choices. Their raw values remain opaque to the UI.
+    pub suggestions: Vec<DecisionChoice>,
 }
 
 impl Decision {
@@ -593,7 +599,10 @@ impl Decision {
 
     /// An opaque standing choice already validated by the provider adapter.
     pub fn standing_answer(&self) -> Option<&serde_json::Value> {
-        self.suggestions.first()
+        self.suggestions
+            .iter()
+            .find(|choice| choice.standing)
+            .map(|choice| &choice.value)
     }
 }
 
@@ -601,7 +610,7 @@ impl Decision {
 mod tests {
     use super::*;
 
-    fn decision(suggestions: Vec<serde_json::Value>) -> Decision {
+    fn decision(suggestions: Vec<DecisionChoice>) -> Decision {
         Decision {
             delivery: Default::default(),
             kind: Default::default(),
@@ -618,10 +627,10 @@ mod tests {
     #[test]
     fn standing_choices_are_provider_validated_and_opaque_here() {
         let offered = decision(vec![
-            serde_json::json!({"opaque_choice": "first"}),
-            serde_json::json!("second"),
+            DecisionChoice { label: "first".into(), value: serde_json::json!({"opaque_choice": "first"}), standing: true },
+            DecisionChoice { label: "second".into(), value: serde_json::json!("second"), standing: false },
         ]);
-        assert_eq!(offered.standing_answer(), offered.suggestions.first());
+        assert_eq!(offered.standing_answer(), Some(&offered.suggestions[0].value));
         assert_eq!(decision(vec![]).standing_answer(), None);
     }
 }
@@ -643,6 +652,8 @@ pub enum DecisionAnswer {
         input: serde_json::Value,
         suggestion: serde_json::Value,
     },
+    /// Choose one opaque, provider-offered choice.
+    Choose { value: serde_json::Value },
     /// Answers a normalized question form. The provider adapter maps its
     /// stable IDs and native payload independently of the renderer.
     Questions {

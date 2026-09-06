@@ -220,6 +220,7 @@ fn approval_response(allow: bool, deny: bool, choices: &[Value], answer: &Decisi
         DecisionAnswer::Allow { .. } if allow => json!("accept"),
         DecisionAnswer::Deny { .. } if deny => json!("decline"),
         DecisionAnswer::AllowAlways { suggestion, .. } if choices.iter().any(|choice| choice == suggestion) => suggestion.clone(),
+        DecisionAnswer::Choose { value } if choices.iter().any(|choice| choice == value) => value.clone(),
         _ => return Err(io::Error::new(io::ErrorKind::InvalidInput, "answer is unavailable for this approval")),
     };
     Ok(json!({"decision": decision}))
@@ -252,7 +253,7 @@ fn question_response(
             native_response(input)
         }
         DecisionAnswer::Deny { .. } | DecisionAnswer::Cancel => Ok(json!({"answers": {}})),
-        DecisionAnswer::Form { .. } => Err(io::Error::new(
+        DecisionAnswer::Form { .. } | DecisionAnswer::Choose { .. } => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "question requires question answers",
         )),
@@ -428,6 +429,7 @@ impl Replies {
                 format!("Skip your async question {}. {}", identity[1], message)
             }
             DecisionAnswer::Form { .. }
+            | DecisionAnswer::Choose { .. }
             | DecisionAnswer::Cancel => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
