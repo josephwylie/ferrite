@@ -13,6 +13,7 @@
 mod activity;
 pub(super) mod catalog;
 mod questions;
+mod queue;
 mod wire;
 
 use std::collections::HashMap;
@@ -227,6 +228,7 @@ pub struct CodexSession {
     cwd: Option<PathBuf>,
     next_request_id: u64,
     question_replies: Arc<Mutex<questions::Replies>>,
+    queue: Arc<Mutex<queue::Queue>>,
 }
 
 impl CodexSession {
@@ -276,6 +278,7 @@ impl CodexSession {
         let skills = Arc::new(Mutex::new(Vec::new()));
         let models = Arc::new(Mutex::new(Vec::new()));
         let question_replies = Arc::new(Mutex::new(questions::Replies::default()));
+        let queue = Arc::new(Mutex::new(queue::Queue::default()));
         let handshake = read_stdout(
             stdout,
             Arc::downgrade(&stdin),
@@ -286,6 +289,7 @@ impl CodexSession {
             Arc::clone(&skills),
             Arc::clone(&models),
             Arc::clone(&question_replies),
+            queue.clone(),
         );
 
         let mut session = Self {
@@ -304,6 +308,7 @@ impl CodexSession {
             cwd: config.cwd.clone(),
             next_request_id: 1,
             question_replies,
+            queue,
         };
 
         // The handshake, in the server's required order. A failed one must
@@ -350,6 +355,8 @@ impl CodexSession {
             "method": "model/list",
             "params": {},
         }));
+        let request = lock(&session.queue).initialize(&session.thread_id);
+        let _ = session.write_line(&request);
         Ok(session)
     }
 
@@ -367,7 +374,7 @@ impl CodexSession {
             "jsonrpc": "2.0",
             "id": id,
             "method": "initialize",
-            "params": {"clientInfo": {"name": "ferrite", "version": env!("CARGO_PKG_VERSION")}},
+            "params": {"capabilities":{"experimentalApi":true}, "clientInfo": {"name": "ferrite", "version": env!("CARGO_PKG_VERSION")}},
         }))
         .map_err(|e| format!("could not write initialize: {e}"))?;
         match await_step(steps, "initialize")? {
@@ -448,6 +455,26 @@ impl CodexSession {
     /// `@path` tokens naming real files ride as `{"type":"mention"}` items —
     /// the server never intercepts slash text, so this seam is where the
     /// Composer's picks become real.
+    pub fn enqueue(&mut self, client_id: &str, text: &str) -> io::Result<()> {
+        let input = wire::input_items(text, &lock(&self.skills), self.cwd.as_deref());
+        let request = {
+            let mut queue = lock(&self.queue);
+            if !queue.supported {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "Codex has not confirmed native queue support",
+                ));
+            }
+            queue.add(client_id, serde_json::json!(input))
+        };
+        self.write_line(&request)
+    }
+
+    pub fn cancel_queued(&mut self, id: &str) -> io::Result<()> {
+        let request = lock(&self.queue).delete(id);
+        self.write_line(&request)
+    }
+
     pub fn send(&mut self, text: &str) -> io::Result<()> {
         let input = wire::input_items(text, &lock(&self.skills), self.cwd.as_deref());
         // The Pane makes its own compact preview; request the detailed
@@ -644,6 +671,7 @@ fn read_stdout(
     skills: Arc<Mutex<Vec<crate::SessionCommand>>>,
     model_catalog: Arc<Mutex<Vec<crate::ModelInfo>>>,
     question_replies: Arc<Mutex<questions::Replies>>,
+    queue: Arc<Mutex<queue::Queue>>,
 ) -> Receiver<Result<HandshakeStep, String>> {
     let (step_sender, steps) = sync_channel(2);
     thread::spawn(move || {
@@ -684,6 +712,7 @@ fn read_stdout(
                     Some(Ok(result)) => match wire::parse_thread_response(&result) {
                         Some(thread) => {
                             turns.identify_main(&thread.thread_id);
+                            let queue_events = lock(&queue).identify(&result["thread"]);
                             // The Session announces itself the way every
                             // provider does; the values are the wire's, only
                             // the correlation is Ferrite's.
@@ -696,6 +725,11 @@ fn read_stdout(
                             // large resumed tree into the bounded event stream.
                             // Main's interrupt owner is already authoritative.
                             let _ = step_sender.send(Ok(HandshakeStep::Thread(Box::new(thread))));
+                            for event in queue_events {
+                                if sender.send(event).is_err() {
+                                    return;
+                                }
+                            }
                             menu_pending = true;
                             models_pending = true;
                             if !publish_activity(update, &mut activity, &sender, &stdin) {
@@ -757,6 +791,17 @@ fn read_stdout(
             }
             turns.observe(text);
             if let Ok(frame) = serde_json::from_str(text) {
+                let (events, requests) = lock(&queue).observe(&frame);
+                for event in events {
+                    if sender.send(event).is_err() {
+                        return;
+                    }
+                }
+                for request in requests {
+                    if let Some(stdin) = stdin.upgrade() {
+                        let _ = write_request(&stdin, &request);
+                    }
+                }
                 let reply = lock(&question_replies).observe(&frame);
                 if let Some(reply) = reply {
                     if sender.send(reply).is_err() {

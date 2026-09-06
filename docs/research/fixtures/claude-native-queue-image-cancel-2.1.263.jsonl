@@ -1,0 +1,12 @@
+{"mode": "image-cancel", "version": "2.1.263 (Claude Code)"}
+{"submitted_uuid": "c8590688-5a7e-411b-aff7-3f3945ac7697", "prompt": "Print numbers 1 through 100, one per line."}
+{"type": "command_lifecycle", "command_uuid": "c8590688-5a7e-411b-aff7-3f3945ac7697", "state": "queued"}
+{"type": "command_lifecycle", "command_uuid": "c8590688-5a7e-411b-aff7-3f3945ac7697", "state": "started"}
+{"type": "system", "subtype": "init", "claude_code_version": "2.1.263", "capabilities": ["interrupt_receipt_v1", "interrupt_cancel_queued_v1", "msg_lifecycle_v1"]}
+{"submitted_uuid": "7c7e6b67-cce7-40ae-a529-25dbb3982442", "prompt": "Describe this image."}
+{"image_uuid": "7c7e6b67-cce7-40ae-a529-25dbb3982442", "content_types": ["text", "image"], "image_dimensions": [1, 1]}
+{"type": "command_lifecycle", "command_uuid": "7c7e6b67-cce7-40ae-a529-25dbb3982442", "state": "queued"}
+{"type": "command_lifecycle", "command_uuid": "7c7e6b67-cce7-40ae-a529-25dbb3982442", "state": "cancelled"}
+{"type": "control_response", "request_id": "cancel_image", "subtype": "success", "response": {"cancelled": true}}
+{"type": "result", "subtype": "success", "terminal_reason": "completed", "user_message_uuid": "c8590688-5a7e-411b-aff7-3f3945ac7697", "user_message_uuids": ["c8590688-5a7e-411b-aff7-3f3945ac7697"], "queued_turn_count": 0}
+{"type": "command_lifecycle", "command_uuid": "c8590688-5a7e-411b-aff7-3f3945ac7697", "state": "completed"}

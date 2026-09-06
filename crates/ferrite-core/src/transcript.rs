@@ -1088,7 +1088,7 @@ impl Transcript {
             // Block, nothing dirty.
             Input::Event(SessionEvent::Commands { .. }) => Update::default(),
             Input::Event(SessionEvent::PermissionMode { .. }) => Update::default(),
-            Input::Event(SessionEvent::Models { .. }) => Update::default(),
+            Input::Event(SessionEvent::Models { .. } | SessionEvent::Queue(_)) => Update::default(),
             Input::Event(SessionEvent::Closed { reason }) => {
                 self.progress.disconnected();
                 self.latest_reasoning_part = None;
