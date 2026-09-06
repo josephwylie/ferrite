@@ -689,6 +689,7 @@ pub fn render_pane(
     let queued = thread.and_then(|thread| thread.queued());
     let workspace = thread.and_then(|thread| thread.workspace());
     let permission_mode = thread.and_then(|thread| thread.permission_mode());
+    let suggestion = thread.and_then(|thread| thread.suggestion());
     let timings = subject.as_ref().map(|subject| subject.timings());
     let status = subject.as_ref().map(|subject| {
         crate::cockpit::subagents::transcript_status(subject.status(), subject.fresh())
@@ -761,6 +762,7 @@ pub fn render_pane(
                     usage_meter: None,
                     setup_controls: None,
                     draft_error: None,
+                    suggestion,
                     focused,
                 },
             )
@@ -875,6 +877,7 @@ pub fn render_pane(
                         usage_meter,
                         setup_controls: None,
                         draft_error: None,
+                        suggestion,
                         focused,
                     },
                 ));
@@ -1052,6 +1055,8 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
                     usage_meter,
                     setup_controls: Some(band),
                     draft_error: error.cloned(),
+                    // A draft has no conversation yet, so nothing to predict.
+                    suggestion: None,
                     focused,
                 },
             )),
@@ -2652,6 +2657,9 @@ struct ComposerStack<'a> {
     usage_meter: Option<AnyElement>,
     setup_controls: Option<AnyElement>,
     draft_error: Option<SharedString>,
+    /// The follow-up predicted for this Thread's last response, if one has
+    /// landed. The idle line shows it verbatim and Tab accepts it.
+    suggestion: Option<&'a str>,
     /// Whether this Pane holds the keyboard. The Composer paints its own
     /// caret when it does; the `›` mark stands in when it does not, and
     /// the two are mutually exclusive (§D.7).
@@ -2687,6 +2695,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         usage_meter,
         setup_controls,
         draft_error,
+        suggestion,
         focused,
     } = stack;
     let is_draft = setup_controls.is_some();
@@ -2766,7 +2775,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
                 .flex()
                 .items_center()
                 .text_color(rgb(TEXT_2))
-                .child(placeholder(decision.is_some(), transcript)),
+                .child(placeholder(decision.is_some(), transcript, suggestion)),
         );
     }
     // `.composer-prompt`: the `›` mark when the Pane is not focused — the
@@ -2800,7 +2809,13 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
             .whitespace_nowrap()
             .text_size(px(theme::FS_MONO))
             .text_color(rgb(TEXT_MUTED))
-            .child(composer_hints(is_draft, history_available)),
+            .child(composer_hints(
+                is_draft,
+                history_available,
+                followup::suggest(decision.is_some(), transcript, suggestion)
+                    .acceptable()
+                    .is_some(),
+            )),
     );
     region = region.child(input);
     // The popover paints above the stack — deferred, so it escapes the
@@ -2894,37 +2909,34 @@ fn mode_chip(mode: &str) -> Div {
         .hover_raised()
 }
 
-fn composer_hints(is_draft: bool, history_available: bool) -> &'static str {
-    if is_draft {
-        "@ project files · /import"
-    } else if history_available {
-        "↑ history · @ files · / commands"
-    } else {
-        "@ files · / commands"
+/// The hints beside the line. A showing prediction takes the first slot: it
+/// is the only one of these the operator cannot discover by looking at the
+/// box, and an accept key nobody knows about is the same as no accept key.
+fn composer_hints(is_draft: bool, history_available: bool, suggested: bool) -> &'static str {
+    match (is_draft, suggested, history_available) {
+        (true, _, _) => "@ project files · /import",
+        (false, true, true) => "⇥ accept · ↑ history · @ files",
+        (false, true, false) => "⇥ accept · @ files · / commands",
+        (false, false, true) => "↑ history · @ files · / commands",
+        (false, false, false) => "@ files · / commands",
     }
 }
 
-/// The idle line's ghost text (§D.7): the wording for whatever follow-up
-/// the Thread invites — the prototype's three, plus the two this reads off
-/// the last response (an offer to accept, a question to answer) and the
-/// model's own unfinished plan. `ferrite_core::followup` decides which;
-/// only the sentences live here. It never names the Thread and never lists
-/// the hints; the `.hint` on the same row already does that.
-fn placeholder(pending: bool, transcript: Option<&Transcript>) -> SharedString {
-    match followup::suggest(pending, transcript) {
+/// The idle line's ghost text (§D.7): the prototype's three, plus the
+/// predicted follow-up when one has landed. A prediction is already in the
+/// operator's voice and already filtered, so it is shown verbatim — it is a
+/// draft of their next prompt, not a description of one, which is what lets
+/// Tab accept it. It never names the Thread and never lists the hints; the
+/// `.hint` on the same row already does that.
+fn placeholder(
+    pending: bool,
+    transcript: Option<&Transcript>,
+    suggestion: Option<&str>,
+) -> SharedString {
+    match followup::suggest(pending, transcript, suggestion) {
         Followup::Decision => SharedString::from("Reply to the Decision\u{2026}"),
         Followup::Revive => SharedString::from("Revive and continue\u{2026}"),
-        // The offer is quoted back as the operator would say it, so the
-        // line reads as a draft of their next prompt rather than as a
-        // description of one.
-        Followup::Accept(phrase) => SharedString::from(format!("Yes, {phrase}\u{2026}")),
-        Followup::Answer => SharedString::from("Answer the question above\u{2026}"),
-        Followup::Continue { remaining: 1 } => {
-            SharedString::from("Continue with the last step\u{2026}")
-        }
-        Followup::Continue { remaining } => SharedString::from(format!(
-            "Continue with the remaining {remaining} steps\u{2026}"
-        )),
+        Followup::Suggested(text) => SharedString::from(text),
         Followup::Steer => SharedString::from("Steer this Thread\u{2026}"),
     }
 }
@@ -5164,14 +5176,26 @@ mod tests {
     #[test]
     fn footer_advertises_history_only_when_the_context_is_armed() {
         assert_eq!(
-            composer_hints(false, true),
+            composer_hints(false, true, false),
             "↑ history · @ files · / commands"
         );
-        assert_eq!(composer_hints(false, false), "@ files · / commands");
+        assert_eq!(composer_hints(false, false, false), "@ files · / commands");
         assert_eq!(
-            composer_hints(true, true),
+            composer_hints(true, true, false),
             "@ project files · /import",
             "drafts never advertise Thread history"
+        );
+    }
+
+    /// A prediction the operator can accept must say so: the key is the one
+    /// thing about it the box itself cannot show.
+    #[test]
+    fn footer_advertises_the_accept_key_while_a_prediction_shows() {
+        assert!(composer_hints(false, true, true).starts_with("⇥ accept"));
+        assert!(composer_hints(false, false, true).starts_with("⇥ accept"));
+        assert!(
+            !composer_hints(true, true, true).contains("accept"),
+            "a draft has no conversation to predict from"
         );
     }
     use ferrite_core::transcript::{Input, Lexer, Todos};
@@ -6075,15 +6099,18 @@ mod tests {
     }
 
     /// §D.7: the idle line says what the Pane is waiting on — a Decision, a
-    /// live Thread, or a closed Session — and, when the last response asked
-    /// for something, what to say back. It never names the Thread and never
-    /// repeats the hints beside it.
+    /// live Thread, or a closed Session — and, once a prediction lands, shows
+    /// it verbatim as the operator's own next line. It never names the Thread
+    /// and never repeats the hints beside it.
     #[test]
     fn the_placeholder_says_what_the_pane_is_waiting_on() {
         let live = Transcript::default();
-        assert_eq!(placeholder(false, Some(&live)), "Steer this Thread\u{2026}");
         assert_eq!(
-            placeholder(true, Some(&live)),
+            placeholder(false, Some(&live), None),
+            "Steer this Thread\u{2026}"
+        );
+        assert_eq!(
+            placeholder(true, Some(&live), None),
             "Reply to the Decision\u{2026}"
         );
 
@@ -6092,36 +6119,39 @@ mod tests {
             reason: "the CLI exited".into(),
         }));
         assert_eq!(
-            placeholder(false, Some(&closed)),
+            placeholder(false, Some(&closed), None),
             "Revive and continue\u{2026}"
         );
 
-        // A response that ended on an offer hands the operator the line
-        // rather than describing it.
-        let mut offered = Transcript::default();
-        offered.apply(Input::Prompt("fix the decoder".into()));
-        offered.apply(Input::Event(SessionEvent::TextDelta {
-            text: "Fixed it. Want me to run the tests?".into(),
+        // A landed prediction is the line, verbatim and unadorned — it is a
+        // draft of the next prompt, not a description of one.
+        let mut answered = Transcript::default();
+        answered.apply(Input::Prompt("fix the decoder".into()));
+        answered.apply(Input::Event(SessionEvent::TextDelta {
+            text: "Fixed it.".into(),
         }));
-        offered.apply(Input::Event(SessionEvent::TurnEnded {
+        answered.apply(Input::Event(SessionEvent::TurnEnded {
             outcome: TurnOutcome::Completed,
             cost_usd: None,
         }));
         assert_eq!(
-            placeholder(false, Some(&offered)),
-            "Yes, run the tests\u{2026}"
+            placeholder(false, Some(&answered), Some("Run the tests")),
+            "Run the tests"
         );
-        // A Decision still outranks it.
+        // A Decision and a dead Session both outrank it.
         assert_eq!(
-            placeholder(true, Some(&offered)),
+            placeholder(true, Some(&answered), Some("Run the tests")),
             "Reply to the Decision\u{2026}"
+        );
+        assert_eq!(
+            placeholder(false, Some(&closed), Some("Run the tests")),
+            "Revive and continue\u{2026}"
         );
 
         for line in [
-            placeholder(false, Some(&live)),
-            placeholder(true, Some(&live)),
-            placeholder(false, Some(&closed)),
-            placeholder(false, Some(&offered)),
+            placeholder(false, Some(&live), None),
+            placeholder(true, Some(&live), None),
+            placeholder(false, Some(&closed), None),
         ] {
             assert!(!line.contains("message"), "{line}");
             assert!(!line.contains("commands"), "{line}");

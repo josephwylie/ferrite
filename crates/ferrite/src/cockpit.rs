@@ -10,6 +10,7 @@ use std::time::Duration;
 use ferrite_core::cockpit::{CloseError, Cockpit, HistoryDirection, ProviderChoice};
 use ferrite_core::docview::{Cell, Level};
 use ferrite_core::draft::DraftTarget;
+use ferrite_core::followup;
 use ferrite_core::groups::{Drag, DropTarget, GroupChange, GroupId, Groups, Plan};
 use ferrite_core::layout::{self, Edge, SeamId, Tree, Zone};
 use ferrite_core::roster::{PaneIdentity, View};
@@ -2367,7 +2368,54 @@ impl CockpitView {
 
     /// Tab walks a draft's band (#29), or an L1 Thread Pane's rendered tool
     /// disclosures before returning to the Composer.
+    /// Tab on an empty Composer that is showing a predicted follow-up puts
+    /// that text in the line — editable, unsent. Nothing reaches the provider
+    /// without a second, deliberate ↵: ghost text is a guess, and a guess is
+    /// not consent to start a turn.
+    ///
+    /// The condition is `followup::suggest` itself, the same call the idle
+    /// line renders from, so the key and the ghost text can never disagree
+    /// about whether there is something to accept.
+    fn accept_suggestion(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.settings_open || self.rename.is_some() || self.popover.is_some() {
+            return false;
+        }
+        let Some(thread) = self.focused_thread() else {
+            return false;
+        };
+        let Some(open) = self.cockpit.thread(thread) else {
+            return false;
+        };
+        let offered = followup::suggest(
+            open.pending().is_some(),
+            Some(open.transcript()),
+            open.suggestion(),
+        );
+        let Some(text) = offered.acceptable().map(str::to_string) else {
+            return false;
+        };
+        let Some(composer) = self
+            .panes
+            .get(self.focused())
+            .map(|pane| pane.composer.clone())
+        else {
+            return false;
+        };
+        // Only ever onto an empty line: Tab is the disclosure walk once the
+        // operator has started typing, and overwriting their draft would be
+        // the worst possible reading of the key.
+        if !composer.read(cx).is_empty() {
+            return false;
+        }
+        composer.update(cx, |composer, cx| composer.set(text, cx));
+        cx.notify();
+        true
+    }
+
     fn band_cycle(&mut self, _: &BandCycle, window: &mut Window, cx: &mut Context<Self>) {
+        if self.accept_suggestion(cx) {
+            return;
+        }
         if self.settings_open
             || self
                 .focused_thread()
@@ -6942,6 +6990,69 @@ mod tests {
                 .unwrap();
         }
         (cockpit, fake)
+    }
+
+    /// Tab on an empty Composer showing a prediction puts it in the line —
+    /// as editable text, unsent. A guess is not consent to start a turn, so
+    /// the operator still has to press ↵.
+    #[gpui::test]
+    fn tab_accepts_the_predicted_follow_up_without_sending_it(cx: &mut TestAppContext) {
+        let (mut core, fake) = cockpit("tab-accept-suggestion", 1);
+        let thread = core.threads()[0];
+        // A finished turn, so the Thread is idle with a response to follow up.
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TextDelta {
+                text: "Fixed the decoder.".into(),
+            })
+            .unwrap();
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TurnEnded {
+                outcome: ferrite_core::TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+        core.pump();
+        core.deliver_suggestion(thread, "Run the tests".into());
+        core.pump();
+
+        bind_band_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.read_with(cx, |view, cx| {
+            assert!(
+                view.panes[view.focused()].composer.read(cx).is_empty(),
+                "the line starts empty"
+            );
+        });
+
+        cx.simulate_keystrokes("tab");
+
+        view.read_with(cx, |view, cx| {
+            assert_eq!(
+                view.panes[view.focused()].composer.read(cx).text(),
+                "Run the tests",
+                "tab puts the prediction in the line"
+            );
+            assert!(
+                view.cockpit
+                    .thread(view.panes[view.focused()].thread().unwrap())
+                    .unwrap()
+                    .transcript()
+                    .blocks()
+                    .iter()
+                    .all(|block| !matches!(&block.body, Body::Prompt(_))),
+                "nothing was sent: accepting is not submitting"
+            );
+        });
+
+        // A second tab must not append it again — the line is no longer
+        // empty, so tab is back to being the disclosure walk.
+        cx.simulate_keystrokes("tab");
+        view.read_with(cx, |view, cx| {
+            assert_eq!(
+                view.panes[view.focused()].composer.read(cx).text(),
+                "Run the tests"
+            );
+        });
     }
 
     #[gpui::test]

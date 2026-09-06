@@ -22,6 +22,7 @@ pub mod roster;
 pub mod session;
 pub mod settings;
 pub mod store;
+pub mod suggest;
 pub mod titler;
 pub mod transcript;
 pub mod workspace;
