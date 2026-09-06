@@ -116,3 +116,18 @@ fn codex_unified_diff_preserves_function_headers_and_marker_like_content() {
     );
     assert_eq!(h.lines, ["---literal", "+++literal", " unchanged"]);
 }
+
+#[test]
+fn codex_mcp_and_dynamic_tools_preserve_native_timing_and_structured_payload() {
+    for (kind, extra, payload) in [
+        ("mcpToolCall", json!({"server":"search","tool":"find","result":{"content":[],"structuredContent":{"count":2}},"error":null}), json!({"content":[],"structuredContent":{"count":2}})),
+        ("dynamicToolCall", json!({"tool":"lookup","contentItems":[{"type":"inputText","text":"found"}],"success":true}), json!([{"type":"inputText","text":"found"}])),
+    ] {
+        let mut item = json!({"id":"call","type":kind,"status":"completed","arguments":{},"durationMs":987});
+        item.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        let r = Replay::new("codex", vec![json!({"method":"item/completed","params":{"threadId":"root","turnId":"turn","item":item}})]);
+        let a = fold(r.drain());
+        assert_eq!(a.view().main().timings().get("call").expect("native duration must survive even without a start frame").elapsed(), std::time::Duration::from_millis(987));
+        assert!(a.view().main().transcript().blocks().iter().any(|b| matches!(&b.body, ferrite_core::transcript::Body::Tool(t) if t.structured_result.as_ref() == Some(&payload))), "native structured payload must use shared disclosure");
+    }
+}
