@@ -7155,6 +7155,12 @@ mod tests {
         );
         assert!(cx.debug_bounds("context-usage-five-hour-52").is_some());
         assert!(cx.debug_bounds("context-usage-weekly-8").is_some());
+        assert!(cx
+            .debug_bounds("context-usage-five-hour-reset-reported")
+            .is_some());
+        assert!(cx
+            .debug_bounds("context-usage-weekly-reset-reported")
+            .is_some());
         fake.streams.borrow()[0]
             .send(SessionEvent::TokenUsage {
                 total_tokens: 31_000,

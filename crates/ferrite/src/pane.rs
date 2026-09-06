@@ -35,7 +35,7 @@ use gpui::{
 #[cfg(test)]
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{cell::Cell as Flag, rc::Rc};
 
 use crate::components;
@@ -3271,6 +3271,46 @@ fn duration_label(elapsed: Duration) -> SharedString {
     }
 }
 
+/// A subscription window's plausible Unix reset instant in compact, useful
+/// units. Providers disagree on the field's units, so only a future value
+/// inside the window's own maximum span is safe to present as a countdown.
+fn reset_label(resets_at: Option<u64>, span: Duration, now: SystemTime) -> SharedString {
+    let Some(resets_at) = resets_at else {
+        return SharedString::from("Reset not reported");
+    };
+    let now = now.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    let Some(remaining) = resets_at
+        .checked_sub(now)
+        .filter(|remaining| *remaining <= span.as_secs())
+    else {
+        return SharedString::from("Reset not reported");
+    };
+    let label = match remaining {
+        0 => "Reset not reported".into(),
+        1..=59 => "Resets in <1m".into(),
+        60..=3_599 => format!("Resets in {}m", remaining / 60),
+        3_600..=86_399 => {
+            let hours = remaining / 3_600;
+            let minutes = remaining % 3_600 / 60;
+            if minutes == 0 {
+                format!("Resets in {hours}h")
+            } else {
+                format!("Resets in {hours}h {minutes}m")
+            }
+        }
+        86_400.. => {
+            let days = remaining / 86_400;
+            let hours = remaining % 86_400 / 3_600;
+            if hours == 0 {
+                format!("Resets in {days}d")
+            } else {
+                format!("Resets in {days}d {hours}h")
+            }
+        }
+    };
+    SharedString::from(label)
+}
+
 /// The usage meter's detail card: the meter's own three windows, in the
 /// meter's own order, each a labelled bar over the reading behind it.
 /// Counts are reported values, never estimates — a window the provider has
@@ -3292,6 +3332,7 @@ pub fn context_usage(
         label
     }
     let maximum = usage.context_window.filter(|limit| *limit > 0);
+    let now = SystemTime::now();
     // One 4px bar, full width: the same track and the same status ink as
     // the meter that opened the card, at a size a card can afford.
     let bar = |fraction: Option<f32>| {
@@ -3359,22 +3400,41 @@ pub fn context_usage(
                     .unwrap_or_else(|| "not reported".into()),
             ))
     };
-    let window =
-        |label: &'static str, key: &'static str, fraction: Option<f32>, detail: Option<Div>| {
-            let mut block = div()
-                .flex()
-                .flex_col()
-                .gap(px(theme::USAGE_CARD_ROW_GAP))
-                .child(heading(
-                    label,
-                    percent_value(key, fraction).into_any_element(),
-                ))
-                .child(bar(fraction));
-            if let Some(detail) = detail {
-                block = block.child(detail);
-            }
-            block
-        };
+    let reset_value = |key: &'static str, resets_at: Option<u64>, span: Duration| {
+        div()
+            .id(SharedString::from(format!("reset-{key}")))
+            .debug_selector(move || {
+                format!(
+                    "context-usage-{key}-reset-{}",
+                    if resets_at.is_some() {
+                        "reported"
+                    } else {
+                        "unknown"
+                    }
+                )
+            })
+            .text_color(rgb(TEXT_MUTED))
+            .child(reset_label(resets_at, span, now))
+            .into_any_element()
+    };
+    let window = |label: &'static str,
+                  key: &'static str,
+                  fraction: Option<f32>,
+                  detail: Option<AnyElement>| {
+        let mut block = div()
+            .flex()
+            .flex_col()
+            .gap(px(theme::USAGE_CARD_ROW_GAP))
+            .child(heading(
+                label,
+                percent_value(key, fraction).into_any_element(),
+            ))
+            .child(bar(fraction));
+        if let Some(detail) = detail {
+            block = block.child(detail);
+        }
+        block
+    };
     let context_fraction = maximum.map(|maximum| usage.total_tokens as f32 / maximum as f32);
     // The counts behind the context bar, in the card's quietest ink: the
     // bar says how full, this says of what.
@@ -3394,18 +3454,31 @@ pub fn context_usage(
         .p(px(theme::USAGE_CARD_PAD))
         .text_size(px(theme::FS_MONO))
         .text_color(rgb(TEXT))
-        .child(window("Context", "context", context_fraction, Some(counts)))
+        .child(window(
+            "Context",
+            "context",
+            context_fraction,
+            Some(counts.into_any_element()),
+        ))
         .child(window(
             "5-hour limit",
             "five-hour",
             limits.five_hour.map(|limit| limit.used_fraction),
-            None,
+            Some(reset_value(
+                "five-hour",
+                limits.five_hour.and_then(|limit| limit.resets_at),
+                Duration::from_secs(5 * 3_600),
+            )),
         ))
         .child(window(
             "Weekly limit",
             "weekly",
             limits.weekly.map(|limit| limit.used_fraction),
-            None,
+            Some(reset_value(
+                "weekly",
+                limits.weekly.and_then(|limit| limit.resets_at),
+                Duration::from_secs(7 * 86_400),
+            )),
         ))
 }
 
@@ -5768,6 +5841,38 @@ mod tests {
         );
         assert_eq!(duration_label(Duration::from_secs(42)).as_ref(), "42s");
         assert_eq!(duration_label(Duration::from_secs(134)).as_ref(), "2m14s");
+    }
+
+    #[test]
+    fn rate_limit_resets_read_as_compact_countdowns() {
+        let now = UNIX_EPOCH + Duration::from_secs(1_000_000);
+        let after = |seconds: u64| Some(1_000_000 + seconds);
+        let week = Duration::from_secs(7 * 86_400);
+
+        assert_eq!(reset_label(None, week, now).as_ref(), "Reset not reported");
+        assert_eq!(reset_label(after(45), week, now).as_ref(), "Resets in <1m");
+        assert_eq!(
+            reset_label(after(42 * 60), week, now).as_ref(),
+            "Resets in 42m"
+        );
+        assert_eq!(
+            reset_label(after(3 * 3_600 + 14 * 60), week, now).as_ref(),
+            "Resets in 3h 14m"
+        );
+        assert_eq!(
+            reset_label(after(4 * 86_400 + 2 * 3_600), week, now).as_ref(),
+            "Resets in 4d 2h"
+        );
+        assert_eq!(
+            reset_label(Some(999_999), week, now).as_ref(),
+            "Reset not reported",
+            "an elapsed or relative provider timestamp must not underflow"
+        );
+        assert_eq!(
+            reset_label(after(8 * 86_400), week, now).as_ref(),
+            "Reset not reported",
+            "a value outside the window span is not guessed to be Unix seconds"
+        );
     }
 
     /// The instrument levels' ▰▱ meter stays glanceable: glyphs for small
