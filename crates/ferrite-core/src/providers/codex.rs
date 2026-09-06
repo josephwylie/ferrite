@@ -12,6 +12,7 @@
 
 mod activity;
 pub(super) mod catalog;
+mod live_catalogs;
 mod questions;
 mod requests;
 mod wire;
@@ -291,6 +292,7 @@ impl CodexSession {
             Arc::clone(&models),
             Arc::clone(&question_replies),
             Arc::clone(&native_questions),
+            config.cwd.clone(),
         );
 
         let mut session = Self {
@@ -683,6 +685,7 @@ fn read_stdout(
     model_catalog: Arc<Mutex<Vec<crate::ModelInfo>>>,
     question_replies: Arc<Mutex<questions::Replies>>,
     native_questions: Arc<Mutex<questions::NativeRequests>>,
+    cwd: Option<PathBuf>,
 ) -> Receiver<Result<HandshakeStep, String>> {
     let (step_sender, steps) = sync_channel(2);
     thread::spawn(move || {
@@ -697,12 +700,7 @@ fn read_stdout(
         // Which handshake response is awaited: request 1, then request 2,
         // then none.
         let mut handshake = Some((step_sender, 1u64));
-        // Once the thread is up, the skills/list answer (request 3) and the
-        // model/list answer (request 4) are still owed; correlated here like
-        // the handshake, but never blocking — a server without either
-        // method just leaves that menu empty.
-        let mut menu_pending = false;
-        let mut models_pending = false;
+        let mut catalogs = live_catalogs::Catalogs::new(cwd.as_deref());
         loop {
             line.clear();
             match reader.read_until(b'\n', &mut line) {
@@ -735,8 +733,6 @@ fn read_stdout(
                             // large resumed tree into the bounded event stream.
                             // Main's interrupt owner is already authoritative.
                             let _ = step_sender.send(Ok(HandshakeStep::Thread(Box::new(thread))));
-                            menu_pending = true;
-                            models_pending = true;
                             if !publish_activity(update, &mut activity, &sender, &stdin) {
                                 return;
                             }
@@ -759,43 +755,38 @@ fn read_stdout(
                     None => handshake = Some((step_sender, pending)),
                 }
             }
-            if menu_pending {
-                if let Some(response) = wire::parse_response(text, SKILLS_REQUEST_ID) {
-                    menu_pending = false;
-                    if let Ok(result) = response {
-                        let commands = wire::parse_skills(&result);
-                        *lock(&skills) = commands.clone();
-                        // Announce the menu on the event stream so the
-                        // cockpit can fold it (#23); a server listing no
-                        // skills announces nothing.
-                        if !commands.is_empty()
-                            && sender.send(SessionEvent::Commands { commands }).is_err()
-                        {
-                            return;
-                        }
-                    }
-                    continue;
-                }
-            }
-            if models_pending {
-                if let Some(response) = wire::parse_response(text, MODELS_REQUEST_ID) {
-                    models_pending = false;
-                    if let Ok(result) = response {
-                        let models = wire::parse_models(&result);
-                        *lock(&model_catalog) = models.clone();
-                        // The picker's rows (#25); a server listing none
-                        // announces nothing and the fallback catalog stands.
-                        if !models.is_empty()
-                            && sender.send(SessionEvent::Models { models }).is_err()
-                        {
-                            return;
-                        }
-                    }
-                    continue;
-                }
-            }
             turns.observe(text);
             if let Ok(frame) = serde_json::from_str(text) {
+                if let Some(update) = catalogs.observe(&frame) {
+                    for event in update.events {
+                        match &event {
+                            SessionEvent::Commands { commands } => {
+                                *lock(&skills) = commands.clone();
+                            }
+                            SessionEvent::Models { models } => {
+                                *lock(&model_catalog) = models.clone();
+                            }
+                            _ => {}
+                        }
+                        if sender.send(event).is_err() {
+                            return;
+                        }
+                    }
+                    if let Some(request) = update.request {
+                        let Some(stdin) = stdin.upgrade() else {
+                            return;
+                        };
+                        if let Err(error) = write_request(&stdin, &request) {
+                            if sender
+                                .send(catalogs.write_failed(&request, &error))
+                                .is_err()
+                            {
+                                return;
+                            }
+                        }
+                    }
+                    continue;
+                }
                 let (response, interrupt) = {
                     let mut requests = lock(&requests);
                     let response = requests.response(&frame);
