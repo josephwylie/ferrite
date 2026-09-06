@@ -209,6 +209,32 @@ impl CockpitView {
         cx.notify();
     }
 
+    /// A Bell request already focused its Thread in core. Select its owning
+    /// Subject without synthesizing a window input event or answering it.
+    pub(super) fn select_subject_from_notice(
+        &mut self,
+        thread: ThreadId,
+        subject: Subject,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = self.pane_for(thread) else {
+            return;
+        };
+        let Some(open) = self.cockpit.thread(thread) else {
+            return;
+        };
+        let subject = open.activity().canonical_subject(&subject);
+        let Some(subject_view) = open.activity().subject(&subject) else {
+            return;
+        };
+        self.facts.selected(&self.cockpit, thread, &subject);
+        self.panes[index].select_subject(subject, subject_view.revision(), cx);
+        self.retry_subject_history(index, cx);
+        self.popover = None;
+        self.context_usage = None;
+        cx.notify();
+    }
+
     pub(super) fn subject_strip(
         &self,
         index: usize,

@@ -8,9 +8,10 @@
 //! dismissal (`Popover`), the count (`Badge`) and the bell glyph itself.
 //! Ferrite supplies the tokens.
 
+use std::collections::BTreeSet;
 use std::rc::Rc;
 
-use ferrite_core::notifications::{Notice, NoticeId};
+use ferrite_core::notifications::{DecisionNotice, DecisionNoticeId, Notice, NoticeId, RequestKind};
 use ferrite_core::{ThreadId, TurnOutcome};
 use gpui::component::badge::Badge;
 use gpui::component::button::Button;
@@ -34,12 +35,16 @@ use crate::theme::{
 
 /// What a click on the bell's surfaces means. The cockpit answers each
 /// against the core and repaints.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Verb {
     /// Land on the Notice's Thread (a toast, a row).
     Open(NoticeId),
     /// Forget one Notice (a row's ×).
     Dismiss(NoticeId),
+    /// Land on the exact live request the row represented.
+    OpenDecision(DecisionNoticeId),
+    /// Hide one live request until its handle changes or ends.
+    DismissDecision(DecisionNoticeId),
     /// Forget them all.
     Clear,
 }
@@ -57,6 +62,31 @@ pub struct Row {
     pub project: Option<SharedString>,
     pub outcome: TurnOutcome,
     /// How long ago, in the nav's own shorthand (`now`, `4m`, `2h`).
+    pub when: SharedString,
+    pub read: bool,
+}
+
+/// A Bell row has one actionable target, independent of provider wire data.
+#[derive(Clone, Debug)]
+pub enum RowTarget {
+    Notice(NoticeId),
+    Decision(DecisionNoticeId),
+}
+
+/// The shared presentation kind. A request never invents a turn outcome.
+#[derive(Clone, Debug)]
+pub enum RowKind {
+    Completion(TurnOutcome),
+    Request(RequestKind),
+}
+
+/// Completion and live-request rows share the same renderer.
+#[derive(Clone, Debug)]
+pub struct BellRow {
+    pub target: RowTarget,
+    pub title: SharedString,
+    pub project: Option<SharedString>,
+    pub kind: RowKind,
     pub when: SharedString,
     pub read: bool,
 }
@@ -96,15 +126,62 @@ impl Row {
     }
 }
 
+impl BellRow {
+    pub fn completion(row: Row) -> Self {
+        Self {
+            target: RowTarget::Notice(row.id),
+            title: row.title,
+            project: row.project,
+            kind: RowKind::Completion(row.outcome),
+            when: row.when,
+            read: row.read,
+        }
+    }
+
+    pub fn decision(
+        notice: &DecisionNotice,
+        title: SharedString,
+        project: Option<SharedString>,
+    ) -> Self {
+        Self {
+            target: RowTarget::Decision(notice.id.clone()),
+            title,
+            project,
+            kind: RowKind::Request(notice.kind),
+            when: "now".into(),
+            read: notice.read,
+        }
+    }
+
+    fn failed(&self) -> bool {
+        matches!(self.kind, RowKind::Completion(TurnOutcome::Error(_)))
+    }
+
+    fn detail(&self) -> SharedString {
+        let detail = match &self.kind {
+            RowKind::Completion(TurnOutcome::Error(error)) => format!("Failed · {error}"),
+            RowKind::Completion(_) => "Finished".to_string(),
+            RowKind::Request(RequestKind::Question) => "Question waiting".to_string(),
+            RowKind::Request(RequestKind::Permission) => "Approval needed".to_string(),
+        };
+        match &self.project {
+            Some(project) => format!("{detail} · {project}").into(),
+            None => detail.into(),
+        }
+    }
+}
+
 /// The toast identity: one per Thread, so a Thread that finishes twice
 /// before the operator looks replaces its own toast rather than stacking.
 struct Finished;
+struct Request;
 
 /// The window's side of the bell: whether its panel is down, and which
 /// Notices it has toasted already.
 pub struct Bell {
     pub open: bool,
     presented: Option<NoticeId>,
+    presented_requests: BTreeSet<DecisionNoticeId>,
 }
 
 impl Bell {
@@ -112,6 +189,7 @@ impl Bell {
         Self {
             open: false,
             presented: None,
+            presented_requests: BTreeSet::new(),
         }
     }
 
@@ -139,12 +217,45 @@ impl Bell {
         }
     }
 
+    /// Keep live request toasts in lockstep with their generation-scoped
+    /// records. Completion uses its monotonic watermark above; requests use
+    /// their own opaque identities and vanish as soon as Activity resolves them.
+    pub fn present_requests(
+        &mut self,
+        rows: impl IntoIterator<Item = BellRow>,
+        handle: &Handle,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let rows: Vec<_> = rows.into_iter().collect();
+        let live: BTreeSet<_> = rows
+            .iter()
+            .filter_map(|row| match &row.target {
+                RowTarget::Decision(id) => Some(id.clone()),
+                RowTarget::Notice(_) => None,
+            })
+            .collect();
+        for id in self.presented_requests.difference(&live) {
+            window.remove_notification1::<Request>(request_key(id), cx);
+        }
+        let presented = std::mem::replace(&mut self.presented_requests, live);
+        for row in rows {
+            let RowTarget::Decision(id) = &row.target else {
+                continue;
+            };
+            if !presented.contains(id) && !row.read {
+                window.push_notification(request_toast(&row, handle.clone()), cx);
+            }
+            self.presented_requests.insert(id.clone());
+        }
+    }
+
     /// The bell with its unread count and, when the panel is down, the
     /// panel under it. `rows` are newest first.
     pub fn element(
         &self,
         unread: usize,
-        rows: Vec<Row>,
+        rows: Vec<BellRow>,
         handle: Handle,
         on_open: impl Fn(bool, &mut Window, &mut App) + 'static,
     ) -> AnyElement {
@@ -206,10 +317,28 @@ fn toast(row: &Row, handle: Handle) -> Notification {
         .on_click(move |_, window, cx| handle(Verb::Open(id), window, cx))
 }
 
+fn request_key(id: &DecisionNoticeId) -> String {
+    format!("{}-{}-{}", id.thread.get(), id.handle.generation, id.handle.serial)
+}
+
+fn request_toast(row: &BellRow, handle: Handle) -> Notification {
+    let RowTarget::Decision(id) = &row.target else {
+        unreachable!("request toast has a request target")
+    };
+    let id = id.clone();
+    Notification::new()
+        .id1::<Request>(request_key(&id))
+        .title(row.title.clone())
+        .message(row.detail())
+        .with_type(NotificationType::Info)
+        .autohide(true)
+        .on_click(move |_, window, cx| handle(Verb::OpenDecision(id.clone()), window, cx))
+}
+
 /// The panel under the bell: a head with the clear verb, then the rows
 /// newest first, on the same floating-menu surface every other menu here
 /// stands on.
-fn panel(rows: &Rc<Vec<Row>>, handle: Handle) -> Div {
+fn panel(rows: &Rc<Vec<BellRow>>, handle: Handle) -> Div {
     let panel = surface().child(head(!rows.is_empty(), handle.clone()));
     if rows.is_empty() {
         return panel.child(
@@ -218,7 +347,7 @@ fn panel(rows: &Rc<Vec<Row>>, handle: Handle) -> Div {
                 .py(px(ROW_PAD_X))
                 .text_size(px(FS_SM))
                 .text_color(rgb(TEXT_MUTED))
-                .child("No agent has finished yet."),
+                .child("No notifications"),
         );
     }
     panel.child(
@@ -268,9 +397,10 @@ fn head(clearable: bool, handle: Handle) -> Div {
         }))
 }
 
-fn row_element(index: usize, row: &Row, handle: Handle) -> Stateful<Div> {
-    let id = row.id;
+fn row_element(index: usize, row: &BellRow, handle: Handle) -> Stateful<Div> {
+    let target = row.target.clone();
     let open = handle.clone();
+    let dismiss = row.target.clone();
     let dot = div()
         .flex_shrink_0()
         .w(px(STATUS_DOT))
@@ -298,7 +428,7 @@ fn row_element(index: usize, row: &Row, handle: Handle) -> Stateful<Div> {
         .press_row()
         .on_click(move |_, window, cx| {
             cx.stop_propagation();
-            open(Verb::Open(id), window, cx)
+            open(target_verb(&target), window, cx)
         })
         .child(dot)
         .child(
@@ -344,9 +474,23 @@ fn row_element(index: usize, row: &Row, handle: Handle) -> Stateful<Div> {
                 )
                 .on_click(move |_, window, cx| {
                     cx.stop_propagation();
-                    handle(Verb::Dismiss(id), window, cx)
+                    handle(dismiss_verb(&dismiss), window, cx)
                 }),
         )
+}
+
+fn target_verb(target: &RowTarget) -> Verb {
+    match target {
+        RowTarget::Notice(id) => Verb::Open(*id),
+        RowTarget::Decision(id) => Verb::OpenDecision(id.clone()),
+    }
+}
+
+fn dismiss_verb(target: &RowTarget) -> Verb {
+    match target {
+        RowTarget::Notice(id) => Verb::Dismiss(*id),
+        RowTarget::Decision(id) => Verb::DismissDecision(id.clone()),
+    }
 }
 
 /// The floating-menu ground every popover here stands on: `--menu`, the

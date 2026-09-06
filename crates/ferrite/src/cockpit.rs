@@ -32,7 +32,7 @@ use crate::composer::{Composer, Edited};
 use crate::facts::Facts;
 use crate::menu;
 use crate::nav;
-use crate::notifications::{Bell, Handle, Row as NoticeRow, Verb};
+use crate::notifications::{Bell, BellRow, Handle, Row as NoticeRow, Verb};
 use crate::pane::{self, PaneView};
 use crate::pointer::{Pointer, PointerPressed};
 use crate::prefs;
@@ -6229,8 +6229,33 @@ impl CockpitView {
             Verb::Dismiss(id) => {
                 self.cockpit.dismiss_notice(id);
             }
+            Verb::OpenDecision(id) => {
+                let subject = self
+                    .cockpit
+                    .notifications()
+                    .decision(&id)
+                    .and_then(|notice| notice.subject.clone())
+                    .unwrap_or(ferrite_core::activity::Subject::Main);
+                if let Some(thread) = self.cockpit.open_decision_notice(&id) {
+                    self.sync_panes(cx);
+                    self.select_subject_from_notice(thread, subject, cx);
+                }
+                self.bell.open = false;
+            }
+            Verb::DismissDecision(id) => {
+                self.cockpit.dismiss_decision_notice(&id);
+            }
             Verb::Clear => {
                 self.cockpit.clear_notices();
+                let decisions: Vec<_> = self
+                    .cockpit
+                    .notifications()
+                    .decisions()
+                    .map(|notice| notice.id.clone())
+                    .collect();
+                for id in decisions {
+                    self.cockpit.dismiss_decision_notice(&id);
+                }
                 self.bell.open = false;
             }
         }
@@ -6245,7 +6270,7 @@ impl CockpitView {
         })
     }
 
-    /// One Notice with the window's words on it: the Thread's cached name
+    /// One completion Notice with the window's words on it: the Thread's cached name
     /// and Project, and how long ago.
     fn notice_row(
         &self,
@@ -6262,7 +6287,7 @@ impl CockpitView {
         )
     }
 
-    /// Toast what finished since the last frame. Render is the one place
+    /// Toast what arrived since the last frame. Render is the one place
     /// with a Window in hand every frame; the pump has none.
     fn present_notices(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let now = std::time::SystemTime::now();
@@ -6272,22 +6297,45 @@ impl CockpitView {
             .since(self.bell.presented())
             .map(|notice| self.notice_row(notice, now))
             .collect();
-        if rows.is_empty() {
-            return;
-        }
         let handle = self.notice_handle(cx);
-        self.bell.present(rows, &handle, window, cx);
+        if !rows.is_empty() {
+            self.bell.present(rows, &handle, window, cx);
+        }
+        let decisions: Vec<BellRow> = self
+            .cockpit
+            .notifications()
+            .decisions()
+            .map(|notice| {
+                BellRow::decision(
+                    notice,
+                    self.facts.name(notice.id.thread),
+                    self.facts
+                        .get(notice.id.thread)
+                        .and_then(|facts| facts.project_label.clone()),
+                )
+            })
+            .collect();
+        self.bell.present_requests(decisions, &handle, window, cx);
     }
 
     /// The bell in the nav's chrome band, its badge, and its panel.
     fn bell_element(&self, cx: &mut Context<Self>) -> AnyElement {
         let now = std::time::SystemTime::now();
         let notifications = self.cockpit.notifications();
-        let rows: Vec<NoticeRow> = notifications
+        let mut rows: Vec<BellRow> = notifications
             .notices()
             .take(50)
-            .map(|notice| self.notice_row(notice, now))
+            .map(|notice| BellRow::completion(self.notice_row(notice, now)))
             .collect();
+        rows.extend(notifications.decisions().take(50).map(|notice| {
+            BellRow::decision(
+                notice,
+                self.facts.name(notice.id.thread),
+                self.facts
+                    .get(notice.id.thread)
+                    .and_then(|facts| facts.project_label.clone()),
+            )
+        }));
         let handle = self.notice_handle(cx);
         let view = cx.entity().downgrade();
         self.bell
