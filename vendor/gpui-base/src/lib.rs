@@ -165,10 +165,11 @@ pub use text::{
     TextViewDefaults, TextViewPlugin, TextViewState, TextViewStyle, html, markdown,
 };
 pub use text_selection::{
-    TextSelection, TextSelectionContentKey, TextSelectionCoverage, TextSelectionEndpoint,
-    TextSelectionEvent, TextSelectionHandle, TextSelectionLayer, TextSelectionProjection,
-    TextSelectionRegistration, TextSelectionRun, TextSelectionScopeId, TextSelectionSnapshot,
-    TextSelectionWindowPoints,
+    TextSelection, TextSelectionContentKey, TextSelectionCoverage, TextSelectionDocument,
+    TextSelectionDocumentMember, TextSelectionDocumentOwner, TextSelectionEndpoint,
+    TextSelectionEvent, TextSelectionHandle, TextSelectionLayer,
+    TextSelectionProjection, TextSelectionRegistration, TextSelectionRun, TextSelectionScopeId,
+    TextSelectionSnapshot, TextSelectionWindowPoints,
 };
 pub use theme::{ResizableTheme, ScrollbarTheme, Theme, ThemeAppearance};
 pub use theme_tokens::{

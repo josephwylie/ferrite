@@ -746,8 +746,11 @@ pub fn thread_row_with_title(row: &ThreadRow, title: impl IntoElement) -> Statef
             ),
     )
     .child(
-        meta_line(icons::FOLDER, row.project.clone(), TEXT_2)
-            .child(meta_tail(row.thread, row.subagents, row.last_used.clone())),
+        meta_line(icons::FOLDER, row.project.clone(), TEXT_2).child(meta_tail(
+            row.thread,
+            row.subagents,
+            row.last_used.clone(),
+        )),
     )
 }
 
@@ -763,11 +766,7 @@ fn meta_tail(thread: ThreadId, subagents: usize, since: Option<SharedString>) ->
         .pl(px(ROW_ICON_GAP))
         .gap(px(ROW_ICON_GAP))
         .child(subagent_tail(thread, subagents))
-        .children(separated.then(|| {
-            meta_text()
-                .flex_shrink_0()
-                .child("·")
-        }))
+        .children(separated.then(|| meta_text().flex_shrink_0().child("·")))
         .child(since_tail(thread, since))
 }
 

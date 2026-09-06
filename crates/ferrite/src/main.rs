@@ -29,6 +29,7 @@ mod session;
 mod shell;
 mod theme;
 mod titlebar;
+mod transcript;
 
 use ::gpui;
 use ::gpui as kit;

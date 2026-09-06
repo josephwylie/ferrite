@@ -12,7 +12,13 @@ use gpui::{
     size,
 };
 
-use crate::text::text_view::{LinkClickHandlerFn, handle_link_click};
+use crate::{
+    GlobalState,
+    text::{
+        inline::InlineSelectionProjection,
+        text_view::{LinkClickHandlerFn, handle_link_click},
+    },
+};
 
 use super::{
     inline::{Inline, InlineState},
@@ -188,11 +194,7 @@ impl InlineFlow {
                 continue;
             }
             let fragment = |range: Range<usize>| {
-                let mut child = InlineState::default();
-                child.set_text(text[range.clone()].to_string().into());
-                let child = Arc::new(Mutex::new(child));
-                state.lock().unwrap().fragments.push((range, child.clone()));
-                child
+                InlineState::fragment(&state, range.clone(), text[range].to_string().into())
             };
             let push_text = |items: &mut Vec<InlineFlowItem>, range: Range<usize>| {
                 if range.is_empty() {
@@ -397,13 +399,7 @@ impl Element for InlineFlow {
                             ..
                         } if source_range == (0..source.len()) => state.clone(),
                         InlineFlowItem::Text { state, .. } => {
-                            let child = Arc::new(Mutex::new(InlineState::default()));
-                            state
-                                .lock()
-                                .unwrap()
-                                .fragments
-                                .push((source_range.clone(), child.clone()));
-                            child
+                            InlineState::fragment(state, source_range.clone(), text.clone())
                         }
                         _ => unreachable!("text fragment belongs to text item"),
                     };
@@ -462,28 +458,60 @@ impl Element for InlineFlow {
                                     gpui::canvas(
                                         |_, _, _| {},
                                         move |bounds, _, _window, cx| {
-                                            let selected = crate::GlobalState::global(cx)
-                                                .text_view_state()
-                                                .is_some_and(|view| {
-                                                    let view = view.read(cx);
-                                                    view.is_all_selected()
-                                                        || view.selection_points(cx).is_some_and(
-                                                            |(a, b)| {
-                                                                let center = bounds.center();
-                                                                let after =
-                                                                    |p: gpui::Point<Pixels>| {
-                                                                        bounds.top() > p.y
-                                                                            || (bounds.bottom()
-                                                                                > p.y
-                                                                                && center.x >= p.x)
-                                                                    };
-                                                                after(a) != after(b)
-                                                            },
-                                                        )
-                                                });
-                                            let mut state = state.lock().unwrap();
-                                            state.selection =
-                                                selected.then(|| (0..state.text.len()).into());
+                                            let projection = InlineSelectionProjection::atomic(
+                                                state.clone(),
+                                                bounds,
+                                            );
+                                            let Some(view) =
+                                                GlobalState::global(cx).text_view_state().cloned()
+                                            else {
+                                                if let Ok(mut state) = state.lock() {
+                                                    state.selection = None;
+                                                }
+                                                return;
+                                            };
+                                            let (
+                                                is_selectable,
+                                                is_all_selected,
+                                                document_range,
+                                                points,
+                                                ordinal,
+                                            ) = {
+                                                let view = view.read(cx);
+                                                (
+                                                    view.is_selectable(),
+                                                    view.is_all_selected(),
+                                                    view.selection_adapter.document_range(cx),
+                                                    view.selection_adapter.selection_points(cx),
+                                                    view.selection_adapter
+                                                        .document_ordinal_for_source(
+                                                            projection.source_root(),
+                                                        ),
+                                                )
+                                            };
+                                            if !is_selectable {
+                                                if let Ok(mut state) = state.lock() {
+                                                    state.selection = None;
+                                                }
+                                                return;
+                                            }
+
+                                            if is_all_selected {
+                                                if let Ok(mut state) = state.lock() {
+                                                    state.selection =
+                                                        Some((0..state.text.len()).into());
+                                                }
+                                            } else if let Some(range) = document_range {
+                                                projection.project_document_range(ordinal, range);
+                                            } else if let Some((anchor, cursor)) = points {
+                                                projection.project(anchor, cursor);
+                                            } else if let Ok(mut state) = state.lock() {
+                                                state.selection = None;
+                                            }
+                                            view.update(cx, |view, _| {
+                                                view.selection_adapter
+                                                    .register_projection(projection)
+                                            });
                                         },
                                     )
                                     .absolute()

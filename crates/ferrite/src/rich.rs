@@ -180,9 +180,18 @@ pub struct Markdown {
     source: String,
     cache: TextCache,
     muted: bool,
+    document: Option<gpui::base::TextSelectionDocument>,
 }
 
 impl Markdown {
+    pub fn selection_document(
+        mut self,
+        document: Option<gpui::base::TextSelectionDocument>,
+    ) -> Self {
+        self.document = document;
+        self
+    }
+
     pub fn muted(mut self) -> Self {
         self.muted = true;
         self
@@ -193,6 +202,7 @@ impl Markdown {
             source,
             cache,
             muted: false,
+            document: None,
         }
     }
 }
@@ -201,7 +211,12 @@ impl gpui::RenderOnce for Markdown {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let state = self.cache.state(self.id.clone(), &self.source, window, cx);
         #[cfg(test)]
-        testing::record(self.id, state.clone(), window.text_style().clone(), cx);
+        testing::record(
+            self.id.clone(),
+            state.clone(),
+            window.text_style().clone(),
+            cx,
+        );
         let text_style = if self.muted {
             style(window.rem_size()).with_foreground(rgb(theme::TEXT_2).into())
         } else {
@@ -219,6 +234,9 @@ impl gpui::RenderOnce for Markdown {
                     window,
                     cx,
                 ))
+            })
+            .when_some(self.document, |view, document| {
+                view.selection_document(document, self.id)
             })
             .font_family(theme::FONT_UI)
             .w_full()
@@ -332,21 +350,26 @@ pub struct Literal {
     pub text: SharedString,
     pub highlights: Vec<(std::ops::Range<usize>, gpui::HighlightStyle)>,
     pub cache: TextCache,
+    pub document: Option<gpui::base::TextSelectionDocument>,
+}
+
+/// The same literal document feeds native rendering and offscreen copy.
+pub(crate) fn literal_source(text: &str) -> String {
+    let fence = "`".repeat(
+        text.split(|c| c != '`')
+            .map(str::len)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1)
+            .max(3),
+    );
+    format!("{fence}\n{text}\n{fence}")
 }
 
 impl gpui::RenderOnce for Literal {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let inherited = window.text_style();
-        let fence = "`".repeat(
-            self.text
-                .split(|c| c != '`')
-                .map(str::len)
-                .max()
-                .unwrap_or(0)
-                .saturating_add(1)
-                .max(3),
-        );
-        let source = format!("{fence}\n{}\n{fence}", self.text);
+        let source = literal_source(&self.text);
         let highlights = self.highlights;
         let style = style(window.rem_size())
             .with_foreground(inherited.color)
@@ -361,8 +384,11 @@ impl gpui::RenderOnce for Literal {
             );
         let state = self.cache.state(self.id.clone(), &source, window, cx);
         #[cfg(test)]
-        testing::record(self.id, state.clone(), inherited.clone(), cx);
+        testing::record(self.id.clone(), state.clone(), inherited.clone(), cx);
         TextView::new(&state)
+            .when_some(self.document, |view, document| {
+                view.selection_document(document, self.id)
+            })
             .w_full()
             .min_w_0()
             // Use natural height inside the transcript's own scroll container.
@@ -421,10 +447,54 @@ pub mod testing {
     struct Outputs(HashMap<SharedString, Entity<TextareaState>>);
     impl gpui::Global for Outputs {}
 
+    /// Native text wrapper renders, keyed by the stable text identity. Kept
+    /// separate from the entity registries: a cached entity may render again
+    /// without being reconstructed.
+    #[derive(Default)]
+    struct Renders(HashMap<SharedString, usize>);
+    impl gpui::Global for Renders {}
+
+    fn record_render(id: &SharedString, cx: &mut App) {
+        if cx.try_global::<Renders>().is_none() {
+            cx.set_global(Renders::default());
+        }
+        *cx.global_mut::<Renders>().0.entry(id.clone()).or_default() += 1;
+    }
+
+    pub fn reset_renders(cx: &mut App) {
+        if cx.try_global::<Renders>().is_none() {
+            cx.set_global(Renders::default());
+        } else {
+            cx.global_mut::<Renders>().0.clear();
+        }
+    }
+
+    pub fn renders_with_prefix(prefix: &str, cx: &App) -> usize {
+        cx.try_global::<Renders>()
+            .map(|renders| {
+                renders
+                    .0
+                    .iter()
+                    .filter(|(id, _)| id.starts_with(prefix))
+                    .map(|(_, count)| count)
+                    .sum()
+            })
+            .unwrap_or_default()
+    }
+
+    /// The number of native wrappers seen in a clean render, independent of
+    /// how often GPUI scheduled that wrapper during the frame.
+    pub fn rendered_identities_with_prefix(prefix: &str, cx: &App) -> usize {
+        cx.try_global::<Renders>()
+            .map(|renders| renders.0.keys().filter(|id| id.starts_with(prefix)).count())
+            .unwrap_or_default()
+    }
+
     pub fn record_output(id: SharedString, state: Entity<TextareaState>, cx: &mut App) {
         if cx.try_global::<Outputs>().is_none() {
             cx.set_global(Outputs::default());
         }
+        record_render(&id, cx);
         cx.global_mut::<Outputs>().0.insert(id, state);
     }
 
@@ -440,6 +510,18 @@ pub mod testing {
             .map(|(_, (state, _))| state.entity_id())
     }
 
+    /// Read the native parser's actual output after a fixture has settled.
+    pub fn full_text(prefix: &str, cx: &mut App) -> Option<String> {
+        let state = cx
+            .global::<Views>()
+            .0
+            .iter()
+            .find(|(id, _)| id.starts_with(prefix))
+            .map(|(_, (state, _))| state.clone())?;
+        state.update(cx, |state, cx| state.select_all(cx));
+        Some(state.read(cx).selected_text())
+    }
+
     pub fn record(
         id: SharedString,
         state: Entity<TextViewState>,
@@ -449,6 +531,7 @@ pub mod testing {
         if cx.try_global::<Views>().is_none() {
             cx.set_global(Views::default());
         }
+        record_render(&id, cx);
         cx.global_mut::<Views>().0.insert(id, (state, style));
     }
 
@@ -508,6 +591,46 @@ pub mod testing {
         Some(gpui::point(
             bounds.left() + line.x_for_index(byte) + px(0.5),
             bounds.top() + line_height * 0.5,
+        ))
+    }
+
+    /// Aim at a byte through the native wrapper's actual wrapped line layout.
+    /// Unlike `caret`, this is for a single markdown paragraph that wraps.
+    pub fn wrapped_caret(
+        id: &str,
+        text: &str,
+        byte: usize,
+        window: &Window,
+        cx: &App,
+    ) -> Option<gpui::Point<gpui::Pixels>> {
+        let (state, style) = cx.global::<Views>().0.get(id)?;
+        let bounds = state.read(cx).bounds();
+        let font_size = style.font_size.to_pixels(window.rem_size());
+        let line_height = style.line_height_in_pixels(window.rem_size());
+        let run = gpui::TextRun {
+            len: text.len(),
+            font: style.font(),
+            color: style.color,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let layout = window
+            .text_system()
+            .shape_text(
+                text.into(),
+                font_size,
+                &[run],
+                Some(bounds.size.width),
+                None,
+            )
+            .ok()?
+            .into_iter()
+            .next()?;
+        let position = layout.position_for_index(byte, line_height)?;
+        Some(gpui::point(
+            bounds.left() + position.x + px(0.5),
+            bounds.top() + position.y + line_height * 0.5,
         ))
     }
 }

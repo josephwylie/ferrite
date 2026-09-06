@@ -11,9 +11,9 @@ use gpui::{
 use crate::StyledExt;
 use crate::text::TextViewFormat;
 use crate::text::markdown_ext::{MarkdownExtensions, MarkdownNode, MarkdownPlugin};
-use crate::text::node::{CodeBlock, TableData};
+use crate::text::node::{CodeBlock, NodeContext, TableData};
 use crate::text::state::{LineSpan, SelectionFormat, TextViewState};
-use crate::{GlobalState, TextSelection, text::TextViewStyle};
+use crate::{GlobalState, TextSelection, TextSelectionDocument, text::TextViewStyle};
 
 /// Type for code block actions generator function.
 pub(crate) type CodeBlockActionsFn =
@@ -139,6 +139,7 @@ pub struct TextView {
     link_click_handler: Option<Arc<LinkClickHandlerFn>>,
     link_renderer: Option<Arc<LinkRendererFn>>,
     markdown_extensions: Arc<MarkdownExtensions>,
+    selection_document: Option<(TextSelectionDocument, SharedString)>,
 }
 
 /// A plugin that can configure a [`TextView`].
@@ -165,6 +166,14 @@ impl Styled for TextView {
 }
 
 impl TextView {
+    /// Returns the plain text produced by the native Markdown parser without
+    /// creating a view or waiting for its asynchronous parser task.
+    pub fn markdown_plain_text(source: &str) -> String {
+        crate::text::format::markdown::parse(source, &mut NodeContext::default())
+            .map(|document| document.text())
+            .unwrap_or_else(|_| source.to_string())
+    }
+
     /// Create new TextView with managed state.
     pub fn new(state: &Entity<TextViewState>) -> Self {
         Self {
@@ -184,6 +193,7 @@ impl TextView {
             link_click_handler: None,
             link_renderer: None,
             markdown_extensions: Arc::default(),
+            selection_document: None,
         }
     }
 
@@ -206,6 +216,7 @@ impl TextView {
             link_click_handler: None,
             link_renderer: None,
             markdown_extensions: Arc::default(),
+            selection_document: None,
         }
     }
 
@@ -228,6 +239,7 @@ impl TextView {
             link_click_handler: None,
             link_renderer: None,
             markdown_extensions: Arc::default(),
+            selection_document: None,
         }
     }
 
@@ -240,6 +252,16 @@ impl TextView {
     /// Set whether the text view is selectable, default is true.
     pub fn selectable(mut self, selectable: bool) -> Self {
         self.selectable = selectable;
+        self
+    }
+
+    /// Binds this fragment to a retained virtual selection document.
+    pub fn selection_document(
+        mut self,
+        document: TextSelectionDocument,
+        key: impl Into<SharedString>,
+    ) -> Self {
+        self.selection_document = Some((document, key.into()));
         self
     }
 
@@ -600,6 +622,10 @@ impl Element for TextView {
                 state.set_text(text.as_str(), cx);
             }
         });
+        if let Some((document, key)) = &self.selection_document {
+            let selection = state.read(cx).selection_adapter.handle();
+            document.bind(key.clone(), &selection, Some(state.clone().into_any()), cx);
+        }
 
         let focus_handle = state.read(cx).focus_handle.clone();
         let list_state = state.read(cx).list_state.clone();
@@ -751,14 +777,24 @@ impl Element for TextView {
                 )
             };
             let document_order = GlobalState::global_mut(cx).next_selection_document_order();
-            adapter.register(
+            let registration = adapter.registration(
                 prepaint.hitbox.clone(),
                 content_bounds,
                 scroll_offset,
                 document_order,
-                window,
-                cx,
             );
+            if let Some((document, _)) = &self.selection_document {
+                document.register_visible(adapter.handle(), registration, window, cx);
+            } else {
+                adapter.register(
+                    prepaint.hitbox.clone(),
+                    content_bounds,
+                    scroll_offset,
+                    document_order,
+                    window,
+                    cx,
+                );
+            }
         }
     }
 }

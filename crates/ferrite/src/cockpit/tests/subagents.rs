@@ -30,6 +30,14 @@ fn child(fake: &Fake, name: &str, status: AgentStatus) {
         },
     );
 }
+
+fn discover(fake: &Fake, name: &str) {
+    let mut info = AgentInfo::new(key(name));
+    info.name = Some(name.into());
+    info.parent = Some(Subject::Main);
+    info.coverage = TranscriptCoverage::Live;
+    emit(fake, ActivityEvent::Discovered(info));
+}
 fn emit(fake: &Fake, event: ActivityEvent) {
     fake.streams.borrow()[0]
         .send(SessionEvent::Activity(event))
@@ -198,17 +206,26 @@ fn child_scroll_disclosure_and_native_text_entity_survive_switching(cx: &mut Tes
     cx.simulate_mouse_down(toggle, MouseButton::Left, gpui::Modifiers::none());
     cx.simulate_mouse_up(toggle, MouseButton::Left, gpui::Modifiers::none());
     cx.run_until_parked();
-    let scroller = view.read_with(cx, |view, _| view.panes[0].scroll.bounds().center());
+    let scroller = view.read_with(cx, |view, cx| {
+        view.panes[0]
+            .transcript()
+            .unwrap()
+            .read(cx)
+            .scroll()
+            .bounds()
+            .center()
+    });
     cx.simulate_event(gpui::ScrollWheelEvent {
         position: scroller,
         delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(240.))),
         ..Default::default()
     });
     cx.run_until_parked();
-    let offset = view.read_with(cx, |view, _| {
+    let offset = view.read_with(cx, |view, cx| {
+        let transcript = view.panes[0].transcript().unwrap();
         assert!(view.panes[0].tool_expanded("same-call"));
-        assert!(!view.panes[0].follow_tail.get());
-        view.panes[0].scroll.offset()
+        assert!(!transcript.read(cx).is_following_tail());
+        transcript.read(cx).scroll().offset()
     });
     let namespace = view.read_with(cx, |view, _| view.panes[0].text_namespace());
     let entity = cx.update(|_, cx| {
@@ -217,10 +234,11 @@ fn child_scroll_disclosure_and_native_text_entity_survive_switching(cx: &mut Tes
     click_child(cx, "Cedar");
     assert!(!view.read_with(cx, |view, _| view.panes[0].tool_expanded("same-call")));
     click_child(cx, "Atlas");
-    view.read_with(cx, |view, _| {
+    view.read_with(cx, |view, cx| {
+        let transcript = view.panes[0].transcript().unwrap();
         assert!(view.panes[0].tool_expanded("same-call"));
-        assert_eq!(view.panes[0].scroll.offset(), offset);
-        assert!(!view.panes[0].follow_tail.get());
+        assert_eq!(transcript.read(cx).scroll().offset(), offset);
+        assert!(!transcript.read(cx).is_following_tail());
     });
     assert_eq!(
         cx.update(|_, cx| crate::rich::testing::first_entity(
@@ -229,6 +247,76 @@ fn child_scroll_disclosure_and_native_text_entity_survive_switching(cx: &mut Tes
         )
         .unwrap()),
         entity
+    );
+}
+
+#[gpui::test]
+fn core_eviction_releases_a_hidden_retained_transcript_entity(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("subagents-evicted-view", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
+
+    child(&fake, "Atlas", AgentStatus::Idle);
+    for index in 0..128 {
+        discover(&fake, &format!("filler-{index}"));
+    }
+    child(&fake, "Tail", AgentStatus::Idle);
+    tick(cx);
+    tick(cx);
+
+    let atlas = Subject::Subagent(key("Atlas"));
+    let tail = Subject::Subagent(key("Tail"));
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    let select =
+        |subject: Subject, view: &Entity<CockpitView>, cx: &mut gpui::VisualTestContext| {
+            view.update(cx, |view, cx| {
+                let generation = view
+                    .cockpit
+                    .thread(thread)
+                    .unwrap()
+                    .activity()
+                    .subject(&subject)
+                    .unwrap()
+                    .revision();
+                view.panes[0].select_subject(subject, generation, cx);
+                cx.notify();
+            });
+            cx.run_until_parked();
+        };
+    select(atlas.clone(), &view, cx);
+    let (atlas_entity, atlas_weak) = view.read_with(cx, |view, _| {
+        let transcript = &view.panes[0].transcripts[&atlas];
+        (transcript.entity_id(), transcript.downgrade())
+    });
+
+    // Switching alone preserves hidden Subject state while Tail's history is
+    // still waiting to restore.
+    select(tail.clone(), &view, cx);
+    view.update(cx, |view, cx| view.retry_subject_history(0, cx));
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.panes[0].transcripts[&atlas].entity_id(), atlas_entity);
+    });
+
+    // Retaining Tail exceeds core's child budget and evicts the hidden Atlas.
+    for _ in 0..8 {
+        tick(cx);
+    }
+    view.read_with(cx, |view, _| {
+        let atlas_core = view
+            .cockpit
+            .thread(thread)
+            .unwrap()
+            .activity()
+            .subject(&atlas)
+            .unwrap();
+        assert!(!atlas_core.retained());
+        assert!(!view.panes[0].transcripts.contains_key(&atlas));
+        assert!(view.panes[0].transcripts.contains_key(&tail));
+        assert!(!view.transcript_entities.contains(&atlas_entity));
+    });
+    assert!(
+        atlas_weak.upgrade().is_none(),
+        "the evicted snapshot is released"
     );
 }
 

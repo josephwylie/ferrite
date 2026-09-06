@@ -4,6 +4,7 @@ use ferrite_core::{
     transcript::{Block, BlockId},
     ThreadId,
 };
+use gpui::base::{TextSelectionDocument, TextSelectionDocumentMember};
 use gpui::{HighlightStyle, SharedString};
 use std::{cell::RefCell, ops::Range};
 
@@ -11,23 +12,12 @@ use std::{cell::RefCell, ops::Range};
 type Registry =
     std::rc::Rc<RefCell<std::collections::HashMap<ThreadId, Vec<(BlockId, u32, bool, String)>>>>;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct TranscriptText {
-    #[cfg(test)]
-    fallback: crate::rich::TextCache,
     #[cfg(test)]
     registry: Registry,
 }
 impl TranscriptText {
-    #[cfg(test)]
-    pub fn overlay(&self, thread: ThreadId, blocks: &[Block]) -> TextRuns {
-        self.overlay_scoped(
-            thread,
-            thread.get().to_string().into(),
-            blocks,
-            self.fallback.clone(),
-        )
-    }
     pub fn overlay_scoped(
         &self,
         _thread: ThreadId,
@@ -35,8 +25,6 @@ impl TranscriptText {
         _: &[Block],
         cache: crate::rich::TextCache,
     ) -> TextRuns {
-        #[cfg(test)]
-        self.registry.borrow_mut().insert(_thread, Vec::new());
         TextRuns {
             #[cfg(test)]
             thread: _thread,
@@ -44,6 +32,8 @@ impl TranscriptText {
             cache,
             block: RefCell::new(None),
             next_ordinal: RefCell::new(0),
+            document: None,
+            members: RefCell::new(None),
             #[cfg(test)]
             registry: self.registry.clone(),
         }
@@ -65,17 +55,81 @@ pub struct TextRuns {
     cache: crate::rich::TextCache,
     block: RefCell<Option<BlockId>>,
     next_ordinal: RefCell<u32>,
+    document: Option<TextSelectionDocument>,
+    members: RefCell<Option<Vec<TextSelectionDocumentMember>>>,
     #[cfg(test)]
     registry: Registry,
 }
 impl TextRuns {
+    pub fn with_document(mut self, document: TextSelectionDocument) -> Self {
+        self.document = Some(document);
+        self
+    }
+
+    /// Reuse the presentation's text identities to describe logical membership.
+    /// This pass constructs elements, but never mounts, parses or lays them out.
+    /// It runs when content or disclosure changes, never for an ordinary frame.
+    pub fn capture_members(&self, build: impl FnOnce()) -> Vec<TextSelectionDocumentMember> {
+        assert!(
+            self.members.borrow().is_none(),
+            "nested transcript text capture"
+        );
+        #[cfg(test)]
+        self.registry.borrow_mut().insert(self.thread, Vec::new());
+        *self.members.borrow_mut() = Some(Vec::new());
+        build();
+        self.members.borrow_mut().take().unwrap_or_default()
+    }
+
+    /// A lazy list may measure the same row more than once in one frame.
+    pub fn begin_row(&self) {
+        *self.block.borrow_mut() = None;
+        *self.next_ordinal.borrow_mut() = 0;
+    }
+
+    fn collect(&self, id: &SharedString, source: &str, markdown: bool) {
+        if let Some(members) = self.members.borrow_mut().as_mut() {
+            let source: SharedString = source.to_owned().into();
+            let version = source.clone();
+            members.push(
+                TextSelectionDocumentMember::new(id.clone(), move |_| {
+                    if markdown {
+                        gpui::base::text::TextView::markdown_plain_text(&source)
+                    } else {
+                        gpui::base::text::TextView::markdown_plain_text(
+                            &crate::rich::literal_source(&source),
+                        )
+                    }
+                })
+                .with_content_version(version),
+            );
+        }
+    }
+
+    pub fn answer(&self, first: BlockId, source: String) -> crate::rich::Markdown {
+        #[cfg(test)]
+        if self.members.borrow().is_some() {
+            self.registry
+                .borrow_mut()
+                .entry(self.thread)
+                .or_default()
+                .push((first, 0, true, source.clone()));
+        }
+        let id: SharedString = format!("markdown-{}-{first:?}", self.namespace).into();
+        self.collect(&id, &source, true);
+        crate::rich::Markdown::new(id, source, self.cache.clone())
+            .selection_document(self.document.clone())
+    }
+
     pub fn output(&self, block: BlockId, part: &str, text: &str) -> crate::rich::Output {
         #[cfg(test)]
-        self.registry
-            .borrow_mut()
-            .entry(self.thread)
-            .or_default()
-            .push((block, 0, true, text.to_string()));
+        if self.members.borrow().is_some() {
+            self.registry
+                .borrow_mut()
+                .entry(self.thread)
+                .or_default()
+                .push((block, 0, true, text.to_string()));
+        }
         crate::rich::Output {
             id: format!("output-{}-{block:?}-{part}", self.namespace).into(),
             text: text.to_string().into(),
@@ -85,16 +139,17 @@ impl TextRuns {
 
     pub fn markdown(&self, block: BlockId, source: String) -> crate::rich::Markdown {
         #[cfg(test)]
-        self.registry
-            .borrow_mut()
-            .entry(self.thread)
-            .or_default()
-            .push((block, 0, true, source.clone()));
-        crate::rich::Markdown::new(
-            format!("thinking-{}-{block:?}", self.namespace),
-            source,
-            self.cache.clone(),
-        )
+        if self.members.borrow().is_some() {
+            self.registry
+                .borrow_mut()
+                .entry(self.thread)
+                .or_default()
+                .push((block, 0, true, source.clone()));
+        }
+        let id: SharedString = format!("thinking-{}-{block:?}", self.namespace).into();
+        self.collect(&id, &source, true);
+        crate::rich::Markdown::new(id, source, self.cache.clone())
+            .selection_document(self.document.clone())
     }
 
     pub fn line(
@@ -112,16 +167,21 @@ impl TextRuns {
         let ordinal = *self.next_ordinal.borrow();
         *self.next_ordinal.borrow_mut() += 1;
         #[cfg(test)]
-        self.registry
-            .borrow_mut()
-            .entry(self.thread)
-            .or_default()
-            .push((block, ordinal, true, text.to_string()));
+        if self.members.borrow().is_some() {
+            self.registry
+                .borrow_mut()
+                .entry(self.thread)
+                .or_default()
+                .push((block, ordinal, true, text.to_string()));
+        }
+        let id: SharedString = format!("literal-{}-{block:?}-{ordinal}", self.namespace).into();
+        self.collect(&id, &text, false);
         crate::rich::Literal {
-            id: format!("literal-{}-{block:?}-{ordinal}", self.namespace).into(),
+            id,
             text,
             highlights,
             cache: self.cache.clone(),
+            document: self.document.clone(),
         }
     }
 }

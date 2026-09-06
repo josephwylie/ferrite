@@ -1,0 +1,31 @@
+   Compiling ferrite v0.1.0 (/Users/josephwylie/Desktop/Projects/ferrite/.worktrees/ui-rendering-architecture/crates/ferrite)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.64s
+warning: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/main.rs (/Users/josephwylie/.cache/ferrite-ui-architecture-target/debug/deps/ferrite-a68d9314544177ea)
+
+running 3 tests
+test cockpit::tests::render_performance::native_transcript_rows_stay_bounded_by_a_fixed_viewport_as_history_grows ...
+thread 'cockpit::tests::render_performance::native_transcript_rows_stay_bounded_by_a_fixed_viewport_as_history_grows' (17296351) panicked at crates/ferrite/src/cockpit/tests/render_performance.rs:204:5:
+assertion failed: short_history_rows <= MAX_MOUNTED_ROWS
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test cockpit::tests::render_performance::streaming_one_pane_does_not_render_sibling_native_transcripts ...
+thread 'cockpit::tests::render_performance::streaming_one_pane_does_not_render_sibling_native_transcripts' (17296575) panicked at crates/ferrite/src/cockpit/tests/render_performance.rs:157:5:
+streaming one Pane must not reconstruct sibling transcript native text
+FAILED
+test cockpit::tests::render_performance::typing_in_a_focused_composer_does_not_render_sibling_native_transcripts ...
+thread 'cockpit::tests::render_performance::typing_in_a_focused_composer_does_not_render_sibling_native_transcripts' (17296598) panicked at crates/ferrite/src/cockpit/tests/render_performance.rs:120:5:
+typing in one Composer must not reconstruct a sibling transcript's native text
+FAILED
+
+failures:
+
+failures:
+    cockpit::tests::render_performance::native_transcript_rows_stay_bounded_by_a_fixed_viewport_as_history_grows
+    cockpit::tests::render_performance::streaming_one_pane_does_not_render_sibling_native_transcripts
+    cockpit::tests::render_performance::typing_in_a_focused_composer_does_not_render_sibling_native_transcripts
+
+test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 256 filtered out; finished in 1.74s
+
+error: test failed, to rerun pass `-p ferrite --bin ferrite`
