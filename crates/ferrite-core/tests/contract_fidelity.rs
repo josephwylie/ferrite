@@ -6,6 +6,17 @@ use serde_json::json;
 use support::*;
 
 #[test]
+fn claude_main_user_echo_is_not_a_second_operator_prompt() {
+    for content in [json!("Original prompt"), json!([{"type":"text","text":"Original prompt"}])] {
+        let r = Replay::new("claude", vec![json!({"type":"user","uuid":"echo","session_id":"root","parent_tool_use_id":null,"message":{"role":"user","content":content}})]);
+        let a = fold(r.drain());
+        assert!(!a.view().main().transcript().blocks().iter().any(|b|
+            matches!(&b.body, ferrite_core::transcript::Body::Prompt(_))),
+            "operator prompt is already recorded on submission; the provider echo must not duplicate it");
+    }
+}
+
+#[test]
 fn claude_complete_main_message_without_deltas_is_visible_once() {
     let frame = json!({"type":"assistant","uuid":"frame-1","session_id":"root","parent_tool_use_id":null,"is_meta":true,"local_command_source":"/context","message":{"id":"msg-1","role":"assistant","content":[{"type":"text","text":"Native context report"}]}});
     let r = Replay::new(

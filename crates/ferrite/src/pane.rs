@@ -4355,7 +4355,7 @@ fn render_tool(
         }
     }
     if expanded || !in_group {
-        if let Some(diff) = &tool.diff {
+        for diff in &tool.diffs {
             card = card.child(render_diff(block, diff, selection));
         }
     }
@@ -4636,8 +4636,11 @@ enum ToolVerdict {
 
 fn tool_verdicts(tool: &ToolBlock) -> Vec<ToolVerdict> {
     let mut verdicts = Vec::with_capacity(2);
-    if let Some(diff) = &tool.diff {
-        verdicts.push(ToolVerdict::Diff(diff.added, diff.removed));
+    if !tool.diffs.is_empty() {
+        verdicts.push(ToolVerdict::Diff(
+            tool.diffs.iter().map(|diff| diff.added).sum(),
+            tool.diffs.iter().map(|diff| diff.removed).sum(),
+        ));
     }
     if matches!(tool.state, ToolState::Failed(_)) {
         verdicts.push(ToolVerdict::Failed);
@@ -5406,8 +5409,8 @@ mod tests {
                 Body::Heading { .. } => "heading",
                 Body::Bullet { .. } => "bullet",
                 Body::Code { .. } => "code",
-                Body::Tool(tool) => match (&tool.state, &tool.diff) {
-                    (_, Some(_)) => "diff",
+                Body::Tool(tool) => match (&tool.state, tool.diffs.is_empty()) {
+                    (_, false) => "diff",
                     (ToolState::Failed(_), _) => "tool-failed",
                     _ => "tool",
                 },

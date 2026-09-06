@@ -51,10 +51,14 @@ fn claude_unrecognized_structured_tool_result_remains_available() {
     let r = Replay::new(
         "claude",
         vec![
+            json!({"type":"assistant","uuid":"call","session_id":"root","parent_tool_use_id":null,"message":{"id":"msg","role":"assistant","content":[{"type":"tool_use","id":"tool","name":"McpSearch","input":{}}]}}),
             json!({"type":"user","uuid":"result","session_id":"root","parent_tool_use_id":null,"tool_use_result":payload,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool","content":"Found one document"}]}}),
         ],
     );
-    assert!(r.drain().iter().any(|e|matches!(e,SessionEvent::ToolCompleted{result:ToolResult::Structured{value},..} if value==&payload)));
+    let a = fold(r.drain());
+    assert!(a.view().main().transcript().blocks().iter().any(|block|
+        matches!(&block.body, ferrite_core::transcript::Body::Tool(tool)
+            if tool.structured_result.as_ref() == Some(&payload))));
 }
 #[test]
 fn codex_multi_file_change_retains_every_native_diff() {
