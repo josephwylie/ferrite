@@ -30,7 +30,8 @@ pub mod workspace;
 mod session_event;
 mod thread;
 pub use session_event::{
-    Decision, DecisionAnswer, DecisionDelivery, FileEdit, Hunk, ModelInfo, RateLimitWindow,
-    SessionCommand, SessionEvent, ToolResult, TurnOutcome,
+    ContextCategory, ContextDetails, ControlKind, Decision, DecisionAnswer, DecisionDelivery,
+    FileEdit, Hunk, McpServer, McpStatus, ModelInfo, RateLimitWindow, SessionCommand,
+    SessionControl, SessionEvent, ToolResult, TurnOutcome,
 };
 pub use thread::ThreadId;

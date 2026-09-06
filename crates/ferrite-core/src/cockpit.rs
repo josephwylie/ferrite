@@ -3340,7 +3340,9 @@ fn event_changes_content(event: &SessionEvent) -> bool {
         | SessionEvent::TokenUsage { .. }
         | SessionEvent::Commands { .. }
         | SessionEvent::Models { .. }
-        | SessionEvent::PermissionMode { .. } => false,
+        | SessionEvent::PermissionMode { .. }
+        | SessionEvent::ContextDetails { .. }
+        | SessionEvent::McpServers { .. } => false,
         _ => true,
     }
 }

@@ -10,6 +10,7 @@ mod activity;
 mod suggestions;
 mod wire;
 
+use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
@@ -18,7 +19,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::{DecisionAnswer, SessionEvent};
+use crate::{ControlKind, DecisionAnswer, SessionControl, SessionEvent};
 
 /// Minimum `claude` CLI version for stable stream-json + stdio control
 /// protocol. Vendor releases below this break loudly at spawn, not weirdly
@@ -181,6 +182,7 @@ pub struct ClaudeCapabilities {
 }
 
 type SettingReply = Arc<Mutex<Option<(String, SyncSender<io::Result<()>>)>>>;
+type ControlReplies = Arc<Mutex<HashMap<String, SessionControl>>>;
 
 /// A live Claude Session: one CLI process serving one Thread.
 pub struct ClaudeSession {
@@ -192,11 +194,12 @@ pub struct ClaudeSession {
     job: super::job::SessionJob,
     /// Held open for the life of the Session: closing it ends the Session,
     /// so multi-turn depends on this staying alive.
-    stdin: ChildStdin,
+    stdin: Arc<Mutex<ChildStdin>>,
     cwd: Option<PathBuf>,
     events: Receiver<SessionEvent>,
     capabilities: ClaudeCapabilities,
     setting_reply: SettingReply,
+    control_replies: ControlReplies,
     decoder: Arc<Mutex<activity::Decoder>>,
     next_request_id: u64,
     suggestions: Arc<Mutex<suggestions::Inbox>>,
@@ -280,7 +283,7 @@ impl ClaudeSession {
         let job =
             super::job::SessionJob::assign_or_reap(&mut child).map_err(ClaudeSpawnError::Io)?;
 
-        let stdin = child.stdin.take().expect("stdin was piped");
+        let stdin = Arc::new(Mutex::new(child.stdin.take().expect("stdin was piped")));
         let stdout = child.stdout.take().expect("stdout was piped");
         let stderr = child.stderr.take().expect("stderr was piped");
 
@@ -290,6 +293,7 @@ impl ClaudeSession {
         let (sender, events) = sync_channel(EVENT_CHANNEL_CAPACITY);
         let child = Arc::new(Mutex::new(child));
         let setting_reply = Arc::new(Mutex::new(None));
+        let control_replies = Arc::new(Mutex::new(HashMap::new()));
         let decoder = Arc::new(Mutex::new(activity::Decoder::default()));
         let mut inbox = suggestions::Inbox::default();
         inbox.configure(config.prompt_suggestions);
@@ -300,6 +304,8 @@ impl ClaudeSession {
             Arc::clone(&child),
             stderr_tail,
             setting_reply.clone(),
+            control_replies.clone(),
+            Arc::clone(&stdin),
             decoder.clone(),
             suggestions.clone(),
         );
@@ -313,6 +319,7 @@ impl ClaudeSession {
             events,
             capabilities: ClaudeCapabilities::default(),
             setting_reply,
+            control_replies,
             decoder,
             next_request_id: 1,
             suggestions,
@@ -360,6 +367,64 @@ impl ClaudeSession {
             serde_json::json!({"subtype": "set_model", "model": model}),
             "model change was not acknowledged",
         )
+    }
+
+    pub fn supports_control(&self, kind: ControlKind) -> bool {
+        matches!(
+            kind,
+            ControlKind::RefreshContext
+                | ControlKind::RefreshMcp
+                | ControlKind::ReconnectMcp
+                | ControlKind::StopTask
+                | ControlKind::BackgroundTasks
+                | ControlKind::SetPermissionMode
+        )
+    }
+
+    pub fn control(&mut self, action: SessionControl) -> io::Result<()> {
+        let requests = match action {
+            SessionControl::RefreshContext => vec![(
+                SessionControl::RefreshContext,
+                serde_json::json!({"subtype": "get_context_usage", "detail": "summary"}),
+            )],
+            SessionControl::RefreshMcp => vec![(
+                SessionControl::RefreshMcp,
+                serde_json::json!({"subtype": "mcp_status"}),
+            )],
+            SessionControl::ReconnectMcp { server } => vec![
+                (
+                    SessionControl::ReconnectMcp {
+                        server: server.clone(),
+                    },
+                    serde_json::json!({"subtype": "mcp_reconnect", "serverName": server}),
+                ),
+            ],
+            SessionControl::StopTask { id } => vec![(
+                SessionControl::StopTask { id: id.clone() },
+                serde_json::json!({"subtype": "stop_task", "task_id": id}),
+            )],
+            SessionControl::BackgroundTasks => vec![(
+                SessionControl::BackgroundTasks,
+                serde_json::json!({"subtype": "background_tasks"}),
+            )],
+            SessionControl::SetPermissionMode { mode } => vec![(
+                SessionControl::SetPermissionMode { mode: mode.clone() },
+                serde_json::json!({"subtype": "set_permission_mode", "mode": mode}),
+            )],
+        };
+        for (action, request) in requests {
+            let id = self.take_request_id();
+            lock(&self.control_replies).insert(id.clone(), action);
+            if let Err(error) = self.write_line(&serde_json::json!({
+                "type": "control_request",
+                "request_id": id.clone(),
+                "request": request,
+            })) {
+                lock(&self.control_replies).remove(&id);
+                return Err(error);
+            }
+        }
+        Ok(())
     }
 
     fn set_setting(&mut self, request: serde_json::Value, timeout_message: &str) -> io::Result<()> {
@@ -504,8 +569,9 @@ impl ClaudeSession {
     fn write_line(&mut self, value: &serde_json::Value) -> io::Result<()> {
         let mut line = serde_json::to_string(value).map_err(io::Error::other)?;
         line.push('\n');
-        self.stdin.write_all(line.as_bytes())?;
-        self.stdin.flush()
+        let mut stdin = lock(&self.stdin);
+        stdin.write_all(line.as_bytes())?;
+        stdin.flush()
     }
 }
 
@@ -530,6 +596,8 @@ fn read_stdout(
     child: Arc<Mutex<Child>>,
     stderr_tail: Arc<Mutex<StderrTail>>,
     setting_reply: SettingReply,
+    control_replies: ControlReplies,
+    stdin: Arc<Mutex<ChildStdin>>,
     decoder: Arc<Mutex<activity::Decoder>>,
     suggestions: Arc<Mutex<suggestions::Inbox>>,
 ) -> Receiver<ClaudeCapabilities> {
@@ -568,6 +636,51 @@ fn read_stdout(
                         ))
                     };
                     let _ = reply.send(result);
+                    continue;
+                }
+                let control = lock(&control_replies).remove(
+                    response["request_id"].as_str().unwrap_or_default(),
+                );
+                if let Some(action) = control {
+                    if response["subtype"] != "success" {
+                        let message = response["error"].as_str().unwrap_or("control refused");
+                        if sender
+                            .send(SessionEvent::Activity(
+                                crate::activity::ActivityEvent::MainContent {
+                                    id: None,
+                                    event: crate::activity::ExecutionEvent::Notice {
+                                        text: format!("control failed: {message}"),
+                                    },
+                                },
+                            ))
+                            .is_err()
+                        {
+                            return;
+                        }
+                        continue;
+                    }
+                    if matches!(action, SessionControl::ReconnectMcp { .. }) {
+                        let id = format!(
+                            "{}_mcp",
+                            response["request_id"].as_str().unwrap_or("req_unknown")
+                        );
+                        lock(&control_replies).insert(id.clone(), SessionControl::RefreshMcp);
+                        let request = serde_json::json!({
+                            "type": "control_request",
+                            "request_id": id,
+                            "request": {"subtype": "mcp_status"},
+                        });
+                        if write_stdin_line(&stdin, &request).is_err() {
+                            lock(&control_replies).remove(
+                                request["request_id"].as_str().unwrap_or_default(),
+                            );
+                        }
+                    }
+                    for event in control_events(&action, &response["response"]) {
+                        if sender.send(event).is_err() {
+                            return;
+                        }
+                    }
                     continue;
                 }
             }
@@ -622,9 +735,80 @@ fn read_stdout(
                 }
             }
         }
+        lock(&control_replies).clear();
         let _ = sender.send(closed_event(&child, &stderr_tail));
     });
     capabilities
+}
+
+fn control_events(action: &SessionControl, response: &serde_json::Value) -> Vec<SessionEvent> {
+    match action {
+        SessionControl::RefreshContext => {
+            let total = response["totalTokens"].as_u64().unwrap_or(0);
+            let raw_max = response["rawMaxTokens"].as_u64();
+            let max = response["maxTokens"].as_u64();
+            let details = crate::ContextDetails {
+                usable_window: max,
+                auto_compact_threshold: response["autoCompactThreshold"].as_u64(),
+                is_auto_compact_enabled: response["isAutoCompactEnabled"].as_bool(),
+                categories: response["categories"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|category| {
+                        Some(crate::ContextCategory {
+                            name: category["name"].as_str()?.to_owned(),
+                            tokens: category["tokens"].as_u64().unwrap_or(0),
+                        })
+                    })
+                    .collect(),
+            };
+            vec![
+                SessionEvent::TokenUsage {
+                    total_tokens: total,
+                    input_tokens: 0,
+                    cached_input_tokens: 0,
+                    output_tokens: 0,
+                    reasoning_output_tokens: 0,
+                    context_window: raw_max,
+                },
+                SessionEvent::ContextDetails { details },
+            ]
+        }
+        SessionControl::RefreshMcp => vec![SessionEvent::McpServers {
+            servers: response["mcpServers"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|server| crate::McpServer {
+                    name: server["name"].as_str().unwrap_or_default().to_owned(),
+                    status: match server["status"].as_str() {
+                        Some("connected") => crate::McpStatus::Connected,
+                        Some("connecting") => crate::McpStatus::Connecting,
+                        Some("needs-auth") => crate::McpStatus::NeedsAuth,
+                        Some("failed") => crate::McpStatus::Failed,
+                        Some("disabled") => crate::McpStatus::Disabled,
+                        _ => crate::McpStatus::Unknown,
+                    },
+                    error: server["error"].as_str().map(str::to_owned),
+                })
+                .collect(),
+        }],
+        SessionControl::SetPermissionMode { mode } => {
+            vec![SessionEvent::PermissionMode { mode: mode.clone() }]
+        }
+        SessionControl::ReconnectMcp { .. }
+        | SessionControl::StopTask { .. }
+        | SessionControl::BackgroundTasks => Vec::new(),
+    }
+}
+
+fn write_stdin_line(stdin: &Arc<Mutex<ChildStdin>>, value: &serde_json::Value) -> io::Result<()> {
+    let mut line = serde_json::to_string(value).map_err(io::Error::other)?;
+    line.push('\n');
+    let mut stdin = lock(stdin);
+    stdin.write_all(line.as_bytes())?;
+    stdin.flush()
 }
 
 /// The last of the CLI's stderr, and whether there is any more coming.

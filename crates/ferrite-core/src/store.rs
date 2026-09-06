@@ -257,6 +257,9 @@ enum Record {
         reasoning_output_tokens: u64,
         context_window: Option<u64>,
     },
+    ContextDetails {
+        details: crate::ContextDetails,
+    },
     ToolStarted {
         id: String,
         name: String,
@@ -830,6 +833,9 @@ impl Record {
                 reasoning_output_tokens: *reasoning_output_tokens,
                 context_window: *context_window,
             },
+            SessionEvent::ContextDetails { details } => Record::ContextDetails {
+                details: details.clone(),
+            },
             SessionEvent::DecisionRequested { .. } => return None,
             // The command menu, the permission mode and the model menu are
             // the live Session's, like a Decision: a replay has no Session
@@ -838,6 +844,7 @@ impl Record {
             SessionEvent::PermissionMode { .. } => return None,
             SessionEvent::Models { .. } => return None,
             SessionEvent::RateLimits { .. } => return None,
+            SessionEvent::McpServers { .. } => return None,
         })
     }
 
@@ -932,6 +939,11 @@ impl Record {
                 reasoning_output_tokens: *reasoning_output_tokens,
                 context_window: *context_window,
             }),
+            Record::ContextDetails { details } => {
+                Input::Event(SessionEvent::ContextDetails {
+                    details: details.clone(),
+                })
+            }
             Record::Closed { reason } => Input::Event(SessionEvent::Closed {
                 reason: reason.clone(),
             }),

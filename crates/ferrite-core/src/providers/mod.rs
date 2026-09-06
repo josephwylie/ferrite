@@ -7,7 +7,7 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 
-use crate::{DecisionAnswer, SessionEvent};
+use crate::{ControlKind, DecisionAnswer, SessionControl, SessionEvent};
 
 mod claude;
 mod codex;
@@ -69,6 +69,15 @@ fn cmd_shim(program: &str, path: Option<&OsStr>) -> Option<PathBuf> {
 /// No park: a Thread is parked by dropping its Session, which is the whole
 /// lifecycle the caller needs and the only one a provider can honour.
 pub trait Session {
+    fn supports_control(&self, _kind: ControlKind) -> bool {
+        false
+    }
+    fn control(&mut self, _action: SessionControl) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "this Session does not support that control",
+        ))
+    }
     /// The bounded event stream. The pump drains this per frame.
     fn events(&self) -> &Receiver<SessionEvent>;
     fn send(&mut self, text: &str) -> io::Result<()>;
@@ -115,6 +124,12 @@ pub trait Session {
 }
 
 impl Session for ClaudeSession {
+    fn supports_control(&self, kind: ControlKind) -> bool {
+        ClaudeSession::supports_control(self, kind)
+    }
+    fn control(&mut self, action: SessionControl) -> io::Result<()> {
+        ClaudeSession::control(self, action)
+    }
     fn set_suggestions_enabled(&mut self, enabled: bool) -> io::Result<()> {
         ClaudeSession::set_suggestions_enabled(self, enabled)
     }

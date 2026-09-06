@@ -380,6 +380,7 @@ pub struct Transcript {
     /// cannot stand in for this: Codex completes without reporting dollars.
     turn_outcome: Option<TurnOutcome>,
     usage: Option<Usage>,
+    context_details: Option<crate::ContextDetails>,
     rate_limits: RateLimits,
     /// When the running turn began — the operator's prompt went out — for
     /// the working line's clock. None between turns.
@@ -484,6 +485,7 @@ impl Transcript {
             last_cost: None,
             turn_outcome: None,
             usage: None,
+            context_details: None,
             rate_limits: RateLimits::default(),
             turn_started: None,
             turn_output_tokens: 0,
@@ -604,6 +606,10 @@ impl Transcript {
 
     pub fn usage(&self) -> Option<Usage> {
         self.usage
+    }
+
+    pub fn context_details(&self) -> Option<&crate::ContextDetails> {
+        self.context_details.as_ref()
     }
 
     pub fn rate_limits(&self) -> RateLimits {
@@ -932,6 +938,10 @@ impl Transcript {
                 self.rate_limits = RateLimits { five_hour, weekly };
                 Update::default()
             }
+            Input::Event(SessionEvent::ContextDetails { details }) => {
+                self.context_details = Some(details);
+                Update::default()
+            }
             Input::Answered { allowed, tool_name } => {
                 self.status = Status::Streaming;
                 let verb = if allowed { "allowed" } else { "denied" };
@@ -1115,6 +1125,7 @@ impl Transcript {
             Input::Event(SessionEvent::Commands { .. }) => Update::default(),
             Input::Event(SessionEvent::PermissionMode { .. }) => Update::default(),
             Input::Event(SessionEvent::Models { .. }) => Update::default(),
+            Input::Event(SessionEvent::McpServers { .. }) => Update::default(),
             Input::Event(SessionEvent::Closed { reason }) => {
                 self.progress.disconnected();
                 self.latest_reasoning_part = None;

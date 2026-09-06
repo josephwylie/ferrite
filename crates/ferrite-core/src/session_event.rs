@@ -119,8 +119,63 @@ pub enum SessionEvent {
     /// to the catalog in `providers::models`. Session state exactly like
     /// the command menu: gone with the Session.
     Models { models: Vec<ModelInfo> },
+    /// A native context refresh with provider-neutral detail.
+    ContextDetails { details: ContextDetails },
+    /// Current MCP server state for this Session.
+    McpServers { servers: Vec<McpServer> },
     /// The session process exited; no further events will arrive.
     Closed { reason: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControlKind {
+    RefreshContext,
+    RefreshMcp,
+    ReconnectMcp,
+    StopTask,
+    BackgroundTasks,
+    SetPermissionMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionControl {
+    RefreshContext,
+    RefreshMcp,
+    ReconnectMcp { server: String },
+    StopTask { id: String },
+    BackgroundTasks,
+    SetPermissionMode { mode: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ContextDetails {
+    pub usable_window: Option<u64>,
+    pub auto_compact_threshold: Option<u64>,
+    pub is_auto_compact_enabled: Option<bool>,
+    pub categories: Vec<ContextCategory>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ContextCategory {
+    pub name: String,
+    pub tokens: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpServer {
+    pub name: String,
+    pub status: McpStatus,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpStatus {
+    Connected,
+    Connecting,
+    NeedsAuth,
+    Failed,
+    Disabled,
+    Unknown,
 }
 
 /// One rolling subscription limit, normalized to a fraction for the UI while
