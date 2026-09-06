@@ -61,6 +61,12 @@ impl Replay {
             quote(&directory.join("host"))
         ));
         script.push_str(r#"case "$frame" in
+*'"method":"turn/start"'*)
+request=$(printf '%s' "$frame" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+case "$frame" in
+*'reject-start'*) printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":"Native start rejected"}}\n' "$request";;
+*'accept-without-notification'*) printf '{"jsonrpc":"2.0","id":%s,"result":{"turn":{"id":"native-turn","status":"inProgress","items":[]}}}\n' "$request";;
+esac;;
 *'"subtype":"get_context_usage"'*)
 request=$(printf '%s' "$frame" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
 printf '{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{"totalTokens":12000,"rawMaxTokens":180000,"maxTokens":150000,"model":"fixture","autoCompactThreshold":140000,"isAutoCompactEnabled":true,"categories":[{"name":"Messages","tokens":12000,"color":"blue"}]}}}\n' "$request";;
