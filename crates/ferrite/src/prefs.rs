@@ -30,6 +30,10 @@ pub fn veil() -> Div {
     div()
         .absolute()
         .inset_0()
+        // The modal veil covers the cockpit, including selectable transcript
+        // text, and therefore owns the neutral cursor outside the card too.
+        .cursor_default()
+        .occlude()
         .flex()
         .items_center()
         .justify_center()

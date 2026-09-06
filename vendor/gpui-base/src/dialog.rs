@@ -499,6 +499,10 @@ impl RenderOnce for Dialog {
                     .left_0()
                     .w(viewport.width)
                     .h(viewport.height)
+                    // The host covers the viewport and must win cursor hit
+                    // testing over the obscured application beneath it.
+                    .cursor_default()
+                    .occlude()
                     .role(self.role)
                     .track_focus(&self.focus)
                     .focus_trap(format!("dialog-{}", self.layer), &self.focus)

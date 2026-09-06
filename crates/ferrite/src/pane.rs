@@ -3801,6 +3801,8 @@ pub fn binding_label(workspace: Option<&WorkspaceBinding>) -> SharedString {
 /// cockpit's to append — their clicks are wired there.
 fn popover_shell() -> Div {
     div()
+        .cursor_default()
+        .occlude()
         .flex()
         .flex_col()
         .p(px(theme::MENU_PAD))

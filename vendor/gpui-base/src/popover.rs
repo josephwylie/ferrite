@@ -3,7 +3,7 @@ use std::rc::Rc;
 use gpui::{
     Anchor, AnyElement, App, Context, DismissEvent, ElementId, EventEmitter, FocusHandle,
     Focusable, InteractiveElement as _, IntoElement, KeyBinding, MouseButton, ParentElement as _,
-    Render, RenderOnce, Role, StatefulInteractiveElement as _, Subscription, Window, div,
+    Render, RenderOnce, Role, StatefulInteractiveElement as _, Styled as _, Subscription, Window, div,
     prelude::FluentBuilder as _,
 };
 
@@ -313,6 +313,10 @@ impl RenderOnce for Popover {
 
         let content = div()
             .id("content")
+            // Deferred content paints above the page, so it must also own the
+            // pointer resting over its otherwise-inert space. Without this,
+            // a cursor advertised by a covered text/input hitbox leaks through.
+            .cursor_default()
             // A popover surface is a non-modal dialog: it takes focus and is
             // dismissed with Escape, which is what this role tells assistive
             // technology to expect.

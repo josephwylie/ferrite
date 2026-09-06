@@ -354,6 +354,7 @@ fn row_element(index: usize, row: &Row, handle: Handle) -> Stateful<Div> {
 /// title, a detail line and its age without wrapping.
 fn surface() -> Div {
     div()
+        .cursor_default()
         .flex()
         .flex_col()
         .w(px(340.))
