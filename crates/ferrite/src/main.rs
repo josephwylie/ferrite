@@ -314,8 +314,14 @@ fn dock_launch_dir(cockpit: &Cockpit) -> std::path::PathBuf {
     };
     worked
         .or_else(registered)
-        .or_else(|| std::env::var_os("HOME").map(std::path::PathBuf::from))
+        .or_else(home_dir)
         .unwrap_or_else(|| std::path::PathBuf::from("/"))
+}
+
+fn home_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
 }
 
 fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
@@ -481,12 +487,12 @@ mod tests {
     fn a_dock_launch_stands_where_the_newest_thread_works() {
         let dir = std::env::temp_dir().join(format!("ferrite-launch-{}-dock", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let home = std::path::PathBuf::from(std::env::var_os("HOME").expect("HOME is set"));
+        let home = super::home_dir().expect("a home directory is set");
         let store = Store::open(dir.clone()).unwrap();
         let mut core = Cockpit::new(store, Box::new(demo::Spawn::new(false)));
         assert_eq!(dock_launch_dir(&core), home, "an empty store: home");
 
-        let checkout = std::env::current_dir().unwrap();
+        let checkout = std::fs::canonicalize(std::env::current_dir().unwrap()).unwrap();
         core.register_project(&checkout).unwrap();
         assert_eq!(
             dock_launch_dir(&core),

@@ -10196,7 +10196,11 @@ mod tests {
                 "progress pumps preserve native output focus"
             )
         });
-        cx.simulate_keystrokes("cmd-down");
+        cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+            "cmd-down"
+        } else {
+            "ctrl-end"
+        });
         cx.run_until_parked();
         output_state.read_with(cx, |state, _| {
             assert_eq!(
@@ -10209,7 +10213,11 @@ mod tests {
                 "the native viewer scrolls to its tail"
             );
         });
-        cx.simulate_keystrokes("cmd-a cmd-c");
+        cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+            "cmd-a cmd-c"
+        } else {
+            "ctrl-a ctrl-c"
+        });
         assert_eq!(clipboard(cx).as_deref(), Some(expected.as_str()));
         cx.simulate_keystrokes("backspace");
         output_state.read_with(cx, |state, _| {
@@ -10300,7 +10308,11 @@ mod tests {
         command_state.read_with(cx, |state, _| assert_eq!(state.value().as_ref(), command));
         let bounds = result_state.read_with(cx, |state, _| state.text_bounds().unwrap());
         cx.simulate_click(bounds.center(), gpui::Modifiers::none());
-        cx.simulate_keystrokes("cmd-down shift-up");
+        cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+            "cmd-down shift-up"
+        } else {
+            "ctrl-end shift-up"
+        });
         cx.run_until_parked();
         let (selected, cursor, scroll) = result_state.read_with(cx, |state, _| {
             (

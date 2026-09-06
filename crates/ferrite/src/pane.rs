@@ -5548,7 +5548,9 @@ mod tests {
             blocks.iter().map(|block| block.id).collect();
         let reasoning: Vec<_> = blocks
             .iter()
-            .filter(|block| matches!(block.body, Body::Thinking(_)))
+            .filter(|block| {
+                matches!(&block.body, Body::Thinking(text) if reasoning_text(text).1.is_some())
+            })
             .map(|block| block.id)
             .collect();
         let thread = ThreadId::new(1);

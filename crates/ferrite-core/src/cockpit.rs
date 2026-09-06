@@ -3451,6 +3451,7 @@ mod tests {
         std::fs::create_dir_all(&repo).unwrap();
         let git = |args: &[&str]| crate::workspace::git_for_tests(&repo, args);
         git(&["init", "-q", "-b", "main"]);
+        git(&["config", "core.autocrlf", "false"]);
         std::fs::write(repo.join("file.txt"), "base\n").unwrap();
         git(&["add", "file.txt"]);
         git(&[
