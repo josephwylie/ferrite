@@ -13,6 +13,7 @@ use ferrite_core::draft::DraftTarget;
 use ferrite_core::groups::{Drag, DropTarget, GroupChange, GroupId, Groups, Plan};
 use ferrite_core::layout::{self, Edge, SeamId, Tree, Zone};
 use ferrite_core::roster::{PaneIdentity, View};
+use ferrite_core::settings::UsageMeterStyle;
 use ferrite_core::store::Provider;
 use ferrite_core::workspace::registry::ProjectId;
 #[cfg(test)]
@@ -162,8 +163,11 @@ pub struct CockpitView {
     /// The right-click menu, if one is up: what it is about, where it was
     /// summoned, and which destructive row is armed for its second press.
     context_menu: Option<ContextMenu>,
-    /// The usage meter's detail card, tied to its Thread and click position.
-    context_usage: Option<(ThreadId, gpui::Point<gpui::Pixels>)>,
+    /// The usage meter's detail card, tied to the Pane that opened it and
+    /// the click position. A draft Pane has a meter too — its account
+    /// windows are real before the first prompt — so this is a
+    /// `PaneIdentity`, not a Thread.
+    context_usage: Option<(PaneIdentity, gpui::Point<gpui::Pixels>)>,
     /// The header `ci` mark's checks card, tied to its Thread and click
     /// position (#29). The runs it lists are read from the same cached
     /// `BranchStatus` the mark was drawn from, so the card can never
@@ -2038,6 +2042,25 @@ impl CockpitView {
                 settings.confirm_delete, self.setting_change(cx, |s, v| s.confirm_delete = v)),
             prefs::toggle("settings-nav-collapsed", "Start with the sidebar collapsed", "⌘B toggles it any time",
                 settings.nav_collapsed, self.setting_change(cx, |s, v| s.nav_collapsed = v)),
+            prefs::choices(
+                "settings-usage-meter",
+                "Usage meter",
+                "The mark the Composer's context, 5-hour and weekly meter wears",
+                [
+                    ("Lines", UsageMeterStyle::Lines),
+                    ("Rings", UsageMeterStyle::Rings),
+                ]
+                .into_iter()
+                .map(|(label, style)| {
+                    (
+                        SharedString::from(label),
+                        settings.usage_meter_style == style,
+                        style,
+                    )
+                })
+                .collect(),
+                self.setting_change(cx, |settings, style| settings.usage_meter_style = style),
+            ),
         ];
         let (claude, codex) = self
             .cli_versions
@@ -3325,6 +3348,19 @@ impl CockpitView {
             let identity = self.panes[index].identity;
             if let Some(draft) = self.panes[index].draft_mut() {
                 draft.binding.choose_target(target);
+            }
+            // Re-aim its placement too, not only its target: a standing
+            // draft left over from an earlier press must still become the
+            // Group the operator is asking for now. Read the view before
+            // focusing the draft.
+            if let Some(draft) = identity.draft() {
+                match placement {
+                    DraftPlacement::CurrentGroup => self.cockpit.aim_draft_at_current_view(draft),
+                    DraftPlacement::Loose => self.cockpit.aim_draft_loose(draft),
+                    DraftPlacement::NewGroupWith(thread) => {
+                        self.cockpit.aim_draft_at_new_group(draft, thread)
+                    }
+                }
             }
             self.cockpit.focus(identity);
             self.sync_panes(cx);
@@ -4763,15 +4799,21 @@ impl Render for CockpitView {
             self.context_checks = None;
         }
 
-        if self.context_usage.is_some_and(|(thread, _)| {
+        if self.context_usage.is_some_and(|(identity, _)| {
             level != Level::Transcript
-                || self.focused_thread() != Some(thread)
                 || self.settings_open
-                || self
-                    .cockpit
-                    .thread(thread)
-                    .and_then(|open| open.transcript().usage())
-                    .is_none()
+                || self.panes.get(self.focused()).map(|pane| pane.identity) != Some(identity)
+                || match identity {
+                    // A Thread's card is a reading, and goes when the
+                    // reading does. A draft's card is its account windows,
+                    // which are real before any turn has reported.
+                    PaneIdentity::Thread(thread) => self
+                        .cockpit
+                        .thread(thread)
+                        .and_then(|open| open.transcript().usage())
+                        .is_none(),
+                    PaneIdentity::Draft(_) => false,
+                }
         }) {
             self.context_usage = None;
         }
@@ -5313,6 +5355,9 @@ impl CockpitView {
                         .into_any_element(),
                     band: self.draft_band_element(index, cx),
                     picker: self.draft_model_picker(index, cx),
+                    usage_meter: (level == Level::Transcript)
+                        .then(|| self.usage_meter(index, cx))
+                        .flatten(),
                     menu: (level == Level::Transcript)
                         .then(|| self.popover_element(index, cx))
                         .flatten(),
@@ -5660,24 +5705,45 @@ impl CockpitView {
     /// The Composer meter opens the latest reported usage on click.
     /// No reading is invented when the provider has not reported usage.
     fn usage_meter(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let thread = self.panes[index].thread()?;
-        let usage = self.cockpit.thread(thread)?.transcript().usage()?;
-        let fraction = usage
-            .context_window
-            .filter(|window| *window > 0)
-            .map_or(0., |window| usage.total_tokens as f32 / window as f32);
+        let identity = self.panes[index].identity;
+        let (fraction, provider, key) = match identity {
+            PaneIdentity::Thread(thread) => {
+                let open = self.cockpit.thread(thread)?;
+                let usage = open.transcript().usage()?;
+                let fraction = usage
+                    .context_window
+                    .filter(|window| *window > 0)
+                    .map_or(0., |window| usage.total_tokens as f32 / window as f32);
+                (fraction, open.provider(), thread.get().to_string())
+            }
+            // A draft has spent no context yet, and that empty window is
+            // half of what the operator came to check before writing a
+            // prompt. The account windows beside it are already real.
+            PaneIdentity::Draft(draft) => (
+                0.,
+                self.panes[index].draft()?.binding.provider().provider,
+                format!("draft-{}", draft.get()),
+            ),
+        };
         // Account-wide and remembered across launches, so the meter is
         // not blank until this Thread's first turn happens to report.
-        let limits = self
-            .cockpit
-            .account_limits(self.cockpit.thread(thread)?.provider());
-        let was_open = self.context_usage.is_some_and(|(shown, _)| shown == thread);
+        let limits = self.cockpit.account_limits(provider);
+        let was_open = self
+            .context_usage
+            .is_some_and(|(shown, _)| shown == identity);
+        let selector = key.clone();
         Some(
             div()
-                .id(("usage-meter", thread.get() as usize))
-                .debug_selector(move || format!("usage-meter-{}", thread.get()))
+                .id(gpui::ElementId::Name(SharedString::from(format!(
+                    "usage-meter-{key}"
+                ))))
+                .debug_selector(move || format!("usage-meter-{selector}"))
                 .rounded(px(crate::theme::R_CHIP))
-                .child(pane::usage_lines(fraction, limits))
+                .child(pane::usage_meter_body(
+                    self.prefs.settings.usage_meter_style,
+                    fraction,
+                    limits,
+                ))
                 .hover_raised()
                 .press_raised()
                 .on_mouse_down(
@@ -5690,7 +5756,7 @@ impl CockpitView {
                         // Outside-click dismissal runs in capture phase, before this
                         // toggle. Use the state of the meter that received the press.
                         view.context_usage = (!was_open)
-                            .then_some((thread, event.position - gpui::point(px(0.), px(12.))));
+                            .then_some((identity, event.position - gpui::point(px(0.), px(12.))));
                         cx.notify();
                     }),
                 )
@@ -5797,15 +5863,36 @@ impl CockpitView {
     }
 
     fn context_usage_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let (thread, at) = self.context_usage?;
-        let usage = self.cockpit.thread(thread)?.transcript().usage()?;
+        let (identity, at) = self.context_usage?;
+        let (usage, provider) = match identity {
+            PaneIdentity::Thread(thread) => {
+                let open = self.cockpit.thread(thread)?;
+                (open.transcript().usage()?, open.provider())
+            }
+            // Nothing spent, and no window to divide by until the Provider
+            // reports one: the card says the context is not reported
+            // rather than inventing a maximum for a Thread that does not
+            // exist yet.
+            PaneIdentity::Draft(draft) => (
+                ferrite_core::transcript::Usage {
+                    total_tokens: 0,
+                    context_window: None,
+                },
+                self.panes
+                    .iter()
+                    .find(|pane| pane.identity == PaneIdentity::Draft(draft))?
+                    .draft()?
+                    .binding
+                    .provider()
+                    .provider,
+            ),
+        };
         let card = menu::shell()
             .id("context-usage-card")
             .debug_selector(|| "context-usage-card".into())
             .child(pane::context_usage(
                 usage,
-                self.cockpit
-                    .account_limits(self.cockpit.thread(thread)?.provider()),
+                self.cockpit.account_limits(provider),
             ))
             .on_mouse_down(
                 MouseButton::Left,
@@ -6934,6 +7021,44 @@ mod tests {
         });
     }
 
+    /// A draft left standing from an earlier press must not swallow the
+    /// next one's placement: pressing add from a loose Thread still aims
+    /// the draft at a new Group with that Thread.
+    #[gpui::test]
+    fn a_standing_draft_is_re_aimed_at_the_new_group(cx: &mut TestAppContext) {
+        let (core, _) = cockpit("re-aim-standing-draft", 1);
+        let original = core.threads()[0];
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, cx| {
+            // A loose draft is up first, as an empty launch or an earlier
+            // press would leave it.
+            view.open_draft(DraftTarget::Main, cx);
+            view.open_draft_with_placement(
+                DraftTarget::Main,
+                DraftPlacement::NewGroupWith(original),
+                cx,
+            );
+            let draft = view.panes[view.focused()]
+                .identity
+                .draft()
+                .expect("the standing draft kept focus");
+            assert_eq!(
+                view.panes.iter().filter(|p| p.draft().is_some()).count(),
+                1,
+                "still one draft"
+            );
+            assert_eq!(
+                view.cockpit
+                    .roster()
+                    .draft_scope(draft)
+                    .unwrap()
+                    .new_group_with,
+                Some(original),
+                "the standing draft was re-aimed at the new Group"
+            );
+        });
+    }
+
     #[gpui::test]
     fn titlebar_add_from_a_loose_thread_scopes_the_draft_to_a_new_group(cx: &mut TestAppContext) {
         let (core, _fake) = cockpit("titlebar-add-new-group", 1);
@@ -7071,9 +7196,8 @@ mod tests {
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, cx| {
             view.open_draft(DraftTarget::Main, cx);
-            let drafts = |view: &CockpitView| {
-                view.panes.iter().filter(|p| p.draft().is_some()).count()
-            };
+            let drafts =
+                |view: &CockpitView| view.panes.iter().filter(|p| p.draft().is_some()).count();
             assert_eq!(drafts(view), 1);
             view.open_draft(DraftTarget::Main, cx);
             assert_eq!(drafts(view), 1);
@@ -7443,6 +7567,88 @@ mod tests {
         cx.run_until_parked();
         cx.simulate_keystrokes("escape");
         view.read_with(cx, |view, _| assert!(view.context_usage.is_none()));
+    }
+
+    /// A draft Pane carries the same meter (#29): the operator checks what
+    /// is left before writing the prompt that would spend it.
+    #[gpui::test]
+    fn a_draft_pane_shows_the_usage_meter_and_its_card(cx: &mut TestAppContext) {
+        let fake = Fake::default();
+        let store = Store::open(scratch("draft-usage")).unwrap();
+        let core = Cockpit::new(store, Box::new(fake));
+        bind_production_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        tick(cx);
+
+        // Nothing spent: the context line is drawn empty, not omitted.
+        assert!(cx.debug_bounds("usage-line-context-0").is_some());
+        let meter = cx
+            .debug_bounds("usage-meter-draft-1")
+            .expect("a draft's meter rides beside its model picker");
+        cx.simulate_mouse_down(meter.center(), MouseButton::Left, gpui::Modifiers::none());
+        cx.run_until_parked();
+
+        assert!(cx.debug_bounds("context-usage-current-0").is_some());
+        assert!(
+            cx.debug_bounds("context-usage-maximum-unknown").is_some(),
+            "a draft has no reported window, and none is invented"
+        );
+        cx.simulate_mouse_down(meter.center(), MouseButton::Left, gpui::Modifiers::none());
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert!(view.context_usage.is_none(), "a second click closes it")
+        });
+    }
+
+    /// The Settings choice swaps the mark and nothing else: the same three
+    /// windows, drawn as rings.
+    #[gpui::test]
+    fn the_usage_meter_can_be_drawn_as_rings(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("usage-rings", 1);
+        bind_production_keys(cx);
+        let prefs = Preferences {
+            settings: ferrite_core::settings::Settings {
+                usage_meter_style: UsageMeterStyle::Rings,
+                ..Default::default()
+            },
+            ..Preferences::ephemeral()
+        };
+        let (_view, cx) = add_cockpit_window(cx, |_, cx| {
+            CockpitView::new_with_settings(core, Provider::Claude, prefs, cx)
+        });
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        fake.streams.borrow()[0]
+            .send(SessionEvent::RateLimits {
+                five_hour: Some(ferrite_core::RateLimitWindow {
+                    used_fraction: 0.52,
+                    resets_at: Some(11),
+                }),
+                weekly: None,
+            })
+            .unwrap();
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TokenUsage {
+                total_tokens: 124_000,
+                input_tokens: 124_000,
+                cached_input_tokens: 0,
+                output_tokens: 0,
+                reasoning_output_tokens: 0,
+                context_window: Some(200_000),
+            })
+            .unwrap();
+        tick(cx);
+
+        assert!(cx.debug_bounds("usage-ring-context-62").is_some());
+        assert!(cx.debug_bounds("usage-ring-five-hour-52").is_some());
+        assert!(
+            cx.debug_bounds("usage-ring-weekly-0").is_some(),
+            "an unreported window keeps its unlit track"
+        );
+        assert!(
+            cx.debug_bounds("usage-line-context-62").is_none(),
+            "the lines are the other mark, not both"
+        );
     }
 
     /// A branch status carrying a PR whose checks are mixed — one Actions

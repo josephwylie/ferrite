@@ -981,6 +981,10 @@ pub struct DraftState<'a> {
     pub focused: bool,
     /// A failed bootstrap's words, shown where the band is.
     pub error: Option<&'a SharedString>,
+    /// The usage meter, in the slot a live Composer hangs it in: a draft
+    /// has spent no context, and its account windows answer before the
+    /// prompt is written.
+    pub usage_meter: Option<AnyElement>,
 }
 
 /// A draft Pane (#29): an empty transcript area and the Composer wearing
@@ -997,6 +1001,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
         composer_empty,
         focused,
         error,
+        usage_meter,
     } = state;
     let shell = pane_shell(rgba(TRANSPARENT).into());
 
@@ -1043,7 +1048,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
                     menu,
                     mode: None,
                     model_picker: Some(picker),
-                    usage_meter: None,
+                    usage_meter,
                     setup_controls: Some(band),
                     draft_error: error.cloned(),
                     focused,
@@ -3538,6 +3543,52 @@ pub fn usage_ink(fraction: f32) -> u32 {
     }
 }
 
+/// The Composer meter's body in whichever mark the operator chose
+/// (Settings › Appearance): three stacked lines, or three rings in a row.
+/// Both draw the same three windows in the same fixed order, so the card
+/// behind the click explains either one.
+pub fn usage_meter_body(
+    style: ferrite_core::settings::UsageMeterStyle,
+    context: f32,
+    limits: ferrite_core::transcript::RateLimits,
+) -> Div {
+    match style {
+        ferrite_core::settings::UsageMeterStyle::Lines => usage_lines(context, limits),
+        ferrite_core::settings::UsageMeterStyle::Rings => usage_rings(context, limits),
+    }
+}
+
+/// The same three windows as `usage_lines`, drawn as three 14px rings side
+/// by side on the same 20px chip body. A window the provider has not
+/// reported keeps its unlit track, exactly as its line would.
+pub fn usage_rings(context: f32, limits: ferrite_core::transcript::RateLimits) -> Div {
+    let ring = |key: &'static str, fraction: Option<f32>| {
+        let used = fraction.unwrap_or(0.).clamp(0., 1.);
+        let percent = (used * 100.).round() as u32;
+        div()
+            .id(key)
+            .debug_selector(move || format!("usage-ring-{key}-{percent}"))
+            .child(usage_ring(used, usage_ink(used)))
+    };
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(theme::USAGE_RING_GAP))
+        .h(px(theme::CHIP_H))
+        .px(px(theme::CHIP_PAD_X))
+        .rounded(px(theme::R_CHIP))
+        .child(ring("context", Some(context)))
+        .child(ring(
+            "five-hour",
+            limits.five_hour.map(|limit| limit.used_fraction),
+        ))
+        .child(ring(
+            "weekly",
+            limits.weekly.map(|limit| limit.used_fraction),
+        ))
+}
+
 /// Three quiet horizontal lines for context, five-hour and weekly usage,
 /// on the same 20px chip body the model picker beside them wears — the
 /// meter is a button, and its hover says so. The fixed order makes the tiny
@@ -3583,14 +3634,17 @@ pub fn usage_lines(context: f32, limits: ferrite_core::transcript::RateLimits) -
 }
 
 /// The context ring (§G.10): a 14px box holding a 5.4px-radius, 2px-stroke
-/// circle — a `--meter-off` track under a `--text-2` arc that sweeps
-/// clockwise from 12 o'clock with the used fraction of the window.
+/// circle — a `--meter-off` track under an arc that sweeps clockwise from
+/// 12 o'clock with the used fraction of the window.
 ///
 /// The header stays compact; its caller wires the token card on click.
 ///
 /// `PathBuilder::arc_to` draws the real arc — gpui 0.2.2 has an arc
 /// primitive, whatever the old comment here claimed.
-pub fn usage_ring(fraction: f32) -> Div {
+/// The ring takes its ink from the caller: the meter's three rings wear
+/// the same status inks its lines do, so a budget reads the same whichever
+/// mark the operator picked.
+pub fn usage_ring(fraction: f32, ink: u32) -> Div {
     // A full ring's seam would degenerate the arc; one part in a thousand
     // is invisible at 14px.
     let fraction = fraction.clamp(0.0, 1.0).min(0.999);
@@ -3655,7 +3709,7 @@ pub fn usage_ring(fraction: f32) -> Div {
                         return;
                     }
                     if let Some(path) = stroke(start, start + sweep, fraction > 0.5) {
-                        window.paint_path(path, rgb(TEXT_2));
+                        window.paint_path(path, rgb(ink));
                     }
                     // `.used` carries `stroke-linecap: round`; lyon's
                     // default is butt and gpui 0.2.2 re-exports no
@@ -3670,7 +3724,7 @@ pub fn usage_ring(fraction: f32) -> Div {
                                     point(end.x - cap, end.y - cap),
                                     gpui::size(cap * 2., cap * 2.),
                                 ),
-                                rgb(TEXT_2),
+                                rgb(ink),
                             )
                             .corner_radii(gpui::Corners::all(cap)),
                         );

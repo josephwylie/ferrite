@@ -469,6 +469,10 @@ pub const USAGE_SPENT: f32 = 0.85;
 pub const USAGE_LINE_W: f32 = 48.0;
 pub const USAGE_LINE_H: f32 = 2.0;
 pub const USAGE_LINE_GAP: f32 = 2.0;
+/// Between the meter's three rings when the operator picks that mark:
+/// tight enough that the trio reads as one control, wide enough that the
+/// three readings stay separate.
+pub const USAGE_RING_GAP: f32 = 4.0;
 /// 320px — a toast's width: a Thread's name, a detail line, room for the
 /// kit's icon and close button.
 pub const TOAST_W: f32 = 320.0;

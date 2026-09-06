@@ -52,6 +52,22 @@ pub struct Settings {
     /// Whether an untitled Thread is named from its first prompt.
     /// Default: true.
     pub auto_title: bool,
+    /// How the Composer's usage meter draws its three windows.
+    /// Default: three stacked lines.
+    pub usage_meter_style: UsageMeterStyle,
+}
+
+/// The shape the Composer's usage meter takes. The three windows —
+/// context, five-hour, weekly — are the same either way; only the mark
+/// changes, so an operator who reads rings faster than bars can say so.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UsageMeterStyle {
+    /// Three stacked horizontal lines.
+    #[default]
+    Lines,
+    /// Three rings side by side.
+    Rings,
 }
 
 impl Default for Settings {
@@ -68,6 +84,7 @@ impl Default for Settings {
             nav_collapsed: false,
             confirm_delete: true,
             auto_title: true,
+            usage_meter_style: UsageMeterStyle::Lines,
         }
     }
 }
@@ -165,6 +182,7 @@ mod tests {
             nav_collapsed: true,
             confirm_delete: false,
             auto_title: false,
+            usage_meter_style: UsageMeterStyle::Rings,
         }
     }
 
@@ -209,6 +227,7 @@ mod tests {
         assert!(!settings.nav_collapsed);
         assert!(settings.confirm_delete);
         assert!(settings.auto_title);
+        assert_eq!(settings.usage_meter_style, UsageMeterStyle::Lines);
     }
 
     /// A corrupt file loads as the defaults and stays exactly as it was:
