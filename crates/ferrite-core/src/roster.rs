@@ -108,6 +108,10 @@ pub struct Roster {
     /// back to creation order (accepted v1 behavior).
     park_order: Vec<ThreadId>,
     drafts: BTreeMap<DraftId, DraftScope>,
+    /// A loose Thread and the focused Draft that will form a Group on send.
+    /// They render as a provisional pair without weakening the rule that a
+    /// durable Group contains Threads only.
+    pending_pair: Option<(ThreadId, DraftId)>,
     next_draft: u64,
 }
 
@@ -181,7 +185,15 @@ impl Roster {
     /// pair as three.
     pub fn visible(&self, groups: &Groups) -> Vec<PaneIdentity> {
         match self.view {
-            View::Solo => self.focused().into_iter().collect(),
+            View::Solo => {
+                if let Some((thread, draft)) = self.pending_pair {
+                    return [PaneIdentity::Thread(thread), PaneIdentity::Draft(draft)]
+                        .into_iter()
+                        .filter(|identity| self.panes.contains(identity))
+                        .collect();
+                }
+                self.focused().into_iter().collect()
+            }
             View::Group(group) => {
                 let Some(members) = groups.get(group).map(|group| &group.members) else {
                     return Vec::new();
@@ -218,6 +230,7 @@ impl Roster {
             };
         }
         let columns = match self.view {
+            View::Solo if self.pending_pair.is_some() => grid(visible).1.max(1),
             View::Solo => 1,
             View::Group(_) => grid(visible).1.max(1),
         };
@@ -266,6 +279,7 @@ impl Roster {
 
     pub(crate) fn set_view(&mut self, view: View) {
         self.view = view;
+        self.pending_pair = None;
     }
 
     /// cmd-f (#20): the focused Pane takes the whole cockpit; cmd-f again
@@ -322,6 +336,12 @@ impl Roster {
         self.panes.retain(|pane| *pane != identity);
         if let PaneIdentity::Draft(draft) = identity {
             self.drafts.remove(&draft);
+            if self
+                .pending_pair
+                .is_some_and(|(_, pending)| pending == draft)
+            {
+                self.pending_pair = None;
+            }
         }
         self.focused = self.focused.min(self.panes.len().saturating_sub(1));
     }
@@ -335,6 +355,9 @@ impl Roster {
         self.drafts.insert(draft, scope);
         self.panes.push(PaneIdentity::Draft(draft));
         self.focus_index(self.panes.len() - 1);
+        if let Some(thread) = scope.new_group_with {
+            self.pending_pair = Some((thread, draft));
+        }
         draft
     }
 
@@ -351,6 +374,12 @@ impl Roster {
     /// Cockpit can apply the leave it was holding.
     pub(crate) fn draft_became(&mut self, draft: DraftId, thread: ThreadId) -> Option<DraftScope> {
         let scope = self.drafts.remove(&draft)?;
+        if self
+            .pending_pair
+            .is_some_and(|(_, pending)| pending == draft)
+        {
+            self.pending_pair = None;
+        }
         let identity = PaneIdentity::Thread(thread);
         // `open` already gave the Thread a Pane at the end; the draft's slot
         // is the one the operator is looking at.

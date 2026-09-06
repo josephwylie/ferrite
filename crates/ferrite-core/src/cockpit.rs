@@ -2591,8 +2591,8 @@ impl Cockpit {
         })
     }
 
-    /// Open a draft beside one loose Thread. Its first successful send
-    /// creates a durable pair and switches the Cockpit to that new Group.
+    /// Open a focused draft beside one loose Thread as a provisional pair.
+    /// Its first successful send creates the durable Group.
     pub fn open_draft_for_new_group(&mut self, first: ThreadId) -> DraftId {
         self.roster.open_draft(DraftScope {
             group: None,
@@ -6066,6 +6066,14 @@ mod tests {
             cockpit.roster().draft_scope(draft).unwrap().new_group_with,
             Some(first)
         );
+        assert_eq!(
+            cockpit.visible(),
+            [PaneIdentity::Thread(first), PaneIdentity::Draft(draft)],
+            "the pending pair is visible before the Draft becomes durable"
+        );
+        assert_eq!(cockpit.roster().focused(), Some(PaneIdentity::Draft(draft)));
+        assert_eq!(cockpit.layout().columns, 2);
+        assert!(cockpit.groups().of(first).is_none());
         let done = cockpit
             .bootstrap_draft(
                 draft,

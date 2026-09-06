@@ -6936,6 +6936,12 @@ mod tests {
                     .new_group_with,
                 Some(original)
             );
+            assert_eq!(
+                view.cockpit.visible(),
+                [PaneIdentity::Thread(original), PaneIdentity::Draft(draft)],
+                "the loose Thread and its focused Draft are shown together"
+            );
+            assert_eq!(view.cockpit.layout().columns, 2);
         });
     }
 
