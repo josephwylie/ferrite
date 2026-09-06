@@ -15,6 +15,7 @@
 use ferrite_core::activity::Subject;
 use ferrite_core::cockpit::{ThreadView, ToolTiming};
 use ferrite_core::docview::{is_test_run, passed_count, Instruments, Level, Tests};
+use ferrite_core::followup::{self, Followup};
 use ferrite_core::roster::{DraftId, PaneIdentity};
 use ferrite_core::store::Provider;
 use ferrite_core::transcript::{
@@ -2728,9 +2729,9 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
     }
     // The one line that grows: the Composer's element is `COMPOSER_ROW_H`
     // per visual row, so the line height here IS the row pitch. The idle
-    // placeholder overlays its first row in every Pane that does not hold
-    // the keyboard — the prototype keeps it under a running turn (§D.7)
-    // and shows the focused Pane its caret alone.
+    // placeholder overlays its first row in every Pane whose line is empty,
+    // focused or not: it now carries a follow-up read off the last response,
+    // and that is worth reading with the cursor already in the box.
     let mut line = div()
         .debug_selector(move || {
             if focused {
@@ -2745,11 +2746,21 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         .min_w_0()
         .line_height(px(theme::COMPOSER_ROW_H))
         .child(view.composer.clone());
-    if empty && !focused {
+    if empty {
+        // Focused too, not only at rest: a follow-up the operator cannot
+        // read while their cursor is in the box is a suggestion they never
+        // see. The Composer paints its own caret at the line origin, so the
+        // focused ghost starts clear of it (the caret plus the Composer own
+        // 3px); the unfocused ghost keeps the origin it has always had.
+        let inset = if focused {
+            theme::CARET_W + theme::COMPOSER_GAP
+        } else {
+            0.
+        };
         line = line.child(
             div()
                 .absolute()
-                .left_0()
+                .left(px(inset))
                 .top_0()
                 .h(px(theme::COMPOSER_ROW_H))
                 .flex()
@@ -2893,17 +2904,28 @@ fn composer_hints(is_draft: bool, history_available: bool) -> &'static str {
     }
 }
 
-/// The idle line's ghost text (§D.7): one of the prototype's three, chosen
-/// by what the Pane is waiting on — a Decision, a live Thread, or a closed
-/// Session. It never names the Thread and never lists the hints; the `.hint`
-/// on the same row already does that.
+/// The idle line's ghost text (§D.7): the wording for whatever follow-up
+/// the Thread invites — the prototype's three, plus the two this reads off
+/// the last response (an offer to accept, a question to answer) and the
+/// model's own unfinished plan. `ferrite_core::followup` decides which;
+/// only the sentences live here. It never names the Thread and never lists
+/// the hints; the `.hint` on the same row already does that.
 fn placeholder(pending: bool, transcript: Option<&Transcript>) -> SharedString {
-    if pending {
-        return SharedString::from("Reply to the Decision\u{2026}");
-    }
-    match transcript.map(|transcript| transcript.status()) {
-        Some(Status::Closed) => SharedString::from("Revive and continue\u{2026}"),
-        _ => SharedString::from("Steer this Thread\u{2026}"),
+    match followup::suggest(pending, transcript) {
+        Followup::Decision => SharedString::from("Reply to the Decision\u{2026}"),
+        Followup::Revive => SharedString::from("Revive and continue\u{2026}"),
+        // The offer is quoted back as the operator would say it, so the
+        // line reads as a draft of their next prompt rather than as a
+        // description of one.
+        Followup::Accept(phrase) => SharedString::from(format!("Yes, {phrase}\u{2026}")),
+        Followup::Answer => SharedString::from("Answer the question above\u{2026}"),
+        Followup::Continue { remaining: 1 } => {
+            SharedString::from("Continue with the last step\u{2026}")
+        }
+        Followup::Continue { remaining } => SharedString::from(format!(
+            "Continue with the remaining {remaining} steps\u{2026}"
+        )),
+        Followup::Steer => SharedString::from("Steer this Thread\u{2026}"),
     }
 }
 
@@ -6053,8 +6075,9 @@ mod tests {
     }
 
     /// §D.7: the idle line says what the Pane is waiting on — a Decision, a
-    /// live Thread, or a closed Session — and nothing else. It never names
-    /// the Thread and never repeats the hints beside it.
+    /// live Thread, or a closed Session — and, when the last response asked
+    /// for something, what to say back. It never names the Thread and never
+    /// repeats the hints beside it.
     #[test]
     fn the_placeholder_says_what_the_pane_is_waiting_on() {
         let live = Transcript::default();
@@ -6073,10 +6096,32 @@ mod tests {
             "Revive and continue\u{2026}"
         );
 
+        // A response that ended on an offer hands the operator the line
+        // rather than describing it.
+        let mut offered = Transcript::default();
+        offered.apply(Input::Prompt("fix the decoder".into()));
+        offered.apply(Input::Event(SessionEvent::TextDelta {
+            text: "Fixed it. Want me to run the tests?".into(),
+        }));
+        offered.apply(Input::Event(SessionEvent::TurnEnded {
+            outcome: TurnOutcome::Completed,
+            cost_usd: None,
+        }));
+        assert_eq!(
+            placeholder(false, Some(&offered)),
+            "Yes, run the tests\u{2026}"
+        );
+        // A Decision still outranks it.
+        assert_eq!(
+            placeholder(true, Some(&offered)),
+            "Reply to the Decision\u{2026}"
+        );
+
         for line in [
             placeholder(false, Some(&live)),
             placeholder(true, Some(&live)),
             placeholder(false, Some(&closed)),
+            placeholder(false, Some(&offered)),
         ] {
             assert!(!line.contains("message"), "{line}");
             assert!(!line.contains("commands"), "{line}");
