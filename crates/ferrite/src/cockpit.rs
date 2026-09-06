@@ -6914,6 +6914,7 @@ mod tests {
     fn titlebar_add_from_a_loose_thread_scopes_the_draft_to_a_new_group(cx: &mut TestAppContext) {
         let (core, _fake) = cockpit("titlebar-add-new-group", 1);
         let original = core.threads()[0];
+        cx.update(|cx| cx.bind_keys([KeyBinding::new("enter", Submit, None)]));
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         tick(cx);
 
@@ -6942,6 +6943,24 @@ mod tests {
                 "the loose Thread and its focused Draft are shown together"
             );
             assert_eq!(view.cockpit.layout().columns, 2);
+        });
+
+        cx.simulate_input("work beside the original thread");
+        cx.simulate_keystrokes("enter");
+        view.read_with(cx, |view, _| {
+            let focused = view
+                .cockpit
+                .roster()
+                .focused_thread()
+                .expect("the sent Draft became the focused Thread");
+            assert_ne!(focused, original);
+            let group = view
+                .cockpit
+                .groups()
+                .of(focused)
+                .expect("the new Thread belongs to a Group");
+            assert_eq!(group.members, [original, focused]);
+            assert_eq!(view.cockpit.roster().view(), View::Group(group.id));
         });
     }
 
