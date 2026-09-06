@@ -752,7 +752,7 @@ fn a_pending_question_requests_attention_and_cancellation_clears_it() {
     let first = h.threads[0];
     let second = h.threads[1];
     h.cockpit.focus_thread(first);
-    h.control.activity(1,ActivityEvent::Decision{subject:Some(Subject::Main),decision:ferrite_core::Decision{delivery:Default::default(),id:"question".into(),tool_use_id:"ask".into(),tool_name:"AskUserQuestion".into(),description:"Choose a target".into(),input:serde_json::json!({"questions":[{"question":"Where?","header":"Target","options":[],"multiSelect":false}]}),suggestions:vec![]}});
+    h.control.activity(1,ActivityEvent::Decision{subject:Some(Subject::Main),decision:ferrite_core::Decision{kind:ferrite_core::DecisionKind::Questions(vec![]),policy:Default::default(),delivery:Default::default(),id:"question".into(),tool_use_id:"ask".into(),tool_name:"AskUserQuestion".into(),description:"Choose a target".into(),input:serde_json::json!({"questions":[{"question":"Where?","header":"Target","options":[],"multiSelect":false}]}),suggestions:vec![]}});
     h.cockpit.pump();
     assert!(
         h.cockpit.notifications().attention(second),
@@ -787,7 +787,7 @@ fn contract_only_the_visible_subjects_requests_are_acknowledged() {
     for (id, subject) in [("main", Subject::Main), ("child", Subject::Subagent(child))] {
         h.control.activity(0, ActivityEvent::Decision {
             subject: Some(subject),
-            decision: ferrite_core::Decision { delivery: Default::default(), id: id.into(), tool_use_id: id.into(), tool_name: "Bash".into(), description: "Approve".into(), input: serde_json::json!({}), suggestions: vec![] },
+            decision: ferrite_core::Decision { kind:Default::default(),policy:Default::default(),delivery: Default::default(), id: id.into(), tool_use_id: id.into(), tool_name: "Bash".into(), description: "Approve".into(), input: serde_json::json!({}), suggestions: vec![] },
         });
     }
     h.cockpit.pump();

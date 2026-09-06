@@ -1158,7 +1158,7 @@ fn wall_cell(
     state: WallState,
     focused: bool,
     title: Option<AnyElement>,
-) -> impl IntoElement {
+) -> Div {
     let (dot_color, hollow) = match state {
         WallState::Working | WallState::Failing | WallState::Done => (RUNNING, false),
         WallState::Decision => (ATTENTION, false),
@@ -3568,7 +3568,7 @@ pub fn context_usage(
         card = card.child(
             div()
                 .debug_selector(move || format!("usage-cost-{cost}"))
-                .child(format!("Last cost US${cost:.2}")),
+                .child(format!("Last cost US${cost:.4}")),
         );
     }
     card.max_h(px(440.)).overflow_y_scrollbar()
