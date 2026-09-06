@@ -68,9 +68,8 @@ pub struct ClaudeConfig {
     /// Native generation is configured at process start.
     pub prompt_suggestions: bool,
     /// The Thread's title, handed to the CLI as the session's display name
-    /// (`--name`) so its own session list reads like Ferrite's. Spawn-time
-    /// only: the CLI takes no rename over the wire, so a later title waits
-    /// for the next Session.
+    /// (`--name`) so its own session list reads like Ferrite's. Later title
+    /// changes use the native rename control request.
     pub name: Option<String>,
     /// Permission posture for this Thread (`"default"`, `"acceptEdits"`,
     /// `"plan"`, …). `None` leaves the CLI's own configuration alone — which
@@ -361,6 +360,17 @@ impl ClaudeSession {
             });
         *lock(&self.effort_reply) = None;
         result
+    }
+
+    /// Rename the live native session so the CLI's own session list carries
+    /// the Thread's title.
+    pub fn set_name(&mut self, name: &str) -> io::Result<()> {
+        let request_id = self.take_request_id();
+        self.write_line(&serde_json::json!({
+            "type": "control_request",
+            "request_id": request_id,
+            "request": {"subtype": "rename_session", "title": name},
+        }))
     }
 
     /// Visibility changes immediately. The CLI's generation opt-in is

@@ -92,9 +92,7 @@ pub trait Session {
     fn respond_to_decision(&mut self, id: &str, answer: DecisionAnswer) -> io::Result<()>;
 
     /// Tell the provider what the Thread is now called, so its own session
-    /// list agrees with Ferrite's. A provider with no rename on its wire
-    /// (Claude names a session at spawn only) accepts silently: the title
-    /// is Ferrite's truth either way, and the next spawn carries it.
+    /// list agrees with Ferrite's.
     fn set_name(&mut self, _name: &str) -> io::Result<()> {
         Ok(())
     }
@@ -119,6 +117,9 @@ impl Session for ClaudeSession {
 
     fn set_effort(&mut self, effort: Option<&str>) -> io::Result<()> {
         ClaudeSession::set_effort(self, effort)
+    }
+    fn set_name(&mut self, name: &str) -> io::Result<()> {
+        ClaudeSession::set_name(self, name)
     }
     fn events(&self) -> &Receiver<SessionEvent> {
         ClaudeSession::events(self)
