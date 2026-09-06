@@ -131,6 +131,9 @@ pub(super) enum Execution {
     ThinkingSnapshot {
         text: String,
     },
+    Retract {
+        ids: Vec<String>,
+    },
     Prompt {
         text: String,
     },
@@ -287,6 +290,7 @@ impl Execution {
             ExecutionEvent::ThinkingSnapshot { text } => {
                 Self::ThinkingSnapshot { text: text.clone() }
             }
+            ExecutionEvent::Retract { ids } => Self::Retract { ids: ids.clone() },
             ExecutionEvent::Prompt { text } => Self::Prompt { text: text.clone() },
             ExecutionEvent::Notice { text } => Self::Notice { text: text.clone() },
             ExecutionEvent::ToolStarted { id, name, input } => Self::ToolStarted {
@@ -362,6 +366,7 @@ impl Execution {
             Self::ThinkingSnapshot { text } => {
                 ExecutionEvent::ThinkingSnapshot { text: text.clone() }
             }
+            Self::Retract { ids } => ExecutionEvent::Retract { ids: ids.clone() },
             Self::Prompt { text } => ExecutionEvent::Prompt { text: text.clone() },
             Self::Notice { text } => ExecutionEvent::Notice { text: text.clone() },
             Self::ToolStarted { id, name, input } => ExecutionEvent::ToolStarted {

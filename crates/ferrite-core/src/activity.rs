@@ -179,6 +179,10 @@ pub enum ExecutionEvent {
     ThinkingSnapshot {
         text: String,
     },
+    /// Removes previously attributed content by its provider-owned identity.
+    Retract {
+        ids: Vec<String>,
+    },
     Prompt {
         text: String,
     },
@@ -313,6 +317,7 @@ pub struct ActivityUpdate {
 struct Record {
     sequence: u64,
     stream: Option<(String, bool)>, // item identity, thinking versus answer
+    content_id: Option<String>,
     input: Input,
     bytes: usize,
 }
@@ -324,6 +329,8 @@ struct SubjectState {
     bytes: usize,
     seen: BTreeSet<String>,
     seen_order: VecDeque<String>,
+    retracted: BTreeSet<String>,
+    retracted_order: VecDeque<String>,
     timings: HashMap<String, ToolTiming>,
     status: AgentStatus,
     fresh: bool,
@@ -345,6 +352,8 @@ impl SubjectState {
             bytes: 0,
             seen: BTreeSet::new(),
             seen_order: VecDeque::new(),
+            retracted: BTreeSet::new(),
+            retracted_order: VecDeque::new(),
             timings: HashMap::new(),
             status: AgentStatus::Unknown,
             fresh: false,
@@ -467,6 +476,7 @@ impl SubjectState {
         &mut self,
         input: Input,
         stream: Option<(String, bool)>,
+        content_id: Option<String>,
         sequence: u64,
         at: Instant,
         live: bool,
@@ -481,6 +491,7 @@ impl SubjectState {
         if separates_item {
             self.append(
                 Input::Event(SessionEvent::ContentBoundary),
+                None,
                 None,
                 sequence,
                 at,
@@ -504,7 +515,7 @@ impl SubjectState {
         let merged = self
             .records
             .back_mut()
-            .filter(|last| last.stream == stream)
+            .filter(|last| last.stream == stream && last.content_id == content_id)
             .is_some_and(|last| {
                 if append_delta(&mut last.input, &input) {
                     last.bytes += bytes;
@@ -517,6 +528,7 @@ impl SubjectState {
             self.records.push_back(Record {
                 sequence,
                 stream,
+                content_id,
                 input,
                 bytes,
             });
@@ -527,6 +539,31 @@ impl SubjectState {
         }
         self.prune_timings(limits);
         update
+    }
+
+    fn retract(&mut self, ids: &[String], limits: ActivityLimits) -> transcript::Update {
+        for id in ids {
+            if self.retracted.insert(id.clone()) {
+                self.retracted_order.push_back(id.clone());
+            }
+        }
+        while self.retracted_order.len() > limits.dedup_ids_per_subject.max(1) {
+            if let Some(old) = self.retracted_order.pop_front() {
+                self.retracted.remove(&old);
+            }
+        }
+        let before = self.records.len();
+        self.records.retain(|record| {
+            !record
+                .content_id
+                .as_ref()
+                .is_some_and(|id| self.retracted.contains(id))
+        });
+        if self.records.len() == before {
+            return transcript::Update::default();
+        }
+        self.bytes = self.records.iter().map(|record| record.bytes).sum();
+        self.rebuild(limits)
     }
 
     fn trim(&mut self, limits: ActivityLimits) -> bool {
@@ -613,7 +650,7 @@ impl SubjectState {
             self.bookkeeping(&input, at, live);
             return transcript::Update::default();
         }
-        let stream = id.map(|id| (id, thinking));
+        let stream = id.clone().map(|id| (id, thinking));
         if let Some(identity) = stream.as_ref() {
             if let Some(first) = self
                 .records
@@ -639,6 +676,7 @@ impl SubjectState {
                         kept.push_back(Record {
                             sequence: old_sequence,
                             stream: stream.clone(),
+                            content_id: id.clone(),
                             input: input.clone(),
                             bytes,
                         });
@@ -656,7 +694,7 @@ impl SubjectState {
         } else {
             self.coverage = TranscriptCoverage::Partial;
         }
-        self.append(input, stream, sequence, at, live, limits)
+        self.append(input, stream, id, sequence, at, live, limits)
     }
 
     fn coverage(&self) -> TranscriptCoverage {
@@ -1001,7 +1039,7 @@ impl Activity {
         }
         let blocks = self
             .main
-            .append(input, None, self.sequence, at, live, self.limits);
+            .append(input, None, None, self.sequence, at, live, self.limits);
         if prompt {
             self.main.busy = previous_busy;
         }
@@ -1083,6 +1121,7 @@ impl Activity {
                                 outcome,
                                 cost_usd: None,
                             }),
+                            None,
                             None,
                             self.sequence,
                             at,
@@ -1257,6 +1296,7 @@ impl Activity {
                                 decision: decision.clone(),
                             }),
                             None,
+                            None,
                             sequence,
                             at,
                             true,
@@ -1349,6 +1389,20 @@ impl Activity {
                 ..ActivityUpdate::default()
             };
         };
+        if let ExecutionEvent::Retract { ids } = &event {
+            let blocks = state.retract(ids, limits);
+            return ActivityUpdate {
+                changed: vec![subject.clone()],
+                blocks: vec![(subject, blocks)],
+                ..ActivityUpdate::default()
+            };
+        }
+        if id.as_ref().is_some_and(|id| state.retracted.contains(id)) {
+            return ActivityUpdate {
+                rejected: true,
+                ..ActivityUpdate::default()
+            };
+        }
         if let Some(delivery) = delivery_id(&event, id.as_deref()) {
             if !state.remember(delivery, limits.dedup_ids_per_subject) {
                 return ActivityUpdate {
@@ -1369,12 +1423,14 @@ impl Activity {
             }
             event => {
                 let stream = match &event {
-                    ExecutionEvent::TextDelta { .. } => id.map(|id| (id, false)),
+                    ExecutionEvent::TextDelta { .. } => id.clone().map(|id| (id, false)),
                     ExecutionEvent::ThinkingDelta { .. }
-                    | ExecutionEvent::ReasoningSummaryDelta { .. } => id.map(|id| (id, true)),
+                    | ExecutionEvent::ReasoningSummaryDelta { .. } => {
+                        id.clone().map(|id| (id, true))
+                    }
                     _ => None,
                 };
-                state.append(event.into_input(), stream, sequence, at, live, limits)
+                state.append(event.into_input(), stream, id, sequence, at, live, limits)
             }
         };
         let mut update = ActivityUpdate {
@@ -1467,6 +1523,7 @@ impl Activity {
                     } else {
                         Input::Notice("Answer delivered".into())
                     },
+                    None,
                     None,
                     sequence,
                     at,
@@ -1928,6 +1985,7 @@ impl ExecutionEvent {
             Self::ThinkingDelta { text }
             | Self::Thinking { text }
             | Self::ThinkingSnapshot { text } => SessionEvent::ThinkingDelta { text },
+            Self::Retract { .. } => unreachable!("retractions are folded before transcript input"),
             Self::ReasoningSummaryDelta {
                 text,
                 summary_index,

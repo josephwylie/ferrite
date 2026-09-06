@@ -61,6 +61,9 @@ pub(super) fn parse_line(line: &str) -> Option<SessionEvent> {
             text: params.get("delta")?.as_str()?.to_string(),
             summary_index: params.get("summaryIndex")?.as_u64()?,
         }),
+        "item/reasoning/textDelta" => Some(SessionEvent::ThinkingDelta {
+            text: params.get("delta")?.as_str()?.to_string(),
+        }),
         "item/started" => parse_item(params, false),
         "item/completed" => parse_item(params, true),
         "item/commandExecution/requestApproval" => {

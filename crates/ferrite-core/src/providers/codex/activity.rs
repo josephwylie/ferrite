@@ -376,7 +376,39 @@ impl Router {
                             update.events.push(SessionEvent::TextDelta { text });
                         }
                     }
+                    SessionEvent::ThinkingDelta { text }
+                        if method == "item/reasoning/textDelta" =>
+                    {
+                        if let (Some(turn), Some(item), Some(index)) = (
+                            turn,
+                            params["itemId"].as_str(),
+                            params["contentIndex"].as_u64(),
+                        ) {
+                            update.activity(ActivityEvent::MainContent {
+                                id: Some(reasoning_raw_key(turn, item, index)),
+                                event: ExecutionEvent::ThinkingDelta { text },
+                            });
+                        } else {
+                            update.events.push(SessionEvent::ThinkingDelta { text });
+                        }
+                    }
                     event => update.events.push(event),
+                }
+            }
+            if method == "item/completed" && params["item"]["type"] == "reasoning" {
+                if let (Some(turn), Some(item), Some(parts)) = (
+                    turn,
+                    params["item"]["id"].as_str(),
+                    params["item"]["content"].as_array(),
+                ) {
+                    for (index, part) in parts.iter().enumerate() {
+                        if let Some(text) = part.as_str() {
+                            update.activity(ActivityEvent::MainContent {
+                                id: Some(reasoning_raw_key(turn, item, index as u64)),
+                                event: ExecutionEvent::ThinkingSnapshot { text: text.into() },
+                            });
+                        }
+                    }
                 }
             }
             if method == "item/completed"
@@ -1036,6 +1068,10 @@ fn nonempty<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
 
 fn item_key(turn: &str, item: &str) -> String {
     serde_json::to_string(&(turn, item)).expect("string tuple serializes")
+}
+
+fn reasoning_raw_key(turn: &str, item: &str, index: u64) -> String {
+    item_key(turn, &format!("raw:{item}:{index}"))
 }
 
 fn execution(event: SessionEvent) -> Option<ExecutionEvent> {
