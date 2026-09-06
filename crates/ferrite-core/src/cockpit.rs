@@ -3490,6 +3490,14 @@ fn fold(state: &mut Thread, event: &SessionEvent) {
         SessionEvent::Models { models } => state.models = models.clone(),
         SessionEvent::PermissionMode { mode } => state.permission_mode = Some(mode.clone()),
         SessionEvent::Init { session_id, .. } => state.resume = Some(session_id.clone()),
+        SessionEvent::ConversationReset { session_id } => {
+            state.resume = Some(session_id.clone());
+            state.history.clear();
+            state.history_errors.clear();
+            state.carry = None;
+            state.prompt_history = PromptHistory::new(Vec::new());
+            state.invalidate_suggestion();
+        }
         _ => {}
     }
 }

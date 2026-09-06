@@ -1617,10 +1617,20 @@ struct AnswerText {
     parts: Vec<String>,
     ids: std::collections::HashMap<String, usize>,
     settled: std::collections::HashSet<String>,
+    retracted: std::collections::HashSet<String>,
 }
 
 impl AnswerText {
     fn observe(&mut self, id: Option<&str>, event: &PersistedExecution) {
+        if let PersistedExecution::Retract { ids } = event {
+            for id in ids {
+                self.retracted.insert(id.clone());
+                if let Some(index) = self.ids.get(id) {
+                    self.parts[*index].clear();
+                }
+            }
+            return;
+        }
         let (text, complete) = match event {
             PersistedExecution::TextDelta { text } => (text, false),
             PersistedExecution::Text { text } | PersistedExecution::TextSnapshot { text } => {
@@ -1632,6 +1642,9 @@ impl AnswerText {
             self.parts.push(text.clone());
             return;
         };
+        if self.retracted.contains(id) {
+            return;
+        }
         if matches!(event, PersistedExecution::Text { .. }) && self.settled.contains(id) {
             return;
         }
@@ -1705,6 +1718,7 @@ impl ThreadSnapshot {
         }
         self.records.iter().rev().find_map(|record| match record {
             Record::Init { session_id, .. } => Some(Some(session_id.as_str())),
+            Record::ConversationReset { session_id } => Some(Some(session_id.as_str())),
             Record::Handover { .. } => Some(None),
             _ => None,
         })?
@@ -1719,11 +1733,22 @@ impl ThreadSnapshot {
             .records
             .iter()
             .rposition(|record| matches!(record, Record::Handover { .. }))?;
+        if self.records[at + 1..]
+            .iter()
+            .any(|record| matches!(record, Record::ConversationReset { .. }))
+        {
+            return None;
+        }
         let Record::Handover { from, .. } = &self.records[at] else {
             unreachable!("rposition matched a handover");
         };
         let mut exchanges: Vec<(String, AnswerText)> = Vec::new();
-        for record in &self.records[..at] {
+        let after_reset = self.records[..at]
+            .iter()
+            .rposition(|record| matches!(record, Record::ConversationReset { .. }))
+            .map(|index| index + 1)
+            .unwrap_or(0);
+        for record in &self.records[after_reset..at] {
             match record {
                 Record::Prompt { text } => exchanges.push((text.clone(), AnswerText::default())),
                 Record::Text { text } => {
@@ -1840,7 +1865,13 @@ impl ThreadSnapshot {
     }
 
     pub(crate) fn prompt_texts(&self) -> Vec<String> {
-        self.records
+        let after_reset = self
+            .records
+            .iter()
+            .rposition(|record| matches!(record, Record::ConversationReset { .. }))
+            .map(|index| index + 1)
+            .unwrap_or(0);
+        self.records[after_reset..]
             .iter()
             .filter_map(|record| match record {
                 Record::Prompt { text } => Some(text.clone()),

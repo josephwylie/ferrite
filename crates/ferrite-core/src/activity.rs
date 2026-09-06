@@ -1091,7 +1091,10 @@ impl Activity {
         evicted.extend(blocks.evicted);
         self.agents.clear();
         self.aliases.clear();
+        self.order.clear();
         self.pending.clear();
+        self.next_decision = 0;
+        self.limited = false;
         self.main_operator_turn = false;
         ActivityUpdate {
             changed,

@@ -55,9 +55,9 @@ pub(super) struct Decoder {
     main_stream_order: VecDeque<(String, u64)>,
     seen_main_frames: HashSet<String>,
     main_frame_order: VecDeque<String>,
-    main_deliveries: HashMap<String, Vec<String>>,
-    main_delivery_order: VecDeque<String>,
-    pending_main_retractions: HashSet<String>,
+    deliveries: HashMap<(Subject, String), Vec<String>>,
+    delivery_order: VecDeque<(Subject, String)>,
+    pending_retractions: HashSet<(Subject, String)>,
     /// Main's last provider-reported occupancy. Result aggregates account for
     /// a turn but do not always carry a new occupancy snapshot.
     usage: Usage,
@@ -165,7 +165,9 @@ impl Decoder {
                     self.notice(&value, string(&value, "content"), &mut events);
                 }
                 if string(&value, "subtype") == Some("model_refusal_fallback") {
+                    let subject = self.scope(&value, &mut events).unwrap_or(Subject::Main);
                     self.retract_uuids(
+                        &subject,
                         value["retracted_message_uuids"]
                             .as_array()
                             .into_iter()
@@ -173,6 +175,18 @@ impl Decoder {
                             .filter_map(Value::as_str),
                         &mut events,
                     );
+                }
+                if string(&value, "subtype") == Some("local_command_output")
+                    && !self.seen_main_frame(&value)
+                {
+                    if let Some(text) = string(&value, "content") {
+                        self.main_content(
+                            &value,
+                            delivery_id(&value, "0"),
+                            ExecutionEvent::Text { text: text.to_owned() },
+                            &mut events,
+                        );
+                    }
                 }
                 self.task(&value, &mut events);
                 if let Some(event) = wire::parse_value(&value) {
@@ -478,6 +492,20 @@ impl Decoder {
         );
     }
 
+    fn content_message(
+        &mut self,
+        key: &AgentKey,
+        value: &Value,
+        id: Option<String>,
+        event: ExecutionEvent,
+        events: &mut Vec<SessionEvent>,
+    ) {
+        if let Some(id) = &id {
+            self.record_delivery(&Subject::Subagent(key.clone()), value, id, events);
+        }
+        self.content(key, id, event, events);
+    }
+
     fn seen(&mut self, value: &Value) -> bool {
         let Some(uuid) = string(value, "uuid") else {
             return false;
@@ -505,9 +533,7 @@ impl Decoder {
         if subject == Subject::Main && self.seen_main_frame(value) {
             return;
         }
-        if subject == Subject::Main {
-            self.retract_main(value, events);
-        }
+        self.retract_subject(&subject, value, events);
         self.progress(value, events);
         let child = match &subject {
             Subject::Main => None,
@@ -518,7 +544,13 @@ impl Decoder {
             match &child {
                 Some(key) => {
                     if let Some(event) = ExecutionEvent::from_session(&usage) {
-                        self.content(key, delivery_id(value, "usage"), event, events);
+                        self.content_message(
+                            key,
+                            value,
+                            delivery_id(value, "usage"),
+                            event,
+                            events,
+                        );
                     }
                 }
                 None => events.push(self.record_main_usage(value, usage)),
@@ -542,7 +574,7 @@ impl Decoder {
                 info.coverage = TranscriptCoverage::Live;
                 self.discover(info, events);
                 self.working(key, events);
-                self.content(key, delivery_id(value, "0"), event, events);
+                self.content_message(key, value, delivery_id(value, "0"), event, events);
             } else {
                 self.main_content(value, delivery_id(value, "0"), event, events);
             }
@@ -609,7 +641,7 @@ impl Decoder {
                         info.coverage = TranscriptCoverage::Live;
                         self.discover(info, events);
                         self.working(key, events);
-                        self.content(key, id, event, events);
+                        self.content_message(key, value, id, event, events);
                     } else {
                         self.main_content(value, id, event, events);
                     }
@@ -626,8 +658,9 @@ impl Decoder {
                     let input = block.get("input").cloned().unwrap_or(Value::Null);
                     if let Some(key) = &child {
                         self.working(key, events);
-                        self.content(
+                        self.content_message(
                             key,
+                            value,
                             id,
                             ExecutionEvent::ToolStarted {
                                 id: tool_id.to_owned(),
@@ -667,8 +700,9 @@ impl Decoder {
                     });
                     if let Some(key) = &child {
                         self.working(key, events);
-                        self.content(
+                        self.content_message(
                             key,
+                            value,
                             id,
                             ExecutionEvent::ToolCompleted {
                                 id: tool_id.to_owned(),
@@ -822,76 +856,90 @@ impl Decoder {
         events: &mut Vec<SessionEvent>,
     ) {
         if let Some(id) = &id {
-            self.record_main_delivery(value, id, events);
+            self.record_delivery(&Subject::Main, value, id, events);
         }
         push(events, ActivityEvent::MainContent { id, event });
     }
 
-    fn retract_main(&mut self, value: &Value, events: &mut Vec<SessionEvent>) {
+    fn retract_subject(
+        &mut self,
+        subject: &Subject,
+        value: &Value,
+        events: &mut Vec<SessionEvent>,
+    ) {
         let retracted = value["supersedes"]
             .as_array()
             .into_iter()
             .flatten()
-            .chain(
-                value["model_refusal_fallback"]["retracted_message_uuids"]
-                    .as_array()
-                    .into_iter()
-                    .flatten(),
-            )
             .filter_map(Value::as_str);
-        self.retract_uuids(retracted, events);
+        self.retract_uuids(subject, retracted, events);
     }
 
     fn retract_uuids<'a>(
         &mut self,
+        subject: &Subject,
         retracted: impl Iterator<Item = &'a str>,
         events: &mut Vec<SessionEvent>,
     ) {
         let mut ids = Vec::new();
         for uuid in retracted {
-            if let Some(known) = self.main_deliveries.get(uuid) {
+            let delivery = (subject.clone(), uuid.into());
+            if let Some(known) = self.deliveries.get(&delivery) {
                 ids.extend(known.iter().cloned());
-            } else if self.pending_main_retractions.len() < 8192 {
-                self.pending_main_retractions.insert(uuid.into());
+            } else if self.pending_retractions.len() < 8192 {
+                self.pending_retractions.insert(delivery);
             }
         }
         if !ids.is_empty() {
-            push(
-                events,
-                ActivityEvent::MainContent {
-                    id: None,
-                    event: ExecutionEvent::Retract { ids },
-                },
-            );
+            self.retract_content(subject, ids, events);
         }
     }
 
-    fn record_main_delivery(&mut self, value: &Value, id: &str, events: &mut Vec<SessionEvent>) {
+    fn record_delivery(
+        &mut self,
+        subject: &Subject,
+        value: &Value,
+        id: &str,
+        events: &mut Vec<SessionEvent>,
+    ) {
         let Some(uuid) = string(value, "uuid") else {
             return;
         };
-        let delivery = self.main_deliveries.entry(uuid.into()).or_default();
+        let key = (subject.clone(), uuid.into());
+        let delivery = self.deliveries.entry(key.clone()).or_default();
         if !delivery.iter().any(|known| known == id) {
             delivery.push(id.into());
         }
         if delivery.len() == 1 {
-            self.main_delivery_order.push_back(uuid.into());
-            if self.main_delivery_order.len() > 8192 {
-                if let Some(old) = self.main_delivery_order.pop_front() {
-                    self.main_deliveries.remove(&old);
+            self.delivery_order.push_back(key.clone());
+            if self.delivery_order.len() > 8192 {
+                if let Some(old) = self.delivery_order.pop_front() {
+                    self.deliveries.remove(&old);
                 }
             }
         }
-        if self.pending_main_retractions.contains(uuid) {
-            push(
+        if self.pending_retractions.contains(&key) {
+            self.retract_content(subject, vec![id.into()], events);
+        }
+    }
+
+    fn retract_content(
+        &self,
+        subject: &Subject,
+        ids: Vec<String>,
+        events: &mut Vec<SessionEvent>,
+    ) {
+        let event = ExecutionEvent::Retract { ids };
+        match subject {
+            Subject::Main => push(events, ActivityEvent::MainContent { id: None, event }),
+            Subject::Subagent(key) => push(
                 events,
-                ActivityEvent::MainContent {
+                ActivityEvent::Content {
+                    key: key.clone(),
                     id: None,
-                    event: ExecutionEvent::Retract {
-                        ids: vec![id.into()],
-                    },
+                    event,
                 },
-            );
+            ),
         }
     }
 
