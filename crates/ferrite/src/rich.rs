@@ -182,14 +182,14 @@ impl Markdown {
 }
 
 impl gpui::RenderOnce for Markdown {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let state = self.cache.state(self.id.clone(), &self.source, _window, cx);
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let state = self.cache.state(self.id.clone(), &self.source, window, cx);
         #[cfg(test)]
-        testing::record(self.id, state.clone(), _window.text_style().clone(), cx);
+        testing::record(self.id, state.clone(), window.text_style().clone(), cx);
         let text_style = if self.muted {
-            style().with_foreground(rgb(theme::TEXT_2).into())
+            style(window.rem_size()).with_foreground(rgb(theme::TEXT_2).into())
         } else {
-            style().with_foreground(rgb(theme::TEXT).into())
+            style(window.rem_size()).with_foreground(rgb(theme::TEXT).into())
         };
         TextView::new(&state)
             .font_family(theme::FONT_UI)
@@ -211,7 +211,7 @@ impl gpui::RenderOnce for Markdown {
                     .on_click(move |_, window, cx| {
                         use gpui::component::WindowExt as _;
                         let html = html.clone();
-                        window.open_dialog(cx, move |dialog, _, _| {
+                        window.open_dialog(cx, move |dialog, window, _| {
                             dialog
                                 .title("HTML preview")
                                 .width(px(720.))
@@ -224,7 +224,7 @@ impl gpui::RenderOnce for Markdown {
                                         .overflow_y_scroll()
                                         .child(
                                             TextView::html("html-preview-text", html.clone())
-                                                .style(style()),
+                                                .style(style(window.rem_size())),
                                         ),
                                 )
                         });
@@ -235,7 +235,8 @@ impl gpui::RenderOnce for Markdown {
     }
 }
 
-pub fn style() -> TextViewStyle {
+/// Convert the shared pixel gap using the active root font size.
+pub fn style(rem_size: gpui::Pixels) -> TextViewStyle {
     TextViewStyle::default()
         .with_dark(true)
         .with_foreground(rgb(theme::TEXT_2).into())
@@ -266,7 +267,7 @@ pub fn style() -> TextViewStyle {
                 .px(px(8.))
                 .py(px(6.)),
         )
-        .with_paragraph_gap(rems(theme::P_MARGIN_B / 16.))
+        .with_paragraph_gap(rems(theme::BLOCK_GAP / f32::from(rem_size)))
         .with_heading_base_font_size(px(theme::FS_MD))
         .with_heading_font_size(|level, base| {
             base * match level {
@@ -301,7 +302,7 @@ impl gpui::RenderOnce for Literal {
         );
         let source = format!("{fence}\n{}\n{fence}", self.text);
         let highlights = self.highlights;
-        let style = style()
+        let style = style(window.rem_size())
             .with_foreground(inherited.color)
             .with_paragraph_gap(rems(0.))
             .with_code_background(gpui::transparent_black())
@@ -440,7 +441,7 @@ pub mod testing {
     ) -> Option<gpui::Point<gpui::Pixels>> {
         let (state, style) = cx.global::<Views>().0.get(id)?;
         let mut bounds = state.read(cx).bounds();
-        let gap = window.rem_size() * (theme::P_MARGIN_B / 16.);
+        let gap = px(theme::BLOCK_GAP);
         let stride = (bounds.size.height + gap) / paragraphs.max(1) as f32;
         let line_height = stride - gap;
         bounds.origin.y += stride * item as f32;
@@ -460,5 +461,164 @@ pub mod testing {
             bounds.left() + line.x_for_index(byte) + px(0.5),
             bounds.top() + line_height * 0.5,
         ))
+    }
+}
+
+#[cfg(test)]
+mod spacing_tests {
+    use super::*;
+    use gpui::{div, Context, Render, TestAppContext};
+    const SELECTORS: [&str; 7] = [
+        "spacing-0",
+        "spacing-1",
+        "spacing-2",
+        "spacing-3",
+        "spacing-4",
+        "spacing-5",
+        "spacing-6",
+    ];
+
+    struct SpacingRoot {
+        samples: Vec<String>,
+        gap: f32,
+    }
+
+    impl Render for SpacingRoot {
+        fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            window.set_rem_size(px(theme::FS_MD));
+            div()
+                .w(px(360.))
+                .children(self.samples.iter().enumerate().map(|(ix, source)| {
+                    div()
+                        .debug_selector(move || format!("spacing-{ix}"))
+                        .w_full()
+                        .child(
+                            TextView::markdown(format!("spacing-{ix}"), source.clone())
+                                .max_lines(usize::MAX)
+                                .style(if self.gap == 0. {
+                                    style(window.rem_size()).with_paragraph_gap(rems(0.))
+                                } else {
+                                    style(window.rem_size())
+                                }),
+                        )
+                }))
+        }
+    }
+
+    // Measure the real renderer, including nested blocks. Each pair must add
+    // exactly one boundary gap, regardless of either block's type.
+    #[gpui::test]
+    fn markdown_spacing_between_all_block_kinds(cx: &mut TestAppContext) {
+        cx.update(gpui::component::init);
+        let blocks = [
+            "Paragraph with **bold** and `code`.",
+            "## Heading",
+            "- First item",
+            "1. First item",
+            "- [ ] Task",
+            "> Quoted paragraph",
+            "```text\ncode\n```",
+            "| Head |\n| --- |\n| Cell |",
+            "---",
+        ];
+        let (root, cx) = cx.add_window_view(|_, _| SpacingRoot {
+            samples: vec![],
+            gap: 10.,
+        });
+        for first in blocks {
+            for second in blocks {
+                // Adjacent list/quote blocks merge in Markdown. Their internal
+                // sibling spacing must still be exactly one gap.
+                let combined = format!("{first}\n\n{second}");
+                root.update(cx, |root, cx| {
+                    root.samples = vec![first.into(), second.into(), combined.clone()];
+                    cx.notify();
+                });
+                cx.run_until_parked();
+                cx.update(|window, cx| {
+                    let _ = window.draw(cx);
+                });
+                let mut height = |ix| cx.debug_bounds(SELECTORS[ix]).unwrap().size.height;
+                let gap = height(2) - height(0) - height(1);
+                assert!((gap - px(10.)).abs() < px(0.5), "{combined:?}: gap {gap:?}");
+            }
+        }
+    }
+
+    #[gpui::test]
+    fn markdown_spacing_nested_lists_and_zero_gap(cx: &mut TestAppContext) {
+        cx.update(gpui::component::init);
+        let samples = vec![
+            "- One\n- Two\n- Three".into(),
+            "1. One\n2. Two\n3. Three".into(),
+            "- [ ] One\n- [x] Two\n- [ ] Three".into(),
+            "- One\n  - Two\n  - Three".into(),
+            "- One\n\n  Two\n\n  Three".into(),
+            "> One\n>\n> Two\n>\n> Three".into(),
+            "- One\n\n  ```text\n  Two\n  ```\n\n  Three".into(),
+        ];
+        let (root, cx) = cx.add_window_view(|_, _| SpacingRoot { samples, gap: 0. });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let compact: Vec<_> = (0..7)
+            .map(|ix| cx.debug_bounds(SELECTORS[ix]).unwrap().size.height)
+            .collect();
+        root.update(cx, |root, cx| {
+            root.gap = 10.;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        for (ix, before) in compact.into_iter().enumerate() {
+            let after = cx.debug_bounds(SELECTORS[ix]).unwrap().size.height;
+            assert!(
+                (after - before - px(20.)).abs() < px(0.5),
+                "nested sample {ix}: {before:?} -> {after:?}"
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn markdown_spacing_preserves_hard_breaks_and_ignores_definitions(cx: &mut TestAppContext) {
+        cx.update(gpui::component::init);
+        let samples = vec![
+            "Before  \n**After**".into(),
+            "Before\\\n**After**".into(),
+            "Before\n\n**After**".into(),
+            "Before".into(),
+            "Before\n\n[unused]: https://example.com".into(),
+            "Before\n\n[unused]: https://example.com\n\n**After**".into(),
+        ];
+        let (_, cx) = cx.add_window_view(|_, _| SpacingRoot { samples, gap: 10. });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let mut height = |ix| cx.debug_bounds(SELECTORS[ix]).unwrap().size.height;
+        let paragraph_pair = height(2);
+        assert_eq!(
+            height(0),
+            paragraph_pair - px(10.),
+            "two-space hard break must start a line"
+        );
+        assert_eq!(
+            height(1),
+            paragraph_pair - px(10.),
+            "backslash hard break must start a line"
+        );
+        assert_eq!(
+            height(3),
+            height(4),
+            "a trailing reference definition adds no blank space"
+        );
+        assert_eq!(
+            height(5),
+            paragraph_pair,
+            "definitions between paragraphs add no extra gap"
+        );
     }
 }

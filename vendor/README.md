@@ -7,11 +7,20 @@
 upstream commit `94a313a72a2513aee2780240cd322d552b2395f0`.
 Its Apache-2.0 license and upstream README are retained in that directory.
 
-One source change: `Inline::text_line_bounds` returns immediately when its
+`Inline::text_line_bounds` returns immediately when its
 text layout is entirely outside the content mask. This avoids per-character
 hitbox calculations for clipped transcript paragraphs during streaming.
 The original function already clipped every returned hitbox to that mask;
 selection calculation and copying of offscreen text remain unchanged.
+
+Markdown block spacing is centralized in `BlockNode::render_block`. The
+configured paragraph gap applies to headings, paragraphs, code, quotes, lists,
+tables, rules and custom blocks, including nested siblings and virtualized
+documents. List items share that gap; final visible children have no trailing
+padding, and reference definitions introduce no spacing. Code line spacing and
+table cell padding remain independent. The Markdown parser also preserves hard
+line breaks instead of dropping them. Ferrite's native geometry tests in
+`rich.rs` cover block pairs, nesting, zero-gap overrides and hard breaks.
 
 Cargo applies this through the root `[patch.crates-io]`. Remove the patch when
 an upstream release includes equivalent clipping. Registry cache markers and
