@@ -91,13 +91,15 @@ pub fn strip(
         .h(px(WIN_CHROME_H))
         .flex()
         .flex_row()
+        .items_center()
         .child(div().flex_shrink_0().w(px(nav_width)))
-        // Location and creation are one compact cluster. The empty stretch
-        // after them absorbs spare width and remains the Windows drag target,
-        // rather than pushing creation against the caption controls.
+        // The location stays anchored to the content edge. The empty stretch
+        // absorbs spare width and remains the Windows drag target, while the
+        // contextual creation door sits at the trailing edge immediately
+        // before the caption controls.
         .child(title_region(title))
-        .child(add_thread)
         .child(trailing_drag)
+        .child(add_thread)
         .children(CUSTOM.then(|| caption_buttons(maximized)))
 }
 
@@ -226,6 +228,7 @@ fn button(
 ) -> Stateful<Div> {
     div()
         .id(id)
+        .debug_selector(move || id.into())
         .group(id)
         .flex()
         .flex_shrink_0()

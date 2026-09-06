@@ -6940,7 +6940,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn titlebar_add_sits_beside_the_group_title(cx: &mut TestAppContext) {
+    fn titlebar_add_sits_before_the_caption_controls(cx: &mut TestAppContext) {
         let (mut core, _fake) = cockpit("titlebar-add-placement", 2);
         let threads = core.threads();
         let group = core
@@ -6955,16 +6955,21 @@ mod tests {
         view.update(cx, |view, cx| view.enter_group(group, cx));
         tick(cx);
 
-        let title = cx
-            .debug_bounds("group-titlebar-name")
-            .expect("the group title is visible");
         let button = cx
             .debug_bounds("titlebar-add-thread")
             .expect("the titlebar add button is visible");
-        assert!(button.origin.x >= title.right());
+        let minimize = cx
+            .debug_bounds("caption-minimize")
+            .expect("the minimize button is visible");
+        assert!(button.right() <= minimize.origin.x);
         assert!(
-            button.origin.x - title.right() <= px(crate::theme::GRID_PAD + 1.0),
-            "the add button belongs to the title cluster"
+            minimize.origin.x - button.right() <= px(crate::theme::GRID_PAD),
+            "the add button belongs beside the caption controls"
+        );
+        assert_eq!(
+            button.center().y,
+            minimize.center().y,
+            "the add button is vertically centered in the titlebar"
         );
     }
 
