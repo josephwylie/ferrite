@@ -39,6 +39,15 @@ use session::{ProcessRss, SessionDefaults};
 
 actions!(ferrite, [Quit]);
 
+/// GPUI defaults to hiding the OS pointer whenever a key is typed. In a
+/// dense cockpit that reads as a flash whenever the pointer is resting over
+/// the Composer, so Ferrite keeps pointer visibility under the operator's
+/// direct control instead: it moves when the mouse moves and never flickers
+/// merely because text changed beneath it.
+fn keep_mouse_cursor_visible(cx: &mut App) {
+    cx.set_cursor_hide_mode(CursorHideMode::Never);
+}
+
 /// One Session may hold this much before the watchdog replaces it. Generous:
 /// a busy agent legitimately grows, and a restart costs the operator context.
 const RSS_LIMIT: u64 = 4 * 1024 * 1024 * 1024;
@@ -100,6 +109,7 @@ fn main() {
     kit::application()
         .with_assets(icons::Assets)
         .run(move |cx: &mut App| {
+            keep_mouse_cursor_visible(cx);
             theme::init_components(cx);
             // First, before anything can lay out text in it: the bundled mono
             // face. `add_fonts` returns a Result and a discarded one fails
@@ -435,7 +445,10 @@ fn store_dir() -> std::path::PathBuf {
 mod tests {
     // No `use super::*`: the crate root globs `gpui::*`, whose `test` macro
     // would capture the `#[test]` this macro expands to and recurse.
-    use super::{adopt, demo, dock_launch_dir, keymap, load_bindings, revive_latest};
+    use super::{
+        adopt, demo, dock_launch_dir, keep_mouse_cursor_visible, keymap, load_bindings,
+        revive_latest,
+    };
     use ferrite_core::cockpit::Cockpit;
     use ferrite_core::store::{Provider, Store};
     use ferrite_core::workspace::WorkspaceChoice;
@@ -451,6 +464,14 @@ mod tests {
                     keymap::bindings(platform).len()
                 );
             }
+        });
+    }
+
+    #[gpui::test]
+    fn typing_does_not_hide_the_mouse_cursor(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            keep_mouse_cursor_visible(cx);
+            assert_eq!(cx.cursor_hide_mode(), gpui::CursorHideMode::Never);
         });
     }
 
