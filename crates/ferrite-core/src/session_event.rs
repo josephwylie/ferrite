@@ -257,76 +257,10 @@ impl Decision {
         self.delivery == DecisionDelivery::Blocking
     }
 
-    /// The standing answer this request offers, if it is a documented
-    /// permission expansion. Provider payloads can carry arbitrary objects;
-    /// those must never turn an "always" control into an accidental allow.
+    /// An opaque standing choice already validated by the provider adapter.
     pub fn standing_answer(&self) -> Option<&serde_json::Value> {
-        self.suggestions
-            .iter()
-            .find(|offered| standing_choice(offered))
+        self.suggestions.first()
     }
-}
-
-fn standing_choice(value: &serde_json::Value) -> bool {
-    if value == "acceptForSession" {
-        return true;
-    }
-    let Some(object) = value.as_object() else {
-        return false;
-    };
-    match object.get("type").and_then(serde_json::Value::as_str) {
-        Some("setMode") => {
-            return claude_destination(object)
-                && object
-                    .get("mode")
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|mode| matches!(mode, "acceptEdits" | "bypassPermissions"))
-        }
-        Some("addRules" | "replaceRules") => {
-            return claude_destination(object)
-                && object.get("behavior") == Some(&serde_json::Value::String("allow".into()))
-                && object
-                    .get("rules")
-                    .and_then(serde_json::Value::as_array)
-                    .is_some_and(|rules| {
-                        !rules.is_empty()
-                            && rules.iter().all(|rule| {
-                                rule.get("toolName")
-                                    .and_then(serde_json::Value::as_str)
-                                    .is_some_and(|tool| !tool.is_empty())
-                            })
-                    })
-        }
-        Some(_) => return false,
-        None => {}
-    }
-    if object.len() != 1 {
-        return false;
-    }
-    if let Some(amendment) = object.get("acceptWithExecpolicyAmendment") {
-        return amendment
-            .get("execpolicy_amendment")
-            .and_then(serde_json::Value::as_array)
-            .is_some_and(|command| {
-                !command.is_empty() && command.iter().all(serde_json::Value::is_string)
-            });
-    }
-    if let Some(amendment) = object.get("applyNetworkPolicyAmendment") {
-        return amendment["network_policy_amendment"]["action"] == "allow"
-            && amendment["network_policy_amendment"]["host"]
-                .as_str()
-                .is_some_and(|host| !host.is_empty());
-    }
-    false
-}
-
-fn claude_destination(object: &serde_json::Map<String, serde_json::Value>) -> bool {
-    matches!(
-        object
-            .get("destination")
-            .and_then(serde_json::Value::as_str),
-        Some("userSettings" | "projectSettings" | "localSettings" | "session" | "cliArg")
-    )
 }
 
 #[cfg(test)]
@@ -345,28 +279,14 @@ mod tests {
         }
     }
 
-    /// Both shapes as the captures carry them.
     #[test]
-    fn the_standing_answer_is_the_structured_one_each_provider_offers() {
-        let claude = decision(vec![serde_json::json!({
-            "type": "setMode", "mode": "acceptEdits", "destination": "session"
-        })]);
-        assert_eq!(claude.standing_answer(), claude.suggestions.first());
-
-        let codex = decision(vec![
-            serde_json::json!("accept"),
-            serde_json::json!({"acceptWithExecpolicyAmendment": {"execpolicy_amendment": ["x"]}}),
-            serde_json::json!("cancel"),
+    fn standing_choices_are_provider_validated_and_opaque_here() {
+        let offered = decision(vec![
+            serde_json::json!({"opaque_choice": "first"}),
+            serde_json::json!("second"),
         ]);
-        assert_eq!(codex.standing_answer(), codex.suggestions.get(1));
-
-        // A file-change approval offers none at all, and the card must not
-        // pretend otherwise.
+        assert_eq!(offered.standing_answer(), offered.suggestions.first());
         assert_eq!(decision(vec![]).standing_answer(), None);
-        assert_eq!(
-            decision(vec![serde_json::json!("accept")]).standing_answer(),
-            None
-        );
     }
 }
 

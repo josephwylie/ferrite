@@ -773,3 +773,82 @@ fn a_pending_question_requests_attention_and_cancellation_clears_it() {
     assert!(!h.cockpit.notifications().attention(second));
     assert_eq!(h.unread(), 0);
 }
+
+#[test]
+fn clearing_attention_dismisses_live_requests_until_they_are_replaced() {
+    let mut h = Harness::new("clear-requests", 2);
+    h.cockpit.focus_thread(h.threads[0]);
+    let request = ActivityEvent::Decision {
+        subject: Some(Subject::Main),
+        decision: ferrite_core::Decision {
+            delivery: Default::default(),
+            id: "approval".into(),
+            tool_use_id: "tool".into(),
+            tool_name: "Bash".into(),
+            description: "Run tests".into(),
+            input: serde_json::Value::Null,
+            suggestions: vec![],
+        },
+    };
+    h.control.activity(1, request.clone());
+    h.cockpit.pump();
+    assert_eq!(h.unread(), 1);
+    h.cockpit.clear_notices();
+    h.cockpit.pump();
+    assert_eq!(h.unread(), 0);
+    assert_eq!(h.cockpit.notifications().decisions().count(), 0);
+    h.control.activity(
+        1,
+        ActivityEvent::DecisionCancelled {
+            id: "approval".into(),
+        },
+    );
+    h.cockpit.pump();
+    h.control.activity(1, request);
+    h.cockpit.pump();
+    assert_eq!(
+        h.unread(),
+        1,
+        "a new handle deserves attention even when the raw request id is reused"
+    );
+}
+#[test]
+fn decision_attention_tracks_resolved_subagent_aliases() {
+    let mut h = Harness::new("request-alias", 2);
+    h.cockpit.focus_thread(h.threads[0]);
+    let old = h.child(1, "old");
+    let new = h.child(1, "new");
+    h.control.activity(
+        1,
+        ActivityEvent::Decision {
+            subject: Some(Subject::Subagent(old.clone())),
+            decision: ferrite_core::Decision {
+                delivery: Default::default(),
+                id: "approval".into(),
+                tool_use_id: "tool".into(),
+                tool_name: "Bash".into(),
+                description: "Run tests".into(),
+                input: serde_json::Value::Null,
+                suggestions: vec![],
+            },
+        },
+    );
+    h.cockpit.pump();
+    h.control.activity(
+        1,
+        ActivityEvent::Alias {
+            from: old,
+            to: new.clone(),
+        },
+    );
+    h.cockpit.pump();
+    assert_eq!(
+        h.cockpit
+            .notifications()
+            .decisions()
+            .next()
+            .unwrap()
+            .subject,
+        Some(Subject::Subagent(new))
+    );
+}

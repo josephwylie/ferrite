@@ -589,19 +589,45 @@ fn parse_control_request(value: &Value) -> Option<SessionEvent> {
             tool_name: text(request, "tool_name"),
             description: text(request, "description"),
             input: request.get("input").cloned().unwrap_or(Value::Null),
-            suggestions: (!request["suppress_always_allow_rule"]
-                .as_bool()
-                .unwrap_or(false))
-            .then(|| {
-                request
-                    .get("permission_suggestions")
-                    .and_then(Value::as_array)
-                    .cloned()
-                    .unwrap_or_default()
-            })
-            .unwrap_or_default(),
+            suggestions: request
+                .get("permission_suggestions")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter(|choice| {
+                    request["suppress_always_allow_rule"] != true && standing_choice(choice)
+                })
+                .cloned()
+                .collect(),
         },
     })
+}
+
+fn standing_choice(value: &Value) -> bool {
+    if !matches!(
+        value["destination"].as_str(),
+        Some("userSettings" | "projectSettings" | "localSettings" | "session" | "cliArg")
+    ) {
+        return false;
+    }
+    match value["type"].as_str() {
+        Some("setMode") => matches!(
+            value["mode"].as_str(),
+            Some("acceptEdits" | "bypassPermissions")
+        ),
+        Some("addRules" | "replaceRules") => {
+            value["behavior"] == "allow"
+                && value["rules"].as_array().is_some_and(|rules| {
+                    !rules.is_empty()
+                        && rules.iter().all(|rule| {
+                            rule["toolName"]
+                                .as_str()
+                                .is_some_and(|name| !name.is_empty())
+                        })
+                })
+        }
+        _ => false,
+    }
 }
 
 /// A string field, or empty when the provider left it out.

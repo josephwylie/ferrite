@@ -443,10 +443,36 @@ fn parse_approval_request(value: &Value, params: &Value, tool_name: &str) -> Opt
             suggestions: params
                 .get("availableDecisions")
                 .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter(|choice| standing_choice(choice))
                 .cloned()
-                .unwrap_or_default(),
+                .collect(),
         },
     })
+}
+
+/// Only documented permission expansions may be offered as standing approval.
+fn standing_choice(value: &Value) -> bool {
+    if value == "acceptForSession" {
+        return true;
+    }
+    let Some(object) = value.as_object().filter(|object| object.len() == 1) else {
+        return false;
+    };
+    if let Some(amendment) = object.get("acceptWithExecpolicyAmendment") {
+        return amendment["execpolicy_amendment"]
+            .as_array()
+            .is_some_and(|command| !command.is_empty() && command.iter().all(Value::is_string));
+    }
+    object
+        .get("applyNetworkPolicyAmendment")
+        .is_some_and(|amendment| {
+            amendment["network_policy_amendment"]["action"] == "allow"
+                && amendment["network_policy_amendment"]["host"]
+                    .as_str()
+                    .is_some_and(|host| !host.is_empty())
+        })
 }
 
 /// Keep the ID's JSON representation as the opaque Decision handle. Encoding

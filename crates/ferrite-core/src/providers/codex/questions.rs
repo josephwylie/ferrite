@@ -19,7 +19,7 @@ pub(super) fn decode_native(params: &Value, id: String) -> Option<Decision> {
         .as_array()?
         .iter()
         .map(|question| {
-            let id = question.get("id")?.as_str()?.trim();
+            let id = question.get("id")?.as_str()?;
             let header = question.get("header")?.as_str()?.trim();
             let text = question.get("question")?.as_str()?.trim();
             if id.is_empty() || text.is_empty() {

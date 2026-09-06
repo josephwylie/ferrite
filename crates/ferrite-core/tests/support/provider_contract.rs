@@ -52,7 +52,25 @@ impl Replay {
         } else {
             "codex-cli 0.153.4"
         };
-        fs::write(&program,format!("#!/bin/sh\ncase \"$1\" in --version) echo '{version}'; exit 0;; esac\ncat {}\nexec cat > {}\n",quote(&directory.join("frames")),quote(&directory.join("host")))).unwrap();
+        let mut script = format!(
+            "#!/bin/sh\ncase \"$1\" in --version) echo '{version}'; exit 0;; esac\ncat {}\n",
+            quote(&directory.join("frames"))
+        );
+        script.push_str(&format!(
+            "while IFS= read -r frame; do\nprintf '%s\\n' \"$frame\" >> {}\n",
+            quote(&directory.join("host"))
+        ));
+        script.push_str(r#"case "$frame" in
+*'"subtype":"set_model"'*)
+request=$(printf '%s' "$frame" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
+case "$frame" in
+*'rejected-model'*) printf '{"type":"control_response","response":{"subtype":"error","request_id":"%s","error":"model unavailable"}}\n' "$request";;
+*) printf '{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{}}}\n' "$request";;
+esac;;
+esac
+done
+"#);
+        fs::write(&program, script).unwrap();
         fs::set_permissions(&program, fs::Permissions::from_mode(0o700)).unwrap();
         let program = program.display().to_string();
         let session: Box<dyn Session> = if provider == "claude" {

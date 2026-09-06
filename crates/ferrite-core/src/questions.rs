@@ -86,7 +86,6 @@ fn parse_question(value: &Value, asynchronous: bool) -> Option<Question> {
     let id = value
         .get("id")
         .and_then(Value::as_str)
-        .map(str::trim)
         .filter(|id| !id.is_empty())
         .map(str::to_string);
     let options = value

@@ -89,6 +89,7 @@ pub struct DecisionNotice {
     pub subject: Option<Subject>,
     pub kind: RequestKind,
     pub read: bool,
+    dismissed: bool,
 }
 
 /// One frame's facts about one Thread, as the Cockpit folded them.
@@ -119,7 +120,6 @@ enum Phase {
 pub struct Notifications {
     notices: VecDeque<Notice>,
     decisions: BTreeMap<DecisionNoticeId, DecisionNotice>,
-    dismissed_decisions: BTreeSet<DecisionNoticeId>,
     phases: BTreeMap<ThreadId, Phase>,
     next: u64,
     grace: Duration,
@@ -136,7 +136,6 @@ impl Notifications {
         Self {
             notices: VecDeque::new(),
             decisions: BTreeMap::new(),
-            dismissed_decisions: BTreeSet::new(),
             phases: BTreeMap::new(),
             next: 0,
             grace,
@@ -251,17 +250,13 @@ impl Notifications {
             .collect();
         self.decisions
             .retain(|id, _| id.thread != thread || live.contains(id));
-        self.dismissed_decisions
-            .retain(|id| id.thread != thread || live.contains(id));
         for pending in view.pending_decisions() {
             let id = DecisionNoticeId {
                 thread,
                 handle: pending.handle.clone(),
             };
-            if self.dismissed_decisions.contains(&id) {
-                continue;
-            }
-            self.decisions
+            let notice = self
+                .decisions
                 .entry(id.clone())
                 .or_insert_with(|| DecisionNotice {
                     id,
@@ -272,7 +267,9 @@ impl Notifications {
                         RequestKind::Permission
                     },
                     read: false,
+                    dismissed: false,
                 });
+            notice.subject = pending.subject.clone();
         }
     }
 
@@ -303,7 +300,7 @@ impl Notifications {
             + self
                 .decisions
                 .values()
-                .filter(|notice| !notice.read)
+                .filter(|notice| !notice.read && !notice.dismissed)
                 .count()
     }
 
@@ -316,7 +313,7 @@ impl Notifications {
             || self
                 .decisions
                 .values()
-                .any(|notice| notice.id.thread == thread && !notice.read)
+                .any(|notice| notice.id.thread == thread && !notice.read && !notice.dismissed)
     }
 
     /// The operator opened this Notice: it is read, and its Thread is
@@ -356,33 +353,40 @@ impl Notifications {
 
     pub fn clear(&mut self) {
         self.notices.clear();
+        for notice in self.decisions.values_mut() {
+            notice.dismissed = true;
+        }
     }
 
     /// Every live Decision attention record, ordered by its stable key.
     pub fn decisions(&self) -> impl Iterator<Item = &DecisionNotice> {
-        self.decisions.values()
+        self.decisions.values().filter(|notice| !notice.dismissed)
     }
 
     pub fn decision(&self, id: &DecisionNoticeId) -> Option<&DecisionNotice> {
-        self.decisions.get(id)
+        self.decisions.get(id).filter(|notice| !notice.dismissed)
     }
 
     /// Opening a request marks it read and returns its owning Thread. The
     /// Cockpit owns navigation and obtains the actionable request from Activity.
     pub fn open_decision(&mut self, id: &DecisionNoticeId) -> Option<ThreadId> {
-        let notice = self.decisions.get_mut(id)?;
+        let notice = self
+            .decisions
+            .get_mut(id)
+            .filter(|notice| !notice.dismissed)?;
         notice.read = true;
         Some(notice.id.thread)
     }
 
-    /// Hide this live request until it changes or disappears. A tombstone
-    /// prevents the next pump from treating the same pending handle as new.
+    /// Hide this live request, retaining its identity until it resolves so
+    /// the next pump cannot notify for it again.
     pub fn dismiss_decision(&mut self, id: &DecisionNoticeId) -> bool {
-        let removed = self.decisions.remove(id).is_some();
-        if removed {
-            self.dismissed_decisions.insert(id.clone());
-        }
-        removed
+        let Some(notice) = self.decisions.get_mut(id) else {
+            return false;
+        };
+        let changed = !notice.dismissed;
+        notice.dismissed = true;
+        changed
     }
 
     /// The live Session ended: discard any deferred finish, but keep its
@@ -390,7 +394,6 @@ impl Notifications {
     pub fn disconnect(&mut self, thread: ThreadId) {
         self.phases.remove(&thread);
         self.decisions.retain(|id, _| id.thread != thread);
-        self.dismissed_decisions.retain(|id| id.thread != thread);
     }
 
     /// The Thread is gone: nothing about it is worth keeping.
