@@ -64,6 +64,28 @@ impl Spawn {
 }
 
 impl Spawner for Spawn {
+    fn discover_commands(
+        &mut self,
+        provider: Provider,
+        cwd: &std::path::Path,
+    ) -> Option<ferrite_core::providers::commands::Discovery> {
+        let (tx, rx) = mpsc::channel();
+        let failures = tx.clone();
+        let cwd = cwd.to_path_buf();
+        if let Err(error) = std::thread::Builder::new()
+            .name("ferrite-command-discovery".into())
+            .spawn(move || {
+                let program = ferrite_core::providers::discover::program(provider);
+                let _ = tx.send(ferrite_core::providers::commands::list(
+                    &program, provider, &cwd,
+                ));
+            })
+        {
+            let _ = failures.send(Err(error));
+        }
+        Some(rx)
+    }
+
     fn discover_models(
         &mut self,
     ) -> Option<std::sync::mpsc::Receiver<(Provider, Vec<ferrite_core::ModelInfo>)>> {

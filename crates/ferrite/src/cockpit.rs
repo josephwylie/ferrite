@@ -145,6 +145,7 @@ pub struct CockpitView {
     /// the text moves again, or `sync_menu` would reopen it on the very
     /// text the operator dismissed it over.
     menu_muted: bool,
+    draft_commands: Option<DraftCommands>,
     /// A recalled slash/mention prompt is a programmatic edit: consume its
     /// `Edited` event without deriving a menu. The next operator edit clears
     /// the ordinary `menu_muted` latch and derives again.
@@ -466,6 +467,38 @@ impl std::ops::Deref for Row {
     }
 }
 
+/// One draft menu request. Its provider and cwd prevent late replies from
+/// leaking commands across project/workspace changes.
+struct DraftCommands {
+    provider: Provider,
+    cwd: std::path::PathBuf,
+    pending: Option<ferrite_core::providers::commands::Discovery>,
+    commands: Vec<ferrite_core::SessionCommand>,
+    error: Option<String>,
+}
+
+impl DraftCommands {
+    fn poll(&mut self) -> bool {
+        let Some(rx) = &self.pending else {
+            return false;
+        };
+        let result = match rx.try_recv() {
+            Ok(result) => result,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return false,
+            Err(error) => Err(std::io::Error::other(error)),
+        };
+        self.pending = None;
+        match result {
+            Ok(commands) => {
+                self.commands = commands;
+                self.error = None;
+            }
+            Err(error) => self.error = Some(error.to_string()),
+        }
+        true
+    }
+}
+
 /// What picking a row does. A command or a file lands in the line; every
 /// other pick is Ferrite's own act, never a prompt.
 #[derive(PartialEq)]
@@ -584,6 +617,7 @@ impl CockpitView {
             nav_scroll: ScrollHandle::new(),
             popover: None,
             menu_muted: false,
+            draft_commands: None,
             suppress_recall_menu_once: false,
             session_file_roots: ferrite_core::import::default_roots(),
             launch_project,
@@ -679,6 +713,9 @@ impl CockpitView {
         {
             draft.error = None;
         }
+        if slash_filter(composer.read(cx).text()).is_none() {
+            self.draft_commands = None;
+        }
         // A picker or a band chip is not text-derived (#11, #25, #29):
         // writing a prompt on its line dismisses it — while the clearing
         // splice that opened it leaves the line empty, and keeps it. The
@@ -749,6 +786,13 @@ impl CockpitView {
     /// One frame for the whole cockpit. Only Panes the pump reports as
     /// changed are worth a repaint; a frame where nothing moved costs nothing.
     fn pump(&mut self, cx: &mut Context<Self>) {
+        let commands_changed = self
+            .draft_commands
+            .as_mut()
+            .is_some_and(DraftCommands::poll);
+        if commands_changed {
+            self.sync_menu(cx);
+        }
         let frame = self.cockpit.pump();
         let models_changed = self.cockpit.take_models_changed();
         if models_changed {
@@ -789,6 +833,7 @@ impl CockpitView {
             && !branch_tick
             && !startup_changed
             && !models_changed
+            && !commands_changed
         {
             return;
         }
@@ -2723,20 +2768,92 @@ impl CockpitView {
             (composer.text().to_string(), composer.cursor())
         };
         if let Some(filter) = slash_filter(&text) {
-            // A draft has one local command: import. It is derived through
-            // the same fuzzy slash menu as a live Thread, so `/`, `/im`,
-            // and `/import` all reach the picker without ever becoming the
-            // draft's first provider prompt.
             let Some(thread) = thread else {
-                let row = local_row(filter, "import", "adopt a CLI session file", false)?;
-                return Some(Popover {
-                    pane: pane.identity,
-                    kind: Kind::Commands,
-                    rows: vec![Row {
+                let identity = pane.identity;
+                let draft = pane.draft()?;
+                let provider = draft.binding.provider().provider;
+                let cwd = match draft.binding.resolve(self.cockpit.registry()) {
+                    Ok(workspace) => workspace.source_root().to_path_buf(),
+                    Err(_) => {
+                        // Import remains available when a workspace was removed.
+                        // Never reuse commands from the previous valid binding.
+                        self.draft_commands = None;
+                        let row = local_row(filter, "import", "adopt a CLI session file", false)?;
+                        return Some(Popover {
+                            pane: identity,
+                            kind: Kind::Commands,
+                            rows: vec![Row {
+                                row,
+                                active: false,
+                                consequence: Consequence::OpenImportPicker,
+                            }],
+                            selected: 0,
+                        });
+                    }
+                };
+                if self
+                    .draft_commands
+                    .as_ref()
+                    .is_none_or(|menu| menu.provider != provider || menu.cwd != cwd)
+                {
+                    let pending = self.cockpit.discover_commands(provider, &cwd);
+                    self.draft_commands = Some(DraftCommands {
+                        provider,
+                        cwd,
+                        pending,
+                        commands: Vec::new(),
+                        error: None,
+                    });
+                }
+                let menu = self.draft_commands.as_mut().expect("initialized above");
+                menu.poll();
+                let mut rows: Vec<Row> = command_rows(&menu.commands, filter)
+                    .into_iter()
+                    .map(|row| Row {
+                        consequence: Consequence::Command(row.insert.clone()),
                         row,
                         active: false,
-                        consequence: Consequence::OpenImportPicker,
-                    }],
+                    })
+                    .collect();
+                if let Some(row) = local_row(filter, "import", "adopt a CLI session file", false) {
+                    rows.retain(|existing| existing.row.name != row.name);
+                    rows.insert(
+                        0,
+                        Row {
+                            row,
+                            active: false,
+                            consequence: Consequence::OpenImportPicker,
+                        },
+                    );
+                }
+                let status = if menu.pending.is_some() {
+                    Some(("Loading commands…", ""))
+                } else {
+                    menu.error
+                        .as_deref()
+                        .map(|error| ("Could not load commands", error))
+                };
+                if let Some((name, detail)) = status {
+                    rows.push(Row {
+                        row: pane::MenuRow {
+                            insert: "".into(),
+                            name: name.into(),
+                            detail: detail.to_string().into(),
+                            matched: Vec::new(),
+                            prose_detail: true,
+                            inert: true,
+                        },
+                        active: false,
+                        consequence: Consequence::Inert,
+                    });
+                }
+                if rows.is_empty() {
+                    return None;
+                }
+                return Some(Popover {
+                    pane: identity,
+                    kind: Kind::Commands,
+                    rows,
                     selected: 0,
                 });
             };
@@ -6913,6 +7030,8 @@ mod tests {
     struct Fake {
         interrupts: Rc<RefCell<usize>>,
         model_discovery: Rc<RefCell<Option<Receiver<(Provider, Vec<ferrite_core::ModelInfo>)>>>>,
+        command_discovery: Rc<RefCell<Option<ferrite_core::providers::commands::Discovery>>>,
+        command_requests: Rc<RefCell<Vec<(Provider, std::path::PathBuf)>>>,
         streams: Rc<RefCell<Vec<Sender<SessionEvent>>>>,
         /// Every spawn's choice, in call order — what the provider-picker
         /// tests read back (#25).
@@ -6926,6 +7045,17 @@ mod tests {
     }
 
     impl Spawner for Fake {
+        fn discover_commands(
+            &mut self,
+            provider: Provider,
+            cwd: &std::path::Path,
+        ) -> Option<ferrite_core::providers::commands::Discovery> {
+            self.command_requests
+                .borrow_mut()
+                .push((provider, cwd.to_path_buf()));
+            self.command_discovery.borrow_mut().take()
+        }
+
         fn discover_models(
             &mut self,
         ) -> Option<Receiver<(Provider, Vec<ferrite_core::ModelInfo>)>> {
@@ -12757,6 +12887,136 @@ mod tests {
     }
 
     // ------------------------------------------------- Provider choice (#25)
+
+    #[gpui::test]
+    fn draft_commands_arrive_before_first_send_and_follow_provider_changes(
+        cx: &mut TestAppContext,
+    ) {
+        let fake = Fake::default();
+        let (tx, rx) = mpsc::channel();
+        *fake.command_discovery.borrow_mut() = Some(rx);
+        let core = Cockpit::new(
+            Store::open(scratch("draft-commands")).unwrap(),
+            Box::new(fake.clone()),
+        );
+        bind_production_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        tick(cx);
+        cx.simulate_input("/code");
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert_eq!(
+                view.popover.as_ref().unwrap().rows[0].name.as_ref(),
+                "Loading commands…"
+            );
+        });
+        tx.send(Ok(menu_commands())).unwrap();
+        tick(cx);
+        view.read_with(cx, |view, _| {
+            assert_eq!(
+                view.popover.as_ref().unwrap().rows[0].name.as_ref(),
+                "/code-review"
+            );
+            assert!(view.panes[0].draft().is_some());
+        });
+        assert!(
+            fake.spawned.borrow().is_empty(),
+            "metadata creates no Session"
+        );
+        assert!(fake.sent.borrow().is_empty(), "metadata sends no prompt");
+        assert_eq!(
+            fake.command_requests.borrow().len(),
+            1,
+            "typing reuses the in-flight request"
+        );
+
+        let (next_tx, next_rx) = mpsc::channel();
+        *fake.command_discovery.borrow_mut() = Some(next_rx);
+        view.update(cx, |view, cx| {
+            view.panes[0].draft_mut().unwrap().binding.choose_provider(
+                ProviderChoice {
+                    provider: Provider::Codex,
+                    model: None,
+                },
+                &[],
+            );
+            view.sync_menu(cx);
+            assert_eq!(
+                view.popover.as_ref().unwrap().rows[0].name.as_ref(),
+                "Loading commands…"
+            );
+        });
+        next_tx
+            .send(Ok(vec![ferrite_core::SessionCommand {
+                name: "code-codex".into(),
+                description: "Codex skill".into(),
+                path: Some("/global/SKILL.md".into()),
+            }]))
+            .unwrap();
+        tick(cx);
+        view.read_with(cx, |view, _| {
+            assert_eq!(
+                view.popover.as_ref().unwrap().rows[0].name.as_ref(),
+                "/code-codex"
+            );
+        });
+        assert_eq!(fake.command_requests.borrow()[1].0, Provider::Codex);
+        view.update(cx, |view, cx| view.pick(0, cx));
+        view.read_with(cx, |view, cx| {
+            assert_eq!(view.panes[0].composer.read(cx).text(), "/code-codex ")
+        });
+        assert!(
+            fake.spawned.borrow().is_empty(),
+            "picking a skill still creates no Session"
+        );
+    }
+
+    #[gpui::test]
+    fn draft_command_discovery_discards_old_workspace_replies_and_shows_failures(
+        cx: &mut TestAppContext,
+    ) {
+        let fake = Fake::default();
+        let (old_tx, old_rx) = mpsc::channel();
+        *fake.command_discovery.borrow_mut() = Some(old_rx);
+        let core = Cockpit::new(
+            Store::open(scratch("draft-command-scopes")).unwrap(),
+            Box::new(fake.clone()),
+        );
+        bind_production_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        tick(cx);
+        cx.simulate_input("/code");
+        cx.run_until_parked();
+
+        let elsewhere = scratch("draft-command-new-project");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let (tx, rx) = mpsc::channel();
+        *fake.command_discovery.borrow_mut() = Some(rx);
+        view.update(cx, |view, cx| {
+            view.aim_launch(&elsewhere);
+            view.sync_menu(cx);
+        });
+        assert!(
+            old_tx.send(Ok(menu_commands())).is_err(),
+            "the old workspace request was discarded"
+        );
+        assert_eq!(
+            fake.command_requests.borrow()[1].1,
+            std::fs::canonicalize(&elsewhere).unwrap()
+        );
+        tx.send(Err(std::io::Error::other("provider unavailable")))
+            .unwrap();
+        tick(cx);
+        view.read_with(cx, |view, _| {
+            let row = &view.popover.as_ref().unwrap().rows[0];
+            assert_eq!(row.name.as_ref(), "Could not load commands");
+            assert_eq!(row.detail.as_ref(), "provider unavailable");
+            assert!(row.consequence_is_inert());
+        });
+        assert!(fake.spawned.borrow().is_empty());
+    }
 
     #[gpui::test]
     fn discovery_updates_an_open_draft_picker_without_starting_a_session(cx: &mut TestAppContext) {

@@ -45,6 +45,7 @@ while IFS= read -r line; do
   printf '%s\n' "$line" >> '{log}'
   case "$line" in
     *'"method":"initialize"'*) echo '{{"id":1,"result":{{}}}}' ;;
+    *'"method":"skills/list"'*) echo '{{"id":3,"result":{{"data":[]}}}}' ;;
     *'"method":"thread/start"'*)
       echo '{{"id":2,"result":{{"thread":{{"id":"main"}},"model":"stub-model"}}}}' ;;
     *'"text":"phase-1"'*)

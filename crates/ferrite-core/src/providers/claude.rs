@@ -7,7 +7,7 @@
 //! dropped.
 
 mod activity;
-mod wire;
+pub(super) mod wire;
 
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;

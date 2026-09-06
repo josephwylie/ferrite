@@ -33,6 +33,7 @@ impl Stub {
         let stream = directory.join("provider.jsonl");
         let log = directory.join("host.jsonl");
         let mut frames = vec![
+            json!({"id": 3, "result": {"data": []}}),
             json!({"id": 1, "result": {"userAgent": "stub"}}),
             json!({"id": 2, "result": {
                 "thread": {"id": "stub-thread"}, "model": "stub-model",

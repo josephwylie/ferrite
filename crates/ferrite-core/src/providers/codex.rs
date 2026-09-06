@@ -1,8 +1,8 @@
 //! Codex provider: the pinned `codex` CLI's app-server spoken over stdio
 //! JSON-RPC.
 //!
-//! Spawn checks the CLI version pin, then holds a two-request handshake —
-//! initialize, then thread/start (or thread/resume) — before any Session
+//! Spawn checks the CLI version pin, then completes initialize, skills/list,
+//! and thread/start (or thread/resume) before any Session
 //! exists: a Codex Session without a thread id cannot say anything, so unlike
 //! Claude a failed handshake is a typed spawn error, not a half-alive
 //! Session. A reader thread parses stdout lines into SessionEvents on a
@@ -13,7 +13,7 @@
 mod activity;
 pub(super) mod catalog;
 mod questions;
-mod wire;
+pub(super) mod wire;
 
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, Write};
@@ -57,9 +57,8 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 /// Bound those candidates; overflow stays non-interruptible until new evidence.
 const EARLY_TURN_THREAD_LIMIT: usize = 64;
 
-/// The request id spawn numbers its skills/list with — always the request
-/// after the two handshake steps, which is what lets the reader correlate
-/// the answer without a shared table (#23).
+/// The skill catalog request id. Sent after initialize and completed before
+/// thread/start, retaining the existing protocol ids for response routing.
 const SKILLS_REQUEST_ID: u64 = 3;
 
 /// And the one after it: the model/list the picker's rows come from. Sent
@@ -276,6 +275,7 @@ impl CodexSession {
         let skills = Arc::new(Mutex::new(Vec::new()));
         let models = Arc::new(Mutex::new(Vec::new()));
         let question_replies = Arc::new(Mutex::new(questions::Replies::default()));
+        let (skills_sender, skills_ready) = sync_channel(1);
         let handshake = read_stdout(
             stdout,
             Arc::downgrade(&stdin),
@@ -284,6 +284,7 @@ impl CodexSession {
             Arc::clone(&stderr_tail),
             Arc::clone(&current_turn),
             Arc::clone(&skills),
+            skills_sender,
             Arc::clone(&models),
             Arc::clone(&question_replies),
         );
@@ -309,36 +310,24 @@ impl CodexSession {
         // The handshake, in the server's required order. A failed one must
         // not leak a live process: kill it and fold whatever it said on
         // stderr into the explanation.
-        session.handshake(&config, &handshake).map_err(|detail| {
-            let mut child = lock(&session.child);
-            let _ = child.kill();
-            let _ = child.wait();
-            let stderr = settled_stderr(&stderr_tail);
-            CodexSpawnError::HandshakeFailed {
-                detail: if stderr.is_empty() {
-                    detail
-                } else {
-                    format!("{detail}\nstderr: {}", stderr.join("\n"))
-                },
-            }
-        })?;
-        // Ask for the `/` menu (#23) — after the handshake, before the
-        // operator can speak. The answer arrives on the reader's own thread
-        // and is announced as `SessionEvent::Commands`; a write failure here
-        // is a server already dying, which the reader is turning into a
-        // Closed event, so the Session is still handed back.
-        let id = session.take_request_id();
-        debug_assert_eq!(id, SKILLS_REQUEST_ID);
-        let mut params = serde_json::json!({});
-        if let Some(cwd) = &session.cwd {
-            params["cwds"] = serde_json::json!([cwd.display().to_string()]);
-        }
-        let _ = session.write_line(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "method": "skills/list",
-            "params": params,
-        }));
+        session
+            .handshake(&config, &handshake, &skills_ready)
+            .map_err(|detail| {
+                let mut child = lock(&session.child);
+                let _ = child.kill();
+                let _ = child.wait();
+                let stderr = settled_stderr(&stderr_tail);
+                CodexSpawnError::HandshakeFailed {
+                    detail: if stderr.is_empty() {
+                        detail
+                    } else {
+                        format!("{detail}\nstderr: {}", stderr.join("\n"))
+                    },
+                }
+            })?;
+        // Request 3 was completed during startup, before thread creation.
+        let skills_id = session.take_request_id();
+        debug_assert_eq!(skills_id, SKILLS_REQUEST_ID);
         // And the model menu (#25), answered the same way and announced as
         // `SessionEvent::Models`; a server without the method, or one that
         // never answers, just leaves the picker on the fallback catalog.
@@ -357,6 +346,7 @@ impl CodexSession {
         &mut self,
         config: &CodexConfig,
         steps: &Receiver<Result<HandshakeStep, String>>,
+        skills_ready: &Receiver<Result<(), String>>,
     ) -> Result<(), String> {
         // Ids 1 and 2 by construction — the reader correlates exactly these,
         // and the committed captures use the same sequence so replayed
@@ -379,6 +369,22 @@ impl CodexSession {
         // acknowledgement before any thread traffic.
         self.write_line(&serde_json::json!({"jsonrpc": "2.0", "method": "initialized"}))
             .map_err(|e| format!("could not write initialized: {e}"))?;
+
+        // Skills are invocation metadata, not an optional decoration. Resolve
+        // them before thread/start so resumed history cannot block discovery
+        // behind the bounded event stream, and first send is always ready.
+        let mut params = serde_json::json!({});
+        if let Some(cwd) = &config.cwd {
+            params["cwds"] = serde_json::json!([cwd]);
+        }
+        self.write_line(&serde_json::json!({
+            "jsonrpc": "2.0", "id": SKILLS_REQUEST_ID,
+            "method": "skills/list", "params": params,
+        }))
+        .map_err(|error| format!("could not request skills: {error}"))?;
+        skills_ready
+            .recv_timeout(HANDSHAKE_TIMEOUT)
+            .map_err(|error| format!("skills/list did not complete: {error}"))??;
 
         let id = self.take_request_id();
         let (method, mut params) = match &config.resume {
@@ -642,6 +648,7 @@ fn read_stdout(
     stderr_tail: Arc<Mutex<StderrTail>>,
     current_turn: Arc<Mutex<Option<String>>>,
     skills: Arc<Mutex<Vec<crate::SessionCommand>>>,
+    skills_ready: SyncSender<Result<(), String>>,
     model_catalog: Arc<Mutex<Vec<crate::ModelInfo>>>,
     question_replies: Arc<Mutex<questions::Replies>>,
 ) -> Receiver<Result<HandshakeStep, String>> {
@@ -658,11 +665,10 @@ fn read_stdout(
         // Which handshake response is awaited: request 1, then request 2,
         // then none.
         let mut handshake = Some((step_sender, 1u64));
-        // Once the thread is up, the skills/list answer (request 3) and the
-        // model/list answer (request 4) are still owed; correlated here like
-        // the handshake, but never blocking — a server without either
-        // method just leaves that menu empty.
-        let mut menu_pending = false;
+        // Skill discovery belongs to startup; model discovery stays optional.
+        // Skills are requested before thread/start so history backpressure
+        // cannot block readiness.
+        let mut menu_pending = true;
         let mut models_pending = false;
         loop {
             line.clear();
@@ -696,7 +702,6 @@ fn read_stdout(
                             // large resumed tree into the bounded event stream.
                             // Main's interrupt owner is already authoritative.
                             let _ = step_sender.send(Ok(HandshakeStep::Thread(Box::new(thread))));
-                            menu_pending = true;
                             models_pending = true;
                             if !publish_activity(update, &mut activity, &sender, &stdin) {
                                 return;
@@ -723,9 +728,21 @@ fn read_stdout(
             if menu_pending {
                 if let Some(response) = wire::parse_response(text, SKILLS_REQUEST_ID) {
                     menu_pending = false;
-                    if let Ok(result) = response {
+                    let result = match response {
+                        Ok(result) => result,
+                        Err(error) => {
+                            let _ = skills_ready.send(Err(error));
+                            continue;
+                        }
+                    };
+                    if !result["data"].is_array() {
+                        let _ = skills_ready.send(Err("skills/list carried no data".into()));
+                        continue;
+                    }
+                    {
                         let commands = wire::parse_skills(&result);
                         *lock(&skills) = commands.clone();
+                        let _ = skills_ready.send(Ok(()));
                         // Announce the menu on the event stream so the
                         // cockpit can fold it (#23); a server listing no
                         // skills announces nothing.

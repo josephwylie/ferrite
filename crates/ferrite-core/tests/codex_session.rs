@@ -41,7 +41,15 @@ fn stub(name: &str, script: &str) -> String {
     let dir = std::env::temp_dir().join(format!("ferrite-codex-{}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
     let path = dir.join(name);
-    fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
+    // Most fixtures predate mandatory skill discovery; supply an empty
+    // successful catalog unless this stub explicitly exercises that request.
+    let metadata = if script.contains("skills-0.149.1") || name.starts_with("codex-skill-") {
+        ""
+    } else {
+        "echo '{\"id\":3,\"result\":{\"data\":[]}}'"
+    };
+    let (version, body) = script.split_once('\n').unwrap_or((script, ""));
+    fs::write(&path, format!("#!/bin/sh\n{version}\n{metadata}\n{body}\n")).unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
     path.display().to_string()
 }
@@ -602,11 +610,11 @@ fn a_listed_skill_is_sent_as_the_typed_item_never_as_slash_text() {
 
     session.send("/probe-body follow the skill").unwrap();
 
-    // Five handshake lines (initialize, initialized, thread/start,
-    // skills/list, model/list), then the turn.
+    // Five startup lines (initialize, initialized, skills/list,
+    // thread/start, model/list), then the turn.
     let recorded = read_lines(&log, 6);
     drop(session);
-    let skills_request: Value = serde_json::from_str(&recorded[3]).unwrap();
+    let skills_request: Value = serde_json::from_str(&recorded[2]).unwrap();
     assert_eq!(skills_request["method"], "skills/list");
     let turn: Value = serde_json::from_str(&recorded[5]).unwrap();
     assert_eq!(turn["method"], "turn/start");
@@ -710,7 +718,7 @@ fn a_resumed_session_answers_from_the_previous_process_history() {
     // replay this fixture identically otherwise.
     let recorded = read_lines(&log, 3);
     drop(session);
-    let request: Value = serde_json::from_str(&recorded[2]).unwrap();
+    let request: Value = serde_json::from_str(&recorded[3]).unwrap();
     assert_eq!(request["method"], "thread/resume");
     assert_eq!(
         request["params"]["threadId"].as_str(),
@@ -834,7 +842,7 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
         serde_json::json!({"jsonrpc": "2.0", "method": "initialized"})
     );
     assert_eq!(
-        sent[2],
+        sent[3],
         serde_json::json!({
             "jsonrpc": "2.0",
             "id": 2,
@@ -847,10 +855,9 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
             },
         })
     );
-    // The `/` menu is asked for as soon as the thread is up (#23), and
-    // the model menu right after it (#25).
+    // Skill metadata is resolved before thread creation; models follow it.
     assert_eq!(
-        sent[3],
+        sent[2],
         serde_json::json!({
             "jsonrpc": "2.0",
             "id": 3,
@@ -1053,7 +1060,7 @@ fn a_resumed_session_passes_effort_on_its_next_turn() {
     session.send("next").unwrap();
     let recorded = read_lines(&log, 6);
     drop(session);
-    let resume: Value = serde_json::from_str(&recorded[2]).unwrap();
+    let resume: Value = serde_json::from_str(&recorded[3]).unwrap();
     assert_eq!(resume["method"], "thread/resume");
     assert_eq!(
         resume["params"],
@@ -1079,7 +1086,7 @@ fn nothing_is_passed_when_the_config_names_nothing() {
     let session = CodexSession::spawn(config(program)).unwrap();
     let recorded = read_lines(&log, 3);
     drop(session);
-    let thread_start: Value = serde_json::from_str(&recorded[2]).unwrap();
+    let thread_start: Value = serde_json::from_str(&recorded[3]).unwrap();
     assert_eq!(thread_start["method"], "thread/start");
     assert_eq!(thread_start["params"], serde_json::json!({}));
 }
@@ -1111,7 +1118,7 @@ fn effort_changes_and_default_stay_on_the_same_thread() {
         .iter()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
-    assert!(sent[2]["params"].get("config").is_none());
+    assert!(sent[3]["params"].get("config").is_none());
     for (turn, effort) in sent[5..].iter().zip(["high", "max", "low", "medium"]) {
         assert_eq!(turn["method"], "turn/start");
         assert_eq!(turn["params"]["threadId"], "stub-thread");
@@ -1378,4 +1385,63 @@ fn read_lines(path: &std::path::Path, wanted: usize) -> Vec<String> {
         );
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+// Regression probe: the first prompt can precede the skills/list response.
+#[test]
+fn a_first_prompt_skill_waits_for_discovery() {
+    let log = log_path("first-skill-send.log");
+    let _ = fs::remove_file(&log);
+    // Respond to actual requests in order; no unsolicited thread response
+    // can accidentally make this startup test pass.
+    let program = stub(
+        "codex-skill-first",
+        &format!(
+            r#"{VERSION_CASE}
+IFS= read -r line; printf '%s\n' "$line" >> '{log}'
+echo '{{"id":1,"result":{{}}}}'
+IFS= read -r line; printf '%s\n' "$line" >> '{log}'
+IFS= read -r line; printf '%s\n' "$line" >> '{log}'
+sleep 0.2
+cat '{skills}'
+IFS= read -r line; printf '%s\n' "$line" >> '{log}'
+echo '{{"id":2,"result":{{"thread":{{"id":"stub-thread"}},"model":"stub-model"}}}}'
+cat >> '{log}'"#,
+            log = log.display(),
+            skills = fixture("skills-0.149.1").display()
+        ),
+    );
+    let mut session = CodexSession::spawn(config(program)).unwrap();
+
+    session.send("/probe-body follow the skill").unwrap();
+
+    // Five startup lines (initialize, initialized, skills/list,
+    // thread/start, model/list), then the turn.
+    let recorded = read_lines(&log, 6);
+    drop(session);
+    let skills_request: Value = serde_json::from_str(&recorded[2]).unwrap();
+    assert_eq!(skills_request["method"], "skills/list");
+    let turn: Value = serde_json::from_str(&recorded[5]).unwrap();
+    assert_eq!(turn["method"], "turn/start");
+    assert_eq!(
+        turn["params"]["input"],
+        serde_json::json!([
+            {
+                "type": "skill",
+                "name": "probe-body",
+                "path": "/workspace/.codex/skills/probe-body/SKILL.md",
+            },
+            {"type": "text", "text": "follow the skill"},
+        ])
+    );
+}
+
+#[test]
+fn refused_skill_discovery_fails_startup_instead_of_sending_plain_text() {
+    let program = stub("codex-skill-refused", &format!("{VERSION_CASE}\necho '{{\"id\":1,\"result\":{{}}}}'\necho '{{\"id\":3,\"error\":{{\"message\":\"skill discovery refused\"}}}}'\nexec cat > /dev/null"));
+    let error = match CodexSession::spawn(config(program)) {
+        Ok(_) => panic!("a failed catalog must not produce a ready Session"),
+        Err(error) => error.to_string(),
+    };
+    assert!(error.contains("skill discovery refused"), "{error}");
 }

@@ -20,6 +20,7 @@ mod tests {
         } else {
             script.push_str("case \"$1\" in --version) echo 'codex-cli 0.149.1'; exit 0;; esac\nread -r request\n");
             script.push_str("echo '{\"id\":1,\"result\":{\"userAgent\":\"probe\"}}'\nread -r request\nread -r request\n");
+            script.push_str("echo '{\"id\":3,\"result\":{\"data\":[]}}'\nread -r request\n");
             script.push_str("echo '{\"id\":2,\"result\":{\"thread\":{\"id\":\"root\"},\"model\":\"probe\",\"modelProvider\":\"probe\",\"approvalPolicy\":\"on-request\",\"sandbox\":{\"type\":\"readOnly\"}}}'\n");
         }
         let sentinel = if provider == "claude" {
