@@ -185,7 +185,7 @@ pub struct GroupBlock {
 }
 
 /// One Thread's row — identical whether it is a Group member or a solo; only
-/// the container differs. Title, Project, checkout, and the provider mark in
+/// the container differs. Title, Project, and the provider mark in
 /// the top-right corner. No status dot, no state label, no counts.
 pub struct ThreadRow {
     pub thread: ThreadId,
@@ -193,10 +193,8 @@ pub struct ThreadRow {
     /// What the Thread is doing right now — the one glance the operator
     /// asked for from the tree: which agents are working, which wait.
     pub status: RowStatus,
-    /// `None` → line 2 draws neither icon nor label, and keeps its height.
-    pub project: Option<SharedString>,
     /// `None` → line 3 draws neither icon nor label, and keeps its height.
-    pub branch: Option<SharedString>,
+    pub project: Option<SharedString>,
     /// `None` → no logomark. Never a `cl`/`cx` string.
     pub provider: Option<Provider>,
     /// This is the focused Pane's Thread: it carries the selected fill and
@@ -204,7 +202,7 @@ pub struct ThreadRow {
     /// pair reads as one selection.
     pub current: bool,
     /// How long since the Thread was last used — `40m`, `2h`, `3d` — at the
-    /// tail of the checkout line. `None` says nothing at all.
+    /// tail of the Project line. `None` says nothing at all.
     pub last_used: Option<SharedString>,
 }
 
@@ -692,8 +690,10 @@ pub fn members(rows: Vec<AnyElement>) -> Div {
         .children(rows)
 }
 
-/// The 56.5px Thread row: title and provider mark on line 1, the Project on
-/// line 2, the checkout on line 3. The prototype's grid is
+/// The 56.5px Thread row: title and provider mark on line 1, a reserved
+/// blank line 2, and the Project on line 3. The checkout used to sit on
+/// line 3 and only ever repeated the current branch; line 2 is kept empty
+/// so dropping it leaves every row — and the tree — exactly as tall. The prototype's grid is
 /// `minmax(0, 1fr) 14px` with an 8px column gap; gpui's grid has uniform
 /// tracks only, so line 1 is flex — a `flex_1().min_w_0()` title beside a
 /// fixed 14px mark is the same two columns, and the mark's box is drawn even
@@ -745,16 +745,16 @@ pub fn thread_row_with_title(row: &ThreadRow, title: impl IntoElement) -> Statef
                     .child(provider_mark(row.provider, PROVIDER_MARK)),
             ),
     )
-    .child(meta_line(icons::FOLDER, row.project.clone(), TEXT_2))
+    .child(div().h(px(META_H)))
     .child(
-        meta_line(icons::BRANCH, row.branch.clone(), TEXT_MUTED)
+        meta_line(icons::FOLDER, row.project.clone(), TEXT_2)
             .child(since_tail(row.thread, row.last_used.clone())),
     )
 }
 
 /// The age at the tail of a row's last line — `40m`, `2h`, `3d`. It is
 /// pushed right by its own auto margin rather than by a spacer, so a line
-/// whose branch is unknown still puts the age where every other row's age
+/// whose Project is unknown still puts the age where every other row's age
 /// is. Never a date: the nav says how long ago, and the Pane says when.
 fn since_tail(thread: ThreadId, label: Option<SharedString>) -> Div {
     let cell = div()
@@ -1028,7 +1028,6 @@ mod tests {
             status: RowStatus::Idle,
             name: "thread-08".into(),
             project: Some("ferrite".into()),
-            branch: Some("codex/prototype-32".into()),
             provider,
             current,
             last_used: Some("2h".into()),
@@ -1101,7 +1100,6 @@ mod tests {
             status: RowStatus::Idle,
             name: "thread-09".into(),
             project: None,
-            branch: None,
             provider: None,
             current: false,
             last_used: None,
