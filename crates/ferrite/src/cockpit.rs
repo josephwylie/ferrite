@@ -308,6 +308,7 @@ enum MenuVerb {
 enum DraftPlacement {
     Loose,
     CurrentGroup,
+    NewGroupWith(ThreadId),
 }
 
 /// The context menu up on screen.
@@ -3315,15 +3316,27 @@ impl CockpitView {
     ) {
         // The project starts where the operator is looking: a Group's own
         // Project, or the launch project.
-        let project = match self.cockpit.roster().view() {
-            View::Group(group) => self
+        let project = match placement {
+            DraftPlacement::NewGroupWith(thread) => self
                 .cockpit
-                .groups()
-                .get(group)
-                .and_then(|group| group.members.first())
-                .and_then(|thread| self.cockpit.project_id(*thread))
+                .project_id(thread)
                 .unwrap_or(self.launch_project),
-            View::Solo => self.launch_project,
+            _ => match self.cockpit.roster().view() {
+                View::Group(group) => self
+                    .cockpit
+                    .roster()
+                    .focused_thread()
+                    .and_then(|thread| self.cockpit.project_id(thread))
+                    .or_else(|| {
+                        self.cockpit
+                            .groups()
+                            .get(group)
+                            .and_then(|group| group.members.first())
+                            .and_then(|thread| self.cockpit.project_id(*thread))
+                    })
+                    .unwrap_or(self.launch_project),
+                View::Solo => self.launch_project,
+            },
         };
         let binding = pane::DraftBinding {
             binding: ferrite_core::draft::DraftBinding::new(provider, project, target),
@@ -3335,6 +3348,7 @@ impl CockpitView {
         let draft = match placement {
             DraftPlacement::CurrentGroup => self.cockpit.open_draft_in_current_view(),
             DraftPlacement::Loose => self.cockpit.open_draft(),
+            DraftPlacement::NewGroupWith(thread) => self.cockpit.open_draft_for_new_group(thread),
         };
         let pane = PaneView::new_draft(draft, binding, cx);
         cx.subscribe(&pane.composer, Self::composer_edited).detach();
@@ -5087,7 +5101,7 @@ impl Render for CockpitView {
             // thing under a menu: an overlay that reached into the band
             // would be answering the frame's hit test, not its own rows, so
             // the drag region stands down while one is open.
-            .when(crate::titlebar::CUSTOM, |root| {
+            .map(|root| {
                 let group_title = match self.cockpit.roster().view() {
                     View::Group(group) => self
                         .cockpit
@@ -5106,12 +5120,43 @@ impl Render for CockpitView {
                         .project(project)
                         .map(|project| SharedString::from(project.title.clone()))
                 });
+                let add_tooltip = match self.cockpit.roster().view() {
+                    View::Group(_) => "New Thread in Group",
+                    View::Solo
+                        if self
+                            .focused_thread()
+                            .is_some_and(|thread| self.cockpit.groups().of(thread).is_none()) =>
+                    {
+                        "New Group with New Thread"
+                    }
+                    View::Solo => "New Thread",
+                };
+                let add_thread = crate::titlebar::add_thread_button(add_tooltip).on_click(
+                    cx.listener(|view, _: &ClickEvent, _, cx| {
+                        cx.stop_propagation();
+                        match view.cockpit.roster().view() {
+                            View::Group(_) => {
+                                view.open_draft_in_current_view(DraftTarget::Main, cx)
+                            }
+                            View::Solo => match view.focused_thread() {
+                                Some(thread) if view.cockpit.groups().of(thread).is_none() => view
+                                    .open_draft_with_placement(
+                                        DraftTarget::Main,
+                                        DraftPlacement::NewGroupWith(thread),
+                                        cx,
+                                    ),
+                                _ => view.open_draft_in_current_view(DraftTarget::Main, cx),
+                            },
+                        }
+                    }),
+                );
                 root.child(crate::titlebar::strip(
                     self.nav_width(),
                     crate::titlebar::Title {
                         project: project_title,
                         group: group_title,
                     },
+                    add_thread,
                     !self.overlay_open(),
                     self.maximized,
                 ))
@@ -6862,6 +6907,35 @@ mod tests {
                 Some(group)
             );
             assert!(view.panes.iter().all(|pane| pane.draft().is_none()));
+        });
+    }
+
+    #[gpui::test]
+    fn titlebar_add_from_a_loose_thread_scopes_the_draft_to_a_new_group(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("titlebar-add-new-group", 1);
+        let original = core.threads()[0];
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        tick(cx);
+
+        let button = cx
+            .debug_bounds("titlebar-add-thread")
+            .expect("the titlebar add button is visible");
+        cx.simulate_click(button.center(), gpui::Modifiers::none());
+        cx.run_until_parked();
+
+        view.read_with(cx, |view, _| {
+            let draft = view.panes[view.focused()]
+                .identity
+                .draft()
+                .expect("the button focused a draft");
+            assert_eq!(
+                view.cockpit
+                    .roster()
+                    .draft_scope(draft)
+                    .unwrap()
+                    .new_group_with,
+                Some(original)
+            );
         });
     }
 

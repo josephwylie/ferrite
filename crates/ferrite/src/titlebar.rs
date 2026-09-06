@@ -27,14 +27,15 @@
 //! Drawing only, like `nav.rs`: the cockpit places these and owns the state
 //! they read.
 
+use gpui::component::button::Button;
 use gpui::prelude::*;
 use gpui::{div, px, rgb, Div, MouseButton, SharedString, Stateful, WindowControlArea};
 
 use crate::icons::{self, icon};
 use crate::pointer::{Pointer, PointerPressed};
 use crate::theme::{
-    BLOCKED, CAPTION_GLYPH, CAPTION_RESIZE_EDGE, CAPTION_W, FS_LG, FS_SM, GRID_PAD, TEXT,
-    TEXT_MUTED, WIN_CHROME_H,
+    BLOCKED, CAPTION_GLYPH, CAPTION_RESIZE_EDGE, CAPTION_W, FS_LG, FS_SM, GRID_PAD, ICON_BUTTON,
+    ICON_BUTTON_GLYPH, TEXT, TEXT_MUTED, WIN_CHROME_H,
 };
 
 /// The active location named in the window chrome. A Group may span
@@ -63,7 +64,18 @@ pub const CUSTOM: bool = cfg!(target_os = "windows");
 /// `draggable` is false while a menu, popover or the settings panel is
 /// open. Such an overlay can reach into the band, and Windows would route
 /// the press to the frame instead of to the row under the pointer.
-pub fn strip(nav_width: f32, title: Title, draggable: bool, maximized: bool) -> Div {
+pub fn strip(
+    nav_width: f32,
+    title: Title,
+    add_thread: Button,
+    draggable: bool,
+    maximized: bool,
+) -> Div {
+    let title = if CUSTOM && draggable {
+        drag_region("titlebar-drag", title, maximized)
+    } else {
+        title_region(title)
+    };
     div()
         .absolute()
         .top_0()
@@ -73,12 +85,22 @@ pub fn strip(nav_width: f32, title: Title, draggable: bool, maximized: bool) -> 
         .flex()
         .flex_row()
         .child(div().flex_shrink_0().w(px(nav_width)))
-        .child(if draggable {
-            drag_region("titlebar-drag", title, maximized)
-        } else {
-            title_region(title)
-        })
-        .child(caption_buttons(maximized))
+        .child(title)
+        .child(add_thread)
+        .children(CUSTOM.then(|| caption_buttons(maximized)))
+}
+
+/// The titlebar's contextual creation door. It is a sibling of the Windows
+/// drag region, never a child, so its click reaches the app instead of the
+/// non-client frame. macOS receives the same control in its transparent band.
+pub fn add_thread_button(tooltip: &'static str) -> Button {
+    crate::components::button("titlebar-add-thread")
+        .debug_selector(|| "titlebar-add-thread".into())
+        .w(px(ICON_BUTTON))
+        .h(px(ICON_BUTTON))
+        .p_0()
+        .tooltip(tooltip)
+        .child(icon(icons::PLUS, ICON_BUTTON_GLYPH, TEXT_MUTED))
 }
 
 /// An empty stretch Windows drags the window by. The tagged part starts
@@ -257,6 +279,7 @@ mod tests {
                 project: Some("Ferrite".into()),
                 group: Some("Group Alpha".into()),
             },
+            add_thread_button("New Thread in Group"),
             true,
             false,
         );

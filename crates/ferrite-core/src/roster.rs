@@ -73,6 +73,7 @@ pub enum View {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DraftScope {
     pub group: Option<GroupId>,
+    pub new_group_with: Option<ThreadId>,
     pub pending_leave: Option<ThreadId>,
 }
 
@@ -494,6 +495,7 @@ mod tests {
         );
         let draft = roster.open_draft(DraftScope {
             group: Some(group),
+            new_group_with: None,
             pending_leave: None,
         });
         assert_eq!(roster.visible(&groups).len(), 3, "the pending draft shows");

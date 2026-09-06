@@ -288,6 +288,7 @@ struct Replacement {
 struct PendingBootstrap {
     prompt: String,
     group: Option<GroupId>,
+    new_group_with: Option<ThreadId>,
     draft: Option<DraftId>,
 }
 
@@ -813,7 +814,7 @@ impl Cockpit {
         prompt: &str,
         effort: Option<String>,
     ) -> io::Result<ThreadId> {
-        self.begin_bootstrap(choice, workspace, prompt, effort, None)
+        self.begin_bootstrap(choice, workspace, prompt, effort, None, None)
     }
 
     pub fn bootstrap_in_group(
@@ -835,7 +836,7 @@ impl Cockpit {
         effort: Option<String>,
     ) -> io::Result<ThreadId> {
         self.groups.validate_join(group).map_err(io::Error::other)?;
-        self.begin_bootstrap(choice, workspace, prompt, effort, Some(group))
+        self.begin_bootstrap(choice, workspace, prompt, effort, Some(group), None)
     }
 
     fn begin_bootstrap(
@@ -845,11 +846,13 @@ impl Cockpit {
         prompt: &str,
         effort: Option<String>,
         group: Option<GroupId>,
+        new_group_with: Option<ThreadId>,
     ) -> io::Result<ThreadId> {
         let id = self.open_choice(choice, workspace, effort)?;
         let pending = PendingBootstrap {
             prompt: prompt.to_string(),
             group,
+            new_group_with,
             draft: None,
         };
         if self.threads[&id]
@@ -874,6 +877,16 @@ impl Cockpit {
                     group,
                     index: None,
                 })
+                .map_err(io::Error::other)?;
+        }
+        if let Some(first) = pending.new_group_with {
+            if self.groups.of(first).is_some() {
+                return Err(io::Error::other(
+                    "the original Thread joined a Group before the draft was sent",
+                ));
+            }
+            self.groups
+                .apply(GroupChange::Create { first, second: id })
                 .map_err(io::Error::other)?;
         }
         let state = self.threads.get_mut(&id).expect("pending Thread exists");
@@ -2573,6 +2586,17 @@ impl Cockpit {
         };
         self.roster.open_draft(DraftScope {
             group,
+            new_group_with: None,
+            pending_leave: None,
+        })
+    }
+
+    /// Open a draft beside one loose Thread. Its first successful send
+    /// creates a durable pair and switches the Cockpit to that new Group.
+    pub fn open_draft_for_new_group(&mut self, first: ThreadId) -> DraftId {
+        self.roster.open_draft(DraftScope {
+            group: None,
+            new_group_with: Some(first),
             pending_leave: None,
         })
     }
@@ -2604,7 +2628,14 @@ impl Cockpit {
             Some(group) => {
                 self.bootstrap_in_group_with(choice, workspace, prompt, group, effort)?
             }
-            None => self.bootstrap_with(choice, workspace, prompt, effort)?,
+            None => self.begin_bootstrap(
+                choice,
+                workspace,
+                prompt,
+                effort,
+                None,
+                scope.new_group_with,
+            )?,
         };
         if let Some(pending) = self.bootstraps.get_mut(&thread) {
             pending.draft = Some(draft);
@@ -2620,6 +2651,12 @@ impl Cockpit {
             .draft_scope(draft)
             .expect("draft retained during startup");
         self.roster.draft_became(draft, thread);
+        if scope.new_group_with.is_some() {
+            if let Some(group) = self.groups.of(thread).map(|group| group.id) {
+                self.roster.set_view(View::Group(group));
+                self.roster.focus(PaneIdentity::Thread(thread));
+            }
+        }
         let refused_leave = scope.pending_leave.and_then(|leaving| {
             self.apply_group(GroupChange::Leave { thread: leaving })
                 .err()
@@ -6016,6 +6053,44 @@ mod tests {
             "the Thread took the draft's own slot"
         );
         assert_eq!(cockpit.roster().draft_scope(draft), None);
+    }
+
+    #[test]
+    fn a_draft_beside_a_loose_thread_creates_and_opens_a_group_on_send() {
+        let (mut cockpit, _) = cockpit("roster-new-group-draft");
+        let first = opened(&mut cockpit, 1)[0];
+        cockpit.focus(PaneIdentity::Thread(first));
+        let draft = cockpit.open_draft_for_new_group(first);
+
+        assert_eq!(
+            cockpit.roster().draft_scope(draft).unwrap().new_group_with,
+            Some(first)
+        );
+        let done = cockpit
+            .bootstrap_draft(
+                draft,
+                ProviderChoice {
+                    provider: Provider::Claude,
+                    model: None,
+                },
+                main_choice(),
+                "work beside the first thread",
+                None,
+            )
+            .unwrap()
+            .unwrap();
+
+        let group = cockpit.groups().of(done.thread).unwrap();
+        assert_eq!(group.members, [first, done.thread]);
+        assert_eq!(cockpit.roster().view(), View::Group(group.id));
+        assert_eq!(cockpit.roster().focused_thread(), Some(done.thread));
+        assert_eq!(
+            cockpit.visible(),
+            [
+                PaneIdentity::Thread(first),
+                PaneIdentity::Thread(done.thread)
+            ]
+        );
     }
 
     #[test]
