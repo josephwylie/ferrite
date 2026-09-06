@@ -1071,6 +1071,7 @@ impl CockpitView {
                             .child(crate::components::composer_join(
                                 radius,
                                 rgb(theme::RAISED).into(),
+                                gpui::rgba(theme::COMPOSER_EDGE).into(),
                             ))
                             .child(
                                 GroupBox::new()

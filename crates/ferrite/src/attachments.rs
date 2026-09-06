@@ -82,6 +82,7 @@ impl RenderOnce for Attachments {
         });
         let stock = &cx.global::<Appearance>().0;
         let tokens = stock.semantic_tokens();
+        let composer_edge = gpui::rgba(crate::theme::COMPOSER_EDGE);
         let cards = AttachmentGroup::new(self.id)
             .when(self.island.is_some(), |group| {
                 group.w_auto().max_w_full().gap_1p5().py_0()
@@ -212,7 +213,11 @@ impl RenderOnce for Attachments {
                             .relative()
                             .top(px(8. * (1. - entrance)))
                             .opacity(0.6 + 0.4 * entrance)
-                            .child(crate::components::composer_join(radius, background))
+                            .child(crate::components::composer_join(
+                                radius,
+                                background,
+                                composer_edge.into(),
+                            ))
                             .child(
                                 GroupBox::new()
                                     .id("attachment-island")

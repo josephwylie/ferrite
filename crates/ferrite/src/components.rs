@@ -197,7 +197,7 @@ pub fn scrollbar(
         )
 }
 
-pub(crate) fn composer_join(radius: Pixels, background: Hsla) -> impl IntoElement {
+pub(crate) fn composer_join(radius: Pixels, background: Hsla, edge: Hsla) -> impl IntoElement {
     canvas(
         |_, _, _| (),
         move |bounds, _, window, _| {
@@ -205,17 +205,25 @@ pub(crate) fn composer_join(radius: Pixels, background: Hsla) -> impl IntoElemen
             let right = bounds.right();
             let top = bounds.origin.y;
             let bottom = bounds.bottom();
-            let mut path = PathBuilder::fill();
-            path.move_to(point(left, bottom));
-            path.curve_to(point(left + radius, top), point(left + radius, bottom));
-            path.line_to(point(left + radius, bottom));
-            path.close();
-            path.move_to(point(right - radius, top));
-            path.curve_to(point(right, bottom), point(right - radius, bottom));
-            path.line_to(point(right - radius, bottom));
-            path.close();
-            if let Ok(path) = path.build() {
+            let mut fill = PathBuilder::fill();
+            fill.move_to(point(left, bottom));
+            fill.curve_to(point(left + radius, top), point(left + radius, bottom));
+            fill.line_to(point(left, bottom));
+            fill.close();
+            fill.move_to(point(right - radius, bottom));
+            fill.curve_to(point(right - radius, top), point(right, bottom));
+            fill.line_to(point(right - radius, bottom));
+            fill.close();
+            if let Ok(path) = fill.build() {
                 window.paint_path(path, background);
+            }
+            let mut stroke = PathBuilder::stroke(px(1.));
+            stroke.move_to(point(left, bottom));
+            stroke.curve_to(point(left + radius, top), point(left + radius, bottom));
+            stroke.move_to(point(right - radius, bottom));
+            stroke.curve_to(point(right - radius, top), point(right, bottom));
+            if let Ok(path) = stroke.build() {
+                window.paint_path(path, edge);
             }
         },
     )
