@@ -321,14 +321,11 @@ pub(super) fn parse_events_value(value: &Value) -> Vec<SessionEvent> {
     events
 }
 
-/// The token count a line carries beside its event, if any: every
-/// `assistant` message reports its own `usage` (the prompt it was given —
-/// input plus cache reads and writes — is the context in use at that
-/// point), and the `result` line reports the turn's totals with the
-/// model's `contextWindow`. Between results the window is read off the
-/// model id: Claude's 1M models carry `[1m]` (or `-1m`), the rest are 200k.
-/// The decoder sends scoped usage before content, so a turn's ring moves
-/// with every message and lands exactly at the result.
+/// The token count a line carries beside its event, if any. An assistant's
+/// native `context_usage` is the authoritative occupancy report. Otherwise
+/// its message usage is the best available occupancy; it never supplies a
+/// guessed model window. A result's final iteration supplies occupancy while
+/// its top-level usage remains output accounting.
 #[cfg(test)]
 pub(super) fn parse_usage(line: &str) -> Option<SessionEvent> {
     let value: Value = serde_json::from_str(line).ok()?;
@@ -345,14 +342,19 @@ pub(super) fn parse_usage_value(value: &Value) -> Option<SessionEvent> {
             let cached = count(usage, "cache_read_input_tokens");
             let created = count(usage, "cache_creation_input_tokens");
             let output = count(usage, "output_tokens");
-            let model = message.get("model").and_then(Value::as_str).unwrap_or("");
+            let context = value.get("context_usage");
             Some(SessionEvent::TokenUsage {
-                total_tokens: input + cached + created + output,
+                total_tokens: context
+                    .and_then(|context| context.get("total_tokens"))
+                    .and_then(Value::as_u64)
+                    .unwrap_or(input + cached + created + output),
                 input_tokens: input,
                 cached_input_tokens: cached,
                 output_tokens: output,
                 reasoning_output_tokens: 0,
-                context_window: Some(window_of_model(model)),
+                context_window: context
+                    .and_then(|context| context.get("raw_max_tokens"))
+                    .and_then(Value::as_u64),
             })
         }
         "result" => {
@@ -362,22 +364,38 @@ pub(super) fn parse_usage_value(value: &Value) -> Option<SessionEvent> {
             let last = usage
                 .get("iterations")
                 .and_then(Value::as_array)
-                .and_then(|iterations| iterations.last())
-                .unwrap_or(usage);
-            let input = count(last, "input_tokens");
-            let cached = count(last, "cache_read_input_tokens");
-            let created = count(last, "cache_creation_input_tokens");
-            let output = count(last, "output_tokens");
+                .and_then(|iterations| iterations.last());
+            // A turn aggregate is accounting, not a context snapshot. The
+            // stateful decoder retains the prior occupancy when this native
+            // final iteration is absent.
+            let occupancy = last.map(|last| {
+                count(last, "input_tokens")
+                    + count(last, "cache_read_input_tokens")
+                    + count(last, "cache_creation_input_tokens")
+                    + count(last, "output_tokens")
+            });
+            let input = count(usage, "input_tokens");
+            let cached = count(usage, "cache_read_input_tokens");
+            let active_model = value
+                .get("model")
+                .and_then(Value::as_str)
+                .or_else(|| usage.get("model").and_then(Value::as_str));
             let window = value
                 .get("modelUsage")
                 .and_then(Value::as_object)
                 .and_then(|models| {
-                    models
-                        .values()
-                        .find_map(|model| model.get("contextWindow").and_then(Value::as_u64))
+                    active_model
+                        .and_then(|model| models.get(model))
+                        .or_else(|| {
+                            (models.len() == 1)
+                                .then(|| models.values().next())
+                                .flatten()
+                        })
+                        .and_then(|model| model.get("contextWindow"))
+                        .and_then(Value::as_u64)
                 });
             Some(SessionEvent::TokenUsage {
-                total_tokens: input + cached + created + output,
+                total_tokens: occupancy.unwrap_or(0),
                 input_tokens: input,
                 cached_input_tokens: cached,
                 output_tokens: count(usage, "output_tokens"),
@@ -414,7 +432,9 @@ pub(super) fn parse_rate_limits(line: &str) -> Option<SessionEvent> {
     })
 }
 
-/// The context window a Claude model id implies, until a result says.
+/// Kept only so pre-stateful decoder fixtures continue to compile. Production
+/// decoding never derives context windows from a model name.
+#[cfg(test)]
 fn window_of_model(model: &str) -> u64 {
     let lower = model.to_ascii_lowercase();
     if lower.contains("[1m]") || lower.ends_with("-1m") {
@@ -596,13 +616,31 @@ fn content_block<'a>(value: &'a Value, kind: &str) -> Option<&'a Value> {
 /// The CLI re-announces init at the head of every turn, carrying the same
 /// `session_id`; Init therefore repeats rather than arriving once.
 fn parse_system(value: &Value) -> Option<SessionEvent> {
-    if value.get("subtype")?.as_str()? != "init" {
-        return None;
+    match value.get("subtype")?.as_str()? {
+        "init" => Some(SessionEvent::Init {
+            session_id: value.get("session_id")?.as_str()?.to_string(),
+            model: value.get("model")?.as_str()?.to_string(),
+        }),
+        "commands_changed" => Some(SessionEvent::Commands {
+            commands: value
+                .get("commands")?
+                .as_array()?
+                .iter()
+                .filter_map(|command| {
+                    Some(crate::SessionCommand {
+                        name: command.get("name")?.as_str()?.to_string(),
+                        description: command
+                            .get("description")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        path: None,
+                    })
+                })
+                .collect(),
+        }),
+        _ => None,
     }
-    Some(SessionEvent::Init {
-        session_id: value.get("session_id")?.as_str()?.to_string(),
-        model: value.get("model")?.as_str()?.to_string(),
-    })
 }
 
 fn parse_stream_event(value: &Value) -> Option<SessionEvent> {
@@ -644,7 +682,7 @@ fn parse_result(value: &Value) -> SessionEvent {
         // `terminal_reason` classifies a failure, so it is preferred and
         // `subtype` is the fallback for a line that omits it.
         let classification = if reason.is_empty() { subtype } else { reason };
-        TurnOutcome::Error(describe_error(classification, text))
+        TurnOutcome::Error(describe_error(classification, text, value.get("errors")))
     } else {
         TurnOutcome::Completed
     };
@@ -665,8 +703,21 @@ fn is_interrupt(terminal_reason: &str) -> bool {
     terminal_reason.starts_with("aborted")
 }
 
-fn describe_error(subtype: &str, text: &str) -> String {
-    match (subtype, text) {
+fn describe_error(subtype: &str, text: &str, errors: Option<&Value>) -> String {
+    let native = errors
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter(|detail| !detail.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let detail = [text, native.as_str()]
+        .into_iter()
+        .filter(|detail| !detail.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    match (subtype, detail.as_str()) {
         ("", "") => "claude CLI reported an error with no detail".to_string(),
         ("", text) => text.to_string(),
         (subtype, "") => subtype.to_string(),

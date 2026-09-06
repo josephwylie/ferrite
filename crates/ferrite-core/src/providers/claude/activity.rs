@@ -36,6 +36,15 @@ pub(super) struct Decoder {
     requests: HashMap<String, (Option<Subject>, String)>,
     seen_child_frames: HashSet<String>,
     frame_order: VecDeque<String>,
+    /// Main's last provider-reported occupancy. Result aggregates account for
+    /// a turn but do not always carry a new occupancy snapshot.
+    usage: Usage,
+}
+
+#[derive(Default)]
+struct Usage {
+    occupancy: Option<u64>,
+    context_window: Option<u64>,
 }
 
 impl Decoder {
@@ -97,6 +106,9 @@ impl Decoder {
         match string(&value, "type") {
             Some("system") if string(&value, "subtype") != Some("init") => {
                 self.task(&value, &mut events);
+                if let Some(event) = wire::parse_value(&value) {
+                    events.push(event);
+                }
                 if !matches!(
                     string(&value, "subtype"),
                     Some("task_started" | "task_progress" | "task_updated" | "task_notification")
@@ -132,7 +144,7 @@ impl Decoder {
                 if !matches!(value.get("parent_tool_use_id"), None | Some(Value::Null)) {
                     return events;
                 }
-                if let Some(usage) = wire::parse_usage_value(&value) {
+                if let Some(usage) = self.main_usage(&value) {
                     events.push(usage);
                 }
                 if let Some(event) = wire::parse_value(&value) {
@@ -409,7 +421,7 @@ impl Decoder {
                         self.content(key, delivery_id(value, "usage"), event, events);
                     }
                 }
-                None => events.push(usage),
+                None => events.push(self.record_main_usage(value, usage)),
             }
         }
         if let (Some(key), Some(text)) = (&child, value["message"]["content"].as_str()) {
@@ -545,6 +557,44 @@ impl Decoder {
                 }
                 _ => {}
             }
+        }
+    }
+
+    fn main_usage(&mut self, value: &Value) -> Option<SessionEvent> {
+        wire::parse_usage_value(value).map(|usage| self.record_main_usage(value, usage))
+    }
+
+    fn record_main_usage(&mut self, value: &Value, usage: SessionEvent) -> SessionEvent {
+        let SessionEvent::TokenUsage {
+            mut total_tokens,
+            input_tokens,
+            cached_input_tokens,
+            output_tokens,
+            reasoning_output_tokens,
+            context_window,
+        } = usage
+        else {
+            return usage;
+        };
+        let has_occupancy = value["type"] == "assistant"
+            || value["usage"]["iterations"]
+                .as_array()
+                .is_some_and(|iterations| !iterations.is_empty());
+        if has_occupancy {
+            self.usage.occupancy = Some(total_tokens);
+        } else if let Some(occupancy) = self.usage.occupancy {
+            total_tokens = occupancy;
+        }
+        if let Some(window) = context_window {
+            self.usage.context_window = Some(window);
+        }
+        SessionEvent::TokenUsage {
+            total_tokens,
+            input_tokens,
+            cached_input_tokens,
+            output_tokens,
+            reasoning_output_tokens,
+            context_window: self.usage.context_window,
         }
     }
 
