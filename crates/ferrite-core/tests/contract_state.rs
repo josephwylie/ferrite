@@ -131,10 +131,9 @@ fn claude_native_context_report_does_not_require_api_usage() {
     assert!(
         events.iter().any(|e| matches!(
             e,
-            SessionEvent::TokenUsage {
+            SessionEvent::ContextUsage {
                 total_tokens: 32100,
                 context_window: Some(180000),
-                ..
             }
         )),
         "native context report without API usage was dropped"
