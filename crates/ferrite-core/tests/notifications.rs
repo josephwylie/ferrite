@@ -743,3 +743,33 @@ fn the_codex_nested_capture_finishes_once() {
     );
     assert_eq!(outcomes, vec![TurnOutcome::Completed]);
 }
+
+#[test]
+fn a_pending_question_requests_attention_and_cancellation_clears_it() {
+    let mut h = Harness::new("question-attention", 2);
+    let first = h.threads[0];
+    let second = h.threads[1];
+    h.cockpit.focus_thread(first);
+    h.control.activity(1,ActivityEvent::Decision{subject:Some(Subject::Main),decision:ferrite_core::Decision{delivery:Default::default(),id:"question".into(),tool_use_id:"ask".into(),tool_name:"AskUserQuestion".into(),description:"Choose a target".into(),input:serde_json::json!({"questions":[{"question":"Where?","header":"Target","options":[],"multiSelect":false}]}),suggestions:vec![]}});
+    h.cockpit.pump();
+    assert!(
+        h.cockpit.notifications().attention(second),
+        "pending question needs attention before the turn ends"
+    );
+    assert_eq!(h.unread(), 1);
+    h.cockpit.pump();
+    assert_eq!(
+        h.unread(),
+        1,
+        "one native request must not repeatedly notify"
+    );
+    h.control.activity(
+        1,
+        ActivityEvent::DecisionCancelled {
+            id: "question".into(),
+        },
+    );
+    h.cockpit.pump();
+    assert!(!h.cockpit.notifications().attention(second));
+    assert_eq!(h.unread(), 0);
+}
