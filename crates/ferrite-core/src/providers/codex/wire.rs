@@ -18,7 +18,8 @@ use serde_json::Value;
 use super::CodexCapabilities;
 use crate::progress::{Phase, PlanStep, ProgressEvent, StepStatus};
 use crate::{
-    Decision, ModelInfo, RateLimitWindow, SessionCommand, SessionEvent, ToolResult, TurnOutcome,
+    Decision, FileEdit, Hunk, ModelInfo, RateLimitWindow, SessionCommand, SessionEvent, ToolResult,
+    TurnOutcome,
 };
 
 /// The item types Ferrite reads as tool runs. Everything else the server
@@ -361,14 +362,36 @@ pub(super) fn parse_item(params: &Value, completed: bool) -> Option<SessionEvent
             .unwrap_or_default(),
     };
     let result = if kind == "commandExecution" {
-        // Codex supplies one combined stream; retain it as the primary output.
-        ToolResult::Command {
-            stdout: output.clone(),
-            stderr: String::new(),
-        }
-    } else {
-        ToolResult::Opaque
-    };
+            // Codex supplies one combined stream, so preserve it as the
+            // primary output instead of pretending it supplied stderr.
+            ToolResult::Command {
+                stdout: output.clone(),
+                stderr: String::new(),
+                exit_code: item.get("exitCode").and_then(Value::as_i64),
+                duration_ms: item.get("durationMs").and_then(Value::as_u64),
+            }
+        } else if kind == "fileChange" {
+            item.get("changes")
+                .and_then(Value::as_array)
+                .map(|changes| ToolResult::FileEdits {
+                    edits: changes
+                        .iter()
+                        .filter_map(|change| {
+                            Some(FileEdit {
+                                path: change.get("path")?.as_str()?.to_string(),
+                                hunks: change
+                                    .get("diff")
+                                    .and_then(Value::as_str)
+                                    .map(parse_unified_diff)
+                                    .unwrap_or_default(),
+                            })
+                        })
+                        .collect(),
+                })
+                .unwrap_or(ToolResult::Opaque)
+        } else {
+            ToolResult::Opaque
+        };
     Some(SessionEvent::ToolCompleted {
         id,
         output,
@@ -379,9 +402,65 @@ pub(super) fn parse_item(params: &Value, completed: bool) -> Option<SessionEvent
             item["status"].as_str(),
             Some("failed" | "declined" | "error")
         ) || item["success"].as_bool() == Some(false)
-            || !item.get("error").unwrap_or(&Value::Null).is_null(),
+            || !item.get("error").unwrap_or(&Value::Null).is_null()
+            || item
+                .get("exitCode")
+                .and_then(Value::as_i64)
+                .is_some_and(|code| code != 0),
         result,
     })
+}
+
+/// Decode Codex's per-file unified diff without assigning a tool identity or
+/// inferring files absent from the native `changes` list.
+fn parse_unified_diff(diff: &str) -> Vec<Hunk> {
+    let mut hunks = Vec::new();
+    let mut current: Option<Hunk> = None;
+    for line in diff.lines() {
+        if let Some((old_start, old_lines, new_start, new_lines)) = parse_hunk_header(line) {
+            if let Some(hunk) = current.take() {
+                hunks.push(hunk);
+            }
+            current = Some(Hunk {
+                old_start,
+                old_lines,
+                new_start,
+                new_lines,
+                lines: Vec::new(),
+            });
+        } else if matches!(line.as_bytes().first(), Some(b' ' | b'+' | b'-'))
+            && !line.starts_with("+++")
+            && !line.starts_with("---")
+        {
+            current
+                .get_or_insert_with(|| Hunk {
+                    old_start: if line.starts_with('-') { 1 } else { 0 },
+                    old_lines: 0,
+                    new_start: if line.starts_with('+') { 1 } else { 0 },
+                    new_lines: 0,
+                    lines: Vec::new(),
+                })
+                .lines
+                .push(line.to_string());
+        }
+    }
+    if let Some(hunk) = current {
+        hunks.push(hunk);
+    }
+    hunks
+}
+
+fn parse_hunk_header(line: &str) -> Option<(u32, u32, u32, u32)> {
+    let middle = line.strip_prefix("@@ -")?.split_once(" +")?;
+    let (old, rest) = middle;
+    let new = rest.strip_suffix(" @@")?.split_whitespace().next()?;
+    fn range(range: &str) -> Option<(u32, u32)> {
+        let (start, count) = range.split_once(',').unwrap_or((range, "1"));
+        Some((start.parse().ok()?, count.parse().ok()?))
+    }
+    let (old_start, old_lines) = range(old)?;
+    let (new_start, new_lines) = range(new)?;
+    Some((old_start, old_lines, new_start, new_lines))
 }
 
 /// The server blocks the turn on a Decision: a JSON-RPC request whose answer

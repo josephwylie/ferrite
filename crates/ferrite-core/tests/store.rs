@@ -105,6 +105,8 @@ fn first_turn() -> Vec<SessionEvent> {
             result: ToolResult::Command {
                 stdout: "saved".into(),
                 stderr: String::new(),
+                exit_code: None,
+                duration_ms: None,
             },
         },
         SessionEvent::TextDelta {

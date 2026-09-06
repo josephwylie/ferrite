@@ -321,11 +321,25 @@ enum PersistedToolResult {
     Command {
         stdout: String,
         stderr: String,
+        exit_code: Option<i64>,
+        duration_ms: Option<u64>,
+    },
+    Structured {
+        value: serde_json::Value,
     },
     FileEdit {
         path: String,
         hunks: Vec<PersistedHunk>,
     },
+    FileEdits {
+        edits: Vec<PersistedFileEdit>,
+    },
+}
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+struct PersistedFileEdit {
+    path: String,
+    hunks: Vec<PersistedHunk>,
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
@@ -341,9 +355,19 @@ impl PersistedToolResult {
     fn from_live(result: &crate::ToolResult) -> Self {
         match result {
             crate::ToolResult::Opaque => PersistedToolResult::Opaque,
-            crate::ToolResult::Command { stdout, stderr } => PersistedToolResult::Command {
+            crate::ToolResult::Command {
+                stdout,
+                stderr,
+                exit_code,
+                duration_ms,
+            } => PersistedToolResult::Command {
                 stdout: stdout.clone(),
                 stderr: stderr.clone(),
+                exit_code: *exit_code,
+                duration_ms: *duration_ms,
+            },
+            crate::ToolResult::Structured { value } => PersistedToolResult::Structured {
+                value: value.clone(),
             },
             crate::ToolResult::FileEdit { path, hunks } => PersistedToolResult::FileEdit {
                 path: path.clone(),
@@ -358,15 +382,44 @@ impl PersistedToolResult {
                     })
                     .collect(),
             },
+            crate::ToolResult::FileEdits { edits } => PersistedToolResult::FileEdits {
+                edits: edits
+                    .iter()
+                    .map(|edit| PersistedFileEdit {
+                        path: edit.path.clone(),
+                        hunks: edit
+                            .hunks
+                            .iter()
+                            .map(|hunk| PersistedHunk {
+                                old_start: hunk.old_start,
+                                old_lines: hunk.old_lines,
+                                new_start: hunk.new_start,
+                                new_lines: hunk.new_lines,
+                                lines: hunk.lines.clone(),
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            },
         }
     }
 
     fn live(&self) -> crate::ToolResult {
         match self {
             PersistedToolResult::Opaque => crate::ToolResult::Opaque,
-            PersistedToolResult::Command { stdout, stderr } => crate::ToolResult::Command {
+            PersistedToolResult::Command {
+                stdout,
+                stderr,
+                exit_code,
+                duration_ms,
+            } => crate::ToolResult::Command {
                 stdout: stdout.clone(),
                 stderr: stderr.clone(),
+                exit_code: *exit_code,
+                duration_ms: *duration_ms,
+            },
+            PersistedToolResult::Structured { value } => crate::ToolResult::Structured {
+                value: value.clone(),
             },
             PersistedToolResult::FileEdit { path, hunks } => crate::ToolResult::FileEdit {
                 path: path.clone(),
@@ -378,6 +431,25 @@ impl PersistedToolResult {
                         new_start: hunk.new_start,
                         new_lines: hunk.new_lines,
                         lines: hunk.lines.clone(),
+                    })
+                    .collect(),
+            },
+            PersistedToolResult::FileEdits { edits } => crate::ToolResult::FileEdits {
+                edits: edits
+                    .iter()
+                    .map(|edit| crate::FileEdit {
+                        path: edit.path.clone(),
+                        hunks: edit
+                            .hunks
+                            .iter()
+                            .map(|hunk| crate::Hunk {
+                                old_start: hunk.old_start,
+                                old_lines: hunk.old_lines,
+                                new_start: hunk.new_start,
+                                new_lines: hunk.new_lines,
+                                lines: hunk.lines.clone(),
+                            })
+                            .collect(),
                     })
                     .collect(),
             },

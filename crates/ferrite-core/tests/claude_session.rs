@@ -298,6 +298,8 @@ fn a_tool_call_arrives_as_a_start_and_a_completion() {
             result: ferrite_core::ToolResult::Command {
                 stdout: "ferrite-tool-ok".into(),
                 stderr: String::new(),
+                exit_code: None,
+                duration_ms: None,
             },
         }),
         "no completion matching {id}: {events:?}"

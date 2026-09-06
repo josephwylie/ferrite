@@ -125,6 +125,8 @@ fn attributed_facts_round_trip_with_native_identity_and_complete_payloads() {
             result: ToolResult::Command {
                 stdout: "fixture".into(),
                 stderr: String::new(),
+                exit_code: None,
+                duration_ms: None,
             },
         },
         ExecutionEvent::TurnEnded {

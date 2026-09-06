@@ -417,8 +417,10 @@ impl SubjectState {
                     }
                 }
             }
-            Input::Event(SessionEvent::ToolCompleted { id, .. }) => {
-                if let Some(ToolTiming::Running(since)) = self.timings.get(id) {
+            Input::Event(SessionEvent::ToolCompleted { id, result, .. }) => {
+                if let ToolResult::Command { duration_ms: Some(duration_ms), .. } = result {
+                    self.timings.insert(id.clone(), ToolTiming::Done(Duration::from_millis(*duration_ms)));
+                } else if let Some(ToolTiming::Running(since)) = self.timings.get(id) {
                     self.timings.insert(
                         id.clone(),
                         ToolTiming::Done(at.saturating_duration_since(*since)),
@@ -2148,7 +2150,8 @@ fn input_bytes(input: &Input) -> usize {
                 id.len()
                     + output.len()
                     + match result {
-                        ToolResult::Command { stdout, stderr } => stdout.len() + stderr.len(),
+                        ToolResult::Command { stdout, stderr, .. } => stdout.len() + stderr.len(),
+                        ToolResult::Structured { value } => value.to_string().len(),
                         ToolResult::FileEdit { path, hunks } => {
                             path.len()
                                 + hunks
@@ -2157,6 +2160,18 @@ fn input_bytes(input: &Input) -> usize {
                                     .map(String::len)
                                     .sum::<usize>()
                         }
+                        ToolResult::FileEdits { edits } => edits
+                            .iter()
+                            .map(|edit| {
+                                edit.path.len()
+                                    + edit
+                                        .hunks
+                                        .iter()
+                                        .flat_map(|hunk| &hunk.lines)
+                                        .map(String::len)
+                                        .sum::<usize>()
+                            })
+                            .sum(),
                         ToolResult::Opaque => 0,
                     }
             }

@@ -63,7 +63,7 @@ impl Instruments {
             let Body::Tool(tool) = &block.body else {
                 continue;
             };
-            if let Some(diff) = &tool.diff {
+            for diff in &tool.diffs {
                 instruments.added += diff.added;
                 instruments.removed += diff.removed;
                 match instruments

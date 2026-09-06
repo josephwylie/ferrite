@@ -206,10 +206,26 @@ pub enum ToolResult {
     #[default]
     Opaque,
     /// A command ran and wrote to the usual two streams.
-    Command { stdout: String, stderr: String },
+    Command {
+        stdout: String,
+        stderr: String,
+        exit_code: Option<i64>,
+        duration_ms: Option<u64>,
+    },
+    /// A provider payload Ferrite preserves without claiming a narrower shape.
+    Structured { value: serde_json::Value },
     /// A file was written. `hunks` is empty when the file was created, which
     /// has nothing to diff against.
     FileEdit { path: String, hunks: Vec<Hunk> },
+    /// One call changed several files.
+    FileEdits { edits: Vec<FileEdit> },
+}
+
+/// One file in a multi-file tool result.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FileEdit {
+    pub path: String,
+    pub hunks: Vec<Hunk>,
 }
 
 /// One changed region of a file, in the provider's own unified-diff form.

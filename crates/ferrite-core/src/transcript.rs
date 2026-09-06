@@ -73,9 +73,10 @@ pub struct ToolBlock {
     /// One line naming what the call touched, for a row that never wraps.
     pub summary: String,
     pub state: ToolState,
-    /// The patch this call applied, when it was a file edit. A row with one
-    /// draws as a diff card; a row without stays a single line.
-    pub diff: Option<Diff>,
+    /// Every file this call changed.
+    pub diffs: Vec<Diff>,
+    /// An unmodelled provider result, retained for disclosure.
+    pub structured_result: Option<serde_json::Value>,
     /// The first line of the tool's output, trimmed to a row — what the
     /// Pane's `⎿` continuation shows (DirectionDense). Errors carry their
     /// message in `state` instead; disclosure reads `output`.
@@ -977,8 +978,18 @@ impl Transcript {
                 } else {
                     ToolState::Ok
                 };
-                let diff = match result {
-                    ToolResult::FileEdit { path, hunks } => Some(Diff::new(path, hunks)),
+                let diffs = match &result {
+                    ToolResult::FileEdit { path, hunks } => {
+                        vec![Diff::new(path.clone(), hunks.clone())]
+                    }
+                    ToolResult::FileEdits { edits } => edits
+                        .iter()
+                        .map(|edit| Diff::new(edit.path.clone(), edit.hunks.clone()))
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                let structured_result = match &result {
+                    ToolResult::Structured { value } => Some(value.clone()),
                     _ => None,
                 };
                 // A failure already carries its message in the state; a
@@ -988,7 +999,7 @@ impl Transcript {
                 let output = retained_output(&output);
                 Update {
                     dirty: self
-                        .settle_tool(&id, state, diff, result_line, output)
+                        .settle_tool(&id, state, diffs, structured_result, result_line, output)
                         .into_iter()
                         .collect(),
                     ..Update::default()
@@ -1022,7 +1033,8 @@ impl Transcript {
                         .map(str::to_owned),
                     name,
                     state: ToolState::Running,
-                    diff: None,
+                    diffs: Vec::new(),
+                    structured_result: None,
                     result_line: None,
                     output: None,
                 }));
@@ -1278,7 +1290,8 @@ impl Transcript {
         &mut self,
         call: &str,
         state: ToolState,
-        diff: Option<Diff>,
+        diffs: Vec<Diff>,
+        structured_result: Option<serde_json::Value>,
         result_line: Option<String>,
         output: Option<ToolOutput>,
     ) -> Option<BlockId> {
@@ -1290,7 +1303,8 @@ impl Transcript {
             return None;
         };
         if tool.state == state
-            && tool.diff == diff
+            && tool.diffs == diffs
+            && tool.structured_result == structured_result
             && tool.result_line == result_line
             && tool.output == output
         {
@@ -1298,7 +1312,8 @@ impl Transcript {
         }
         let was_running = tool.state == ToolState::Running;
         tool.state = state;
-        tool.diff = diff;
+        tool.diffs = diffs;
+        tool.structured_result = structured_result;
         if result_line.is_some() || !was_running {
             tool.result_line = result_line;
         }
@@ -2606,7 +2621,7 @@ mod tests {
         assert_eq!(update.dirty, vec![row]);
         match &transcript.blocks()[0].body {
             Body::Tool(tool) => {
-                let diff = tool.diff.as_ref().expect("an edit carries a diff card");
+                let diff = tool.diffs.first().expect("an edit carries a diff card");
                 assert_eq!(diff.path, "/workspace/x.txt");
                 assert_eq!((diff.added, diff.removed), (1, 1));
                 assert_eq!(diff.hunks.len(), 1);
@@ -2649,7 +2664,7 @@ mod tests {
         assert_eq!(retained.text.as_bytes(), &output.as_bytes()[..65_535]);
         assert!(retained.text.is_char_boundary(retained.text.len()));
         assert_eq!(retained.omitted_bytes, output.len() - retained.text.len());
-        let diff = tool.diff.as_ref().expect("structured diff stays folded");
+        let diff = tool.diffs.first().expect("structured diff stays folded");
         assert_eq!((diff.added, diff.removed), (1, 1));
 
         let failure = transcript.apply(completed("toolu_1", "line one\nline two", true));

@@ -527,9 +527,13 @@ pub(super) fn parse_tool_result(value: Option<&Value>) -> ToolResult {
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string(),
+            exit_code: value.get("exitCode").and_then(Value::as_i64),
+            duration_ms: value.get("durationMs").and_then(Value::as_u64),
         };
     }
-    ToolResult::Opaque
+    ToolResult::Structured {
+        value: value.clone(),
+    }
 }
 
 /// Whether the result describes a file the tool wrote where there was
@@ -1122,6 +1126,8 @@ mod tests {
             result: ToolResult::Command {
                 stdout: "ferrite-tool-ok".into(),
                 stderr: String::new(),
+                exit_code: None,
+                duration_ms: None,
             },
         }));
     }
@@ -1220,7 +1226,7 @@ mod tests {
             .into_iter()
             .find_map(|event| match event {
                 SessionEvent::ToolCompleted {
-                    result: ToolResult::Command { stdout, stderr },
+                    result: ToolResult::Command { stdout, stderr, .. },
                     ..
                 } => Some((stdout, stderr)),
                 _ => None,
