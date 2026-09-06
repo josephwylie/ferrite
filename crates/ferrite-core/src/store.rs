@@ -220,6 +220,14 @@ enum Record {
         id: String,
         text: String,
     },
+    FileChanges {
+        id: String,
+        edits: Vec<PersistedFileEdit>,
+    },
+    TurnDiff {
+        turn_id: String,
+        diff: String,
+    },
     ContentBoundary,
     /// Schema 9: a durable attributed fact, never a pending request handle.
     Activity {
@@ -831,7 +839,30 @@ impl Record {
                 id: id.clone(),
                 text: text.clone(),
             },
-            SessionEvent::FileChanges { .. } | SessionEvent::TurnDiff { .. } => return None,
+            SessionEvent::FileChanges { id, edits } => Record::FileChanges {
+                id: id.clone(),
+                edits: edits
+                    .iter()
+                    .map(|edit| PersistedFileEdit {
+                        path: edit.path.clone(),
+                        hunks: edit
+                            .hunks
+                            .iter()
+                            .map(|hunk| PersistedHunk {
+                                old_start: hunk.old_start,
+                                old_lines: hunk.old_lines,
+                                new_start: hunk.new_start,
+                                new_lines: hunk.new_lines,
+                                lines: hunk.lines.clone(),
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            },
+            SessionEvent::TurnDiff { turn_id, diff } => Record::TurnDiff {
+                turn_id: turn_id.clone(),
+                diff: diff.clone(),
+            },
             SessionEvent::ContentBoundary => Record::ContentBoundary,
             SessionEvent::Activity(observation) => Record::Activity {
                 observation: PersistedActivity::from_live(observation, duration)?,
@@ -936,6 +967,30 @@ impl Record {
             Record::ToolOutput { id, text } => Input::Event(SessionEvent::ToolOutputDelta {
                 id: id.clone(),
                 text: text.clone(),
+            }),
+            Record::FileChanges { id, edits } => Input::Event(SessionEvent::FileChanges {
+                id: id.clone(),
+                edits: edits
+                    .iter()
+                    .map(|edit| crate::FileEdit {
+                        path: edit.path.clone(),
+                        hunks: edit
+                            .hunks
+                            .iter()
+                            .map(|hunk| crate::Hunk {
+                                old_start: hunk.old_start,
+                                old_lines: hunk.old_lines,
+                                new_start: hunk.new_start,
+                                new_lines: hunk.new_lines,
+                                lines: hunk.lines.clone(),
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            }),
+            Record::TurnDiff { turn_id, diff } => Input::Event(SessionEvent::TurnDiff {
+                turn_id: turn_id.clone(),
+                diff: diff.clone(),
             }),
             Record::ContentBoundary => Input::Event(SessionEvent::ContentBoundary),
             Record::Activity { observation } => {
