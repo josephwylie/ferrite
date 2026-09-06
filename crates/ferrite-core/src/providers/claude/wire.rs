@@ -47,7 +47,7 @@ pub(super) fn input_content(text: &str, cwd: Option<&std::path::Path>) -> Vec<se
 use serde_json::Value;
 
 use super::ClaudeCapabilities;
-use crate::progress::{Phase, ProgressEvent, StepStatus, TaskStatus};
+use crate::progress::{Phase, PlanTask, ProgressEvent, StepStatus, TaskStatus};
 use crate::{
     validate_form, Decision, DecisionKind, DecisionPolicy, FormField, Hunk,
     RateLimitWindow, SessionEvent, ToolResult, TurnOutcome,
@@ -313,16 +313,19 @@ pub(super) fn parse_events_value(value: &Value) -> Vec<SessionEvent> {
         _ => None,
     };
     events.extend(extra);
-    // The successful tool receipt supplies the actual task id. Starts alone
-    // cannot establish a plan step or mark one complete.
-    if kind == "user" && value["tool_use_result"]["success"] != false {
+    // Only native success receipts carry task identities and authoritative
+    // lists. Proposed tool input never changes the shared plan.
+    if kind == "user" && successful_receipt(value) {
         let result = &value["tool_use_result"];
         if let Some(id) = result["task"]["id"].as_str() {
             events.push(SessionEvent::Progress {
                 event: ProgressEvent::Task {
                     id: id.into(),
                     subject: result["task"]["subject"].as_str().unwrap_or("").into(),
-                    status: Some(StepStatus::Pending),
+                    status: match result["task"].get("status") {
+                        Some(Value::String(status)) => task_status(Some(status)),
+                        _ => Some(StepStatus::Pending),
+                    },
                     deleted: false,
                 },
             });
@@ -341,9 +344,57 @@ pub(super) fn parse_events_value(value: &Value) -> Vec<SessionEvent> {
                     },
                 },
             });
+        } else if let Some(tasks) = result["tasks"].as_array() {
+            events.push(SessionEvent::Progress {
+                event: ProgressEvent::TasksSnapshot {
+                    tasks: tasks.iter().filter_map(native_task).collect(),
+                },
+            });
+        } else if let Some(todos) = result["newTodos"].as_array() {
+            events.push(SessionEvent::Progress {
+                event: ProgressEvent::TasksSnapshot {
+                    tasks: todos.iter().enumerate().filter_map(|(index, todo)| {
+                        let text = todo["content"].as_str()?.trim();
+                        (!text.is_empty()).then_some(PlanTask {
+                            id: todo["id"].as_str().map(str::to_string).unwrap_or_else(|| format!("todo:{index}")),
+                            text: text.into(),
+                            status: task_status(todo["status"].as_str()).unwrap_or(StepStatus::Pending),
+                        })
+                    }).collect(),
+                },
+            });
         }
     }
     events
+}
+
+fn successful_receipt(value: &Value) -> bool {
+    value["tool_use_result"]["success"] != false
+        && !value["message"]["content"]
+            .as_array()
+            .is_some_and(|blocks| blocks.iter().any(|block| block["type"] == "tool_result" && block["is_error"] == true))
+}
+
+fn native_task(task: &Value) -> Option<PlanTask> {
+    let id = task["id"].as_str()?.trim();
+    let text = task["subject"].as_str()?.trim();
+    if id.is_empty() || text.is_empty() {
+        return None;
+    }
+    Some(PlanTask {
+        id: id.into(),
+        text: text.into(),
+        status: task_status(task["status"].as_str()).unwrap_or(StepStatus::Pending),
+    })
+}
+
+fn task_status(status: Option<&str>) -> Option<StepStatus> {
+    match status {
+        Some("pending") => Some(StepStatus::Pending),
+        Some("in_progress") => Some(StepStatus::InProgress),
+        Some("completed") => Some(StepStatus::Completed),
+        _ => None,
+    }
 }
 
 /// The token count a line carries beside its event, if any. An assistant's

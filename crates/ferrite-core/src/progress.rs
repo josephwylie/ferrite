@@ -39,6 +39,14 @@ pub struct PlanStep {
     pub status: StepStatus,
 }
 
+/// One authoritative provider task, with a stable native identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanTask {
+    pub id: String,
+    pub text: String,
+    pub status: StepStatus,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskStatus {
     Working,
@@ -68,6 +76,10 @@ pub enum ProgressEvent {
         subject: String,
         status: Option<StepStatus>,
         deleted: bool,
+    },
+    /// The provider's authoritative task list. It replaces the current plan.
+    TasksSnapshot {
+        tasks: Vec<PlanTask>,
     },
     Background {
         id: String,
@@ -182,6 +194,22 @@ impl Progress {
                         status: status.unwrap_or(StepStatus::Pending),
                     });
                 }
+            }
+            ProgressEvent::TasksSnapshot { tasks } => {
+                self.has_plan = true;
+                self.task_ids = tasks
+                    .iter()
+                    .take(MAX_ENTRIES)
+                    .map(|task| task.id.clone())
+                    .collect();
+                self.plan = tasks
+                    .iter()
+                    .take(MAX_ENTRIES)
+                    .map(|task| PlanStep {
+                        text: one_line(&task.text, MAX_TEXT),
+                        status: task.status,
+                    })
+                    .collect();
             }
             ProgressEvent::Background {
                 id,
@@ -399,6 +427,10 @@ impl ProgressEvent {
                 explanation.len() + steps.iter().map(|step| step.text.len() + 16).sum::<usize>()
             }
             Self::Task { id, subject, .. } => id.len() + subject.len(),
+            Self::TasksSnapshot { tasks } => tasks
+                .iter()
+                .map(|task| task.id.len() + task.text.len() + 16)
+                .sum(),
             Self::Background {
                 id, label, detail, ..
             } => id.len() + label.len() + detail.len(),

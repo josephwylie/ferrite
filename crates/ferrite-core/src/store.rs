@@ -520,6 +520,9 @@ enum PersistedProgress {
         status: Option<StoredStepStatus>,
         deleted: bool,
     },
+    TasksSnapshot {
+        tasks: Vec<StoredPlanTask>,
+    },
     Background {
         id: String,
         label: String,
@@ -539,6 +542,12 @@ struct StoredBackgroundTask {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct StoredStep {
+    text: String,
+    status: StoredStepStatus,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct StoredPlanTask {
+    id: String,
     text: String,
     status: StoredStepStatus,
 }
@@ -689,6 +698,16 @@ impl PersistedProgress {
                 status: status.map(StoredStepStatus::from_live),
                 deleted: *deleted,
             },
+            E::TasksSnapshot { tasks } => Self::TasksSnapshot {
+                tasks: tasks
+                    .iter()
+                    .map(|task| StoredPlanTask {
+                        id: task.id.clone(),
+                        text: task.text.clone(),
+                        status: StoredStepStatus::from_live(task.status),
+                    })
+                    .collect(),
+            },
             E::Background {
                 id,
                 label,
@@ -749,6 +768,16 @@ impl PersistedProgress {
                 subject: subject.clone(),
                 status: status.map(StoredStepStatus::live),
                 deleted: *deleted,
+            },
+            Self::TasksSnapshot { tasks } => E::TasksSnapshot {
+                tasks: tasks
+                    .iter()
+                    .map(|task| crate::progress::PlanTask {
+                        id: task.id.clone(),
+                        text: task.text.clone(),
+                        status: task.status.live(),
+                    })
+                    .collect(),
             },
             Self::Background {
                 id,
