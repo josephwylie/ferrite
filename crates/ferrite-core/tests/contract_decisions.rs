@@ -94,3 +94,16 @@ fn codex_question_form_preserves_ids_and_labels_with_commas() {
         json!({"answers":{"first":{"answers":["Red, green"]},"second":{"answers":["free text"]}}})
     );
 }
+
+#[test]
+fn native_approval_options_have_labels_and_keep_distinct_response_tokens() {
+    let mut r=Replay::new("codex",vec![json!({"id":83,"method":"item/commandExecution/requestApproval","params":{"threadId":"root","turnId":"turn","itemId":"cmd","availableDecisions":["acceptForSession",{"applyNetworkPolicyAmendment":{"network_policy_amendment":{"host":"example.com","action":"deny"}}},"cancel"]}})]);
+    let ds=decisions(&r.drain());
+    assert!(!ds[0].policy.allow,"plain accept is absent; a standing choice is separate");
+    assert_eq!(ds[0].suggestions.len(),3,"all native choices must remain usable, including deny-policy and cancel");
+    assert!(ds[0].suggestions[0].label.to_lowercase().contains("session"));
+    assert!(ds[0].suggestions[1].label.contains("example.com"));
+    assert_eq!(ds[0].standing_answer(),Some(&json!("acceptForSession")),"deny options must never be assigned to the always shortcut");
+    r.session.respond_to_decision(&ds[0].id,DecisionAnswer::Choose{value:ds[0].suggestions[1].value.clone()}).unwrap();
+    assert_eq!(r.wait_host(|v|v["id"]==83 && v.get("result").is_some())["result"]["decision"],json!({"applyNetworkPolicyAmendment":{"network_policy_amendment":{"host":"example.com","action":"deny"}}}));
+}
