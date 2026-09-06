@@ -338,7 +338,7 @@ fn a_permission_request_arrives_as_a_decision_naming_its_tool_call() {
     assert_eq!(tool_name, "Write");
     assert_eq!(description, "ferrite-perm.txt");
     assert_eq!(input["content"], "ok");
-    assert_eq!(suggestions[0]["mode"], "acceptEdits");
+    assert_eq!(suggestions[0].value["mode"], "acceptEdits");
 
     // The Decision names the tool card it blocks, so a Pane can render it in
     // place instead of as a free-floating prompt.
@@ -433,7 +433,7 @@ fn adopting_a_standing_answer_writes_the_permission_change_the_cli_honoured() {
         };
         DecisionAnswer::AllowAlways {
             input: decision.input.clone(),
-            suggestion: decision.suggestions.first().cloned().unwrap(),
+            suggestion: decision.suggestions.first().unwrap().value.clone(),
         }
     });
     assert_eq!(sent, recorded_answer("permission-always-2.1.243"));

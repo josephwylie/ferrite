@@ -480,8 +480,8 @@ fn adopting_a_standing_answer_writes_the_amendment_the_server_accepted() {
             suggestion: decision
                 .suggestions
                 .iter()
-                .find(|offered| offered.is_object())
-                .cloned()
+                .find(|offered| offered.value.is_object())
+                .map(|offered| offered.value.clone())
                 .expect("the request offers a standing answer"),
         }
     });

@@ -1363,7 +1363,9 @@ mod tests {
         // The standing answers 0.149.1 offers: accept, accept with an
         // execpolicy amendment, decline.
         assert_eq!(suggestions.len(), 3);
-        assert!(suggestions.contains(&serde_json::json!("accept")));
+        assert!(suggestions
+            .iter()
+            .any(|choice| choice.value == serde_json::json!("accept")));
 
         // The Decision names the tool card it blocks, so a Pane can render it
         // in place instead of as a free-floating prompt.
@@ -1458,7 +1460,7 @@ mod tests {
         };
         assert_eq!(tool_name, "fileChange");
         assert_eq!(description, "");
-        assert_eq!(suggestions, &Vec::<Value>::new());
+        assert!(suggestions.is_empty());
 
         let SessionEvent::ToolStarted { input, .. } = events
             .iter()
