@@ -6239,13 +6239,15 @@ impl CockpitView {
 
     fn context_usage_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let (identity, at) = self.context_usage?;
-        let (usage, provider, details) = match identity {
+        let (usage, provider, details, usage_details, last_cost) = match identity {
             PaneIdentity::Thread(thread) => {
                 let open = self.cockpit.thread(thread)?;
                 (
                     open.transcript().usage()?,
                     open.provider(),
                     open.transcript().context_details(),
+                    open.transcript().usage_details(),
+                    open.transcript().last_cost(),
                 )
             }
             // Nothing spent, and no window to divide by until the Provider
@@ -6265,6 +6267,8 @@ impl CockpitView {
                     .provider()
                     .provider,
                 None,
+                None,
+                None,
             ),
         };
         let card = menu::shell()
@@ -6274,6 +6278,8 @@ impl CockpitView {
                 usage,
                 self.cockpit.account_limits(provider),
                 details,
+                usage_details,
+                last_cost,
             ))
             .when_some(
                 match identity {

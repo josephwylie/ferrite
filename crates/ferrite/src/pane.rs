@@ -40,6 +40,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{cell::Cell as Flag, rc::Rc};
 
 use crate::components;
+use gpui::component::scroll::ScrollableElement;
 use crate::composer::Composer;
 use crate::icons::{self, icon};
 use crate::pointer::{Pointer, PointerPressed};
@@ -1157,7 +1158,7 @@ fn wall_cell(
     state: WallState,
     focused: bool,
     title: Option<AnyElement>,
-) -> Div {
+) -> impl IntoElement {
     let (dot_color, hollow) = match state {
         WallState::Working | WallState::Failing | WallState::Done => (RUNNING, false),
         WallState::Decision => (ATTENTION, false),
@@ -3340,7 +3341,9 @@ pub fn context_usage(
     usage: ferrite_core::transcript::Usage,
     limits: ferrite_core::transcript::RateLimits,
     details: Option<&ferrite_core::ContextDetails>,
-) -> Div {
+    usage_details: Option<&ferrite_core::UsageDetails>,
+    last_cost: Option<f64>,
+) -> impl IntoElement {
     fn count_label(count: u64) -> String {
         let digits = count.to_string();
         let mut label = String::new();
@@ -3536,7 +3539,39 @@ pub fn context_usage(
             );
         }
     }
-    card
+    if let Some(details) = usage_details {
+        let scope = match details.scope {
+            ferrite_core::UsageScope::Message => ("message", "This message"),
+            ferrite_core::UsageScope::Turn => ("turn", "This turn"),
+            ferrite_core::UsageScope::Session => ("session", "This session"),
+        };
+        card = card.child(
+            div()
+                .debug_selector(move || format!("usage-scope-{}", scope.0))
+                .text_color(rgb(TEXT_MUTED))
+                .child(scope.1),
+        );
+        for (key, label, count) in [
+            ("input", "Input", details.input_tokens),
+            ("cached-input", "Cached input", details.cached_input_tokens),
+            ("output", "Output", details.output_tokens),
+            ("reasoning-output", "Reasoning output", details.reasoning_output_tokens),
+        ] {
+            card = card.child(
+                div()
+                    .debug_selector(move || format!("usage-{key}-{count}"))
+                    .child(format!("{label} {}", count_label(count))),
+            );
+        }
+    }
+    if let Some(cost) = last_cost {
+        card = card.child(
+            div()
+                .debug_selector(move || format!("usage-cost-{cost}"))
+                .child(format!("Last cost US${cost:.2}")),
+        );
+    }
+    card.max_h(px(440.)).overflow_y_scrollbar()
 }
 
 /// A usage bar's ink: the Pane's own status inks, so a budget reads like
