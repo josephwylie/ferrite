@@ -131,3 +131,11 @@ fn codex_mcp_and_dynamic_tools_preserve_native_timing_and_structured_payload() {
         assert!(a.view().main().transcript().blocks().iter().any(|b| matches!(&b.body, ferrite_core::transcript::Body::Tool(t) if t.structured_result.as_ref() == Some(&payload))), "native structured payload must use shared disclosure");
     }
 }
+
+#[test]
+fn failed_mcp_tools_keep_the_native_error_and_duration() {
+    let r=Replay::new("codex",vec![json!({"method":"item/completed","params":{"threadId":"root","turnId":"turn","item":{"id":"failed","type":"mcpToolCall","status":"failed","server":"search","tool":"find","arguments":{},"result":null,"error":{"message":"No access"},"durationMs":42}}})]);
+    let a=fold(r.drain());
+    assert_eq!(a.view().main().timings().get("failed").unwrap().elapsed(),std::time::Duration::from_millis(42));
+    assert!(a.view().main().transcript().blocks().iter().any(|b|matches!(&b.body,ferrite_core::transcript::Body::Tool(t) if t.structured_result.as_ref()==Some(&json!({"message":"No access"})))));
+}
