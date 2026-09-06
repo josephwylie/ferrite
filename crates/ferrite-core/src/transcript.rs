@@ -16,6 +16,12 @@ pub use highlight::{tokens as highlight_tokens, Lexer};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct BlockId(u64);
 
+impl BlockId {
+    /// Render-only selection identity for transcript metadata that is not a
+    /// transcript Block. A Transcript holds at most one current turn diff.
+    pub const TURN_DIFF: Self = Self(u64::MAX);
+}
+
 /// One rendered unit of the transcript.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Block {

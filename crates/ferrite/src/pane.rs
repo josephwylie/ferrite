@@ -20,7 +20,7 @@ use ferrite_core::roster::{DraftId, PaneIdentity};
 use ferrite_core::store::Provider;
 use ferrite_core::transcript::{
     Block, BlockId, Body, Class, Diff, Span, Status, Style, Todos, Token, ToolActivity, ToolBlock,
-    ToolState, Transcript,
+    ToolState, Transcript, TurnDiff,
 };
 use ferrite_core::workspace::{
     BranchStatus, Check, CheckState, PrState, PullRequest, WorkspaceBinding,
@@ -108,6 +108,7 @@ pub(crate) enum DisclosureId {
     Tool(String),
     Group(String),
     Reasoning(BlockId),
+    TurnDiff(String),
 }
 impl From<&str> for DisclosureId {
     fn from(call: &str) -> Self {
@@ -2240,6 +2241,13 @@ pub fn rendered_disclosures(view: &PaneView, blocks: &[Block], level: Level) -> 
     controls
 }
 
+pub fn turn_diff_disclosure(transcript: &Transcript, level: Level) -> Option<DisclosureId> {
+    (level == Level::Transcript)
+        .then(|| transcript.turn_diff())
+        .flatten()
+        .map(|diff| DisclosureId::TurnDiff(diff.turn_id.clone()))
+}
+
 /// A scrollbar gesture owns the viewport until it reaches the tail again.
 /// Keep this on the handle so both dragging and track clicks agree with the wheel.
 #[derive(Clone)]
@@ -2414,6 +2422,15 @@ fn body(
         ));
         index += 1;
     }
+    if let Some(diff) = transcript.turn_diff() {
+        let call = DisclosureId::TurnDiff(diff.turn_id.clone());
+        body = body.child(render_turn_diff(
+            diff,
+            selection,
+            view.tool_state(&call) == DisclosureState::Expanded,
+            tool_controls.remove(&call),
+        ));
+    }
     if transcript.status() == Status::Streaming && !progress_is_pinned(view) {
         body = body.child(working_line(transcript, false));
     }
@@ -2468,6 +2485,57 @@ fn body(
             .absolute()
             .size_full(),
         )
+}
+
+fn render_turn_diff(
+    diff: &TurnDiff,
+    selection: &TextRuns,
+    expanded: bool,
+    disclosure: Option<AnyElement>,
+) -> AnyElement {
+    let gutter = div()
+        .relative()
+        .flex_shrink_0()
+        .w(px(theme::GUTTER_W))
+        .children(disclosure);
+    let header = div()
+        .flex()
+        .items_baseline()
+        .min_w_0()
+        .gap(px(theme::EVENT_GAP))
+        .py(px(theme::EVENT_PAD_Y))
+        .text_size(px(theme::FS_MD))
+        .line_height(relative(theme::LINE_BODY))
+        .text_color(rgb(TEXT_MUTED))
+        .child(gutter)
+        .child(selection.line(BlockId::TURN_DIFF, "Turn changes", Vec::new()));
+    let mut card = gpui::component::collapsible::Collapsible::new()
+        .w_full()
+        .open(expanded)
+        .child(header);
+    if expanded {
+        let mut details = div().flex().flex_col().min_w_0().child(output_block(
+            BlockId::TURN_DIFF,
+            "turn-diff",
+            &diff.diff,
+            TEXT_MUTED,
+            selection,
+        ));
+        if diff.omitted_bytes > 0 {
+            details = details.child(result_line(TEXT_MUTED).child(div().min_w_0().child(format!(
+                "… {} bytes omitted from inline view",
+                diff.omitted_bytes
+            ))));
+        }
+        card = card.content(details);
+    }
+    div()
+        .id(SharedString::from(format!("turn-diff-{}", diff.turn_id)))
+        .debug_selector(|| "turn-diff".into())
+        .flex_shrink_0()
+        .w_full()
+        .child(card)
+        .into_any_element()
 }
 
 // Moving progress out of the scroll content shrinks the viewport by the same
@@ -4772,6 +4840,8 @@ pub fn tool_disclosure_control(
             (DisclosureId::Reasoning(_), true) => "Hide reasoning",
             (DisclosureId::Group(_), false) => "Show tool calls",
             (DisclosureId::Group(_), true) => "Hide tool calls",
+            (DisclosureId::TurnDiff(_), false) => "Show turn changes",
+            (DisclosureId::TurnDiff(_), true) => "Hide turn changes",
             (_, false) => "Show tool details",
             (_, true) => "Hide tool details",
         })
@@ -4784,8 +4854,13 @@ pub fn tool_disclosure_control(
             theme::ICON_CHEVRON,
             TEXT_MUTED,
         ));
+    let id = match call {
+        DisclosureId::TurnDiff(_) => SharedString::from("turn-diff-disclosure"),
+        _ => SharedString::from(format!("tool-disclosure-{call}")),
+    };
     div()
-        .id(SharedString::from(format!("tool-disclosure-{call}")))
+        .id(id.clone())
+        .debug_selector(move || id.to_string())
         .absolute()
         .left(px((theme::GUTTER_W - theme::TOOL_DISCLOSURE_HIT) / 2.))
         .top(px(-1.))

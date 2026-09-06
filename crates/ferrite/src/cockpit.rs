@@ -896,24 +896,29 @@ impl CockpitView {
         let Some(index) = self.pane_for(thread) else {
             return;
         };
-        let valid = self
+        let mut valid = std::collections::HashSet::new();
+        if let Some(transcript) = self
             .cockpit
             .thread(thread)
             .and_then(|open| open.activity().subject(&self.panes[index].selected))
             .map(|subject| subject.transcript())
-            .into_iter()
-            .flat_map(|transcript| transcript.blocks())
-            .flat_map(|block| match &block.body {
-                ferrite_core::transcript::Body::Tool(tool) => vec![
-                    pane::DisclosureId::Tool(tool.call.clone()),
-                    pane::DisclosureId::Group(tool.call.clone()),
-                ],
-                ferrite_core::transcript::Body::Thinking(_) => {
-                    vec![pane::DisclosureId::Reasoning(block.id)]
+        {
+            for block in transcript.blocks() {
+                match &block.body {
+                    ferrite_core::transcript::Body::Tool(tool) => {
+                        valid.insert(pane::DisclosureId::Tool(tool.call.clone()));
+                        valid.insert(pane::DisclosureId::Group(tool.call.clone()));
+                    }
+                    ferrite_core::transcript::Body::Thinking(_) => {
+                        valid.insert(pane::DisclosureId::Reasoning(block.id));
+                    }
+                    _ => {}
                 }
-                _ => vec![],
-            })
-            .collect();
+            }
+            if let Some(call) = pane::turn_diff_disclosure(transcript, Level::Transcript) {
+                valid.insert(call);
+            }
+        }
         self.panes[index].prune_tools(&valid);
     }
 
@@ -2536,14 +2541,23 @@ impl CockpitView {
         let Some(thread) = self.panes[index].thread() else {
             return Vec::new();
         };
-        self.cockpit
+        let mut calls = self.cockpit
             .thread(thread)
             .and_then(|open| open.activity().subject(&self.panes[index].selected))
             .into_iter()
             .flat_map(|subject| {
                 pane::rendered_disclosures(&self.panes[index], subject.transcript().blocks(), level)
             })
-            .collect()
+            .collect::<Vec<_>>();
+        if let Some(call) = self
+            .cockpit
+            .thread(thread)
+            .and_then(|open| open.activity().subject(&self.panes[index].selected))
+            .and_then(|subject| pane::turn_diff_disclosure(subject.transcript(), level))
+        {
+            calls.push(call);
+        }
+        calls
     }
 
     fn allow(&mut self, _: &Allow, window: &mut Window, cx: &mut Context<Self>) {
@@ -4834,12 +4848,15 @@ impl Render for CockpitView {
                                 .map(|subject| subject.transcript())
                         })
                         .is_some_and(|transcript| {
-                            pane::rendered_disclosures(
+                            let mut calls = pane::rendered_disclosures(
                                 &self.panes[index],
                                 transcript.blocks(),
                                 level,
-                            )
-                            .contains(target)
+                            );
+                            if let Some(call) = pane::turn_diff_disclosure(transcript, level) {
+                                calls.push(call);
+                            }
+                            calls.contains(target)
                         })
                 });
                 if !target_is_rendered {
@@ -5532,7 +5549,11 @@ impl CockpitView {
         };
         let transcript = subject_view.transcript();
         let mut controls = std::collections::HashMap::new();
-        for call in pane::rendered_disclosures(pane, transcript.blocks(), level) {
+        let mut calls = pane::rendered_disclosures(pane, transcript.blocks(), level);
+        if let Some(call) = pane::turn_diff_disclosure(transcript, level) {
+            calls.push(call);
+        }
+        for call in calls {
             let subject = pane.selected.clone();
             let wired = pane::tool_disclosure_control(
                 &call,
