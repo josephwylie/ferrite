@@ -251,6 +251,12 @@ fn the_reader_thread_delivers_the_captured_stream() {
     assert_eq!(inits[0].1, "claude-haiku-4-5-20251001");
 
     assert_eq!(prose(&all), "hello ferrite");
+    let activity = fold(&all);
+    let thinking: Vec<_> = activity.view().main().transcript().blocks().iter().filter_map(|block| match &block.body {
+        Body::Thinking(text) => Some(text.as_str()), _ => None,
+    }).collect();
+    assert_eq!(thinking, ["The user is asking me to say exactly \"hello ferrite\". This is a straightforward request to output a specific string. I should just output that exactly as requested."]);
+
     assert!(all.iter().any(|event| {
         matches!(
             event,
@@ -306,6 +312,11 @@ fn a_tool_call_arrives_as_a_start_and_a_completion() {
     assert_eq!(started.len(), 1, "expected one tool start: {events:?}");
     let (id, name, _result, output) = started[0];
     assert_eq!(name, "Bash");
+    assert!(events.iter().any(|event| matches!(event,
+        SessionEvent::Activity(ferrite_core::activity::ActivityEvent::MainContent {
+            event: ExecutionEvent::ToolStarted { id: started, input, .. }, ..
+        }) if started == id && input["command"] == "echo ferrite-tool-ok"
+    )));
     assert_eq!(output.as_ref().map(|output| output.text.as_str()), Some("ferrite-tool-ok"));
     assert!(events.iter().any(|event| matches!(
         event,
