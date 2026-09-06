@@ -138,3 +138,35 @@ fn unreadable_elicitation_remains_visible_and_cancellable() {
     r.session.respond_to_decision(&ds[0].id, DecisionAnswer::Cancel).unwrap();
     assert_eq!(r.wait_host(|v| v["type"] == "control_response")["response"]["response"]["action"], "cancel");
 }
+
+#[test]
+fn native_approvals_without_an_optional_choices_list_remain_answerable() {
+    for method in ["item/commandExecution/requestApproval", "item/fileChange/requestApproval"] {
+        let mut r = Replay::new("codex", vec![json!({"id":81,"method":method,"params":{"threadId":"root","turnId":"turn","itemId":"tool","reason":"Apply change"}})]);
+        let ds = decisions(&r.drain());
+        assert!(ds[0].policy.allow && ds[0].policy.deny);
+        r.session.respond_to_decision(&ds[0].id, DecisionAnswer::Allow {input:ds[0].input.clone()}).unwrap();
+        assert_eq!(r.wait_host(|v| v["id"] == 81 && v.get("result").is_some())["result"]["decision"], "accept");
+    }
+}
+
+#[test]
+fn unsupported_elicitation_can_never_be_accepted() {
+    let mut r = Replay::new("codex", vec![json!({"id":82,"method":"mcpServer/elicitation/request","params":{"threadId":"root","message":"Configure","mode":"form","requestedSchema":{"type":"object","properties":{"x":{"type":"future-widget"}}}}})]);
+    let ds = decisions(&r.drain());
+    for answer in [DecisionAnswer::Allow {input:json!({})}, DecisionAnswer::Form {values:json!({})}] {
+        assert!(r.session.respond_to_decision(&ds[0].id, answer).is_err());
+    }
+    r.session.respond_to_decision(&ds[0].id, DecisionAnswer::Cancel).unwrap();
+    assert_eq!(r.wait_host(|v|v["id"] == 82 && v.get("result").is_some())["result"]["action"],"cancel");
+}
+
+#[test]
+fn legacy_enum_labels_are_preserved_in_the_shared_form() {
+    let r = Replay::new("claude",vec![json!({"type":"control_request","request_id":"enum","request":{"subtype":"elicitation","message":"Choose","mode":"form","requested_schema":{"type":"object","properties":{"country":{"type":"string","enum":["au","nz"],"enumNames":["Australia","New Zealand"]}}}}})]);
+    let ds = decisions(&r.drain());
+    let DecisionKind::Form{fields} = &ds[0].kind else {panic!("form")};
+    let ferrite_core::FormFieldKind::Enum{options,..} = &fields[0].kind else {panic!("enum")};
+    assert_eq!(options[0].label,"Australia");
+    assert_eq!(options[0].value,"au");
+}
