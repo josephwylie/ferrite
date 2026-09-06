@@ -43,3 +43,17 @@ fn native_diff_updates_survive_store_replay() {
     assert!(a.view().main().transcript().blocks().iter().any(|b| matches!(&b.body,ferrite_core::transcript::Body::Tool(t) if t.diffs.len()==1 && t.diffs[0].path=="a.txt")));
     drop(writer);std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn child_patch_updates_target_the_childs_scoped_tool() {
+    let r=Replay::new("codex",vec![
+        json!({"method":"thread/started","params":{"thread":{"id":"child","parentThreadId":"root"}}}),
+        json!({"method":"item/started","params":{"threadId":"child","turnId":"turn","item":{"id":"edit","type":"fileChange","changes":[],"status":"inProgress"}}}),
+        json!({"method":"item/fileChange/patchUpdated","params":{"threadId":"child","turnId":"turn","itemId":"edit","changes":[{"path":"child.txt","kind":{"type":"add"},"diff":"child\n"}]}}),
+        json!({"method":"turn/diff/updated","params":{"threadId":"child","turnId":"turn","diff":"child aggregate"}}),
+    ]);
+    let a=fold(r.drain());let child=a.view().children().into_iter().next().unwrap();
+    assert!(child.transcript().blocks().iter().any(|b|matches!(&b.body,ferrite_core::transcript::Body::Tool(t) if t.diffs.len()==1 && t.diffs[0].path=="child.txt")));
+    assert_eq!(child.transcript().turn_diff().unwrap().diff,"child aggregate");
+    assert!(a.view().main().transcript().turn_diff().is_none());
+}
