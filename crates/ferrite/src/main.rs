@@ -6,6 +6,7 @@ mod components;
 mod composer;
 mod demo;
 mod facts;
+mod file_links;
 mod fuzzy;
 mod icons;
 mod keymap;

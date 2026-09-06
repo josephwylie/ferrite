@@ -67,6 +67,10 @@ pub trait Spawner {
         None
     }
 
+    /// Optional background prediction. Scripted/demo adapters do nothing;
+    /// production delegates to the provider one-shot module.
+    fn suggest(&mut self, _request: crate::suggest::Request, _replies: Sender<Suggestion>) {}
+
     fn spawn(&mut self, request: SpawnRequest) -> io::Result<Box<dyn Session>>;
 
     /// A ready adapter completes synchronously; production overrides this
@@ -368,8 +372,9 @@ struct Thread {
     /// or None while nothing has been predicted — before the first turn ends,
     /// for the ~seconds a prediction is in flight, and whenever the one that
     /// came back was refused. Never persisted: it describes a response, and
-    /// a revived Thread predicts again from the replayed one.
+    /// a later completed turn requests a fresh prediction.
     suggestion: Option<String>,
+    suggestion_revision: u64,
     /// The live Session's permission mode (#23) — the meta row's mode chip,
     /// in the provider's own word. Display-only, and Session state exactly
     /// like the menu: None until announced, gone with the Session.
@@ -418,6 +423,7 @@ impl Thread {
             models: Vec::new(),
             first_prompt_sent: false,
             suggestion: None,
+            suggestion_revision: 0,
             permission_mode: None,
         }
     }
@@ -452,6 +458,11 @@ impl Thread {
     fn busy(&self) -> bool {
         self.activity.view().main().busy()
     }
+    fn invalidate_suggestion(&mut self) {
+        self.suggestion = None;
+        self.suggestion_revision = self.suggestion_revision.wrapping_add(1);
+    }
+
     fn replace_generation(&mut self) {
         if let Some(notice) = self
             .native_queue
@@ -459,6 +470,7 @@ impl Thread {
         {
             self.apply(Input::Notice(notice));
         }
+        self.invalidate_suggestion();
         self.history.clear();
         self.history_errors.clear();
         self.generation = next_generation();
@@ -512,14 +524,6 @@ pub struct Cockpit {
     suggestions: (Sender<Suggestion>, Receiver<Suggestion>),
     /// Whether completed turns may ask for and show predicted follow-ups.
     suggestions_enabled: bool,
-    /// The `claude` program the predictor runs, resolved once. None when no
-    /// Claude CLI is installed anywhere — the one configuration where a
-    /// Thread simply never gets a suggestion.
-    suggest_program: Option<String>,
-    /// Test seam: predictions are recorded rather than spawned, so the
-    /// trigger is covered without a suite that shells out to a real CLI.
-    #[cfg(test)]
-    suggest_calls: Vec<crate::suggest::Request>,
     #[cfg(test)]
     refuse_park: std::collections::HashSet<ThreadId>,
 }
@@ -550,15 +554,6 @@ impl Cockpit {
             limit: u64::MAX,
             suggestions: channel(),
             suggestions_enabled: true,
-            // Never probed under test: discovery would find the developer's
-            // own CLI and the suite would start paying for predictions.
-            suggest_program: if cfg!(test) {
-                None
-            } else {
-                crate::suggest::program()
-            },
-            #[cfg(test)]
-            suggest_calls: Vec::new(),
             #[cfg(test)]
             refuse_park: std::collections::HashSet::new(),
         })
@@ -938,7 +933,7 @@ impl Cockpit {
                 binding.cwd().display()
             )));
         }
-        deliver(state, pending.prompt.clone())?;
+        deliver(state, pending.prompt.clone(), self.suggestions_enabled)?;
         Ok(())
     }
 
@@ -1466,7 +1461,7 @@ impl Cockpit {
             state.queued = Some(text);
             return;
         }
-        if let Err(error) = deliver(state, text.clone()) {
+        if let Err(error) = deliver(state, text.clone(), self.suggestions_enabled) {
             state.queued = Some(text);
             state.apply(Input::Notice(format!("send failed: {error}")));
         }
@@ -1805,7 +1800,7 @@ impl Cockpit {
             if release {
                 let state = self.threads.get_mut(&id).expect("exists");
                 if let Some(text) = state.queued.take() {
-                    if let Err(error) = deliver(state, text.clone()) {
+                    if let Err(error) = deliver(state, text.clone(), self.suggestions_enabled) {
                         state.queued = Some(text);
                         state.apply(Input::Notice(format!("send failed: {error}")));
                     }
@@ -1910,6 +1905,7 @@ impl Cockpit {
                                 true,
                             );
                         } else {
+                            thread.invalidate_suggestion();
                             let applied = thread.apply(Input::Prompt(text));
                             update.dirty.extend(applied.dirty);
                         }
@@ -2033,6 +2029,26 @@ impl Cockpit {
                 Instant::now(),
             );
             update.activity_changed |= born.is_some();
+            if turn_ended && thread.provider == Provider::Claude {
+                thread.invalidate_suggestion();
+            }
+            if let Some(session) = thread
+                .session
+                .as_mut()
+                .and_then(SessionLifecycle::session_mut)
+            {
+                if let Some(text) = session.take_suggestion() {
+                    if self.suggestions_enabled
+                        && !thread.busy()
+                        && !thread.native_queue.pending()
+                        && !thread.activity.view().main_operator_turn()
+                        && thread.transcript().status() == crate::transcript::Status::Idle
+                    {
+                        thread.suggestion = Some(text);
+                        update.activity_changed = true;
+                    }
+                }
+            }
             if turn_ended {
                 ended.push(*id);
             }
@@ -2108,7 +2124,10 @@ impl Cockpit {
                     "Session is still starting; retry when ready",
                 )
             })
-            .and_then(|session| session.enqueue(&id, &text));
+            .and_then(|session| {
+                session.set_suggestions_enabled(self.suggestions_enabled)?;
+                session.enqueue(&id, &text)
+            });
         if let Err(error) = result {
             if matches!(
                 error.kind(),
@@ -2124,6 +2143,7 @@ impl Cockpit {
                 "native queue delivery is uncertain; not retried: {error}\n{text}"
             )));
         }
+        state.invalidate_suggestion();
         true
     }
 
@@ -2239,7 +2259,10 @@ impl Cockpit {
             let Some(thread) = self.threads.get_mut(&reply.thread) else {
                 continue;
             };
-            if thread.generation != reply.generation {
+            if thread.generation != reply.generation
+                || thread.suggestion_revision != reply.revision
+                || thread.native_queue.pending()
+            {
                 continue;
             }
             thread.suggestion = Some(reply.text);
@@ -2258,42 +2281,31 @@ impl Cockpit {
         let Some(thread) = self.threads.get_mut(&id) else {
             return;
         };
-        thread.suggestion = None;
-        if !self.suggestions_enabled {
+        if thread.provider == Provider::Claude {
             return;
         }
-        let Some(program) = self.suggest_program.clone() else {
+        thread.invalidate_suggestion();
+        if !self.suggestions_enabled || thread.native_queue.pending() {
             return;
-        };
-        let Some(thread) = self.threads.get(&id) else {
-            return;
-        };
+        }
         let Some(context) = crate::suggest::context(thread.transcript()) else {
             return;
         };
         let request = crate::suggest::Request {
             thread: id,
             generation: thread.generation,
-            program,
-            cwd: thread
-                .workspace
-                .as_ref()
-                .map(|binding| binding.cwd().to_path_buf()),
+            revision: thread.suggestion_revision,
+            provider: thread.provider,
             context,
         };
-        #[cfg(test)]
-        {
-            self.suggest_calls.push(request);
-        }
-        #[cfg(not(test))]
-        crate::suggest::spawn(request, self.suggestions.0.clone());
+        self.spawner.suggest(request, self.suggestions.0.clone());
     }
 
     /// Land a prediction as if the predictor had just answered, stamped with
     /// the Thread's current generation.
     ///
     /// The renderer's seam for anything that produces a follow-up without
-    /// going through the Haiku run — today, the tests that cover the
+    /// going through a provider run — today, the tests that cover the
     /// Composer's accept key end to end.
     pub fn deliver_suggestion(&self, thread: ThreadId, text: String) {
         let Some(state) = self.threads.get(&thread) else {
@@ -2302,6 +2314,7 @@ impl Cockpit {
         let _ = self.suggestions.0.send(Suggestion {
             thread,
             generation: state.generation,
+            revision: state.suggestion_revision,
             text,
         });
     }
@@ -2311,17 +2324,18 @@ impl Cockpit {
     /// discarded by `poll_suggestions`.
     pub fn set_suggestions_enabled(&mut self, enabled: bool) {
         self.suggestions_enabled = enabled;
-        if !enabled {
-            for thread in self.threads.values_mut() {
-                thread.suggestion = None;
+        for thread in self.threads.values_mut() {
+            if !enabled {
+                thread.invalidate_suggestion();
+            }
+            if let Some(session) = thread
+                .session
+                .as_mut()
+                .and_then(SessionLifecycle::session_mut)
+            {
+                let _ = session.set_suggestions_enabled(enabled);
             }
         }
-    }
-
-    /// Every prediction the trigger would have fired, in order. Test-only.
-    #[cfg(test)]
-    pub(crate) fn suggest_calls(&self) -> &[crate::suggest::Request] {
-        &self.suggest_calls
     }
 
     fn poll_model_discovery(&mut self) {
@@ -3247,7 +3261,7 @@ fn vanished_root_refusal(state: &Thread) -> Option<String> {
 /// session-context block when a root is set: the transcript and the log
 /// carry the operator's raw text, displayed ≠ sent. Answers what the
 /// transcript changed.
-fn deliver(state: &mut Thread, text: String) -> io::Result<Update> {
+fn deliver(state: &mut Thread, text: String, suggestions_enabled: bool) -> io::Result<Update> {
     if let Some(refusal) = vanished_root_refusal(state) {
         return Err(io::Error::new(io::ErrorKind::NotFound, refusal));
     }
@@ -3281,7 +3295,9 @@ fn deliver(state: &mut Thread, text: String) -> io::Result<Update> {
         let operator = wire.len() - text.len();
         wire.insert_str(operator, &format!("{carry}\n\n"));
     }
+    session.set_suggestions_enabled(suggestions_enabled)?;
     session.send(&wire)?;
+    state.invalidate_suggestion();
     state.carry = None;
     // The Session's first prompt has gone out; every later one is bare.
     state.preface_pending = false;
@@ -3460,6 +3476,7 @@ mod tests {
         named: Rc<RefCell<Vec<String>>>,
         tuned_efforts: Rc<RefCell<Vec<Option<String>>>>,
         fail_effort: Rc<RefCell<bool>>,
+        native_suggestion: Rc<RefCell<Option<String>>>,
     }
 
     impl crate::providers::Session for Scripted {
@@ -3485,6 +3502,10 @@ mod tests {
                 }))
                 .unwrap();
             Ok(())
+        }
+
+        fn take_suggestion(&mut self) -> Option<String> {
+            self.native_suggestion.borrow_mut().take()
         }
 
         fn set_effort(&mut self, effort: Option<&str>) -> io::Result<()> {
@@ -3550,9 +3571,14 @@ mod tests {
         fail: Rc<RefCell<bool>>,
         fail_at: Rc<RefCell<Option<usize>>>,
         fail_send: Rc<RefCell<bool>>,
+        suggestions: Rc<RefCell<Vec<crate::suggest::Request>>>,
+        native_suggestion: Rc<RefCell<Option<String>>>,
     }
 
     impl Fake {
+        fn suggest_calls(&self) -> Vec<crate::suggest::Request> {
+            self.suggestions.borrow().clone()
+        }
         /// Every spawn's choice, in call order.
         fn spawn_pairs(&self) -> Vec<ProviderChoice> {
             self.providers
@@ -3568,6 +3594,9 @@ mod tests {
     }
 
     impl Spawner for Fake {
+        fn suggest(&mut self, request: crate::suggest::Request, _: Sender<Suggestion>) {
+            self.suggestions.borrow_mut().push(request);
+        }
         fn spawn(
             &mut self,
             request: SpawnRequest,
@@ -3604,6 +3633,7 @@ mod tests {
                 named: self.named.clone(),
                 tuned_efforts: self.tuned_efforts.clone(),
                 fail_effort: self.fail_effort.clone(),
+                native_suggestion: self.native_suggestion.clone(),
             }))
         }
     }
@@ -4275,18 +4305,15 @@ mod tests {
     #[test]
     fn a_finished_turn_asks_for_one_follow_up_prediction() {
         let (mut cockpit, fake) = cockpit("suggest-trigger");
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        let thread = cockpit.open(Provider::Codex, main_choice()).unwrap();
         cockpit.send(thread, "fix the decoder".into());
-        // The predictor only exists once a program was discovered; the suite
-        // never discovers one, so arm it by hand.
-        cockpit.suggest_program = Some("claude".into());
 
         fake.streams.borrow()[0]
             .send(text("Fixed it. Want me to run the tests?"))
             .unwrap();
         cockpit.pump();
         assert!(
-            cockpit.suggest_calls().is_empty(),
+            fake.suggest_calls().is_empty(),
             "a turn still streaming has nothing settled to predict from"
         );
 
@@ -4298,7 +4325,7 @@ mod tests {
             .unwrap();
         cockpit.pump();
 
-        let calls = cockpit.suggest_calls();
+        let calls = fake.suggest_calls();
         assert_eq!(calls.len(), 1, "one turn, one ask");
         assert_eq!(calls[0].thread, thread);
         assert!(
@@ -4316,17 +4343,15 @@ mod tests {
         // difference between one Haiku call per turn and one per repaint.
         cockpit.pump();
         cockpit.pump();
-        assert_eq!(cockpit.suggest_calls().len(), 1, "one turn, still one ask");
+        assert_eq!(fake.suggest_calls().len(), 1, "one turn, still one ask");
     }
 
-    /// With no Claude CLI anywhere there is nothing to ask, and the Thread
-    /// simply keeps the generic idle line.
+    /// Codex requests never depend on discovering or running Claude.
     #[test]
-    fn no_claude_cli_means_no_prediction_and_no_error() {
+    fn a_codex_thread_requests_a_codex_prediction() {
         let (mut cockpit, fake) = cockpit("suggest-no-cli");
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        let thread = cockpit.open(Provider::Codex, main_choice()).unwrap();
         cockpit.send(thread, "go".into());
-        cockpit.suggest_program = None;
 
         fake.streams.borrow()[0].send(text("Done.")).unwrap();
         fake.streams.borrow()[0]
@@ -4337,15 +4362,14 @@ mod tests {
             .unwrap();
         cockpit.pump();
 
-        assert!(cockpit.suggest_calls().is_empty());
+        assert_eq!(fake.suggest_calls()[0].provider, Provider::Codex);
         assert_eq!(cockpit.thread(thread).unwrap().suggestion(), None);
     }
 
     #[test]
     fn disabled_suggestions_neither_run_nor_land() {
         let (mut cockpit, fake) = cockpit("suggest-disabled");
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        cockpit.suggest_program = Some("claude".into());
+        let thread = cockpit.open(Provider::Codex, main_choice()).unwrap();
         cockpit.set_suggestions_enabled(false);
         cockpit.send(thread, "go".into());
 
@@ -4357,7 +4381,7 @@ mod tests {
             })
             .unwrap();
         cockpit.pump();
-        assert!(cockpit.suggest_calls().is_empty());
+        assert!(fake.suggest_calls().is_empty());
 
         cockpit.deliver_suggestion(thread, "Run the tests".into());
         cockpit.pump();
@@ -4373,11 +4397,7 @@ mod tests {
             })
             .unwrap();
         cockpit.pump();
-        assert_eq!(
-            cockpit.suggest_calls().len(),
-            1,
-            "re-enabling restores asks"
-        );
+        assert_eq!(fake.suggest_calls().len(), 1, "re-enabling restores asks");
     }
 
     #[test]
@@ -4410,6 +4430,7 @@ mod tests {
             .send(Suggestion {
                 thread,
                 generation: generation.wrapping_add(1),
+                revision: cockpit.threads[&thread].suggestion_revision,
                 text: "Run the tests".into(),
             })
             .unwrap();
@@ -4426,6 +4447,7 @@ mod tests {
             .send(Suggestion {
                 thread,
                 generation,
+                revision: cockpit.threads[&thread].suggestion_revision,
                 text: "Run the tests".into(),
             })
             .unwrap();
@@ -4441,8 +4463,7 @@ mod tests {
     #[test]
     fn a_new_turn_drops_the_previous_prediction() {
         let (mut cockpit, fake) = cockpit("suggest-supersede");
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        cockpit.suggest_program = Some("claude".into());
+        let thread = cockpit.open(Provider::Codex, main_choice()).unwrap();
         cockpit.send(thread, "go".into());
 
         let generation = cockpit.threads[&thread].generation;
@@ -4460,6 +4481,7 @@ mod tests {
             .send(Suggestion {
                 thread,
                 generation,
+                revision: cockpit.threads[&thread].suggestion_revision,
                 text: "Run the tests".into(),
             })
             .unwrap();
@@ -4482,6 +4504,96 @@ mod tests {
             None,
             "the new turn's ask must drop the old turn's answer"
         );
+    }
+
+    #[test]
+    fn older_turn_predictions_cannot_replace_the_latest_or_survive_disabling() {
+        let (mut cockpit, fake) = cockpit("suggest-turn-revision");
+        let thread = cockpit.open(Provider::Codex, main_choice()).unwrap();
+        let finish = || {
+            fake.streams.borrow()[0].send(text("Done.")).unwrap();
+            fake.streams.borrow()[0]
+                .send(SessionEvent::TurnEnded {
+                    outcome: TurnOutcome::Completed,
+                    cost_usd: None,
+                })
+                .unwrap();
+        };
+        cockpit.send(thread, "first".into());
+        finish();
+        cockpit.pump();
+        let first = fake.suggest_calls()[0].clone();
+        cockpit.send(thread, "second".into());
+        let old = Suggestion {
+            thread,
+            generation: first.generation,
+            revision: first.revision,
+            text: "Run the tests".into(),
+        };
+        // Sending invalidates an outstanding prediction immediately.
+        cockpit.suggestions.0.send(old.clone()).unwrap();
+        cockpit.pump();
+        assert_eq!(cockpit.thread(thread).unwrap().suggestion(), None);
+        finish();
+        cockpit.pump();
+        cockpit.deliver_suggestion(thread, "Commit the fix".into());
+        cockpit.pump();
+        cockpit.suggestions.0.send(old).unwrap();
+        cockpit.pump();
+        assert_eq!(
+            cockpit.thread(thread).unwrap().suggestion(),
+            Some("Commit the fix")
+        );
+        // Off then on must also discard replies from before the setting change.
+        cockpit.deliver_suggestion(thread, "Late reply".into());
+        cockpit.set_suggestions_enabled(false);
+        cockpit.set_suggestions_enabled(true);
+        cockpit.pump();
+        assert_eq!(cockpit.thread(thread).unwrap().suggestion(), None);
+    }
+
+    #[test]
+    fn claude_uses_native_suggestions_without_a_second_model_request() {
+        let (mut cockpit, fake) = cockpit("native-suggestion");
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        cockpit.send(thread, "show code".into());
+        fake.streams.borrow()[0]
+            .send(text("Here is the code."))
+            .unwrap();
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TurnEnded {
+                outcome: TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+        *fake.native_suggestion.borrow_mut() = Some("write the tests".into());
+        let updates = cockpit.pump();
+        assert_eq!(
+            cockpit.thread(thread).unwrap().suggestion(),
+            Some("write the tests")
+        );
+        assert!(updates.iter().any(|update| update.thread == thread));
+        assert!(
+            fake.suggest_calls().is_empty(),
+            "Claude must not spawn a fallback model"
+        );
+        // An autonomous next turn also supersedes the old native hint,
+        // even when Claude deliberately emits no new suggestion.
+        fake.streams.borrow()[0]
+            .send(text("Another result."))
+            .unwrap();
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TurnEnded {
+                outcome: TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+        cockpit.pump();
+        assert_eq!(cockpit.thread(thread).unwrap().suggestion(), None);
+        cockpit.set_suggestions_enabled(false);
+        *fake.native_suggestion.borrow_mut() = Some("late reply".into());
+        cockpit.pump();
+        assert_eq!(cockpit.thread(thread).unwrap().suggestion(), None);
     }
 
     #[test]

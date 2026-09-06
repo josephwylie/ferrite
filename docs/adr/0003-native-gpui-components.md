@@ -24,6 +24,14 @@ text; selection and copying of offscreen text remain unchanged. See
 [dependency patch](../../vendor/README.md).
 Tool output remains literal and selectable. HTML code fences offer a native
 formatted preview; this is not a browser, CSS layout engine or JavaScript host.
+The transcript uses a shared 10px gap between semantic blocks. Markdown uses
+the same gap between block siblings and list items, recursively through quotes
+and lists, with no trailing gap or extra space for reference definitions.
+Code line spacing and table cell padding remain local to their content.
+User prompts use a neutral raised background for both providers. Live progress
+places elapsed time, tokens and the interrupt hint below its reasoning caption;
+command details remain in the transcript's tool disclosure. Successful tools
+use their green verb without additional passed or exit-zero badges.
 GPUI 0.6's default text document requests full height inside the transcript's
 auto-height rows. An unbounded line cap selects its natural-height path, avoiding
 circular sizing without truncating content or introducing another scroll owner.

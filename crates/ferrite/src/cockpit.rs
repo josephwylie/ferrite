@@ -4562,13 +4562,13 @@ impl CockpitView {
     /// ⌘V anywhere in the window lands in the focused Pane's Composer.
     /// The Composer's own Paste runs first while it holds the keyboard;
     /// this is the fallback for when a click in the transcript — a drag
-    /// to select, a tool row — took the keyboard away: the text goes
-    /// where the operator is about to type, and the keyboard follows it.
+    /// to select, a tool row — took the keyboard away: pasted text or files
+    /// go where the operator is about to type, and the keyboard follows.
     fn paste_into_composer(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
         if !self.panes[self.focused()].is_main() {
             return;
         }
-        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
+        let Some(item) = cx.read_from_clipboard() else {
             return;
         };
         let index = self.focused();
@@ -4579,7 +4579,7 @@ impl CockpitView {
             return;
         }
         let composer = pane.composer.clone();
-        composer.update(cx, |composer, cx| composer.insert(&text, cx));
+        composer.update(cx, |composer, cx| composer.paste_item(item, cx));
         window.focus(&composer.focus_handle(cx), cx);
         cx.notify();
     }
@@ -9992,6 +9992,45 @@ mod tests {
                     }
                 }
             });
+        }
+    }
+
+    #[gpui::test]
+    fn transcript_spacing_separates_prompts_tools_and_answers(cx: &mut TestAppContext) {
+        let (mut core, fake) = cockpit("transcript-spacing", 1);
+        let thread = core.threads()[0];
+        core.send(thread, "Check the build".into());
+        let (_, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        for index in 0..2 {
+            fake.streams.borrow()[0]
+                .send(SessionEvent::ToolStarted {
+                    id: format!("spacing-{index}"),
+                    name: "commandExecution".into(),
+                    input: serde_json::json!({"command": "cargo check"}),
+                })
+                .unwrap();
+            fake.streams.borrow()[0]
+                .send(SessionEvent::ToolCompleted {
+                    id: format!("spacing-{index}"),
+                    output: "ok".into(),
+                    is_error: false,
+                    result: ferrite_core::ToolResult::Opaque,
+                })
+                .unwrap();
+        }
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TextDelta {
+                text: "The build passed.\n\n".into(),
+            })
+            .unwrap();
+        for width in [1000., 720.] {
+            cx.simulate_resize(gpui::size(px(width), px(700.)));
+            tick(cx);
+            let prompt = cx.debug_bounds("transcript-prompt").unwrap();
+            let tools = cx.debug_bounds("tool-group-spacing-0").unwrap();
+            let answer = cx.debug_bounds("transcript-answer").unwrap();
+            assert_eq!(tools.top() - prompt.bottom(), px(crate::theme::BLOCK_GAP));
+            assert_eq!(answer.top() - tools.bottom(), px(crate::theme::BLOCK_GAP));
         }
     }
 

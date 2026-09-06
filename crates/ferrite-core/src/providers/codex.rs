@@ -1043,7 +1043,7 @@ fn parse_version_token(token: &str) -> Option<(String, [u64; 3])> {
 /// Codex's way of titling a Thread: `codex exec`, whose stdout is the
 /// final message alone (the banner goes to stderr).
 pub mod title {
-    use crate::titler::TitleForm;
+    use crate::providers::oneshot::Form as TitleForm;
 
     /// The small model in Codex's own catalogue.
     pub const MODEL: &str = "gpt-5.4-mini";
@@ -1057,13 +1057,17 @@ pub mod title {
     /// verified against `codex exec --help` of 0.144.4. The prompt is the
     /// positional argument.
     pub fn fill(program: &str, prompt: &str) -> TitleForm {
+        fill_with_model(program, prompt, MODEL)
+    }
+
+    pub(super) fn fill_with_model(program: &str, prompt: &str, model: &'static str) -> TitleForm {
         let effort = format!("model_reasoning_effort=\"{EFFORT}\"");
         TitleForm {
             program: program.to_string(),
             args: [
                 "exec",
                 "--model",
-                MODEL,
+                model,
                 "-c",
                 effort.as_str(),
                 "--ephemeral",
@@ -1079,9 +1083,36 @@ pub mod title {
             .into_iter()
             .map(str::to_string)
             .collect(),
-            model: MODEL,
+            model,
             effort: EFFORT,
         }
+    }
+}
+
+/// Follow-ups use the same isolated exec policy as Titles, with the
+/// operator-requested GPT-5.5 at its lowest supported reasoning effort.
+pub(super) mod followup {
+    use super::title;
+    use crate::providers::oneshot::Form;
+
+    pub fn fill(program: &str, system: &str) -> Form {
+        let mut form = title::fill_with_model(program, system, "gpt-5.5");
+        // No local tools or external connectors are needed for a prediction.
+        form.args.splice(
+            1..1,
+            [
+                "-c",
+                "features.shell_tool=false",
+                "-c",
+                "features.apps=false",
+                "-c",
+                "features.multi_agent=false",
+                "-c",
+                "web_search=\"disabled\"",
+            ]
+            .map(str::to_string),
+        );
+        form
     }
 }
 

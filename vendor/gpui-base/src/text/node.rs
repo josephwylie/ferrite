@@ -102,6 +102,15 @@ impl BlockNode {
         matches!(self, Self::ListItem { .. })
     }
 
+    /// Non-rendering source nodes must not introduce a boundary or trailing gap.
+    pub(super) fn is_visible(&self) -> bool {
+        match self {
+            Self::Definition { .. } | Self::Unknown | Self::Break { .. } => false,
+            Self::Root { children, .. } => children.iter().any(Self::is_visible),
+            _ => true,
+        }
+    }
+
     /// Combine all children, omitting the empt parent nodes.
     pub(super) fn compact(self) -> BlockNode {
         match self {
@@ -554,7 +563,7 @@ fn emit_run(
     let Ok(state) = state.lock() else {
         return selected;
     };
-    let Some(selection) = &state.selection else {
+    let Some(selection) = state.selected_range() else {
         return selected;
     };
     if selection.start >= selection.end {
@@ -844,13 +853,13 @@ impl Paragraph {
             let Ok(state) = c.state.lock() else {
                 continue;
             };
-            if let Some(selection) = &state.selection {
+            if let Some(selection) = state.selected_range() {
                 text.push_str(&state.text[selection.start..selection.end]);
             }
         }
 
         if let Ok(state) = self.state.lock()
-            && let Some(selection) = &state.selection
+            && let Some(selection) = state.selected_range()
         {
             text.push_str(&state.text[selection.start..selection.end]);
         }
@@ -928,24 +937,25 @@ impl Paragraph {
     ///
     /// Mirrors the [`selected_text`](Self::selected_text) traversal.
     pub(super) fn has_selection(&self) -> bool {
-        self.children
-            .iter()
-            .any(|c| c.state.lock().is_ok_and(|state| state.selection.is_some()))
-            || self
-                .state
+        self.children.iter().any(|c| {
+            c.state
                 .lock()
-                .is_ok_and(|state| state.selection.is_some())
+                .is_ok_and(|state| state.selected_range().is_some())
+        }) || self
+            .state
+            .lock()
+            .is_ok_and(|state| state.selected_range().is_some())
     }
 
     pub(super) fn clear_selection(&self) {
         for c in self.children.iter() {
             if let Ok(mut state) = c.state.lock() {
-                state.selection = None;
+                state.clear_selection();
             }
         }
 
         if let Ok(mut state) = self.state.lock() {
-            state.selection = None;
+            state.clear_selection();
         }
     }
 }
@@ -1226,7 +1236,7 @@ impl CodeBlock {
     pub(super) fn selected_text(&self) -> String {
         let mut text = String::new();
         if let Ok(state) = self.state.lock()
-            && let Some(selection) = &state.selection
+            && let Some(selection) = state.selected_range()
         {
             text.push_str(&state.text[selection.start..selection.end]);
         }
@@ -1264,12 +1274,12 @@ impl CodeBlock {
     pub(super) fn has_selection(&self) -> bool {
         self.state
             .lock()
-            .is_ok_and(|state| state.selection.is_some())
+            .is_ok_and(|state| state.selected_range().is_some())
     }
 
     pub(super) fn clear_selection(&self) {
         if let Ok(mut state) = self.state.lock() {
-            state.selection = None;
+            state.clear_selection();
         }
     }
 
@@ -1285,7 +1295,6 @@ impl CodeBlock {
         div()
             .w_full()
             .min_w_0()
-            .when(!options.is_last, |this| this.pb(style.paragraph_gap()))
             .child(
                 div()
                     .id(("codeblock", options.ix))
@@ -1336,6 +1345,7 @@ pub(crate) struct NodeContext {
     pub(crate) code_block_actions: Option<Arc<CodeBlockActionsFn>>,
     pub(crate) code_block_highlighter: Option<Arc<CodeBlockHighlighterFn>>,
     pub(crate) table_actions: Option<Arc<TableActionsFn>>,
+    pub(crate) link_renderer: Option<Arc<super::text_view::LinkRendererFn>>,
     pub(crate) link_click_handler: Option<Arc<LinkClickHandlerFn>>,
     pub(crate) markdown_extensions: Arc<MarkdownExtensions>,
 }
@@ -1359,13 +1369,20 @@ impl Paragraph {
         let span = self.span;
         let children = &self.children;
 
-        if self.should_render_inline_flow() {
-            return InlineFlow::new(
+        let has_custom_links = node_cx.link_renderer.is_some()
+            && children
+                .iter()
+                .any(|child| child.marks.iter().any(|(_, mark)| mark.link.is_some()));
+        if self.should_render_inline_flow() || has_custom_links {
+            let flow = InlineFlow::new(
                 span.unwrap_or_default(),
                 self.inline_flow_items(node_cx, cx),
                 node_cx.link_click_handler.clone(),
             )
-            .into_any_element();
+            .render_links(node_cx.link_renderer.as_ref(), _window, cx);
+            if self.should_render_inline_flow() || flow.has_elements() {
+                return flow.into_any_element();
+            }
         }
 
         let mut child_nodes: Vec<AnyElement> = vec![];
@@ -1846,16 +1863,14 @@ impl BlockNode {
     ) -> AnyElement {
         match item {
             BlockNode::ListItem {
-                children,
-                spread,
-                checked,
-                ..
+                children, checked, ..
             } => v_flex()
                 .id(("li", options.ix))
                 .w_full()
                 .min_w_0()
-                .when(*spread, |this| this.child(div()))
                 .children({
+                    let children: Vec<_> =
+                        children.iter().filter(|child| child.is_visible()).collect();
                     let mut items: Vec<Div> = Vec::with_capacity(children.len());
 
                     for (child_ix, child) in children.iter().enumerate() {
@@ -1868,7 +1883,8 @@ impl BlockNode {
                                     NodeRenderOptions {
                                         depth: options.depth + 1,
                                         todo: checked.is_some(),
-                                        is_last: true,
+                                        ix: child_ix,
+                                        is_last: child_ix + 1 == children.len(),
                                         ..options
                                     },
                                     node_cx,
@@ -1908,7 +1924,8 @@ impl BlockNode {
                                     NodeRenderOptions {
                                         depth: options.depth + 1,
                                         todo: checked.is_some(),
-                                        is_last: true,
+                                        ix: child_ix,
+                                        is_last: child_ix + 1 == children.len(),
                                         ..options
                                     },
                                     node_cx,
@@ -1927,7 +1944,8 @@ impl BlockNode {
                                     NodeRenderOptions {
                                         depth: options.depth + 1,
                                         todo: checked.is_some(),
-                                        is_last: true,
+                                        ix: child_ix,
+                                        is_last: child_ix + 1 == children.len(),
                                         ..options
                                     },
                                     node_cx,
@@ -2173,7 +2191,6 @@ impl BlockNode {
         }
 
         div()
-            .pb(rems(1.))
             .w_full()
             .child(
                 // Scroll viewport owns the visible frame, including any
@@ -2282,7 +2299,6 @@ impl BlockNode {
         }
 
         div()
-            .pb(rems(1.))
             .w_full()
             .child(
                 div()
@@ -2318,23 +2334,37 @@ impl BlockNode {
         window: &mut Window,
         cx: &mut App,
     ) -> AnyElement {
+        if !self.is_visible() {
+            return div().into_any_element();
+        }
         let ix = options.ix;
-        let mb = if options.in_list || options.is_last {
+        let gap = if options.is_last {
             rems(0.)
         } else {
             node_cx.style.paragraph_gap()
         };
 
-        match self {
-            BlockNode::Root { children, .. } => div()
-                .id(("div", ix))
-                .children(children.into_iter().enumerate().map(move |(ix, node)| {
-                    node.render_block(NodeRenderOptions { ix, ..options }, node_cx, window, cx)
-                }))
-                .into_any_element(),
+        let content = match self {
+            BlockNode::Root { children, .. } => {
+                let last = children.iter().rposition(Self::is_visible);
+                div()
+                    .id(("div", ix))
+                    .children(children.iter().enumerate().map(move |(ix, node)| {
+                        node.render_block(
+                            NodeRenderOptions {
+                                ix,
+                                is_last: Some(ix) == last,
+                                ..options
+                            },
+                            node_cx,
+                            window,
+                            cx,
+                        )
+                    }))
+                    .into_any_element()
+            }
             BlockNode::Paragraph(paragraph) => div()
                 .id(("p", ix))
-                .pb(mb)
                 .child(paragraph.render(node_cx, window, cx))
                 .into_any_element(),
             BlockNode::Heading {
@@ -2357,7 +2387,6 @@ impl BlockNode {
 
                 div()
                     .id(SharedString::from(format!("h{}-{}", level, ix)))
-                    .pb(rems(0.3))
                     .whitespace_normal()
                     .text_size(text_size)
                     .font_weight(font_weight)
@@ -2366,7 +2395,6 @@ impl BlockNode {
             }
             BlockNode::Blockquote { children, .. } => div()
                 .w_full()
-                .pb(mb)
                 .child(
                     div()
                         .id(("blockquote", ix))
@@ -2376,10 +2404,18 @@ impl BlockNode {
                         .border_color(node_cx.style.border())
                         .px_4()
                         .children({
-                            let children_len = children.len();
+                            let last = children.iter().rposition(Self::is_visible);
                             children.into_iter().enumerate().map(move |(index, c)| {
-                                let is_last = index == children_len - 1;
-                                c.render_block(options.is_last(is_last), node_cx, window, cx)
+                                let is_last = Some(index) == last;
+                                c.render_block(
+                                    NodeRenderOptions {
+                                        ix: index,
+                                        ..options.is_last(is_last)
+                                    },
+                                    node_cx,
+                                    window,
+                                    cx,
+                                )
                             })
                         }),
                 )
@@ -2388,14 +2424,16 @@ impl BlockNode {
                 children, ordered, ..
             } => v_flex()
                 .id((if *ordered { "ol" } else { "ul" }, ix))
+                .gap(node_cx.style.paragraph_gap())
                 .w_full()
                 .min_w_0()
-                .pb(mb)
                 .children({
                     let mut items = Vec::with_capacity(children.len());
                     let mut item_index = 0;
                     for (ix, item) in children.into_iter().enumerate() {
-                        let is_item = item.is_list_item();
+                        if !item.is_list_item() {
+                            continue;
+                        }
 
                         items.push(Self::render_list_item(
                             item,
@@ -2410,9 +2448,7 @@ impl BlockNode {
                             cx,
                         ));
 
-                        if is_item {
-                            item_index += 1;
-                        }
+                        item_index += 1;
                     }
                     items
                 })
@@ -2424,13 +2460,12 @@ impl BlockNode {
                     None => div().child(node.as_text().to_string()).into_any_element(),
                 };
 
-                div().pb(mb).child(inner).into_any_element()
+                div().child(inner).into_any_element()
             }
             BlockNode::Table { .. } => {
                 Self::render_table(self, &options, node_cx, window, cx).into_any_element()
             }
             BlockNode::HorizontalRule { .. } => div()
-                .pb(mb)
                 .child(
                     div()
                         .id("horizontal-rule")
@@ -2447,7 +2482,14 @@ impl BlockNode {
 
                 div().into_any_element()
             }
-        }
+        };
+        div()
+            .id(("markdown-block", ix))
+            .w_full()
+            .min_w_0()
+            .pb(gap)
+            .child(content)
+            .into_any_element()
     }
 }
 

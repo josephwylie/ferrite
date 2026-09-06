@@ -9,22 +9,19 @@
 //! back Some(title) or, on any failure, None. The prompt-derived title
 //! stays in place until then.
 //!
-//! The provider-agnostic part lives here: what to ask, how to run a CLI
-//! with a kill deadline, how to clean its reply. What differs per provider
+//! The provider-agnostic part lives here: what to ask and how to clean its reply.
+//! Titles and follow-ups share the provider one-shot runner and its deadline. What differs per provider
 //! — which program, which flags, which cheap model — is a [`TitleForm`]
 //! that each provider fills in ([`claude::fill`], [`codex::fill`]); the
-//! cockpit picks the filler by the Thread's Provider. Those fillers belong
-//! beside their Sessions in `providers/`; they sit here only until that
-//! module is free to take them.
+//! cockpit picks the filler by the Thread's Provider. Those fillers live
+//! beside their Sessions in `providers/`.
 
-use std::io::Read;
-use std::path::PathBuf;
-use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(test)]
+use std::time::Instant;
 
-use crate::providers::spawnable_program;
 use crate::store::Provider;
 
 /// Longest title kept; longer replies mean the model ignored the ask.
@@ -35,8 +32,6 @@ const PROMPT_CHARS: usize = 2000;
 const REPLY_CHARS: usize = 1000;
 /// Longer than any sane title turn, shorter than an operator's patience.
 const TIMEOUT: Duration = Duration::from_secs(30);
-/// How often the watcher thread checks whether the CLI has exited.
-const POLL: Duration = Duration::from_millis(50);
 
 /// What the model is shown: the Thread's first prompt and, if the turn has
 /// finished, the first reply. Both are cut to their caps when the
@@ -47,23 +42,7 @@ pub struct TitleRequest {
     pub reply: Option<String>,
 }
 
-/// The form a provider fills in so the titler can run its CLI: everything
-/// the agnostic runner needs and nothing it has to understand. The
-/// instruction text is already inside `args`, wherever that CLI wants it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TitleForm {
-    /// The CLI to run — the provider's configured program, as the Session
-    /// would spawn it.
-    pub program: String,
-    /// Everything after the program. The reply is read from stdout, so the
-    /// flags must put the model's final text there and nothing else.
-    pub args: Vec<String>,
-    /// The model the title is asked of, for a UI that says what a title
-    /// costs. A provider's own alias ("haiku", "gpt-5.4-mini").
-    pub model: &'static str,
-    /// The effort level sent with the model, in the provider's own words.
-    pub effort: &'static str,
-}
+pub use crate::providers::oneshot::Form as TitleForm;
 
 /// The instruction text a provider puts in its form.
 pub fn title_prompt(req: &TitleRequest) -> String {
@@ -139,63 +118,8 @@ pub fn spawn_with_timeout(form: TitleForm, timeout: Duration) -> Receiver<Option
     rx
 }
 
-/// An empty directory for the CLI's cwd, so no project instructions or
-/// settings are discovered. One per process; both CLIs are told not to
-/// persist, so nothing accumulates there.
-fn scratch_dir() -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("ferrite-titler-{}", std::process::id()));
-    let _ = std::fs::create_dir_all(&dir);
-    dir
-}
-
 fn run(form: &TitleForm, timeout: Duration) -> Option<String> {
-    let mut child = Command::new(spawnable_program(&form.program))
-        .args(&form.args)
-        .current_dir(scratch_dir())
-        // Closed, not inherited: Codex reads a piped stdin as more prompt.
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-
-    // Drain stdout on its own thread: waiting on the child first would
-    // deadlock if the CLI ever filled the pipe, and reading first would
-    // defeat the timeout.
-    let mut stdout = child.stdout.take()?;
-    let reader = thread::spawn(move || {
-        let mut buf = String::new();
-        let _ = stdout.read_to_string(&mut buf);
-        buf
-    });
-
-    let started = Instant::now();
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break Some(status),
-            Ok(None) if started.elapsed() < timeout => thread::sleep(POLL),
-            Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                break None;
-            }
-            Err(_) => {
-                let _ = child.kill();
-                break None;
-            }
-        }
-    };
-    // A killed CLI's own children (a shell's `sleep`, a node wrapper's
-    // binary) may still hold the pipe: joining the reader would wait for
-    // them, so a timed-out run is None without waiting — the reader thread
-    // ends by itself when the pipe finally closes.
-    let status = status?;
-    let output = reader.join().ok()?;
-    if status.success() {
-        clean(&output)
-    } else {
-        None
-    }
+    clean(&crate::providers::oneshot::run(form, None, timeout)?)
 }
 
 /// Each Provider's own filler lives beside its Session; the titler only

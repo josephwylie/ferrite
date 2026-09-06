@@ -1784,7 +1784,9 @@ version = "0.1.0"
 dependencies = [
  "ferrite-core",
  "gpui-kit",
+ "percent-encoding",
  "serde_json",
+ "url",
  "windows-sys 0.61.2",
 ]
 

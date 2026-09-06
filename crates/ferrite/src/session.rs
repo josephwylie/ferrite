@@ -28,6 +28,7 @@ pub struct SessionDefaults {
     pub codex_sandbox: Option<String>,
     pub claude_effort: Option<String>,
     pub codex_effort: Option<String>,
+    pub placeholder_suggestions: bool,
 }
 
 impl SessionDefaults {
@@ -39,6 +40,7 @@ impl SessionDefaults {
             codex_sandbox: settings.codex_sandbox.clone(),
             claude_effort: settings.claude_effort.clone(),
             codex_effort: settings.codex_effort.clone(),
+            placeholder_suggestions: settings.placeholder_suggestions,
         }
     }
 
@@ -64,6 +66,14 @@ impl Spawn {
 }
 
 impl Spawner for Spawn {
+    fn suggest(
+        &mut self,
+        request: ferrite_core::suggest::Request,
+        replies: std::sync::mpsc::Sender<ferrite_core::suggest::Suggestion>,
+    ) {
+        ferrite_core::suggest::spawn(request, replies);
+    }
+
     fn discover_models(
         &mut self,
     ) -> Option<std::sync::mpsc::Receiver<(Provider, Vec<ferrite_core::ModelInfo>)>> {
@@ -143,6 +153,13 @@ impl Session for SessionWithDefaults {
         self.inner.cancel_queued(id)
     }
 
+    fn set_suggestions_enabled(&mut self, enabled: bool) -> io::Result<()> {
+        self.inner.set_suggestions_enabled(enabled)
+    }
+    fn take_suggestion(&mut self) -> Option<String> {
+        self.inner.take_suggestion()
+    }
+
     fn events(&self) -> &std::sync::mpsc::Receiver<ferrite_core::SessionEvent> {
         self.inner.events()
     }
@@ -217,6 +234,7 @@ impl Spawn {
                 effort,
                 name,
                 permission_mode: defaults.claude_permission_mode,
+                prompt_suggestions: defaults.placeholder_suggestions,
                 resume,
                 ..Default::default()
             }),

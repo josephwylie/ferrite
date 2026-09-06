@@ -167,13 +167,6 @@ pub const SYN_NUMBER: u32 = ATTENTION;
 pub const INLINE_CODE_INK: u32 = 0xe3c88f;
 /// `#8ab4f8` — a link's ink, and its underline. Inert still — nothing opens.
 pub const LINK_INK: u32 = 0x8ab4f8;
-/// `rgba(217,119,87,0.10)` — the operator's prompt block on a Claude Thread.
-pub const PROMPT_WASH_CLAUDE: u32 = 0xd977571a;
-/// `rgba(16,163,127,0.10)` — the operator's prompt block on a Codex Thread.
-pub const PROMPT_WASH_CODEX: u32 = 0x10a37f1a;
-/// 2px — the prompt block's left edge in the provider's colour.
-pub const PROMPT_EDGE_W: f32 = 2.0;
-
 /// `#7fbf95` at 1px inset — a nav row that will accept the drag.
 #[allow(dead_code)]
 pub const DROP_VALID: u32 = RUNNING;
@@ -523,6 +516,10 @@ pub const COMPOSER_PAD_B: f32 = 8.0;
 pub const COMPOSER_ROW_H: f32 = 20.0;
 #[allow(dead_code)]
 pub const COMPOSER_GAP: f32 = 3.0;
+
+/// Clearance between the floating attachment island and the prompt's
+/// top edge, so the island reads as its own surface.
+pub const ATTACHMENT_ISLAND_GAP: f32 = 6.0;
 pub const CARET_W: f32 = 2.0;
 #[allow(dead_code)]
 pub const CARET_H: f32 = 14.0;
@@ -563,18 +560,9 @@ pub const RESULT_PAD_T: f32 = 0.0;
 pub const RESULT_PAD_B: f32 = 1.0;
 /// An invisible hit area, not a drawn thing: the tool-disclosure target.
 pub const TOOL_DISCLOSURE_HIT: f32 = 20.0;
-/// Paragraph and list rhythm: 10px below a paragraph, a list or a code
-/// block; 12/6 around a heading; 3px between list items; a 16px list indent
-/// with a 4px disc 15px left of the text.
-#[allow(dead_code)]
-pub const P_MARGIN_B: f32 = 10.0;
-#[allow(dead_code)]
-pub const H4_MARGIN_T: f32 = 12.0;
-#[allow(dead_code)]
-pub const H4_MARGIN_B: f32 = 6.0;
-#[allow(dead_code)]
-pub const LI_GAP: f32 = 3.0;
-#[allow(dead_code)]
+/// Shared 10px separation between transcript blocks and Markdown siblings.
+pub const BLOCK_GAP: f32 = 10.0;
+/// A 16px list indent, with a 4px disc 15px left of the text.
 pub const UL_INDENT: f32 = 16.0;
 #[allow(dead_code)]
 pub const BULLET_D: f32 = 4.0;

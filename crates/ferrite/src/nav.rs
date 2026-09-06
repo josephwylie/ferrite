@@ -28,6 +28,7 @@ use ferrite_core::ThreadId;
 use std::time::Duration;
 
 use gpui::component::button::Button;
+use gpui::component::tooltip::Tooltip;
 use gpui::prelude::*;
 use gpui::{
     div, point, pulsating_between, px, radians, relative, rgb, rgba, Animation, AnimationExt,
@@ -925,8 +926,10 @@ pub fn rail_items() -> Div {
 /// the Group's, not the Thread's — the same fill, carried by the same
 /// selection, at the same strength as the expanded tree.
 pub fn rail_item(row: &ThreadRow, current: bool) -> Stateful<Div> {
+    let title = row.name.clone();
     let cell = div()
         .id(("nav-rail-item", row.thread.get() as usize))
+        .tooltip(move |window, cx| Tooltip::new(title.clone()).build(window, cx))
         .flex()
         .flex_shrink_0()
         .items_center()

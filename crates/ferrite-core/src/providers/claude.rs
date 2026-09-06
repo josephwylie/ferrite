@@ -8,6 +8,7 @@
 
 mod activity;
 mod queue;
+mod suggestions;
 mod wire;
 
 use std::io::{self, BufRead, BufReader, Write};
@@ -65,6 +66,8 @@ pub struct ClaudeConfig {
     /// Reasoning effort (`"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`)
     /// applied through flag settings. `None` leaves the CLI's own default.
     pub effort: Option<String>,
+    /// Native generation is configured at process start.
+    pub prompt_suggestions: bool,
     /// The Thread's title, handed to the CLI as the session's display name
     /// (`--name`) so its own session list reads like Ferrite's. Spawn-time
     /// only: the CLI takes no rename over the wire, so a later title waits
@@ -90,6 +93,7 @@ impl Default for ClaudeConfig {
             cwd: None,
             model: None,
             effort: None,
+            prompt_suggestions: false,
             name: None,
             permission_mode: None,
             resume: None,
@@ -198,6 +202,7 @@ pub struct ClaudeSession {
     decoder: Arc<Mutex<activity::Decoder>>,
     queue: Arc<Mutex<queue::Queue>>,
     next_request_id: u64,
+    suggestions: Arc<Mutex<suggestions::Inbox>>,
 }
 
 impl ClaudeSession {
@@ -229,6 +234,14 @@ impl ClaudeSession {
             // that means "ask the host on stdin", verified by capture.
             "--permission-prompt-tool",
             "stdio",
+        ]);
+        command.args([
+            "--prompt-suggestions",
+            if config.prompt_suggestions {
+                "true"
+            } else {
+                "false"
+            },
         ]);
         if let Some(session_id) = &config.resume {
             // Continue the named conversation instead of starting one. The
@@ -282,6 +295,9 @@ impl ClaudeSession {
         let effort_reply = Arc::new(Mutex::new(None));
         let decoder = Arc::new(Mutex::new(activity::Decoder::default()));
         let queue = Arc::new(Mutex::new(queue::Queue::default()));
+        let mut inbox = suggestions::Inbox::default();
+        inbox.configure(config.prompt_suggestions);
+        let suggestions = Arc::new(Mutex::new(inbox));
         let capabilities = read_stdout(
             stdout,
             sender,
@@ -290,6 +306,7 @@ impl ClaudeSession {
             effort_reply.clone(),
             decoder.clone(),
             queue.clone(),
+            suggestions.clone(),
         );
 
         let mut session = Self {
@@ -304,6 +321,7 @@ impl ClaudeSession {
             decoder,
             queue,
             next_request_id: 1,
+            suggestions,
         };
         // Before the operator is offered anything: ask the CLI what it can do.
         // A write failure here is a CLI that died on startup, which the reader
@@ -350,6 +368,20 @@ impl ClaudeSession {
         result
     }
 
+    /// Visibility changes immediately. The CLI's generation opt-in is
+    /// spawn-time only; reopening the Session applies the new setting.
+    pub fn set_suggestions_enabled(&mut self, enabled: bool) -> io::Result<()> {
+        let mut inbox = lock(&self.suggestions);
+        if inbox.enabled != enabled {
+            inbox.configure(enabled);
+        }
+        Ok(())
+    }
+
+    pub fn take_suggestion(&mut self) -> Option<String> {
+        lock(&self.suggestions).take()
+    }
+
     /// Send one user prompt; the CLI starts (or queues) a turn.
     pub fn enqueue(&mut self, client_id: &str, text: &str) -> io::Result<()> {
         {
@@ -362,6 +394,7 @@ impl ClaudeSession {
             }
             queue.submitted.insert(client_id.into(), text.into());
         }
+        lock(&self.suggestions).sent();
         self.write_line(&serde_json::json!({
             "type":"user", "uuid":client_id, "isAsync":true,
             "message":{"role":"user","content":wire::input_content(text,self.cwd.as_deref())}
@@ -380,6 +413,7 @@ impl ClaudeSession {
     }
 
     pub fn send(&mut self, text: &str) -> io::Result<()> {
+        lock(&self.suggestions).sent();
         self.write_line(&serde_json::json!({
             "type": "user",
             "message": {
@@ -504,6 +538,7 @@ fn read_stdout(
     effort_reply: EffortReply,
     decoder: Arc<Mutex<activity::Decoder>>,
     queue: Arc<Mutex<queue::Queue>>,
+    suggestions: Arc<Mutex<suggestions::Inbox>>,
 ) -> Receiver<ClaudeCapabilities> {
     let (handshake, capabilities) = sync_channel(1);
     thread::spawn(move || {
@@ -527,6 +562,7 @@ fn read_stdout(
                         return;
                     }
                 }
+                lock(&suggestions).observe(&value);
                 let response = &value["response"];
                 let mut pending = lock(&effort_reply);
                 if value["type"] == "control_response"
@@ -738,7 +774,7 @@ pub(crate) fn parse_version(reported: &str) -> Option<(String, [u64; 3])> {
 
 /// Claude Code's way of titling a Thread: `claude -p` in print mode.
 pub mod title {
-    use crate::titler::TitleForm;
+    use crate::providers::oneshot::Form as TitleForm;
 
     /// The cheapest alias, so a Thread's name costs nothing an operator
     /// would notice.
