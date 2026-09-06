@@ -173,25 +173,29 @@ pub fn answered_input(input: &Value, answers: &[Answer], questions: &[Question])
 }
 
 fn answer_values(question: &Question, answer: &Answer) -> Option<Vec<String>> {
-    let parts = selected_values(question, answer);
+    let parts = selected_values(question, answer).ok()?;
     (!parts.is_empty()).then_some(parts)
 }
 
 /// The selected labels and free text in their original boundaries. Adapters
 /// choose whether their provider needs strings joined or a JSON array.
-pub fn selected_values(question: &Question, answer: &Answer) -> Vec<String> {
-    let mut parts: Vec<String> = answer
-        .picks
-        .iter()
-        .filter_map(|&pick| question.options.get(pick))
-        .map(|choice| choice.label.clone())
-        .collect();
+pub fn selected_values(question: &Question, answer: &Answer) -> Result<Vec<String>, String> {
+    if answer.picks.len() > question.options.len()
+        || (!question.multi_select && answer.picks.len() > 1)
+        || answer.picks.iter().any(|pick| *pick >= question.options.len())
+    {
+        return Err("question has an invalid selection".into());
+    }
+    if answer.other.as_deref().is_some_and(|other| !other.trim().is_empty()) && !question.allow_other {
+        return Err("question does not allow another answer".into());
+    }
+    let mut parts: Vec<String> = answer.picks.iter().map(|&pick| question.options[pick].label.clone()).collect();
     if let Some(other) = answer.other.as_deref().map(str::trim) {
         if !other.is_empty() {
             parts.push(other.to_string());
         }
     }
-    parts
+    Ok(parts)
 }
 
 /// One line for a cell too small to show the questions: the count and the

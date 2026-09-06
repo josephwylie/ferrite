@@ -1,14 +1,11 @@
 //! Codex's asynchronous questions are structured agent messages. Native
 //! request_user_input calls block on their JSON-RPC response instead.
 use crate::{
-    activity::ActivityEvent, validate_form, Decision, DecisionAnswer, DecisionKind, FormField,
-    FormFieldKind, SessionEvent,
+    activity::ActivityEvent, validate_form, Decision, DecisionAnswer, DecisionKind, DecisionPolicy,
+    FormField, SessionEvent,
 };
 use serde_json::{json, Value};
-use std::{
-    collections::{HashMap, HashSet},
-    io,
-};
+use std::{collections::HashMap, io};
 
 const PREFIX: &str = "codex-async-question:";
 
@@ -69,19 +66,27 @@ pub(super) fn decode_elicitation(params: &Value, id: String) -> Option<Decision>
     if message.is_empty() {
         return None;
     }
-    let kind = match params.get("mode")?.as_str()? {
-        "form" => DecisionKind::Form {
-            fields: form_fields(params.get("requestedSchema")?)?,
+    let kind = match params.get("mode").and_then(Value::as_str) {
+        Some("form" | "openai/form" | "openaiForm") => {
+            match crate::providers::elicitation::fields(params.get("requestedSchema").unwrap_or(&Value::Null)) {
+                Ok(fields) => DecisionKind::Form { fields },
+                Err(reason) => DecisionKind::Unsupported { reason },
+            }
+        }
+        Some("url" | "openai/url" | "openaiUrl") => match params.get("url").and_then(Value::as_str) {
+            Some(url) if !url.is_empty() => DecisionKind::External { url: url.into() },
+            _ => DecisionKind::Unsupported { reason: "elicitation has no URL".into() },
         },
-        "url" => DecisionKind::External {
-            url: params.get("url")?.as_str()?.to_string(),
-        },
-        _ => return None,
+        _ => DecisionKind::Unsupported { reason: "unsupported elicitation mode".into() },
     };
+    let allow = !matches!(&kind, DecisionKind::Unsupported { .. });
     Some(Decision {
         delivery: crate::DecisionDelivery::Blocking,
         kind,
-        policy: Default::default(),
+        policy: DecisionPolicy {
+            allow,
+            ..Default::default()
+        },
         id,
         tool_use_id: params
             .get("itemId")
@@ -114,102 +119,12 @@ pub(super) fn decode_permissions(params: &Value, id: String) -> Option<Decision>
     })
 }
 
-pub(super) fn form_fields(schema: &Value) -> Option<Vec<FormField>> {
-    if schema.get("type")?.as_str()? != "object" {
-        return None;
-    }
-    let required = schema.get("required").and_then(Value::as_array);
-    schema
-        .get("properties")?
-        .as_object()?
-        .iter()
-        .map(|(id, field)| {
-            let kind = match field.get("type")?.as_str()? {
-                "string" if field.get("enum").is_some() => FormFieldKind::Enum {
-                    options: field
-                        .get("enum")?
-                        .as_array()?
-                        .iter()
-                        .map(Value::as_str)
-                        .collect::<Option<Vec<_>>>()?
-                        .into_iter()
-                        .map(str::to_string)
-                        .collect(),
-                    multi_select: false,
-                    default: field.get("default").cloned(),
-                },
-                "string" => FormFieldKind::String {
-                    min_length: field
-                        .get("minLength")
-                        .and_then(Value::as_u64)
-                        .map(|v| v as usize),
-                    max_length: field
-                        .get("maxLength")
-                        .and_then(Value::as_u64)
-                        .map(|v| v as usize),
-                    default: field
-                        .get("default")
-                        .and_then(Value::as_str)
-                        .map(str::to_string),
-                },
-                "number" => FormFieldKind::Number {
-                    minimum: field.get("minimum").and_then(Value::as_f64),
-                    maximum: field.get("maximum").and_then(Value::as_f64),
-                    default: field.get("default").and_then(Value::as_f64),
-                },
-                "integer" => FormFieldKind::Integer {
-                    minimum: field.get("minimum").and_then(Value::as_i64),
-                    maximum: field.get("maximum").and_then(Value::as_i64),
-                    default: field.get("default").and_then(Value::as_i64),
-                },
-                "boolean" => FormFieldKind::Boolean {
-                    default: field.get("default").and_then(Value::as_bool),
-                },
-                "array" => FormFieldKind::Enum {
-                    options: field
-                        .get("items")?
-                        .get("enum")?
-                        .as_array()?
-                        .iter()
-                        .map(Value::as_str)
-                        .collect::<Option<Vec<_>>>()?
-                        .into_iter()
-                        .map(str::to_string)
-                        .collect(),
-                    multi_select: true,
-                    default: field.get("default").cloned(),
-                },
-                _ => return None,
-            };
-            Some(FormField {
-                id: id.clone(),
-                label: field
-                    .get("title")
-                    .and_then(Value::as_str)
-                    .filter(|text| !text.is_empty())
-                    .unwrap_or(id)
-                    .into(),
-                description: field
-                    .get("description")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .into(),
-                required: required.is_some_and(|required| {
-                    required.iter().any(|value| value.as_str() == Some(id))
-                }),
-                kind,
-            })
-        })
-        .collect()
-}
-
 /// Native request handles are registered by the reader, and selected here at
 /// reply time. This keeps reply matching in the provider adapter instead of
 /// inferring it from a renderer-visible tool name.
 #[derive(Default)]
 pub(super) struct NativeRequests {
     pending: HashMap<String, NativeRequest>,
-    resolved: HashSet<String>,
 }
 
 enum NativeRequest {
@@ -217,6 +132,8 @@ enum NativeRequest {
     Form(Vec<FormField>),
     External,
     Permissions(Value),
+    Unsupported,
+    Approval { allow: bool, deny: bool, choices: Vec<Value> },
 }
 
 impl NativeRequests {
@@ -227,7 +144,6 @@ impl NativeRequests {
             {
                 let id = id.to_string();
                 self.pending.remove(&id);
-                self.resolved.insert(id);
             }
             return;
         }
@@ -247,12 +163,21 @@ impl NativeRequests {
                 {
                     DecisionKind::Form { fields } => Some(NativeRequest::Form(fields)),
                     DecisionKind::External { .. } => Some(NativeRequest::External),
+                    DecisionKind::Unsupported { .. } => Some(NativeRequest::Unsupported),
                     _ => None,
                 })
             }
             Some("item/permissions/requestApproval") => {
                 decode_permissions(&frame["params"], id.clone())
                     .map(|decision| NativeRequest::Permissions(decision.input))
+            }
+            Some("item/commandExecution/requestApproval" | "item/fileChange/requestApproval") => {
+                let choices = frame["params"]["availableDecisions"].as_array().cloned().unwrap_or_default();
+                Some(NativeRequest::Approval {
+                    allow: choices.iter().any(|choice| choice == "accept"),
+                    deny: choices.iter().any(|choice| choice == "decline"),
+                    choices,
+                })
             }
             _ => None,
         };
@@ -262,25 +187,30 @@ impl NativeRequests {
     }
 
     pub fn response(&self, id: &str, answer: &DecisionAnswer) -> Option<io::Result<Value>> {
-        if self.resolved.contains(id) {
-            return Some(Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "Decision is no longer pending",
-            )));
-        }
         let request = self.pending.get(id)?;
         Some(match request {
             NativeRequest::Questions(questions) => question_response(questions, answer),
             NativeRequest::Form(fields) => elicitation_response(Some(fields), answer),
             NativeRequest::External => elicitation_response(None, answer),
             NativeRequest::Permissions(profile) => permission_response(profile, answer),
+            NativeRequest::Unsupported => elicitation_response(None, answer),
+            NativeRequest::Approval { allow, deny, choices } => approval_response(*allow, *deny, choices, answer),
         })
     }
 
     pub fn resolved(&mut self, id: &str) {
         self.pending.remove(id);
-        self.resolved.insert(id.into());
     }
+}
+
+fn approval_response(allow: bool, deny: bool, choices: &[Value], answer: &DecisionAnswer) -> io::Result<Value> {
+    let decision = match answer {
+        DecisionAnswer::Allow { .. } if allow => json!("accept"),
+        DecisionAnswer::Deny { .. } if deny => json!("decline"),
+        DecisionAnswer::AllowAlways { suggestion, .. } if choices.iter().any(|choice| choice == suggestion) => suggestion.clone(),
+        _ => return Err(io::Error::new(io::ErrorKind::InvalidInput, "answer is unavailable for this approval")),
+    };
+    Ok(json!({"decision": decision}))
 }
 
 fn question_response(
@@ -289,13 +219,17 @@ fn question_response(
 ) -> io::Result<Value> {
     match answer {
         DecisionAnswer::Questions { answers } => {
+            if answers.len() != questions.len() {
+                return Err(io::Error::new(io::ErrorKind::InvalidInput, "question answer count does not match"));
+            }
             let mut values = serde_json::Map::new();
             for (question, answer) in questions.iter().zip(answers) {
                 let id = question
                     .id
                     .as_ref()
                     .ok_or_else(|| io::Error::other("native question has no id"))?;
-                let values_for_question = crate::questions::selected_values(question, answer);
+                let values_for_question = crate::questions::selected_values(question, answer)
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
                 if !values_for_question.is_empty() {
                     values.insert(id.clone(), json!({"answers": values_for_question}));
                 }
@@ -415,8 +349,17 @@ pub(super) fn decode(params: &Value) -> Option<Decision> {
 #[derive(Default)]
 pub(super) struct Replies {
     pending: HashMap<u64, String>,
+    questions: HashMap<String, Vec<crate::questions::Question>>,
 }
 impl Replies {
+    pub fn register(&mut self, decision: &Decision) {
+        if let DecisionKind::Questions(questions) = &decision.kind {
+            if decision.delivery == crate::DecisionDelivery::Async {
+                self.questions.insert(decision.id.clone(), questions.clone());
+            }
+        }
+    }
+
     pub fn prepare(
         &mut self,
         id: &str,
@@ -439,6 +382,20 @@ impl Replies {
             return Err(io::Error::other("too many unanswered deliveries"));
         }
         let text = match answer {
+            DecisionAnswer::Questions { answers } => {
+                let questions = self.questions.get(id).ok_or_else(|| io::Error::other("unknown async question"))?;
+                if answers.len() != questions.len() {
+                    return Err(io::Error::other("question answer count does not match"));
+                }
+                let mut text = format!("Answer to your async question {}:\n", identity[1]);
+                for (question, answer) in questions.iter().zip(answers) {
+                    let values = crate::questions::selected_values(question, answer).map_err(io::Error::other)?;
+                    if !values.is_empty() {
+                        text.push_str(&format!("\n{}\n{}\n", question.question, values.join(", ")));
+                    }
+                }
+                text
+            }
             DecisionAnswer::Allow { input } | DecisionAnswer::AllowAlways { input, .. } => {
                 let answers = input["answers"]
                     .as_object()
@@ -458,8 +415,7 @@ impl Replies {
             DecisionAnswer::Deny { message } => {
                 format!("Skip your async question {}. {}", identity[1], message)
             }
-            DecisionAnswer::Questions { .. }
-            | DecisionAnswer::Form { .. }
+            DecisionAnswer::Form { .. }
             | DecisionAnswer::Cancel => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
@@ -489,6 +445,7 @@ impl Replies {
         }
         let rpc = frame["id"].as_u64()?;
         let id = self.pending.remove(&rpc)?;
+        self.questions.remove(&id);
         let error = frame.get("error").map(|error| {
             format!(
                 "Answer not delivered: {}. Your choices are saved; try again.",

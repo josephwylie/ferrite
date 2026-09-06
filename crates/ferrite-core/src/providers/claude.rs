@@ -509,34 +509,9 @@ impl ClaudeSession {
     /// on. Unlike `interrupt`, the request id is the CLI's, not Ferrite's —
     /// this is a response to its question, so it must not be renumbered.
     pub fn respond_to_decision(&mut self, id: &str, answer: DecisionAnswer) -> io::Result<()> {
-        let body = if let Some(body) = lock(&self.requests).response(id, &answer) {
-            body?
-        } else {
-            match answer {
-                DecisionAnswer::Allow { input } => {
-                    serde_json::json!({"behavior": "allow", "updatedInput": input})
-                }
-                DecisionAnswer::Deny { message } => {
-                    serde_json::json!({"behavior": "deny", "message": message})
-                }
-                // `updatedPermissions` carries the CLI's own suggestion back to
-                // it; the permission-always capture proves a second call in the
-                // same turn is then not gated at all.
-                DecisionAnswer::AllowAlways { input, suggestion } => serde_json::json!({
-                    "behavior": "allow",
-                    "updatedInput": input,
-                    "updatedPermissions": [suggestion],
-                }),
-                DecisionAnswer::Questions { .. }
-                | DecisionAnswer::Form { .. }
-                | DecisionAnswer::Cancel => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        "Decision answer does not match a pending request",
-                    ))
-                }
-            }
-        };
+        let body = lock(&self.requests)
+            .response(id, &answer)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Decision is not pending"))??;
         // Serialize response bookkeeping with stdout decoding: a progress or
         // cancellation frame can arrive as soon as this write reaches the CLI.
         let decoder = self.decoder.clone();

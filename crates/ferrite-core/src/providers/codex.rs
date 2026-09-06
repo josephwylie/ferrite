@@ -581,28 +581,10 @@ impl CodexSession {
             return Ok(());
         }
 
-        let decision = match &answer {
-            DecisionAnswer::Allow { .. } => serde_json::json!("accept"),
-            DecisionAnswer::Deny { .. } => serde_json::json!("decline"),
-            // The standing answer is one of the request's own
-            // `availableDecisions`, echoed back whole: the server takes the
-            // object exactly as it offered it.
-            DecisionAnswer::AllowAlways { suggestion, .. } => suggestion.clone(),
-            DecisionAnswer::Questions { .. }
-            | DecisionAnswer::Form { .. }
-            | DecisionAnswer::Cancel => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "Decision answer does not match a pending request",
-                ));
-            }
-        };
-        let id = wire::decision_request_id(id)?;
-        self.write_line(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "result": {"decision": decision},
-        }))
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Decision is not pending",
+        ))
     }
 
     /// The process this Session runs, for a watchdog counting its memory.
@@ -848,6 +830,9 @@ fn read_stdout(
                     continue;
                 }
                 lock(&native_questions).observe(&frame);
+                if let Some(decision) = questions::decode(&frame["params"]) {
+                    lock(&question_replies).register(&decision);
+                }
                 let reply = lock(&question_replies).observe(&frame);
                 if let Some(reply) = reply {
                     if sender.send(reply).is_err() {

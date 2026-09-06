@@ -49,7 +49,7 @@ use serde_json::Value;
 use super::ClaudeCapabilities;
 use crate::progress::{Phase, ProgressEvent, StepStatus, TaskStatus};
 use crate::{
-    validate_form, Decision, DecisionKind, DecisionPolicy, FormField, FormFieldKind, Hunk,
+    validate_form, Decision, DecisionKind, DecisionPolicy, FormField, Hunk,
     RateLimitWindow, SessionEvent, ToolResult, TurnOutcome,
 };
 
@@ -642,7 +642,7 @@ fn parse_tool_request(value: &Value, request: &Value) -> Option<SessionEvent> {
             id: value.get("request_id")?.as_str()?.to_string(),
             tool_use_id: text(request, "tool_use_id"),
             tool_name,
-            description: text(request, "description"),
+            description: request_description(request),
             input,
             suggestions: request
                 .get("permission_suggestions")
@@ -663,24 +663,28 @@ fn parse_elicitation_request(value: &Value, request: &Value) -> Option<SessionEv
     if message.is_empty() {
         return None;
     }
-    let kind = match request
-        .get("mode")
-        .and_then(Value::as_str)
-        .unwrap_or("form")
-    {
-        "form" => DecisionKind::Form {
-            fields: form_fields(request.get("requested_schema")?)?,
+    let kind = match request.get("mode").and_then(Value::as_str).unwrap_or("form") {
+        "form" | "openai/form" | "openaiForm" => {
+            match crate::providers::elicitation::fields(request.get("requested_schema").unwrap_or(&Value::Null)) {
+                Ok(fields) => DecisionKind::Form { fields },
+                Err(reason) => DecisionKind::Unsupported { reason },
+            }
+        }
+        "url" | "openai/url" | "openaiUrl" => match request.get("url").and_then(Value::as_str) {
+            Some(url) if !url.is_empty() => DecisionKind::External { url: url.into() },
+            _ => DecisionKind::Unsupported { reason: "elicitation has no URL".into() },
         },
-        "url" => DecisionKind::External {
-            url: request.get("url")?.as_str()?.to_string(),
-        },
-        _ => return None,
+        _ => DecisionKind::Unsupported { reason: "unsupported elicitation mode".into() },
     };
+    let allow = !matches!(&kind, DecisionKind::Unsupported { .. });
     Some(SessionEvent::DecisionRequested {
         decision: Decision {
             delivery: Default::default(),
             kind,
-            policy: Default::default(),
+            policy: DecisionPolicy {
+                allow,
+                ..Default::default()
+            },
             id: value.get("request_id")?.as_str()?.to_string(),
             tool_use_id: String::new(),
             tool_name: "mcp_elicitation".into(),
@@ -691,99 +695,9 @@ fn parse_elicitation_request(value: &Value, request: &Value) -> Option<SessionEv
     })
 }
 
-fn form_fields(schema: &Value) -> Option<Vec<FormField>> {
-    if schema.get("type")?.as_str()? != "object" {
-        return None;
-    }
-    let required = schema.get("required").and_then(Value::as_array);
-    schema
-        .get("properties")?
-        .as_object()?
-        .iter()
-        .map(|(id, field)| {
-            let kind = match field.get("type")?.as_str()? {
-                "string" if field.get("enum").is_some() => FormFieldKind::Enum {
-                    options: field
-                        .get("enum")?
-                        .as_array()?
-                        .iter()
-                        .map(Value::as_str)
-                        .collect::<Option<Vec<_>>>()?
-                        .into_iter()
-                        .map(str::to_string)
-                        .collect(),
-                    multi_select: false,
-                    default: field.get("default").cloned(),
-                },
-                "string" => FormFieldKind::String {
-                    min_length: field
-                        .get("minLength")
-                        .and_then(Value::as_u64)
-                        .map(|v| v as usize),
-                    max_length: field
-                        .get("maxLength")
-                        .and_then(Value::as_u64)
-                        .map(|v| v as usize),
-                    default: field
-                        .get("default")
-                        .and_then(Value::as_str)
-                        .map(str::to_string),
-                },
-                "number" => FormFieldKind::Number {
-                    minimum: field.get("minimum").and_then(Value::as_f64),
-                    maximum: field.get("maximum").and_then(Value::as_f64),
-                    default: field.get("default").and_then(Value::as_f64),
-                },
-                "integer" => FormFieldKind::Integer {
-                    minimum: field.get("minimum").and_then(Value::as_i64),
-                    maximum: field.get("maximum").and_then(Value::as_i64),
-                    default: field.get("default").and_then(Value::as_i64),
-                },
-                "boolean" => FormFieldKind::Boolean {
-                    default: field.get("default").and_then(Value::as_bool),
-                },
-                "array" => FormFieldKind::Enum {
-                    options: field
-                        .get("items")?
-                        .get("enum")?
-                        .as_array()?
-                        .iter()
-                        .map(Value::as_str)
-                        .collect::<Option<Vec<_>>>()?
-                        .into_iter()
-                        .map(str::to_string)
-                        .collect(),
-                    multi_select: true,
-                    default: field.get("default").cloned(),
-                },
-                _ => return None,
-            };
-            Some(FormField {
-                id: id.clone(),
-                label: field
-                    .get("title")
-                    .and_then(Value::as_str)
-                    .filter(|text| !text.is_empty())
-                    .unwrap_or(id)
-                    .into(),
-                description: field
-                    .get("description")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .into(),
-                required: required.is_some_and(|required| {
-                    required.iter().any(|value| value.as_str() == Some(id))
-                }),
-                kind,
-            })
-        })
-        .collect()
-}
-
 #[derive(Default)]
 pub(super) struct Requests {
     pending: std::collections::HashMap<String, Request>,
-    resolved: std::collections::HashSet<String>,
 }
 
 enum Request {
@@ -793,6 +707,13 @@ enum Request {
     },
     Form(Vec<FormField>),
     External,
+    Unsupported,
+    Approval {
+        allow: bool,
+        deny: bool,
+        input: Value,
+        suggestions: Vec<Value>,
+    },
 }
 
 impl Requests {
@@ -800,7 +721,6 @@ impl Requests {
         if frame.get("type").and_then(Value::as_str) == Some("control_cancel_request") {
             if let Some(id) = frame.get("request_id").and_then(Value::as_str) {
                 self.pending.remove(id);
-                self.resolved.insert(id.into());
             }
             return;
         }
@@ -814,7 +734,13 @@ impl Requests {
             },
             DecisionKind::Form { fields } => Request::Form(fields),
             DecisionKind::External { .. } => Request::External,
-            DecisionKind::Approval => return,
+            DecisionKind::Unsupported { .. } => Request::Unsupported,
+            DecisionKind::Approval => Request::Approval {
+                allow: decision.policy.allow,
+                deny: decision.policy.deny,
+                input: decision.input,
+                suggestions: decision.suggestions,
+            },
         };
         self.pending.insert(decision.id, request);
     }
@@ -824,23 +750,49 @@ impl Requests {
         id: &str,
         answer: &crate::DecisionAnswer,
     ) -> Option<std::io::Result<Value>> {
-        if self.resolved.contains(id) {
-            return Some(Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "Decision is no longer pending",
-            )));
-        }
         let request = self.pending.get(id)?;
         Some(match request {
             Request::Questions { questions, input } => question_response(questions, input, answer),
             Request::Form(fields) => elicitation_response(Some(fields), answer),
             Request::External => elicitation_response(None, answer),
+            Request::Unsupported => elicitation_response(None, answer),
+            Request::Approval { allow, deny, input, suggestions } => {
+                approval_response(*allow, *deny, input, suggestions, answer)
+            }
         })
     }
 
     pub fn resolved(&mut self, id: &str) {
         self.pending.remove(id);
-        self.resolved.insert(id.into());
+    }
+}
+
+fn approval_response(
+    allow: bool,
+    deny: bool,
+    _input: &Value,
+    suggestions: &[Value],
+    answer: &crate::DecisionAnswer,
+) -> std::io::Result<Value> {
+    match answer {
+        crate::DecisionAnswer::Allow { input } if allow => {
+            Ok(serde_json::json!({"behavior":"allow","updatedInput":input}))
+        }
+        crate::DecisionAnswer::Deny { message } if deny => {
+            Ok(serde_json::json!({"behavior":"deny","message":message}))
+        }
+        crate::DecisionAnswer::AllowAlways { input, suggestion }
+            if allow && suggestions.iter().any(|offered| offered == suggestion) =>
+        {
+            Ok(serde_json::json!({
+                "behavior":"allow", "updatedInput":input,
+                "updatedPermissions":[suggestion],
+            }))
+        }
+        _ => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "answer is unavailable for this approval",
+        )),
     }
 }
 
@@ -850,15 +802,20 @@ fn question_response(
     answer: &crate::DecisionAnswer,
 ) -> std::io::Result<Value> {
     let crate::DecisionAnswer::Questions { answers } = answer else {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "question requires question answers",
-        ));
+        return match answer {
+            crate::DecisionAnswer::Deny { message } => Ok(serde_json::json!({"behavior":"deny","message":message})),
+            crate::DecisionAnswer::Cancel => Ok(serde_json::json!({"behavior":"deny","message":"Question cancelled"})),
+            _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "question requires question answers")),
+        };
     };
+    if answers.len() != questions.len() {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "question answer count does not match"));
+    }
     let mut updated = input.as_object().cloned().unwrap_or_default();
     let mut values = serde_json::Map::new();
     for (question, answer) in questions.iter().zip(answers) {
-        let values_for_question = crate::questions::selected_values(question, answer);
+        let values_for_question = crate::questions::selected_values(question, answer)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
         if !values_for_question.is_empty() {
             values.insert(
                 question.question.clone(),
@@ -924,6 +881,22 @@ fn standing_choice(value: &Value) -> bool {
         }
         _ => false,
     }
+}
+
+/// Keep the CLI's useful permission context visible without exposing the
+/// provider envelope to the shared renderer.
+fn request_description(request: &Value) -> String {
+    ["description", "title", "display_name", "decision_reason", "blocked_path"]
+        .into_iter()
+        .filter_map(|key| request.get(key).and_then(Value::as_str).map(str::trim))
+        .filter(|value| !value.is_empty())
+        .fold(Vec::new(), |mut parts, value| {
+            if !parts.iter().any(|part| *part == value) {
+                parts.push(value);
+            }
+            parts
+        })
+        .join(" · ")
 }
 
 /// A string field, or empty when the provider left it out.

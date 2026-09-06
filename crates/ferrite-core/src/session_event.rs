@@ -317,6 +317,8 @@ pub enum DecisionKind {
     Form { fields: Vec<FormField> },
     /// A URL the operator may complete outside Ferrite. Ferrite never opens it.
     External { url: String },
+    /// A native request Ferrite can safely dismiss but cannot render yet.
+    Unsupported { reason: String },
 }
 
 /// Provider-normalized controls for an approval card.
@@ -349,6 +351,13 @@ pub struct FormField {
     pub kind: FormFieldKind,
 }
 
+/// One rendered label and the wire value it represents.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FormChoice {
+    pub value: String,
+    pub label: String,
+}
+
 /// Constraints and defaults for the MCP flat primitive subset.
 #[derive(Debug, Clone, PartialEq)]
 pub enum FormFieldKind {
@@ -371,8 +380,10 @@ pub enum FormFieldKind {
         default: Option<bool>,
     },
     Enum {
-        options: Vec<String>,
+        options: Vec<FormChoice>,
         multi_select: bool,
+        min_items: Option<usize>,
+        max_items: Option<usize>,
         default: Option<serde_json::Value>,
     },
 }
@@ -428,6 +439,8 @@ impl FormField {
             FormFieldKind::Enum {
                 options,
                 multi_select,
+                min_items,
+                max_items,
                 ..
             } => {
                 let values: Vec<&str> = if *multi_select {
@@ -448,9 +461,15 @@ impl FormField {
                 };
                 if values
                     .iter()
-                    .any(|value| !options.iter().any(|option| option == value))
+                    .any(|value| !options.iter().any(|option| option.value == *value))
                 {
                     return Err(format!("{} has an unavailable choice", self.label));
+                }
+                if *multi_select
+                    && (min_items.is_some_and(|min| values.len() < min)
+                        || max_items.is_some_and(|max| values.len() > max))
+                {
+                    return Err(format!("{} has an invalid number of choices", self.label));
                 }
             }
         }
@@ -469,6 +488,9 @@ pub fn validate_form(fields: &[FormField], values: &serde_json::Value) -> Result
             _ if field.required => return Err(format!("{} is required", field.label)),
             _ => {}
         }
+    }
+    if values.keys().any(|id| !fields.iter().any(|field| field.id == *id)) {
+        return Err("form contains an unsupported field".into());
     }
     Ok(())
 }

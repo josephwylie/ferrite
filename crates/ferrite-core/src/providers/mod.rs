@@ -11,6 +11,7 @@ use crate::{ControlKind, DecisionAnswer, SessionControl, SessionEvent};
 
 mod claude;
 mod codex;
+mod elicitation;
 pub mod discover;
 pub mod limits;
 pub mod models;
