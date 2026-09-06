@@ -458,6 +458,13 @@ pub(crate) struct Runtime {
     turn_started: Option<std::time::Instant>,
     turn_output_tokens: u64,
     last_report: u64,
+    turn_diff: Option<TurnDiff>,
+    usage_details: Option<crate::UsageDetails>,
+    context_details: Option<crate::ContextDetails>,
+    mcp_servers: Vec<crate::McpServer>,
+    mcp_authorizations: std::collections::BTreeMap<String, String>,
+    rate_limits: RateLimits,
+
 }
 
 /// Blocks a long-running Thread keeps in memory. Generous enough that a Pane
@@ -560,6 +567,12 @@ impl Transcript {
             turn_started: self.turn_started,
             turn_output_tokens: self.turn_output_tokens,
             last_report: self.last_report,
+            turn_diff: self.turn_diff.clone(),
+            usage_details: self.usage_details.clone(),
+            context_details: self.context_details.clone(),
+            mcp_servers: self.mcp_servers.clone(),
+            mcp_authorizations: self.mcp_authorizations.clone(),
+            rate_limits: self.rate_limits,
         }
     }
 
@@ -588,6 +601,12 @@ impl Transcript {
         self.turn_started = runtime.turn_started;
         self.turn_output_tokens = runtime.turn_output_tokens;
         self.last_report = runtime.last_report;
+        self.turn_diff = runtime.turn_diff;
+        self.usage_details = runtime.usage_details;
+        self.context_details = runtime.context_details;
+        self.mcp_servers = runtime.mcp_servers;
+        self.mcp_authorizations = runtime.mcp_authorizations;
+        self.rate_limits = runtime.rate_limits;
     }
 
     pub fn model(&self) -> Option<&str> {

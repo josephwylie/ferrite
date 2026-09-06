@@ -28,3 +28,16 @@ fn native_accounting_details_keep_scope_and_all_counters() {
         if provider=="codex"{assert_eq!(details.reasoning_output_tokens,10);}else{assert_eq!(a.view().main().transcript().last_cost(),Some(0.04));}
     }
 }
+
+#[test]
+fn historical_events_cannot_replace_live_usage_or_turn_changes() {
+    use ferrite_core::activity::{ActivityInput,ActivityEvent,ExecutionEvent};
+    let details=|n|ferrite_core::UsageDetails{scope:UsageScope::Session,input_tokens:n,cached_input_tokens:0,output_tokens:0,reasoning_output_tokens:0};
+    let mut activity=fold(vec![SessionEvent::UsageDetails{details:details(200)},SessionEvent::TurnDiff{turn_id:"live".into(),diff:"live diff".into()}]);
+    for event in [ExecutionEvent::UsageDetails{details:details(10)},ExecutionEvent::TurnDiff{turn_id:"old".into(),diff:"old diff".into()}] {
+        activity.apply(ActivityInput::ReplayEvent(ActivityEvent::MainContent{id:None,event}));
+    }
+    let view=activity.view();let transcript=view.main().transcript();
+    assert_eq!(transcript.usage_details().unwrap().input_tokens,200);
+    assert_eq!(transcript.turn_diff().unwrap().diff,"live diff");
+}
