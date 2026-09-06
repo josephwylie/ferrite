@@ -356,6 +356,22 @@ impl Roster {
         draft
     }
 
+    /// Re-aim a standing draft: a second new-thread press points the draft
+    /// already up at where the operator is now, rather than stacking one.
+    /// The deferred leave is left alone — it belongs to the Pane that closed
+    /// onto this draft, not to wherever the next press aims it.
+    pub(crate) fn rescope_draft(
+        &mut self,
+        draft: DraftId,
+        group: Option<GroupId>,
+        new_group_with: Option<ThreadId>,
+    ) {
+        if let Some(scope) = self.drafts.get_mut(&draft) {
+            scope.group = group;
+            scope.new_group_with = new_group_with;
+        }
+    }
+
     /// A pair member's leave is deferred onto this draft (`Cockpit::close`).
     pub(crate) fn defer_leave(&mut self, draft: DraftId, thread: ThreadId) {
         if let Some(scope) = self.drafts.get_mut(&draft) {

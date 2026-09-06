@@ -2601,6 +2601,29 @@ impl Cockpit {
         })
     }
 
+    /// Re-aim the standing draft the way `open_draft` would have aimed a
+    /// fresh one: loose, and the Cockpit back to Solo.
+    pub fn aim_draft_loose(&mut self, draft: DraftId) {
+        self.roster.rescope_draft(draft, None, None);
+        self.roster.set_view(View::Solo);
+    }
+
+    /// Re-aim the standing draft at the current view — the Group the
+    /// operator is looking at, or nothing when they are Solo.
+    pub fn aim_draft_at_current_view(&mut self, draft: DraftId) {
+        let group = match self.roster.view() {
+            View::Group(group) => Some(group),
+            View::Solo => None,
+        };
+        self.roster.rescope_draft(draft, group, None);
+    }
+
+    /// Re-aim the standing draft beside one loose Thread as a provisional
+    /// pair, as `open_draft_for_new_group` would have.
+    pub fn aim_draft_at_new_group(&mut self, draft: DraftId, first: ThreadId) {
+        self.roster.rescope_draft(draft, None, Some(first));
+    }
+
     /// The first send (#29): bootstrap the Thread — create, worktree, spawn
     /// — and only then let the prompt go; the Thread takes the draft's own
     /// slot, and joins the Group the draft was pending in. The leave the
