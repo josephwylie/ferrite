@@ -62,7 +62,7 @@ fn codex_multi_file_change_retains_every_native_diff() {
         "codex",
         vec![
             json!({"method":"item/started","params":{"threadId":"root","turnId":"turn","item":{"id":"edit","type":"fileChange","changes":[],"status":"inProgress"}}}),
-            json!({"method":"item/completed","params":{"threadId":"root","turnId":"turn","item":{"id":"edit","type":"fileChange","status":"completed","changes":[{"path":"a.txt","kind":{"type":"update","move_path":null},"diff":"@@ -1 +1 @@\n-old\n+new\n"},{"path":"b.txt","kind":{"type":"add"},"diff":"+created\n"}]}}}),
+            json!({"method":"item/completed","params":{"threadId":"root","turnId":"turn","item":{"id":"edit","type":"fileChange","status":"completed","changes":[{"path":"a.txt","kind":{"type":"update","move_path":null},"diff":"@@ -1 +1 @@\n-old\n+new\n"},{"path":"b.txt","kind":{"type":"add"},"diff":"created\n"}]}}}),
         ],
     );
     let a = fold(r.drain());
@@ -82,4 +82,33 @@ fn codex_multi_file_change_retains_every_native_diff() {
     assert_eq!(tool.diffs[1].path, "b.txt");
     assert_eq!((tool.diffs[0].added, tool.diffs[0].removed), (1, 1));
     assert_eq!((tool.diffs[1].added, tool.diffs[1].removed), (1, 0));
+}
+
+#[test]
+fn codex_unified_diff_preserves_function_headers_and_marker_like_content() {
+    let r = Replay::new(
+        "codex",
+        vec![
+            json!({"method":"item/started","params":{"threadId":"root","turnId":"turn","item":{"id":"edit","type":"fileChange","changes":[],"status":"inProgress"}}}),
+            json!({"method":"item/completed","params":{"threadId":"root","turnId":"turn","item":{"id":"edit","type":"fileChange","status":"completed","changes":[{"path":"code.txt","kind":{"type":"update","move_path":null},"diff":"--- a/code.txt\n+++ b/code.txt\n@@ -12,2 +12,2 @@ fn example()\n---literal\n+++literal\n unchanged\n"}]}}}),
+        ],
+    );
+    let a = fold(r.drain());
+    let t = a
+        .view()
+        .main()
+        .transcript()
+        .blocks()
+        .iter()
+        .find_map(|b| match &b.body {
+            ferrite_core::transcript::Body::Tool(t) => Some(t),
+            _ => None,
+        })
+        .unwrap();
+    let h = &t.diffs[0].hunks[0];
+    assert_eq!(
+        (h.old_start, h.old_lines, h.new_start, h.new_lines),
+        (12, 2, 12, 2)
+    );
+    assert_eq!(h.lines, ["---literal", "+++literal", " unchanged"]);
 }
