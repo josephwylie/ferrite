@@ -162,6 +162,11 @@ pub enum SessionEvent {
     McpServers {
         servers: Vec<McpServer>,
     },
+    /// Live authorization link; never persisted or opened automatically.
+    McpAuthorization {
+        server: String,
+        url: Option<String>,
+    },
     /// The session process exited; no further events will arrive.
     Closed {
         reason: String,
@@ -173,6 +178,8 @@ pub enum ControlKind {
     RefreshContext,
     RefreshMcp,
     ReconnectMcp,
+    LoginMcp,
+    ReloadMcp,
     StopTask,
     BackgroundTasks,
     SetPermissionMode,
@@ -183,6 +190,8 @@ pub enum SessionControl {
     RefreshContext,
     RefreshMcp,
     ReconnectMcp { server: String },
+    LoginMcp { server: String },
+    ReloadMcp,
     StopTask { id: String },
     BackgroundTasks,
     SetPermissionMode { mode: String },

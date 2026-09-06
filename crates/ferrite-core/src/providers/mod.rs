@@ -178,6 +178,13 @@ impl Session for CodexSession {
     fn permission_modes(&self) -> Vec<PermissionModeChoice> {
         CodexSession::permission_modes(self)
     }
+
+    fn supports_control(&self, kind: ControlKind) -> bool {
+        CodexSession::supports_control(self, kind)
+    }
+    fn control(&mut self, action: SessionControl) -> io::Result<()> {
+        CodexSession::control(self, action)
+    }
     fn set_effort(&mut self, effort: Option<&str>) -> io::Result<()> {
         CodexSession::set_effort(self, effort)
     }

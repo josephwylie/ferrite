@@ -404,6 +404,12 @@ impl ClaudeSession {
 
     pub fn control(&mut self, action: SessionControl) -> io::Result<()> {
         let (request, pending) = match action {
+            SessionControl::LoginMcp { .. } | SessionControl::ReloadMcp => {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "Claude does not support this control",
+                ));
+            }
             SessionControl::RefreshContext => (
                 serde_json::json!({"subtype": "get_context_usage", "detail": "summary"}),
                 SessionControl::RefreshContext,
@@ -822,6 +828,8 @@ fn control_events(action: &SessionControl, response: &serde_json::Value) -> Vec<
             vec![SessionEvent::PermissionMode { mode: mode.clone() }]
         }
         SessionControl::ReconnectMcp { .. }
+        | SessionControl::LoginMcp { .. }
+        | SessionControl::ReloadMcp
         | SessionControl::StopTask { .. }
         | SessionControl::BackgroundTasks => Vec::new(),
     }

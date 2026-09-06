@@ -944,6 +944,7 @@ impl Record {
             SessionEvent::Models { .. } => return None,
             SessionEvent::RateLimits { .. } => return None,
             SessionEvent::McpServers { .. } => return None,
+            SessionEvent::McpAuthorization { .. } => return None,
         })
     }
 

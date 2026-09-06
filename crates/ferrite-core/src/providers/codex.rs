@@ -12,6 +12,7 @@
 
 mod activity;
 pub(super) mod catalog;
+mod controls;
 mod live_catalogs;
 mod questions;
 mod requests;
@@ -26,7 +27,7 @@ use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::{DecisionAnswer, PermissionModeChoice, SessionEvent};
+use crate::{ControlKind, DecisionAnswer, PermissionModeChoice, SessionControl, SessionEvent};
 
 use wire::ThreadHandshake;
 
@@ -222,6 +223,7 @@ pub struct CodexSession {
     /// Ordinary host requests and Main's native interrupt target. Child turns
     /// must never become this Session's interrupt target.
     requests: Arc<Mutex<requests::Requests>>,
+    controls: Arc<Mutex<controls::Controls>>,
     /// The server's skills, filled by the reader from the skills/list answer
     /// (#23). `send` translates a leading `/name` against this list into the
     /// typed skill item — slash text is never intercepted server-side.
@@ -277,6 +279,7 @@ impl CodexSession {
         let (sender, events) = sync_channel(EVENT_CHANNEL_CAPACITY);
         let child = Arc::new(Mutex::new(child));
         let requests = Arc::new(Mutex::new(requests::Requests::default()));
+        let controls = Arc::new(Mutex::new(controls::Controls::default()));
         let skills = Arc::new(Mutex::new(Vec::new()));
         let models = Arc::new(Mutex::new(Vec::new()));
         let question_replies = Arc::new(Mutex::new(questions::Replies::default()));
@@ -288,6 +291,7 @@ impl CodexSession {
             Arc::clone(&child),
             Arc::clone(&stderr_tail),
             Arc::clone(&requests),
+            Arc::clone(&controls),
             Arc::clone(&skills),
             Arc::clone(&models),
             Arc::clone(&question_replies),
@@ -308,6 +312,7 @@ impl CodexSession {
             effort: config.effort.clone(),
             models,
             requests,
+            controls,
             skills,
             cwd: config.cwd.clone(),
             next_request_id: 1,
@@ -376,7 +381,11 @@ impl CodexSession {
             "jsonrpc": "2.0",
             "id": id,
             "method": "initialize",
-            "params": {"clientInfo": {"name": "ferrite", "version": env!("CARGO_PKG_VERSION")}},
+            "params": {
+                "clientInfo": {"name": "ferrite", "version": env!("CARGO_PKG_VERSION")},
+                "capabilities": {"experimentalApi":true,"requestAttestation":false,
+                    "extensions":{"openai/form":{}}}
+            },
         }))
         .map_err(|e| format!("could not write initialize: {e}"))?;
         match await_step(steps, "initialize")? {
@@ -529,6 +538,29 @@ impl CodexSession {
             label: label.into(),
         })
         .collect()
+    }
+
+    pub fn supports_control(&self, kind: ControlKind) -> bool {
+        matches!(
+            kind,
+            ControlKind::RefreshMcp
+                | ControlKind::LoginMcp
+                | ControlKind::ReloadMcp
+                | ControlKind::SetPermissionMode
+        )
+    }
+
+    pub fn control(&mut self, action: SessionControl) -> io::Result<()> {
+        let id = serde_json::json!(self.take_request_id());
+        let request = lock(&self.controls).begin(id, action, &self.thread_id)?;
+        let Some(request) = request else {
+            return Ok(());
+        };
+        let result = self.write_line(&request);
+        if result.is_err() {
+            lock(&self.controls).discard(&request);
+        }
+        result
     }
 
     /// Rename the thread server-side (`thread/name/set`), so the server's
@@ -695,6 +727,7 @@ fn read_stdout(
     child: Arc<Mutex<Child>>,
     stderr_tail: Arc<Mutex<StderrTail>>,
     requests: Arc<Mutex<requests::Requests>>,
+    controls: Arc<Mutex<controls::Controls>>,
     skills: Arc<Mutex<Vec<crate::SessionCommand>>>,
     model_catalog: Arc<Mutex<Vec<crate::ModelInfo>>>,
     question_replies: Arc<Mutex<questions::Replies>>,
@@ -771,6 +804,34 @@ fn read_stdout(
             }
             turns.observe(text);
             if let Ok(frame) = serde_json::from_str(text) {
+                let control = turns
+                    .main_thread_id
+                    .as_deref()
+                    .and_then(|thread| lock(&controls).observe(&frame, thread));
+                if let Some(update) = control {
+                    for event in update.events {
+                        if sender.send(event).is_err() {
+                            return;
+                        }
+                    }
+                    if let Some(request) = update.request {
+                        let Some(stdin) = stdin.upgrade() else {
+                            return;
+                        };
+                        if let Err(error) = write_request(&stdin, &request) {
+                            lock(&controls).discard(&request);
+                            if sender
+                                .send(requests::notice(format!(
+                                    "Could not send Codex control: {error}"
+                                )))
+                                .is_err()
+                            {
+                                return;
+                            }
+                        }
+                    }
+                    continue;
+                }
                 if let Some(update) = catalogs.observe(&frame) {
                     for event in update.events {
                         match &event {
@@ -855,6 +916,7 @@ fn read_stdout(
             let _ = step_sender.send(Err("server closed stdout before answering".into()));
         }
         *lock(&requests) = requests::Requests::default();
+        *lock(&controls) = controls::Controls::default();
         let _ = sender.send(closed_event(&child, &stderr_tail));
     });
     steps

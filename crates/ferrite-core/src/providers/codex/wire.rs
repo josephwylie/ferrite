@@ -1105,7 +1105,7 @@ mod tests {
             // model, never a list, so its picker offers no model rows.
             SessionEvent::Models { .. } => return None,
             SessionEvent::ContextDetails { .. } => return None,
-            SessionEvent::McpServers { .. } => return None,
+            SessionEvent::McpServers { .. } | SessionEvent::McpAuthorization { .. } => return None,
             // Claude's concept: Codex never streams raw chain-of-thought, only
             // summaries of it, so no codex line may ever produce this — that
             // is the capability difference, stated rather than papered over.

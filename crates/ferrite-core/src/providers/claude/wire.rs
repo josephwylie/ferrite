@@ -1330,7 +1330,7 @@ mod tests {
             SessionEvent::PermissionMode { .. } => return None,
             SessionEvent::Models { .. } => return None,
             SessionEvent::ContextDetails { .. } => return None,
-            SessionEvent::McpServers { .. } => return None,
+            SessionEvent::McpServers { .. } | SessionEvent::McpAuthorization { .. } => return None,
             // Codex's own concept (#9); the Claude CLI never emits one.
             SessionEvent::ReasoningSummaryDelta { .. } => return None,
             // Rides beside a line's own event (`parse_usage`), proved by

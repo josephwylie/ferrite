@@ -3458,7 +3458,8 @@ fn event_changes_content(event: &SessionEvent) -> bool {
         | SessionEvent::Models { .. }
         | SessionEvent::PermissionMode { .. }
         | SessionEvent::ContextDetails { .. }
-        | SessionEvent::McpServers { .. } => false,
+        | SessionEvent::McpServers { .. }
+        | SessionEvent::McpAuthorization { .. } => false,
         _ => true,
     }
 }
@@ -3468,6 +3469,8 @@ fn control_kind(action: &crate::SessionControl) -> crate::ControlKind {
         crate::SessionControl::RefreshContext => crate::ControlKind::RefreshContext,
         crate::SessionControl::RefreshMcp => crate::ControlKind::RefreshMcp,
         crate::SessionControl::ReconnectMcp { .. } => crate::ControlKind::ReconnectMcp,
+        crate::SessionControl::LoginMcp { .. } => crate::ControlKind::LoginMcp,
+        crate::SessionControl::ReloadMcp => crate::ControlKind::ReloadMcp,
         crate::SessionControl::StopTask { .. } => crate::ControlKind::StopTask,
         crate::SessionControl::BackgroundTasks => crate::ControlKind::BackgroundTasks,
         crate::SessionControl::SetPermissionMode { .. } => crate::ControlKind::SetPermissionMode,

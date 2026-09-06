@@ -389,6 +389,7 @@ pub struct Transcript {
     usage: Option<Usage>,
     context_details: Option<crate::ContextDetails>,
     mcp_servers: Vec<crate::McpServer>,
+    mcp_authorizations: std::collections::BTreeMap<String, String>,
     rate_limits: RateLimits,
     /// When the running turn began — the operator's prompt went out — for
     /// the working line's clock. None between turns.
@@ -494,6 +495,7 @@ impl Transcript {
             usage: None,
             context_details: None,
             mcp_servers: Vec::new(),
+            mcp_authorizations: std::collections::BTreeMap::new(),
             rate_limits: RateLimits::default(),
             turn_started: None,
             turn_output_tokens: 0,
@@ -620,6 +622,10 @@ impl Transcript {
 
     pub fn mcp_servers(&self) -> &[crate::McpServer] {
         &self.mcp_servers
+    }
+
+    pub fn mcp_authorizations(&self) -> &std::collections::BTreeMap<String, String> {
+        &self.mcp_authorizations
     }
 
     pub fn rate_limits(&self) -> RateLimits {
@@ -979,6 +985,8 @@ impl Transcript {
                 }
             }
             Input::Revived => {
+                self.mcp_servers.clear();
+                self.mcp_authorizations.clear();
                 self.progress.disconnected();
                 self.mcp_servers.clear();
                 if matches!(self.status, Status::Streaming | Status::Blocked) {
@@ -1166,7 +1174,17 @@ impl Transcript {
                 self.mcp_servers = servers;
                 Update::default()
             }
+            Input::Event(SessionEvent::McpAuthorization { server, url }) => {
+                if let Some(url) = url {
+                    self.mcp_authorizations.insert(server, url);
+                } else {
+                    self.mcp_authorizations.remove(&server);
+                }
+                Update::default()
+            }
             Input::Event(SessionEvent::Closed { reason }) => {
+                self.mcp_servers.clear();
+                self.mcp_authorizations.clear();
                 self.progress.disconnected();
                 self.mcp_servers.clear();
                 self.latest_reasoning_part = None;
