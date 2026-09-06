@@ -14668,6 +14668,9 @@ mod tests {
         }
         tick(cx);
         view.read_with(cx, |view, _| assert_eq!(view.cockpit.notifications().unread(), 0));
+        // GPUI removes a dismissed toast after its exit animation.
+        cx.executor().advance_clock(Duration::from_millis(300));
+        cx.run_until_parked();
         cx.update(|window, cx| assert!(window.notifications(cx).is_empty(), "cancelled requests must not leave stale toast actions"));
     }
 
