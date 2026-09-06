@@ -1,0 +1,17 @@
+{"mode": "cancel", "version": "2.1.263 (Claude Code)"}
+{"submitted_uuid": "e3d42cf7-97b1-481e-a05e-0c5557c83237", "prompt": "Print numbers 1 through 100, one per line."}
+{"type": "command_lifecycle", "command_uuid": "e3d42cf7-97b1-481e-a05e-0c5557c83237", "state": "queued"}
+{"type": "command_lifecycle", "command_uuid": "e3d42cf7-97b1-481e-a05e-0c5557c83237", "state": "started"}
+{"type": "system", "subtype": "init", "claude_code_version": "2.1.263", "capabilities": ["interrupt_receipt_v1", "interrupt_cancel_queued_v1", "msg_lifecycle_v1"]}
+{"submitted_uuid": "61ccccde-6efb-4223-8e56-ad8c6d39f663", "prompt": "Reply exactly SECOND."}
+{"submitted_uuid": "22af1315-c8d5-43bf-a8a6-ee649317ecc5", "prompt": "Reply exactly THIRD."}
+{"type": "command_lifecycle", "command_uuid": "61ccccde-6efb-4223-8e56-ad8c6d39f663", "state": "queued"}
+{"type": "command_lifecycle", "command_uuid": "22af1315-c8d5-43bf-a8a6-ee649317ecc5", "state": "queued"}
+{"type": "command_lifecycle", "command_uuid": "22af1315-c8d5-43bf-a8a6-ee649317ecc5", "state": "cancelled"}
+{"type": "control_response", "request_id": "cancel", "subtype": "success", "response": {"cancelled": true}}
+{"type": "result", "subtype": "success", "terminal_reason": "completed", "user_message_uuid": "e3d42cf7-97b1-481e-a05e-0c5557c83237", "user_message_uuids": ["e3d42cf7-97b1-481e-a05e-0c5557c83237"], "queued_turn_count": 0}
+{"type": "command_lifecycle", "command_uuid": "e3d42cf7-97b1-481e-a05e-0c5557c83237", "state": "completed"}
+{"type": "command_lifecycle", "command_uuid": "61ccccde-6efb-4223-8e56-ad8c6d39f663", "state": "started"}
+{"type": "system", "subtype": "init", "claude_code_version": "2.1.263", "capabilities": ["interrupt_receipt_v1", "interrupt_cancel_queued_v1", "msg_lifecycle_v1"]}
+{"type": "result", "subtype": "success", "terminal_reason": "completed", "user_message_uuid": "61ccccde-6efb-4223-8e56-ad8c6d39f663", "user_message_uuids": ["61ccccde-6efb-4223-8e56-ad8c6d39f663"], "queued_turn_count": 0}
+{"type": "command_lifecycle", "command_uuid": "61ccccde-6efb-4223-8e56-ad8c6d39f663", "state": "completed"}

@@ -1,0 +1,183 @@
+{
+  "crash": false,
+  "version": "codex-cli 0.153.4",
+  "without_experimental": {
+    "code": -32600,
+    "message": "thread/queue/list requires experimentalApi capability"
+  },
+  "while_busy": [
+    [
+      {
+        "type": "text",
+        "text": "second",
+        "text_elements": []
+      }
+    ],
+    [
+      {
+        "type": "text",
+        "text": "third",
+        "text_elements": []
+      }
+    ],
+    [
+      {
+        "type": "text",
+        "text": "delete me",
+        "text_elements": []
+      }
+    ]
+  ],
+  "busy_start": {
+    "code": -32600,
+    "message": "thread already has an active or pending turn"
+  },
+  "update_preserves_id": true,
+  "deleted": {
+    "deleted": true
+  },
+  "reordered": [
+    [
+      {
+        "type": "text",
+        "text": "third",
+        "text_elements": []
+      }
+    ],
+    [
+      {
+        "type": "text",
+        "text": "second edited",
+        "text_elements": []
+      }
+    ]
+  ],
+  "delete_again": {
+    "deleted": false
+  },
+  "invalid_reorder": {
+    "code": -32600,
+    "message": "queue reorder must include every queued submission exactly once"
+  },
+  "attachment_snapshot_type": "image",
+  "attachment_snapshot_is_data_url": true,
+  "same_client_id_deduplicates": false,
+  "invalid_attachment": {
+    "code": -32600,
+    "message": "local queued attachment is invalid: No such file or directory (os error 2)"
+  },
+  "after_interrupt": [
+    [
+      {
+        "type": "text",
+        "text": "third",
+        "text_elements": []
+      }
+    ],
+    [
+      {
+        "type": "text",
+        "text": "second edited",
+        "text_elements": []
+      }
+    ]
+  ],
+  "after_process_restart": [
+    {
+      "id": "01a0768b-1ccb-7340-ab3f-127e51a63b49",
+      "input": [
+        {
+          "type": "text",
+          "text": "third",
+          "text_elements": []
+        }
+      ],
+      "clientUserMessageId": "7e8af987-4703-464b-997b-d800fb000b86"
+    },
+    {
+      "id": "01a0768b-1cc9-7242-be8d-4356e0e94d8b",
+      "input": [
+        {
+          "type": "text",
+          "text": "second edited",
+          "text_elements": []
+        }
+      ],
+      "clientUserMessageId": "ae85aa3b-2ea4-46ef-b357-b94c11c865e4"
+    }
+  ],
+  "after_resume_before_start": [
+    {
+      "id": "01a0768b-1ccb-7340-ab3f-127e51a63b49",
+      "input": [
+        {
+          "type": "text",
+          "text": "third",
+          "text_elements": []
+        }
+      ],
+      "clientUserMessageId": "7e8af987-4703-464b-997b-d800fb000b86"
+    },
+    {
+      "id": "01a0768b-1cc9-7242-be8d-4356e0e94d8b",
+      "input": [
+        {
+          "type": "text",
+          "text": "second edited",
+          "text_elements": []
+        }
+      ],
+      "clientUserMessageId": "ae85aa3b-2ea4-46ef-b357-b94c11c865e4"
+    }
+  ],
+  "explicit_start_after_interrupt": {
+    "turn": {
+      "id": "01a0768b-2605-7c20-8b37-64ad6832c6f1",
+      "items": [],
+      "itemsView": "notLoaded",
+      "status": "inProgress",
+      "error": null,
+      "startedAt": null,
+      "completedAt": null,
+      "durationMs": null
+    }
+  },
+  "turns_after_start": [
+    {
+      "id": "01a0768b-2605-7c20-8b37-64ad6832c6f1",
+      "status": "completed"
+    },
+    {
+      "id": "01a0768b-2670-79e3-bb94-467e3461a7c7",
+      "status": "completed"
+    }
+  ],
+  "after_auto_drain": [],
+  "queue_change_notifications": 2,
+  "user_items": [
+    {
+      "type": "userMessage",
+      "id": "01a0768b-2660-77a1-86fc-3f18529bd91a",
+      "clientId": "7e8af987-4703-464b-997b-d800fb000b86",
+      "content": [
+        {
+          "type": "text",
+          "text": "third",
+          "text_elements": []
+        }
+      ]
+    },
+    {
+      "type": "userMessage",
+      "id": "01a0768b-26d2-7810-a02e-eb046ea7b559",
+      "clientId": "ae85aa3b-2ea4-46ef-b357-b94c11c865e4",
+      "content": [
+        {
+          "type": "text",
+          "text": "second edited",
+          "text_elements": []
+        }
+      ]
+    }
+  ]
+}
