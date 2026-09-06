@@ -67,6 +67,10 @@ pub(super) fn parse_line(line: &str) -> Option<SessionEvent> {
             parse_approval_request(&value, params, "commandExecution")
         }
         "item/fileChange/requestApproval" => parse_approval_request(&value, params, "fileChange"),
+        "item/tool/requestUserInput" => {
+            super::questions::decode_native(params, rpc_id_string(value.get("id")?)?)
+                .map(|decision| SessionEvent::DecisionRequested { decision })
+        }
         "thread/tokenUsage/updated" => parse_token_usage(params),
         "account/rateLimits/updated" => parse_rate_limits(params),
         "turn/completed" => parse_turn_completed(params),

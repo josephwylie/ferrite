@@ -586,11 +586,17 @@ fn parse_control_request(value: &Value) -> Option<SessionEvent> {
             tool_name: text(request, "tool_name"),
             description: text(request, "description"),
             input: request.get("input").cloned().unwrap_or(Value::Null),
-            suggestions: request
-                .get("permission_suggestions")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default(),
+            suggestions: (!request["suppress_always_allow_rule"]
+                .as_bool()
+                .unwrap_or(false))
+            .then(|| {
+                request
+                    .get("permission_suggestions")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default(),
         },
     })
 }

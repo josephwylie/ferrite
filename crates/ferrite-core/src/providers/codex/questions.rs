@@ -1,10 +1,111 @@
-//! Codex's fire-and-return questions are structured agent messages. Replies
-//! enter as new user input, with correlated acknowledgements, never approvals.
+//! Codex's asynchronous questions are structured agent messages. Native
+//! request_user_input calls block on their JSON-RPC response instead.
 use crate::{activity::ActivityEvent, Decision, DecisionAnswer, SessionEvent};
 use serde_json::{json, Value};
-use std::{collections::HashMap, io};
+use std::{
+    collections::{HashMap, HashSet},
+    io,
+};
 
 const PREFIX: &str = "codex-async-question:";
+
+/// Normalize the native request into the provider-neutral form UI input.
+/// Provider response construction remains below, so renderer code never sees
+/// the app-server schema.
+pub(super) fn decode_native(params: &Value, id: String) -> Option<Decision> {
+    let item_id = params.get("itemId")?.as_str()?;
+    let questions = params
+        .get("questions")?
+        .as_array()?
+        .iter()
+        .map(|question| {
+            let id = question.get("id")?.as_str()?.trim();
+            let header = question.get("header")?.as_str()?.trim();
+            let text = question.get("question")?.as_str()?.trim();
+            if id.is_empty() || text.is_empty() {
+                return None;
+            }
+            let options = match question.get("options") {
+            None | Some(Value::Null) => vec![],
+            Some(Value::Array(options)) => options.iter().map(|option| {
+                Some(json!({
+                    "label": option.get("label")?.as_str()?,
+                    "description": option.get("description").and_then(Value::as_str).unwrap_or(""),
+                }))
+            }).collect::<Option<Vec<_>>>()?,
+            _ => return None,
+        };
+            Some(json!({
+                "id": id,
+                "header": header,
+                "question": text,
+                "options": options,
+            }))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let input = json!({"questions": questions});
+    let parsed = crate::questions::parse(&input)?;
+    Some(Decision {
+        delivery: crate::DecisionDelivery::Blocking,
+        id,
+        tool_use_id: item_id.into(),
+        tool_name: crate::questions::NATIVE_TOOL_NAME.into(),
+        description: crate::questions::summary(&parsed),
+        input,
+        suggestions: vec![],
+    })
+}
+
+/// Native request handles are registered by the reader, and selected here at
+/// reply time. This keeps reply matching in the provider adapter instead of
+/// inferring it from a renderer-visible tool name.
+#[derive(Default)]
+pub(super) struct NativeRequests {
+    pending: HashSet<String>,
+}
+
+impl NativeRequests {
+    pub fn observe(&mut self, frame: &Value) {
+        if frame.get("method").and_then(Value::as_str) != Some("item/tool/requestUserInput") {
+            return;
+        }
+        let Some(id @ (Value::Number(_) | Value::String(_))) = frame.get("id") else {
+            return;
+        };
+        if self.pending.len() < 128 {
+            self.pending.insert(id.to_string());
+        }
+    }
+
+    pub fn contains(&self, id: &str) -> bool {
+        self.pending.contains(id)
+    }
+
+    pub fn resolved(&mut self, id: &str) {
+        self.pending.remove(id);
+    }
+}
+
+/// The native wire accepts only its response object, never the normalized
+/// questions carried for rendering.
+pub(super) fn native_response(answer: &DecisionAnswer) -> io::Result<Value> {
+    let input = match answer {
+        DecisionAnswer::Allow { input } | DecisionAnswer::AllowAlways { input, .. } => input,
+        // The protocol has no denial variant. An empty optional answer map is
+        // the only valid way to decline while releasing the blocked request.
+        DecisionAnswer::Deny { .. } => return Ok(json!({"answers": {}})),
+    };
+    let answers = input
+        .get("answers")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "missing native question answers",
+            )
+        })?;
+    Ok(json!({"answers": answers}))
+}
 
 pub(super) fn decode(params: &Value) -> Option<Decision> {
     let item = &params["item"];

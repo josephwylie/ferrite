@@ -227,6 +227,7 @@ pub struct CodexSession {
     cwd: Option<PathBuf>,
     next_request_id: u64,
     question_replies: Arc<Mutex<questions::Replies>>,
+    native_questions: Arc<Mutex<questions::NativeRequests>>,
 }
 
 impl CodexSession {
@@ -276,6 +277,7 @@ impl CodexSession {
         let skills = Arc::new(Mutex::new(Vec::new()));
         let models = Arc::new(Mutex::new(Vec::new()));
         let question_replies = Arc::new(Mutex::new(questions::Replies::default()));
+        let native_questions = Arc::new(Mutex::new(questions::NativeRequests::default()));
         let handshake = read_stdout(
             stdout,
             Arc::downgrade(&stdin),
@@ -286,6 +288,7 @@ impl CodexSession {
             Arc::clone(&skills),
             Arc::clone(&models),
             Arc::clone(&question_replies),
+            Arc::clone(&native_questions),
         );
 
         let mut session = Self {
@@ -304,6 +307,7 @@ impl CodexSession {
             cwd: config.cwd.clone(),
             next_request_id: 1,
             question_replies,
+            native_questions,
         };
 
         // The handshake, in the server's required order. A failed one must
@@ -533,6 +537,19 @@ impl CodexSession {
             return result;
         }
 
+        if lock(&self.native_questions).contains(id) {
+            let handle = id.to_owned();
+            let id = wire::decision_request_id(&handle)?;
+            let result = questions::native_response(&answer)?;
+            self.write_line(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": result,
+            }))?;
+            lock(&self.native_questions).resolved(&handle);
+            return Ok(());
+        }
+
         let decision = match &answer {
             DecisionAnswer::Allow { .. } => serde_json::json!("accept"),
             DecisionAnswer::Deny { .. } => serde_json::json!("decline"),
@@ -644,6 +661,7 @@ fn read_stdout(
     skills: Arc<Mutex<Vec<crate::SessionCommand>>>,
     model_catalog: Arc<Mutex<Vec<crate::ModelInfo>>>,
     question_replies: Arc<Mutex<questions::Replies>>,
+    native_questions: Arc<Mutex<questions::NativeRequests>>,
 ) -> Receiver<Result<HandshakeStep, String>> {
     let (step_sender, steps) = sync_channel(2);
     thread::spawn(move || {
@@ -757,6 +775,7 @@ fn read_stdout(
             }
             turns.observe(text);
             if let Ok(frame) = serde_json::from_str(text) {
+                lock(&native_questions).observe(&frame);
                 let reply = lock(&question_replies).observe(&frame);
                 if let Some(reply) = reply {
                     if sender.send(reply).is_err() {

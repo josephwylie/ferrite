@@ -257,13 +257,76 @@ impl Decision {
         self.delivery == DecisionDelivery::Blocking
     }
 
-    /// The standing answer this request offers, if it offers one. Both
-    /// providers put structured choices among plainer ones — Codex lists
-    /// `"accept"` and `"cancel"` beside its amendment object — so the
-    /// structured entry is the one that means "and don't ask again".
+    /// The standing answer this request offers, if it is a documented
+    /// permission expansion. Provider payloads can carry arbitrary objects;
+    /// those must never turn an "always" control into an accidental allow.
     pub fn standing_answer(&self) -> Option<&serde_json::Value> {
-        self.suggestions.iter().find(|offered| offered.is_object())
+        self.suggestions
+            .iter()
+            .find(|offered| standing_choice(offered))
     }
+}
+
+fn standing_choice(value: &serde_json::Value) -> bool {
+    if value == "acceptForSession" {
+        return true;
+    }
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    match object.get("type").and_then(serde_json::Value::as_str) {
+        Some("setMode") => {
+            return claude_destination(object)
+                && object
+                    .get("mode")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|mode| matches!(mode, "acceptEdits" | "bypassPermissions"))
+        }
+        Some("addRules" | "replaceRules") => {
+            return claude_destination(object)
+                && object.get("behavior") == Some(&serde_json::Value::String("allow".into()))
+                && object
+                    .get("rules")
+                    .and_then(serde_json::Value::as_array)
+                    .is_some_and(|rules| {
+                        !rules.is_empty()
+                            && rules.iter().all(|rule| {
+                                rule.get("toolName")
+                                    .and_then(serde_json::Value::as_str)
+                                    .is_some_and(|tool| !tool.is_empty())
+                            })
+                    })
+        }
+        Some(_) => return false,
+        None => {}
+    }
+    if object.len() != 1 {
+        return false;
+    }
+    if let Some(amendment) = object.get("acceptWithExecpolicyAmendment") {
+        return amendment
+            .get("execpolicy_amendment")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|command| {
+                !command.is_empty() && command.iter().all(serde_json::Value::is_string)
+            });
+    }
+    if let Some(amendment) = object.get("applyNetworkPolicyAmendment") {
+        return amendment["network_policy_amendment"]["action"] == "allow"
+            && amendment["network_policy_amendment"]["host"]
+                .as_str()
+                .is_some_and(|host| !host.is_empty());
+    }
+    false
+}
+
+fn claude_destination(object: &serde_json::Map<String, serde_json::Value>) -> bool {
+    matches!(
+        object
+            .get("destination")
+            .and_then(serde_json::Value::as_str),
+        Some("userSettings" | "projectSettings" | "localSettings" | "session" | "cliArg")
+    )
 }
 
 #[cfg(test)]
