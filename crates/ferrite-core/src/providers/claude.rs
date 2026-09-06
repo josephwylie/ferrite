@@ -386,52 +386,58 @@ impl ClaudeSession {
     }
 
     pub fn control(&mut self, action: SessionControl) -> io::Result<()> {
-        let requests = match action {
-            SessionControl::RefreshContext => vec![(
-                SessionControl::RefreshContext,
+        let (request, pending) = match action {
+            SessionControl::RefreshContext => (
                 serde_json::json!({"subtype": "get_context_usage", "detail": "summary"}),
-            )],
-            SessionControl::RefreshMcp => vec![(
-                SessionControl::RefreshMcp,
+                SessionControl::RefreshContext,
+            ),
+            SessionControl::RefreshMcp => (
                 serde_json::json!({"subtype": "mcp_status"}),
-            )],
-            SessionControl::ReconnectMcp { server } => vec![
-                (
-                    SessionControl::ReconnectMcp {
-                        server: server.clone(),
-                    },
-                    serde_json::json!({"subtype": "mcp_reconnect", "serverName": server}),
-                ),
-            ],
-            SessionControl::StopTask { id } => vec![(
-                SessionControl::StopTask { id: id.clone() },
+                SessionControl::RefreshMcp,
+            ),
+            SessionControl::ReconnectMcp { server } => (
+                serde_json::json!({"subtype": "mcp_reconnect", "serverName": server}),
+                SessionControl::ReconnectMcp { server },
+            ),
+            SessionControl::StopTask { id } => (
                 serde_json::json!({"subtype": "stop_task", "task_id": id}),
-            )],
-            SessionControl::BackgroundTasks => vec![(
-                SessionControl::BackgroundTasks,
+                SessionControl::StopTask { id },
+            ),
+            SessionControl::BackgroundTasks => (
                 serde_json::json!({"subtype": "background_tasks"}),
-            )],
-            SessionControl::SetPermissionMode { mode } => vec![(
-                SessionControl::SetPermissionMode { mode: mode.clone() },
+                SessionControl::BackgroundTasks,
+            ),
+            SessionControl::SetPermissionMode { mode } => (
                 serde_json::json!({"subtype": "set_permission_mode", "mode": mode}),
-            )],
+                SessionControl::SetPermissionMode { mode },
+            ),
         };
-        for (action, request) in requests {
-            let id = self.take_request_id();
-            lock(&self.control_replies).insert(id.clone(), action);
-            if let Err(error) = self.write_line(&serde_json::json!({
-                "type": "control_request",
-                "request_id": id.clone(),
-                "request": request,
-            })) {
-                lock(&self.control_replies).remove(&id);
-                return Err(error);
-            }
+        let id = self.take_request_id();
+        let mut replies = lock(&self.control_replies);
+        if replies.len() >= 128 {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "too many native controls are pending",
+            ));
+        }
+        replies.insert(id.clone(), pending);
+        drop(replies);
+        if let Err(error) = self.write_line(&serde_json::json!({
+            "type": "control_request",
+            "request_id": id.clone(),
+            "request": request,
+        })) {
+            lock(&self.control_replies).remove(&id);
+            return Err(error);
         }
         Ok(())
     }
 
-    fn set_setting(&mut self, request: serde_json::Value, timeout_message: &str) -> io::Result<()> {
+    fn set_setting(
+        &mut self,
+        request: serde_json::Value,
+        timeout_message: &str,
+    ) -> io::Result<()> {
         let request_id = self.take_request_id();
         let (tx, rx) = sync_channel(1);
         *lock(&self.setting_reply) = Some((request_id.clone(), tx));
@@ -559,11 +565,7 @@ impl ClaudeSession {
     }
 
     fn write_line(&mut self, value: &serde_json::Value) -> io::Result<()> {
-        let mut line = serde_json::to_string(value).map_err(io::Error::other)?;
-        line.push('\n');
-        let mut stdin = lock(&self.stdin);
-        stdin.write_all(line.as_bytes())?;
-        stdin.flush()
+        write_stdin_line(&self.stdin, value)
     }
 }
 
@@ -664,10 +666,18 @@ fn read_stdout(
                             "request_id": id,
                             "request": {"subtype": "mcp_status"},
                         });
-                        if write_stdin_line(&stdin, &request).is_err() {
+                        if let Err(error) = write_stdin_line(&stdin, &request) {
                             lock(&control_replies).remove(
                                 request["request_id"].as_str().unwrap_or_default(),
                             );
+                            let _ = sender.send(SessionEvent::Activity(
+                                crate::activity::ActivityEvent::MainContent {
+                                    id: None,
+                                    event: crate::activity::ExecutionEvent::Notice {
+                                        text: format!("control failed: {error}"),
+                                    },
+                                },
+                            ));
                         }
                     }
                     for event in control_events(&action, &response["response"]) {
@@ -774,17 +784,20 @@ fn control_events(action: &SessionControl, response: &serde_json::Value) -> Vec<
                 .as_array()
                 .into_iter()
                 .flatten()
-                .map(|server| crate::McpServer {
-                    name: server["name"].as_str().unwrap_or_default().to_owned(),
-                    status: match server["status"].as_str() {
-                        Some("connected") => crate::McpStatus::Connected,
-                        Some("connecting") => crate::McpStatus::Connecting,
-                        Some("needs-auth") => crate::McpStatus::NeedsAuth,
-                        Some("failed") => crate::McpStatus::Failed,
-                        Some("disabled") => crate::McpStatus::Disabled,
-                        _ => crate::McpStatus::Unknown,
-                    },
-                    error: server["error"].as_str().map(str::to_owned),
+                .filter_map(|server| {
+                    let name = server["name"].as_str()?.to_owned();
+                    Some(crate::McpServer {
+                        name,
+                        status: match server["status"].as_str() {
+                            Some("connected") => crate::McpStatus::Connected,
+                            Some("connecting" | "pending") => crate::McpStatus::Connecting,
+                            Some("needs-auth") => crate::McpStatus::NeedsAuth,
+                            Some("failed") => crate::McpStatus::Failed,
+                            Some("disabled") => crate::McpStatus::Disabled,
+                            _ => crate::McpStatus::Unknown,
+                        },
+                        error: server["error"].as_str().map(str::to_owned),
+                    })
                 })
                 .collect(),
         }],

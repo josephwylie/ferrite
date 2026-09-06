@@ -1595,6 +1595,33 @@ impl Cockpit {
         self.threads.get(&thread).map(|state| ThreadView { state })
     }
 
+    /// Route a provider-native control to the live Session for this Thread.
+    /// Controls never create or replace a Session and never alter Activity.
+    pub fn control(
+        &mut self,
+        thread: ThreadId,
+        action: crate::SessionControl,
+    ) -> io::Result<()> {
+        let state = self.threads.get_mut(&thread).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "Thread is not open")
+        })?;
+        let session = state
+            .session
+            .as_mut()
+            .and_then(SessionLifecycle::session_mut)
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::Unsupported, "Thread has no live Session")
+            })?;
+        let kind = control_kind(&action);
+        if !session.supports_control(kind) {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "Session does not support that control",
+            ));
+        }
+        session.control(action)
+    }
+
     /// Threads the store holds that no Pane is showing — what a restart finds,
     /// and what "reopen" reopens.
     pub fn parked(&self) -> io::Result<Vec<ThreadId>> {
@@ -2568,6 +2595,13 @@ pub struct ThreadView<'a> {
 }
 
 impl<'a> ThreadView<'a> {
+    pub fn supports_control(&self, kind: crate::ControlKind) -> bool {
+        self.state
+            .session
+            .as_ref()
+            .and_then(SessionLifecycle::session)
+            .is_some_and(|session| session.supports_control(kind))
+    }
     pub fn activity(&self) -> ActivityView<'a> {
         self.state.activity.view()
     }
@@ -3413,6 +3447,17 @@ fn event_changes_content(event: &SessionEvent) -> bool {
         | SessionEvent::ContextDetails { .. }
         | SessionEvent::McpServers { .. } => false,
         _ => true,
+    }
+}
+
+fn control_kind(action: &crate::SessionControl) -> crate::ControlKind {
+    match action {
+        crate::SessionControl::RefreshContext => crate::ControlKind::RefreshContext,
+        crate::SessionControl::RefreshMcp => crate::ControlKind::RefreshMcp,
+        crate::SessionControl::ReconnectMcp { .. } => crate::ControlKind::ReconnectMcp,
+        crate::SessionControl::StopTask { .. } => crate::ControlKind::StopTask,
+        crate::SessionControl::BackgroundTasks => crate::ControlKind::BackgroundTasks,
+        crate::SessionControl::SetPermissionMode { .. } => crate::ControlKind::SetPermissionMode,
     }
 }
 
