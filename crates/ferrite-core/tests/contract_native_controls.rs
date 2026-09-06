@@ -66,3 +66,11 @@ fn native_task_mcp_and_permission_controls_keep_exact_wire_handles() {
         assert_eq!(request["request"], expected);
     }
 }
+
+#[test]
+fn reconnect_never_displays_previous_sessions_live_mcp_status() {
+    let mut t=ferrite_core::transcript::Transcript::default();
+    t.apply(ferrite_core::transcript::Input::Event(SessionEvent::McpServers {servers:vec![ferrite_core::McpServer{name:"stale".into(),status:ferrite_core::McpStatus::Connected,error:None}]}));
+    t.apply(ferrite_core::transcript::Input::Revived);
+    assert!(t.mcp_servers().is_empty(),"live connection state cannot be inherited by a new Session");
+}

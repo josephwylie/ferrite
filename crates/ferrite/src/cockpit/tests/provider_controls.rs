@@ -16,11 +16,13 @@ fn contract_context_card_refreshes_and_shows_native_details(cx: &mut TestAppCont
     assert!(cx.debug_bounds("context-usable-150000").is_some());
     assert!(cx.debug_bounds("context-compaction-140000").is_some());
     assert!(cx.debug_bounds("context-category-0-12000").is_some());
+    cx.simulate_mouse_down(meter.center(),MouseButton::Left,gpui::Modifiers::none());cx.run_until_parked();
+    assert_eq!(fake.controls.borrow().len(),1,"closing the card must not request another refresh");
 }
 
 #[gpui::test]
 fn contract_session_controls_use_shared_native_handles(cx:&mut TestAppContext) {
-    let(core,fake)=cockpit("native-session-ui",1);*fake.native_controls.borrow_mut()=true;
+    let(core,fake)=cockpit("native-session-ui",1);bind_production_keys(cx);*fake.native_controls.borrow_mut()=true;
     let(_view,cx)=add_cockpit_window(cx,|_,cx|CockpitView::new(core,cx));cx.simulate_resize(gpui::size(px(1100.),px(800.)));
     fake.streams.borrow()[0].send(SessionEvent::McpServers{servers:vec![ferrite_core::McpServer{name:"search".into(),status:ferrite_core::McpStatus::NeedsAuth,error:Some("Sign in to search".into())}]}).unwrap();
     fake.streams.borrow()[0].send(SessionEvent::Progress{event:ferrite_core::progress::ProgressEvent::BackgroundSnapshot{tasks:vec![ferrite_core::progress::BackgroundTask{id:"task:1".into(),label:"Background check".into(),detail:"shell".into(),status:ferrite_core::progress::TaskStatus::Working}]}}).unwrap();
@@ -32,4 +34,8 @@ fn contract_session_controls_use_shared_native_handles(cx:&mut TestAppContext) {
     let stop=cx.debug_bounds("background-stop-0").unwrap();cx.simulate_click(stop.center(),gpui::Modifiers::none());cx.run_until_parked();
     assert!(fake.controls.borrow().contains(&ferrite_core::SessionControl::StopTask{id:"task:1".into()}));
     assert!(fake.sent.borrow().is_empty(),"controls cannot become chat prompts");
+    assert!(cx.debug_bounds("mcp-status-0-needs-auth").is_some(),"native status must remain visible beside the server identity");
+    cx.simulate_keystrokes("escape");cx.run_until_parked();
+    assert!(cx.debug_bounds("mcp-reconnect-0").is_none(),"Escape closes controls rather than interrupting Main");
+    assert_eq!(*fake.interrupts.borrow(),0);
 }
