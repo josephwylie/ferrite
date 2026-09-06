@@ -51,21 +51,6 @@ pub enum Verb {
 
 pub type Handle = Rc<dyn Fn(Verb, &mut Window, &mut App)>;
 
-/// One Notice as the panel and a toast read it. Core knows the Thread and
-/// the outcome; the cockpit adds the words — a Thread's name and Project
-/// are the window's caches, not core facts.
-#[derive(Clone, Debug)]
-pub struct Row {
-    pub id: NoticeId,
-    pub thread: ThreadId,
-    pub title: SharedString,
-    pub project: Option<SharedString>,
-    pub outcome: TurnOutcome,
-    /// How long ago, in the nav's own shorthand (`now`, `4m`, `2h`).
-    pub when: SharedString,
-    pub read: bool,
-}
-
 /// A Bell row has one actionable target, independent of provider wire data.
 #[derive(Clone, Debug)]
 pub enum RowTarget {
@@ -80,10 +65,12 @@ pub enum RowKind {
     Request(RequestKind),
 }
 
-/// Completion and live-request rows share the same renderer.
+/// Completion and live-request rows share the same renderer. Core owns the
+/// target and kind; the cockpit adds cached title and project words.
 #[derive(Clone, Debug)]
-pub struct BellRow {
+pub struct Row {
     pub target: RowTarget,
+    pub thread: ThreadId,
     pub title: SharedString,
     pub project: Option<SharedString>,
     pub kind: RowKind,
@@ -99,42 +86,13 @@ impl Row {
         when: SharedString,
     ) -> Self {
         Self {
-            id: notice.id,
+            target: RowTarget::Notice(notice.id),
             thread: notice.thread,
             title,
             project,
-            outcome: notice.outcome.clone(),
+            kind: RowKind::Completion(notice.outcome.clone()),
             when,
             read: notice.read,
-        }
-    }
-
-    fn failed(&self) -> bool {
-        matches!(self.outcome, TurnOutcome::Error(_))
-    }
-
-    /// `Finished · ferrite`, or the provider's own error in its place.
-    fn detail(&self) -> SharedString {
-        let outcome = match &self.outcome {
-            TurnOutcome::Error(error) => format!("Failed · {error}"),
-            _ => "Finished".to_string(),
-        };
-        match &self.project {
-            Some(project) => format!("{outcome} · {project}").into(),
-            None => outcome.into(),
-        }
-    }
-}
-
-impl BellRow {
-    pub fn completion(row: Row) -> Self {
-        Self {
-            target: RowTarget::Notice(row.id),
-            title: row.title,
-            project: row.project,
-            kind: RowKind::Completion(row.outcome),
-            when: row.when,
-            read: row.read,
         }
     }
 
@@ -145,6 +103,7 @@ impl BellRow {
     ) -> Self {
         Self {
             target: RowTarget::Decision(notice.id.clone()),
+            thread: notice.id.thread,
             title,
             project,
             kind: RowKind::Request(notice.kind),
@@ -209,7 +168,11 @@ impl Bell {
         cx: &mut App,
     ) {
         for row in rows {
-            self.presented = Some(self.presented.map_or(row.id, |seen| seen.max(row.id)));
+            let RowTarget::Notice(id) = &row.target else {
+                continue;
+            };
+            let id = *id;
+            self.presented = Some(self.presented.map_or(id, |seen| seen.max(id)));
             if row.read {
                 continue;
             }
@@ -222,7 +185,7 @@ impl Bell {
     /// their own opaque identities and vanish as soon as Activity resolves them.
     pub fn present_requests(
         &mut self,
-        rows: impl IntoIterator<Item = BellRow>,
+        rows: impl IntoIterator<Item = Row>,
         handle: &Handle,
         window: &mut Window,
         cx: &mut App,
@@ -246,7 +209,6 @@ impl Bell {
             if !presented.contains(id) && !row.read {
                 window.push_notification(request_toast(&row, handle.clone()), cx);
             }
-            self.presented_requests.insert(id.clone());
         }
     }
 
@@ -255,7 +217,7 @@ impl Bell {
     pub fn element(
         &self,
         unread: usize,
-        rows: Vec<BellRow>,
+        rows: Vec<Row>,
         handle: Handle,
         on_open: impl Fn(bool, &mut Window, &mut App) + 'static,
     ) -> AnyElement {
@@ -303,7 +265,9 @@ fn trigger(unread: usize) -> Button {
 /// One toast, in the kit's own stack: the Thread's name, what became of
 /// it, and a click that lands the operator on its Pane.
 fn toast(row: &Row, handle: Handle) -> Notification {
-    let id = row.id;
+    let RowTarget::Notice(id) = row.target else {
+        unreachable!("completion toast has a completion target")
+    };
     Notification::new()
         .id1::<Finished>(row.thread.get() as usize)
         .title(row.title.clone())
@@ -321,7 +285,7 @@ fn request_key(id: &DecisionNoticeId) -> String {
     format!("{}-{}-{}", id.thread.get(), id.handle.generation, id.handle.serial)
 }
 
-fn request_toast(row: &BellRow, handle: Handle) -> Notification {
+fn request_toast(row: &Row, handle: Handle) -> Notification {
     let RowTarget::Decision(id) = &row.target else {
         unreachable!("request toast has a request target")
     };
@@ -338,7 +302,7 @@ fn request_toast(row: &BellRow, handle: Handle) -> Notification {
 /// The panel under the bell: a head with the clear verb, then the rows
 /// newest first, on the same floating-menu surface every other menu here
 /// stands on.
-fn panel(rows: &Rc<Vec<BellRow>>, handle: Handle) -> Div {
+fn panel(rows: &Rc<Vec<Row>>, handle: Handle) -> Div {
     let panel = surface().child(head(!rows.is_empty(), handle.clone()));
     if rows.is_empty() {
         return panel.child(
@@ -397,7 +361,7 @@ fn head(clearable: bool, handle: Handle) -> Div {
         }))
 }
 
-fn row_element(index: usize, row: &BellRow, handle: Handle) -> Stateful<Div> {
+fn row_element(index: usize, row: &Row, handle: Handle) -> Stateful<Div> {
     let target = row.target.clone();
     let open = handle.clone();
     let dismiss = row.target.clone();
@@ -533,11 +497,11 @@ mod tests {
 
     fn row(outcome: TurnOutcome, project: Option<&str>) -> Row {
         Row {
-            id: NoticeId::from_u64(1),
+            target: RowTarget::Notice(NoticeId::from_u64(1)),
             thread: ThreadId::new(3),
             title: "fix the bell".into(),
             project: project.map(SharedString::from),
-            outcome,
+            kind: RowKind::Completion(outcome),
             when: "now".into(),
             read: false,
         }

@@ -32,7 +32,7 @@ use crate::composer::{Composer, Edited};
 use crate::facts::Facts;
 use crate::menu;
 use crate::nav;
-use crate::notifications::{Bell, BellRow, Handle, Row as NoticeRow, Verb};
+use crate::notifications::{Bell, Handle, Row as NoticeRow, Verb};
 use crate::pane::{self, PaneView};
 use crate::pointer::{Pointer, PointerPressed};
 use crate::prefs;
@@ -6247,15 +6247,6 @@ impl CockpitView {
             }
             Verb::Clear => {
                 self.cockpit.clear_notices();
-                let decisions: Vec<_> = self
-                    .cockpit
-                    .notifications()
-                    .decisions()
-                    .map(|notice| notice.id.clone())
-                    .collect();
-                for id in decisions {
-                    self.cockpit.dismiss_decision_notice(&id);
-                }
                 self.bell.open = false;
             }
         }
@@ -6301,12 +6292,12 @@ impl CockpitView {
         if !rows.is_empty() {
             self.bell.present(rows, &handle, window, cx);
         }
-        let decisions: Vec<BellRow> = self
+        let decisions: Vec<NoticeRow> = self
             .cockpit
             .notifications()
             .decisions()
             .map(|notice| {
-                BellRow::decision(
+                NoticeRow::decision(
                     notice,
                     self.facts.name(notice.id.thread),
                     self.facts
@@ -6322,20 +6313,25 @@ impl CockpitView {
     fn bell_element(&self, cx: &mut Context<Self>) -> AnyElement {
         let now = std::time::SystemTime::now();
         let notifications = self.cockpit.notifications();
-        let mut rows: Vec<BellRow> = notifications
-            .notices()
+        let mut rows: Vec<NoticeRow> = notifications
+            .decisions()
             .take(50)
-            .map(|notice| BellRow::completion(self.notice_row(notice, now)))
-            .collect();
-        rows.extend(notifications.decisions().take(50).map(|notice| {
-            BellRow::decision(
+            .map(|notice| {
+            NoticeRow::decision(
                 notice,
                 self.facts.name(notice.id.thread),
                 self.facts
                     .get(notice.id.thread)
                     .and_then(|facts| facts.project_label.clone()),
             )
-        }));
+            })
+            .collect();
+        rows.extend(
+            notifications
+                .notices()
+                .take(50)
+                .map(|notice| self.notice_row(notice, now)),
+        );
         let handle = self.notice_handle(cx);
         let view = cx.entity().downgrade();
         self.bell
