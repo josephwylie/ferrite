@@ -7730,6 +7730,11 @@ mod tests {
         let button = cx
             .debug_bounds("titlebar-add-thread")
             .expect("the titlebar add button is visible");
+        if !crate::titlebar::CUSTOM {
+            assert!(cx.debug_bounds("caption-minimize").is_none(), "macOS owns its native caption buttons");
+            assert!(button.size.width > px(0.));
+            return;
+        }
         let minimize = cx
             .debug_bounds("caption-minimize")
             .expect("the minimize button is visible");

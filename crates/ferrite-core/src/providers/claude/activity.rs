@@ -105,7 +105,7 @@ impl Usage {
         }
         let outputs = self.message_outputs.entry(subject.clone()).or_default();
         outputs.insert(message, output);
-        let live = outputs.values().copied().sum::<u64>();
+        let live = outputs.values().fold(0u64, |total, output| total.saturating_add(*output));
         self.retired_outputs
             .get(&subject)
             .copied()
@@ -862,10 +862,7 @@ impl Decoder {
             cached_input_tokens,
             output_tokens,
             reasoning_output_tokens,
-            context_window: main
-                .then_some(self.usage.context_window)
-                .flatten()
-                .or(context_window),
+            context_window: if main { self.usage.context_window } else { context_window },
         }
     }
 

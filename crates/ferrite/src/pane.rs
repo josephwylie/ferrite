@@ -5903,19 +5903,15 @@ mod tests {
         assert!(empty.meter.is_empty());
 
         let mut transcript = Transcript::default();
-        for subject in ["a", "b", "c", "d"] {
-            transcript.apply(Input::Event(SessionEvent::ToolStarted {
-                id: format!("t{subject}"),
-                name: "TaskCreate".into(),
-                input: serde_json::json!({ "subject": subject }),
-            }));
+        for (id, subject) in [("1", "a"), ("2", "b"), ("3", "c"), ("4", "d")] {
+            transcript.apply(Input::Event(SessionEvent::Progress { event: ferrite_core::progress::ProgressEvent::Task {
+                id: id.into(), subject: subject.into(), status: Some(ferrite_core::progress::StepStatus::Pending), deleted: false,
+            }}));
         }
         for task in ["1", "2", "3"] {
-            transcript.apply(Input::Event(SessionEvent::ToolStarted {
-                id: format!("u{task}"),
-                name: "TaskUpdate".into(),
-                input: serde_json::json!({ "taskId": task, "status": "completed" }),
-            }));
+            transcript.apply(Input::Event(SessionEvent::Progress { event: ferrite_core::progress::ProgressEvent::Task {
+                id: task.into(), subject: String::new(), status: Some(ferrite_core::progress::StepStatus::Completed), deleted: false,
+            }}));
         }
         assert_eq!(transcript.todos(), Some(Todos { done: 3, total: 4 }));
         let card = wall_card(Some(&transcript), None);
