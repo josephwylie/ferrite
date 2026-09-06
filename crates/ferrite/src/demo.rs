@@ -804,11 +804,10 @@ pub fn script() -> Vec<Step> {
                 tool_name: "Write".into(),
                 description: "ferrite-perm.txt".into(),
                 input: serde_json::json!({ "file_path": "ferrite-perm.txt", "content": "ok" }),
-                suggestions: vec![serde_json::json!({
-                    "type": "setMode",
-                    "mode": "acceptEdits",
-                    "destination": "session",
-                })],
+                suggestions: vec![ferrite_core::DecisionChoice {
+                    label: "Accept edits for this session".into(), standing: true,
+                    value: serde_json::json!({"type":"setMode","mode":"acceptEdits","destination":"session"}),
+                }],
             },
         },
     ));
