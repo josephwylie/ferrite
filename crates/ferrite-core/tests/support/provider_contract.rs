@@ -57,10 +57,24 @@ impl Replay {
             quote(&directory.join("frames"))
         );
         script.push_str(&format!(
-            "while IFS= read -r frame; do\nprintf '%s\\n' \"$frame\" >> {}\n",
+            "skill_reads=0\nwhile IFS= read -r frame; do\nprintf '%s\\n' \"$frame\" >> {}\n",
             quote(&directory.join("host"))
         ));
         script.push_str(r#"case "$frame" in
+*'"method":"model/list"'*)
+request=$(printf '%s' "$frame" | sed -n 's/.*"id":\([^,}]*\).*/\1/p')
+case "$frame" in
+*'"cursor":"second"'*) printf '{"id":%s,"result":{"data":[{"id":"native-second","model":"native-second","displayName":"Second"}],"nextCursor":null}}\n' "$request";;
+*) printf '{"id":%s,"result":{"data":[{"id":"native-first","model":"native-first","displayName":"First"}],"nextCursor":"second"}}\n' "$request";;
+esac;;
+*'"method":"skills/list"'*)
+request=$(printf '%s' "$frame" | sed -n 's/.*"id":\([^,}]*\).*/\1/p')
+skill_reads=$((skill_reads + 1))
+if [ "$skill_reads" -eq 1 ]; then
+printf '{"id":%s,"result":{"data":[{"cwd":"/workspace","skills":[{"name":"review","description":"Review changes","path":"/workspace/review/SKILL.md","enabled":true}],"errors":[]}]}}\n' "$request"
+else
+printf '{"id":%s,"result":{"data":[{"cwd":"/workspace","skills":[],"errors":[]}]}}\n' "$request"
+fi;;
 *'"method":"turn/start"'*)
 request=$(printf '%s' "$frame" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
 case "$frame" in
