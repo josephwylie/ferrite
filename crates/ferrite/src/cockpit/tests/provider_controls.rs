@@ -73,3 +73,17 @@ fn contract_native_accounting_and_cost_are_visible(cx:&mut TestAppContext) {
         assert!(cx.debug_bounds(selector).is_some(),"missing native accounting field: {selector}");
     }
 }
+
+#[gpui::test]
+fn contract_native_turn_diff_is_disclosed_without_a_fake_tool(cx:&mut TestAppContext) {
+    let(core,fake)=cockpit("native-turn-diff-ui",1);
+    let(view,cx)=add_cockpit_window(cx,|_,cx|CockpitView::new(core,cx));cx.simulate_resize(gpui::size(px(1100.),px(900.)));
+    fake.streams.borrow()[0].send(SessionEvent::TurnDiff{turn_id:"native-turn".into(),diff:"diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old-native\n+new-native\n".into()}).unwrap();tick(cx);
+    let show=cx.debug_bounds("turn-diff-disclosure").expect("aggregate changes have their own shared disclosure");cx.simulate_click(show.center(),gpui::Modifiers::none());cx.run_until_parked();
+    view.read_with(cx,|v,_|{
+        let thread=v.panes[0].thread().unwrap();
+        let runs=v.selection.registered(thread);
+        assert!(runs.iter().any(|(_,_,_,text)|text.contains("+new-native")),"native diff must be visible and copyable");
+        assert!(!v.cockpit.thread(thread).unwrap().transcript().blocks().iter().any(|b|matches!(b.body,ferrite_core::transcript::Body::Tool(_))),"turn diff is not a fabricated tool call");
+    });
+}
