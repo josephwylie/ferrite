@@ -2735,23 +2735,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
                 .child("\u{203a}"),
         );
     }
-    input = input.child(line).child(
-        div()
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .h(px(theme::COMPOSER_ROW_H))
-            .whitespace_nowrap()
-            .text_size(px(theme::FS_MONO))
-            .text_color(rgb(TEXT_MUTED))
-            .child(composer_hints(
-                is_draft,
-                history_available,
-                followup::suggest(decision.is_some(), transcript, suggestion)
-                    .acceptable()
-                    .is_some(),
-            )),
-    );
+    input = input.child(line);
     region = region.child(input);
     // The popover paints above the stack — deferred, so it escapes the
     // Pane's clip and draws over the transcript (#24).
@@ -2767,7 +2751,8 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         ));
     }
 
-    // `.composer-controls`: setup or mode at left; usage and model at right.
+    // `.composer-controls`: setup or mode and the `@`/`/` hints at left;
+    // usage and model at right.
     let mut controls = div()
         .flex()
         .flex_shrink_0()
@@ -2801,6 +2786,26 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
                 .child(escape),
         );
     }
+    // The `@`/`/` hints ride the controls row rather than the text row: the
+    // line is free to grow across its full width, and every key the Composer
+    // offers reads on one bottom edge.
+    controls = controls.child(
+        div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .h(px(theme::COMPOSER_ROW_H))
+            .whitespace_nowrap()
+            .text_size(px(theme::FS_MONO))
+            .text_color(rgb(TEXT_MUTED))
+            .child(composer_hints(
+                is_draft,
+                history_available,
+                followup::suggest(decision.is_some(), transcript, suggestion)
+                    .acceptable()
+                    .is_some(),
+            )),
+    );
     // `margin-inline-start: auto` on the picker. It renders in every Pane,
     // before and after the first-prompt lock — there is no plain-label
     // fallback and no second model surface anywhere.
@@ -2850,7 +2855,7 @@ fn mode_chip(mode: &str) -> Div {
         .hover_raised()
 }
 
-/// The hints beside the line. A showing prediction takes the first slot: it
+/// The hints under the line, on the controls row. A showing prediction takes the first slot: it
 /// is the only one of these the operator cannot discover by looking at the
 /// box, and an accept key nobody knows about is the same as no accept key.
 fn composer_hints(is_draft: bool, history_available: bool, suggested: bool) -> &'static str {
