@@ -1595,6 +1595,21 @@ impl Cockpit {
         self.store.peek(thread)
     }
 
+    /// The subagents a Thread knows, live or parked. Parked Threads replay
+    /// their durable activity into a throwaway projection; callers should
+    /// cache this moment-level read rather than ask for it while rendering.
+    pub fn subagent_count(&self, thread: ThreadId) -> Result<usize, LoadError> {
+        if let Some(open) = self.thread(thread) {
+            return Ok(open.activity().children().len());
+        }
+        let snapshot = self.store.load(thread)?;
+        let mut activity = Activity::default();
+        for input in snapshot.activity_inputs() {
+            activity.apply(input);
+        }
+        Ok(activity.view().children().len())
+    }
+
     /// When a Thread was last used, live or parked — the nav's default
     /// order and its "3 days" line. One `stat`, so callers still cache it
     /// rather than ask per frame.

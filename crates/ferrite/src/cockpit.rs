@@ -4286,6 +4286,7 @@ impl CockpitView {
             last_used: facts
                 .and_then(|facts| facts.last_used)
                 .map(|at| crate::facts::since_label(at, now)),
+            subagents: facts.map_or(0, |facts| facts.subagents),
         }
     }
 

@@ -881,6 +881,11 @@ fn stale_request_after_replacement(replacement: Replacement) {
         Replacement::ParkAndRevive => {
             h.cockpit.queue(h.thread, "unpersisted queue".to_owned());
             h.cockpit.park(h.thread).unwrap();
+            assert_eq!(
+                h.cockpit.subagent_count(h.thread).unwrap(),
+                1,
+                "a parked Thread exposes its durable child count"
+            );
             h.cockpit.revive(h.thread).unwrap();
         }
         Replacement::Handover => {
