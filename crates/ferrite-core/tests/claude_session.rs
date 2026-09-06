@@ -582,7 +582,7 @@ fn a_resumed_session_answers_from_the_previous_process_history() {
         recorded[0],
         format!(
             "-p --input-format stream-json --output-format stream-json \
-             --include-partial-messages --thinking-display summarized --forward-subagent-text --verbose --permission-prompt-tool stdio \
+             --include-partial-messages --thinking-display summarized --forward-subagent-text --verbose --permission-prompt-tool stdio --prompt-suggestions false \
              --resume {resumed}"
         )
     );
@@ -665,6 +665,7 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
         cwd: Some(std::env::temp_dir()),
         model: Some("haiku".into()),
         effort: Some("high".into()),
+        prompt_suggestions: false,
         name: Some("CI flake".into()),
         permission_mode: Some("default".into()),
         resume: None,
@@ -690,7 +691,7 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
     assert_eq!(
         recorded[0],
         "-p --input-format stream-json --output-format stream-json \
-         --include-partial-messages --thinking-display summarized --forward-subagent-text --verbose --permission-prompt-tool stdio \
+         --include-partial-messages --thinking-display summarized --forward-subagent-text --verbose --permission-prompt-tool stdio --prompt-suggestions false \
          --model haiku --permission-mode default --name CI flake"
     );
     assert_eq!(sent.len(), 5, "the rename wrote nothing");
@@ -746,7 +747,7 @@ fn no_model_or_permission_mode_is_passed_when_the_config_names_none() {
     assert_eq!(
         recorded[0],
         "-p --input-format stream-json --output-format stream-json \
-         --include-partial-messages --thinking-display summarized --forward-subagent-text --verbose --permission-prompt-tool stdio"
+         --include-partial-messages --thinking-display summarized --forward-subagent-text --verbose --permission-prompt-tool stdio --prompt-suggestions false"
     );
 }
 
@@ -982,4 +983,55 @@ fn read_lines(path: &std::path::Path, wanted: usize) -> Vec<String> {
         );
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+#[test]
+fn native_followups_arrive_after_result_through_the_session_adapter() {
+    let script = format!(
+        r#"{PRELUDE}
+previous=''
+for arg in "$@"; do
+  if [ "$previous" = '--prompt-suggestions' ]; then enabled="$arg"; fi
+  previous="$arg"
+done
+while IFS= read -r line; do
+  case "$line" in
+    *'"type":"user"'*)
+      echo '{{"type":"system","subtype":"init","session_id":"native-main"}}'
+      echo '{{"type":"result","subtype":"success","is_error":false,"session_id":"native-main","total_cost_usd":0}}'
+      if [ "$enabled" = true ]; then
+        sleep 0.05
+        echo '{{"type":"prompt_suggestion","suggestion":"write the tests","uuid":"native-1","session_id":"native-main"}}'
+      fi
+      ;;
+  esac
+done
+"#
+    );
+    let mut session = ClaudeSession::spawn(ClaudeConfig {
+        program: stub("native-followups", &script),
+        prompt_suggestions: true,
+        ..Default::default()
+    })
+    .unwrap();
+    session.send("Show the function").unwrap();
+    let events = drain(session.events());
+    assert!(events
+        .iter()
+        .any(|event| matches!(event, SessionEvent::TurnEnded { .. })));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let text = loop {
+        if let Some(text) = session.take_suggestion() {
+            break text;
+        }
+        assert!(Instant::now() < deadline, "native suggestion never arrived");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(text, "write the tests");
+    assert_eq!(session.take_suggestion(), None);
+    session.set_suggestions_enabled(false).unwrap();
+    session.send("Continue").unwrap();
+    drain(session.events());
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(session.take_suggestion(), None);
 }
