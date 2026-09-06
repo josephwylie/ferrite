@@ -9,7 +9,7 @@
 mod activity;
 mod queue;
 mod suggestions;
-mod wire;
+pub(super) mod wire;
 
 use crate::spawn::NoConsoleWindow;
 use std::io::{self, BufRead, BufReader, Write};

@@ -56,7 +56,10 @@ use crate::{Decision, Hunk, RateLimitWindow, SessionEvent, ToolResult, TurnOutco
 /// subagents, output styles, account; only the two fields Ferrite acts on are
 /// lifted out, and a response missing them yields defaults rather than an
 /// error, because an unknown capability must read as unknown.
-pub(super) fn parse_capabilities(line: &str, request_id: &str) -> Option<ClaudeCapabilities> {
+pub(in crate::providers) fn parse_capabilities(
+    line: &str,
+    request_id: &str,
+) -> Option<ClaudeCapabilities> {
     let value: Value = serde_json::from_str(line).ok()?;
     if value.get("type")?.as_str()? != "control_response" {
         return None;

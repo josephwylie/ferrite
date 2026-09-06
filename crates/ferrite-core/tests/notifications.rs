@@ -545,6 +545,7 @@ impl Replay {
             &program,
             format!(
                 "#!/bin/sh\ncase \"$1\" in --version) echo 'codex-cli 0.153.4'; exit 0;; esac\n\
+             echo '{{\"id\":3,\"result\":{{\"data\":[]}}}}'\n\
              echo '{{\"id\":1,\"result\":{{\"userAgent\":\"stub\"}}}}'\n\
              cat {}\nprintf '%s\\n' '{}'\nexec cat > /dev/null\n",
                 quoted(&fixture),
