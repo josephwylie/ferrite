@@ -32,6 +32,7 @@ use crate::workspace::{self, WorkspaceBinding, WorkspaceChoice};
 use crate::{Decision, DecisionAnswer, ModelInfo, SessionEvent, ThreadId};
 
 mod history;
+mod queue;
 
 /// Everything one spawn needs, in one struct: every path that starts a
 /// Session (open, revive, send-respawn, sweep) reads the Thread's stored
@@ -324,7 +325,7 @@ struct Thread {
     title: Option<String>,
     /// A prompt the operator wrote while the turn was still running.
     queued: Option<String>,
-    queued_ready: bool,
+    native_queue: queue::Queue,
     prompt_history: PromptHistory,
     /// The provider-native id a replacement Session resumes from — the latest
     /// the provider announced. Held here rather than read back from the log,
@@ -387,6 +388,7 @@ impl Thread {
         resume: Option<String>,
         workspace: Option<WorkspaceBinding>,
         session_project_root: Option<PathBuf>,
+        queue_path: PathBuf,
     ) -> Self {
         let generation = next_generation();
         let mut activity = Activity::default();
@@ -405,7 +407,7 @@ impl Thread {
             effort,
             title: None,
             queued: None,
-            queued_ready: false,
+            native_queue: queue::Queue::open(queue_path),
             prompt_history: PromptHistory::new(Vec::new()),
             resume,
             workspace,
@@ -451,6 +453,12 @@ impl Thread {
         self.activity.view().main().busy()
     }
     fn replace_generation(&mut self) {
+        if let Some(notice) = self
+            .native_queue
+            .disconnect(self.provider == Provider::Codex)
+        {
+            self.apply(Input::Notice(notice));
+        }
         self.history.clear();
         self.history_errors.clear();
         self.generation = next_generation();
@@ -816,6 +824,7 @@ impl Cockpit {
                 None,
                 Some(binding),
                 None,
+                self.store.dir().join(id.to_string()).join("queue.json"),
             ),
         );
         self.roster.insert_thread(id);
@@ -1071,7 +1080,8 @@ impl Cockpit {
         kind: ReplacementKind,
     ) -> Result<(), ProvisionError> {
         let state = self.threads.get(&thread).expect("checked by caller");
-        if (state.busy() && !matches!(kind, ReplacementKind::Fresh))
+        if state.native_queue.pending()
+            || (state.busy() && !matches!(kind, ReplacementKind::Fresh))
             || state.replacement.is_some()
             || self.bootstraps.contains_key(&thread)
         {
@@ -1331,6 +1341,7 @@ impl Cockpit {
             resume,
             workspace,
             session_project_root,
+            self.store.dir().join(thread.to_string()).join("queue.json"),
         );
         state.title = title;
         // A switch whose carry never went out (parked before the next
@@ -1346,6 +1357,9 @@ impl Cockpit {
             state.activity.apply(input);
         }
         state.apply(Input::Revived);
+        if let Some(notice) = state.native_queue.disconnect(provider == Provider::Codex) {
+            state.apply(Input::Notice(notice));
+        }
         state.activity.apply(ActivityInput::Connect {
             generation: state.generation,
         });
@@ -1868,7 +1882,6 @@ impl Cockpit {
             }
             let mut closed = false;
             let mut settled = false;
-            let mut resumed = false;
             let mut turn_ended = false;
             for _ in 0..256 {
                 if thread.store_error.is_some() || thread.history_backpressure() {
@@ -1882,6 +1895,33 @@ impl Cockpit {
                 else {
                     break;
                 };
+                if let SessionEvent::Queue(event) = event {
+                    let change = thread.native_queue.observe(event);
+                    if let Some(text) = change.prompt {
+                        if let Err(error) = thread.writer.record_prompt(&text) {
+                            thread.report_store_error(error);
+                        }
+                        thread.prompt_history.append(text.clone());
+                        if change.historical {
+                            update.absorb(
+                                thread
+                                    .activity
+                                    .apply(ActivityInput::Replay(Input::Prompt(text))),
+                                true,
+                            );
+                        } else {
+                            let applied = thread.apply(Input::Prompt(text));
+                            update.dirty.extend(applied.dirty);
+                        }
+                    }
+                    if let Some(notice) = change.notice {
+                        update
+                            .dirty
+                            .extend(thread.apply(Input::Notice(notice)).dirty);
+                    }
+                    update.activity_changed = true;
+                    continue;
+                }
                 if let SessionEvent::RateLimits { five_hour, weekly } = &event {
                     self.limit_cache.remember(
                         thread.provider,
@@ -1928,7 +1968,6 @@ impl Cockpit {
                         at: Instant::now(),
                     }),
                 };
-                thread.queued_ready |= applied.main_turn_ended;
                 turn_ended |= applied.main_turn_ended;
                 settled |= applied.main_settled;
                 if matches!(&event, SessionEvent::Activity(_)) {
@@ -1969,40 +2008,18 @@ impl Cockpit {
                 update.absorb(applied, content_changed);
             }
             if closed {
+                if let Some(notice) = thread
+                    .native_queue
+                    .disconnect(thread.provider == Provider::Codex)
+                {
+                    update
+                        .dirty
+                        .extend(thread.apply(Input::Notice(notice)).dirty);
+                }
                 thread.session = None;
                 thread.history.clear();
                 thread.activity.apply(ActivityInput::Disconnect);
                 update.activity_changed = true;
-            }
-            if thread.queued_ready
-                && thread.store_error.is_none()
-                && thread.replacement.is_none()
-                && thread
-                    .session
-                    .as_ref()
-                    .and_then(SessionLifecycle::session)
-                    .is_some()
-            {
-                if let Some(held) = thread.queued.take() {
-                    match deliver(thread, held.clone()) {
-                        Ok(sent) => {
-                            update.dirty.extend(sent.dirty);
-                            update.evicted.extend(sent.evicted);
-                            update.activity_changed = true;
-                            resumed = true;
-                        }
-                        Err(error) => {
-                            thread.queued = Some(held);
-                            update.dirty.extend(
-                                thread
-                                    .apply(Input::Notice(format!("send failed: {error}")))
-                                    .dirty,
-                            );
-                        }
-                    }
-                } else {
-                    thread.queued_ready = false;
-                }
             }
             // Every frame, every Thread: the deferral's grace is a clock
             // only the pump ticks.
@@ -2011,7 +2028,7 @@ impl Cockpit {
                 Frame {
                     activity: thread.activity.view(),
                     settled,
-                    resumed,
+                    resumed: thread.native_queue.pending(),
                 },
                 Instant::now(),
             );
@@ -2051,21 +2068,121 @@ impl Cockpit {
         frame
     }
 
-    /// Hold a prompt written mid-turn. It stays visible and editable until the
-    /// turn ends, which is when it is sent.
-    pub fn queue(&mut self, thread: ThreadId, text: String) {
+    /// Submit immediately; the provider owns admission and execution.
+    /// False leaves the caller's draft intact; no local fallback is installed.
+    pub fn queue(&mut self, thread: ThreadId, text: String) -> bool {
+        let Some(state) = self.threads.get_mut(&thread) else {
+            return false;
+        };
+        state.prompt_history.reset();
+        let id = format!(
+            "{:08x}-{:04x}-4{:03x}-8{:03x}-{:012x}",
+            std::process::id(),
+            state.generation & 0xffff,
+            (state.generation >> 16) & 0xfff,
+            next_generation() & 0xfff,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+                & 0xffffffffffff
+        );
+        if let Some(refusal) = vanished_root_refusal(state) {
+            state.apply(Input::Notice(refusal));
+            return false;
+        }
+        if let Err(error) = state.native_queue.prepare(&id, &text) {
+            state.native_queue.refused(&id);
+            state.apply(Input::Notice(format!(
+                "queue metadata could not be saved: {error}"
+            )));
+            return false;
+        }
+        let result = state
+            .session
+            .as_mut()
+            .and_then(SessionLifecycle::session_mut)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotConnected,
+                    "Session is still starting; retry when ready",
+                )
+            })
+            .and_then(|session| session.enqueue(&id, &text));
+        if let Err(error) = result {
+            if matches!(
+                error.kind(),
+                io::ErrorKind::Unsupported | io::ErrorKind::NotConnected
+            ) {
+                state.native_queue.refused(&id);
+                state.apply(Input::Notice(format!("native queue failed: {error}")));
+                return false;
+            }
+            // A partial pipe write might have reached the provider. Keep its
+            // correlation metadata and never turn uncertainty into a resend.
+            state.apply(Input::Notice(format!(
+                "native queue delivery is uncertain; not retried: {error}\n{text}"
+            )));
+        }
+        true
+    }
+
+    /// Empty-Composer Enter requests cancellation; retrieval arrives via the pump.
+    pub fn unqueue(&mut self, thread: ThreadId) -> Option<String> {
         if let Some(state) = self.threads.get_mut(&thread) {
-            state.prompt_history.reset();
-            state.queued = Some(text);
+            if let Some(text) = state.queued.take() {
+                return Some(text);
+            }
+        }
+        self.cancel_queued(thread, true);
+        None
+    }
+
+    pub fn cancel_queued(&mut self, thread: ThreadId, restore: bool) {
+        self.cancel_queue(thread, restore, false);
+    }
+
+    /// Up edits the visible queued prompt ahead of the current draft.
+    pub fn edit_queued(&mut self, thread: ThreadId) {
+        self.cancel_queue(thread, true, true);
+    }
+
+    fn cancel_queue(&mut self, thread: ThreadId, restore: bool, prepend: bool) {
+        let Some(state) = self.threads.get_mut(&thread) else {
+            return;
+        };
+        state.prompt_history.reset();
+        // Startup input has never reached a provider and can be taken back locally.
+        if let Some(text) = state.queued.take() {
+            if restore {
+                state.native_queue.recovered.push((text, prepend));
+            }
+            return;
+        }
+        let Some(id) = state.native_queue.cancellation(restore, prepend) else {
+            return;
+        };
+        let result = state
+            .session
+            .as_mut()
+            .and_then(SessionLifecycle::session_mut)
+            .ok_or_else(|| io::Error::other("no live Session to cancel queued input"))
+            .and_then(|session| session.cancel_queued(&id));
+        if let Err(error) = result {
+            state.native_queue.cancel_failed();
+            state.apply(Input::Notice(format!(
+                "native cancellation failed: {error}"
+            )));
         }
     }
 
-    /// Take a held prompt back into the Composer, so a typo written mid-turn
-    /// is fixable before it goes out.
-    pub fn unqueue(&mut self, thread: ThreadId) -> Option<String> {
+    pub fn take_retrieved_prompt(&mut self, thread: ThreadId) -> Option<(String, bool)> {
         let state = self.threads.get_mut(&thread)?;
-        state.prompt_history.reset();
-        state.queued.take()
+        if state.native_queue.recovered.is_empty() {
+            None
+        } else {
+            Some(state.native_queue.recovered.remove(0))
+        }
     }
 
     pub fn recall_prompt(
@@ -2501,7 +2618,12 @@ impl<'a> ThreadView<'a> {
 
     /// A prompt held back while the turn runs.
     pub fn queued(&self) -> Option<&'a str> {
-        self.state.queued.as_deref()
+        self.state
+            .native_queue
+            .items
+            .last()
+            .map(|item| item.text.as_str())
+            .or(self.state.queued.as_deref())
     }
 
     /// Is a turn running? A prompt written now has to wait for it.
@@ -2518,6 +2640,12 @@ impl<'a> ThreadView<'a> {
 
     pub fn busy(&self) -> bool {
         self.state.busy() || self.starting()
+    }
+
+    pub fn needs_queue(&self) -> bool {
+        self.busy()
+            || self.state.activity.view().main_operator_turn()
+            || self.state.native_queue.pending()
     }
 
     /// The checkout this Thread works in — what the Pane's chrome shows.
@@ -3154,7 +3282,6 @@ fn deliver(state: &mut Thread, text: String) -> io::Result<Update> {
         wire.insert_str(operator, &format!("{carry}\n\n"));
     }
     session.send(&wire)?;
-    state.queued_ready = false;
     state.carry = None;
     // The Session's first prompt has gone out; every later one is bare.
     state.preface_pending = false;
@@ -3325,6 +3452,8 @@ mod tests {
     /// A Session with no process behind it: the test pushes the events a
     /// provider would have streamed, and reads back what Ferrite sent.
     struct Scripted {
+        tx: Sender<SessionEvent>,
+        native: Rc<RefCell<Vec<(String, String)>>>,
         rx: Receiver<SessionEvent>,
         sent: Rc<RefCell<Vec<String>>>,
         fail_send: Rc<RefCell<bool>>,
@@ -3334,6 +3463,30 @@ mod tests {
     }
 
     impl crate::providers::Session for Scripted {
+        fn enqueue(&mut self, id: &str, text: &str) -> io::Result<()> {
+            self.native.borrow_mut().push((id.into(), text.into()));
+            self.tx
+                .send(SessionEvent::Queue(crate::QueueEvent::Accepted(
+                    crate::QueuedPrompt {
+                        id: id.into(),
+                        client_id: id.into(),
+                        text: text.into(),
+                    },
+                )))
+                .unwrap();
+            Ok(())
+        }
+        fn cancel_queued(&mut self, id: &str) -> io::Result<()> {
+            self.tx
+                .send(SessionEvent::Queue(crate::QueueEvent::Cancelled {
+                    id: id.into(),
+                    cancelled: true,
+                    error: None,
+                }))
+                .unwrap();
+            Ok(())
+        }
+
         fn set_effort(&mut self, effort: Option<&str>) -> io::Result<()> {
             if *self.fail_effort.borrow() {
                 return Err(io::Error::other("stub refused effort"));
@@ -3377,6 +3530,7 @@ mod tests {
     /// with. Nothing here spawns a process.
     #[derive(Clone, Default)]
     struct Fake {
+        native: Rc<RefCell<Vec<(String, String)>>>,
         streams: Rc<RefCell<Vec<Sender<SessionEvent>>>>,
         sent: Rc<RefCell<Vec<String>>>,
         providers: Rc<RefCell<Vec<Provider>>>,
@@ -3424,7 +3578,7 @@ mod tests {
                 return Err(std::io::Error::other("stub refused to spawn"));
             }
             let (tx, rx) = mpsc::channel();
-            self.streams.borrow_mut().push(tx);
+            self.streams.borrow_mut().push(tx.clone());
             self.providers.borrow_mut().push(request.provider);
             self.models
                 .borrow_mut()
@@ -3442,6 +3596,8 @@ mod tests {
                 .borrow_mut()
                 .push(request.name.map(|name| name.to_string()));
             Ok(Box::new(Scripted {
+                tx,
+                native: self.native.clone(),
                 rx,
                 sent: self.sent.clone(),
                 fail_send: self.fail_send.clone(),
@@ -4509,40 +4665,58 @@ mod tests {
     }
 
     #[test]
-    fn only_successful_delivery_joins_history_and_queued_delivery_waits_for_turn_end() {
-        let (mut cockpit, fake) = cockpit("prompt-history-delivery");
+    fn native_queue_history_records_consumption_once() {
+        let (mut cockpit, fake) = cockpit("native-history");
         let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
         cockpit.send(thread, "sent".into());
-        *fake.fail_send.borrow_mut() = true;
-        cockpit.send(thread, "refused".into());
-        *fake.fail_send.borrow_mut() = false;
+        assert!(cockpit.queue(thread, "held".into()));
+        assert_eq!(
+            cockpit.thread(thread).unwrap().queued(),
+            None,
+            "pipe write is not admission"
+        );
+        cockpit.pump();
+        assert_eq!(cockpit.thread(thread).unwrap().queued(), Some("held"));
+        fake.streams.borrow()[0].send(ended()).unwrap();
+        cockpit.pump();
+        assert_eq!(
+            fake.sent.borrow().as_slice(),
+            ["sent"],
+            "turn end never dispatches"
+        );
         assert_eq!(
             cockpit.recall_prompt(thread, HistoryDirection::Older, "draft"),
             Some("sent".into())
         );
-
-        cockpit.queue(thread, "taken back".into());
-        assert_eq!(cockpit.unqueue(thread).as_deref(), Some("taken back"));
-        assert_eq!(
-            cockpit.recall_prompt(thread, HistoryDirection::Older, "after unqueue"),
-            Some("sent".into()),
-            "unqueue resets traversal and never appends"
-        );
-
-        fake.streams.borrow()[0].send(text("working")).unwrap();
+        let id = fake.native.borrow()[0].0.clone();
+        for _ in 0..2 {
+            fake.streams.borrow()[0]
+                .send(SessionEvent::Queue(crate::QueueEvent::Started {
+                    historical: false,
+                    client_id: id.clone(),
+                    text: None,
+                }))
+                .unwrap();
+        }
         cockpit.pump();
-        cockpit.queue(thread, "held".into());
+        assert_eq!(cockpit.thread(thread).unwrap().queued(), None);
         assert_eq!(
-            cockpit.recall_prompt(thread, HistoryDirection::Older, "while held"),
-            Some("sent".into()),
-            "queueing resets traversal but does not append"
+            cockpit.recall_prompt(thread, HistoryDirection::Older, "draft"),
+            Some("held".into())
         );
-        fake.streams.borrow()[0].send(ended()).unwrap();
-        cockpit.pump();
+        let prompts = cockpit
+            .thread(thread)
+            .unwrap()
+            .transcript()
+            .blocks()
+            .iter()
+            .filter(|block| matches!(&block.body, Body::Prompt(text) if text == "held"))
+            .count();
+        assert_eq!(prompts, 1);
+        cockpit.park(thread).unwrap();
         assert_eq!(
-            cockpit.recall_prompt(thread, HistoryDirection::Older, "after release"),
-            Some("held".into()),
-            "turn-end delivery appends through the single delivery chokepoint"
+            cockpit.store.load(thread).unwrap().prompt_texts(),
+            ["sent", "held"]
         );
     }
 
@@ -4809,81 +4983,31 @@ mod tests {
         );
     }
 
-    /// A prompt queued behind a running turn must not strand when the
-    /// operator changes the root: no turn will ever end to release it, the
-    /// Session being gone. It goes out at once as the new Session's first
-    /// prompt, wearing the new preface — what the operator picked it for.
     #[test]
-    fn changing_the_root_releases_a_queued_prompt_into_the_new_session() {
-        let (mut cockpit, fake) = cockpit("root-queued");
+    fn replacing_a_claude_session_does_not_resubmit_native_pending_work() {
+        let (mut cockpit, fake) = cockpit("native-replacement");
         let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        fake.streams.borrow()[0].send(text("working")).unwrap();
+        assert!(cockpit.queue(thread, "pending text".into()));
         cockpit.pump();
-        assert!(cockpit.thread(thread).is_some_and(|open| open.busy()));
-        cockpit.queue(thread, "and then the tests".into());
-        let root = existing_root("root-queued-root");
-
         cockpit
-            .set_session_project_root(thread, Some(root.clone()))
+            .set_session_project_root(thread, Some(existing_root("native-replacement-root")))
             .unwrap();
-
-        assert_eq!(
-            cockpit.thread(thread).and_then(|open| open.queued()),
-            None,
-            "the held prompt went out"
-        );
-        assert_eq!(fake.streams.borrow().len(), 2, "a fresh Session took it");
-        let binding = std::env::temp_dir();
-        assert_eq!(
-            fake.sent.borrow().as_slice(),
-            [format!("{}and then the tests", preface(&binding, &root))]
-        );
-        // Raw in the Pane: displayed ≠ sent.
-        let blocks = cockpit.thread(thread).unwrap().transcript().blocks();
-        assert!(blocks
+        cockpit.send(thread, "new input".into());
+        fake.streams.borrow()[0]
+            .send(SessionEvent::Queue(crate::QueueEvent::Started {
+                historical: false,
+                client_id: fake.native.borrow()[0].0.clone(),
+                text: None,
+            }))
+            .ok();
+        cockpit.pump();
+        assert_eq!(fake.native.borrow().len(), 1);
+        assert!(!fake
+            .sent
+            .borrow()
             .iter()
-            .any(|b| matches!(&b.body, Body::Prompt(line) if line == "and then the tests")));
-    }
-
-    /// A held prompt released by a turn's end is a prompt like any other:
-    /// on a fresh Session (the watchdog replaced it mid-wait) its wire text
-    /// carries the preface — once — and the Pane keeps the raw text.
-    #[test]
-    fn a_queued_prompt_released_on_a_fresh_session_carries_the_preface_once() {
-        let (mut cockpit, fake) = cockpit("root-queued-release");
-        let rss = Rc::new(RefCell::new(0u64));
-        cockpit.watch_memory(Box::new(Meter(rss.clone())), 1024);
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        let root = existing_root("root-queued-release-root");
-        cockpit
-            .set_session_project_root(thread, Some(root.clone()))
-            .unwrap();
-        cockpit.send(thread, "one".into()); // consumes the first preface
-        fake.streams.borrow()[1].send(text("working")).unwrap();
-        cockpit.pump();
-        cockpit.queue(thread, "held".into());
-        *rss.borrow_mut() = 4096; // over the limit: the watchdog acts
-        assert_eq!(cockpit.sweep().len(), 1, "a fresh Session, preface armed");
-        fake.streams.borrow()[2].send(ended()).unwrap();
-
-        cockpit.pump(); // the turn ends; the held prompt is released
-
-        let binding = std::env::temp_dir();
-        assert_eq!(
-            fake.sent.borrow().last().unwrap(),
-            &format!("{}held", preface(&binding, &root))
-        );
-        cockpit.send(thread, "next".into());
-        assert_eq!(
-            fake.sent.borrow().last().unwrap(),
-            "next",
-            "the preface rides once per Session"
-        );
-        let blocks = cockpit.thread(thread).unwrap().transcript().blocks();
-        assert!(
-            !format!("{blocks:?}").contains("ferrite-session-context"),
-            "the preface must never reach the transcript"
-        );
+            .any(|text| text.ends_with("pending text")));
+        assert!(cockpit.thread(thread).unwrap().transcript().blocks().iter().any(|block| matches!(&block.body, Body::Notice(text) if text.contains("delivery is uncertain"))));
     }
 
     /// After a failed watchdog restart the Thread sits in the cockpit with
@@ -5277,39 +5401,45 @@ mod tests {
     }
 
     #[test]
-    fn a_prompt_typed_during_a_turn_is_sent_when_the_turn_ends() {
-        let (mut cockpit, fake) = cockpit("queued");
+    fn native_pending_prompts_survive_turn_end_without_client_dispatch() {
+        let (mut cockpit, fake) = cockpit("native-queued");
         let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
         fake.streams.borrow()[0].send(text("working")).unwrap();
         cockpit.pump();
-        assert!(cockpit.thread(thread).is_some_and(|open| open.busy()));
-
-        cockpit.queue(thread, "and then run the tests".into());
-        assert_eq!(
-            cockpit.thread(thread).and_then(|open| open.queued()),
-            Some("and then run the tests")
-        );
-        assert!(fake.sent.borrow().is_empty(), "nothing goes out mid-turn");
-
+        assert!(cockpit.queue(thread, "and then run the tests".into()));
+        cockpit.pump();
         fake.streams.borrow()[0].send(ended()).unwrap();
         cockpit.pump();
-
-        assert_eq!(fake.sent.borrow().as_slice(), ["and then run the tests"]);
-        assert_eq!(cockpit.thread(thread).and_then(|open| open.queued()), None);
-        assert!(!cockpit.thread(thread).is_some_and(|open| open.busy()));
+        assert!(fake.sent.borrow().is_empty());
+        assert_eq!(fake.native.borrow().len(), 1);
+        assert_eq!(
+            cockpit.thread(thread).unwrap().queued(),
+            Some("and then run the tests")
+        );
     }
 
     #[test]
-    fn a_held_prompt_can_be_taken_back_for_editing() {
-        let (mut cockpit, _fake) = cockpit("unqueue");
+    fn a_native_prompt_is_retrieved_only_after_cancel_receipt() {
+        let (mut cockpit, fake) = cockpit("native-unqueue");
         let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        cockpit.queue(thread, "run the tets".into());
-
-        let back = cockpit.unqueue(thread);
-
-        assert_eq!(back.as_deref(), Some("run the tets"));
-        assert_eq!(cockpit.thread(thread).and_then(|open| open.queued()), None);
+        assert!(cockpit.queue(thread, "run the tets".into()));
+        cockpit.pump();
         assert_eq!(cockpit.unqueue(thread), None);
+        assert_eq!(cockpit.take_retrieved_prompt(thread), None);
+        assert_eq!(
+            cockpit.thread(thread).unwrap().queued(),
+            Some("run the tets")
+        );
+        cockpit.pump();
+        assert_eq!(
+            cockpit
+                .take_retrieved_prompt(thread)
+                .map(|(text, _)| text)
+                .as_deref(),
+            Some("run the tets")
+        );
+        assert_eq!(cockpit.thread(thread).unwrap().queued(), None);
+        assert!(fake.sent.borrow().is_empty());
     }
 
     #[test]

@@ -850,7 +850,7 @@ mod tests {
             // below and the session test that watches the reader announce them.
             SessionEvent::Commands { .. } => return None,
             SessionEvent::PermissionMode { .. } => return None,
-            SessionEvent::Models { .. } => return None,
+            SessionEvent::Models { .. } | SessionEvent::Queue(_) => return None,
             // Codex's own concept (#9); the Claude CLI never emits one.
             SessionEvent::ReasoningSummaryDelta { .. } => return None,
             // Rides beside a line's own event (`parse_usage`), proved by

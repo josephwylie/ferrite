@@ -750,6 +750,33 @@ impl CockpitView {
     /// changed are worth a repaint; a frame where nothing moved costs nothing.
     fn pump(&mut self, cx: &mut Context<Self>) {
         let frame = self.cockpit.pump();
+        for pane in &self.panes {
+            if let Some(thread) = pane.thread() {
+                while let Some((held, prepend)) = self.cockpit.take_retrieved_prompt(thread) {
+                    pane.composer.update(cx, |composer, cx| {
+                        let (current, mut files) =
+                            ferrite_core::prompt_files::split(composer.prompt());
+                        let (held, restored_files) = ferrite_core::prompt_files::split(held);
+                        let text = if current.is_empty() {
+                            held
+                        } else if prepend {
+                            format!("{held}\n\n{current}")
+                        } else {
+                            format!("{current}\n\n{held}")
+                        };
+                        if prepend {
+                            let mut restored_files = restored_files;
+                            restored_files.extend(files);
+                            files = restored_files;
+                        } else {
+                            files.extend(restored_files);
+                        }
+                        composer.set(ferrite_core::prompt_files::compose(&text, &files), cx);
+                    });
+                    cx.notify();
+                }
+            }
+        }
         let models_changed = self.cockpit.take_models_changed();
         if models_changed {
             self.refresh_model_picker(cx);
@@ -2291,8 +2318,14 @@ impl CockpitView {
             return;
         }
         // Typing does not wait for the agent; sending does.
-        if self.cockpit.thread(thread).is_some_and(|open| open.busy()) {
-            self.cockpit.queue(thread, text.clone());
+        if self
+            .cockpit
+            .thread(thread)
+            .is_some_and(|open| open.needs_queue())
+        {
+            if !self.cockpit.queue(thread, text.clone()) {
+                composer.update(cx, |composer, cx| composer.set(text.clone(), cx));
+            }
         } else {
             self.cockpit.send(thread, text.clone());
             self.panes[self.focused()].follow_tail.set(true);
@@ -2326,9 +2359,8 @@ impl CockpitView {
         if !self.panes[self.focused()].composer.read(cx).is_empty() {
             return;
         }
-        if self.cockpit.unqueue(thread).is_some() {
-            cx.notify();
-        }
+        self.cockpit.cancel_queued(thread, false);
+        cx.notify();
     }
 
     fn interrupt(&mut self, _: &Interrupt, _window: &mut Window, cx: &mut Context<Self>) {
@@ -2897,6 +2929,17 @@ impl CockpitView {
         let Some(thread) = self.panes[index].thread() else {
             return;
         };
+        if self
+            .cockpit
+            .thread(thread)
+            .is_some_and(|open| open.queued().is_some())
+        {
+            if matches!(direction, HistoryDirection::Older) {
+                self.cockpit.edit_queued(thread);
+                cx.notify();
+            }
+            return;
+        }
         let composer = self.panes[index].composer.clone();
         let draft = composer.read(cx).prompt();
         let Some(text) = self.cockpit.recall_prompt(thread, direction, &draft) else {
@@ -2919,13 +2962,14 @@ impl CockpitView {
         let Some(open) = self.cockpit.thread(thread) else {
             return false;
         };
-        open.has_prompt_history()
-            && !self.panes[index].has_tool_target()
+        !self.panes[index].has_tool_target()
             && self.rename.is_none()
-            && !open.busy()
-            && open.pending().is_none()
-            && open.queued().is_none()
             && self.popover.is_none()
+            && ((self.panes[index].is_main() && open.queued().is_some())
+                || (open.has_prompt_history()
+                    && !open.busy()
+                    && open.pending().is_none()
+                    && open.queued().is_none()))
     }
 
     /// Clamp-step the open popover's selection.
@@ -6878,6 +6922,7 @@ mod tests {
     use gpui::{KeyBinding, TestAppContext};
 
     struct Scripted {
+        tx: Sender<SessionEvent>,
         rx: Receiver<SessionEvent>,
         interrupts: Rc<RefCell<usize>>,
         fail_send: Rc<RefCell<bool>>,
@@ -6886,6 +6931,29 @@ mod tests {
     }
 
     impl Session for Scripted {
+        fn enqueue(&mut self, id: &str, text: &str) -> std::io::Result<()> {
+            self.tx
+                .send(SessionEvent::Queue(ferrite_core::QueueEvent::Accepted(
+                    ferrite_core::QueuedPrompt {
+                        id: id.into(),
+                        client_id: id.into(),
+                        text: text.into(),
+                    },
+                )))
+                .unwrap();
+            Ok(())
+        }
+        fn cancel_queued(&mut self, id: &str) -> std::io::Result<()> {
+            self.tx
+                .send(SessionEvent::Queue(ferrite_core::QueueEvent::Cancelled {
+                    id: id.into(),
+                    cancelled: true,
+                    error: None,
+                }))
+                .unwrap();
+            Ok(())
+        }
+
         fn set_effort(&mut self, _effort: Option<&str>) -> std::io::Result<()> {
             Ok(())
         }
@@ -6940,12 +7008,13 @@ mod tests {
                 return Err(std::io::Error::other("stub refused to spawn"));
             }
             let (tx, rx) = mpsc::channel();
-            self.streams.borrow_mut().push(tx);
+            self.streams.borrow_mut().push(tx.clone());
             self.spawned.borrow_mut().push(ProviderChoice {
                 provider: request.provider,
                 model: request.model.map(|model| model.to_string()),
             });
             Ok(Box::new(Scripted {
+                tx,
                 rx,
                 interrupts: self.interrupts.clone(),
                 fail_send: self.fail_send.clone(),
@@ -8142,6 +8211,8 @@ mod tests {
             cx.bind_keys([
                 KeyBinding::new("enter", Submit, None),
                 KeyBinding::new("backspace", crate::composer::Backspace, None),
+                KeyBinding::new("up", HistoryOlder, Some("ComposerHistory")),
+                KeyBinding::new("up", crate::composer::Up, Some("Composer")),
             ]);
         });
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -8162,6 +8233,7 @@ mod tests {
         });
         cx.simulate_input("also this");
         cx.simulate_keystrokes("enter");
+        tick(cx);
         view.read_with(cx, |view, _| {
             assert_eq!(
                 view.cockpit.thread(thread).and_then(|open| open.queued()),
@@ -8193,11 +8265,84 @@ mod tests {
             );
         });
         cx.simulate_keystrokes("backspace");
+        tick(cx);
         view.read_with(cx, |view, _| {
             assert_eq!(
                 view.cockpit.thread(thread).and_then(|open| open.queued()),
                 None,
                 "backspace on the empty line unqueues the held prompt"
+            );
+        });
+
+        // Enter waits for cancellation and preserves edits/attachments made
+        // while its receipt is in flight.
+        view.update(cx, |view, cx| {
+            view.panes[0].composer.update(cx, |composer, cx| {
+                composer.set(
+                    ferrite_core::prompt_files::compose(
+                        "held",
+                        &[std::path::PathBuf::from("/tmp/held.png")],
+                    ),
+                    cx,
+                )
+            });
+        });
+        cx.simulate_keystrokes("enter");
+        tick(cx);
+        cx.simulate_keystrokes("enter");
+        view.update(cx, |view, cx| {
+            view.panes[0].composer.update(cx, |composer, cx| {
+                composer.set(
+                    ferrite_core::prompt_files::compose(
+                        "new draft",
+                        &[std::path::PathBuf::from("/tmp/new.png")],
+                    ),
+                    cx,
+                )
+            });
+        });
+        tick(cx);
+        view.read_with(cx, |view, cx| {
+            let (text, files) =
+                ferrite_core::prompt_files::split(view.panes[0].composer.read(cx).prompt());
+            assert_eq!(text, "new draft\n\nheld");
+            assert_eq!(
+                files,
+                [
+                    std::path::PathBuf::from("/tmp/new.png"),
+                    std::path::PathBuf::from("/tmp/held.png")
+                ]
+            );
+        });
+
+        // Up walks rows first, then edits the visible newest native prompt.
+        view.update(cx, |view, cx| {
+            view.cockpit.queue(thread, "earlier queued".into());
+            view.cockpit.queue(thread, "edit queued".into());
+            view.panes[0].composer.update(cx, |composer, cx| {
+                composer.set("draft\nsecond row".into(), cx)
+            });
+        });
+        tick(cx);
+        cx.simulate_keystrokes("up");
+        tick(cx);
+        view.read_with(cx, |view, cx| {
+            assert_eq!(
+                view.cockpit.thread(thread).unwrap().queued(),
+                Some("edit queued")
+            );
+            assert_eq!(view.panes[0].composer.read(cx).text(), "draft\nsecond row");
+        });
+        cx.simulate_keystrokes("up");
+        tick(cx);
+        view.read_with(cx, |view, cx| {
+            assert_eq!(
+                view.cockpit.thread(thread).unwrap().queued(),
+                Some("earlier queued")
+            );
+            assert_eq!(
+                view.panes[0].composer.read(cx).text(),
+                "edit queued\n\ndraft\nsecond row"
             );
         });
     }
@@ -11450,6 +11595,13 @@ mod tests {
         let thread = core.threads()[0];
         core.send(thread, "one".into());
         core.send(thread, "two".into());
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TurnEnded {
+                outcome: ferrite_core::TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+
         bind_production_keys(cx);
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, cx| {
@@ -12099,7 +12251,7 @@ mod tests {
         // keycaps, so the sentence starts past them.)
         cx.simulate_input("fix the tests too");
         cx.simulate_keystrokes("enter");
-        cx.run_until_parked();
+        tick(cx);
         view.read_with(cx, |view, _| {
             assert_eq!(
                 view.cockpit.thread(thread).and_then(|open| open.queued()),

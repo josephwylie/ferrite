@@ -6,6 +6,8 @@
 /// One structured event from a provider Session.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SessionEvent {
+    /// Native queue acknowledgments; never a client execution schedule.
+    Queue(QueueEvent),
     /// Attributed execution and discovery. Child facts must enter Activity
     /// before any Main transcript, usage, queue, or resume bookkeeping.
     Activity(crate::activity::ActivityEvent),
@@ -332,4 +334,35 @@ pub enum TurnOutcome {
     Completed,
     Interrupted,
     Error(String),
+}
+
+/// A provider-owned pending submission. Client identity only correlates metadata.
+#[derive(Debug, Clone, PartialEq)]
+pub struct QueuedPrompt {
+    pub id: String,
+    pub client_id: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum QueueEvent {
+    Snapshot(Vec<QueuedPrompt>),
+    Accepted(QueuedPrompt),
+    Started {
+        historical: bool,
+        client_id: String,
+        text: Option<String>,
+    },
+    Removed {
+        id: String,
+    },
+    Cancelled {
+        id: String,
+        cancelled: bool,
+        error: Option<String>,
+    },
+    Failed {
+        client_id: String,
+        error: String,
+    },
 }

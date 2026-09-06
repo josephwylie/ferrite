@@ -136,6 +136,13 @@ struct SessionWithDefaults {
 }
 
 impl Session for SessionWithDefaults {
+    fn enqueue(&mut self, client_id: &str, text: &str) -> io::Result<()> {
+        self.inner.enqueue(client_id, text)
+    }
+    fn cancel_queued(&mut self, id: &str) -> io::Result<()> {
+        self.inner.cancel_queued(id)
+    }
+
     fn events(&self) -> &std::sync::mpsc::Receiver<ferrite_core::SessionEvent> {
         self.inner.events()
     }
