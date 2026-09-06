@@ -14640,4 +14640,64 @@ mod tests {
             assert_eq!(view.cockpit.notifications().notices().count(), 0);
         });
     }
+
+    #[gpui::test]
+    fn contract_request_attention_toasts_once_and_cancellation_removes_it(cx: &mut TestAppContext) {
+        use ferrite_core::activity::ActivityEvent;
+        use gpui::component::WindowExt as _;
+        let (mut core, fake) = cockpit("request-toast-contract", 2);
+        let group = group_all(&mut core);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, cx| view.enter_group(group, cx));
+        for name in ["AskUserQuestion", "Bash"] {
+            fake.streams.borrow()[1].send(SessionEvent::DecisionRequested {
+                decision: ferrite_core::Decision {
+                    delivery: Default::default(), id: name.into(), tool_use_id: name.into(),
+                    tool_name: name.into(), description: "Needs your input".into(),
+                    input: serde_json::json!({}), suggestions: vec![],
+                },
+            }).unwrap();
+        }
+        tick(cx);
+        view.read_with(cx, |view, _| assert_eq!(view.cockpit.notifications().unread(), 2));
+        cx.update(|window, cx| assert_eq!(window.notifications(cx).len(), 2, "each pending request must be visible before the turn ends"));
+        tick(cx);
+        cx.update(|window, cx| assert_eq!(window.notifications(cx).len(), 2, "pumping must not duplicate request toasts"));
+        for name in ["AskUserQuestion", "Bash"] {
+            fake.streams.borrow()[1].send(SessionEvent::Activity(ActivityEvent::DecisionCancelled { id: name.into() })).unwrap();
+        }
+        tick(cx);
+        view.read_with(cx, |view, _| assert_eq!(view.cockpit.notifications().unread(), 0));
+        cx.update(|window, cx| assert!(window.notifications(cx).is_empty(), "cancelled requests must not leave stale toast actions"));
+    }
+
+    #[gpui::test]
+    fn contract_request_notice_opens_its_owning_child(cx: &mut TestAppContext) {
+        use ferrite_core::activity::{ActivityEvent, AgentInfo, AgentKey, Subject};
+        let (mut core, fake) = cockpit("request-child-contract", 2);
+        let group = group_all(&mut core);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, cx| view.enter_group(group, cx));
+        let key = AgentKey::new(Provider::Claude, "native", "child");
+        let mut info = AgentInfo::new(key.clone());
+        info.parent = Some(Subject::Main);
+        fake.streams.borrow()[1].send(SessionEvent::Activity(ActivityEvent::Discovered(info))).unwrap();
+        fake.streams.borrow()[1].send(SessionEvent::Activity(ActivityEvent::Decision {
+            subject: Some(Subject::Subagent(key.clone())),
+            decision: ferrite_core::Decision {
+                delivery: Default::default(), id: "child-request".into(), tool_use_id: "tool".into(),
+                tool_name: "Bash".into(), description: "Allow command".into(), input: serde_json::json!({}), suggestions: vec![],
+            },
+        })).unwrap();
+        tick(cx);
+        let id = view.read_with(cx, |view, _| view.cockpit.notifications().decisions().next().unwrap().id.clone());
+        view.update(cx, |view, cx| view.notice_verb(Verb::OpenDecision(id.clone()), cx));
+        tick(cx);
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.focused(), 1);
+            assert_eq!(view.panes[view.focused()].selected, Subject::Subagent(key.clone()));
+            assert!(view.cockpit.notifications().decision(&id).unwrap().read);
+            assert!(!view.bell.open);
+        });
+    }
 }
