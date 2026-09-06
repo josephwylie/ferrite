@@ -472,6 +472,22 @@ impl SubjectState {
         live: bool,
         limits: ActivityLimits,
     ) -> transcript::Update {
+        let separates_item = stream.as_ref().is_some_and(|stream| {
+            self.records
+                .back()
+                .and_then(|record| record.stream.as_ref())
+                .is_some_and(|previous| previous != stream)
+        });
+        if separates_item {
+            self.append(
+                Input::Event(SessionEvent::ContentBoundary),
+                None,
+                sequence,
+                at,
+                live,
+                limits,
+            );
+        }
         self.bookkeeping(&input, at, live);
         if !self.retained {
             return transcript::Update::default();

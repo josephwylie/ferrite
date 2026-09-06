@@ -78,8 +78,8 @@ pub(super) fn parse_line(line: &str) -> Option<SessionEvent> {
     }
 }
 
-/// Content state is per native thread, so interleaved child observations
-/// cannot split Main's heading or discard its snapshot deduplication state.
+/// Request delivery state is per native thread. Content identity remains on
+/// the Activity events, where snapshots reconcile the matching item.
 #[derive(Default)]
 pub(super) struct Decoder {
     threads: std::collections::BTreeMap<String, ContentDecoder>,
@@ -105,11 +105,12 @@ impl Decoder {
     }
 }
 
-/// Only answer/plan text needs duplicate-detection state. Reasoning sections
-/// keep their native identity all the way to the transcript and store.
+/// Async question delivery repeats on started and completed frames. Keep that
+/// bounded delivery state without retaining a second accumulated text copy.
 #[derive(Default)]
 struct ContentDecoder {
-    texts: std::collections::BTreeMap<String, Option<String>>,
+    decisions: std::collections::BTreeSet<String>,
+    decision_order: std::collections::VecDeque<String>,
 }
 impl ContentDecoder {
     fn parse(&mut self, line: &str) -> Vec<SessionEvent> {
@@ -126,11 +127,14 @@ impl ContentDecoder {
         // suppress its prose fallback, and keep final_answer from ending a turn.
         if matches!(method, "item/started" | "item/completed") {
             if let Some(decision) = super::questions::decode(p) {
-                if self.texts.contains_key(id) {
+                if !self.decisions.insert(id.into()) {
                     return vec![];
                 }
-                if self.texts.len() < 128 {
-                    self.texts.insert(id.into(), None);
+                self.decision_order.push_back(id.into());
+                if self.decision_order.len() > 128 {
+                    if let Some(old) = self.decision_order.pop_front() {
+                        self.decisions.remove(&old);
+                    }
                 }
                 return vec![
                     SessionEvent::ContentBoundary,
@@ -138,47 +142,7 @@ impl ContentDecoder {
                 ];
             }
         }
-        let mut before = vec![];
-        if matches!(method, "item/agentMessage/delta" | "item/plan/delta") {
-            if let Some(delta) = p["delta"].as_str() {
-                if self.texts.len() < 128 || self.texts.contains_key(id) {
-                    let seen = self
-                        .texts
-                        .entry(id.into())
-                        .or_insert_with(|| Some(String::new()));
-                    if let Some(text) = seen {
-                        if text.len().saturating_add(delta.len()) <= 256 * 1024 {
-                            text.push_str(delta);
-                        } else {
-                            *seen = None;
-                        } // Streamed in full; never repeat a truncated prefix.
-                    }
-                }
-            }
-        } else if method == "item/completed"
-            && matches!(p["item"]["type"].as_str(), Some("agentMessage" | "plan"))
-        {
-            if self.texts.len() < 128 || self.texts.contains_key(id) {
-                let seen = self
-                    .texts
-                    .entry(id.into())
-                    .or_insert_with(|| Some(String::new()));
-                if let (Some(seen), Some(text)) = (seen.as_mut(), p["item"]["text"].as_str()) {
-                    if let Some(rest) = text
-                        .strip_prefix(seen.as_str())
-                        .filter(|rest| !rest.is_empty())
-                    {
-                        before.push(SessionEvent::TextDelta { text: rest.into() });
-                        *seen = text.into();
-                    }
-                }
-                if seen.as_ref().is_some_and(|text| text.len() > 256 * 1024) {
-                    *seen = None;
-                }
-            }
-        }
-        before.extend(parse_events(line));
-        before
+        parse_events(line)
     }
 }
 

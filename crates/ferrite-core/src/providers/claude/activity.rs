@@ -36,6 +36,9 @@ pub(super) struct Decoder {
     requests: HashMap<String, (Option<Subject>, String)>,
     seen_child_frames: HashSet<String>,
     frame_order: VecDeque<String>,
+    main_stream_message: Option<String>,
+    main_stream_blocks: HashSet<String>,
+    main_stream_order: VecDeque<String>,
     /// Main's last provider-reported occupancy. Result aggregates account for
     /// a turn but do not always carry a new occupancy snapshot.
     usage: Usage,
@@ -153,7 +156,7 @@ impl Decoder {
                 // Only the null/absent Main stream is part of Claude's current
                 // contract. An unexpected child stream must never become Main.
                 if matches!(value.get("parent_tool_use_id"), None | Some(Value::Null)) {
-                    events.extend(wire::parse_events_value(&value));
+                    self.main_stream(&value, &mut events);
                 }
             }
             Some("result") => {
@@ -442,11 +445,7 @@ impl Decoder {
                 None => events.push(self.record_main_usage(value, usage)),
             }
         }
-        if let (Some(key), Some(text)) = (&child, value["message"]["content"].as_str()) {
-            let mut info = self.info(key);
-            info.coverage = TranscriptCoverage::Live;
-            self.discover(info, events);
-            self.working(key, events);
+        if let Some(text) = value["message"]["content"].as_str() {
             let event = if assistant {
                 ExecutionEvent::Text {
                     text: text.to_owned(),
@@ -456,7 +455,21 @@ impl Decoder {
                     text: text.to_owned(),
                 }
             };
-            self.content(key, delivery_id(value, "0"), event, events);
+            if let Some(key) = &child {
+                let mut info = self.info(key);
+                info.coverage = TranscriptCoverage::Live;
+                self.discover(info, events);
+                self.working(key, events);
+                self.content(key, delivery_id(value, "0"), event, events);
+            } else {
+                push(
+                    events,
+                    ActivityEvent::MainContent {
+                        id: delivery_id(value, "0"),
+                        event,
+                    },
+                );
+            }
             return;
         }
         let Some(blocks) = value["message"]["content"].as_array() else {
@@ -468,10 +481,15 @@ impl Decoder {
             .then(|| value.get("tool_use_result"))
             .flatten();
         for (ordinal, block) in blocks.iter().enumerate() {
-            let id = delivery_id(value, &ordinal.to_string());
+            let streamed = child
+                .is_none()
+                .then(|| self.streamed_main_block(value, ordinal))
+                .flatten();
+            let id = streamed
+                .clone()
+                .or_else(|| delivery_id(value, &ordinal.to_string()));
             match string(block, "type") {
-                Some("text" | "thinking") if child.is_some() => {
-                    let key = child.as_ref().expect("guarded");
+                Some("text" | "thinking") => {
                     let thinking = block["type"] == "thinking";
                     let Some(text) = block
                         .get(if thinking { "thinking" } else { "text" })
@@ -484,19 +502,33 @@ impl Decoder {
                             text: text.to_owned(),
                         }
                     } else if thinking {
-                        ExecutionEvent::Thinking {
-                            text: text.to_owned(),
+                        match streamed {
+                            Some(_) => ExecutionEvent::ThinkingSnapshot {
+                                text: text.to_owned(),
+                            },
+                            None => ExecutionEvent::Thinking {
+                                text: text.to_owned(),
+                            },
                         }
                     } else {
-                        ExecutionEvent::Text {
-                            text: text.to_owned(),
+                        match streamed {
+                            Some(_) => ExecutionEvent::TextSnapshot {
+                                text: text.to_owned(),
+                            },
+                            None => ExecutionEvent::Text {
+                                text: text.to_owned(),
+                            },
                         }
                     };
-                    let mut info = self.info(key);
-                    info.coverage = TranscriptCoverage::Live;
-                    self.discover(info, events);
-                    self.working(key, events);
-                    self.content(key, id, event, events);
+                    if let Some(key) = &child {
+                        let mut info = self.info(key);
+                        info.coverage = TranscriptCoverage::Live;
+                        self.discover(info, events);
+                        self.working(key, events);
+                        self.content(key, id, event, events);
+                    } else {
+                        push(events, ActivityEvent::MainContent { id, event });
+                    }
                 }
                 Some("tool_use") if assistant => {
                     let (Some(tool_id), Some(name)) = (string(block, "id"), string(block, "name"))
@@ -614,6 +646,73 @@ impl Decoder {
             reasoning_output_tokens,
             context_window: self.usage.context_window,
         }
+    }
+
+    /// Claude stream frames name a message once, then each delta carries only
+    /// its native block index. Retain that proven pair so the later completed
+    /// block can replace the live stream. A full frame with no observed stream
+    /// still keeps its outer delivery UUID.
+    fn main_stream(&mut self, value: &Value, events: &mut Vec<SessionEvent>) {
+        match value["event"]["type"].as_str() {
+            Some("message_start") => {
+                self.main_stream_message = value["event"]["message"]["id"]
+                    .as_str()
+                    .filter(|id| !id.is_empty())
+                    .map(str::to_owned);
+            }
+            Some("message_stop") => self.main_stream_message = None,
+            Some("content_block_delta") => {
+                let Some(id) = self.observe_main_stream_block(value) else {
+                    events.extend(wire::parse_events_value(value));
+                    return;
+                };
+                for event in wire::parse_events_value(value) {
+                    match event {
+                        SessionEvent::TextDelta { text } => push(
+                            events,
+                            ActivityEvent::MainContent {
+                                id: Some(id.clone()),
+                                event: ExecutionEvent::TextDelta { text },
+                            },
+                        ),
+                        SessionEvent::ThinkingDelta { text } => push(
+                            events,
+                            ActivityEvent::MainContent {
+                                id: Some(id.clone()),
+                                event: ExecutionEvent::ThinkingDelta { text },
+                            },
+                        ),
+                        event => events.push(event),
+                    }
+                }
+                return;
+            }
+            _ => {}
+        }
+        events.extend(wire::parse_events_value(value));
+    }
+
+    fn observe_main_stream_block(&mut self, value: &Value) -> Option<String> {
+        let message = self.main_stream_message.as_deref()?;
+        let index = value["event"]["index"].as_u64()?;
+        let id = main_block_id(message, index);
+        if self.main_stream_blocks.insert(id.clone()) {
+            self.main_stream_order.push_back(id.clone());
+            if self.main_stream_order.len() > 8192 {
+                if let Some(old) = self.main_stream_order.pop_front() {
+                    self.main_stream_blocks.remove(&old);
+                }
+            }
+        }
+        Some(id)
+    }
+
+    fn streamed_main_block(&self, value: &Value, ordinal: usize) -> Option<String> {
+        let message = value["message"]["id"]
+            .as_str()
+            .filter(|id| !id.is_empty())?;
+        let id = main_block_id(message, ordinal as u64);
+        self.main_stream_blocks.contains(&id).then_some(id)
     }
 
     fn invocation(
@@ -862,6 +961,10 @@ fn string<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
 
 fn delivery_id(value: &Value, part: &str) -> Option<String> {
     string(value, "uuid").map(|uuid| format!("{uuid}:{part}"))
+}
+
+fn main_block_id(message: &str, index: u64) -> String {
+    format!("stream:{message}:{index}")
 }
 
 fn push(events: &mut Vec<SessionEvent>, event: ActivityEvent) {

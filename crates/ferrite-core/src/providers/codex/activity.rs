@@ -352,6 +352,9 @@ impl Router {
             self.discover_from_item(&scope, &params["item"], true, update);
         }
         if self.root.as_deref() == Some(scope.as_str()) {
+            let item_id = params["itemId"].as_str().or(params["item"]["id"].as_str());
+            let content_id = turn.zip(item_id).map(|(turn, item)| item_key(turn, item));
+            let question = super::questions::decode(params).is_some();
             for event in self.content.parse(&frame.to_string()) {
                 if let SessionEvent::DecisionRequested { decision } = &event {
                     if self.requests.len() < MAX_PENDING_FRAMES
@@ -360,7 +363,37 @@ impl Router {
                         self.requests.insert(decision.id.clone(), scope.clone());
                     }
                 }
-                update.events.push(event);
+                match event {
+                    SessionEvent::TextDelta { text }
+                        if matches!(method, "item/agentMessage/delta" | "item/plan/delta") =>
+                    {
+                        if let Some(id) = content_id.clone() {
+                            update.activity(ActivityEvent::MainContent {
+                                id: Some(id),
+                                event: ExecutionEvent::TextDelta { text },
+                            });
+                        } else {
+                            update.events.push(SessionEvent::TextDelta { text });
+                        }
+                    }
+                    event => update.events.push(event),
+                }
+            }
+            if method == "item/completed"
+                && !question
+                && matches!(
+                    params["item"]["type"].as_str(),
+                    Some("agentMessage" | "plan")
+                )
+            {
+                if let (Some(id), Some(text)) = (content_id, params["item"]["text"].as_str()) {
+                    update.activity(ActivityEvent::MainContent {
+                        id: Some(id),
+                        event: ExecutionEvent::TextSnapshot {
+                            text: text.to_owned(),
+                        },
+                    });
+                }
             }
             return;
         }
