@@ -55,3 +55,20 @@ fn contract_denied_allow_policy_disables_mouse_and_keyboard_approval(cx:&mut Tes
     cx.simulate_keystrokes("y");cx.run_until_parked();
     assert!(fake.answered.borrow().is_empty(),"keyboard must respect the native restriction");
 }
+
+#[gpui::test]
+fn contract_mcp_required_input_without_default_is_editable_and_validated(cx:&mut TestAppContext) {
+    let(core,fake)=cockpit("mcp-edit-contract",1);bind_production_keys(cx);
+    let(view,cx)=add_cockpit_window(cx,|_,cx|CockpitView::new(core,cx));cx.simulate_resize(gpui::size(px(1100.),px(800.)));
+    fake.streams.borrow()[0].send(typed_decision(DecisionKind::Form {fields:vec![FormField{id:"count".into(),label:"Count".into(),description:"Enter 1 to 3".into(),required:true,kind:FormFieldKind::Integer{minimum:Some(1),maximum:Some(3),default:None}}]})).unwrap();tick(cx);
+    let serial=view.read_with(cx,|v,_|v.cockpit.thread(v.panes[0].thread().unwrap()).unwrap().activity().pending_decisions()[0].handle.serial);
+    let field=cx.debug_bounds("form-field-count").expect("fields without defaults still need an editable input");
+    cx.simulate_click(field.center(),gpui::Modifiers::none());cx.run_until_parked();cx.simulate_input("9");cx.run_until_parked();
+    let submit=cx.debug_bounds(Box::leak(format!("request-submit-1-{serial}").into_boxed_str())).unwrap();
+    cx.simulate_click(submit.center(),gpui::Modifiers::none());cx.run_until_parked();
+    assert!(fake.answered.borrow().is_empty());
+    assert!(cx.debug_bounds("form-validation-error").is_some(),"validation failure must be visible, not merely retained in hidden state");
+    let cancel=cx.debug_bounds("form-cancel").expect("operator can cancel any MCP form");
+    cx.simulate_click(cancel.center(),gpui::Modifiers::none());cx.run_until_parked();
+    assert!(matches!(&fake.answered.borrow()[0].1,DecisionAnswer::Cancel));
+}
