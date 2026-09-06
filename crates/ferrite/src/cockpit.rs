@@ -551,6 +551,7 @@ impl CockpitView {
     ) -> Self {
         crate::theme::init_components(cx);
         subagents::init(cx);
+        cockpit.set_suggestions_enabled(prefs.settings.placeholder_suggestions);
         cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(pump_interval()).await;
             if this.update(cx, |view, cx| view.pump(cx)).is_err() {
@@ -1855,6 +1856,8 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         change(&mut self.prefs.settings);
+        self.cockpit
+            .set_suggestions_enabled(self.prefs.settings.placeholder_suggestions);
         if let Err(e) = self.prefs.settings.save(&self.prefs.dir) {
             self.group_error = Some(SharedString::from(format!("settings not saved: {e}")));
         }
@@ -2039,6 +2042,9 @@ impl CockpitView {
             prefs::toggle("settings-auto-title", "Name Threads automatically",
                 "Use the first prompt, then a short title from the Thread's Provider. Renaming a Thread keeps your title.",
                 settings.auto_title, self.setting_change(cx, |s, v| s.auto_title = v)),
+            prefs::toggle("settings-placeholder-suggestions", "Suggest follow-up prompts",
+                "Predict a possible next prompt in the empty Composer. Tab accepts it without sending.",
+                settings.placeholder_suggestions, self.setting_change(cx, |s, v| s.placeholder_suggestions = v)),
             prefs::toggle("settings-confirm-delete", "Confirm before deleting a Thread", "Ask before removing a Thread and its transcript.",
                 settings.confirm_delete, self.setting_change(cx, |s, v| s.confirm_delete = v)),
             prefs::toggle("settings-nav-collapsed", "Start with the sidebar collapsed", "⌘B toggles it any time",
@@ -10858,6 +10864,41 @@ mod tests {
     }
 
     #[gpui::test]
+    fn disabled_placeholder_suggestions_are_hidden_and_tab_does_not_accept_them(
+        cx: &mut TestAppContext,
+    ) {
+        let (mut core, _fake) = cockpit("suggestion-setting-off", 1);
+        let thread = core.threads()[0];
+        core.deliver_suggestion(thread, "Run the tests".into());
+        core.pump();
+        let prefs = Preferences {
+            settings: ferrite_core::settings::Settings {
+                placeholder_suggestions: false,
+                ..Default::default()
+            },
+            ..Preferences::ephemeral()
+        };
+
+        bind_band_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| {
+            CockpitView::new_with_settings(core, Provider::Claude, prefs, cx)
+        });
+        cx.simulate_keystrokes("tab");
+
+        view.read_with(cx, |view, cx| {
+            assert_eq!(
+                view.cockpit.thread(thread).unwrap().suggestion(),
+                None,
+                "turning the setting off clears the visible prediction"
+            );
+            assert!(
+                view.panes[view.focused()].composer.read(cx).is_empty(),
+                "Tab must not accept a disabled prediction"
+            );
+        });
+    }
+
+    #[gpui::test]
     fn launch_provider_seeds_the_first_empty_store_draft(cx: &mut TestAppContext) {
         let fake = Fake::default();
         let store = Store::open(scratch("launch-provider-draft")).unwrap();
@@ -13253,6 +13294,23 @@ mod tests {
             assert!(view.settings_open, "cmd-, opens the panel")
         });
         let card = cx.debug_bounds("settings-card").unwrap();
+        cx.simulate_click(
+            card.origin + gpui::point(px(80.), px(66.)),
+            gpui::Modifiers::none(),
+        );
+        cx.simulate_input("Suggest follow-up prompts");
+        tick(cx);
+        assert!(
+            cx.debug_bounds("settings-placeholder-suggestions")
+                .is_some(),
+            "Behaviour exposes the follow-up suggestion toggle"
+        );
+        cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+            "cmd-a backspace"
+        } else {
+            "ctrl-a backspace"
+        });
+        tick(cx);
         cx.simulate_click(
             card.origin + gpui::point(px(60.), px(180.)),
             gpui::Modifiers::none(),

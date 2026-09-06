@@ -502,6 +502,8 @@ pub struct Cockpit {
     /// Thread: the reply names the Thread and the generation it was asked
     /// for, so a Pane that has since been parked or re-aimed drops it.
     suggestions: (Sender<Suggestion>, Receiver<Suggestion>),
+    /// Whether completed turns may ask for and show predicted follow-ups.
+    suggestions_enabled: bool,
     /// The `claude` program the predictor runs, resolved once. None when no
     /// Claude CLI is installed anywhere — the one configuration where a
     /// Thread simply never gets a suggestion.
@@ -539,6 +541,7 @@ impl Cockpit {
             sampler: None,
             limit: u64::MAX,
             suggestions: channel(),
+            suggestions_enabled: true,
             // Never probed under test: discovery would find the developer's
             // own CLI and the suite would start paying for predictions.
             suggest_program: if cfg!(test) {
@@ -2113,6 +2116,9 @@ impl Cockpit {
     fn poll_suggestions(&mut self) -> Vec<ThreadId> {
         let mut landed = Vec::new();
         while let Ok(reply) = self.suggestions.1.try_recv() {
+            if !self.suggestions_enabled {
+                continue;
+            }
             let Some(thread) = self.threads.get_mut(&reply.thread) else {
                 continue;
             };
@@ -2136,6 +2142,9 @@ impl Cockpit {
             return;
         };
         thread.suggestion = None;
+        if !self.suggestions_enabled {
+            return;
+        }
         let Some(program) = self.suggest_program.clone() else {
             return;
         };
@@ -2178,6 +2187,18 @@ impl Cockpit {
             generation: state.generation,
             text,
         });
+    }
+
+    /// Enable or disable predicted Composer follow-ups. Disabling is
+    /// immediate: visible predictions are cleared and late replies are
+    /// discarded by `poll_suggestions`.
+    pub fn set_suggestions_enabled(&mut self, enabled: bool) {
+        self.suggestions_enabled = enabled;
+        if !enabled {
+            for thread in self.threads.values_mut() {
+                thread.suggestion = None;
+            }
+        }
     }
 
     /// Every prediction the trigger would have fired, in order. Test-only.
@@ -4161,6 +4182,61 @@ mod tests {
         cockpit.pump();
 
         assert!(cockpit.suggest_calls().is_empty());
+        assert_eq!(cockpit.thread(thread).unwrap().suggestion(), None);
+    }
+
+    #[test]
+    fn disabled_suggestions_neither_run_nor_land() {
+        let (mut cockpit, fake) = cockpit("suggest-disabled");
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        cockpit.suggest_program = Some("claude".into());
+        cockpit.set_suggestions_enabled(false);
+        cockpit.send(thread, "go".into());
+
+        fake.streams.borrow()[0].send(text("Done.")).unwrap();
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TurnEnded {
+                outcome: TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+        cockpit.pump();
+        assert!(cockpit.suggest_calls().is_empty());
+
+        cockpit.deliver_suggestion(thread, "Run the tests".into());
+        cockpit.pump();
+        assert_eq!(cockpit.thread(thread).unwrap().suggestion(), None);
+
+        cockpit.set_suggestions_enabled(true);
+        cockpit.send(thread, "again".into());
+        fake.streams.borrow()[0].send(text("Done again.")).unwrap();
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TurnEnded {
+                outcome: TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+        cockpit.pump();
+        assert_eq!(
+            cockpit.suggest_calls().len(),
+            1,
+            "re-enabling restores asks"
+        );
+    }
+
+    #[test]
+    fn disabling_suggestions_clears_an_existing_prediction() {
+        let (mut cockpit, _fake) = cockpit("suggest-disable-clears");
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        cockpit.deliver_suggestion(thread, "Run the tests".into());
+        cockpit.pump();
+        assert_eq!(
+            cockpit.thread(thread).unwrap().suggestion(),
+            Some("Run the tests")
+        );
+
+        cockpit.set_suggestions_enabled(false);
+
         assert_eq!(cockpit.thread(thread).unwrap().suggestion(), None);
     }
 
