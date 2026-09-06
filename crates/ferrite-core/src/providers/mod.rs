@@ -11,8 +11,8 @@ use crate::{ControlKind, DecisionAnswer, PermissionModeChoice, SessionControl, S
 
 mod claude;
 mod codex;
-mod elicitation;
 pub mod discover;
+mod elicitation;
 pub mod limits;
 pub mod models;
 pub(crate) mod oneshot;

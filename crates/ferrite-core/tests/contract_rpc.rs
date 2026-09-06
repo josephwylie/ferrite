@@ -11,13 +11,21 @@ fn rejected_codex_start_settles_the_optimistic_turn_with_native_error() {
     r.drain();
     r.session.send("reject-start").unwrap();
     loop {
-        match r.session.events().recv_timeout(std::time::Duration::from_secs(3)).expect("rejected native start must not leave the turn working forever") {
-            SessionEvent::TurnEnded { outcome: TurnOutcome::Error(error), .. } => {
+        match r
+            .session
+            .events()
+            .recv_timeout(std::time::Duration::from_secs(3))
+            .expect("rejected native start must not leave the turn working forever")
+        {
+            SessionEvent::TurnEnded {
+                outcome: TurnOutcome::Error(error),
+                ..
+            } => {
                 assert_eq!(error, "Native start rejected");
                 break;
-            },
+            }
             SessionEvent::Closed { reason } => panic!("session unexpectedly closed: {reason}"),
-            _ => {},
+            _ => {}
         }
     }
 }

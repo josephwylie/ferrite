@@ -2541,7 +2541,8 @@ impl CockpitView {
         let Some(thread) = self.panes[index].thread() else {
             return Vec::new();
         };
-        let mut calls = self.cockpit
+        let mut calls = self
+            .cockpit
             .thread(thread)
             .and_then(|open| open.activity().subject(&self.panes[index].selected))
             .into_iter()
@@ -2648,8 +2649,14 @@ impl CockpitView {
         // A question is answered by its form, never by a bare "allow" —
         // allowing an unanswered question would send the model nothing.
         if (pane::question_of(&decision).is_some()
-            || matches!(decision.kind, ferrite_core::DecisionKind::Form { .. } | ferrite_core::DecisionKind::External { .. } | ferrite_core::DecisionKind::Unsupported { .. }))
-            && answer != Answer::Deny {
+            || matches!(
+                decision.kind,
+                ferrite_core::DecisionKind::Form { .. }
+                    | ferrite_core::DecisionKind::External { .. }
+                    | ferrite_core::DecisionKind::Unsupported { .. }
+            ))
+            && answer != Answer::Deny
+        {
             cx.notify();
             return;
         }
@@ -4889,15 +4896,18 @@ impl Render for CockpitView {
             self.context_checks = None;
         }
 
-        if self.session_controls.is_some_and(|(thread, generation, _)| {
-            level != Level::Transcript
-                || self.settings_open
-                || self.focused_thread() != Some(thread)
-                || self
-                    .cockpit
-                    .thread(thread)
-                    .is_none_or(|open| open.generation() != generation)
-        }) {
+        if self
+            .session_controls
+            .is_some_and(|(thread, generation, _)| {
+                level != Level::Transcript
+                    || self.settings_open
+                    || self.focused_thread() != Some(thread)
+                    || self
+                        .cockpit
+                        .thread(thread)
+                        .is_none_or(|open| open.generation() != generation)
+            })
+        {
             self.session_controls = None;
         }
 
@@ -5938,32 +5948,39 @@ impl CockpitView {
                 "session-controls-{}",
                 thread.get()
             )))
-                .debug_selector(move || format!("session-controls-{}", thread.get()))
-                .tooltip("Session controls")
-                .child("•••")
-                .on_click(cx.listener(move |view, event: &ClickEvent, window, cx| {
-                    cx.stop_propagation();
-                    view.focus_pane(index);
-                    if !was_open
-                        && view.cockpit.thread(thread).is_some_and(|open| {
-                            open.generation() == generation
-                                && open.supports_control(ferrite_core::ControlKind::RefreshMcp)
-                        })
-                    {
-                        view.run_session_control(
-                            thread,
-                            generation,
-                            ferrite_core::SessionControl::RefreshMcp,
-                        );
-                    }
-                    view.popover = None;
-                    view.context_menu = None;
-                    view.context_usage = None;
-                    view.context_checks = None;
-                    view.session_controls = (!was_open).then_some((thread, generation, match event { ClickEvent::Mouse(event) => event.up.position, _ => window.mouse_position() }));
-                    cx.notify();
-                }))
-                .into_any_element(),
+            .debug_selector(move || format!("session-controls-{}", thread.get()))
+            .tooltip("Session controls")
+            .child("•••")
+            .on_click(cx.listener(move |view, event: &ClickEvent, window, cx| {
+                cx.stop_propagation();
+                view.focus_pane(index);
+                if !was_open
+                    && view.cockpit.thread(thread).is_some_and(|open| {
+                        open.generation() == generation
+                            && open.supports_control(ferrite_core::ControlKind::RefreshMcp)
+                    })
+                {
+                    view.run_session_control(
+                        thread,
+                        generation,
+                        ferrite_core::SessionControl::RefreshMcp,
+                    );
+                }
+                view.popover = None;
+                view.context_menu = None;
+                view.context_usage = None;
+                view.context_checks = None;
+                view.session_controls = (!was_open).then_some((
+                    thread,
+                    generation,
+                    match event {
+                        ClickEvent::Mouse(event) => event.up.position,
+                        _ => window.mouse_position(),
+                    },
+                ));
+                cx.notify();
+            }))
+            .into_any_element(),
         )
     }
 
@@ -5983,8 +6000,19 @@ impl CockpitView {
             .gap(px(6.))
             .flex()
             .flex_col();
-        if let Some((_, _, error)) = self.session_control_error.as_ref().filter(|(shown, shown_generation, _)| *shown == thread && *shown_generation == generation) {
-            card = card.child(div().id("session-control-error").text_color(rgb(crate::theme::ATTENTION)).child(error.clone()));
+        if let Some((_, _, error)) =
+            self.session_control_error
+                .as_ref()
+                .filter(|(shown, shown_generation, _)| {
+                    *shown == thread && *shown_generation == generation
+                })
+        {
+            card = card.child(
+                div()
+                    .id("session-control-error")
+                    .text_color(rgb(crate::theme::ATTENTION))
+                    .child(error.clone()),
+            );
         }
         for (index, mode) in open.permission_modes().into_iter().enumerate() {
             let value = mode.value;
@@ -5998,7 +6026,9 @@ impl CockpitView {
                         view.run_session_control(
                             thread,
                             generation,
-                            ferrite_core::SessionControl::SetPermissionMode { mode: value.clone() },
+                            ferrite_core::SessionControl::SetPermissionMode {
+                                mode: value.clone(),
+                            },
                         );
                         cx.notify();
                     })),
@@ -6011,7 +6041,11 @@ impl CockpitView {
                     .tab_stop(true)
                     .child("Reload MCP")
                     .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                        view.run_session_control(thread, generation, ferrite_core::SessionControl::ReloadMcp);
+                        view.run_session_control(
+                            thread,
+                            generation,
+                            ferrite_core::SessionControl::ReloadMcp,
+                        );
                         cx.notify();
                     })),
             );
@@ -6041,9 +6075,18 @@ impl CockpitView {
                 .items_start()
                 .gap(px(6.))
                 .child(server.name.clone())
-                .child(div().debug_selector(move || format!("mcp-status-{index}-{status}")).text_color(rgb(crate::theme::TEXT_MUTED)).child(status));
+                .child(
+                    div()
+                        .debug_selector(move || format!("mcp-status-{index}-{status}"))
+                        .text_color(rgb(crate::theme::TEXT_MUTED))
+                        .child(status),
+                );
             if let Some(error) = server.error.as_ref() {
-                row = row.child(div().text_color(rgb(crate::theme::ATTENTION)).child(error.clone()));
+                row = row.child(
+                    div()
+                        .text_color(rgb(crate::theme::ATTENTION))
+                        .child(error.clone()),
+                );
             }
             if server.status == ferrite_core::McpStatus::NeedsAuth
                 && open.supports_control(ferrite_core::ControlKind::LoginMcp)
@@ -6057,18 +6100,30 @@ impl CockpitView {
                         .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                             let exists = view.cockpit.thread(thread).is_some_and(|open| {
                                 open.generation() == generation
-                                    && open.transcript().mcp_servers().iter().any(|server| server.name == login_name)
+                                    && open
+                                        .transcript()
+                                        .mcp_servers()
+                                        .iter()
+                                        .any(|server| server.name == login_name)
                             });
                             if exists {
-                                view.run_session_control(thread, generation, ferrite_core::SessionControl::LoginMcp { server: login_name.clone() });
+                                view.run_session_control(
+                                    thread,
+                                    generation,
+                                    ferrite_core::SessionControl::LoginMcp {
+                                        server: login_name.clone(),
+                                    },
+                                );
                             }
                             cx.notify();
                         })),
                 );
             }
-            if let Some(url) = transcript.mcp_authorizations().get(&server.name).filter(|url| {
-                url.starts_with("https://") || url.starts_with("http://")
-            }) {
+            if let Some(url) = transcript
+                .mcp_authorizations()
+                .get(&server.name)
+                .filter(|url| url.starts_with("https://") || url.starts_with("http://"))
+            {
                 let url = url.clone();
                 row = row.child(
                     crate::components::button(SharedString::from(format!("mcp-authorize-{index}")))
@@ -6086,10 +6141,20 @@ impl CockpitView {
                         .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                             let exists = view.cockpit.thread(thread).is_some_and(|open| {
                                 open.generation() == generation
-                                    && open.transcript().mcp_servers().iter().any(|server| server.name == name)
+                                    && open
+                                        .transcript()
+                                        .mcp_servers()
+                                        .iter()
+                                        .any(|server| server.name == name)
                             });
                             if exists {
-                                view.run_session_control(thread, generation, ferrite_core::SessionControl::ReconnectMcp { server: name.clone() });
+                                view.run_session_control(
+                                    thread,
+                                    generation,
+                                    ferrite_core::SessionControl::ReconnectMcp {
+                                        server: name.clone(),
+                                    },
+                                );
                             }
                             cx.notify();
                         })),
@@ -6110,23 +6175,34 @@ impl CockpitView {
                 && open.supports_control(ferrite_core::ControlKind::StopTask)
             {
                 let id = task.id.clone();
-                row = row.child(
-                    crate::components::button(SharedString::from(format!("background-stop-{index}")))
+                row =
+                    row.child(
+                        crate::components::button(SharedString::from(format!(
+                            "background-stop-{index}"
+                        )))
                         .debug_selector(move || format!("background-stop-{index}"))
                         .child("Stop")
                         .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                             let exists = view.cockpit.thread(thread).is_some_and(|open| {
                                 open.generation() == generation
-                                    && open.transcript().progress().background().iter().any(|task| {
-                                        task.id == id && task.status == ferrite_core::progress::TaskStatus::Working
-                                    })
+                                    && open.transcript().progress().background().iter().any(
+                                        |task| {
+                                            task.id == id
+                                                && task.status
+                                                    == ferrite_core::progress::TaskStatus::Working
+                                        },
+                                    )
                             });
                             if exists {
-                                view.run_session_control(thread, generation, ferrite_core::SessionControl::StopTask { id: id.clone() });
+                                view.run_session_control(
+                                    thread,
+                                    generation,
+                                    ferrite_core::SessionControl::StopTask { id: id.clone() },
+                                );
                             }
                             cx.notify();
                         })),
-                );
+                    );
             }
             card = card.child(row);
         }
@@ -6135,13 +6211,20 @@ impl CockpitView {
                 crate::components::button("background-all")
                     .child("Run tasks in background")
                     .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                        view.run_session_control(thread, generation, ferrite_core::SessionControl::BackgroundTasks);
+                        view.run_session_control(
+                            thread,
+                            generation,
+                            ferrite_core::SessionControl::BackgroundTasks,
+                        );
                         cx.notify();
                     })),
             );
         }
         let card = card
-            .on_mouse_down(MouseButton::Left, cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
+            )
             .on_mouse_down_out(cx.listener(move |view, _: &MouseDownEvent, _, cx| {
                 if view.session_controls.take().is_some() {
                     cx.notify();
@@ -7311,8 +7394,13 @@ mod tests {
     impl Session for Scripted {
         fn permission_modes(&self) -> Vec<ferrite_core::PermissionModeChoice> {
             if *self.native_controls.borrow() {
-                vec![ferrite_core::PermissionModeChoice { value: "native-mode".into(), label: "Ask for changes".into() }]
-            } else { vec![] }
+                vec![ferrite_core::PermissionModeChoice {
+                    value: "native-mode".into(),
+                    label: "Ask for changes".into(),
+                }]
+            } else {
+                vec![]
+            }
         }
         fn supports_control(&self, _: ferrite_core::ControlKind) -> bool {
             *self.native_controls.borrow()
@@ -7731,7 +7819,10 @@ mod tests {
             .debug_bounds("titlebar-add-thread")
             .expect("the titlebar add button is visible");
         if !crate::titlebar::CUSTOM {
-            assert!(cx.debug_bounds("caption-minimize").is_none(), "macOS owns its native caption buttons");
+            assert!(
+                cx.debug_bounds("caption-minimize").is_none(),
+                "macOS owns its native caption buttons"
+            );
             assert!(button.size.width > px(0.));
             return;
         }
@@ -8364,10 +8455,28 @@ mod tests {
         SessionEvent::DecisionRequested {
             decision: Decision {
                 delivery: Default::default(),
-                kind: ferrite_core::DecisionKind::Questions(vec![ferrite_core::questions::Question {
-                    id: None, question: "Which approach?".into(), header: "Approach".into(), multi_select: false, secret: false, allow_other: true,
-                    options: vec![ferrite_core::questions::Choice {label:"Rewrite".into(),description:"Start over".into(),preview:None},ferrite_core::questions::Choice {label:"Patch".into(),description:"Smallest change".into(),preview:None}],
-                }]),
+                kind: ferrite_core::DecisionKind::Questions(vec![
+                    ferrite_core::questions::Question {
+                        id: None,
+                        question: "Which approach?".into(),
+                        header: "Approach".into(),
+                        multi_select: false,
+                        secret: false,
+                        allow_other: true,
+                        options: vec![
+                            ferrite_core::questions::Choice {
+                                label: "Rewrite".into(),
+                                description: "Start over".into(),
+                                preview: None,
+                            },
+                            ferrite_core::questions::Choice {
+                                label: "Patch".into(),
+                                description: "Smallest change".into(),
+                                preview: None,
+                            },
+                        ],
+                    },
+                ]),
                 policy: Default::default(),
                 id: id.into(),
                 tool_use_id: "toolu_q".into(),

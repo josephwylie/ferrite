@@ -456,11 +456,7 @@ impl ClaudeSession {
         Ok(())
     }
 
-    fn set_setting(
-        &mut self,
-        request: serde_json::Value,
-        timeout_message: &str,
-    ) -> io::Result<()> {
+    fn set_setting(&mut self, request: serde_json::Value, timeout_message: &str) -> io::Result<()> {
         let request_id = self.take_request_id();
         let (tx, rx) = sync_channel(1);
         *lock(&self.setting_reply) = Some((request_id.clone(), tx));
@@ -538,9 +534,9 @@ impl ClaudeSession {
     /// on. Unlike `interrupt`, the request id is the CLI's, not Ferrite's —
     /// this is a response to its question, so it must not be renumbered.
     pub fn respond_to_decision(&mut self, id: &str, answer: DecisionAnswer) -> io::Result<()> {
-        let body = lock(&self.requests)
-            .response(id, &answer)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Decision is not pending"))??;
+        let body = lock(&self.requests).response(id, &answer).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "Decision is not pending")
+        })??;
         // Serialize response bookkeeping with stdout decoding: a progress or
         // cancellation frame can arrive as soon as this write reaches the CLI.
         let decoder = self.decoder.clone();
@@ -657,9 +653,8 @@ fn read_stdout(
                     let _ = reply.send(result);
                     continue;
                 }
-                let control = lock(&control_replies).remove(
-                    response["request_id"].as_str().unwrap_or_default(),
-                );
+                let control = lock(&control_replies)
+                    .remove(response["request_id"].as_str().unwrap_or_default());
                 if let Some(action) = control {
                     if response["subtype"] != "success" {
                         let message = response["error"].as_str().unwrap_or("control refused");
@@ -690,9 +685,8 @@ fn read_stdout(
                             "request": {"subtype": "mcp_status"},
                         });
                         if let Err(error) = write_stdin_line(&stdin, &request) {
-                            lock(&control_replies).remove(
-                                request["request_id"].as_str().unwrap_or_default(),
-                            );
+                            lock(&control_replies)
+                                .remove(request["request_id"].as_str().unwrap_or_default());
                             let _ = sender.send(SessionEvent::Activity(
                                 crate::activity::ActivityEvent::MainContent {
                                     id: None,

@@ -75,22 +75,33 @@ mod tests {
     struct Projection(ferrite_core::activity::Activity);
     impl std::ops::Deref for Projection {
         type Target = Transcript;
-        fn deref(&self) -> &Transcript { self.0.view().main().transcript() }
+        fn deref(&self) -> &Transcript {
+            self.0.view().main().transcript()
+        }
     }
     impl Projection {
         fn apply(&mut self, input: Input) {
             use ferrite_core::activity::ActivityInput;
             self.0.apply(match input {
-                Input::Event(SessionEvent::Activity(event)) => ActivityInput::Observe { generation:1,event,at:std::time::Instant::now() },
-                input => ActivityInput::Main { input,at:std::time::Instant::now() },
+                Input::Event(SessionEvent::Activity(event)) => ActivityInput::Observe {
+                    generation: 1,
+                    event,
+                    at: std::time::Instant::now(),
+                },
+                input => ActivityInput::Main {
+                    input,
+                    at: std::time::Instant::now(),
+                },
             });
         }
     }
     fn fold(events: Vec<SessionEvent>) -> Projection {
         let mut t = Projection(ferrite_core::activity::Activity::default());
-        t.0.apply(ferrite_core::activity::ActivityInput::Connect{generation:1});
+        t.0.apply(ferrite_core::activity::ActivityInput::Connect { generation: 1 });
         t.apply(Input::Prompt("Investigate progress".into()));
-        for e in events { t.apply(Input::Event(e)); }
+        for e in events {
+            t.apply(Input::Event(e));
+        }
         t
     }
     #[test]
@@ -318,7 +329,9 @@ mod tests {
         writer.flush().unwrap();
         drop(writer);
         let mut restored = Projection(ferrite_core::activity::Activity::default());
-        for input in store.load(id).unwrap().activity_inputs() { restored.0.apply(input); }
+        for input in store.load(id).unwrap().activity_inputs() {
+            restored.0.apply(input);
+        }
         let restored_headings: Vec<_> = restored
             .blocks()
             .iter()

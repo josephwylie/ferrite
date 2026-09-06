@@ -68,16 +68,23 @@ pub(super) fn decode_elicitation(params: &Value, id: String) -> Option<Decision>
     }
     let kind = match params.get("mode").and_then(Value::as_str) {
         Some("form" | "openai/form" | "openaiForm") => {
-            match crate::providers::elicitation::fields(params.get("requestedSchema").unwrap_or(&Value::Null)) {
+            match crate::providers::elicitation::fields(
+                params.get("requestedSchema").unwrap_or(&Value::Null),
+            ) {
                 Ok(fields) => DecisionKind::Form { fields },
                 Err(reason) => DecisionKind::Unsupported { reason },
             }
         }
-        Some("url" | "openai/url" | "openaiUrl") => match params.get("url").and_then(Value::as_str) {
+        Some("url" | "openai/url" | "openaiUrl") => match params.get("url").and_then(Value::as_str)
+        {
             Some(url) if !url.is_empty() => DecisionKind::External { url: url.into() },
-            _ => DecisionKind::Unsupported { reason: "elicitation has no URL".into() },
+            _ => DecisionKind::Unsupported {
+                reason: "elicitation has no URL".into(),
+            },
         },
-        _ => DecisionKind::Unsupported { reason: "unsupported elicitation mode".into() },
+        _ => DecisionKind::Unsupported {
+            reason: "unsupported elicitation mode".into(),
+        },
     };
     let allow = !matches!(&kind, DecisionKind::Unsupported { .. });
     Some(Decision {
@@ -133,7 +140,11 @@ enum NativeRequest {
     External,
     Permissions(Value),
     Unsupported,
-    Approval { allow: bool, deny: bool, choices: Vec<Value> },
+    Approval {
+        allow: bool,
+        deny: bool,
+        choices: Vec<Value>,
+    },
 }
 
 impl NativeRequests {
@@ -173,7 +184,9 @@ impl NativeRequests {
             }
             Some("item/commandExecution/requestApproval" | "item/fileChange/requestApproval") => {
                 let choices = match frame["params"].get("availableDecisions") {
-                    None | Some(Value::Null) => vec![json!("accept"), json!("decline"), json!("cancel")],
+                    None | Some(Value::Null) => {
+                        vec![json!("accept"), json!("decline"), json!("cancel")]
+                    }
                     Some(Value::Array(choices)) => choices.clone(),
                     Some(_) => vec![],
                 };
@@ -198,7 +211,11 @@ impl NativeRequests {
             NativeRequest::External => elicitation_response(None, answer),
             NativeRequest::Permissions(profile) => permission_response(profile, answer),
             NativeRequest::Unsupported => unsupported_response(answer),
-            NativeRequest::Approval { allow, deny, choices } => approval_response(*allow, *deny, choices, answer),
+            NativeRequest::Approval {
+                allow,
+                deny,
+                choices,
+            } => approval_response(*allow, *deny, choices, answer),
         })
     }
 
@@ -211,17 +228,36 @@ fn unsupported_response(answer: &DecisionAnswer) -> io::Result<Value> {
     match answer {
         DecisionAnswer::Deny { .. } => Ok(json!({"action":"decline","content":null,"_meta":null})),
         DecisionAnswer::Cancel => Ok(json!({"action":"cancel","content":null,"_meta":null})),
-        _ => Err(io::Error::new(io::ErrorKind::InvalidInput, "unsupported elicitation can only be declined or cancelled")),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "unsupported elicitation can only be declined or cancelled",
+        )),
     }
 }
 
-fn approval_response(allow: bool, deny: bool, choices: &[Value], answer: &DecisionAnswer) -> io::Result<Value> {
+fn approval_response(
+    allow: bool,
+    deny: bool,
+    choices: &[Value],
+    answer: &DecisionAnswer,
+) -> io::Result<Value> {
     let decision = match answer {
         DecisionAnswer::Allow { .. } if allow => json!("accept"),
         DecisionAnswer::Deny { .. } if deny => json!("decline"),
-        DecisionAnswer::AllowAlways { suggestion, .. } if choices.iter().any(|choice| choice == suggestion) => suggestion.clone(),
-        DecisionAnswer::Choose { value } if choices.iter().any(|choice| choice == value) => value.clone(),
-        _ => return Err(io::Error::new(io::ErrorKind::InvalidInput, "answer is unavailable for this approval")),
+        DecisionAnswer::AllowAlways { suggestion, .. }
+            if choices.iter().any(|choice| choice == suggestion) =>
+        {
+            suggestion.clone()
+        }
+        DecisionAnswer::Choose { value } if choices.iter().any(|choice| choice == value) => {
+            value.clone()
+        }
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "answer is unavailable for this approval",
+            ))
+        }
     };
     Ok(json!({"decision": decision}))
 }
@@ -233,7 +269,10 @@ fn question_response(
     match answer {
         DecisionAnswer::Questions { answers } => {
             if answers.len() != questions.len() {
-                return Err(io::Error::new(io::ErrorKind::InvalidInput, "question answer count does not match"));
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "question answer count does not match",
+                ));
             }
             let mut values = serde_json::Map::new();
             for (question, answer) in questions.iter().zip(answers) {
@@ -368,7 +407,8 @@ impl Replies {
     pub fn register(&mut self, decision: &Decision) {
         if let DecisionKind::Questions(questions) = &decision.kind {
             if decision.delivery == crate::DecisionDelivery::Async {
-                self.questions.insert(decision.id.clone(), questions.clone());
+                self.questions
+                    .insert(decision.id.clone(), questions.clone());
             }
         }
     }
@@ -396,13 +436,17 @@ impl Replies {
         }
         let text = match answer {
             DecisionAnswer::Questions { answers } => {
-                let questions = self.questions.get(id).ok_or_else(|| io::Error::other("unknown async question"))?;
+                let questions = self
+                    .questions
+                    .get(id)
+                    .ok_or_else(|| io::Error::other("unknown async question"))?;
                 if answers.len() != questions.len() {
                     return Err(io::Error::other("question answer count does not match"));
                 }
                 let mut text = format!("Answer to your async question {}:\n", identity[1]);
                 for (question, answer) in questions.iter().zip(answers) {
-                    let values = crate::questions::selected_values(question, answer).map_err(io::Error::other)?;
+                    let values = crate::questions::selected_values(question, answer)
+                        .map_err(io::Error::other)?;
                     if !values.is_empty() {
                         text.push_str(&format!("\n{}\n{}\n", question.question, values.join(", ")));
                     }

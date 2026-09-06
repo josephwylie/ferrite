@@ -470,7 +470,6 @@ pub(crate) struct Runtime {
     mcp_servers: Vec<crate::McpServer>,
     mcp_authorizations: std::collections::BTreeMap<String, String>,
     rate_limits: RateLimits,
-
 }
 
 /// Blocks a long-running Thread keeps in memory. Generous enough that a Pane
@@ -2364,9 +2363,14 @@ mod tests {
     }
 
     fn native_task(id: &str, subject: &str, status: crate::progress::StepStatus) -> Input {
-        Input::Event(SessionEvent::Progress { event: crate::progress::ProgressEvent::Task {
-            id: id.into(), subject: subject.into(), status: Some(status), deleted: false,
-        }})
+        Input::Event(SessionEvent::Progress {
+            event: crate::progress::ProgressEvent::Task {
+                id: id.into(),
+                subject: subject.into(),
+                status: Some(status),
+                deleted: false,
+            },
+        })
     }
 
     #[test]
@@ -2390,13 +2394,19 @@ mod tests {
         use crate::progress::StepStatus::*;
         let mut transcript = Transcript::default();
         assert_eq!(transcript.current_task(), None);
-        for (id, subject) in [("1", "read the recipe"), ("2", "run the suite"), ("3", "land the diff")] {
+        for (id, subject) in [
+            ("1", "read the recipe"),
+            ("2", "run the suite"),
+            ("3", "land the diff"),
+        ] {
             transcript.apply(native_task(id, subject, Pending));
         }
         assert_eq!(transcript.current_task(), Some("read the recipe"));
         transcript.apply(native_task("1", "", Completed));
         assert_eq!(transcript.current_task(), Some("run the suite"));
-        for id in ["2", "3"] { transcript.apply(native_task(id, "", Completed)); }
+        for id in ["2", "3"] {
+            transcript.apply(native_task(id, "", Completed));
+        }
         assert_eq!(transcript.current_task(), None);
     }
 
@@ -2405,7 +2415,9 @@ mod tests {
         use crate::progress::StepStatus::*;
         let mut transcript = Transcript::default();
         transcript.apply(native_task("1", "the only step", Pending));
-        for id in ["1", "2", "3"] { transcript.apply(native_task(id, "", Completed)); }
+        for id in ["1", "2", "3"] {
+            transcript.apply(native_task(id, "", Completed));
+        }
         assert_eq!(transcript.todos(), Some(Todos { done: 1, total: 1 }));
     }
 

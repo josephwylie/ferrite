@@ -11,7 +11,9 @@
 use std::collections::BTreeSet;
 use std::rc::Rc;
 
-use ferrite_core::notifications::{DecisionNotice, DecisionNoticeId, Notice, NoticeId, RequestKind};
+use ferrite_core::notifications::{
+    DecisionNotice, DecisionNoticeId, Notice, NoticeId, RequestKind,
+};
 use ferrite_core::{ThreadId, TurnOutcome};
 use gpui::component::badge::Badge;
 use gpui::component::button::Button;
@@ -282,7 +284,12 @@ fn toast(row: &Row, handle: Handle) -> Notification {
 }
 
 fn request_key(id: &DecisionNoticeId) -> String {
-    format!("{}-{}-{}", id.thread.get(), id.handle.generation, id.handle.serial)
+    format!(
+        "{}-{}-{}",
+        id.thread.get(),
+        id.handle.generation,
+        id.handle.serial
+    )
 }
 
 fn request_toast(row: &Row, handle: Handle) -> Notification {

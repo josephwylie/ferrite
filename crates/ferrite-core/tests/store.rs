@@ -15,11 +15,11 @@ use std::time::{Duration, Instant};
 
 use ferrite_core::providers::{ClaudeConfig, ClaudeSession};
 use ferrite_core::store::{Provider, Store};
+use ferrite_core::workspace::WorkspaceBinding;
 use ferrite_core::{
     activity::{Activity, ActivityInput},
     transcript::{Body, Input},
 };
-use ferrite_core::workspace::WorkspaceBinding;
 use ferrite_core::{SessionEvent, ToolResult, TurnOutcome};
 
 /// The session id the committed resume capture announces — the conversation
@@ -146,7 +146,12 @@ fn prose(activity: &Activity) -> String {
         .iter()
         .filter_map(|block| match &block.body {
             Body::Paragraph { spans } | Body::Heading { spans, .. } | Body::Bullet { spans } => {
-                Some(spans.iter().map(|span| span.text.as_str()).collect::<String>())
+                Some(
+                    spans
+                        .iter()
+                        .map(|span| span.text.as_str())
+                        .collect::<String>(),
+                )
             }
             _ => None,
         })
@@ -200,9 +205,18 @@ fn a_restart_restores_the_thread_and_the_next_prompt_continues_the_session() {
     for input in thread.activity_inputs() {
         restored.apply(input);
     }
-    assert_eq!(restored.view().main().transcript().blocks(), operator_saw.view().main().transcript().blocks());
-    assert_eq!(restored.view().main().transcript().session_id(), operator_saw.view().main().transcript().session_id());
-    assert_eq!(restored.view().main().transcript().model(), operator_saw.view().main().transcript().model());
+    assert_eq!(
+        restored.view().main().transcript().blocks(),
+        operator_saw.view().main().transcript().blocks()
+    );
+    assert_eq!(
+        restored.view().main().transcript().session_id(),
+        operator_saw.view().main().transcript().session_id()
+    );
+    assert_eq!(
+        restored.view().main().transcript().model(),
+        operator_saw.view().main().transcript().model()
+    );
 
     // The next prompt continues the same provider session: the resume target
     // the store kept is what the new Session is spawned with, and the stub
@@ -255,7 +269,10 @@ fn a_restart_restores_the_thread_and_the_next_prompt_continues_the_session() {
 
     // The capture answered from history this process never had, and its
     // init re-announced the same session id — the resume target is stable.
-    assert_eq!(prose(&operator_saw), "Saving the codeword.savedferrite-resume-ok");
+    assert_eq!(
+        prose(&operator_saw),
+        "Saving the codeword.savedferrite-resume-ok"
+    );
 
     // A second restart shows the whole life of the Thread, both turns.
     let thread = Store::open(&dir).unwrap().load(thread_id).unwrap();
@@ -264,5 +281,8 @@ fn a_restart_restores_the_thread_and_the_next_prompt_continues_the_session() {
     for input in thread.activity_inputs() {
         restored.apply(input);
     }
-    assert_eq!(restored.view().main().transcript().blocks(), operator_saw.view().main().transcript().blocks());
+    assert_eq!(
+        restored.view().main().transcript().blocks(),
+        operator_saw.view().main().transcript().blocks()
+    );
 }

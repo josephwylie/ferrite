@@ -40,11 +40,11 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{cell::Cell as Flag, rc::Rc};
 
 use crate::components;
-use gpui::component::scroll::ScrollableElement;
 use crate::composer::Composer;
 use crate::icons::{self, icon};
 use crate::pointer::{Pointer, PointerPressed};
 use crate::select::TextRuns;
+use gpui::component::scroll::ScrollableElement;
 // Every color and metric here is a Soft token (crate::theme) — no literal
 // survives in render code, which is #22's grep-able law.
 use crate::theme;
@@ -691,7 +691,11 @@ pub fn render_pane(
     };
     let queued = thread.and_then(|thread| thread.queued());
     let workspace = thread.and_then(|thread| thread.workspace());
-    let permission_mode = thread.and_then(|thread| thread.permission_mode().map(|mode| permission_mode_label(mode, &thread.permission_modes())));
+    let permission_mode = thread.and_then(|thread| {
+        thread
+            .permission_mode()
+            .map(|mode| permission_mode_label(mode, &thread.permission_modes()))
+    });
     let suggestion = thread.and_then(|thread| thread.suggestion());
     let timings = subject.as_ref().map(|subject| subject.timings());
     let status = subject.as_ref().map(|subject| {
@@ -2955,9 +2959,16 @@ pub fn offers_import(transcript: Option<&Transcript>) -> bool {
 }
 
 /// Display the adapter's label for its native mode; unknown values stay visible.
-fn permission_mode_label(mode: &str, choices: &[ferrite_core::PermissionModeChoice]) -> SharedString {
-    choices.iter().find(|choice| choice.value == mode)
-        .map(|choice| choice.label.clone()).unwrap_or_else(|| mode.to_owned()).into()
+fn permission_mode_label(
+    mode: &str,
+    choices: &[ferrite_core::PermissionModeChoice],
+) -> SharedString {
+    choices
+        .iter()
+        .find(|choice| choice.value == mode)
+        .map(|choice| choice.label.clone())
+        .unwrap_or_else(|| mode.to_owned())
+        .into()
 }
 
 /// One row of the `/` or `@` popover, ready to draw: what a pick inserts,
@@ -3618,7 +3629,11 @@ pub fn context_usage(
             ("input", "Input", details.input_tokens),
             ("cached-input", "Cached input", details.cached_input_tokens),
             ("output", "Output", details.output_tokens),
-            ("reasoning-output", "Reasoning output", details.reasoning_output_tokens),
+            (
+                "reasoning-output",
+                "Reasoning output",
+                details.reasoning_output_tokens,
+            ),
         ] {
             card = card.child(
                 div()
@@ -5899,14 +5914,24 @@ mod tests {
 
         let mut transcript = Transcript::default();
         for (id, subject) in [("1", "a"), ("2", "b"), ("3", "c"), ("4", "d")] {
-            transcript.apply(Input::Event(SessionEvent::Progress { event: ferrite_core::progress::ProgressEvent::Task {
-                id: id.into(), subject: subject.into(), status: Some(ferrite_core::progress::StepStatus::Pending), deleted: false,
-            }}));
+            transcript.apply(Input::Event(SessionEvent::Progress {
+                event: ferrite_core::progress::ProgressEvent::Task {
+                    id: id.into(),
+                    subject: subject.into(),
+                    status: Some(ferrite_core::progress::StepStatus::Pending),
+                    deleted: false,
+                },
+            }));
         }
         for task in ["1", "2", "3"] {
-            transcript.apply(Input::Event(SessionEvent::Progress { event: ferrite_core::progress::ProgressEvent::Task {
-                id: task.into(), subject: String::new(), status: Some(ferrite_core::progress::StepStatus::Completed), deleted: false,
-            }}));
+            transcript.apply(Input::Event(SessionEvent::Progress {
+                event: ferrite_core::progress::ProgressEvent::Task {
+                    id: task.into(),
+                    subject: String::new(),
+                    status: Some(ferrite_core::progress::StepStatus::Completed),
+                    deleted: false,
+                },
+            }));
         }
         assert_eq!(transcript.todos(), Some(Todos { done: 3, total: 4 }));
         let card = wall_card(Some(&transcript), None);
@@ -6031,9 +6056,18 @@ mod tests {
 
     #[test]
     fn the_mode_chip_uses_provider_supplied_labels() {
-        let choices = vec![ferrite_core::PermissionModeChoice {value:"opaque-mode".into(),label:"Ask for changes".into()}];
-        assert_eq!(permission_mode_label("opaque-mode", &choices).as_ref(), "Ask for changes");
-        assert_eq!(permission_mode_label("unknown", &choices).as_ref(), "unknown");
+        let choices = vec![ferrite_core::PermissionModeChoice {
+            value: "opaque-mode".into(),
+            label: "Ask for changes".into(),
+        }];
+        assert_eq!(
+            permission_mode_label("opaque-mode", &choices).as_ref(),
+            "Ask for changes"
+        );
+        assert_eq!(
+            permission_mode_label("unknown", &choices).as_ref(),
+            "unknown"
+        );
     }
 
     /// #22 amendment: durations read in the comps' grammar at every scale.

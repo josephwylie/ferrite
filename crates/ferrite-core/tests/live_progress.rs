@@ -1,9 +1,9 @@
 //! Opt-in native adapter smoke checks. No external service mock, no model
 //! API: the existing provider Sessions own each agent’s native harness.
 use ferrite_core::{
+    activity::{Activity, ActivityEvent, ActivityInput, ExecutionEvent},
     providers::{ClaudeConfig, ClaudeSession, CodexConfig, CodexSession, Session},
     transcript::Input,
-    activity::{Activity, ActivityInput, ActivityEvent, ExecutionEvent},
     SessionEvent, TurnOutcome,
 };
 use std::{
@@ -49,7 +49,10 @@ fn probe(provider: &str) {
     let prompt = "Read README.md and notes.txt in this directory, using your native file-reading tools. Briefly say what you are checking as you work. Then give one sentence explaining their shared requirement. Do not edit files, launch subagents, or search the internet.";
     let mut activity = Activity::default();
     activity.apply(ActivityInput::Connect { generation: 1 });
-    activity.apply(ActivityInput::Main { input: Input::Prompt(prompt.into()), at: Instant::now() });
+    activity.apply(ActivityInput::Main {
+        input: Input::Prompt(prompt.into()),
+        at: Instant::now(),
+    });
     session.send(prompt).unwrap();
     let deadline = Instant::now() + Duration::from_secs(180);
     let (mut headings, mut tools, mut output, mut captions) = (0, 0, 0, Vec::new());
@@ -69,13 +72,18 @@ fn probe(provider: &str) {
             }
             | SessionEvent::ReasoningSummaryDelta { .. }
             | SessionEvent::ThinkingDelta { .. } => headings += 1,
-            SessionEvent::Activity(ActivityEvent::MainContent {event,..}) => match event {
-                ExecutionEvent::ReasoningSummaryPart { snapshot:false,.. } | ExecutionEvent::ThinkingDelta {..} => headings += 1,
-                ExecutionEvent::ToolStarted {..} => tools += 1,
-                ExecutionEvent::ToolOutputDelta {..} => output += 1,
+            SessionEvent::Activity(ActivityEvent::MainContent { event, .. }) => match event {
+                ExecutionEvent::ReasoningSummaryPart {
+                    snapshot: false, ..
+                }
+                | ExecutionEvent::ThinkingDelta { .. } => headings += 1,
+                ExecutionEvent::ToolStarted { .. } => tools += 1,
+                ExecutionEvent::ToolOutputDelta { .. } => output += 1,
                 _ => {}
             },
-            SessionEvent::Activity(ActivityEvent::Decision { .. }) => panic!("read-only probe unexpectedly requires a decision"),
+            SessionEvent::Activity(ActivityEvent::Decision { .. }) => {
+                panic!("read-only probe unexpectedly requires a decision")
+            }
             SessionEvent::ToolStarted { .. } => tools += 1,
             SessionEvent::ToolOutputDelta { .. } => output += 1,
             SessionEvent::Closed { reason } => panic!("native process closed: {reason}"),
@@ -85,8 +93,15 @@ fn probe(provider: &str) {
             _ => {}
         }
         activity.apply(match event {
-            SessionEvent::Activity(event) => ActivityInput::Observe { generation:1,event,at:Instant::now() },
-            event => ActivityInput::Main {input:Input::Event(event),at:Instant::now()},
+            SessionEvent::Activity(event) => ActivityInput::Observe {
+                generation: 1,
+                event,
+                at: Instant::now(),
+            },
+            event => ActivityInput::Main {
+                input: Input::Event(event),
+                at: Instant::now(),
+            },
         });
         if let Some(caption) = activity.view().main().transcript().progress().caption() {
             if captions.last() != Some(&caption) {

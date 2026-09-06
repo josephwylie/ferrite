@@ -1597,14 +1597,11 @@ impl Cockpit {
 
     /// Route a provider-native control to the live Session for this Thread.
     /// Controls never create or replace a Session and never alter Activity.
-    pub fn control(
-        &mut self,
-        thread: ThreadId,
-        action: crate::SessionControl,
-    ) -> io::Result<()> {
-        let state = self.threads.get_mut(&thread).ok_or_else(|| {
-            io::Error::new(io::ErrorKind::NotFound, "Thread is not open")
-        })?;
+    pub fn control(&mut self, thread: ThreadId, action: crate::SessionControl) -> io::Result<()> {
+        let state = self
+            .threads
+            .get_mut(&thread)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Thread is not open"))?;
         let session = state
             .session
             .as_mut()
@@ -2569,9 +2566,12 @@ impl Cockpit {
             let subject = self
                 .visible_subjects
                 .get(&thread)
-                .map(|subject| self.threads.get(&thread)
-                    .map(|state| state.activity.view().canonical_subject(subject))
-                    .unwrap_or(Subject::Main))
+                .map(|subject| {
+                    self.threads
+                        .get(&thread)
+                        .map(|state| state.activity.view().canonical_subject(subject))
+                        .unwrap_or(Subject::Main)
+                })
                 .filter(|subject| {
                     self.threads
                         .get(&thread)

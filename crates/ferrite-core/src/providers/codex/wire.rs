@@ -18,8 +18,8 @@ use serde_json::Value;
 use super::CodexCapabilities;
 use crate::progress::{Phase, PlanStep, ProgressEvent, StepStatus};
 use crate::{
-    Decision, DecisionChoice, DecisionPolicy, FileEdit, Hunk, ModelInfo, RateLimitWindow, SessionCommand,
-    SessionEvent, ToolResult, TurnOutcome, UsageDetails, UsageScope,
+    Decision, DecisionChoice, DecisionPolicy, FileEdit, Hunk, ModelInfo, RateLimitWindow,
+    SessionCommand, SessionEvent, ToolResult, TurnOutcome, UsageDetails, UsageScope,
 };
 
 /// The item types Ferrite reads as tool runs. Everything else the server
@@ -618,9 +618,7 @@ fn approval_policy(params: &Value) -> DecisionPolicy {
     };
     DecisionPolicy {
         allow: choices.iter().any(|choice| choice == "accept"),
-        deny: choices
-            .iter()
-            .any(|choice| choice == "decline"),
+        deny: choices.iter().any(|choice| choice == "decline"),
         ..DecisionPolicy::default()
     }
 }
@@ -636,13 +634,21 @@ fn codex_choice(value: &Value) -> Option<DecisionChoice> {
         Value::Object(object) if object.len() == 1 => {
             if let Some(amendment) = object.get("acceptWithExecpolicyAmendment") {
                 let parts = amendment["execpolicy_amendment"].as_array()?;
-                if parts.is_empty() { return None; }
-                let command = parts.iter().map(Value::as_str).collect::<Option<Vec<_>>>()?.join(" ");
+                if parts.is_empty() {
+                    return None;
+                }
+                let command = parts
+                    .iter()
+                    .map(Value::as_str)
+                    .collect::<Option<Vec<_>>>()?
+                    .join(" ");
                 (format!("Always allow {command}"), true)
             } else if let Some(amendment) = object.get("applyNetworkPolicyAmendment") {
                 let policy = &amendment["network_policy_amendment"];
                 let host = policy["host"].as_str()?.trim();
-                if host.is_empty() { return None; }
+                if host.is_empty() {
+                    return None;
+                }
                 match policy["action"].as_str()? {
                     "allow" => (format!("Allow {host}"), true),
                     "deny" => (format!("Block {host}"), false),
@@ -654,7 +660,11 @@ fn codex_choice(value: &Value) -> Option<DecisionChoice> {
         }
         _ => return None,
     };
-    Some(DecisionChoice { label, value: value.clone(), standing })
+    Some(DecisionChoice {
+        label,
+        value: value.clone(),
+        standing,
+    })
 }
 
 /// Keep the ID's JSON representation as the opaque Decision handle. Encoding
@@ -1339,7 +1349,12 @@ mod tests {
             id: id.clone(),
             output: "ferrite-tool-ok\n".into(),
             is_error: false,
-            result: ToolResult::Command { stdout: "ferrite-tool-ok\n".into(), stderr: String::new(), exit_code: Some(0), duration_ms: Some(0) },
+            result: ToolResult::Command {
+                stdout: "ferrite-tool-ok\n".into(),
+                stderr: String::new(),
+                exit_code: Some(0),
+                duration_ms: Some(0)
+            },
         }));
     }
 
@@ -1382,7 +1397,9 @@ mod tests {
         // an execpolicy amendment and cancellation.
         assert_eq!(suggestions.len(), 2);
         assert!(suggestions.iter().any(|choice| choice.standing));
-        assert!(suggestions.iter().any(|choice| choice.value == serde_json::json!("cancel")));
+        assert!(suggestions
+            .iter()
+            .any(|choice| choice.value == serde_json::json!("cancel")));
 
         // The Decision names the tool card it blocks, so a Pane can render it
         // in place instead of as a free-floating prompt.

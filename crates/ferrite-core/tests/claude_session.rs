@@ -118,7 +118,12 @@ fn prose(events: &[SessionEvent]) -> String {
         .iter()
         .filter_map(|block| match &block.body {
             Body::Paragraph { spans } | Body::Heading { spans, .. } | Body::Bullet { spans } => {
-                Some(spans.iter().map(|span| span.text.as_str()).collect::<String>())
+                Some(
+                    spans
+                        .iter()
+                        .map(|span| span.text.as_str())
+                        .collect::<String>(),
+                )
             }
             _ => None,
         })
@@ -233,10 +238,14 @@ fn the_reader_thread_delivers_the_captured_stream() {
         .filter(|event| matches!(event, SessionEvent::TokenUsage { .. }))
         .count();
     assert_eq!(usages, 3, "two messages and the result: {all:?}");
-    assert!(all.iter().any(|event| matches!(
-        event,
-        SessionEvent::TokenUsage { context_window: Some(200_000), .. }
-    )),
+    assert!(
+        all.iter().any(|event| matches!(
+            event,
+            SessionEvent::TokenUsage {
+                context_window: Some(200_000),
+                ..
+            }
+        )),
         "the result's count lands before the turn ends: {all:?}"
     );
     let inits: Vec<_> = all
@@ -252,9 +261,17 @@ fn the_reader_thread_delivers_the_captured_stream() {
 
     assert_eq!(prose(&all), "hello ferrite");
     let activity = fold(&all);
-    let thinking: Vec<_> = activity.view().main().transcript().blocks().iter().filter_map(|block| match &block.body {
-        Body::Thinking(text) => Some(text.as_str()), _ => None,
-    }).collect();
+    let thinking: Vec<_> = activity
+        .view()
+        .main()
+        .transcript()
+        .blocks()
+        .iter()
+        .filter_map(|block| match &block.body {
+            Body::Thinking(text) => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
     assert_eq!(thinking, ["The user is asking me to say exactly \"hello ferrite\". This is a straightforward request to output a specific string. I should just output that exactly as requested."]);
 
     assert!(all.iter().any(|event| {
@@ -305,7 +322,12 @@ fn a_tool_call_arrives_as_a_start_and_a_completion() {
         .blocks()
         .iter()
         .filter_map(|block| match &block.body {
-            Body::Tool(tool) => Some((&tool.call, &tool.name, &tool.structured_result, &tool.output)),
+            Body::Tool(tool) => Some((
+                &tool.call,
+                &tool.name,
+                &tool.structured_result,
+                &tool.output,
+            )),
             _ => None,
         })
         .collect();
@@ -317,7 +339,10 @@ fn a_tool_call_arrives_as_a_start_and_a_completion() {
             event: ExecutionEvent::ToolStarted { id: started, input, .. }, ..
         }) if started == id && input["command"] == "echo ferrite-tool-ok"
     )));
-    assert_eq!(output.as_ref().map(|output| output.text.as_str()), Some("ferrite-tool-ok"));
+    assert_eq!(
+        output.as_ref().map(|output| output.text.as_str()),
+        Some("ferrite-tool-ok")
+    );
     assert!(events.iter().any(|event| matches!(
         event,
         SessionEvent::Activity(ferrite_core::activity::ActivityEvent::MainContent {
@@ -363,13 +388,14 @@ fn a_permission_request_arrives_as_a_decision_naming_its_tool_call() {
 
     // The Decision names the tool card it blocks, so a Pane can render it in
     // place instead of as a free-floating prompt.
-    assert!(events.iter().any(|event| matches!(
-        event,
-        SessionEvent::Activity(ferrite_core::activity::ActivityEvent::MainContent {
-            event: ExecutionEvent::ToolStarted { id, name, input: started_input },
-            ..
-        }) if id == tool_use_id && name == "Write" && started_input == input
-    )),
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            SessionEvent::Activity(ferrite_core::activity::ActivityEvent::MainContent {
+                event: ExecutionEvent::ToolStarted { id, name, input: started_input },
+                ..
+            }) if id == tool_use_id && name == "Write" && started_input == input
+        )),
         "no ToolStarted for {tool_use_id}: {events:?}"
     );
 }

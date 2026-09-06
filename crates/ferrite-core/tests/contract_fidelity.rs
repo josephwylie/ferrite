@@ -8,12 +8,28 @@ use support::*;
 #[test]
 fn conversation_reset_never_reuses_a_live_decision_handle() {
     let request = |id: &str| json!({"type":"control_request","request_id":id,"request":{"subtype":"can_use_tool","tool_name":"Bash","tool_use_id":id,"input":{"command":"echo test"}}});
-    let r = Replay::new("claude", vec![request("before"), json!({"type":"conversation_reset","session_id":"root","uuid":"reset","new_conversation_id":"fresh"}), request("after")]);
+    let r = Replay::new(
+        "claude",
+        vec![
+            request("before"),
+            json!({"type":"conversation_reset","session_id":"root","uuid":"reset","new_conversation_id":"fresh"}),
+            request("after"),
+        ],
+    );
     let events = r.drain();
-    let reset = events.iter().position(|e| matches!(e, ferrite_core::SessionEvent::ConversationReset { .. })).unwrap();
-    let old = fold(events[..reset].to_vec()).view().pending_decisions()[0].handle.clone();
+    let reset = events
+        .iter()
+        .position(|e| matches!(e, ferrite_core::SessionEvent::ConversationReset { .. }))
+        .unwrap();
+    let old = fold(events[..reset].to_vec()).view().pending_decisions()[0]
+        .handle
+        .clone();
     let a = fold(events);
-    assert_ne!(old, a.view().pending_decisions()[0].handle, "stale pre-reset UI actions must never target a new request");
+    assert_ne!(
+        old,
+        a.view().pending_decisions()[0].handle,
+        "stale pre-reset UI actions must never target a new request"
+    );
 }
 
 #[test]
@@ -25,15 +41,25 @@ fn claude_local_command_output_preserves_all_lines_once() {
 
 #[test]
 fn claude_child_retraction_removes_only_the_owning_childs_content() {
-    let r = Replay::new("claude", vec![
-        json!({"type":"assistant","uuid":"main","session_id":"root","parent_tool_use_id":null,"message":{"id":"main","content":[{"type":"text","text":"Keep Main"}]}}),
-        json!({"type":"assistant","uuid":"old-child","session_id":"root","parent_tool_use_id":"spawn","message":{"id":"old","content":[{"type":"text","text":"Retracted child"}]}}),
-        json!({"type":"assistant","uuid":"replacement","supersedes":["old-child"],"session_id":"root","parent_tool_use_id":"spawn","message":{"id":"new","content":[{"type":"text","text":"Replacement child"}]}}),
-    ]);
+    let r = Replay::new(
+        "claude",
+        vec![
+            json!({"type":"assistant","uuid":"main","session_id":"root","parent_tool_use_id":null,"message":{"id":"main","content":[{"type":"text","text":"Keep Main"}]}}),
+            json!({"type":"assistant","uuid":"old-child","session_id":"root","parent_tool_use_id":"spawn","message":{"id":"old","content":[{"type":"text","text":"Retracted child"}]}}),
+            json!({"type":"assistant","uuid":"replacement","supersedes":["old-child"],"session_id":"root","parent_tool_use_id":"spawn","message":{"id":"new","content":[{"type":"text","text":"Replacement child"}]}}),
+        ],
+    );
     let a = fold(r.drain());
     assert_eq!(prose(&a), ["Keep Main"]);
-    let key = ferrite_core::activity::AgentKey::new(ferrite_core::store::Provider::Claude, "root", "spawn");
-    let child = a.view().subject(&ferrite_core::activity::Subject::Subagent(key)).unwrap();
+    let key = ferrite_core::activity::AgentKey::new(
+        ferrite_core::store::Provider::Claude,
+        "root",
+        "spawn",
+    );
+    let child = a
+        .view()
+        .subject(&ferrite_core::activity::Subject::Subagent(key))
+        .unwrap();
     let text = format!("{:?}", child.transcript().blocks());
     assert!(!text.contains("Retracted child"));
     assert!(text.contains("Replacement child"));
@@ -41,25 +67,50 @@ fn claude_child_retraction_removes_only_the_owning_childs_content() {
 
 #[test]
 fn conversation_reset_clears_child_order_and_persists_the_new_resume_target() {
-    use ferrite_core::{activity::Activity, store::{Store, Provider}, workspace::WorkspaceBinding};
-    let r = Replay::new("claude", vec![
-        json!({"type":"system","subtype":"init","session_id":"root","model":"fixture"}),
-        json!({"type":"assistant","uuid":"child","session_id":"root","parent_tool_use_id":"spawn","message":{"id":"child","content":[{"type":"text","text":"Old child"}]}}),
-        json!({"type":"conversation_reset","session_id":"root","uuid":"reset","new_conversation_id":"fresh"}),
-    ]);
+    use ferrite_core::{
+        activity::Activity,
+        store::{Provider, Store},
+        workspace::WorkspaceBinding,
+    };
+    let r = Replay::new(
+        "claude",
+        vec![
+            json!({"type":"system","subtype":"init","session_id":"root","model":"fixture"}),
+            json!({"type":"assistant","uuid":"child","session_id":"root","parent_tool_use_id":"spawn","message":{"id":"child","content":[{"type":"text","text":"Old child"}]}}),
+            json!({"type":"conversation_reset","session_id":"root","uuid":"reset","new_conversation_id":"fresh"}),
+        ],
+    );
     let events = r.drain();
     let a = fold(events.clone());
-    assert!(a.view().children().is_empty(), "reset must clear the child ordering as well as its records");
+    assert!(
+        a.view().children().is_empty(),
+        "reset must clear the child ordering as well as its records"
+    );
     let dir = std::env::temp_dir().join(format!("ferrite-reset-contract-{}", std::process::id()));
     let store = Store::open(&dir).unwrap();
-    let (id, mut writer) = store.create(Provider::Claude, None, WorkspaceBinding::Main { checkout: std::env::temp_dir() }).unwrap();
-    for event in &events { writer.record_event(event, None).unwrap(); }
+    let (id, mut writer) = store
+        .create(
+            Provider::Claude,
+            None,
+            WorkspaceBinding::Main {
+                checkout: std::env::temp_dir(),
+            },
+        )
+        .unwrap();
+    for event in &events {
+        writer.record_event(event, None).unwrap();
+    }
     writer.flush().unwrap();
     let snapshot = store.load(id).unwrap();
     assert_eq!(snapshot.resume_target(), Some("fresh"));
     let mut restored = Activity::default();
-    for input in snapshot.activity_inputs() { restored.apply(input); }
-    assert_eq!(restored.view().main().transcript().session_id(), Some("fresh"));
+    for input in snapshot.activity_inputs() {
+        restored.apply(input);
+    }
+    assert_eq!(
+        restored.view().main().transcript().session_id(),
+        Some("fresh")
+    );
     assert!(restored.view().children().is_empty());
     assert!(restored.view().pending_decisions().is_empty());
     drop(writer);
@@ -68,8 +119,16 @@ fn conversation_reset_clears_child_order_and_persists_the_new_resume_target() {
 
 #[test]
 fn claude_main_user_echo_is_not_a_second_operator_prompt() {
-    for content in [json!("Original prompt"), json!([{"type":"text","text":"Original prompt"}])] {
-        let r = Replay::new("claude", vec![json!({"type":"user","uuid":"echo","session_id":"root","parent_tool_use_id":null,"message":{"role":"user","content":content}})]);
+    for content in [
+        json!("Original prompt"),
+        json!([{"type":"text","text":"Original prompt"}]),
+    ] {
+        let r = Replay::new(
+            "claude",
+            vec![
+                json!({"type":"user","uuid":"echo","session_id":"root","parent_tool_use_id":null,"message":{"role":"user","content":content}}),
+            ],
+        );
         let a = fold(r.drain());
         assert!(!a.view().main().transcript().blocks().iter().any(|b|
             matches!(&b.body, ferrite_core::transcript::Body::Prompt(_))),
@@ -251,16 +310,31 @@ fn claude_conversation_reset_immediately_clears_visible_old_content() {
 
 #[test]
 fn codex_child_raw_reasoning_parts_reconcile_independently() {
-    let r=Replay::new("codex",vec![
-        json!({"method":"thread/started","params":{"thread":{"id":"child","parentThreadId":"root","source":{"subAgent":{"thread_spawn":{"parent_thread_id":"root"}}}}}}),
-        json!({"method":"item/reasoning/textDelta","params":{"threadId":"child","turnId":"turn","itemId":"r","contentIndex":0,"delta":"old first"}}),
-        json!({"method":"item/reasoning/textDelta","params":{"threadId":"child","turnId":"turn","itemId":"r","contentIndex":1,"delta":"old second"}}),
-        json!({"method":"item/completed","params":{"threadId":"child","turnId":"turn","item":{"id":"r","type":"reasoning","summary":["Summary"],"content":["Correct first","Correct second"]}}}),
-        json!({"method":"thread/name/updated","params":{"threadId":"child","threadName":"Named child"}}),
-    ]);
-    let a=fold(r.drain());let child=a.view().children().into_iter().next().expect("known child");
-    let text:Vec<_>=child.transcript().blocks().iter().filter_map(|b| match &b.body{ferrite_core::transcript::Body::Thinking(s)=>Some(s.as_str()),_=>None}).collect();
-    assert_eq!(text,["Correct first","Correct second","Summary"]);
-    assert_eq!(child.info().name.as_deref(),Some("Named child"));
-    assert!(reasoning(&a).is_empty(),"child content must not enter Main");
+    let r = Replay::new(
+        "codex",
+        vec![
+            json!({"method":"thread/started","params":{"thread":{"id":"child","parentThreadId":"root","source":{"subAgent":{"thread_spawn":{"parent_thread_id":"root"}}}}}}),
+            json!({"method":"item/reasoning/textDelta","params":{"threadId":"child","turnId":"turn","itemId":"r","contentIndex":0,"delta":"old first"}}),
+            json!({"method":"item/reasoning/textDelta","params":{"threadId":"child","turnId":"turn","itemId":"r","contentIndex":1,"delta":"old second"}}),
+            json!({"method":"item/completed","params":{"threadId":"child","turnId":"turn","item":{"id":"r","type":"reasoning","summary":["Summary"],"content":["Correct first","Correct second"]}}}),
+            json!({"method":"thread/name/updated","params":{"threadId":"child","threadName":"Named child"}}),
+        ],
+    );
+    let a = fold(r.drain());
+    let child = a.view().children().into_iter().next().expect("known child");
+    let text: Vec<_> = child
+        .transcript()
+        .blocks()
+        .iter()
+        .filter_map(|b| match &b.body {
+            ferrite_core::transcript::Body::Thinking(s) => Some(s.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(text, ["Correct first", "Correct second", "Summary"]);
+    assert_eq!(child.info().name.as_deref(), Some("Named child"));
+    assert!(
+        reasoning(&a).is_empty(),
+        "child content must not enter Main"
+    );
 }

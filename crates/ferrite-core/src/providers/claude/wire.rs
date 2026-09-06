@@ -353,14 +353,22 @@ pub(super) fn parse_events_value(value: &Value) -> Vec<SessionEvent> {
         } else if let Some(todos) = result["newTodos"].as_array() {
             events.push(SessionEvent::Progress {
                 event: ProgressEvent::TasksSnapshot {
-                    tasks: todos.iter().enumerate().filter_map(|(index, todo)| {
-                        let text = todo["content"].as_str()?.trim();
-                        (!text.is_empty()).then_some(PlanTask {
-                            id: todo["id"].as_str().map(str::to_string).unwrap_or_else(|| format!("todo:{index}")),
-                            text: text.into(),
-                            status: task_status(todo["status"].as_str()).unwrap_or(StepStatus::Pending),
+                    tasks: todos
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, todo)| {
+                            let text = todo["content"].as_str()?.trim();
+                            (!text.is_empty()).then_some(PlanTask {
+                                id: todo["id"]
+                                    .as_str()
+                                    .map(str::to_string)
+                                    .unwrap_or_else(|| format!("todo:{index}")),
+                                text: text.into(),
+                                status: task_status(todo["status"].as_str())
+                                    .unwrap_or(StepStatus::Pending),
+                            })
                         })
-                    }).collect(),
+                        .collect(),
                 },
             });
         }
@@ -372,7 +380,11 @@ fn successful_receipt(value: &Value) -> bool {
     value["tool_use_result"]["success"] != false
         && !value["message"]["content"]
             .as_array()
-            .is_some_and(|blocks| blocks.iter().any(|block| block["type"] == "tool_result" && block["is_error"] == true))
+            .is_some_and(|blocks| {
+                blocks
+                    .iter()
+                    .any(|block| block["type"] == "tool_result" && block["is_error"] == true)
+            })
 }
 
 fn native_task(task: &Value) -> Option<PlanTask> {
@@ -752,18 +764,28 @@ fn parse_elicitation_request(value: &Value, request: &Value) -> Option<SessionEv
     if message.is_empty() {
         return None;
     }
-    let kind = match request.get("mode").and_then(Value::as_str).unwrap_or("form") {
+    let kind = match request
+        .get("mode")
+        .and_then(Value::as_str)
+        .unwrap_or("form")
+    {
         "form" | "openai/form" | "openaiForm" => {
-            match crate::providers::elicitation::fields(request.get("requested_schema").unwrap_or(&Value::Null)) {
+            match crate::providers::elicitation::fields(
+                request.get("requested_schema").unwrap_or(&Value::Null),
+            ) {
                 Ok(fields) => DecisionKind::Form { fields },
                 Err(reason) => DecisionKind::Unsupported { reason },
             }
         }
         "url" | "openai/url" | "openaiUrl" => match request.get("url").and_then(Value::as_str) {
             Some(url) if !url.is_empty() => DecisionKind::External { url: url.into() },
-            _ => DecisionKind::Unsupported { reason: "elicitation has no URL".into() },
+            _ => DecisionKind::Unsupported {
+                reason: "elicitation has no URL".into(),
+            },
         },
-        _ => DecisionKind::Unsupported { reason: "unsupported elicitation mode".into() },
+        _ => DecisionKind::Unsupported {
+            reason: "unsupported elicitation mode".into(),
+        },
     };
     let allow = !matches!(&kind, DecisionKind::Unsupported { .. });
     Some(SessionEvent::DecisionRequested {
@@ -845,9 +867,12 @@ impl Requests {
             Request::Form(fields) => elicitation_response(Some(fields), answer),
             Request::External => elicitation_response(None, answer),
             Request::Unsupported => unsupported_response(answer),
-            Request::Approval { allow, deny, input, suggestions } => {
-                approval_response(*allow, *deny, input, suggestions, answer)
-            }
+            Request::Approval {
+                allow,
+                deny,
+                input,
+                suggestions,
+            } => approval_response(*allow, *deny, input, suggestions, answer),
         })
     }
 
@@ -858,9 +883,14 @@ impl Requests {
 
 fn unsupported_response(answer: &crate::DecisionAnswer) -> std::io::Result<Value> {
     match answer {
-        crate::DecisionAnswer::Deny { .. } => Ok(serde_json::json!({"action":"decline","content":null})),
+        crate::DecisionAnswer::Deny { .. } => {
+            Ok(serde_json::json!({"action":"decline","content":null}))
+        }
         crate::DecisionAnswer::Cancel => Ok(serde_json::json!({"action":"cancel","content":null})),
-        _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "unsupported elicitation can only be declined or cancelled")),
+        _ => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "unsupported elicitation can only be declined or cancelled",
+        )),
     }
 }
 
@@ -879,7 +909,10 @@ fn approval_response(
             Ok(serde_json::json!({"behavior":"deny","message":message}))
         }
         crate::DecisionAnswer::AllowAlways { input, suggestion }
-            if allow && suggestions.iter().any(|offered| offered.value == *suggestion) =>
+            if allow
+                && suggestions
+                    .iter()
+                    .any(|offered| offered.value == *suggestion) =>
         {
             Ok(serde_json::json!({
                 "behavior":"allow", "updatedInput":input,
@@ -908,13 +941,23 @@ fn question_response(
 ) -> std::io::Result<Value> {
     let crate::DecisionAnswer::Questions { answers } = answer else {
         return match answer {
-            crate::DecisionAnswer::Deny { message } => Ok(serde_json::json!({"behavior":"deny","message":message})),
-            crate::DecisionAnswer::Cancel => Ok(serde_json::json!({"behavior":"deny","message":"Question cancelled"})),
-            _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "question requires question answers")),
+            crate::DecisionAnswer::Deny { message } => {
+                Ok(serde_json::json!({"behavior":"deny","message":message}))
+            }
+            crate::DecisionAnswer::Cancel => {
+                Ok(serde_json::json!({"behavior":"deny","message":"Question cancelled"}))
+            }
+            _ => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "question requires question answers",
+            )),
         };
     };
     if answers.len() != questions.len() {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "question answer count does not match"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "question answer count does not match",
+        ));
     }
     let mut updated = input.as_object().cloned().unwrap_or_default();
     let mut values = serde_json::Map::new();
@@ -973,32 +1016,74 @@ fn claude_choice(value: &Value) -> Option<DecisionChoice> {
     let label = match kind {
         "setMode" => {
             let mode = match value["mode"].as_str()? {
-                "acceptEdits" => "Accept edits", "bypassPermissions" => "Bypass permissions",
-                "default" => "Default", "plan" => "Plan", "dontAsk" => "Don't ask", "auto" => "Auto", _ => return None,
+                "acceptEdits" => "Accept edits",
+                "bypassPermissions" => "Bypass permissions",
+                "default" => "Default",
+                "plan" => "Plan",
+                "dontAsk" => "Don't ask",
+                "auto" => "Auto",
+                _ => return None,
             };
             format!("Use {mode} for {destination}")
         }
         "addRules" | "replaceRules" | "removeRules" => {
-            let rules = value["rules"].as_array()?.iter().map(|rule| {
-                let tool = rule["toolName"].as_str()?;
-                Some(match rule["ruleContent"].as_str() { Some(content) => format!("{tool}({content})"), None => tool.into() })
-            }).collect::<Option<Vec<String>>>()?;
-            if rules.is_empty() { return None; }
-            let action = if kind == "removeRules" { "Remove rules for" } else {
-                match value["behavior"].as_str()? { "allow" => "Allow", "deny" => "Block", "ask" => "Ask before", _ => return None }
+            let rules = value["rules"]
+                .as_array()?
+                .iter()
+                .map(|rule| {
+                    let tool = rule["toolName"].as_str()?;
+                    Some(match rule["ruleContent"].as_str() {
+                        Some(content) => format!("{tool}({content})"),
+                        None => tool.into(),
+                    })
+                })
+                .collect::<Option<Vec<String>>>()?;
+            if rules.is_empty() {
+                return None;
+            }
+            let action = if kind == "removeRules" {
+                "Remove rules for"
+            } else {
+                match value["behavior"].as_str()? {
+                    "allow" => "Allow",
+                    "deny" => "Block",
+                    "ask" => "Ask before",
+                    _ => return None,
+                }
             };
-            let replacement = if kind == "replaceRules" { "Replace rules: " } else { "" };
-            format!("{replacement}{action} {} in {destination}", rules.join(", "))
+            let replacement = if kind == "replaceRules" {
+                "Replace rules: "
+            } else {
+                ""
+            };
+            format!(
+                "{replacement}{action} {} in {destination}",
+                rules.join(", ")
+            )
         }
         "addDirectories" | "removeDirectories" => {
-            let directories = value["directories"].as_array()?.iter().map(Value::as_str).collect::<Option<Vec<_>>>()?;
-            if directories.is_empty() { return None; }
-            let action = if kind == "addDirectories" { "Allow" } else { "Remove access to" };
+            let directories = value["directories"]
+                .as_array()?
+                .iter()
+                .map(Value::as_str)
+                .collect::<Option<Vec<_>>>()?;
+            if directories.is_empty() {
+                return None;
+            }
+            let action = if kind == "addDirectories" {
+                "Allow"
+            } else {
+                "Remove access to"
+            };
             format!("{action} {} in {destination}", directories.join(", "))
         }
         _ => return None,
     };
-    Some(DecisionChoice { label, value: value.clone(), standing: standing_choice(value) })
+    Some(DecisionChoice {
+        label,
+        value: value.clone(),
+        standing: standing_choice(value),
+    })
 }
 
 fn standing_choice(value: &Value) -> bool {
@@ -1031,17 +1116,23 @@ fn standing_choice(value: &Value) -> bool {
 /// Keep the CLI's useful permission context visible without exposing the
 /// provider envelope to the shared renderer.
 fn request_description(request: &Value) -> String {
-    ["description", "title", "display_name", "decision_reason", "blocked_path"]
-        .into_iter()
-        .filter_map(|key| request.get(key).and_then(Value::as_str).map(str::trim))
-        .filter(|value| !value.is_empty())
-        .fold(Vec::new(), |mut parts, value| {
-            if !parts.iter().any(|part| *part == value) {
-                parts.push(value);
-            }
-            parts
-        })
-        .join(" · ")
+    [
+        "description",
+        "title",
+        "display_name",
+        "decision_reason",
+        "blocked_path",
+    ]
+    .into_iter()
+    .filter_map(|key| request.get(key).and_then(Value::as_str).map(str::trim))
+    .filter(|value| !value.is_empty())
+    .fold(Vec::new(), |mut parts, value| {
+        if !parts.iter().any(|part| *part == value) {
+            parts.push(value);
+        }
+        parts
+    })
+    .join(" · ")
 }
 
 /// A string field, or empty when the provider left it out.
@@ -1286,7 +1377,10 @@ mod tests {
             10 + 18865 + 4,
             "input + cache writes + output"
         );
-        assert_eq!(*context_window, None, "unknown native window is not inferred from a model name");
+        assert_eq!(
+            *context_window, None,
+            "unknown native window is not inferred from a model name"
+        );
         let SessionEvent::TokenUsage {
             total_tokens,
             context_window,

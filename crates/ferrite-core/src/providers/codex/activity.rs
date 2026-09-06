@@ -931,11 +931,7 @@ impl Router {
                             if let Some(turn) = turn {
                                 update.activity(ActivityEvent::Content {
                                     key: key.clone(),
-                                    id: Some(reasoning_summary_key(
-                                        turn,
-                                        &item_id,
-                                        summary_index,
-                                    )),
+                                    id: Some(reasoning_summary_key(turn, &item_id, summary_index)),
                                     event: ExecutionEvent::ReasoningSummaryPart {
                                         item_id: item_key(turn, &item_id),
                                         summary_index,
@@ -1304,7 +1300,11 @@ mod tests {
         let text: String = events
             .iter()
             .filter_map(|event| match event {
-                SessionEvent::TextDelta { text } | SessionEvent::Activity(ActivityEvent::MainContent { event: ExecutionEvent::TextDelta { text }, .. }) => Some(text.as_str()),
+                SessionEvent::TextDelta { text }
+                | SessionEvent::Activity(ActivityEvent::MainContent {
+                    event: ExecutionEvent::TextDelta { text },
+                    ..
+                }) => Some(text.as_str()),
                 _ => None,
             })
             .collect();

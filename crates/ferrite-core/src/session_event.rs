@@ -578,7 +578,12 @@ impl FormField {
                 {
                     return Err(format!("{} has an unavailable choice", self.label));
                 }
-                if *multi_select && values.iter().enumerate().any(|(i, value)| values[..i].contains(value)) {
+                if *multi_select
+                    && values
+                        .iter()
+                        .enumerate()
+                        .any(|(i, value)| values[..i].contains(value))
+                {
                     return Err(format!("{} contains duplicate choices", self.label));
                 }
                 if *multi_select
@@ -672,10 +677,21 @@ mod tests {
     #[test]
     fn standing_choices_are_provider_validated_and_opaque_here() {
         let offered = decision(vec![
-            DecisionChoice { label: "first".into(), value: serde_json::json!({"opaque_choice": "first"}), standing: true },
-            DecisionChoice { label: "second".into(), value: serde_json::json!("second"), standing: false },
+            DecisionChoice {
+                label: "first".into(),
+                value: serde_json::json!({"opaque_choice": "first"}),
+                standing: true,
+            },
+            DecisionChoice {
+                label: "second".into(),
+                value: serde_json::json!("second"),
+                standing: false,
+            },
         ]);
-        assert_eq!(offered.standing_answer(), Some(&offered.suggestions[0].value));
+        assert_eq!(
+            offered.standing_answer(),
+            Some(&offered.suggestions[0].value)
+        );
         assert_eq!(decision(vec![]).standing_answer(), None);
     }
 }

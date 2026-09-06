@@ -83,16 +83,15 @@ impl Usage {
             .get(&subject)
             .is_some_and(|outputs| outputs.contains_key(&message))
         {
-            self.message_order.push_back((subject.clone(), message.clone()));
+            self.message_order
+                .push_back((subject.clone(), message.clone()));
             if self.message_order.len() > 8192 {
                 if let Some((old_subject, old_message)) = self.message_order.pop_front() {
                     let mut empty = false;
                     if let Some(outputs) = self.message_outputs.get_mut(&old_subject) {
                         if let Some(old_output) = outputs.remove(&old_message) {
-                            let retired = self
-                                .retired_outputs
-                                .entry(old_subject.clone())
-                                .or_default();
+                            let retired =
+                                self.retired_outputs.entry(old_subject.clone()).or_default();
                             *retired = retired.saturating_add(old_output);
                         }
                         empty = outputs.is_empty();
@@ -105,7 +104,9 @@ impl Usage {
         }
         let outputs = self.message_outputs.entry(subject.clone()).or_default();
         outputs.insert(message, output);
-        let live = outputs.values().fold(0u64, |total, output| total.saturating_add(*output));
+        let live = outputs
+            .values()
+            .fold(0u64, |total, output| total.saturating_add(*output));
         self.retired_outputs
             .get(&subject)
             .copied()
@@ -233,7 +234,9 @@ impl Decoder {
                         self.main_content(
                             &value,
                             delivery_id(&value, "0"),
-                            ExecutionEvent::Text { text: text.to_owned() },
+                            ExecutionEvent::Text {
+                                text: text.to_owned(),
+                            },
                             &mut events,
                         );
                     }
@@ -850,7 +853,10 @@ impl Decoder {
         }
         let output_tokens = if value["type"] == "assistant" {
             string(&value["message"], "id")
-                .map(|message| self.usage.message_output(subject.clone(), message.into(), output_tokens))
+                .map(|message| {
+                    self.usage
+                        .message_output(subject.clone(), message.into(), output_tokens)
+                })
                 .unwrap_or(output_tokens)
         } else {
             self.usage.clear_message_outputs(subject);
@@ -862,7 +868,11 @@ impl Decoder {
             cached_input_tokens,
             output_tokens,
             reasoning_output_tokens,
-            context_window: if main { self.usage.context_window } else { context_window },
+            context_window: if main {
+                self.usage.context_window
+            } else {
+                context_window
+            },
         }
     }
 
@@ -1013,12 +1023,7 @@ impl Decoder {
         }
     }
 
-    fn retract_content(
-        &self,
-        subject: &Subject,
-        ids: Vec<String>,
-        events: &mut Vec<SessionEvent>,
-    ) {
+    fn retract_content(&self, subject: &Subject, ids: Vec<String>, events: &mut Vec<SessionEvent>) {
         let event = ExecutionEvent::Retract { ids };
         match subject {
             Subject::Main => push(events, ActivityEvent::MainContent { id: None, event }),
@@ -1455,8 +1460,15 @@ mod tests {
                 activity.apply(ActivityInput::Connect { generation: 1 });
                 for event in events {
                     activity.apply(match event {
-                        SessionEvent::Activity(event) => ActivityInput::Observe { generation: 1, event, at: Instant::now() },
-                        event => ActivityInput::Main { input: crate::transcript::Input::Event(event), at: Instant::now() },
+                        SessionEvent::Activity(event) => ActivityInput::Observe {
+                            generation: 1,
+                            event,
+                            at: Instant::now(),
+                        },
+                        event => ActivityInput::Main {
+                            input: crate::transcript::Input::Event(event),
+                            at: Instant::now(),
+                        },
                     });
                 }
                 activity
@@ -1470,19 +1482,31 @@ mod tests {
                 for block in activity.view().main().transcript().blocks() {
                     use crate::transcript::Body;
                     match &block.body {
-                        Body::Paragraph { spans } | Body::Heading { spans, .. } | Body::Bullet { spans, .. } => {
-                            for span in spans { prose.push_str(&span.text); }
+                        Body::Paragraph { spans }
+                        | Body::Heading { spans, .. }
+                        | Body::Bullet { spans, .. } => {
+                            for span in spans {
+                                prose.push_str(&span.text);
+                            }
                         }
                         Body::Thinking(text) => thinking.push_str(text),
-                        Body::Tool(tool) => tools.push((tool.call.clone(), tool.name.clone(), tool.output.clone())),
+                        Body::Tool(tool) => {
+                            tools.push((tool.call.clone(), tool.name.clone(), tool.output.clone()))
+                        }
                         _ => {}
                     }
                 }
                 (prose, thinking, tools)
             };
             assert_eq!(projection(&new), projection(&old));
-            assert_eq!(new.view().main().transcript().turn_completed(), old.view().main().transcript().turn_completed());
-            assert_eq!(new.view().main().transcript().usage(), old.view().main().transcript().usage());
+            assert_eq!(
+                new.view().main().transcript().turn_completed(),
+                old.view().main().transcript().turn_completed()
+            );
+            assert_eq!(
+                new.view().main().transcript().usage(),
+                old.view().main().transcript().usage()
+            );
         }
     }
 

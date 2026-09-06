@@ -16,21 +16,37 @@ fn question_presentation_and_answers_are_provider_neutral() {
         };
         let mut r = Replay::new(provider, vec![frame]);
         let ds = decisions(&r.drain());
-        let DecisionKind::Questions(qs) = &ds[0].kind else { panic!("adapter must fill the typed shared form") };
+        let DecisionKind::Questions(qs) = &ds[0].kind else {
+            panic!("adapter must fill the typed shared form")
+        };
         assert_eq!(qs[0].question, "Choose");
         if provider == "codex" {
             assert!(qs[0].secret);
             assert!(!qs[0].allow_other);
         }
-        r.session.respond_to_decision(&ds[0].id, DecisionAnswer::Questions {
-            answers: vec![ferrite_core::questions::Answer { picks: vec![0], other: None }],
-        }).unwrap();
+        r.session
+            .respond_to_decision(
+                &ds[0].id,
+                DecisionAnswer::Questions {
+                    answers: vec![ferrite_core::questions::Answer {
+                        picks: vec![0],
+                        other: None,
+                    }],
+                },
+            )
+            .unwrap();
         if provider == "codex" {
             let reply = r.wait_host(|v| v["id"] == "q" && v.get("result").is_some());
-            assert_eq!(reply["result"], json!({"answers":{"stable":{"answers":["Red, green"]}}}));
+            assert_eq!(
+                reply["result"],
+                json!({"answers":{"stable":{"answers":["Red, green"]}}})
+            );
         } else {
             let reply = r.wait_host(|v| v["type"] == "control_response");
-            assert_eq!(reply["response"]["response"]["updatedInput"]["answers"], json!({"Choose":"Red, green"}));
+            assert_eq!(
+                reply["response"]["response"]["updatedInput"]["answers"],
+                json!({"Choose":"Red, green"})
+            );
         }
     }
 }
@@ -47,11 +63,30 @@ fn both_providers_offer_the_same_typed_elicitation_form() {
         let mut r = Replay::new(provider, vec![frame]);
         let ds = decisions(&r.drain());
         assert_eq!(ds.len(), 1, "elicitation must not strand the provider");
-        let DecisionKind::Form { fields } = &ds[0].kind else { panic!("MCP schema must normalize before the UI") };
+        let DecisionKind::Form { fields } = &ds[0].kind else {
+            panic!("MCP schema must normalize before the UI")
+        };
         assert_eq!(fields.len(), 2);
         assert!(fields.iter().any(|f| f.id == "count" && f.required));
-        assert!(r.session.respond_to_decision(&ds[0].id, DecisionAnswer::Form { values: json!({"count":9}) }).is_err(), "native field constraints must be enforced");
-        r.session.respond_to_decision(&ds[0].id, DecisionAnswer::Form { values: json!({"count":2,"enabled":true}) }).unwrap();
+        assert!(
+            r.session
+                .respond_to_decision(
+                    &ds[0].id,
+                    DecisionAnswer::Form {
+                        values: json!({"count":9})
+                    }
+                )
+                .is_err(),
+            "native field constraints must be enforced"
+        );
+        r.session
+            .respond_to_decision(
+                &ds[0].id,
+                DecisionAnswer::Form {
+                    values: json!({"count":2,"enabled":true}),
+                },
+            )
+            .unwrap();
         let reply = if provider == "codex" {
             r.wait_host(|v| v["id"] == 71 && v.get("result").is_some())["result"].clone()
         } else {
@@ -64,34 +99,80 @@ fn both_providers_offer_the_same_typed_elicitation_form() {
 
 #[test]
 fn resolved_native_question_cannot_be_answered_as_an_approval() {
-    let mut r = Replay::new("codex", vec![
-        json!({"id":"q","method":"item/tool/requestUserInput","params":{"threadId":"root","turnId":"turn","itemId":"tool","questions":[{"id":"q","question":"Why?","header":"Reason","options":null,"isOther":true,"isSecret":false}]}}),
-        json!({"method":"serverRequest/resolved","params":{"threadId":"root","requestId":"q"}}),
-    ]);
+    let mut r = Replay::new(
+        "codex",
+        vec![
+            json!({"id":"q","method":"item/tool/requestUserInput","params":{"threadId":"root","turnId":"turn","itemId":"tool","questions":[{"id":"q","question":"Why?","header":"Reason","options":null,"isOther":true,"isSecret":false}]}}),
+            json!({"method":"serverRequest/resolved","params":{"threadId":"root","requestId":"q"}}),
+        ],
+    );
     let ds = decisions(&r.drain());
     assert_eq!(ds.len(), 1);
-    assert!(r.session.respond_to_decision(&ds[0].id, DecisionAnswer::Deny { message: "cancel".into() }).is_err(), "resolved request must not fall through to another response schema");
+    assert!(
+        r.session
+            .respond_to_decision(
+                &ds[0].id,
+                DecisionAnswer::Deny {
+                    message: "cancel".into()
+                }
+            )
+            .is_err(),
+        "resolved request must not fall through to another response schema"
+    );
 }
 
 #[test]
 fn permission_profile_approval_grants_only_the_requested_profile() {
-    let mut r = Replay::new("codex", vec![json!({"id":92,"method":"item/permissions/requestApproval","params":{"threadId":"root","turnId":"turn","itemId":"permissions","environmentId":null,"startedAtMs":1,"cwd":"/workspace","reason":"Fetch dependencies","permissions":{"network":{"enabled":true},"fileSystem":null}}})]);
+    let mut r = Replay::new(
+        "codex",
+        vec![
+            json!({"id":92,"method":"item/permissions/requestApproval","params":{"threadId":"root","turnId":"turn","itemId":"permissions","environmentId":null,"startedAtMs":1,"cwd":"/workspace","reason":"Fetch dependencies","permissions":{"network":{"enabled":true},"fileSystem":null}}}),
+        ],
+    );
     let ds = decisions(&r.drain());
     assert_eq!(ds.len(), 1);
-    r.session.respond_to_decision(&ds[0].id, DecisionAnswer::Allow { input: ds[0].input.clone() }).unwrap();
+    r.session
+        .respond_to_decision(
+            &ds[0].id,
+            DecisionAnswer::Allow {
+                input: ds[0].input.clone(),
+            },
+        )
+        .unwrap();
     let reply = r.wait_host(|v| v["id"] == 92 && v.get("result").is_some());
-    assert_eq!(reply["result"], json!({"permissions":{"network":{"enabled":true}},"scope":"turn"}));
+    assert_eq!(
+        reply["result"],
+        json!({"permissions":{"network":{"enabled":true}},"scope":"turn"})
+    );
 }
 
 #[test]
 fn native_approval_cannot_offer_or_send_an_unavailable_allow_choice() {
-    let mut r = Replay::new("codex", vec![json!({"id":15,"method":"item/commandExecution/requestApproval","params":{"threadId":"root","turnId":"turn","itemId":"cmd","availableDecisions":["decline"]}})]);
+    let mut r = Replay::new(
+        "codex",
+        vec![
+            json!({"id":15,"method":"item/commandExecution/requestApproval","params":{"threadId":"root","turnId":"turn","itemId":"cmd","availableDecisions":["decline"]}}),
+        ],
+    );
     let ds = decisions(&r.drain());
     assert!(!ds[0].policy.allow);
     assert!(ds[0].policy.deny);
-    assert!(r.session.respond_to_decision(&ds[0].id, DecisionAnswer::Allow { input: json!({}) }).is_err());
-    r.session.respond_to_decision(&ds[0].id, DecisionAnswer::Deny { message:"No".into() }).unwrap();
-    assert_eq!(r.wait_host(|v| v["id"] == 15 && v.get("result").is_some())["result"]["decision"], "decline");
+    assert!(r
+        .session
+        .respond_to_decision(&ds[0].id, DecisionAnswer::Allow { input: json!({}) })
+        .is_err());
+    r.session
+        .respond_to_decision(
+            &ds[0].id,
+            DecisionAnswer::Deny {
+                message: "No".into(),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        r.wait_host(|v| v["id"] == 15 && v.get("result").is_some())["result"]["decision"],
+        "decline"
+    );
 }
 
 #[test]
@@ -99,74 +180,166 @@ fn unknown_handles_are_never_encoded_as_tool_approvals() {
     for provider in ["claude", "codex"] {
         let mut r = Replay::new(provider, vec![]);
         r.drain();
-        assert!(r.session.respond_to_decision("\"unknown\"", DecisionAnswer::Allow { input: json!({}) }).is_err());
+        assert!(r
+            .session
+            .respond_to_decision("\"unknown\"", DecisionAnswer::Allow { input: json!({}) })
+            .is_err());
     }
 }
 
 #[test]
 fn claude_question_can_be_declined_without_leaving_it_pending() {
-    let mut r = Replay::new("claude", vec![json!({"type":"control_request","request_id":"q","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","tool_use_id":"tool","input":{"questions":[{"question":"Choose","options":[{"label":"A"},{"label":"B"}]}]}}})]);
+    let mut r = Replay::new(
+        "claude",
+        vec![
+            json!({"type":"control_request","request_id":"q","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","tool_use_id":"tool","input":{"questions":[{"question":"Choose","options":[{"label":"A"},{"label":"B"}]}]}}}),
+        ],
+    );
     let ds = decisions(&r.drain());
-    r.session.respond_to_decision(&ds[0].id, DecisionAnswer::Deny { message:"Skip this question".into() }).unwrap();
+    r.session
+        .respond_to_decision(
+            &ds[0].id,
+            DecisionAnswer::Deny {
+                message: "Skip this question".into(),
+            },
+        )
+        .unwrap();
     let reply = r.wait_host(|v| v["type"] == "control_response");
     assert_eq!(reply["response"]["response"]["behavior"], "deny");
-    assert_eq!(reply["response"]["response"]["message"], "Skip this question");
+    assert_eq!(
+        reply["response"]["response"]["message"],
+        "Skip this question"
+    );
 }
 
 #[test]
 fn titled_mcp_enum_choices_preserve_distinct_values_and_labels() {
     let schema = json!({"type":"object","properties":{"region":{"type":"string","oneOf":[{"const":"au","title":"Australia"},{"const":"us","title":"United States"}]}},"required":["region"]});
     for mode in ["form", "openai/form", "openaiForm"] {
-        let mut r = Replay::new("codex", vec![json!({"id":71,"method":"mcpServer/elicitation/request","params":{"threadId":"root","turnId":"turn","serverName":"server","mode":mode,"message":"Choose region","requestedSchema":schema,"_meta":null}})]);
+        let mut r = Replay::new(
+            "codex",
+            vec![
+                json!({"id":71,"method":"mcpServer/elicitation/request","params":{"threadId":"root","turnId":"turn","serverName":"server","mode":mode,"message":"Choose region","requestedSchema":schema,"_meta":null}}),
+            ],
+        );
         let ds = decisions(&r.drain());
         assert_eq!(ds.len(), 1);
-        let DecisionKind::Form { fields } = &ds[0].kind else { panic!("typed form expected") };
-        let ferrite_core::FormFieldKind::Enum { options, .. } = &fields[0].kind else { panic!("native enum cannot become free text") };
+        let DecisionKind::Form { fields } = &ds[0].kind else {
+            panic!("typed form expected")
+        };
+        let ferrite_core::FormFieldKind::Enum { options, .. } = &fields[0].kind else {
+            panic!("native enum cannot become free text")
+        };
         assert_eq!(options[0].value, "au");
         assert_eq!(options[0].label, "Australia");
-        r.session.respond_to_decision(&ds[0].id, DecisionAnswer::Form { values: json!({"region":"au"}) }).unwrap();
-        assert_eq!(r.wait_host(|v| v["id"] == 71 && v.get("result").is_some())["result"]["content"]["region"], "au");
+        r.session
+            .respond_to_decision(
+                &ds[0].id,
+                DecisionAnswer::Form {
+                    values: json!({"region":"au"}),
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            r.wait_host(|v| v["id"] == 71 && v.get("result").is_some())["result"]["content"]
+                ["region"],
+            "au"
+        );
     }
 }
 
 #[test]
 fn unreadable_elicitation_remains_visible_and_cancellable() {
-    let mut r = Replay::new("claude", vec![json!({"type":"control_request","request_id":"unsupported","request":{"subtype":"elicitation","mcp_server_name":"server","message":"Configure","mode":"form","requested_schema":{"type":"object","properties":{"future":{"type":"future-widget"}}}}})]);
+    let mut r = Replay::new(
+        "claude",
+        vec![
+            json!({"type":"control_request","request_id":"unsupported","request":{"subtype":"elicitation","mcp_server_name":"server","message":"Configure","mode":"form","requested_schema":{"type":"object","properties":{"future":{"type":"future-widget"}}}}}),
+        ],
+    );
     let ds = decisions(&r.drain());
-    assert_eq!(ds.len(), 1, "an unsupported form must never strand a native request invisibly");
+    assert_eq!(
+        ds.len(),
+        1,
+        "an unsupported form must never strand a native request invisibly"
+    );
     assert!(!ds[0].policy.allow);
-    r.session.respond_to_decision(&ds[0].id, DecisionAnswer::Cancel).unwrap();
-    assert_eq!(r.wait_host(|v| v["type"] == "control_response")["response"]["response"]["action"], "cancel");
+    r.session
+        .respond_to_decision(&ds[0].id, DecisionAnswer::Cancel)
+        .unwrap();
+    assert_eq!(
+        r.wait_host(|v| v["type"] == "control_response")["response"]["response"]["action"],
+        "cancel"
+    );
 }
 
 #[test]
 fn native_approvals_without_an_optional_choices_list_remain_answerable() {
-    for method in ["item/commandExecution/requestApproval", "item/fileChange/requestApproval"] {
-        let mut r = Replay::new("codex", vec![json!({"id":81,"method":method,"params":{"threadId":"root","turnId":"turn","itemId":"tool","reason":"Apply change"}})]);
+    for method in [
+        "item/commandExecution/requestApproval",
+        "item/fileChange/requestApproval",
+    ] {
+        let mut r = Replay::new(
+            "codex",
+            vec![
+                json!({"id":81,"method":method,"params":{"threadId":"root","turnId":"turn","itemId":"tool","reason":"Apply change"}}),
+            ],
+        );
         let ds = decisions(&r.drain());
         assert!(ds[0].policy.allow && ds[0].policy.deny);
-        r.session.respond_to_decision(&ds[0].id, DecisionAnswer::Allow {input:ds[0].input.clone()}).unwrap();
-        assert_eq!(r.wait_host(|v| v["id"] == 81 && v.get("result").is_some())["result"]["decision"], "accept");
+        r.session
+            .respond_to_decision(
+                &ds[0].id,
+                DecisionAnswer::Allow {
+                    input: ds[0].input.clone(),
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            r.wait_host(|v| v["id"] == 81 && v.get("result").is_some())["result"]["decision"],
+            "accept"
+        );
     }
 }
 
 #[test]
 fn unsupported_elicitation_can_never_be_accepted() {
-    let mut r = Replay::new("codex", vec![json!({"id":82,"method":"mcpServer/elicitation/request","params":{"threadId":"root","message":"Configure","mode":"form","requestedSchema":{"type":"object","properties":{"x":{"type":"future-widget"}}}}})]);
+    let mut r = Replay::new(
+        "codex",
+        vec![
+            json!({"id":82,"method":"mcpServer/elicitation/request","params":{"threadId":"root","message":"Configure","mode":"form","requestedSchema":{"type":"object","properties":{"x":{"type":"future-widget"}}}}}),
+        ],
+    );
     let ds = decisions(&r.drain());
-    for answer in [DecisionAnswer::Allow {input:json!({})}, DecisionAnswer::Form {values:json!({})}] {
+    for answer in [
+        DecisionAnswer::Allow { input: json!({}) },
+        DecisionAnswer::Form { values: json!({}) },
+    ] {
         assert!(r.session.respond_to_decision(&ds[0].id, answer).is_err());
     }
-    r.session.respond_to_decision(&ds[0].id, DecisionAnswer::Cancel).unwrap();
-    assert_eq!(r.wait_host(|v|v["id"] == 82 && v.get("result").is_some())["result"]["action"],"cancel");
+    r.session
+        .respond_to_decision(&ds[0].id, DecisionAnswer::Cancel)
+        .unwrap();
+    assert_eq!(
+        r.wait_host(|v| v["id"] == 82 && v.get("result").is_some())["result"]["action"],
+        "cancel"
+    );
 }
 
 #[test]
 fn legacy_enum_labels_are_preserved_in_the_shared_form() {
-    let r = Replay::new("claude",vec![json!({"type":"control_request","request_id":"enum","request":{"subtype":"elicitation","message":"Choose","mode":"form","requested_schema":{"type":"object","properties":{"country":{"type":"string","enum":["au","nz"],"enumNames":["Australia","New Zealand"]}}}}})]);
+    let r = Replay::new(
+        "claude",
+        vec![
+            json!({"type":"control_request","request_id":"enum","request":{"subtype":"elicitation","message":"Choose","mode":"form","requested_schema":{"type":"object","properties":{"country":{"type":"string","enum":["au","nz"],"enumNames":["Australia","New Zealand"]}}}}}),
+        ],
+    );
     let ds = decisions(&r.drain());
-    let DecisionKind::Form{fields} = &ds[0].kind else {panic!("form")};
-    let ferrite_core::FormFieldKind::Enum{options,..} = &fields[0].kind else {panic!("enum")};
-    assert_eq!(options[0].label,"Australia");
-    assert_eq!(options[0].value,"au");
+    let DecisionKind::Form { fields } = &ds[0].kind else {
+        panic!("form")
+    };
+    let ferrite_core::FormFieldKind::Enum { options, .. } = &fields[0].kind else {
+        panic!("enum")
+    };
+    assert_eq!(options[0].label, "Australia");
+    assert_eq!(options[0].value, "au");
 }

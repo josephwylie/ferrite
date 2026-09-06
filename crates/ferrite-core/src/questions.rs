@@ -182,14 +182,26 @@ fn answer_values(question: &Question, answer: &Answer) -> Option<Vec<String>> {
 pub fn selected_values(question: &Question, answer: &Answer) -> Result<Vec<String>, String> {
     if answer.picks.len() > question.options.len()
         || (!question.multi_select && answer.picks.len() > 1)
-        || answer.picks.iter().any(|pick| *pick >= question.options.len())
+        || answer
+            .picks
+            .iter()
+            .any(|pick| *pick >= question.options.len())
     {
         return Err("question has an invalid selection".into());
     }
-    if answer.other.as_deref().is_some_and(|other| !other.trim().is_empty()) && !question.allow_other {
+    if answer
+        .other
+        .as_deref()
+        .is_some_and(|other| !other.trim().is_empty())
+        && !question.allow_other
+    {
         return Err("question does not allow another answer".into());
     }
-    let mut parts: Vec<String> = answer.picks.iter().map(|&pick| question.options[pick].label.clone()).collect();
+    let mut parts: Vec<String> = answer
+        .picks
+        .iter()
+        .map(|&pick| question.options[pick].label.clone())
+        .collect();
     if let Some(other) = answer.other.as_deref().map(str::trim) {
         if !other.is_empty() {
             parts.push(other.to_string());
@@ -402,10 +414,7 @@ mod tests {
             other: None,
         }];
         let updated = answered_input(&input, &answers, &questions);
-        assert_eq!(
-            updated["answers"],
-            json!({})
-        );
+        assert_eq!(updated["answers"], json!({}));
     }
 
     #[test]

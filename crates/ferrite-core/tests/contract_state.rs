@@ -14,9 +14,28 @@ fn claude_background_snapshots_replace_tasks_and_exclude_ambient_work() {
     let tasks = a.view().main().transcript().progress().background();
     assert_eq!(tasks.len(), 1);
     assert_eq!(tasks[0].id, "work");
-    assert_eq!(a.view().main().transcript().progress().working_background(), 1, "snapshot membership itself means live background activity");
-    let r = Replay::new("claude", vec![first, json!({"type":"system","subtype":"background_tasks_changed","session_id":"root","uuid":"snapshot-2","tasks":[]})]);
-    assert!(fold(r.drain()).view().main().transcript().progress().background().is_empty(), "empty native snapshot must remove stale tasks");
+    assert_eq!(
+        a.view().main().transcript().progress().working_background(),
+        1,
+        "snapshot membership itself means live background activity"
+    );
+    let r = Replay::new(
+        "claude",
+        vec![
+            first,
+            json!({"type":"system","subtype":"background_tasks_changed","session_id":"root","uuid":"snapshot-2","tasks":[]}),
+        ],
+    );
+    assert!(
+        fold(r.drain())
+            .view()
+            .main()
+            .transcript()
+            .progress()
+            .background()
+            .is_empty(),
+        "empty native snapshot must remove stale tasks"
+    );
 }
 
 #[test]
@@ -24,23 +43,50 @@ fn claude_ambient_and_hidden_tasks_do_not_create_working_children() {
     for flag in ["ambient", "skip_transcript"] {
         let mut frame = json!({"type":"system","subtype":"task_started","session_id":"root","uuid":"task","task_id":"ambient","tool_use_id":"tool","task_type":"local_agent","description":"Maintenance"});
         frame[flag] = json!(true);
-        let r = Replay::new("claude", vec![frame, json!({"type":"system","subtype":"task_progress","session_id":"root","uuid":"later","task_id":"ambient","description":"Still running"})]);
+        let r = Replay::new(
+            "claude",
+            vec![
+                frame,
+                json!({"type":"system","subtype":"task_progress","session_id":"root","uuid":"later","task_id":"ambient","description":"Still running"}),
+            ],
+        );
         let a = fold(r.drain());
-        assert!(a.view().children().is_empty(), "excluded native tasks must not enter visible agent activity");
+        assert!(
+            a.view().children().is_empty(),
+            "excluded native tasks must not enter visible agent activity"
+        );
     }
 }
 
 #[test]
 fn native_diagnostics_are_visible_without_ending_a_turn() {
     for (provider, frame, wanted) in [
-        ("codex", json!({"method":"configWarning","params":{"summary":"Invalid plugin","details":"Update the plugin path","path":"config.toml"}}), "Update the plugin path"),
-        ("codex", json!({"method":"deprecationNotice","params":{"summary":"Old setting","details":"Use the replacement setting"}}), "Use the replacement setting"),
-        ("claude", json!({"type":"system","subtype":"informational","session_id":"root","uuid":"info","content":"Reconnect the server","level":"warning"}), "Reconnect the server"),
-        ("claude", json!({"type":"auth_status","session_id":"root","uuid":"auth","isAuthenticating":false,"output":[],"error":"Sign in again"}), "Sign in again"),
+        (
+            "codex",
+            json!({"method":"configWarning","params":{"summary":"Invalid plugin","details":"Update the plugin path","path":"config.toml"}}),
+            "Update the plugin path",
+        ),
+        (
+            "codex",
+            json!({"method":"deprecationNotice","params":{"summary":"Old setting","details":"Use the replacement setting"}}),
+            "Use the replacement setting",
+        ),
+        (
+            "claude",
+            json!({"type":"system","subtype":"informational","session_id":"root","uuid":"info","content":"Reconnect the server","level":"warning"}),
+            "Reconnect the server",
+        ),
+        (
+            "claude",
+            json!({"type":"auth_status","session_id":"root","uuid":"auth","isAuthenticating":false,"output":[],"error":"Sign in again"}),
+            "Sign in again",
+        ),
     ] {
         let r = Replay::new(provider, vec![frame]);
         let events = r.drain();
-        assert!(!events.iter().any(|e| matches!(e, SessionEvent::TurnEnded { .. })));
+        assert!(!events
+            .iter()
+            .any(|e| matches!(e, SessionEvent::TurnEnded { .. })));
         let a = fold(events);
         assert!(a.view().main().transcript().blocks().iter().any(|b| matches!(&b.body,ferrite_core::transcript::Body::Notice(s) if s.contains(wanted))), "native diagnostic dropped: {wanted}");
     }
@@ -48,7 +94,12 @@ fn native_diagnostics_are_visible_without_ending_a_turn() {
 
 #[test]
 fn codex_rerouted_model_updates_effective_model_without_resetting_conversation() {
-    let r = Replay::new("codex", vec![json!({"method":"model/rerouted","params":{"threadId":"root","turnId":"turn","fromModel":"original","toModel":"fallback","reason":"highRiskCyberActivity"}})]);
+    let r = Replay::new(
+        "codex",
+        vec![
+            json!({"method":"model/rerouted","params":{"threadId":"root","turnId":"turn","fromModel":"original","toModel":"fallback","reason":"highRiskCyberActivity"}}),
+        ],
+    );
     let a = fold(r.drain());
     assert_eq!(a.view().main().transcript().model(), Some("fallback"));
     assert_eq!(a.view().main().transcript().session_id(), Some("root"));
@@ -56,10 +107,20 @@ fn codex_rerouted_model_updates_effective_model_without_resetting_conversation()
 
 #[test]
 fn codex_settings_notification_reads_the_native_nested_settings() {
-    let r = Replay::new("codex", vec![json!({"method":"thread/settings/updated","params":{"threadId":"root","threadSettings":{"model":"native-model","approvalPolicy":"never"}}})]);
+    let r = Replay::new(
+        "codex",
+        vec![
+            json!({"method":"thread/settings/updated","params":{"threadId":"root","threadSettings":{"model":"native-model","approvalPolicy":"never"}}}),
+        ],
+    );
     let events = r.drain();
-    assert!(events.iter().any(|e| matches!(e, SessionEvent::PermissionMode { mode } if mode == "never")));
-    assert_eq!(fold(events).view().main().transcript().model(), Some("native-model"));
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, SessionEvent::PermissionMode { mode } if mode == "never")));
+    assert_eq!(
+        fold(events).view().main().transcript().model(),
+        Some("native-model")
+    );
 }
 #[test]
 fn claude_native_context_report_owns_the_meter_without_model_name_guessing() {
@@ -186,13 +247,31 @@ fn claude_live_permission_mode_is_reflected_from_native_status() {
 #[test]
 fn claude_session_state_is_authoritative_without_inventing_turn_completion() {
     for (state, busy, status) in [
-        ("running", true, ferrite_core::activity::AgentStatus::Working),
-        ("requires_action", true, ferrite_core::activity::AgentStatus::Waiting),
+        (
+            "running",
+            true,
+            ferrite_core::activity::AgentStatus::Working,
+        ),
+        (
+            "requires_action",
+            true,
+            ferrite_core::activity::AgentStatus::Waiting,
+        ),
         ("idle", false, ferrite_core::activity::AgentStatus::Idle),
     ] {
-        let r = Replay::new("claude", vec![json!({"type":"system","subtype":"session_state_changed","state":state,"session_id":"root","uuid":"state"})]);
+        let r = Replay::new(
+            "claude",
+            vec![
+                json!({"type":"system","subtype":"session_state_changed","state":state,"session_id":"root","uuid":"state"}),
+            ],
+        );
         let events = r.drain();
-        assert!(!events.iter().any(|e| matches!(e, SessionEvent::TurnEnded { .. })), "a state snapshot cannot release queued prompts or announce a completed turn");
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, SessionEvent::TurnEnded { .. })),
+            "a state snapshot cannot release queued prompts or announce a completed turn"
+        );
         let a = fold(events);
         assert_eq!(a.view().main().busy(), busy);
         assert_eq!(a.view().main().status(), status);

@@ -260,7 +260,10 @@ impl Notifications {
                 .or_insert_with(|| DecisionNotice {
                     id,
                     subject: pending.subject.clone(),
-                    kind: if matches!(pending.decision.kind, DecisionKind::Questions(_) | DecisionKind::Form { .. }) {
+                    kind: if matches!(
+                        pending.decision.kind,
+                        DecisionKind::Questions(_) | DecisionKind::Form { .. }
+                    ) {
                         RequestKind::Question
                     } else {
                         RequestKind::Permission
@@ -341,7 +344,10 @@ impl Notifications {
             }
         }
         for notice in self.decisions.values_mut() {
-            if notice.id.thread == thread && notice.subject.as_ref() == Some(subject) && !notice.read {
+            if notice.id.thread == thread
+                && notice.subject.as_ref() == Some(subject)
+                && !notice.read
+            {
                 notice.read = true;
                 changed = true;
             }

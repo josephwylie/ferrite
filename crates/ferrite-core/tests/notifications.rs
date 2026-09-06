@@ -782,18 +782,41 @@ fn contract_only_the_visible_subjects_requests_are_acknowledged() {
     let thread = h.threads[0];
     let child = h.child(0, "visible-child");
     h.cockpit.pump();
-    h.cockpit.set_visible_subject(thread, Subject::Subagent(child.clone()));
+    h.cockpit
+        .set_visible_subject(thread, Subject::Subagent(child.clone()));
     h.cockpit.focus_thread(thread);
     for (id, subject) in [("main", Subject::Main), ("child", Subject::Subagent(child))] {
-        h.control.activity(0, ActivityEvent::Decision {
-            subject: Some(subject),
-            decision: ferrite_core::Decision { kind:Default::default(),policy:Default::default(),delivery: Default::default(), id: id.into(), tool_use_id: id.into(), tool_name: "Bash".into(), description: "Approve".into(), input: serde_json::json!({}), suggestions: vec![] },
-        });
+        h.control.activity(
+            0,
+            ActivityEvent::Decision {
+                subject: Some(subject),
+                decision: ferrite_core::Decision {
+                    kind: Default::default(),
+                    policy: Default::default(),
+                    delivery: Default::default(),
+                    id: id.into(),
+                    tool_use_id: id.into(),
+                    tool_name: "Bash".into(),
+                    description: "Approve".into(),
+                    input: serde_json::json!({}),
+                    suggestions: vec![],
+                },
+            },
+        );
     }
     h.cockpit.pump();
     let notices: Vec<_> = h.cockpit.notifications().decisions().collect();
-    assert!(notices.iter().find(|n| n.subject == Some(Subject::Main)).is_some_and(|n| !n.read), "a hidden Main request must remain unread while its child is selected");
-    assert!(notices.iter().find(|n| n.subject != Some(Subject::Main)).is_some_and(|n| n.read));
+    assert!(
+        notices
+            .iter()
+            .find(|n| n.subject == Some(Subject::Main))
+            .is_some_and(|n| !n.read),
+        "a hidden Main request must remain unread while its child is selected"
+    );
+    assert!(notices
+        .iter()
+        .find(|n| n.subject != Some(Subject::Main))
+        .is_some_and(|n| n.read));
     assert_eq!(h.unread(), 1);
     h.cockpit.set_visible_subject(thread, Subject::Main);
     assert_eq!(h.unread(), 0);

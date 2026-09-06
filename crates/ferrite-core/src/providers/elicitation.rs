@@ -29,9 +29,18 @@ pub(super) fn fields(schema: &Value) -> Result<Vec<FormField>, String> {
                         default: field.get("default").cloned(),
                     },
                     None => FormFieldKind::String {
-                        min_length: field.get("minLength").and_then(Value::as_u64).map(|n| n as usize),
-                        max_length: field.get("maxLength").and_then(Value::as_u64).map(|n| n as usize),
-                        default: field.get("default").and_then(Value::as_str).map(str::to_string),
+                        min_length: field
+                            .get("minLength")
+                            .and_then(Value::as_u64)
+                            .map(|n| n as usize),
+                        max_length: field
+                            .get("maxLength")
+                            .and_then(Value::as_u64)
+                            .map(|n| n as usize),
+                        default: field
+                            .get("default")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
                     },
                 },
                 Some("number") => FormFieldKind::Number {
@@ -48,20 +57,40 @@ pub(super) fn fields(schema: &Value) -> Result<Vec<FormField>, String> {
                     default: field.get("default").and_then(Value::as_bool),
                 },
                 Some("array") => FormFieldKind::Enum {
-                    options: choices(field.get("items").ok_or_else(|| "array has no items".to_string())?)?
-                        .ok_or_else(|| "array items are not choices".to_string())?,
+                    options: choices(
+                        field
+                            .get("items")
+                            .ok_or_else(|| "array has no items".to_string())?,
+                    )?
+                    .ok_or_else(|| "array items are not choices".to_string())?,
                     multi_select: true,
-                    min_items: field.get("minItems").and_then(Value::as_u64).map(|n| n as usize),
-                    max_items: field.get("maxItems").and_then(Value::as_u64).map(|n| n as usize),
+                    min_items: field
+                        .get("minItems")
+                        .and_then(Value::as_u64)
+                        .map(|n| n as usize),
+                    max_items: field
+                        .get("maxItems")
+                        .and_then(Value::as_u64)
+                        .map(|n| n as usize),
                     default: field.get("default").cloned(),
                 },
                 _ => return Err(format!("{} has an unsupported type", id)),
             };
             Ok(FormField {
                 id: id.clone(),
-                label: field.get("title").and_then(Value::as_str).filter(|label| !label.is_empty()).unwrap_or(id).into(),
-                description: field.get("description").and_then(Value::as_str).unwrap_or_default().into(),
-                required: required.is_some_and(|items| items.iter().any(|item| item.as_str() == Some(id))),
+                label: field
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .filter(|label| !label.is_empty())
+                    .unwrap_or(id)
+                    .into(),
+                description: field
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .into(),
+                required: required
+                    .is_some_and(|items| items.iter().any(|item| item.as_str() == Some(id))),
                 kind,
             })
         })
@@ -70,10 +99,14 @@ pub(super) fn fields(schema: &Value) -> Result<Vec<FormField>, String> {
 
 fn choices(schema: &Value) -> Result<Option<Vec<FormChoice>>, String> {
     if let Some(values) = schema.get("enum") {
-        let values = values.as_array().ok_or_else(|| "enum is not an array".to_string())?;
+        let values = values
+            .as_array()
+            .ok_or_else(|| "enum is not an array".to_string())?;
         let labels = match schema.get("enumNames") {
             Some(names) => {
-                let names = names.as_array().ok_or_else(|| "enumNames is not an array".to_string())?;
+                let names = names
+                    .as_array()
+                    .ok_or_else(|| "enumNames is not an array".to_string())?;
                 if names.len() != values.len() {
                     return Err("enumNames does not match enum choices".into());
                 }
@@ -81,27 +114,47 @@ fn choices(schema: &Value) -> Result<Option<Vec<FormChoice>>, String> {
             }
             None => None,
         };
-        let choices = values.iter().enumerate().map(|(index, value)| {
-            let value = value.as_str().ok_or_else(|| "enum choice is not text".to_string())?;
-            let label = labels
-                .and_then(|labels| labels[index].as_str())
-                .filter(|label| !label.is_empty())
-                .unwrap_or(value);
-            Ok(FormChoice { value: value.into(), label: label.into() })
-        }).collect::<Result<Vec<_>, String>>()?;
+        let choices = values
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                let value = value
+                    .as_str()
+                    .ok_or_else(|| "enum choice is not text".to_string())?;
+                let label = labels
+                    .and_then(|labels| labels[index].as_str())
+                    .filter(|label| !label.is_empty())
+                    .unwrap_or(value);
+                Ok(FormChoice {
+                    value: value.into(),
+                    label: label.into(),
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
         ensure_unique(&choices)?;
         return Ok(Some(choices));
     }
     let alternatives = schema.get("oneOf").or_else(|| schema.get("anyOf"));
-    let Some(alternatives) = alternatives else { return Ok(None) };
-    let choices = alternatives.as_array().ok_or_else(|| "choices are not an array".to_string())?
+    let Some(alternatives) = alternatives else {
+        return Ok(None);
+    };
+    let choices = alternatives
+        .as_array()
+        .ok_or_else(|| "choices are not an array".to_string())?
         .iter()
         .map(|choice| {
-            let value = choice.get("const").and_then(Value::as_str)
+            let value = choice
+                .get("const")
+                .and_then(Value::as_str)
                 .ok_or_else(|| "choice has no text value".to_string())?;
             Ok(FormChoice {
                 value: value.into(),
-                label: choice.get("title").and_then(Value::as_str).filter(|title| !title.is_empty()).unwrap_or(value).into(),
+                label: choice
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .filter(|title| !title.is_empty())
+                    .unwrap_or(value)
+                    .into(),
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -110,7 +163,11 @@ fn choices(schema: &Value) -> Result<Option<Vec<FormChoice>>, String> {
 }
 
 fn ensure_unique(choices: &[FormChoice]) -> Result<(), String> {
-    if choices.iter().enumerate().any(|(index, choice)| choices[..index].iter().any(|other| other.value == choice.value)) {
+    if choices.iter().enumerate().any(|(index, choice)| {
+        choices[..index]
+            .iter()
+            .any(|other| other.value == choice.value)
+    }) {
         Err("form choices contain duplicate values".into())
     } else {
         Ok(())
