@@ -354,9 +354,9 @@ pub const ROW_TEXT_W: f32 = NAV_WIDTH - 2.0 * NAV_TREE_PAD - 2.0 * ROW_PAD_X;
 /// 43px — a Group parent row: 6 + 16.25 + 1 + 13.75 + 6.
 #[allow(dead_code)]
 pub const GROUP_ROW_H: f32 = 43.0;
-/// 56.5px — a Thread row: 6 + 15 + 1 + 13.75 + 1 + 13.75 + 6.
+/// 41.75px — a Thread row: 6 + 15 + 1 + 13.75 + 6.
 #[allow(dead_code)]
-pub const THREAD_ROW_H: f32 = 56.5;
+pub const THREAD_ROW_H: f32 = 41.75;
 /// 16px between Group blocks; 6px between a Group row and its members;
 /// 2px between sibling rows; 24px above the solo section.
 #[allow(dead_code)]

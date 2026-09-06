@@ -4321,7 +4321,6 @@ impl CockpitView {
             name: self.facts.name(thread),
             status,
             project: facts.and_then(|facts| facts.project_label.clone()),
-            branch: facts.and_then(|facts| facts.branch.clone()),
             provider: self
                 .cockpit
                 .thread(thread)
@@ -4331,6 +4330,7 @@ impl CockpitView {
             last_used: facts
                 .and_then(|facts| facts.last_used)
                 .map(|at| crate::facts::since_label(at, now)),
+            subagents: facts.map_or(0, |facts| facts.subagents),
         }
     }
 
@@ -11524,8 +11524,8 @@ mod tests {
             .into_iter()
             .map(|row| {
                 format!(
-                    "{}|{:?}|{:?}|{:?}",
-                    row.name, row.project, row.branch, row.provider
+                    "{}|{:?}|{:?}",
+                    row.name, row.project, row.provider
                 )
             })
             .collect()

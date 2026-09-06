@@ -63,6 +63,11 @@ fn child_tabs_switch_transcripts_preserve_main_draft_and_survive_reorder(cx: &mu
     child(&fake, "Cedar", AgentStatus::Idle);
     tick(cx);
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    assert_eq!(
+        view.read_with(cx, |view, _| view.thread_row(thread).subagents),
+        2,
+        "the Thread card counts the discovered children"
+    );
     view.update(cx, |view, cx| {
         view.panes[0]
             .composer
