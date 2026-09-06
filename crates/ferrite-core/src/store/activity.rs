@@ -171,6 +171,13 @@ pub(super) enum Execution {
         reasoning_output_tokens: u64,
         context_window: Option<u64>,
     },
+    ContextUsage {
+        total_tokens: u64,
+        context_window: Option<u64>,
+    },
+    UsageDetails {
+        details: crate::UsageDetails,
+    },
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
@@ -374,6 +381,16 @@ impl Execution {
                 reasoning_output_tokens: *reasoning_output_tokens,
                 context_window: *context_window,
             },
+            ExecutionEvent::ContextUsage {
+                total_tokens,
+                context_window,
+            } => Self::ContextUsage {
+                total_tokens: *total_tokens,
+                context_window: *context_window,
+            },
+            ExecutionEvent::UsageDetails { details } => Self::UsageDetails {
+                details: details.clone(),
+            },
         }
     }
     pub(super) fn live(&self) -> ExecutionEvent {
@@ -473,6 +490,16 @@ impl Execution {
                 output_tokens: *output_tokens,
                 reasoning_output_tokens: *reasoning_output_tokens,
                 context_window: *context_window,
+            },
+            Self::ContextUsage {
+                total_tokens,
+                context_window,
+            } => ExecutionEvent::ContextUsage {
+                total_tokens: *total_tokens,
+                context_window: *context_window,
+            },
+            Self::UsageDetails { details } => ExecutionEvent::UsageDetails {
+                details: details.clone(),
             },
         }
     }

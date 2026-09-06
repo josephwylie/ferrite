@@ -387,6 +387,7 @@ pub struct Transcript {
     turn_outcome: Option<TurnOutcome>,
     turn_diff: Option<TurnDiff>,
     usage: Option<Usage>,
+    usage_details: Option<crate::UsageDetails>,
     context_details: Option<crate::ContextDetails>,
     mcp_servers: Vec<crate::McpServer>,
     mcp_authorizations: std::collections::BTreeMap<String, String>,
@@ -493,6 +494,7 @@ impl Transcript {
             turn_outcome: None,
             turn_diff: None,
             usage: None,
+            usage_details: None,
             context_details: None,
             mcp_servers: Vec::new(),
             mcp_authorizations: std::collections::BTreeMap::new(),
@@ -614,6 +616,10 @@ impl Transcript {
 
     pub fn usage(&self) -> Option<Usage> {
         self.usage
+    }
+
+    pub fn usage_details(&self) -> Option<&crate::UsageDetails> {
+        self.usage_details.as_ref()
     }
 
     pub fn context_details(&self) -> Option<&crate::ContextDetails> {
@@ -966,6 +972,20 @@ impl Transcript {
                     self.turn_output_tokens += output_tokens;
                 }
                 self.last_report = output_tokens;
+                Update::default()
+            }
+            Input::Event(SessionEvent::ContextUsage {
+                total_tokens,
+                context_window,
+            }) => {
+                self.usage = Some(Usage {
+                    total_tokens,
+                    context_window,
+                });
+                Update::default()
+            }
+            Input::Event(SessionEvent::UsageDetails { details }) => {
+                self.usage_details = Some(details);
                 Update::default()
             }
             Input::Event(SessionEvent::RateLimits { five_hour, weekly }) => {

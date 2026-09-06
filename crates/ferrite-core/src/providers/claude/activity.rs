@@ -255,6 +255,9 @@ impl Decoder {
                 if let Some(usage) = self.main_usage(&value) {
                     events.push(usage);
                 }
+                if let Some(details) = wire::parse_usage_details_value(&value) {
+                    events.push(details);
+                }
                 if let Some(event) = wire::parse_value(&value) {
                     // The published SDK names only `human` as operator
                     // origin. Peer/observer/coordinator and future origins
@@ -554,6 +557,22 @@ impl Decoder {
                     }
                 }
                 None => events.push(self.record_main_usage(value, usage)),
+            }
+        }
+        if let Some(details) = wire::parse_usage_details_value(value) {
+            match &child {
+                Some(key) => {
+                    if let Some(event) = ExecutionEvent::from_session(&details) {
+                        self.content_message(
+                            key,
+                            value,
+                            delivery_id(value, "usage-details"),
+                            event,
+                            events,
+                        );
+                    }
+                }
+                None => events.push(details),
             }
         }
         if let Some(text) = value["message"]["content"].as_str() {

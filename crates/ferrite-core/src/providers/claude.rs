@@ -791,12 +791,8 @@ fn control_events(action: &SessionControl, response: &serde_json::Value) -> Vec<
                     .collect(),
             };
             vec![
-                SessionEvent::TokenUsage {
+                SessionEvent::ContextUsage {
                     total_tokens: total,
-                    input_tokens: 0,
-                    cached_input_tokens: 0,
-                    output_tokens: 0,
-                    reasoning_output_tokens: 0,
                     context_window: raw_max,
                 },
                 SessionEvent::ContextDetails { details },

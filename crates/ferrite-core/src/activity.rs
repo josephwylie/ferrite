@@ -220,6 +220,13 @@ pub enum ExecutionEvent {
         reasoning_output_tokens: u64,
         context_window: Option<u64>,
     },
+    ContextUsage {
+        total_tokens: u64,
+        context_window: Option<u64>,
+    },
+    UsageDetails {
+        details: crate::UsageDetails,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -2028,6 +2035,16 @@ impl ExecutionEvent {
                 reasoning_output_tokens: *reasoning_output_tokens,
                 context_window: *context_window,
             },
+            SessionEvent::ContextUsage {
+                total_tokens,
+                context_window,
+            } => Self::ContextUsage {
+                total_tokens: *total_tokens,
+                context_window: *context_window,
+            },
+            SessionEvent::UsageDetails { details } => Self::UsageDetails {
+                details: details.clone(),
+            },
             _ => return None,
         })
     }
@@ -2097,6 +2114,14 @@ impl ExecutionEvent {
                 reasoning_output_tokens,
                 context_window,
             },
+            Self::ContextUsage {
+                total_tokens,
+                context_window,
+            } => SessionEvent::ContextUsage {
+                total_tokens,
+                context_window,
+            },
+            Self::UsageDetails { details } => SessionEvent::UsageDetails { details },
         })
     }
 }

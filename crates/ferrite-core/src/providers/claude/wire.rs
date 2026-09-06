@@ -50,7 +50,7 @@ use super::ClaudeCapabilities;
 use crate::progress::{Phase, PlanTask, ProgressEvent, StepStatus, TaskStatus};
 use crate::{
     validate_form, Decision, DecisionChoice, DecisionKind, DecisionPolicy, FormField, Hunk,
-    RateLimitWindow, SessionEvent, ToolResult, TurnOutcome,
+    RateLimitWindow, SessionEvent, ToolResult, TurnOutcome, UsageDetails, UsageScope,
 };
 
 /// The answer to spawn's initialize control request, if this line is it.
@@ -418,6 +418,17 @@ pub(super) fn parse_usage_value(value: &Value) -> Option<SessionEvent> {
             if usage.is_null() && context.is_none() {
                 return None;
             }
+            if usage.is_null() {
+                return context
+                    .and_then(|context| context.get("total_tokens"))
+                    .and_then(Value::as_u64)
+                    .map(|total_tokens| SessionEvent::ContextUsage {
+                        total_tokens,
+                        context_window: context
+                            .and_then(|context| context.get("raw_max_tokens"))
+                            .and_then(Value::as_u64),
+                    });
+            }
             let input = count(usage, "input_tokens");
             let cached = count(usage, "cache_read_input_tokens");
             let created = count(usage, "cache_creation_input_tokens");
@@ -487,6 +498,34 @@ pub(super) fn parse_usage_value(value: &Value) -> Option<SessionEvent> {
         }
         _ => None,
     }
+}
+
+pub(super) fn parse_usage_details_value(value: &Value) -> Option<SessionEvent> {
+    let usage = match value.get("type")?.as_str()? {
+        "assistant" => value["message"].get("usage")?,
+        "result" => value.get("usage")?,
+        _ => return None,
+    };
+    if !usage.is_object() {
+        return None;
+    }
+    let count = |key| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
+    Some(SessionEvent::UsageDetails {
+        details: UsageDetails {
+            scope: if value["type"] == "assistant" {
+                UsageScope::Message
+            } else {
+                UsageScope::Turn
+            },
+            input_tokens: count("input_tokens"),
+            cached_input_tokens: count("cache_read_input_tokens"),
+            output_tokens: count("output_tokens"),
+            reasoning_output_tokens: usage["output_tokens_details"]
+                .get("thinking_tokens")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+        },
+    })
 }
 
 /// Subscription windows arrive as their own line, independently of token
@@ -1331,6 +1370,7 @@ mod tests {
             SessionEvent::Models { .. } => return None,
             SessionEvent::ContextDetails { .. } => return None,
             SessionEvent::McpServers { .. } | SessionEvent::McpAuthorization { .. } => return None,
+            SessionEvent::ContextUsage { .. } | SessionEvent::UsageDetails { .. } => return None,
             // Codex's own concept (#9); the Claude CLI never emits one.
             SessionEvent::ReasoningSummaryDelta { .. } => return None,
             // Rides beside a line's own event (`parse_usage`), proved by

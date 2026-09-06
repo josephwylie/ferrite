@@ -265,6 +265,13 @@ enum Record {
         reasoning_output_tokens: u64,
         context_window: Option<u64>,
     },
+    ContextUsage {
+        total_tokens: u64,
+        context_window: Option<u64>,
+    },
+    UsageDetails {
+        details: crate::UsageDetails,
+    },
     ContextDetails {
         details: crate::ContextDetails,
     },
@@ -932,6 +939,16 @@ impl Record {
                 reasoning_output_tokens: *reasoning_output_tokens,
                 context_window: *context_window,
             },
+            SessionEvent::ContextUsage {
+                total_tokens,
+                context_window,
+            } => Record::ContextUsage {
+                total_tokens: *total_tokens,
+                context_window: *context_window,
+            },
+            SessionEvent::UsageDetails { details } => Record::UsageDetails {
+                details: details.clone(),
+            },
             SessionEvent::ContextDetails { details } => Record::ContextDetails {
                 details: details.clone(),
             },
@@ -1065,6 +1082,16 @@ impl Record {
                 output_tokens: *output_tokens,
                 reasoning_output_tokens: *reasoning_output_tokens,
                 context_window: *context_window,
+            }),
+            Record::ContextUsage {
+                total_tokens,
+                context_window,
+            } => Input::Event(SessionEvent::ContextUsage {
+                total_tokens: *total_tokens,
+                context_window: *context_window,
+            }),
+            Record::UsageDetails { details } => Input::Event(SessionEvent::UsageDetails {
+                details: details.clone(),
             }),
             Record::ContextDetails { details } => Input::Event(SessionEvent::ContextDetails {
                 details: details.clone(),

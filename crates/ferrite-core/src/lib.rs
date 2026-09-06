@@ -33,6 +33,6 @@ pub use session_event::{
     validate_form, ContextCategory, ContextDetails, ControlKind, Decision, DecisionAnswer,
     DecisionChoice, DecisionDelivery, DecisionKind, DecisionPolicy, FileEdit, FormChoice, FormField, FormFieldKind,
     Hunk, McpServer, McpStatus, ModelInfo, PermissionModeChoice, RateLimitWindow, RunState, SessionCommand,
-    SessionControl, SessionEvent, ToolResult, TurnOutcome,
+    SessionControl, SessionEvent, ToolResult, TurnOutcome, UsageDetails, UsageScope,
 };
 pub use thread::ThreadId;

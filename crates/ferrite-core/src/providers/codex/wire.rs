@@ -19,7 +19,7 @@ use super::CodexCapabilities;
 use crate::progress::{Phase, PlanStep, ProgressEvent, StepStatus};
 use crate::{
     Decision, DecisionChoice, DecisionPolicy, FileEdit, Hunk, ModelInfo, RateLimitWindow, SessionCommand,
-    SessionEvent, ToolResult, TurnOutcome,
+    SessionEvent, ToolResult, TurnOutcome, UsageDetails, UsageScope,
 };
 
 /// The item types Ferrite reads as tool runs. Everything else the server
@@ -256,6 +256,11 @@ pub(super) fn parse_events(line: &str) -> Vec<SessionEvent> {
     if method == "thread/settings/updated" {
         if let Some(mode) = params["threadSettings"]["approvalPolicy"].as_str() {
             events.push(SessionEvent::PermissionMode { mode: mode.into() });
+        }
+    }
+    if method == "thread/tokenUsage/updated" {
+        if let Some(event) = parse_usage_details(params) {
+            events.push(event);
         }
     }
     let phase = |phase, detail| SessionEvent::Progress {
@@ -690,6 +695,20 @@ fn parse_token_usage(params: &Value) -> Option<SessionEvent> {
     })
 }
 
+fn parse_usage_details(params: &Value) -> Option<SessionEvent> {
+    let total = params["tokenUsage"].get("total")?;
+    let count = |key| total.get(key).and_then(Value::as_u64).unwrap_or(0);
+    Some(SessionEvent::UsageDetails {
+        details: UsageDetails {
+            scope: UsageScope::Session,
+            input_tokens: count("inputTokens"),
+            cached_input_tokens: count("cachedInputTokens"),
+            output_tokens: count("outputTokens"),
+            reasoning_output_tokens: count("reasoningOutputTokens"),
+        },
+    })
+}
+
 /// A completed turn always ends the Session's turn, whatever its verdict.
 /// `cost_usd` is `None` by construction: Codex accounts in tokens (see
 /// `thread/tokenUsage/updated`), never in dollars.
@@ -1106,6 +1125,7 @@ mod tests {
             SessionEvent::Models { .. } => return None,
             SessionEvent::ContextDetails { .. } => return None,
             SessionEvent::McpServers { .. } | SessionEvent::McpAuthorization { .. } => return None,
+            SessionEvent::ContextUsage { .. } | SessionEvent::UsageDetails { .. } => return None,
             // Claude's concept: Codex never streams raw chain-of-thought, only
             // summaries of it, so no codex line may ever produce this — that
             // is the capability difference, stated rather than papered over.

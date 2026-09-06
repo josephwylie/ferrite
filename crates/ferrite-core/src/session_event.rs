@@ -123,6 +123,15 @@ pub enum SessionEvent {
         /// The model's context window, when the provider states it.
         context_window: Option<u64>,
     },
+    /// Provider-reported occupancy without accounting counters.
+    ContextUsage {
+        total_tokens: u64,
+        context_window: Option<u64>,
+    },
+    /// Native accounting counters, with the scope the provider assigned them.
+    UsageDetails {
+        details: UsageDetails,
+    },
     /// Provider-reported subscription usage. Windows are named by duration,
     /// rather than by the provider's primary/secondary ordering, because that
     /// ordering is not stable across plans.
@@ -171,6 +180,23 @@ pub enum SessionEvent {
     Closed {
         reason: String,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UsageScope {
+    Message,
+    Turn,
+    Session,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct UsageDetails {
+    pub scope: UsageScope,
+    pub input_tokens: u64,
+    pub cached_input_tokens: u64,
+    pub output_tokens: u64,
+    pub reasoning_output_tokens: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
