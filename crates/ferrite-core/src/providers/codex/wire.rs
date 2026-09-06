@@ -463,6 +463,7 @@ pub(super) fn parse_item(params: &Value, completed: bool) -> Option<SessionEvent
     } else if kind == "mcpToolCall" {
         item.get("result")
             .filter(|result| !result.is_null())
+            .or_else(|| item.get("error").filter(|error| !error.is_null()))
             .map(|value| ToolResult::Structured {
                 value: value.clone(),
                 duration_ms: item.get("durationMs").and_then(Value::as_u64),
