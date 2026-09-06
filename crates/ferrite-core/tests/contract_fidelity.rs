@@ -6,6 +6,56 @@ use serde_json::json;
 use support::*;
 
 #[test]
+fn claude_local_command_output_preserves_all_lines_once() {
+    let frame = json!({"type":"system","subtype":"local_command_output","session_id":"root","uuid":"command","content":"First line\n\nSecond paragraph"});
+    let r = Replay::new("claude", vec![frame.clone(), frame]);
+    assert_eq!(prose(&fold(r.drain())), ["First line", "Second paragraph"]);
+}
+
+#[test]
+fn claude_child_retraction_removes_only_the_owning_childs_content() {
+    let r = Replay::new("claude", vec![
+        json!({"type":"assistant","uuid":"main","session_id":"root","parent_tool_use_id":null,"message":{"id":"main","content":[{"type":"text","text":"Keep Main"}]}}),
+        json!({"type":"assistant","uuid":"old-child","session_id":"root","parent_tool_use_id":"spawn","message":{"id":"old","content":[{"type":"text","text":"Retracted child"}]}}),
+        json!({"type":"assistant","uuid":"replacement","supersedes":["old-child"],"session_id":"root","parent_tool_use_id":"spawn","message":{"id":"new","content":[{"type":"text","text":"Replacement child"}]}}),
+    ]);
+    let a = fold(r.drain());
+    assert_eq!(prose(&a), ["Keep Main"]);
+    let key = ferrite_core::activity::AgentKey::new(ferrite_core::store::Provider::Claude, "root", "spawn");
+    let child = a.view().subject(&ferrite_core::activity::Subject::Subagent(key)).unwrap();
+    let text = format!("{:?}", child.transcript().blocks());
+    assert!(!text.contains("Retracted child"));
+    assert!(text.contains("Replacement child"));
+}
+
+#[test]
+fn conversation_reset_clears_child_order_and_persists_the_new_resume_target() {
+    use ferrite_core::{activity::Activity, store::{Store, Provider}, workspace::WorkspaceBinding};
+    let r = Replay::new("claude", vec![
+        json!({"type":"system","subtype":"init","session_id":"root","model":"fixture"}),
+        json!({"type":"assistant","uuid":"child","session_id":"root","parent_tool_use_id":"spawn","message":{"id":"child","content":[{"type":"text","text":"Old child"}]}}),
+        json!({"type":"conversation_reset","session_id":"root","uuid":"reset","new_conversation_id":"fresh"}),
+    ]);
+    let events = r.drain();
+    let a = fold(events.clone());
+    assert!(a.view().children().is_empty(), "reset must clear the child ordering as well as its records");
+    let dir = std::env::temp_dir().join(format!("ferrite-reset-contract-{}", std::process::id()));
+    let store = Store::open(&dir).unwrap();
+    let (id, mut writer) = store.create(Provider::Claude, None, WorkspaceBinding::Main { checkout: std::env::temp_dir() }).unwrap();
+    for event in &events { writer.record_event(event, None).unwrap(); }
+    writer.flush().unwrap();
+    let snapshot = store.load(id).unwrap();
+    assert_eq!(snapshot.resume_target(), Some("fresh"));
+    let mut restored = Activity::default();
+    for input in snapshot.activity_inputs() { restored.apply(input); }
+    assert_eq!(restored.view().main().transcript().session_id(), Some("fresh"));
+    assert!(restored.view().children().is_empty());
+    assert!(restored.view().pending_decisions().is_empty());
+    drop(writer);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn claude_main_user_echo_is_not_a_second_operator_prompt() {
     for content in [json!("Original prompt"), json!([{"type":"text","text":"Original prompt"}])] {
         let r = Replay::new("claude", vec![json!({"type":"user","uuid":"echo","session_id":"root","parent_tool_use_id":null,"message":{"role":"user","content":content}})]);

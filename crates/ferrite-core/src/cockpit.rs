@@ -2256,12 +2256,9 @@ impl Cockpit {
         crate::providers::models::catalog(provider, &self.announced_models(provider))
     }
 
-    /// Re-aim one Thread's model, whenever (#25). Before the first prompt
-    /// this is `set_provider`'s own eager swap. After it the running
-    /// Session is replaced by one resuming the same conversation under the
-    /// new model — the transcript and history stay, the header on disk
-    /// changes, and the provider is fixed. Mid-turn the change is refused
-    /// rather than cutting the turn.
+    /// Change an idle Thread's model through its live native Session control.
+    /// Unsupported controls fall back to resuming the same conversation;
+    /// provider refusals preserve the current Session and durable choice.
     pub fn set_model(
         &mut self,
         thread: ThreadId,
@@ -2284,8 +2281,7 @@ impl Cockpit {
         {
             return Err(ProvisionError::Busy);
         }
-        if state.model == model {
-            state.replacement = None;
+        if state.model == model && model.is_some() {
             return Ok(());
         }
         let previous = state.model.clone();
