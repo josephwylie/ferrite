@@ -71,6 +71,35 @@ pub(super) struct Decoder {
 struct Usage {
     occupancy: Option<u64>,
     context_window: Option<u64>,
+    message_outputs: HashMap<Subject, HashMap<String, u64>>,
+    message_order: VecDeque<(Subject, String)>,
+}
+
+impl Usage {
+    fn message_output(&mut self, subject: Subject, message: String, output: u64) -> u64 {
+        if !self
+            .message_outputs
+            .get(&subject)
+            .is_some_and(|outputs| outputs.contains_key(&message))
+        {
+            self.message_order.push_back((subject.clone(), message.clone()));
+            if self.message_order.len() > 8192 {
+                if let Some((old_subject, old_message)) = self.message_order.pop_front() {
+                    if let Some(outputs) = self.message_outputs.get_mut(&old_subject) {
+                        outputs.remove(&old_message);
+                    }
+                }
+            }
+        }
+        let outputs = self.message_outputs.entry(subject).or_default();
+        outputs.insert(message, output);
+        outputs.values().copied().sum()
+    }
+
+    fn clear_message_outputs(&mut self, subject: &Subject) {
+        self.message_outputs.remove(subject);
+        self.message_order.retain(|(owner, _)| owner != subject);
+    }
 }
 
 impl Decoder {
@@ -95,6 +124,9 @@ impl Decoder {
             && value["subtype"] == "init"
             && !self.root.is_empty()
             && string(&value, "session_id") == Some(self.root.as_str());
+        if turn_head {
+            self.usage.clear_message_outputs(&Subject::Main);
+        }
         if let Some(root) = string(&value, "session_id") {
             if value["type"] == "system"
                 && value["subtype"] == "init"
@@ -546,6 +578,7 @@ impl Decoder {
         if let Some(usage) = wire::parse_usage_value(value) {
             match &child {
                 Some(key) => {
+                    let usage = self.record_usage(&Subject::Subagent(key.clone()), value, usage);
                     if let Some(event) = ExecutionEvent::from_session(&usage) {
                         self.content_message(
                             key,
@@ -762,6 +795,15 @@ impl Decoder {
     }
 
     fn record_main_usage(&mut self, value: &Value, usage: SessionEvent) -> SessionEvent {
+        self.record_usage(&Subject::Main, value, usage)
+    }
+
+    fn record_usage(
+        &mut self,
+        subject: &Subject,
+        value: &Value,
+        usage: SessionEvent,
+    ) -> SessionEvent {
         let SessionEvent::TokenUsage {
             mut total_tokens,
             input_tokens,
@@ -785,6 +827,14 @@ impl Decoder {
         if let Some(window) = context_window {
             self.usage.context_window = Some(window);
         }
+        let output_tokens = if value["type"] == "assistant" {
+            string(&value["message"], "id")
+                .map(|message| self.usage.message_output(subject.clone(), message.into(), output_tokens))
+                .unwrap_or(output_tokens)
+        } else {
+            self.usage.clear_message_outputs(subject);
+            output_tokens
+        };
         SessionEvent::TokenUsage {
             total_tokens,
             input_tokens,

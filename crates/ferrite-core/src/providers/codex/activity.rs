@@ -67,6 +67,9 @@ pub(super) struct Router {
     requests: HashMap<String, String>,
     unrelated: HashSet<String>,
     conflicts: HashSet<String>,
+    usage_totals: HashMap<String, u64>,
+    usage_baselines: HashMap<(String, String), u64>,
+    usage_order: VecDeque<(String, String)>,
 }
 
 impl Router {
@@ -321,6 +324,11 @@ impl Router {
         let turn = params["turnId"]
             .as_str()
             .or_else(|| params["turn"]["id"].as_str());
+        if method == "turn/completed" {
+            if let Some(turn) = turn {
+                self.usage_baselines.remove(&(scope.clone(), turn.into()));
+            }
+        }
         if let Some(turn) = turn {
             let identity = (scope.clone(), turn.to_owned());
             if self.completed_turns.contains(&identity) && method != "turn/completed" {
@@ -354,6 +362,7 @@ impl Router {
             let content_id = turn.zip(item_id).map(|(turn, item)| item_key(turn, item));
             let question = super::questions::decode(params).is_some();
             for event in self.content.parse(&frame.to_string()) {
+                let event = self.normalize_usage(&scope, turn, event);
                 if let SessionEvent::DecisionRequested { decision } = &event {
                     if self.requests.len() < MAX_PENDING_FRAMES
                         || self.requests.contains_key(&decision.id)
@@ -896,6 +905,7 @@ impl Router {
             }
             _ => {
                 for event in wire::parse_events(&frame.to_string()) {
+                    let event = self.normalize_usage(scope, turn, event);
                     match event {
                         SessionEvent::ThinkingDelta { text }
                             if method == "item/reasoning/textDelta" =>
@@ -973,6 +983,51 @@ impl Router {
                     }
                 }
             }
+        }
+    }
+
+    fn normalize_usage(
+        &mut self,
+        scope: &str,
+        turn: Option<&str>,
+        event: SessionEvent,
+    ) -> SessionEvent {
+        let Some(turn) = turn else {
+            return event;
+        };
+        let SessionEvent::TokenUsage {
+            total_tokens,
+            input_tokens,
+            cached_input_tokens,
+            output_tokens,
+            reasoning_output_tokens,
+            context_window,
+        } = event
+        else {
+            return event;
+        };
+        let key = (scope.into(), turn.into());
+        let baseline = if let Some(baseline) = self.usage_baselines.get(&key) {
+            *baseline
+        } else {
+            let baseline = self.usage_totals.get(scope).copied().unwrap_or(0);
+            self.usage_baselines.insert(key.clone(), baseline);
+            self.usage_order.push_back(key.clone());
+            if self.usage_order.len() > MAX_ITEM_REVISIONS {
+                if let Some(old) = self.usage_order.pop_front() {
+                    self.usage_baselines.remove(&old);
+                }
+            }
+            baseline
+        };
+        self.usage_totals.insert(scope.into(), output_tokens);
+        SessionEvent::TokenUsage {
+            total_tokens,
+            input_tokens,
+            cached_input_tokens,
+            output_tokens: output_tokens.saturating_sub(baseline),
+            reasoning_output_tokens,
+            context_window,
         }
     }
 
