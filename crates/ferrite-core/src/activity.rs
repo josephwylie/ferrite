@@ -1000,6 +1000,9 @@ impl Activity {
     }
 
     fn main_input(&mut self, input: Input, at: Instant, live: bool) -> ActivityUpdate {
+        if let Input::Event(SessionEvent::ConversationReset { session_id }) = input {
+            return self.conversation_reset(session_id, at, live);
+        }
         if let Input::Event(SessionEvent::DecisionRequested { decision }) = input {
             return self.event(
                 ActivityEvent::Decision {
@@ -1045,6 +1048,47 @@ impl Activity {
         }
         update.blocks.push((Subject::Main, blocks));
         update
+    }
+
+    fn conversation_reset(
+        &mut self,
+        session_id: String,
+        at: Instant,
+        live: bool,
+    ) -> ActivityUpdate {
+        let mut changed = vec![Subject::Main];
+        let mut evicted: Vec<_> = self
+            .main
+            .transcript
+            .blocks()
+            .iter()
+            .map(|block| block.id)
+            .collect();
+        for key in self.agents.keys() {
+            changed.push(Subject::Subagent(key.clone()));
+        }
+        let model = self.main.transcript.model().unwrap_or_default().to_owned();
+        self.main = SubjectState::new(self.limits);
+        let blocks = self.main.append(
+            Input::Event(SessionEvent::Init { session_id, model }),
+            None,
+            None,
+            self.sequence,
+            at,
+            live,
+            self.limits,
+        );
+        evicted.extend(blocks.evicted);
+        self.agents.clear();
+        self.aliases.clear();
+        self.pending.clear();
+        self.main_operator_turn = false;
+        ActivityUpdate {
+            changed,
+            blocks: vec![(Subject::Main, transcript::Update { evicted, ..blocks })],
+            attention_changed: true,
+            ..ActivityUpdate::default()
+        }
     }
 
     fn event(&mut self, event: ActivityEvent, at: Instant, live: bool) -> ActivityUpdate {

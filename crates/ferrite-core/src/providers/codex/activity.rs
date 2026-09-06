@@ -392,6 +392,31 @@ impl Router {
                             update.events.push(SessionEvent::ThinkingDelta { text });
                         }
                     }
+                    SessionEvent::ReasoningSummaryPart {
+                        item_id,
+                        summary_index,
+                        text,
+                        snapshot,
+                    } => {
+                        if let Some(turn) = turn {
+                            update.activity(ActivityEvent::MainContent {
+                                id: Some(reasoning_summary_key(turn, &item_id, summary_index)),
+                                event: ExecutionEvent::ReasoningSummaryPart {
+                                    item_id: item_key(turn, &item_id),
+                                    summary_index,
+                                    text,
+                                    snapshot,
+                                },
+                            });
+                        } else {
+                            update.events.push(SessionEvent::ReasoningSummaryPart {
+                                item_id,
+                                summary_index,
+                                text,
+                                snapshot,
+                            });
+                        }
+                    }
                     event => update.events.push(event),
                 }
             }
@@ -1071,7 +1096,11 @@ fn item_key(turn: &str, item: &str) -> String {
 }
 
 fn reasoning_raw_key(turn: &str, item: &str, index: u64) -> String {
-    item_key(turn, &format!("raw:{item}:{index}"))
+    serde_json::to_string(&(turn, "raw", item, index)).expect("reasoning identity serializes")
+}
+
+fn reasoning_summary_key(turn: &str, item: &str, index: u64) -> String {
+    serde_json::to_string(&(turn, "summary", item, index)).expect("reasoning identity serializes")
 }
 
 fn execution(event: SessionEvent) -> Option<ExecutionEvent> {

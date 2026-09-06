@@ -1040,6 +1040,7 @@ impl Transcript {
                 self.model = Some(model);
                 Update::default()
             }
+            Input::Event(SessionEvent::ConversationReset { .. }) => Update::default(),
             Input::Event(SessionEvent::TurnEnded { outcome, cost_usd }) => {
                 self.progress.end_turn();
                 self.latest_reasoning_part = None;

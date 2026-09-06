@@ -229,6 +229,9 @@ enum Record {
         session_id: String,
         model: String,
     },
+    ConversationReset {
+        session_id: String,
+    },
     /// A line the operator sent (schema 2+).
     Prompt {
         text: String,
@@ -662,6 +665,9 @@ impl Record {
                 session_id: session_id.clone(),
                 model: model.clone(),
             },
+            SessionEvent::ConversationReset { session_id } => Record::ConversationReset {
+                session_id: session_id.clone(),
+            },
             SessionEvent::TextDelta { text } => Record::Text { text: text.clone() },
             SessionEvent::ThinkingDelta { text } => Record::Thinking { text: text.clone() },
             SessionEvent::ToolStarted { id, name, input } => Record::ToolStarted {
@@ -754,6 +760,11 @@ impl Record {
                 session_id: session_id.clone(),
                 model: model.clone(),
             }),
+            Record::ConversationReset { session_id } => {
+                Input::Event(SessionEvent::ConversationReset {
+                    session_id: session_id.clone(),
+                })
+            }
             Record::Prompt { text } => Input::Prompt(text.clone()),
             Record::Text { text } => Input::Event(SessionEvent::TextDelta { text: text.clone() }),
             Record::Thinking { text } => {
