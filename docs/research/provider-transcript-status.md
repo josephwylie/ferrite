@@ -3,6 +3,11 @@
 Researched 2026-09-05. Primary documentation, published SDK types, provider
 source, and existing captures only; no model requests or tests run for research.
 
+Follow-up: [reasoning display lifecycle audit](reasoning-display-lifecycle.md)
+checks Claude Code 2.1.263 and Codex 0.153.4 against PR #53. It refines the
+CLI timing/default claims below and identifies Claude narration metadata,
+Codex placeholder handling, and remaining parity gaps.
+
 ## Claude
 
 Streaming and thinking visibility are separate controls. Agent SDK

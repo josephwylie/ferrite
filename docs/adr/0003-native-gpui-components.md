@@ -36,8 +36,12 @@ a paragraph; GPUI Kit 0.6 does not extend a double-click drag word-wise.
 Consecutive tool calls of every kind share a display disclosure, retaining each call's
 identity and result. Group expansion reveals compact call summaries; each call
 independently discloses its input/output. Failure previews stay visible. Reasoning
-starts as its provider-authored heading or first line with a right-hand chevron
-for the received summary text. Streaming preserves these independent choices.
+starts as its provider-authored heading or first line, with the chevron immediately
+beside the text. Expansion shows the remaining received text; a shortened first
+line retains the complete text in its disclosure. Short blocks with no additional
+text stay visible and selectable without a chevron. Codex turns request detailed
+reasoning summaries so compact presentation does not limit the supplied detail.
+Streaming preserves these independent choices.
 Commentary separates groups. No parallel-execution claim is inferred. See [Claude CLI research](../research/claude-code-tool-grouping.md).
 
 Questions share one GPUI form across Main and child subjects: `RadioGroup`,

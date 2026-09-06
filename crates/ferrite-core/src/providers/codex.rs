@@ -450,8 +450,10 @@ impl CodexSession {
     /// Composer's picks become real.
     pub fn send(&mut self, text: &str) -> io::Result<()> {
         let input = wire::input_items(text, &lock(&self.skills), self.cwd.as_deref());
+        // The Pane makes its own compact preview; request the detailed
+        // provider summary so expanding it can reveal additional text.
         let mut params =
-            serde_json::json!({"threadId": self.thread_id, "input": input, "summary": "concise"});
+            serde_json::json!({"threadId": self.thread_id, "input": input, "summary": "detailed"});
         if let Some(effort) = &self.effort {
             params["effort"] = serde_json::json!(effort);
         }

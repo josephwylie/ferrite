@@ -876,7 +876,7 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
             "params": {
                 "threadId": "stub-thread",
                 "input": [{"type": "text", "text": "hi"}],
-                "summary": "concise",
+                "summary": "detailed",
                 "effort": "high",
             },
         })
