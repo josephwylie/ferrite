@@ -6907,6 +6907,7 @@ fn transcript_text(blocks: &[ferrite_core::transcript::Block]) -> String {
 
 #[cfg(test)]
 mod tests {
+    mod provider_forms;
     mod subagents;
     use super::*;
     use std::cell::RefCell;
