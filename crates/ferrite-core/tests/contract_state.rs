@@ -62,3 +62,25 @@ fn claude_command_catalog_refresh_replaces_stale_commands() {
     let events = r.drain();
     assert!(events.iter().any(|e|matches!(e,SessionEvent::Commands{commands} if commands.len()==1 && commands[0].name=="review")));
 }
+
+#[test]
+fn claude_native_context_report_does_not_require_api_usage() {
+    let r = Replay::new(
+        "claude",
+        vec![
+            json!({"type":"assistant","uuid":"context","session_id":"root","parent_tool_use_id":null,"context_usage":{"model":"custom-model","total_tokens":32100,"raw_max_tokens":180000,"percentage":18,"categories":[],"mcp_tools":[],"memory_files":[],"agents":[]},"message":{"id":"context","content":[{"type":"text","text":"Context"}]}}),
+        ],
+    );
+    let events = r.drain();
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            SessionEvent::TokenUsage {
+                total_tokens: 32100,
+                context_window: Some(180000),
+                ..
+            }
+        )),
+        "native context report without API usage was dropped"
+    );
+}

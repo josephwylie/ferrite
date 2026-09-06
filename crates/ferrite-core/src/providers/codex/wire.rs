@@ -389,9 +389,18 @@ pub(super) fn parse_item(params: &Value, completed: bool) -> Option<SessionEvent
             })
             .unwrap_or_default(),
     };
+    let result = if kind == "commandExecution" {
+        // Codex supplies one combined stream; retain it as the primary output.
+        ToolResult::Command {
+            stdout: output.clone(),
+            stderr: String::new(),
+        }
+    } else {
+        ToolResult::Opaque
+    };
     Some(SessionEvent::ToolCompleted {
         id,
-        output: output.clone(),
+        output,
         // "completed" is the only success; "failed" and "declined" both mean
         // the tool did not do its work (a declined tool fails without failing
         // the turn — see the approval-deny fixture).
@@ -400,16 +409,7 @@ pub(super) fn parse_item(params: &Value, completed: bool) -> Option<SessionEvent
             Some("failed" | "declined" | "error")
         ) || item["success"].as_bool() == Some(false)
             || !item.get("error").unwrap_or(&Value::Null).is_null(),
-        result: if kind == "commandExecution" {
-            // Codex supplies one combined stream, so preserve it as the
-            // primary output instead of pretending it supplied stderr.
-            ToolResult::Command {
-                stdout: output,
-                stderr: String::new(),
-            }
-        } else {
-            ToolResult::Opaque
-        },
+        result,
     })
 }
 

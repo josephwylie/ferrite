@@ -92,3 +92,34 @@ fn codex_raw_reasoning_and_summary_do_not_share_a_part_identity() {
         ["Summary complete", "Raw text complete"]
     );
 }
+
+#[test]
+fn captured_claude_thinking_then_text_have_distinct_stream_block_identities() {
+    let frames = include_str!("fixtures/claude-hello-2.1.243.jsonl")
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let r = Replay::new("claude", frames);
+    let a = fold(r.drain());
+    assert_eq!(prose(&a), ["hello ferrite"]);
+    assert_eq!(
+        reasoning(&a).len(),
+        1,
+        "completed thinking must reconcile with its stream"
+    );
+    assert!(reasoning(&a)[0].starts_with("The user is asking me"));
+}
+#[test]
+fn claude_content_block_start_can_carry_the_entire_visible_text() {
+    let r = Replay::new(
+        "claude",
+        vec![
+            json!({"type":"system","subtype":"init","session_id":"root","model":"fixture"}),
+            json!({"type":"stream_event","session_id":"root","parent_tool_use_id":null,"event":{"type":"message_start","message":{"id":"msg"}}}),
+            json!({"type":"stream_event","session_id":"root","parent_tool_use_id":null,"event":{"type":"content_block_start","index":3,"content_block":{"type":"text","text":"Already present"}}}),
+            json!({"type":"assistant","uuid":"frame","session_id":"root","parent_tool_use_id":null,"message":{"id":"msg","content":[{"type":"text","text":"Already present"}]}}),
+            json!({"type":"stream_event","session_id":"root","parent_tool_use_id":null,"event":{"type":"content_block_stop","index":3}}),
+        ],
+    );
+    assert_eq!(prose(&fold(r.drain())), ["Already present"]);
+}
