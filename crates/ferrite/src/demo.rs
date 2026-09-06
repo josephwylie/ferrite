@@ -707,6 +707,8 @@ fn seed_decision() -> Vec<Step> {
         SessionEvent::DecisionRequested {
             decision: Decision {
                 delivery: Default::default(),
+                kind: Default::default(),
+                policy: Default::default(),
                 id: "perm_close".into(),
                 tool_use_id: "t_close".into(),
                 tool_name: "Bash".into(),
@@ -791,6 +793,8 @@ pub fn script() -> Vec<Step> {
         SessionEvent::DecisionRequested {
             decision: Decision {
                 delivery: Default::default(),
+                kind: Default::default(),
+                policy: Default::default(),
                 id: "perm_demo".into(),
                 tool_use_id: "toolu_demo".into(),
                 tool_name: "Write".into(),

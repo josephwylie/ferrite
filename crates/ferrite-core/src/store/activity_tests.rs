@@ -278,6 +278,8 @@ fn pending_decisions_and_cancellations_never_enter_the_log_or_replay() {
                 subject,
                 decision: Decision {
                     delivery: Default::default(),
+                    kind: Default::default(),
+                    policy: Default::default(),
                     id: "live-only-request-secret".into(),
                     tool_use_id: "call".into(),
                     tool_name: "Bash".into(),

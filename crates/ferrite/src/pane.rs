@@ -5755,6 +5755,8 @@ mod tests {
         // tool prefix every Decision surface shares (#22 C7).
         let decision = Decision {
             delivery: Default::default(),
+            kind: Default::default(),
+            policy: Default::default(),
             id: "perm".into(),
             tool_use_id: "toolu".into(),
             tool_name: "Bash".into(),
@@ -5788,6 +5790,8 @@ mod tests {
     fn every_decision_surface_shares_one_subject_derivation() {
         let decision = |tool: &str, description: &str| Decision {
             delivery: Default::default(),
+            kind: Default::default(),
+            policy: Default::default(),
             id: "perm".into(),
             tool_use_id: "toolu".into(),
             tool_name: tool.into(),

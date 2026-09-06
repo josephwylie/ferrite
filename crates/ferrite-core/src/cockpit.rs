@@ -4664,6 +4664,8 @@ mod tests {
         SessionEvent::DecisionRequested {
             decision: Decision {
                 delivery: Default::default(),
+                kind: Default::default(),
+                policy: Default::default(),
                 id: id.into(),
                 tool_use_id: format!("toolu_{id}"),
                 tool_name: tool.into(),

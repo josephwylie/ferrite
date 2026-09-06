@@ -7625,6 +7625,8 @@ mod tests {
         SessionEvent::DecisionRequested {
             decision: Decision {
                 delivery: Default::default(),
+                kind: Default::default(),
+                policy: Default::default(),
                 id: id.into(),
                 tool_use_id: "toolu_1".into(),
                 tool_name: "Write".into(),
@@ -7961,6 +7963,8 @@ mod tests {
         SessionEvent::DecisionRequested {
             decision: Decision {
                 delivery: Default::default(),
+                kind: Default::default(),
+                policy: Default::default(),
                 id: id.into(),
                 tool_use_id: "toolu_q".into(),
                 tool_name: "AskUserQuestion".into(),
@@ -14696,7 +14700,10 @@ mod tests {
         for name in ["AskUserQuestion", "Bash"] {
             fake.streams.borrow()[1].send(SessionEvent::DecisionRequested {
                 decision: ferrite_core::Decision {
-                    delivery: Default::default(), id: name.into(), tool_use_id: name.into(),
+                    delivery: Default::default(),
+                    kind: Default::default(),
+                    policy: Default::default(),
+                    id: name.into(), tool_use_id: name.into(),
                     tool_name: name.into(), description: "Needs your input".into(),
                     input: serde_json::json!({}), suggestions: vec![],
                 },
@@ -14732,7 +14739,10 @@ mod tests {
         fake.streams.borrow()[1].send(SessionEvent::Activity(ActivityEvent::Decision {
             subject: Some(Subject::Subagent(key.clone())),
             decision: ferrite_core::Decision {
-                delivery: Default::default(), id: "child-request".into(), tool_use_id: "tool".into(),
+                delivery: Default::default(),
+                kind: Default::default(),
+                policy: Default::default(),
+                id: "child-request".into(), tool_use_id: "tool".into(),
                 tool_name: "Bash".into(), description: "Allow command".into(), input: serde_json::json!({}), suggestions: vec![],
             },
         })).unwrap();

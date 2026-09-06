@@ -2103,6 +2103,8 @@ mod tests {
             Input::Event(SessionEvent::DecisionRequested {
                 decision: Decision {
                     delivery: Default::default(),
+                    kind: Default::default(),
+                    policy: Default::default(),
                     id: "perm_01".into(),
                     tool_use_id: "toolu_01".into(),
                     tool_name: "AskUserQuestion".into(),
@@ -2157,6 +2159,8 @@ mod tests {
         transcript.apply(Input::Event(SessionEvent::DecisionRequested {
             decision: Decision {
                 delivery: Default::default(),
+                kind: Default::default(),
+                policy: Default::default(),
                 id: "perm_01".into(),
                 tool_use_id: "toolu_01".into(),
                 tool_name: "Write".into(),
@@ -2215,6 +2219,8 @@ mod tests {
         transcript.apply(Input::Event(SessionEvent::DecisionRequested {
             decision: Decision {
                 delivery: Default::default(),
+                kind: Default::default(),
+                policy: Default::default(),
                 id: "perm_01".into(),
                 tool_use_id: "toolu_01".into(),
                 tool_name: "Write".into(),
@@ -2826,6 +2832,8 @@ mod tests {
         blocked.apply(Input::Event(SessionEvent::DecisionRequested {
             decision: Decision {
                 delivery: Default::default(),
+                kind: Default::default(),
+                policy: Default::default(),
                 id: "perm_01".into(),
                 tool_use_id: "toolu_01".into(),
                 tool_name: "Write".into(),

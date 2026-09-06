@@ -75,6 +75,8 @@ fn text(activity: &Activity, subject: &Subject) -> String {
 fn decision(id: &str) -> Decision {
     Decision {
         delivery: Default::default(),
+        kind: Default::default(),
+        policy: Default::default(),
         id: id.into(),
         tool_use_id: "shared-tool".into(),
         tool_name: "Bash".into(),

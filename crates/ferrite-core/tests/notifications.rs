@@ -219,6 +219,8 @@ fn notifications_wait_for_a_child_permission_before_finishing() {
             subject: Some(Subject::Subagent(child.clone())),
             decision: ferrite_core::Decision {
                 delivery: Default::default(),
+                kind: Default::default(),
+                policy: Default::default(),
                 id: "approval".into(),
                 tool_use_id: "tool".into(),
                 tool_name: "Write".into(),
@@ -805,6 +807,8 @@ fn clearing_attention_dismisses_live_requests_until_they_are_replaced() {
         subject: Some(Subject::Main),
         decision: ferrite_core::Decision {
             delivery: Default::default(),
+            kind: Default::default(),
+            policy: Default::default(),
             id: "approval".into(),
             tool_use_id: "tool".into(),
             tool_name: "Bash".into(),
@@ -847,6 +851,8 @@ fn decision_attention_tracks_resolved_subagent_aliases() {
             subject: Some(Subject::Subagent(old.clone())),
             decision: ferrite_core::Decision {
                 delivery: Default::default(),
+                kind: Default::default(),
+                policy: Default::default(),
                 id: "approval".into(),
                 tool_use_id: "tool".into(),
                 tool_name: "Bash".into(),
