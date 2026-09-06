@@ -61,6 +61,15 @@ impl Replay {
             quote(&directory.join("host"))
         ));
         script.push_str(r#"case "$frame" in
+*'"method":"mcpServerStatus/list"'*)
+request=$(printf '%s' "$frame" | sed -n 's/.*"id":\([^,}]*\).*/\1/p')
+printf '{"id":%s,"result":{"data":[{"name":"search","runtimeStatus":"authenticationRequired","authStatus":"notLoggedIn","tools":{},"resources":[],"resourceTemplates":[]}],"nextCursor":null}}\n' "$request";;
+*'"method":"mcpServer/oauth/login"'*)
+request=$(printf '%s' "$frame" | sed -n 's/.*"id":\([^,}]*\).*/\1/p')
+printf '{"id":%s,"result":{"authorizationUrl":"https://example.com/authorize"}}\n' "$request";;
+*'"method":"thread/settings/update"'*|*'"method":"config/mcpServer/reload"'*)
+request=$(printf '%s' "$frame" | sed -n 's/.*"id":\([^,}]*\).*/\1/p')
+printf '{"id":%s,"result":{}}\n' "$request";;
 *'"method":"model/list"'*)
 request=$(printf '%s' "$frame" | sed -n 's/.*"id":\([^,}]*\).*/\1/p')
 case "$frame" in
