@@ -762,6 +762,7 @@ mod tests {
         let repo = root.join("repo");
         fs::create_dir_all(&repo).unwrap();
         git(&repo, &["init", "-q", "-b", "main"]).unwrap();
+        git(&repo, &["config", "core.autocrlf", "false"]).unwrap();
         fs::write(repo.join("file.txt"), "base\n").unwrap();
         git(&repo, &["add", "file.txt"]).unwrap();
         git(

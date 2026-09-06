@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 pub use crate::activity::ToolTiming;
@@ -25,6 +25,7 @@ use crate::providers::Session;
 use crate::roster::{DraftId, DraftScope, Layout, PaneIdentity, Roster, View};
 use crate::session::SessionLifecycle;
 use crate::store::{LoadError, Provider, Store, ThreadWriter};
+use crate::suggest::Suggestion;
 use crate::transcript::{BlockId, Input, Transcript, Update};
 use crate::workspace::registry::{self, ProjectId, Registry};
 use crate::workspace::{self, WorkspaceBinding, WorkspaceChoice};
@@ -362,6 +363,12 @@ struct Thread {
     /// history holds one. Never disarmed — nothing re-aims a Thread the
     /// operator has spoken in.
     first_prompt_sent: bool,
+    /// The follow-up predicted for this Thread's last response (`suggest`),
+    /// or None while nothing has been predicted — before the first turn ends,
+    /// for the ~seconds a prediction is in flight, and whenever the one that
+    /// came back was refused. Never persisted: it describes a response, and
+    /// a revived Thread predicts again from the replayed one.
+    suggestion: Option<String>,
     /// The live Session's permission mode (#23) — the meta row's mode chip,
     /// in the provider's own word. Display-only, and Session state exactly
     /// like the menu: None until announced, gone with the Session.
@@ -408,6 +415,7 @@ impl Thread {
             commands: Vec::new(),
             models: Vec::new(),
             first_prompt_sent: false,
+            suggestion: None,
             permission_mode: None,
         }
     }
@@ -490,6 +498,20 @@ pub struct Cockpit {
     sampler: Option<Box<dyn RssSampler>>,
     /// Bytes one Session may hold before the watchdog replaces it.
     limit: u64,
+    /// Where finished follow-up predictions come back. One channel for every
+    /// Thread: the reply names the Thread and the generation it was asked
+    /// for, so a Pane that has since been parked or re-aimed drops it.
+    suggestions: (Sender<Suggestion>, Receiver<Suggestion>),
+    /// Whether completed turns may ask for and show predicted follow-ups.
+    suggestions_enabled: bool,
+    /// The `claude` program the predictor runs, resolved once. None when no
+    /// Claude CLI is installed anywhere — the one configuration where a
+    /// Thread simply never gets a suggestion.
+    suggest_program: Option<String>,
+    /// Test seam: predictions are recorded rather than spawned, so the
+    /// trigger is covered without a suite that shells out to a real CLI.
+    #[cfg(test)]
+    suggest_calls: Vec<crate::suggest::Request>,
     #[cfg(test)]
     refuse_park: std::collections::HashSet<ThreadId>,
 }
@@ -518,6 +540,17 @@ impl Cockpit {
             notifications: Notifications::default(),
             sampler: None,
             limit: u64::MAX,
+            suggestions: channel(),
+            suggestions_enabled: true,
+            // Never probed under test: discovery would find the developer's
+            // own CLI and the suite would start paying for predictions.
+            suggest_program: if cfg!(test) {
+                None
+            } else {
+                crate::suggest::program()
+            },
+            #[cfg(test)]
+            suggest_calls: Vec::new(),
             #[cfg(test)]
             refuse_park: std::collections::HashSet::new(),
         })
@@ -1795,7 +1828,14 @@ impl Cockpit {
     /// down. What comes back is only the Panes that actually changed.
     pub fn pump(&mut self) -> Vec<PaneUpdate> {
         self.poll_model_discovery();
+        // Predictions that finished between frames. Collected before the
+        // Thread walk so a landing suggestion repaints in the same frame.
+        let landed = self.poll_suggestions();
         let mut frame = self.advance_startups();
+        // Threads whose Main turn ended this frame, and which therefore owe
+        // themselves a fresh prediction. Gathered here and asked after the
+        // walk: the walk holds `threads` mutably.
+        let mut ended: Vec<ThreadId> = Vec::new();
         frame.extend(self.advance_history());
         let mut history_reloads = Vec::new();
         for (id, thread) in &mut self.threads {
@@ -1829,6 +1869,7 @@ impl Cockpit {
             let mut closed = false;
             let mut settled = false;
             let mut resumed = false;
+            let mut turn_ended = false;
             for _ in 0..256 {
                 if thread.store_error.is_some() || thread.history_backpressure() {
                     break;
@@ -1888,6 +1929,7 @@ impl Cockpit {
                     }),
                 };
                 thread.queued_ready |= applied.main_turn_ended;
+                turn_ended |= applied.main_turn_ended;
                 settled |= applied.main_settled;
                 if matches!(&event, SessionEvent::Activity(_)) {
                     for accepted in &applied.accepted {
@@ -1974,9 +2016,24 @@ impl Cockpit {
                 Instant::now(),
             );
             update.activity_changed |= born.is_some();
+            if turn_ended {
+                ended.push(*id);
+            }
             if update.activity_changed || !update.dirty.is_empty() || !update.subjects.is_empty() {
                 frame.push(update);
             }
+        }
+        // A landed prediction changes only the Composer's idle line, so it
+        // owes its Pane a repaint and nothing else.
+        for id in landed {
+            if !frame.iter().any(|update| update.thread == id) {
+                let mut update = PaneUpdate::new(id);
+                update.activity_changed = true;
+                frame.push(update);
+            }
+        }
+        for id in ended {
+            self.request_suggestion(id);
         }
         // The operator is on the focused Pane; whatever it had to say is
         // seen. Here rather than only at the focus doors, so a focus that
@@ -2049,6 +2106,105 @@ impl Cockpit {
             at: Instant::now(),
         });
         true
+    }
+
+    /// Fold in whatever predictions finished since the last frame.
+    ///
+    /// A reply is dropped unless it still names a live Thread at the
+    /// generation it was asked for: a park, revive or provider switch since
+    /// the ask means it is answering a conversation that is gone.
+    fn poll_suggestions(&mut self) -> Vec<ThreadId> {
+        let mut landed = Vec::new();
+        while let Ok(reply) = self.suggestions.1.try_recv() {
+            if !self.suggestions_enabled {
+                continue;
+            }
+            let Some(thread) = self.threads.get_mut(&reply.thread) else {
+                continue;
+            };
+            if thread.generation != reply.generation {
+                continue;
+            }
+            thread.suggestion = Some(reply.text);
+            landed.push(reply.thread);
+        }
+        landed
+    }
+
+    /// Ask for the follow-up to this Thread's just-finished response.
+    ///
+    /// Called exactly once per finished turn. The old prediction is dropped
+    /// first: it described the previous response, and showing it beside a new
+    /// one would be worse than the generic line the Thread falls back to for
+    /// the seconds the ask takes.
+    fn request_suggestion(&mut self, id: ThreadId) {
+        let Some(thread) = self.threads.get_mut(&id) else {
+            return;
+        };
+        thread.suggestion = None;
+        if !self.suggestions_enabled {
+            return;
+        }
+        let Some(program) = self.suggest_program.clone() else {
+            return;
+        };
+        let Some(thread) = self.threads.get(&id) else {
+            return;
+        };
+        let Some(context) = crate::suggest::context(thread.transcript()) else {
+            return;
+        };
+        let request = crate::suggest::Request {
+            thread: id,
+            generation: thread.generation,
+            program,
+            cwd: thread
+                .workspace
+                .as_ref()
+                .map(|binding| binding.cwd().to_path_buf()),
+            context,
+        };
+        #[cfg(test)]
+        {
+            self.suggest_calls.push(request);
+        }
+        #[cfg(not(test))]
+        crate::suggest::spawn(request, self.suggestions.0.clone());
+    }
+
+    /// Land a prediction as if the predictor had just answered, stamped with
+    /// the Thread's current generation.
+    ///
+    /// The renderer's seam for anything that produces a follow-up without
+    /// going through the Haiku run — today, the tests that cover the
+    /// Composer's accept key end to end.
+    pub fn deliver_suggestion(&self, thread: ThreadId, text: String) {
+        let Some(state) = self.threads.get(&thread) else {
+            return;
+        };
+        let _ = self.suggestions.0.send(Suggestion {
+            thread,
+            generation: state.generation,
+            text,
+        });
+    }
+
+    /// Enable or disable predicted Composer follow-ups. Disabling is
+    /// immediate: visible predictions are cleared and late replies are
+    /// discarded by `poll_suggestions`.
+    pub fn set_suggestions_enabled(&mut self, enabled: bool) {
+        self.suggestions_enabled = enabled;
+        if !enabled {
+            for thread in self.threads.values_mut() {
+                thread.suggestion = None;
+            }
+        }
+    }
+
+    /// Every prediction the trigger would have fired, in order. Test-only.
+    #[cfg(test)]
+    pub(crate) fn suggest_calls(&self) -> &[crate::suggest::Request] {
+        &self.suggest_calls
     }
 
     fn poll_model_discovery(&mut self) {
@@ -2324,6 +2480,13 @@ impl<'a> ThreadView<'a> {
     /// The durable operator title, as this open Thread holds it.
     pub fn title(&self) -> Option<&'a str> {
         self.state.title.as_deref()
+    }
+
+    /// The follow-up predicted for this Thread's last response, if one has
+    /// landed and survived the filter. What the Composer's idle line offers
+    /// and what Tab accepts.
+    pub fn suggestion(&self) -> Option<&'a str> {
+        self.state.suggestion.as_deref()
     }
 
     /// What this Thread is blocked on, if anything.
@@ -3149,6 +3312,7 @@ mod tests {
 
     use crate::store::{Provider, Store};
     use crate::transcript::{Body, Class};
+    use crate::TurnOutcome;
 
     /// A fresh per-test scratch directory.
     fn scratch(name: &str) -> std::path::PathBuf {
@@ -3308,6 +3472,7 @@ mod tests {
         std::fs::create_dir_all(&repo).unwrap();
         let git = |args: &[&str]| crate::workspace::git_for_tests(&repo, args);
         git(&["init", "-q", "-b", "main"]);
+        git(&["config", "core.autocrlf", "false"]);
         std::fs::write(repo.join("file.txt"), "base\n").unwrap();
         git(&["add", "file.txt"]);
         git(&[
@@ -3946,6 +4111,221 @@ mod tests {
 
     fn text(s: &str) -> SessionEvent {
         SessionEvent::TextDelta { text: s.into() }
+    }
+
+    /// A finished Main turn buys exactly one prediction, carrying both sides
+    /// of the exchange. Recorded rather than spawned: the suite must never
+    /// shell out to a real CLI, let alone pay one.
+    #[test]
+    fn a_finished_turn_asks_for_one_follow_up_prediction() {
+        let (mut cockpit, fake) = cockpit("suggest-trigger");
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        cockpit.send(thread, "fix the decoder".into());
+        // The predictor only exists once a program was discovered; the suite
+        // never discovers one, so arm it by hand.
+        cockpit.suggest_program = Some("claude".into());
+
+        fake.streams.borrow()[0]
+            .send(text("Fixed it. Want me to run the tests?"))
+            .unwrap();
+        cockpit.pump();
+        assert!(
+            cockpit.suggest_calls().is_empty(),
+            "a turn still streaming has nothing settled to predict from"
+        );
+
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TurnEnded {
+                outcome: TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+        cockpit.pump();
+
+        let calls = cockpit.suggest_calls();
+        assert_eq!(calls.len(), 1, "one turn, one ask");
+        assert_eq!(calls[0].thread, thread);
+        assert!(
+            calls[0].context.contains("fix the decoder"),
+            "{:?}",
+            calls[0]
+        );
+        assert!(
+            calls[0].context.contains("Want me to run the tests?"),
+            "{:?}",
+            calls[0]
+        );
+
+        // A frame with no new turn end must not ask again — this is the
+        // difference between one Haiku call per turn and one per repaint.
+        cockpit.pump();
+        cockpit.pump();
+        assert_eq!(cockpit.suggest_calls().len(), 1, "one turn, still one ask");
+    }
+
+    /// With no Claude CLI anywhere there is nothing to ask, and the Thread
+    /// simply keeps the generic idle line.
+    #[test]
+    fn no_claude_cli_means_no_prediction_and_no_error() {
+        let (mut cockpit, fake) = cockpit("suggest-no-cli");
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        cockpit.send(thread, "go".into());
+        cockpit.suggest_program = None;
+
+        fake.streams.borrow()[0].send(text("Done.")).unwrap();
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TurnEnded {
+                outcome: TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+        cockpit.pump();
+
+        assert!(cockpit.suggest_calls().is_empty());
+        assert_eq!(cockpit.thread(thread).unwrap().suggestion(), None);
+    }
+
+    #[test]
+    fn disabled_suggestions_neither_run_nor_land() {
+        let (mut cockpit, fake) = cockpit("suggest-disabled");
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        cockpit.suggest_program = Some("claude".into());
+        cockpit.set_suggestions_enabled(false);
+        cockpit.send(thread, "go".into());
+
+        fake.streams.borrow()[0].send(text("Done.")).unwrap();
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TurnEnded {
+                outcome: TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+        cockpit.pump();
+        assert!(cockpit.suggest_calls().is_empty());
+
+        cockpit.deliver_suggestion(thread, "Run the tests".into());
+        cockpit.pump();
+        assert_eq!(cockpit.thread(thread).unwrap().suggestion(), None);
+
+        cockpit.set_suggestions_enabled(true);
+        cockpit.send(thread, "again".into());
+        fake.streams.borrow()[0].send(text("Done again.")).unwrap();
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TurnEnded {
+                outcome: TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+        cockpit.pump();
+        assert_eq!(
+            cockpit.suggest_calls().len(),
+            1,
+            "re-enabling restores asks"
+        );
+    }
+
+    #[test]
+    fn disabling_suggestions_clears_an_existing_prediction() {
+        let (mut cockpit, _fake) = cockpit("suggest-disable-clears");
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        cockpit.deliver_suggestion(thread, "Run the tests".into());
+        cockpit.pump();
+        assert_eq!(
+            cockpit.thread(thread).unwrap().suggestion(),
+            Some("Run the tests")
+        );
+
+        cockpit.set_suggestions_enabled(false);
+
+        assert_eq!(cockpit.thread(thread).unwrap().suggestion(), None);
+    }
+
+    /// A prediction that comes back for a generation the Thread has moved
+    /// past is answering a conversation that no longer exists.
+    #[test]
+    fn a_stale_prediction_is_dropped() {
+        let (mut cockpit, _fake) = cockpit("suggest-stale");
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        let generation = cockpit.threads[&thread].generation;
+
+        cockpit
+            .suggestions
+            .0
+            .send(Suggestion {
+                thread,
+                generation: generation.wrapping_add(1),
+                text: "Run the tests".into(),
+            })
+            .unwrap();
+        cockpit.pump();
+        assert_eq!(
+            cockpit.thread(thread).unwrap().suggestion(),
+            None,
+            "a reply from a previous generation must not land"
+        );
+
+        cockpit
+            .suggestions
+            .0
+            .send(Suggestion {
+                thread,
+                generation,
+                text: "Run the tests".into(),
+            })
+            .unwrap();
+        cockpit.pump();
+        assert_eq!(
+            cockpit.thread(thread).unwrap().suggestion(),
+            Some("Run the tests")
+        );
+    }
+
+    /// The next turn's ask clears the last turn's answer: ghost text that
+    /// describes a superseded response is worse than the generic line.
+    #[test]
+    fn a_new_turn_drops_the_previous_prediction() {
+        let (mut cockpit, fake) = cockpit("suggest-supersede");
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        cockpit.suggest_program = Some("claude".into());
+        cockpit.send(thread, "go".into());
+
+        let generation = cockpit.threads[&thread].generation;
+        fake.streams.borrow()[0].send(text("Done.")).unwrap();
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TurnEnded {
+                outcome: TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+        cockpit.pump();
+        cockpit
+            .suggestions
+            .0
+            .send(Suggestion {
+                thread,
+                generation,
+                text: "Run the tests".into(),
+            })
+            .unwrap();
+        cockpit.pump();
+        assert_eq!(
+            cockpit.thread(thread).unwrap().suggestion(),
+            Some("Run the tests")
+        );
+
+        fake.streams.borrow()[0].send(text("Ran them.")).unwrap();
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TurnEnded {
+                outcome: TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+        cockpit.pump();
+        assert_eq!(
+            cockpit.thread(thread).unwrap().suggestion(),
+            None,
+            "the new turn's ask must drop the old turn's answer"
+        );
     }
 
     #[test]

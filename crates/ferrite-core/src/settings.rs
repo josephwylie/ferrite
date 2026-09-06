@@ -52,6 +52,9 @@ pub struct Settings {
     /// Whether an untitled Thread is named from its first prompt.
     /// Default: true.
     pub auto_title: bool,
+    /// Whether Ferrite predicts a follow-up prompt in the empty Composer.
+    /// Default: true.
+    pub placeholder_suggestions: bool,
     /// How the Composer's usage meter draws its three windows.
     /// Default: three stacked lines.
     pub usage_meter_style: UsageMeterStyle,
@@ -84,6 +87,7 @@ impl Default for Settings {
             nav_collapsed: false,
             confirm_delete: true,
             auto_title: true,
+            placeholder_suggestions: true,
             usage_meter_style: UsageMeterStyle::Lines,
         }
     }
@@ -182,6 +186,7 @@ mod tests {
             nav_collapsed: true,
             confirm_delete: false,
             auto_title: false,
+            placeholder_suggestions: false,
             usage_meter_style: UsageMeterStyle::Rings,
         }
     }
@@ -227,6 +232,7 @@ mod tests {
         assert!(!settings.nav_collapsed);
         assert!(settings.confirm_delete);
         assert!(settings.auto_title);
+        assert!(settings.placeholder_suggestions);
         assert_eq!(settings.usage_meter_style, UsageMeterStyle::Lines);
     }
 

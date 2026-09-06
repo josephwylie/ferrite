@@ -10,6 +10,7 @@ use std::time::Duration;
 use ferrite_core::cockpit::{CloseError, Cockpit, HistoryDirection, ProviderChoice};
 use ferrite_core::docview::{Cell, Level};
 use ferrite_core::draft::DraftTarget;
+use ferrite_core::followup;
 use ferrite_core::groups::{Drag, DropTarget, GroupChange, GroupId, Groups, Plan};
 use ferrite_core::layout::{self, Edge, SeamId, Tree, Zone};
 use ferrite_core::roster::{PaneIdentity, View};
@@ -550,6 +551,7 @@ impl CockpitView {
     ) -> Self {
         crate::theme::init_components(cx);
         subagents::init(cx);
+        cockpit.set_suggestions_enabled(prefs.settings.placeholder_suggestions);
         cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(pump_interval()).await;
             if this.update(cx, |view, cx| view.pump(cx)).is_err() {
@@ -1854,6 +1856,8 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         change(&mut self.prefs.settings);
+        self.cockpit
+            .set_suggestions_enabled(self.prefs.settings.placeholder_suggestions);
         if let Err(e) = self.prefs.settings.save(&self.prefs.dir) {
             self.group_error = Some(SharedString::from(format!("settings not saved: {e}")));
         }
@@ -2038,6 +2042,9 @@ impl CockpitView {
             prefs::toggle("settings-auto-title", "Name Threads automatically",
                 "Use the first prompt, then a short title from the Thread's Provider. Renaming a Thread keeps your title.",
                 settings.auto_title, self.setting_change(cx, |s, v| s.auto_title = v)),
+            prefs::toggle("settings-placeholder-suggestions", "Suggest follow-up prompts",
+                "Predict a possible next prompt in the empty Composer. Tab accepts it without sending.",
+                settings.placeholder_suggestions, self.setting_change(cx, |s, v| s.placeholder_suggestions = v)),
             prefs::toggle("settings-confirm-delete", "Confirm before deleting a Thread", "Ask before removing a Thread and its transcript.",
                 settings.confirm_delete, self.setting_change(cx, |s, v| s.confirm_delete = v)),
             prefs::toggle("settings-nav-collapsed", "Start with the sidebar collapsed", "⌘B toggles it any time",
@@ -2367,7 +2374,54 @@ impl CockpitView {
 
     /// Tab walks a draft's band (#29), or an L1 Thread Pane's rendered tool
     /// disclosures before returning to the Composer.
+    /// Tab on an empty Composer that is showing a predicted follow-up puts
+    /// that text in the line — editable, unsent. Nothing reaches the provider
+    /// without a second, deliberate ↵: ghost text is a guess, and a guess is
+    /// not consent to start a turn.
+    ///
+    /// The condition is `followup::suggest` itself, the same call the idle
+    /// line renders from, so the key and the ghost text can never disagree
+    /// about whether there is something to accept.
+    fn accept_suggestion(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.settings_open || self.rename.is_some() || self.popover.is_some() {
+            return false;
+        }
+        let Some(thread) = self.focused_thread() else {
+            return false;
+        };
+        let Some(open) = self.cockpit.thread(thread) else {
+            return false;
+        };
+        let offered = followup::suggest(
+            open.pending().is_some(),
+            Some(open.transcript()),
+            open.suggestion(),
+        );
+        let Some(text) = offered.acceptable().map(str::to_string) else {
+            return false;
+        };
+        let Some(composer) = self
+            .panes
+            .get(self.focused())
+            .map(|pane| pane.composer.clone())
+        else {
+            return false;
+        };
+        // Only ever onto an empty line: Tab is the disclosure walk once the
+        // operator has started typing, and overwriting their draft would be
+        // the worst possible reading of the key.
+        if !composer.read(cx).is_empty() {
+            return false;
+        }
+        composer.update(cx, |composer, cx| composer.set(text, cx));
+        cx.notify();
+        true
+    }
+
     fn band_cycle(&mut self, _: &BandCycle, window: &mut Window, cx: &mut Context<Self>) {
+        if self.accept_suggestion(cx) {
+            return;
+        }
         if self.settings_open
             || self
                 .focused_thread()
@@ -6944,6 +6998,69 @@ mod tests {
         (cockpit, fake)
     }
 
+    /// Tab on an empty Composer showing a prediction puts it in the line —
+    /// as editable text, unsent. A guess is not consent to start a turn, so
+    /// the operator still has to press ↵.
+    #[gpui::test]
+    fn tab_accepts_the_predicted_follow_up_without_sending_it(cx: &mut TestAppContext) {
+        let (mut core, fake) = cockpit("tab-accept-suggestion", 1);
+        let thread = core.threads()[0];
+        // A finished turn, so the Thread is idle with a response to follow up.
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TextDelta {
+                text: "Fixed the decoder.".into(),
+            })
+            .unwrap();
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TurnEnded {
+                outcome: ferrite_core::TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+        core.pump();
+        core.deliver_suggestion(thread, "Run the tests".into());
+        core.pump();
+
+        bind_band_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.read_with(cx, |view, cx| {
+            assert!(
+                view.panes[view.focused()].composer.read(cx).is_empty(),
+                "the line starts empty"
+            );
+        });
+
+        cx.simulate_keystrokes("tab");
+
+        view.read_with(cx, |view, cx| {
+            assert_eq!(
+                view.panes[view.focused()].composer.read(cx).text(),
+                "Run the tests",
+                "tab puts the prediction in the line"
+            );
+            assert!(
+                view.cockpit
+                    .thread(view.panes[view.focused()].thread().unwrap())
+                    .unwrap()
+                    .transcript()
+                    .blocks()
+                    .iter()
+                    .all(|block| !matches!(&block.body, Body::Prompt(_))),
+                "nothing was sent: accepting is not submitting"
+            );
+        });
+
+        // A second tab must not append it again — the line is no longer
+        // empty, so tab is back to being the disclosure walk.
+        cx.simulate_keystrokes("tab");
+        view.read_with(cx, |view, cx| {
+            assert_eq!(
+                view.panes[view.focused()].composer.read(cx).text(),
+                "Run the tests"
+            );
+        });
+    }
+
     #[gpui::test]
     fn group_scope_is_one_view_and_cmd_w_makes_the_focused_thread_live_and_solo(
         cx: &mut TestAppContext,
@@ -10124,7 +10241,11 @@ mod tests {
                 "progress pumps preserve native output focus"
             )
         });
-        cx.simulate_keystrokes("cmd-down");
+        cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+            "cmd-down"
+        } else {
+            "ctrl-end"
+        });
         cx.run_until_parked();
         output_state.read_with(cx, |state, _| {
             assert_eq!(
@@ -10137,7 +10258,11 @@ mod tests {
                 "the native viewer scrolls to its tail"
             );
         });
-        cx.simulate_keystrokes("cmd-a cmd-c");
+        cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+            "cmd-a cmd-c"
+        } else {
+            "ctrl-a ctrl-c"
+        });
         assert_eq!(clipboard(cx).as_deref(), Some(expected.as_str()));
         cx.simulate_keystrokes("backspace");
         output_state.read_with(cx, |state, _| {
@@ -10228,7 +10353,11 @@ mod tests {
         command_state.read_with(cx, |state, _| assert_eq!(state.value().as_ref(), command));
         let bounds = result_state.read_with(cx, |state, _| state.text_bounds().unwrap());
         cx.simulate_click(bounds.center(), gpui::Modifiers::none());
-        cx.simulate_keystrokes("cmd-down shift-up");
+        cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+            "cmd-down shift-up"
+        } else {
+            "ctrl-end shift-up"
+        });
         cx.run_until_parked();
         let (selected, cursor, scroll) = result_state.read_with(cx, |state, _| {
             (
@@ -10751,6 +10880,59 @@ mod tests {
             assert_eq!(
                 view.panes[view.focused()].composer.read(cx).text(),
                 "reachable"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn focused_placeholder_starts_immediately_after_the_caret(cx: &mut TestAppContext) {
+        let fake = Fake::default();
+        let store = Store::open(scratch("placeholder-caret-gap")).unwrap();
+        let core = Cockpit::new(store, Box::new(fake));
+        let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        cx.run_until_parked();
+
+        let editor = cx.debug_bounds("focused-prompt-editor").unwrap();
+        let placeholder = cx.debug_bounds("prompt-placeholder").unwrap();
+        assert_eq!(
+            placeholder.left() - editor.left(),
+            px(crate::theme::CARET_W),
+            "the caret width is the only separation before placeholder text"
+        );
+    }
+
+    #[gpui::test]
+    fn disabled_placeholder_suggestions_are_hidden_and_tab_does_not_accept_them(
+        cx: &mut TestAppContext,
+    ) {
+        let (mut core, _fake) = cockpit("suggestion-setting-off", 1);
+        let thread = core.threads()[0];
+        core.deliver_suggestion(thread, "Run the tests".into());
+        core.pump();
+        let prefs = Preferences {
+            settings: ferrite_core::settings::Settings {
+                placeholder_suggestions: false,
+                ..Default::default()
+            },
+            ..Preferences::ephemeral()
+        };
+
+        bind_band_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| {
+            CockpitView::new_with_settings(core, Provider::Claude, prefs, cx)
+        });
+        cx.simulate_keystrokes("tab");
+
+        view.read_with(cx, |view, cx| {
+            assert_eq!(
+                view.cockpit.thread(thread).unwrap().suggestion(),
+                None,
+                "turning the setting off clears the visible prediction"
+            );
+            assert!(
+                view.panes[view.focused()].composer.read(cx).is_empty(),
+                "Tab must not accept a disabled prediction"
             );
         });
     }
@@ -13151,6 +13333,23 @@ mod tests {
             assert!(view.settings_open, "cmd-, opens the panel")
         });
         let card = cx.debug_bounds("settings-card").unwrap();
+        cx.simulate_click(
+            card.origin + gpui::point(px(80.), px(66.)),
+            gpui::Modifiers::none(),
+        );
+        cx.simulate_input("Suggest follow-up prompts");
+        tick(cx);
+        assert!(
+            cx.debug_bounds("settings-placeholder-suggestions")
+                .is_some(),
+            "Behaviour exposes the follow-up suggestion toggle"
+        );
+        cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+            "cmd-a backspace"
+        } else {
+            "ctrl-a backspace"
+        });
+        tick(cx);
         cx.simulate_click(
             card.origin + gpui::point(px(60.), px(180.)),
             gpui::Modifiers::none(),
