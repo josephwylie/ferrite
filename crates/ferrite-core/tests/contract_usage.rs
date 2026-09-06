@@ -41,3 +41,25 @@ fn historical_events_cannot_replace_live_usage_or_turn_changes() {
     assert_eq!(transcript.usage_details().unwrap().input_tokens,200);
     assert_eq!(transcript.turn_diff().unwrap().diff,"live diff");
 }
+
+#[test]
+fn claude_equal_sized_messages_are_counted_separately() {
+    let frame=|uuid:&str,id:&str,output:u64|json!({"type":"assistant","uuid":uuid,"session_id":"root","parent_tool_use_id":null,"message":{"id":id,"content":[],"usage":{"input_tokens":1,"output_tokens":output}}});
+    let r=Replay::new("claude",vec![frame("a","m1",10),frame("b","m1",15),frame("c","m2",15)]);
+    let a=fold(r.drain());
+    assert_eq!(a.view().main().transcript().turn_output_tokens(),30,"message IDs, not counter magnitude, determine whether output is new");
+    assert_eq!(a.view().main().transcript().usage_details().unwrap().output_tokens,15,"native accounting details remain the exact last message report");
+}
+
+#[test]
+fn codex_second_turn_output_excludes_previous_turns() {
+    use ferrite_core::activity::ActivityInput;
+    let frame=|turn:&str,output:u64|json!({"method":"thread/tokenUsage/updated","params":{"threadId":"root","turnId":turn,"tokenUsage":{"last":{"totalTokens":100},"total":{"totalTokens":100,"outputTokens":output},"modelContextWindow":1000}}});
+    let r=Replay::new("codex",vec![frame("one",10),json!({"method":"turn/completed","params":{"threadId":"root","turn":{"id":"one","status":"completed"}}}),frame("two",15)]);
+    let events=r.drain();let split=events.iter().position(|e|matches!(e,SessionEvent::TurnEnded{..})).unwrap();
+    let mut a=fold(events[..=split].to_vec());
+    a.apply(ActivityInput::Main{input:Input::Prompt("again".into()),at:std::time::Instant::now()});
+    for event in events[split+1..].iter().cloned(){match event{SessionEvent::Activity(event)=>{a.apply(ActivityInput::Observe{generation:1,event,at:std::time::Instant::now()});},event=>{a.apply(ActivityInput::Main{input:Input::Event(event),at:std::time::Instant::now()});}}}
+    assert_eq!(a.view().main().transcript().turn_output_tokens(),5,"thread-wide native totals need a per-turn baseline");
+    assert_eq!(a.view().main().transcript().usage_details().unwrap().output_tokens,15);
+}
