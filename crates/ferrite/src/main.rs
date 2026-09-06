@@ -39,6 +39,15 @@ use session::{ProcessRss, SessionDefaults};
 
 actions!(ferrite, [Quit]);
 
+/// GPUI defaults to hiding the OS pointer whenever a key is typed. In a
+/// dense cockpit that reads as a flash whenever the pointer is resting over
+/// the Composer, so Ferrite keeps pointer visibility under the operator's
+/// direct control instead: it moves when the mouse moves and never flickers
+/// merely because text changed beneath it.
+fn keep_mouse_cursor_visible(cx: &mut App) {
+    cx.set_cursor_hide_mode(CursorHideMode::Never);
+}
+
 /// One Session may hold this much before the watchdog replaces it. Generous:
 /// a busy agent legitimately grows, and a restart costs the operator context.
 const RSS_LIMIT: u64 = 4 * 1024 * 1024 * 1024;
@@ -100,6 +109,7 @@ fn main() {
     kit::application()
         .with_assets(icons::Assets)
         .run(move |cx: &mut App| {
+            keep_mouse_cursor_visible(cx);
             theme::init_components(cx);
             // First, before anything can lay out text in it: the bundled mono
             // face. `add_fonts` returns a Result and a discarded one fails
@@ -304,8 +314,14 @@ fn dock_launch_dir(cockpit: &Cockpit) -> std::path::PathBuf {
     };
     worked
         .or_else(registered)
-        .or_else(|| std::env::var_os("HOME").map(std::path::PathBuf::from))
+        .or_else(home_dir)
         .unwrap_or_else(|| std::path::PathBuf::from("/"))
+}
+
+fn home_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
 }
 
 fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
@@ -435,7 +451,10 @@ fn store_dir() -> std::path::PathBuf {
 mod tests {
     // No `use super::*`: the crate root globs `gpui::*`, whose `test` macro
     // would capture the `#[test]` this macro expands to and recurse.
-    use super::{adopt, demo, dock_launch_dir, keymap, load_bindings, revive_latest};
+    use super::{
+        adopt, demo, dock_launch_dir, keep_mouse_cursor_visible, keymap, load_bindings,
+        revive_latest,
+    };
     use ferrite_core::cockpit::Cockpit;
     use ferrite_core::store::{Provider, Store};
     use ferrite_core::workspace::WorkspaceChoice;
@@ -454,18 +473,26 @@ mod tests {
         });
     }
 
+    #[gpui::test]
+    fn typing_does_not_hide_the_mouse_cursor(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            keep_mouse_cursor_visible(cx);
+            assert_eq!(cx.cursor_hide_mode(), gpui::CursorHideMode::Never);
+        });
+    }
+
     /// A Dock launch stands where the newest Thread works — launchd's `/`
     /// is no Project — else in the newest registered Project, else at home.
     #[test]
     fn a_dock_launch_stands_where_the_newest_thread_works() {
         let dir = std::env::temp_dir().join(format!("ferrite-launch-{}-dock", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let home = std::path::PathBuf::from(std::env::var_os("HOME").expect("HOME is set"));
+        let home = super::home_dir().expect("a home directory is set");
         let store = Store::open(dir.clone()).unwrap();
         let mut core = Cockpit::new(store, Box::new(demo::Spawn::new(false)));
         assert_eq!(dock_launch_dir(&core), home, "an empty store: home");
 
-        let checkout = std::env::current_dir().unwrap();
+        let checkout = std::fs::canonicalize(std::env::current_dir().unwrap()).unwrap();
         core.register_project(&checkout).unwrap();
         assert_eq!(
             dock_launch_dir(&core),

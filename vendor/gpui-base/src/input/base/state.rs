@@ -238,6 +238,10 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new("cmd-up", MoveToStart, Some(CONTEXT)),
         #[cfg(target_os = "macos")]
         KeyBinding::new("cmd-down", MoveToEnd, Some(CONTEXT)),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-home", MoveToStart, Some(CONTEXT)),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-end", MoveToEnd, Some(CONTEXT)),
         #[cfg(target_os = "macos")]
         KeyBinding::new("alt-left", MoveToPreviousWord, Some(CONTEXT)),
         #[cfg(target_os = "macos")]
@@ -250,6 +254,10 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new("cmd-shift-up", SelectToStart, Some(CONTEXT)),
         #[cfg(target_os = "macos")]
         KeyBinding::new("cmd-shift-down", SelectToEnd, Some(CONTEXT)),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-shift-home", SelectToStart, Some(CONTEXT)),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-shift-end", SelectToEnd, Some(CONTEXT)),
         #[cfg(not(target_os = "macos"))]
         KeyBinding::new("ctrl-z", Undo, Some(CONTEXT)),
         #[cfg(not(target_os = "macos"))]

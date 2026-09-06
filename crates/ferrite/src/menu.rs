@@ -64,6 +64,10 @@ impl Item {
 /// border. The caller positions it (`anchored`) and fills it with `row`s.
 pub fn shell() -> Div {
     div()
+        // This deferred surface sits over selectable transcript text. Own its
+        // inert space so the covered text's I-beam cannot show through.
+        .cursor_default()
+        .occlude()
         .flex()
         .flex_col()
         .w(px(WIDTH))
@@ -143,7 +147,39 @@ pub fn row(index: usize, item: &Item, armed: bool) -> Stateful<Div> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::CursorStyle;
+    use gpui::{deferred, Context, CursorStyle, Render};
+    use std::{cell::Cell, rc::Rc};
+
+    struct OcclusionHarness {
+        card_hovered: Rc<Cell<bool>>,
+        menu_hovered: Rc<Cell<bool>>,
+    }
+
+    impl Render for OcclusionHarness {
+        fn render(&mut self, _: &mut gpui::Window, _: &mut Context<Self>) -> impl IntoElement {
+            let card_hovered = self.card_hovered.clone();
+            let menu_hovered = self.menu_hovered.clone();
+            div()
+                .relative()
+                .size(px(300.))
+                .child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .on_mouse_move(move |_, _, _| card_hovered.set(true)),
+                )
+                .child(
+                    deferred(
+                        shell().absolute().top_0().left_0().child(
+                            div()
+                                .size(px(80.))
+                                .on_mouse_move(move |_, _, _| menu_hovered.set(true)),
+                        ),
+                    )
+                    .with_priority(2),
+                )
+        }
+    }
 
     #[test]
     fn a_live_row_is_a_button_and_a_disabled_one_is_not() {
@@ -153,6 +189,38 @@ mod tests {
         let dead = Item::new("Reveal in Finder").disabled(true);
         let mut drawn = row(1, &dead, false);
         assert_eq!(drawn.style().mouse_cursor, None);
+    }
+
+    #[test]
+    fn the_floating_shell_masks_the_cursor_beneath_it() {
+        let mut drawn = shell();
+        assert_eq!(drawn.style().mouse_cursor, Some(CursorStyle::Arrow));
+    }
+
+    #[gpui::test]
+    fn the_context_menu_blocks_hover_on_the_card_beneath_it(cx: &mut gpui::TestAppContext) {
+        let card_hovered = Rc::new(Cell::new(false));
+        let menu_hovered = Rc::new(Cell::new(false));
+        let (_, window) = cx.add_window_view({
+            let card_hovered = card_hovered.clone();
+            let menu_hovered = menu_hovered.clone();
+            move |_, _| OcclusionHarness {
+                card_hovered,
+                menu_hovered,
+            }
+        });
+        window.update(|window, cx| window.draw(cx).clear(cx));
+        window.simulate_mouse_move(
+            gpui::point(px(20.), px(20.)),
+            None,
+            gpui::Modifiers::default(),
+        );
+
+        assert!(menu_hovered.get(), "the pointer still reaches the menu");
+        assert!(
+            !card_hovered.get(),
+            "the covered Thread card must not receive hover"
+        );
     }
 
     #[test]

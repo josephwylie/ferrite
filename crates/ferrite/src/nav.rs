@@ -442,6 +442,8 @@ pub fn filter_menu() -> Div {
         .top(px(MENU_TOP))
         .left(px(ROW_PAD_X))
         .right(px(ROW_PAD_X))
+        .cursor_default()
+        .occlude()
         .flex()
         .flex_col()
         .gap(px(ROW_GAP))
