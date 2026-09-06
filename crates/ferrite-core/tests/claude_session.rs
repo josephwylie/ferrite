@@ -986,6 +986,85 @@ fn read_lines(path: &std::path::Path, wanted: usize) -> Vec<String> {
 }
 
 #[test]
+fn native_queue_admission_and_cancellation_use_the_existing_session_pipe() {
+    use ferrite_core::QueueEvent;
+    let frames: Vec<Value> =
+        include_str!("../../../docs/research/fixtures/claude-native-queue-cancel-2.1.263.jsonl")
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+    let cancelled = frames
+        .iter()
+        .find(|frame| frame["state"] == "cancelled")
+        .unwrap();
+    let id = cancelled["command_uuid"].as_str().unwrap();
+    let queued = frames
+        .iter()
+        .find(|frame| frame["state"] == "queued" && frame["command_uuid"] == id)
+        .unwrap();
+    let log =
+        std::env::temp_dir().join(format!("ferrite-claude-native-{}.log", std::process::id()));
+    let program = stub(
+        "native-queue",
+        &format!(
+            r#"{PRELUDE}
+read -r line
+printf '%s\n' "$line" > '{}'
+echo '{{"type":"system","subtype":"init","session_id":"native","model":"stub","capabilities":["msg_lifecycle_v1"]}}'
+read -r line
+printf '%s\n' "$line" >> '{}'
+echo '{}'
+read -r line
+printf '%s\n' "$line" >> '{}'
+echo '{}'
+echo '{{"type":"control_response","response":{{"subtype":"success","request_id":"req_2","response":{{"cancelled":true}}}}}}'
+exec cat > /dev/null"#,
+            log.display(),
+            log.display(),
+            queued,
+            log.display(),
+            cancelled
+        ),
+    );
+    let mut session = ClaudeSession::spawn(config(program)).unwrap();
+    while !matches!(
+        session
+            .events()
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap(),
+        SessionEvent::Init { .. }
+    ) {}
+    session.enqueue(id, "operator input").unwrap();
+    assert!(matches!(
+        session
+            .events()
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap(),
+        SessionEvent::Queue(QueueEvent::Accepted(_))
+    ));
+    session.cancel_queued(id).unwrap();
+    loop {
+        if let SessionEvent::Queue(QueueEvent::Cancelled { cancelled, .. }) = session
+            .events()
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+        {
+            assert!(cancelled);
+            break;
+        }
+    }
+    let lines: Vec<Value> = fs::read_to_string(&log)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(lines[1]["uuid"], id);
+    assert_eq!(lines[1]["isAsync"], true);
+    assert_eq!(lines[2]["request"]["message_uuid"], id);
+    assert_eq!(lines[2]["request"]["subtype"], "cancel_async_message");
+}
+
+#[test]
 fn native_followups_arrive_after_result_through_the_session_adapter() {
     let script = format!(
         r#"{PRELUDE}

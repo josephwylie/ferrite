@@ -1,0 +1,113 @@
+{
+  "crash": true,
+  "version": "codex-cli 0.153.4",
+  "without_experimental": {
+    "code": -32600,
+    "message": "thread/queue/list requires experimentalApi capability"
+  },
+  "while_busy": [
+    [
+      {
+        "type": "text",
+        "text": "second",
+        "text_elements": []
+      }
+    ],
+    [
+      {
+        "type": "text",
+        "text": "third",
+        "text_elements": []
+      }
+    ],
+    [
+      {
+        "type": "text",
+        "text": "delete me",
+        "text_elements": []
+      }
+    ]
+  ],
+  "busy_start": {
+    "code": -32600,
+    "message": "thread already has an active or pending turn"
+  },
+  "update_preserves_id": true,
+  "deleted": {
+    "deleted": true
+  },
+  "reordered": [
+    [
+      {
+        "type": "text",
+        "text": "third",
+        "text_elements": []
+      }
+    ],
+    [
+      {
+        "type": "text",
+        "text": "second edited",
+        "text_elements": []
+      }
+    ]
+  ],
+  "delete_again": {
+    "deleted": false
+  },
+  "invalid_reorder": {
+    "code": -32600,
+    "message": "queue reorder must include every queued submission exactly once"
+  },
+  "attachment_snapshot_type": "image",
+  "attachment_snapshot_is_data_url": true,
+  "same_client_id_deduplicates": false,
+  "invalid_attachment": {
+    "code": -32600,
+    "message": "local queued attachment is invalid: No such file or directory (os error 2)"
+  },
+  "after_interrupt": [
+    [
+      {
+        "type": "text",
+        "text": "third",
+        "text_elements": []
+      }
+    ],
+    [
+      {
+        "type": "text",
+        "text": "second edited",
+        "text_elements": []
+      }
+    ]
+  ],
+  "after_process_restart": [
+    {
+      "id": "01a0768a-632d-74e3-a737-da2196c881a9",
+      "input": [
+        {
+          "type": "text",
+          "text": "third",
+          "text_elements": []
+        }
+      ],
+      "clientUserMessageId": "3fc00679-1922-4bc5-9782-75978cf8b399"
+    },
+    {
+      "id": "01a0768a-632b-7390-a682-f10124e94292",
+      "input": [
+        {
+          "type": "text",
+          "text": "second edited",
+          "text_elements": []
+        }
+      ],
+      "clientUserMessageId": "74687cec-6b42-4bc4-800a-55a28629f0c5"
+    }
+  ],
+  "resume_error": {
+    "code": -32600,
+    "message": "thread 01a0768a-62cc-7d33-919a-6f7512466edf already has an active writer"
+  }
+}

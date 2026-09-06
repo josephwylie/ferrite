@@ -67,6 +67,20 @@ struct ScriptedSession {
 }
 
 impl Session for ScriptedSession {
+    fn enqueue(&mut self, id: &str, text: &str) -> io::Result<()> {
+        self.control.emit(
+            self.index,
+            SessionEvent::Queue(ferrite_core::QueueEvent::Accepted(
+                ferrite_core::QueuedPrompt {
+                    id: id.into(),
+                    client_id: id.into(),
+                    text: text.into(),
+                },
+            )),
+        );
+        Ok(())
+    }
+
     fn events(&self) -> &mpsc::Receiver<SessionEvent> {
         &self.events
     }
@@ -342,8 +356,15 @@ fn child_completion_cannot_release_mains_prompt_or_pending_decision() {
 
     h.control.emit(0, ended());
     h.cockpit.pump();
-    assert_eq!(h.control.sent(0).len(), 2);
-    assert!(h.control.sent(0)[1].contains("queued main prompt"));
+    assert_eq!(
+        h.control.sent(0).len(),
+        1,
+        "Main's turn end also cannot dispatch native pending work"
+    );
+    assert_eq!(
+        h.cockpit.thread(h.thread).unwrap().queued(),
+        Some("queued main prompt")
+    );
 }
 
 #[test]
@@ -881,6 +902,11 @@ fn stale_request_after_replacement(replacement: Replacement) {
         Replacement::ParkAndRevive => {
             h.cockpit.queue(h.thread, "unpersisted queue".to_owned());
             h.cockpit.park(h.thread).unwrap();
+            assert_eq!(
+                h.cockpit.subagent_count(h.thread).unwrap(),
+                1,
+                "a parked Thread exposes its durable child count"
+            );
             h.cockpit.revive(h.thread).unwrap();
         }
         Replacement::Handover => {

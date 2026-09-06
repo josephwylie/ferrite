@@ -7,6 +7,7 @@
 //! dropped.
 
 mod activity;
+mod queue;
 mod suggestions;
 pub(super) mod wire;
 
@@ -199,6 +200,7 @@ pub struct ClaudeSession {
     capabilities: ClaudeCapabilities,
     effort_reply: EffortReply,
     decoder: Arc<Mutex<activity::Decoder>>,
+    queue: Arc<Mutex<queue::Queue>>,
     next_request_id: u64,
     suggestions: Arc<Mutex<suggestions::Inbox>>,
 }
@@ -292,6 +294,7 @@ impl ClaudeSession {
         let child = Arc::new(Mutex::new(child));
         let effort_reply = Arc::new(Mutex::new(None));
         let decoder = Arc::new(Mutex::new(activity::Decoder::default()));
+        let queue = Arc::new(Mutex::new(queue::Queue::default()));
         let mut inbox = suggestions::Inbox::default();
         inbox.configure(config.prompt_suggestions);
         let suggestions = Arc::new(Mutex::new(inbox));
@@ -302,6 +305,7 @@ impl ClaudeSession {
             stderr_tail,
             effort_reply.clone(),
             decoder.clone(),
+            queue.clone(),
             suggestions.clone(),
         );
 
@@ -315,6 +319,7 @@ impl ClaudeSession {
             capabilities: ClaudeCapabilities::default(),
             effort_reply,
             decoder,
+            queue,
             next_request_id: 1,
             suggestions,
         };
@@ -378,6 +383,35 @@ impl ClaudeSession {
     }
 
     /// Send one user prompt; the CLI starts (or queues) a turn.
+    pub fn enqueue(&mut self, client_id: &str, text: &str) -> io::Result<()> {
+        {
+            let mut queue = lock(&self.queue);
+            if !queue.supported {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "Claude has not announced native queue lifecycle support",
+                ));
+            }
+            queue.submitted.insert(client_id.into(), text.into());
+        }
+        lock(&self.suggestions).sent();
+        self.write_line(&serde_json::json!({
+            "type":"user", "uuid":client_id, "isAsync":true,
+            "message":{"role":"user","content":wire::input_content(text,self.cwd.as_deref())}
+        }))
+    }
+
+    pub fn cancel_queued(&mut self, id: &str) -> io::Result<()> {
+        let request_id = self.take_request_id();
+        lock(&self.queue)
+            .cancellations
+            .insert(request_id.clone(), id.into());
+        self.write_line(&serde_json::json!({
+            "type":"control_request", "request_id":request_id,
+            "request":{"subtype":"cancel_async_message","message_uuid":id}
+        }))
+    }
+
     pub fn send(&mut self, text: &str) -> io::Result<()> {
         lock(&self.suggestions).sent();
         self.write_line(&serde_json::json!({
@@ -503,6 +537,7 @@ fn read_stdout(
     stderr_tail: Arc<Mutex<StderrTail>>,
     effort_reply: EffortReply,
     decoder: Arc<Mutex<activity::Decoder>>,
+    queue: Arc<Mutex<queue::Queue>>,
     suggestions: Arc<Mutex<suggestions::Inbox>>,
 ) -> Receiver<ClaudeCapabilities> {
     let (handshake, capabilities) = sync_channel(1);
@@ -521,6 +556,12 @@ fn read_stdout(
             let text = String::from_utf8_lossy(&line);
             let text = text.trim_end();
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(text) {
+                let queue_events = lock(&queue).observe(&value);
+                for event in queue_events {
+                    if sender.send(event).is_err() {
+                        return;
+                    }
+                }
                 lock(&suggestions).observe(&value);
                 let response = &value["response"];
                 let mut pending = lock(&effort_reply);

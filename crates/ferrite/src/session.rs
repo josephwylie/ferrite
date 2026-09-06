@@ -168,6 +168,13 @@ struct SessionWithDefaults {
 }
 
 impl Session for SessionWithDefaults {
+    fn enqueue(&mut self, client_id: &str, text: &str) -> io::Result<()> {
+        self.inner.enqueue(client_id, text)
+    }
+    fn cancel_queued(&mut self, id: &str) -> io::Result<()> {
+        self.inner.cancel_queued(id)
+    }
+
     fn set_suggestions_enabled(&mut self, enabled: bool) -> io::Result<()> {
         self.inner.set_suggestions_enabled(enabled)
     }
