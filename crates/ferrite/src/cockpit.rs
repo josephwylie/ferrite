@@ -9851,6 +9851,45 @@ mod tests {
     }
 
     #[gpui::test]
+    fn transcript_spacing_separates_prompts_tools_and_answers(cx: &mut TestAppContext) {
+        let (mut core, fake) = cockpit("transcript-spacing", 1);
+        let thread = core.threads()[0];
+        core.send(thread, "Check the build".into());
+        let (_, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        for index in 0..2 {
+            fake.streams.borrow()[0]
+                .send(SessionEvent::ToolStarted {
+                    id: format!("spacing-{index}"),
+                    name: "commandExecution".into(),
+                    input: serde_json::json!({"command": "cargo check"}),
+                })
+                .unwrap();
+            fake.streams.borrow()[0]
+                .send(SessionEvent::ToolCompleted {
+                    id: format!("spacing-{index}"),
+                    output: "ok".into(),
+                    is_error: false,
+                    result: ferrite_core::ToolResult::Opaque,
+                })
+                .unwrap();
+        }
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TextDelta {
+                text: "The build passed.\n\n".into(),
+            })
+            .unwrap();
+        for width in [1000., 720.] {
+            cx.simulate_resize(gpui::size(px(width), px(700.)));
+            tick(cx);
+            let prompt = cx.debug_bounds("transcript-prompt").unwrap();
+            let tools = cx.debug_bounds("tool-group-spacing-0").unwrap();
+            let answer = cx.debug_bounds("transcript-answer").unwrap();
+            assert_eq!(tools.top() - prompt.bottom(), px(crate::theme::BLOCK_GAP));
+            assert_eq!(answer.top() - tools.bottom(), px(crate::theme::BLOCK_GAP));
+        }
+    }
+
+    #[gpui::test]
     fn consecutive_mixed_tools_share_one_disclosure_and_keep_failures_visible(
         cx: &mut TestAppContext,
     ) {

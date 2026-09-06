@@ -50,9 +50,8 @@ use crate::theme;
 use crate::theme::{
     ATTENTION, ATTENTION_EDGE, ATTENTION_WASH, BLOCKED, BLOCKED_WASH, COMPOSER_EDGE,
     DIFF_ADDED_INK, DIFF_REMOVED_INK, FOCUS, HOVER, IDLE, INLINE_CODE_INK, LINK_INK, METER_OFF,
-    PANE, PANE_HEAD, PANE_HEAD_EDGE, PROMPT_WASH_CLAUDE, PROMPT_WASH_CODEX, PROVIDER_CLAUDE,
-    PROVIDER_CODEX, RAISED, RUNNING, RUNNING_WASH, SELECTION, SEP, SYN_KEYWORD, SYN_NUMBER,
-    SYN_STRING, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG, TRANSPARENT,
+    PANE, PANE_HEAD, PANE_HEAD_EDGE, RAISED, RUNNING, RUNNING_WASH, SELECTION, SEP, SYN_KEYWORD,
+    SYN_NUMBER, SYN_STRING, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG, TRANSPARENT,
 };
 
 /// One Pane's view state: what the window owns per Pane. Everything it
@@ -827,7 +826,7 @@ pub fn render_pane(
             // Once scrollback fills the pane, pin the same line above Composer.
             if transcript.status() == Status::Streaming && progress_is_pinned(view) {
                 pane = pane.child(
-                    working_line(transcript, timings, false)
+                    working_line(transcript, false)
                         .px(px(theme::PANE_PAD_X))
                         .py(px(theme::KEYS_GAP)),
                 );
@@ -1296,7 +1295,7 @@ fn l2_cell(
     workspace: Option<&WorkspaceBinding>,
     branch: Option<&SharedString>,
     state: WallState,
-    timings: Option<&HashMap<String, ToolTiming>>,
+    _timings: Option<&HashMap<String, ToolTiming>>,
     decide: Option<AnyElement>,
     title: Option<AnyElement>,
     composer: Option<Div>,
@@ -1508,7 +1507,7 @@ fn l2_cell(
                 .child("❯ idle"),
         );
     } else if transcript.status() == Status::Streaming {
-        body = body.child(working_line(transcript, timings, true));
+        body = body.child(working_line(transcript, true));
     }
 
     let mut content = cell.child(header).child(body).children(composer);
@@ -2327,9 +2326,8 @@ fn body(
         .min_h_0()
         .overflow_y_scroll()
         .track_scroll(&view.scroll)
-        // `padding: 6px 12px 12px` (§D.4). No gap: every block carries its
-        // own margin now, so the rhythm is the prototype's, not a uniform
-        // stack spacing.
+        // One gap between semantic blocks; tool-group internals remain compact.
+        .gap(px(theme::BLOCK_GAP))
         .px(px(theme::PANE_PAD_X))
         .pt(px(theme::BODY_PAD_T))
         .pb(px(theme::BODY_PAD_B))
@@ -2344,7 +2342,6 @@ fn body(
     // Pane's border can never disagree.
     let signal = signal_color(status);
     let window = rendered_window(transcript.blocks(), level);
-    let mut prev_margin_b = 0.;
     let mut index = 0;
     while index < window.len() {
         let block = &window[index];
@@ -2363,17 +2360,16 @@ fn body(
                         "answer-{}-{first:?}",
                         view.text_namespace()
                     )))
+                    .debug_selector(|| "transcript-answer".into())
                     .min_w_0()
                     .w_full()
                     .flex_shrink_0()
-                    .mb(px(theme::P_MARGIN_B))
                     .child(crate::rich::Markdown::new(
                         format!("markdown-{}-{first:?}", view.text_namespace()),
                         source,
                         view.rich.clone(),
                     )),
             );
-            prev_margin_b = theme::P_MARGIN_B;
             continue;
         }
         if let Some(activity) = ToolActivity::at_start(&window[index..]) {
@@ -2388,19 +2384,13 @@ fn body(
                 view,
                 tool_controls,
             ));
-            prev_margin_b = 0.;
             index += len;
             continue;
         }
-        let next_is_bullet = matches!(
-            window.get(index + 1).map(|next| &next.body),
-            Some(Body::Bullet { .. })
-        );
-        let flow = Flow {
-            prev_margin_b,
-            next_is_bullet,
-        };
-        prev_margin_b = margin_b(&block.body, next_is_bullet);
+        if matches!(&block.body, Body::Thinking(text) if text.trim().is_empty()) {
+            index += 1;
+            continue;
+        }
         body = body.child(render_block(
             block,
             selection,
@@ -2416,14 +2406,13 @@ fn body(
                 _ => None,
             },
             signal,
-            flow,
             provider,
             &view.preview,
         ));
         index += 1;
     }
     if transcript.status() == Status::Streaming && !progress_is_pinned(view) {
-        body = body.child(working_line(transcript, timings, false).py(px(theme::KEYS_GAP)));
+        body = body.child(working_line(transcript, false));
     }
     let wheel_scroll = view.scroll.clone();
     let follow = view.follow_tail.clone();
@@ -2484,15 +2473,10 @@ fn progress_is_pinned(view: &PaneView) -> bool {
     view.scroll.max_offset().y > px(0.)
 }
 
-/// `◐ Running 6 shell commands… (2m 6s · ↓ 8.0k tokens)`: the phrase names
-/// the calls in flight (several of one kind counted together), else the
-/// model's own thinking or answering; the clock is the turn's, the count
-/// the turn's output tokens when the provider has reported any.
-fn working_line(
-    transcript: &Transcript,
-    timings: Option<&HashMap<String, ToolTiming>>,
-    compact: bool,
-) -> Div {
+/// The provider's live caption, followed by a quieter metadata line.
+/// Elapsed time and output tokens belong to the turn; command details stay
+/// in their tool disclosures.
+fn working_line(transcript: &Transcript, compact: bool) -> Div {
     let mut facts: Vec<String> = Vec::new();
     if let Some(elapsed) = transcript.turn_elapsed() {
         facts.push(duration_label(elapsed).to_string());
@@ -2512,7 +2496,7 @@ fn working_line(
         .flex_shrink_0()
         .w_full()
         .min_w_0()
-        .text_size(px(theme::FS_SM))
+        .text_size(px(theme::FS_MD))
         .line_height(relative(theme::LINE_BODY));
     if let Some(caption) = caption {
         let selector = format!("progress-caption-{caption}");
@@ -2520,11 +2504,14 @@ fn working_line(
         row = row.child(
             div()
                 .flex()
-                .items_center()
-                .gap(px(theme::KEYS_GAP))
+                .flex_col()
+                .items_start()
+                .gap(px(theme::EVENT_PAD_Y))
                 .child(
                     div()
+                        .debug_selector(|| "progress-reasoning".into())
                         .min_w_0()
+                        .w_full()
                         .truncate()
                         .text_color(rgb(TEXT_2))
                         .font_weight(FontWeight::SEMIBOLD)
@@ -2532,51 +2519,14 @@ fn working_line(
                 )
                 .child(
                     div()
-                        .flex_shrink_0()
-                        .text_color(rgb(TEXT_2))
-                        .child(SharedString::from(format!("({})", facts.join(" · ")))),
+                        .debug_selector(|| "progress-metadata".into())
+                        .min_w_0()
+                        .w_full()
+                        .text_size(px(theme::FS_SM))
+                        .text_color(rgb(TEXT_MUTED))
+                        .child(SharedString::from(facts.join(" · "))),
                 ),
         );
-        let tool = transcript
-            .blocks()
-            .iter()
-            .rev()
-            .find_map(|block| match &block.body {
-                Body::Tool(tool) if tool.state == ToolState::Running => Some(tool),
-                _ => None,
-            });
-        if let Some(tool) = tool {
-            let native = progress.tool(&tool.call);
-            let detail = native
-                .filter(|p| !p.message.is_empty())
-                .map(|p| p.message.clone())
-                .unwrap_or_else(|| {
-                    if tool.summary.is_empty() {
-                        tool.name.clone()
-                    } else {
-                        format!("{} · {}", tool.name, tool.summary)
-                    }
-                });
-            let elapsed = native
-                .and_then(|p| p.elapsed_ms)
-                .map(Duration::from_millis)
-                .or_else(|| {
-                    timings
-                        .and_then(|map| map.get(&tool.call))
-                        .map(ToolTiming::elapsed)
-                });
-            let detail = elapsed
-                .map(|elapsed| format!("{detail} · {}", duration_label(elapsed)))
-                .unwrap_or(detail);
-            row = row.child(
-                div()
-                    .truncate()
-                    .text_color(rgb(TEXT_2))
-                    .child(SharedString::from(ferrite_core::progress::one_line(
-                        &detail, 240,
-                    ))),
-            );
-        }
     }
     div()
         .w_full()
@@ -2604,28 +2554,6 @@ fn tokens_label(tokens: u64) -> String {
         format!("{:.1}k", tokens as f64 / 1000.0)
     } else {
         tokens.to_string()
-    }
-}
-
-/// What CSS collapsing needs to know about a Block's neighbours — gpui adds
-/// adjacent margins where CSS collapses them, so the two cases the prototype
-/// actually shows are carried explicitly: a heading's 12px top margin
-/// collapses into whatever the previous block put below it, and a bullet run
-/// ends on the `ul`'s 10px rather than the `li`'s 3px.
-#[derive(Clone, Copy, Default)]
-struct Flow {
-    prev_margin_b: f32,
-    next_is_bullet: bool,
-}
-
-/// The bottom margin a Block actually renders with — the other half of the
-/// collapse.
-fn margin_b(body: &Body, next_is_bullet: bool) -> f32 {
-    match body {
-        Body::Bullet { .. } if next_is_bullet => theme::LI_GAP,
-        Body::Heading { .. } => theme::H4_MARGIN_B,
-        Body::Tool(_) => 0.,
-        _ => theme::P_MARGIN_B,
     }
 }
 
@@ -3982,8 +3910,8 @@ fn reasoning_text(thought: &str) -> (String, Option<&str>) {
 /// One Block in the prototype's transcript vocabulary (§E). The body draws
 /// **no gutter at all** for prose: paragraphs, headings and list items sit
 /// flush at the content edge, and the only glyphs left are the event row's
-/// `▸`/`●` and the result line's `└`, all in `--sep`. Spacing is per-block
-/// margins, not a stack gap.
+/// `▸`/`●` and the result line's `└`, all in `--sep`. The transcript stack
+/// owns spacing between blocks.
 ///
 /// Every text run routes through the selection overlay (#27) — that is what
 /// makes it selectable and copyable; the disc markers, chips, elbows and
@@ -3995,35 +3923,20 @@ fn render_block(
     expanded: bool,
     disclosure: Option<AnyElement>,
     signal: u32,
-    flow: Flow,
-    provider: Option<Provider>,
+    _provider: Option<Provider>,
     preview: &crate::attachment_preview::Preview,
 ) -> AnyElement {
     let row = div().w_full().min_w_0().flex_shrink_0();
     match &block.body {
-        // The operator's own line stands apart from the answer: a
-        // content-sized block in the strong ink on a ground of its own, so
-        // a glance tells who said what. No `❯`, no gutter: the ground is
-        // the whole marker. The prototype's ground is `--raised`; on a
-        // Thread the operator asked for the Provider's own colour instead
-        // — a faint wash and a 2px left edge — so the prompt also says who
-        // is answering it. A Pane with no Thread keeps `--raised`.
-        // Laid out exactly like a paragraph (stretched, capped at 68ch —
-        // see `paragraph` for why the width is dropped), so the wrap is
-        // measured at the width it is painted.
+        // A neutral ground distinguishes the operator's prompt for every provider.
         Body::Prompt(line) => {
             let (text, files) = ferrite_core::prompt_files::split(line.clone());
-            let mut row = paragraph(row, TEXT_STRONG)
+            let row = paragraph(row, TEXT_STRONG)
+                .debug_selector(|| "transcript-prompt".into())
                 .px(px(theme::CODE_PAD_X))
                 .py(px(theme::PROMPT_PAD_Y))
-                .rounded(px(theme::R_CONTROL));
-            row = match prompt_paint(provider) {
-                Some((wash, edge)) => row
-                    .bg(rgba(wash))
-                    .border_l(px(theme::PROMPT_EDGE_W))
-                    .border_color(rgb(edge)),
-                None => row.bg(rgb(RAISED)),
-            };
+                .rounded(px(theme::R_CONTROL))
+                .bg(rgb(RAISED));
             row.flex()
                 .flex_col()
                 .when(!text.is_empty(), |row| {
@@ -4043,28 +3956,16 @@ fn render_block(
             .font_family(theme::FONT_UI)
             .child(prose(block.id, spans, selection))
             .into_any_element(),
-        // `h4`: `margin: 12px 0 6px`, the same 12px as body text —
-        // distinguished by weight and colour only (§E.2).
+        // Fallback headings share the transcript's block rhythm.
         Body::Heading { spans, .. } => row
-            .mt(px((theme::H4_MARGIN_T - flow.prev_margin_b).max(0.)))
-            .mb(px(theme::H4_MARGIN_B))
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(rgb(TEXT_STRONG))
             .child(prose(block.id, spans, selection))
             .into_any_element(),
-        // `li`: a 16px indent, 3px below its siblings — 10px below the last
-        // of the run, where the `ul`'s own margin takes over — and an
-        // explicit 4px disc, gpui drawing no list markers. The disc sits
-        // 15px left of the text and 8.3px below the line box's top (§E.3,
-        // pixel-measured).
+        // Fallback list items retain the text inset and share block spacing.
         Body::Bullet { spans } => row
             .relative()
             .pl(px(theme::UL_INDENT))
-            .mb(px(if flow.next_is_bullet {
-                theme::LI_GAP
-            } else {
-                theme::P_MARGIN_B
-            }))
             .child(
                 div()
                     .absolute()
@@ -4137,7 +4038,6 @@ fn render_block(
         // 10px below, coloured by the Pane's own state — muted at rest,
         // amber while a Decision waits, red once the Session closed.
         Body::Notice(text) => row
-            .mb(px(theme::P_MARGIN_B))
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(rgb(signal))
             .child(selection.line(block.id, text.clone(), separators(text)))
@@ -4154,7 +4054,6 @@ fn render_block(
             source,
             tokens,
         } => row
-            .mb(px(theme::P_MARGIN_B))
             .child(
                 div()
                     .flex()
@@ -4199,8 +4098,8 @@ fn render_block(
     }
 }
 
-/// `p` (§E.1): `margin: 0 0 10px`, colour from the caller — `--text-2`
-/// for prose, `--text-muted` for a `.note`. The prototype capped prose at
+/// Paragraph ink comes from the caller; the transcript owns its spacing.
+/// The prototype capped prose at
 /// 68ch; the operator ruled that out — a wide Pane left half its width
 /// empty while tool rows ran the whole column — so prose runs the full
 /// content column like everything else in it.
@@ -4211,16 +4110,7 @@ fn paragraph(mut row: Div, ink: u32) -> Div {
     // — but a stretched item is the shape every other Block takes, and the
     // width it is measured at is then the width it is painted at.
     row.style().size.width = None;
-    row.mb(px(theme::P_MARGIN_B)).text_color(rgb(ink))
-}
-
-/// A prompt block's `(wash, edge)` on a Thread of the given Provider, or
-/// `None` where there is no Thread and the block keeps `--raised`.
-fn prompt_paint(provider: Option<Provider>) -> Option<(u32, u32)> {
-    match provider? {
-        Provider::Claude => Some((PROMPT_WASH_CLAUDE, PROVIDER_CLAUDE)),
-        Provider::Codex => Some((PROMPT_WASH_CODEX, PROVIDER_CODEX)),
-    }
+    row.text_color(rgb(ink))
 }
 
 /// `.signal .sep` (§E.8): the interpunct joining a signal's state to its
@@ -4354,11 +4244,12 @@ fn render_tool(
                 ToolTiming::Running(_) => None,
             })
     };
-    // A pass chip that carries the run's own count subsumes the result
-    // line it was promoted from; a countless chip keeps the line, which
-    // still says more than the chip does.
-    let mut promoted = false;
-    let mut verdicts: Vec<AnyElement> = tool_verdicts(tool)
+    // The tool's green verb already signals success. Keep a test tally in
+    // its disclosure instead of replacing a removed badge with redundant prose.
+    let redundant_test_result = tool.state == ToolState::Ok
+        && is_test_run(tool)
+        && tool.result_line.as_deref().and_then(passed_count).is_some();
+    let verdicts: Vec<AnyElement> = tool_verdicts(tool)
         .into_iter()
         .map(|verdict| match verdict {
             ToolVerdict::Diff(added, removed) => diff_stat(added, removed).into_any_element(),
@@ -4369,27 +4260,6 @@ fn render_tool(
             }
         })
         .collect();
-    if verdicts.is_empty() && matches!(tool.name.as_str(), "Bash" | "commandExecution") {
-        if matches!(tool.state, ToolState::Ok) {
-            let label = if is_test_run(tool) {
-                match tool.result_line.as_deref().and_then(passed_count) {
-                    Some(count) => {
-                        promoted = true;
-                        SharedString::from(format!("{count} passed"))
-                    }
-                    None => SharedString::from("passed"),
-                }
-            } else {
-                SharedString::from("exit 0")
-            };
-            // The prototype draws exactly one verdict chip, `.pass`. A
-            // command that merely exited 0 has no prototype form (R-09);
-            // it used to take the chip in muted ink on `--raised`, and now
-            // takes `.pass` itself — the operator wants a clean exit to
-            // read green at a glance, like the `●` beside it.
-            verdicts.push(chip(label, RUNNING, rgba(RUNNING_WASH).into()).into_any_element());
-        }
-    }
     // `.trail`: `margin-inline-start: auto`, an 8px gap, hard right.
     if !verdicts.is_empty() || settled_clock.is_some() {
         let mut trail = div()
@@ -4453,7 +4323,7 @@ fn render_tool(
             }
         }
         card = card.content(details);
-    } else if !promoted && (!in_group || matches!(tool.state, ToolState::Failed(_))) {
+    } else if !redundant_test_result && (!in_group || matches!(tool.state, ToolState::Failed(_))) {
         // A failed call's compact result reads in the blocked ink. Raw
         // output above remains neutral so ordinary source is still readable.
         if let Some(line) = &tool.result_line {
@@ -4828,7 +4698,7 @@ pub fn tool_disclosure_control(
 }
 
 /// `.hunk` (§E.13): no card, no filename header — the event above already
-/// names the file. `margin: 4px 0 10px 17px` so it aligns under the verb, a
+/// names the file. A top margin and text inset align it under the verb; a
 /// 4px radius clipping the first and last rows' outer corners, 8px inline
 /// padding, a 24px right-aligned number column, a 7px sign column, 10px
 /// between columns, and full-bleed washes on the added and removed rows.
@@ -4846,7 +4716,6 @@ fn render_diff(block: BlockId, diff: &Diff, selection: &TextRuns) -> impl IntoEl
         .flex()
         .flex_col()
         .mt(px(theme::HUNK_MARGIN_T))
-        .mb(px(theme::P_MARGIN_B))
         .ml(px(theme::INDENT))
         .rounded(px(theme::R_CHIP))
         .overflow_hidden()
@@ -5205,6 +5074,51 @@ mod tests {
     use gpui::{size, TestAppContext};
     use std::sync::Arc;
 
+    struct ShowsProgress(Transcript);
+
+    impl Render for ShowsProgress {
+        fn render(&mut self, _: &mut gpui::Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().w_full().child(working_line(&self.0, false))
+        }
+    }
+
+    #[gpui::test]
+    fn progress_metadata_sits_below_reasoning_without_a_duplicate_command(cx: &mut TestAppContext) {
+        let (lexer, _) = Lexer::new();
+        let mut transcript = Transcript::new(Arc::new(lexer));
+        transcript.apply(Input::Prompt("Build".into()));
+        transcript.apply(Input::Event(SessionEvent::ReasoningSummaryDelta {
+            text: "**Checking build progress**".into(),
+            summary_index: 0,
+        }));
+        transcript.apply(Input::Event(SessionEvent::ToolStarted {
+            id: "build".into(),
+            name: "commandExecution".into(),
+            input: serde_json::json!({"command": "cargo build --release"}),
+        }));
+        let (_, cx) = cx.add_window_view(|_, cx| {
+            gpui::component::init(cx);
+            ShowsProgress(transcript)
+        });
+        for width in [740., 260.] {
+            cx.simulate_resize(size(px(width), px(400.)));
+            cx.run_until_parked();
+            let reasoning = cx.debug_bounds("progress-reasoning").unwrap();
+            let metadata = cx.debug_bounds("progress-metadata").unwrap();
+            let footer = cx
+                .debug_bounds("progress-caption-Checking build progress")
+                .unwrap();
+            assert!(metadata.top() >= reasoning.bottom());
+            assert_eq!(metadata.left(), reasoning.left());
+            assert_eq!(
+                footer.bottom(),
+                metadata.bottom(),
+                "no command detail below metadata"
+            );
+            assert!(metadata.right() <= px(width));
+        }
+    }
+
     /// A transcript holding one of every Block kind the Pane can draw.
     fn every_kind() -> Transcript {
         let (lexer, answers) = Lexer::new();
@@ -5282,7 +5196,7 @@ mod tests {
         blocks: Vec<Block>,
         expanded: HashSet<String>,
         reasoning_expanded: bool,
-        /// The Thread's Provider, which colours the prompt block.
+        /// Exercise the same prompt rendering for each Thread Provider.
         provider: Option<Provider>,
     }
 
@@ -5313,7 +5227,6 @@ mod tests {
                         expanded,
                         None,
                         TEXT_MUTED,
-                        Flow::default(),
                         self.provider,
                         &preview,
                     )
@@ -5611,7 +5524,7 @@ mod tests {
             "the sign column is chrome and never copies: {all}"
         );
         // The result line registers where it renders (Edit's); Bash's was
-        // promoted into its chip, which is chrome — so its count never
+        // kept inside its disclosure — so its count never
         // registers. The `└` elbow is chrome and never joins the run.
         assert!(all.contains("applied"), "the result line: {all}");
         assert!(!all.contains("└"), "the elbow is chrome: {all}");
@@ -5635,7 +5548,7 @@ mod tests {
         assert_eq!((instruments.added, instruments.removed), (1, 1));
         assert!(
             !all.contains("42 passed"),
-            "a promoted chip is chrome: {all}"
+            "a redundant success tally stays in its disclosure: {all}"
         );
         // The prototype's body draws two glyphs and one elbow, all chrome;
         // the old ❯/⏺/• gutter glyphs are gone entirely.
@@ -6000,19 +5913,6 @@ mod tests {
         );
         assert_eq!(result_ink(&ToolState::Ok), TEXT_MUTED);
         assert_eq!(result_ink(&failed), BLOCKED);
-    }
-
-    #[test]
-    fn a_prompt_wears_its_threads_provider_or_stays_raised() {
-        assert_eq!(
-            prompt_paint(Some(Provider::Claude)),
-            Some((PROMPT_WASH_CLAUDE, PROVIDER_CLAUDE))
-        );
-        assert_eq!(
-            prompt_paint(Some(Provider::Codex)),
-            Some((PROMPT_WASH_CODEX, PROVIDER_CODEX))
-        );
-        assert_eq!(prompt_paint(None), None);
     }
 
     #[test]
