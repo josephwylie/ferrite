@@ -674,11 +674,10 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
     session.send("hi").unwrap();
     session.interrupt().unwrap();
     session.interrupt().unwrap();
-    // The CLI names a session at spawn only: a rename is accepted and
-    // writes nothing.
+    // A live rename is a native control request on the same Session.
     ferrite_core::providers::Session::set_name(&mut session, "renamed").unwrap();
 
-    let recorded = read_lines(&log, 6);
+    let recorded = read_lines(&log, 7);
     drop(session);
     let sent: Vec<serde_json::Value> = recorded[1..]
         .iter()
@@ -694,7 +693,7 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
          --include-partial-messages --thinking-display summarized --forward-subagent-text --verbose --permission-prompt-tool stdio --prompt-suggestions false \
          --model haiku --permission-mode default --name CI flake"
     );
-    assert_eq!(sent.len(), 5, "the rename wrote nothing");
+    assert_eq!(sent.len(), 6);
     // Feature detection comes first, before a word of the Thread.
     assert_eq!(
         sent[0],
@@ -727,6 +726,10 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
         })
     );
     assert_eq!(sent[4]["request_id"], "req_4");
+    assert_eq!(
+        sent[5],
+        serde_json::json!({"type":"control_request", "request_id":"req_5", "request":{"subtype":"rename_session","title":"renamed"}})
+    );
 }
 
 /// Ferrite must not smuggle in a model or a permission posture the operator

@@ -58,3 +58,39 @@ fn claude_suppressed_standing_approval_is_not_offered() {
     assert_eq!(ds.len(), 1);
     assert!(ds[0].standing_answer().is_none());
 }
+
+#[test]
+fn codex_question_form_preserves_ids_and_labels_with_commas() {
+    let mut r = Replay::new(
+        "codex",
+        vec![
+            json!({"id":9,"method":"item/tool/requestUserInput","params":{"threadId":"root","turnId":"turn","itemId":"tool","questions":[{"id":"first","header":"One","question":"Choose","options":[{"label":"Red, green","description":"Together"},{"label":"Blue","description":"Alone"}],"isOther":true,"isSecret":false},{"id":"second","header":"Two","question":"Choose","options":null,"isOther":true,"isSecret":false}]}}),
+        ],
+    );
+    let ds = decisions(&r.drain());
+    assert_eq!(ds.len(), 1);
+    let qs =
+        ferrite_core::questions::parse(&ds[0].input).expect("native question is a usable form");
+    let input = ferrite_core::questions::answered_input(
+        &ds[0].input,
+        &[
+            ferrite_core::questions::Answer {
+                picks: vec![0],
+                other: None,
+            },
+            ferrite_core::questions::Answer {
+                picks: vec![],
+                other: Some("free text".into()),
+            },
+        ],
+        &qs,
+    );
+    r.session
+        .respond_to_decision(&ds[0].id, DecisionAnswer::Allow { input })
+        .unwrap();
+    let reply = r.wait_host(|v| v["id"] == 9 && v.get("result").is_some());
+    assert_eq!(
+        reply["result"],
+        json!({"answers":{"first":{"answers":["Red, green"]},"second":{"answers":["free text"]}}})
+    );
+}
