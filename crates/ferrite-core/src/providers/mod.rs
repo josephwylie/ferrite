@@ -14,6 +14,7 @@ mod codex;
 pub mod discover;
 pub mod limits;
 pub mod models;
+pub(crate) mod oneshot;
 // The Win32 calls are cfg(windows); the pid-selection logic inside is pure
 // and part of the host suite, like `cmd_shim` below.
 #[cfg(any(windows, test))]
@@ -79,6 +80,14 @@ pub trait Session {
             "this Session cannot change effort",
         ))
     }
+    /// Native follow-ups are optional; providers without them use the
+    /// one-shot prediction path. These never enter the durable transcript.
+    fn set_suggestions_enabled(&mut self, _enabled: bool) -> io::Result<()> {
+        Ok(())
+    }
+    fn take_suggestion(&mut self) -> Option<String> {
+        None
+    }
     fn interrupt(&mut self) -> io::Result<()>;
     fn respond_to_decision(&mut self, id: &str, answer: DecisionAnswer) -> io::Result<()>;
 
@@ -101,6 +110,13 @@ pub trait Session {
 }
 
 impl Session for ClaudeSession {
+    fn set_suggestions_enabled(&mut self, enabled: bool) -> io::Result<()> {
+        ClaudeSession::set_suggestions_enabled(self, enabled)
+    }
+    fn take_suggestion(&mut self) -> Option<String> {
+        ClaudeSession::take_suggestion(self)
+    }
+
     fn set_effort(&mut self, effort: Option<&str>) -> io::Result<()> {
         ClaudeSession::set_effort(self, effort)
     }
