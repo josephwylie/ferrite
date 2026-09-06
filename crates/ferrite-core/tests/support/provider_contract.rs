@@ -61,6 +61,15 @@ impl Replay {
             quote(&directory.join("host"))
         ));
         script.push_str(r#"case "$frame" in
+*'"subtype":"get_context_usage"'*)
+request=$(printf '%s' "$frame" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
+printf '{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{"totalTokens":12000,"rawMaxTokens":180000,"maxTokens":150000,"model":"fixture","autoCompactThreshold":140000,"isAutoCompactEnabled":true,"categories":[{"name":"Messages","tokens":12000,"color":"blue"}]}}}\n' "$request";;
+*'"subtype":"mcp_status"'*)
+request=$(printf '%s' "$frame" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
+printf '{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{"mcpServers":[{"name":"search","status":"needs-auth","error":"Sign in to search"}]}}}\n' "$request";;
+*'"subtype":"stop_task"'*|*'"subtype":"background_tasks"'*|*'"subtype":"mcp_reconnect"'*|*'"subtype":"set_permission_mode"'*)
+request=$(printf '%s' "$frame" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
+printf '{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{}}}\n' "$request";;
 *'"subtype":"set_model"'*)
 request=$(printf '%s' "$frame" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
 case "$frame" in
