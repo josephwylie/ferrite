@@ -2,6 +2,7 @@
 //! Provider adapters own flags, models and output formats. Callers supply
 //! text; the runner owns stdin, pipe draining, the scratch cwd and deadline.
 
+use crate::spawn::NoConsoleWindow;
 use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
@@ -58,6 +59,7 @@ pub(crate) fn run(form: &Form, input: Option<&str>, timeout: Duration) -> Option
     std::fs::create_dir_all(&dir).ok()?;
     let mut child = Command::new(spawnable_program(&form.program))
         .args(&form.args)
+        .no_console_window()
         .current_dir(dir)
         .stdin(if input.is_some() {
             Stdio::piped()

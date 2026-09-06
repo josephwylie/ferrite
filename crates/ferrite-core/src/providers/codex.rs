@@ -16,6 +16,7 @@ mod questions;
 mod queue;
 mod wire;
 
+use crate::spawn::NoConsoleWindow;
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
@@ -242,7 +243,7 @@ impl CodexSession {
         check_version(&program)?;
 
         let mut command = Command::new(&program);
-        command.arg("app-server");
+        command.arg("app-server").no_console_window();
         if let Some(cwd) = &config.cwd {
             // The thread's cwd travels in thread/start; the process gets the
             // same one so anything the server resolves against itself agrees.
@@ -987,6 +988,7 @@ fn spawn_error(program: &str, e: io::Error) -> CodexSpawnError {
 fn check_version(program: &str) -> Result<(), CodexSpawnError> {
     let output = Command::new(program)
         .arg("--version")
+        .no_console_window()
         .output()
         .map_err(|e| spawn_error(program, e))?;
     if !output.status.success() {

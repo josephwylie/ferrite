@@ -21,6 +21,7 @@ pub mod questions;
 pub mod roster;
 pub mod session;
 pub mod settings;
+pub mod spawn;
 pub mod store;
 pub mod suggest;
 pub mod titler;
