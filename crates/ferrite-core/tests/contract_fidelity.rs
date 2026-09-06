@@ -6,6 +6,17 @@ use serde_json::json;
 use support::*;
 
 #[test]
+fn conversation_reset_never_reuses_a_live_decision_handle() {
+    let request = |id: &str| json!({"type":"control_request","request_id":id,"request":{"subtype":"can_use_tool","tool_name":"Bash","tool_use_id":id,"input":{"command":"echo test"}}});
+    let r = Replay::new("claude", vec![request("before"), json!({"type":"conversation_reset","session_id":"root","uuid":"reset","new_conversation_id":"fresh"}), request("after")]);
+    let events = r.drain();
+    let reset = events.iter().position(|e| matches!(e, ferrite_core::SessionEvent::ConversationReset { .. })).unwrap();
+    let old = fold(events[..reset].to_vec()).view().pending_decisions()[0].handle.clone();
+    let a = fold(events);
+    assert_ne!(old, a.view().pending_decisions()[0].handle, "stale pre-reset UI actions must never target a new request");
+}
+
+#[test]
 fn claude_local_command_output_preserves_all_lines_once() {
     let frame = json!({"type":"system","subtype":"local_command_output","session_id":"root","uuid":"command","content":"First line\n\nSecond paragraph"});
     let r = Replay::new("claude", vec![frame.clone(), frame]);
