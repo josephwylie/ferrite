@@ -1263,6 +1263,9 @@ mod tests {
             // captures; these legacy parser fixtures are Main-only.
             SessionEvent::Activity(_) => return None,
             SessionEvent::Init { .. } => "Init",
+            SessionEvent::ModelChanged { .. }
+            | SessionEvent::ConversationReset { .. }
+            | SessionEvent::RunState { .. } => return None,
             SessionEvent::TextDelta { .. } => "TextDelta",
             SessionEvent::ThinkingDelta { .. } => "ThinkingDelta",
             SessionEvent::ToolStarted { .. } => "ToolStarted",

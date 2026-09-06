@@ -1788,7 +1788,11 @@ impl ThreadSnapshot {
                 Record::Activity {
                     observation: PersistedActivity::MainContent { id, event, .. },
                 } => {
-                    if let Some((_, answer)) = exchanges.last_mut() {
+                    if matches!(event, PersistedExecution::Retract { .. }) {
+                        for (_, answer) in &mut exchanges {
+                            answer.observe(id.as_deref(), event);
+                        }
+                    } else if let Some((_, answer)) = exchanges.last_mut() {
                         answer.observe(id.as_deref(), event);
                     }
                 }

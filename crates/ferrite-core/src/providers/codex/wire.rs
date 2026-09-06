@@ -1058,6 +1058,9 @@ mod tests {
             // its real child captures are covered in activity::tests.
             SessionEvent::Activity(_) => return None,
             SessionEvent::Init { .. } => "Init",
+            SessionEvent::ModelChanged { .. }
+            | SessionEvent::ConversationReset { .. }
+            | SessionEvent::RunState { .. } => return None,
             SessionEvent::TextDelta { .. } => "TextDelta",
             SessionEvent::ReasoningSummaryDelta { .. } => "ReasoningSummaryDelta",
             SessionEvent::ToolStarted { .. } => "ToolStarted",

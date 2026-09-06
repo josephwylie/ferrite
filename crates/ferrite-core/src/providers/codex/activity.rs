@@ -888,7 +888,7 @@ impl Router {
             }
             "thread/name/updated" => {
                 if let (Some(name), Some(child)) =
-                    (params["name"].as_str(), self.children.get_mut(scope))
+                    (params["threadName"].as_str(), self.children.get_mut(scope))
                 {
                     child.info.name = Some(name.to_owned());
                     update.activity(ActivityEvent::Discovered(child.info.clone()));
@@ -897,6 +897,44 @@ impl Router {
             _ => {
                 for event in wire::parse_events(&frame.to_string()) {
                     match event {
+                        SessionEvent::ThinkingDelta { text }
+                            if method == "item/reasoning/textDelta" =>
+                        {
+                            if let (Some(turn), Some(item), Some(index)) = (
+                                turn,
+                                params["itemId"].as_str(),
+                                params["contentIndex"].as_u64(),
+                            ) {
+                                update.activity(ActivityEvent::Content {
+                                    key: key.clone(),
+                                    id: Some(reasoning_raw_key(turn, item, index)),
+                                    event: ExecutionEvent::ThinkingDelta { text },
+                                });
+                            }
+                        }
+                        SessionEvent::ReasoningSummaryPart {
+                            item_id,
+                            summary_index,
+                            text,
+                            snapshot,
+                        } => {
+                            if let Some(turn) = turn {
+                                update.activity(ActivityEvent::Content {
+                                    key: key.clone(),
+                                    id: Some(reasoning_summary_key(
+                                        turn,
+                                        &item_id,
+                                        summary_index,
+                                    )),
+                                    event: ExecutionEvent::ReasoningSummaryPart {
+                                        item_id: item_key(turn, &item_id),
+                                        summary_index,
+                                        text,
+                                        snapshot,
+                                    },
+                                });
+                            }
+                        }
                         SessionEvent::DecisionRequested { mut decision } => {
                             if let Some(turn) = turn {
                                 decision.tool_use_id = item_key(turn, &decision.tool_use_id);
@@ -951,17 +989,17 @@ impl Router {
         };
         let id = item_key(turn, native_id);
         let key = self.key(scope);
-        let emit = |event, update: &mut Update| {
+        let emit = |id, event, update: &mut Update| {
             update.activity(if historical {
                 ActivityEvent::HistoryContent {
                     key: key.clone(),
-                    id: Some(id.clone()),
+                    id: Some(id),
                     event,
                 }
             } else {
                 ActivityEvent::Content {
                     key: key.clone(),
-                    id: Some(id.clone()),
+                    id: Some(id),
                     event,
                 }
             })
@@ -970,6 +1008,7 @@ impl Router {
             "agentMessage" | "plan" if completed => {
                 if let Some(text) = item["text"].as_str() {
                     emit(
+                        id.clone(),
                         ExecutionEvent::TextSnapshot {
                             text: text.to_owned(),
                         },
@@ -982,6 +1021,7 @@ impl Router {
                     for (index, part) in parts.iter().enumerate() {
                         if let Some(text) = part.as_str() {
                             emit(
+                                reasoning_summary_key(turn, native_id, index as u64),
                                 ExecutionEvent::ReasoningSummaryPart {
                                     item_id: id.clone(),
                                     summary_index: index as u64,
@@ -993,7 +1033,18 @@ impl Router {
                         }
                     }
                 }
-                emit(ExecutionEvent::ContentBoundary, update);
+                if let Some(parts) = item["content"].as_array() {
+                    for (index, part) in parts.iter().enumerate() {
+                        if let Some(text) = part.as_str() {
+                            emit(
+                                reasoning_raw_key(turn, native_id, index as u64),
+                                ExecutionEvent::ThinkingSnapshot { text: text.into() },
+                                update,
+                            );
+                        }
+                    }
+                }
+                emit(id.clone(), ExecutionEvent::ContentBoundary, update);
             }
             "userMessage" if completed => {
                 let text = item["content"].as_array().map(|parts| {
@@ -1004,7 +1055,7 @@ impl Router {
                         .join("\n")
                 });
                 if let Some(text) = text {
-                    emit(ExecutionEvent::Prompt { text }, update);
+                    emit(id.clone(), ExecutionEvent::Prompt { text }, update);
                 }
             }
             "agentMessage" | "plan" | "reasoning" | "userMessage" => {}
@@ -1021,11 +1072,11 @@ impl Router {
             | "subAgentActivity" => {
                 let params = json!({"item":item});
                 if let Some(event) = wire::parse_item(&params, false).and_then(execution) {
-                    emit(scoped_execution(event, Some(turn)), update);
+                    emit(id.clone(), scoped_execution(event, Some(turn)), update);
                 }
                 if completed {
                     if let Some(event) = wire::parse_item(&params, true).and_then(execution) {
-                        emit(scoped_execution(event, Some(turn)), update);
+                        emit(id.clone(), scoped_execution(event, Some(turn)), update);
                     }
                 }
             }
@@ -1033,6 +1084,7 @@ impl Router {
             _ if completed => {
                 if let Some(text) = item["text"].as_str() {
                     emit(
+                        id.clone(),
                         ExecutionEvent::Notice {
                             text: text.to_owned(),
                         },
