@@ -26,3 +26,20 @@ fn native_turn_diff_is_a_replacement_snapshot_not_an_invented_tool() {
     assert_eq!(d.turn_id,"turn");assert_eq!(d.diff,"--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n+new\n");
     assert!(!t.blocks().iter().any(|b|matches!(&b.body,ferrite_core::transcript::Body::Tool(_))));
 }
+
+#[test]
+fn native_diff_updates_survive_store_replay() {
+    use ferrite_core::{store::{Store,Provider}, workspace::WorkspaceBinding, activity::Activity};
+    let r=Replay::new("codex",vec![
+        json!({"method":"item/started","params":{"threadId":"root","turnId":"turn","item":{"id":"edit","type":"fileChange","changes":[],"status":"inProgress"}}}),
+        json!({"method":"item/fileChange/patchUpdated","params":{"threadId":"root","turnId":"turn","itemId":"edit","changes":[{"path":"a.txt","kind":{"type":"add"},"diff":"persisted\n"}]}}),
+        json!({"method":"turn/diff/updated","params":{"threadId":"root","turnId":"turn","diff":"persisted aggregate"}}),
+    ]);
+    let dir=std::env::temp_dir().join(format!("ferrite-diff-replay-{}",std::process::id()));
+    let store=Store::open(&dir).unwrap();let(id,mut writer)=store.create(Provider::Codex,None,WorkspaceBinding::Main{checkout:std::env::temp_dir()}).unwrap();
+    for event in r.drain(){writer.record_event(&event,None).unwrap();}writer.flush().unwrap();
+    let mut a=Activity::default();for input in store.load(id).unwrap().activity_inputs(){a.apply(input);}
+    assert_eq!(a.view().main().transcript().turn_diff().unwrap().diff,"persisted aggregate");
+    assert!(a.view().main().transcript().blocks().iter().any(|b| matches!(&b.body,ferrite_core::transcript::Body::Tool(t) if t.diffs.len()==1 && t.diffs[0].path=="a.txt")));
+    drop(writer);std::fs::remove_dir_all(dir).unwrap();
+}
