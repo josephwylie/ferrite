@@ -2595,6 +2595,11 @@ pub struct ThreadView<'a> {
 }
 
 impl<'a> ThreadView<'a> {
+    /// Changes whenever this Thread receives a replacement Session.
+    pub fn generation(&self) -> u64 {
+        self.state.generation
+    }
+
     pub fn supports_control(&self, kind: crate::ControlKind) -> bool {
         self.state
             .session

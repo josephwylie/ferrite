@@ -980,6 +980,7 @@ impl Transcript {
             }
             Input::Revived => {
                 self.progress.disconnected();
+                self.mcp_servers.clear();
                 if matches!(self.status, Status::Streaming | Status::Blocked) {
                     self.status = Status::Idle;
                 }
@@ -1167,6 +1168,7 @@ impl Transcript {
             }
             Input::Event(SessionEvent::Closed { reason }) => {
                 self.progress.disconnected();
+                self.mcp_servers.clear();
                 self.latest_reasoning_part = None;
                 self.status = Status::Closed;
                 let mut dirty = self.retire_tools();

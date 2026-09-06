@@ -169,7 +169,8 @@ pub struct CockpitView {
     /// windows are real before the first prompt — so this is a
     /// `PaneIdentity`, not a Thread.
     context_usage: Option<(PaneIdentity, gpui::Point<gpui::Pixels>)>,
-    session_controls: Option<(ThreadId, gpui::Point<gpui::Pixels>)>,
+    session_controls: Option<(ThreadId, u64, gpui::Point<gpui::Pixels>)>,
+    session_control_error: Option<(ThreadId, u64, String)>,
     /// The header `ci` mark's checks card, tied to its Thread and click
     /// position (#29). The runs it lists are read from the same cached
     /// `BranchStatus` the mark was drawn from, so the card can never
@@ -592,6 +593,7 @@ impl CockpitView {
             context_menu: None,
             context_usage: None,
             session_controls: None,
+            session_control_error: None,
             context_checks: None,
             nav_collapsed: prefs.settings.nav_collapsed,
             nav_has_toggled: false,
@@ -2339,6 +2341,10 @@ impl CockpitView {
             return;
         }
         if self.context_usage.take().is_some() {
+            cx.notify();
+            return;
+        }
+        if self.session_controls.take().is_some() {
             cx.notify();
             return;
         }
@@ -4866,6 +4872,18 @@ impl Render for CockpitView {
             self.context_checks = None;
         }
 
+        if self.session_controls.is_some_and(|(thread, generation, _)| {
+            level != Level::Transcript
+                || self.settings_open
+                || self.focused_thread() != Some(thread)
+                || self
+                    .cockpit
+                    .thread(thread)
+                    .is_none_or(|open| open.generation() != generation)
+        }) {
+            self.session_controls = None;
+        }
+
         if self.context_usage.is_some_and(|(identity, _)| {
             level != Level::Transcript
                 || self.settings_open
@@ -5828,16 +5846,21 @@ impl CockpitView {
                     cx.listener(move |view, event: &MouseDownEvent, _, cx| {
                         cx.stop_propagation();
                         view.focus_pane(index);
-                        if can_refresh {
+                        if !was_open && can_refresh {
                             let PaneIdentity::Thread(thread) = identity else {
                                 return;
                             };
-                            let _ = view
-                                .cockpit
-                                .control(thread, ferrite_core::SessionControl::RefreshContext);
+                            if let Some(open) = view.cockpit.thread(thread) {
+                                view.run_session_control(
+                                    thread,
+                                    open.generation(),
+                                    ferrite_core::SessionControl::RefreshContext,
+                                );
+                            }
                         }
                         view.popover = None;
                         view.context_menu = None;
+                        view.session_controls = None;
                         // Outside-click dismissal runs in capture phase, before this
                         // toggle. Use the state of the meter that received the press.
                         view.context_usage = (!was_open)
@@ -5849,9 +5872,30 @@ impl CockpitView {
         )
     }
 
+    fn run_session_control(
+        &mut self,
+        thread: ThreadId,
+        generation: u64,
+        action: ferrite_core::SessionControl,
+    ) {
+        let current = self
+            .cockpit
+            .thread(thread)
+            .is_some_and(|open| open.generation() == generation);
+        if !current {
+            return;
+        }
+        self.session_control_error = self
+            .cockpit
+            .control(thread, action)
+            .err()
+            .map(|error| (thread, generation, error.to_string()));
+    }
+
     fn session_controls_button(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
         let thread = self.panes[index].thread()?;
         let open = self.cockpit.thread(thread)?;
+        let generation = open.generation();
         let capable = [
             ferrite_core::ControlKind::RefreshMcp,
             ferrite_core::ControlKind::ReconnectMcp,
@@ -5865,51 +5909,61 @@ impl CockpitView {
         }
         let was_open = self
             .session_controls
-            .is_some_and(|(shown, _)| shown == thread);
+            .is_some_and(|(shown, shown_generation, _)| {
+                shown == thread && shown_generation == generation
+            });
         Some(
-            div()
-                .id(SharedString::from(format!(
-                    "session-controls-{}",
-                    thread.get()
-                )))
+            crate::components::button(SharedString::from(format!(
+                "session-controls-{}",
+                thread.get()
+            )))
                 .debug_selector(move || format!("session-controls-{}", thread.get()))
-                .rounded(px(crate::theme::R_CHIP))
-                .px(px(6.))
+                .tooltip("Session controls")
                 .child("•••")
-                .hover_raised()
-                .press_raised()
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |view, event: &MouseDownEvent, _, cx| {
-                        cx.stop_propagation();
-                        view.focus_pane(index);
-                        if !was_open
-                            && view.cockpit.thread(thread).is_some_and(|open| {
-                                open.supports_control(ferrite_core::ControlKind::RefreshMcp)
-                            })
-                        {
-                            let _ = view
-                                .cockpit
-                                .control(thread, ferrite_core::SessionControl::RefreshMcp);
-                        }
-                        view.session_controls = (!was_open).then_some((thread, event.position));
-                        cx.notify();
-                    }),
-                )
+                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                    view.focus_pane(index);
+                    if !was_open
+                        && view.cockpit.thread(thread).is_some_and(|open| {
+                            open.generation() == generation
+                                && open.supports_control(ferrite_core::ControlKind::RefreshMcp)
+                        })
+                    {
+                        view.run_session_control(
+                            thread,
+                            generation,
+                            ferrite_core::SessionControl::RefreshMcp,
+                        );
+                    }
+                    view.popover = None;
+                    view.context_menu = None;
+                    view.context_usage = None;
+                    view.context_checks = None;
+                    view.session_controls = (!was_open).then_some((thread, generation, gpui::point(px(0.), px(0.))));
+                    cx.notify();
+                }))
                 .into_any_element(),
         )
     }
 
     fn session_controls_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let (thread, at) = self.session_controls?;
+        let (thread, generation, at) = self.session_controls?;
         let open = self.cockpit.thread(thread)?;
+        if open.generation() != generation {
+            return None;
+        }
         let transcript = open.transcript();
         let mut card = menu::shell()
             .id("session-controls-card")
+            .debug_selector(|| "session-controls-card".into())
+            .max_h(px(420.))
+            .overflow_y_scroll()
             .p(px(8.))
             .gap(px(6.))
             .flex()
             .flex_col();
+        if let Some((_, _, error)) = self.session_control_error.as_ref().filter(|(shown, shown_generation, _)| *shown == thread && *shown_generation == generation) {
+            card = card.child(div().id("session-control-error").text_color(rgb(crate::theme::ATTENTION)).child(error.clone()));
+        }
         if transcript.mcp_servers().is_empty() {
             card = card.child(
                 div()
@@ -5919,33 +5973,38 @@ impl CockpitView {
         }
         for (index, server) in transcript.mcp_servers().iter().enumerate() {
             let name = server.name.clone();
-            let label = server
-                .error
-                .as_deref()
-                .unwrap_or(server.name.as_str())
-                .to_string();
-            let mut row = div().flex().items_center().gap(px(6.)).child(label);
+            let status = match server.status {
+                ferrite_core::McpStatus::Connected => "connected",
+                ferrite_core::McpStatus::Connecting => "connecting",
+                ferrite_core::McpStatus::NeedsAuth => "needs-auth",
+                ferrite_core::McpStatus::Failed => "failed",
+                ferrite_core::McpStatus::Disabled => "disabled",
+                ferrite_core::McpStatus::Unknown => "unknown",
+            };
+            let mut row = div()
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .child(server.name.clone())
+                .child(div().debug_selector(move || format!("mcp-status-{index}-{status}")).text_color(rgb(crate::theme::TEXT_MUTED)).child(status));
+            if let Some(error) = server.error.as_ref() {
+                row = row.child(div().text_color(rgb(crate::theme::ATTENTION)).child(error.clone()));
+            }
             if open.supports_control(ferrite_core::ControlKind::ReconnectMcp) {
                 row = row.child(
-                    div()
-                        .id(SharedString::from(format!("mcp-reconnect-{index}")))
+                    crate::components::button(SharedString::from(format!("mcp-reconnect-{index}")))
                         .debug_selector(move || format!("mcp-reconnect-{index}"))
                         .child("Reconnect")
-                        .hover_raised()
-                        .press_raised()
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                                cx.stop_propagation();
-                                let _ = view.cockpit.control(
-                                    thread,
-                                    ferrite_core::SessionControl::ReconnectMcp {
-                                        server: name.clone(),
-                                    },
-                                );
-                                cx.notify();
-                            }),
-                        ),
+                        .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                            let exists = view.cockpit.thread(thread).is_some_and(|open| {
+                                open.generation() == generation
+                                    && open.transcript().mcp_servers().iter().any(|server| server.name == name)
+                            });
+                            if exists {
+                                view.run_session_control(thread, generation, ferrite_core::SessionControl::ReconnectMcp { server: name.clone() });
+                            }
+                            cx.notify();
+                        })),
                 );
             }
             card = card.child(row);
@@ -5961,46 +6020,42 @@ impl CockpitView {
             {
                 let id = task.id.clone();
                 row = row.child(
-                    div()
-                        .id(SharedString::from(format!("background-stop-{index}")))
+                    crate::components::button(SharedString::from(format!("background-stop-{index}")))
                         .debug_selector(move || format!("background-stop-{index}"))
                         .child("Stop")
-                        .hover_raised()
-                        .press_raised()
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                                cx.stop_propagation();
-                                let _ = view.cockpit.control(
-                                    thread,
-                                    ferrite_core::SessionControl::StopTask { id: id.clone() },
-                                );
-                                cx.notify();
-                            }),
-                        ),
+                        .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                            let exists = view.cockpit.thread(thread).is_some_and(|open| {
+                                open.generation() == generation
+                                    && open.transcript().progress().background().iter().any(|task| {
+                                        task.id == id && task.status == ferrite_core::progress::TaskStatus::Working
+                                    })
+                            });
+                            if exists {
+                                view.run_session_control(thread, generation, ferrite_core::SessionControl::StopTask { id: id.clone() });
+                            }
+                            cx.notify();
+                        })),
                 );
             }
             card = card.child(row);
         }
         if open.supports_control(ferrite_core::ControlKind::BackgroundTasks) {
             card = card.child(
-                div()
-                    .id("background-all")
-                    .child("Show background tasks")
-                    .hover_raised()
-                    .press_raised()
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                            cx.stop_propagation();
-                            let _ = view
-                                .cockpit
-                                .control(thread, ferrite_core::SessionControl::BackgroundTasks);
-                            cx.notify();
-                        }),
-                    ),
+                crate::components::button("background-all")
+                    .child("Run tasks in background")
+                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                        view.run_session_control(thread, generation, ferrite_core::SessionControl::BackgroundTasks);
+                        cx.notify();
+                    })),
             );
         }
+        let card = card
+            .on_mouse_down(MouseButton::Left, cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()))
+            .on_mouse_down_out(cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                if view.session_controls.take().is_some() {
+                    cx.notify();
+                }
+            }));
         Some(
             deferred(
                 anchored()
@@ -6150,6 +6205,27 @@ impl CockpitView {
                 self.cockpit.account_limits(provider),
                 details,
             ))
+            .when_some(
+                match identity {
+                    PaneIdentity::Thread(thread) => self.cockpit.thread(thread).and_then(|open| {
+                        self.session_control_error
+                            .as_ref()
+                            .filter(|(shown, generation, _)| {
+                                *shown == thread && *generation == open.generation()
+                            })
+                            .map(|(_, _, error)| error.clone())
+                    }),
+                    PaneIdentity::Draft(_) => None,
+                },
+                |card, error| {
+                    card.child(
+                        div()
+                            .id("session-control-error")
+                            .text_color(rgb(crate::theme::ATTENTION))
+                            .child(error),
+                    )
+                },
+            )
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),

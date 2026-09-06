@@ -3517,7 +3517,11 @@ pub fn context_usage(
                         "context-compaction-{threshold}"
                     )))
                     .debug_selector(move || format!("context-compaction-{threshold}"))
-                    .child(format!("Compacts at {threshold}")),
+                    .child(match details.is_auto_compact_enabled {
+                        Some(true) => format!("Compacts at {threshold}"),
+                        Some(false) => format!("Compaction disabled · threshold {threshold}"),
+                        None => format!("Compaction threshold {threshold}"),
+                    }),
             );
         }
         for (index, category) in details.categories.iter().enumerate() {
