@@ -18,7 +18,7 @@ use crate::activity::{
     Subject,
 };
 use crate::groups::{Applied, ApplyError, Drag, DropTarget, GroupChange, GroupId, Groups, Plan};
-use crate::notifications::{Frame, NoticeId, Notifications};
+use crate::notifications::{DecisionNoticeId, Frame, NoticeId, Notifications};
 pub use crate::prompt_history::HistoryDirection;
 use crate::prompt_history::PromptHistory;
 use crate::providers::Session;
@@ -2431,6 +2431,22 @@ impl Cockpit {
 
     pub fn dismiss_notice(&mut self, id: NoticeId) -> bool {
         self.notifications.dismiss(id)
+    }
+
+    /// Open one live Decision attention record. Its handle remains resolved
+    /// through Activity, so opening it cannot complete a turn or release a
+    /// queued prompt.
+    pub fn open_decision_notice(&mut self, id: &DecisionNoticeId) -> Option<ThreadId> {
+        let thread = self.notifications.open_decision(id)?;
+        if !self.focus_thread(thread) {
+            self.reopen(thread).ok()?;
+        }
+        self.acknowledge_focus();
+        Some(thread)
+    }
+
+    pub fn dismiss_decision_notice(&mut self, id: &DecisionNoticeId) -> bool {
+        self.notifications.dismiss_decision(id)
     }
 
     pub fn clear_notices(&mut self) {

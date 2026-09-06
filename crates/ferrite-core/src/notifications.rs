@@ -20,10 +20,11 @@
 //! A held prompt going out at turn end never notifies either: the
 //! operator queued more work and is not waiting for this one.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::{Duration, Instant, SystemTime};
 
-use crate::activity::{ActivityView, AgentStatus};
+use crate::activity::{ActivityView, AgentStatus, DecisionHandle, Subject};
+use crate::questions::is_question_tool;
 use crate::{ThreadId, TurnOutcome};
 
 /// How long Main may sit idle after its last child settles before the
@@ -64,6 +65,32 @@ pub struct Notice {
     pub read: bool,
 }
 
+/// Identity of one live request. The handle scopes the provider's request
+/// serial to its Session generation; the Thread scopes it to one Activity.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct DecisionNoticeId {
+    pub thread: ThreadId,
+    pub handle: DecisionHandle,
+}
+
+/// The small distinction a notification surface needs before it opens the
+/// real Decision from Activity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RequestKind {
+    Question,
+    Permission,
+}
+
+/// An unread live Decision asking for the operator. Its actionable data stays
+/// in Activity; this record only owns attention and read state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DecisionNotice {
+    pub id: DecisionNoticeId,
+    pub subject: Option<Subject>,
+    pub kind: RequestKind,
+    pub read: bool,
+}
+
 /// One frame's facts about one Thread, as the Cockpit folded them.
 #[derive(Clone, Copy)]
 pub struct Frame<'a> {
@@ -91,6 +118,8 @@ enum Phase {
 
 pub struct Notifications {
     notices: VecDeque<Notice>,
+    decisions: BTreeMap<DecisionNoticeId, DecisionNotice>,
+    dismissed_decisions: BTreeSet<DecisionNoticeId>,
     phases: BTreeMap<ThreadId, Phase>,
     next: u64,
     grace: Duration,
@@ -106,6 +135,8 @@ impl Notifications {
     pub fn with_grace(grace: Duration) -> Self {
         Self {
             notices: VecDeque::new(),
+            decisions: BTreeMap::new(),
+            dismissed_decisions: BTreeSet::new(),
             phases: BTreeMap::new(),
             next: 0,
             grace,
@@ -124,6 +155,7 @@ impl Notifications {
             self.disconnect(thread);
             return None;
         }
+        self.observe_decisions(thread, view);
         let main = view.main();
         let busy = main.busy() || view.main_operator_turn();
         // A child awaiting a Decision is unfinished even though it is
@@ -208,6 +240,42 @@ impl Notifications {
         id
     }
 
+    fn observe_decisions(&mut self, thread: ThreadId, view: ActivityView<'_>) {
+        let live: BTreeSet<_> = view
+            .pending_decisions()
+            .iter()
+            .map(|pending| DecisionNoticeId {
+                thread,
+                handle: pending.handle.clone(),
+            })
+            .collect();
+        self.decisions
+            .retain(|id, _| id.thread != thread || live.contains(id));
+        self.dismissed_decisions
+            .retain(|id| id.thread != thread || live.contains(id));
+        for pending in view.pending_decisions() {
+            let id = DecisionNoticeId {
+                thread,
+                handle: pending.handle.clone(),
+            };
+            if self.dismissed_decisions.contains(&id) {
+                continue;
+            }
+            self.decisions
+                .entry(id.clone())
+                .or_insert_with(|| DecisionNotice {
+                    id,
+                    subject: pending.subject.clone(),
+                    kind: if is_question_tool(&pending.decision.tool_name) {
+                        RequestKind::Question
+                    } else {
+                        RequestKind::Permission
+                    },
+                    read: false,
+                });
+        }
+    }
+
     /// Every Notice, newest first.
     pub fn notices(&self) -> impl Iterator<Item = &Notice> {
         self.notices.iter().rev()
@@ -232,6 +300,11 @@ impl Notifications {
 
     pub fn unread(&self) -> usize {
         self.notices.iter().filter(|notice| !notice.read).count()
+            + self
+                .decisions
+                .values()
+                .filter(|notice| !notice.read)
+                .count()
     }
 
     /// Does this Thread hold an unread Notice — should its Pane ask for
@@ -240,6 +313,10 @@ impl Notifications {
         self.notices
             .iter()
             .any(|notice| notice.thread == thread && !notice.read)
+            || self
+                .decisions
+                .values()
+                .any(|notice| notice.id.thread == thread && !notice.read)
     }
 
     /// The operator opened this Notice: it is read, and its Thread is
@@ -260,6 +337,14 @@ impl Notifications {
                 changed = true;
             }
         }
+        // Landing on a Thread presents Main. Child requests remain unread
+        // until their own Subject is selected or their notice is opened.
+        for notice in self.decisions.values_mut() {
+            if notice.id.thread == thread && notice.subject == Some(Subject::Main) && !notice.read {
+                notice.read = true;
+                changed = true;
+            }
+        }
         changed
     }
 
@@ -273,10 +358,39 @@ impl Notifications {
         self.notices.clear();
     }
 
+    /// Every live Decision attention record, ordered by its stable key.
+    pub fn decisions(&self) -> impl Iterator<Item = &DecisionNotice> {
+        self.decisions.values()
+    }
+
+    pub fn decision(&self, id: &DecisionNoticeId) -> Option<&DecisionNotice> {
+        self.decisions.get(id)
+    }
+
+    /// Opening a request marks it read and returns its owning Thread. The
+    /// Cockpit owns navigation and obtains the actionable request from Activity.
+    pub fn open_decision(&mut self, id: &DecisionNoticeId) -> Option<ThreadId> {
+        let notice = self.decisions.get_mut(id)?;
+        notice.read = true;
+        Some(notice.id.thread)
+    }
+
+    /// Hide this live request until it changes or disappears. A tombstone
+    /// prevents the next pump from treating the same pending handle as new.
+    pub fn dismiss_decision(&mut self, id: &DecisionNoticeId) -> bool {
+        let removed = self.decisions.remove(id).is_some();
+        if removed {
+            self.dismissed_decisions.insert(id.clone());
+        }
+        removed
+    }
+
     /// The live Session ended: discard any deferred finish, but keep its
     /// existing Notices so the operator can still open the parked Thread.
     pub fn disconnect(&mut self, thread: ThreadId) {
         self.phases.remove(&thread);
+        self.decisions.retain(|id, _| id.thread != thread);
+        self.dismissed_decisions.retain(|id| id.thread != thread);
     }
 
     /// The Thread is gone: nothing about it is worth keeping.
