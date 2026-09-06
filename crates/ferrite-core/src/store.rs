@@ -332,6 +332,8 @@ enum PersistedToolResult {
     },
     Structured {
         value: serde_json::Value,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duration_ms: Option<u64>,
     },
     FileEdit {
         path: String,
@@ -372,9 +374,12 @@ impl PersistedToolResult {
                 exit_code: *exit_code,
                 duration_ms: *duration_ms,
             },
-            crate::ToolResult::Structured { value } => PersistedToolResult::Structured {
-                value: value.clone(),
-            },
+            crate::ToolResult::Structured { value, duration_ms } => {
+                PersistedToolResult::Structured {
+                    value: value.clone(),
+                    duration_ms: *duration_ms,
+                }
+            }
             crate::ToolResult::FileEdit { path, hunks } => PersistedToolResult::FileEdit {
                 path: path.clone(),
                 hunks: hunks
@@ -424,9 +429,12 @@ impl PersistedToolResult {
                 exit_code: *exit_code,
                 duration_ms: *duration_ms,
             },
-            PersistedToolResult::Structured { value } => crate::ToolResult::Structured {
-                value: value.clone(),
-            },
+            PersistedToolResult::Structured { value, duration_ms } => {
+                crate::ToolResult::Structured {
+                    value: value.clone(),
+                    duration_ms: *duration_ms,
+                }
+            }
             PersistedToolResult::FileEdit { path, hunks } => crate::ToolResult::FileEdit {
                 path: path.clone(),
                 hunks: hunks

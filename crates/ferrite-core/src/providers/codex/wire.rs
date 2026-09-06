@@ -137,8 +137,23 @@ impl Decoder {
 struct ContentDecoder {
     decisions: std::collections::BTreeSet<String>,
     decision_order: std::collections::VecDeque<String>,
+    tools: std::collections::BTreeSet<String>,
+    tool_order: std::collections::VecDeque<String>,
 }
 impl ContentDecoder {
+    fn remember_tool(&mut self, id: &str) -> bool {
+        if !self.tools.insert(id.into()) {
+            return false;
+        }
+        self.tool_order.push_back(id.into());
+        if self.tool_order.len() > 128 {
+            if let Some(old) = self.tool_order.pop_front() {
+                self.tools.remove(&old);
+            }
+        }
+        true
+    }
+
     fn parse(&mut self, line: &str) -> Vec<SessionEvent> {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             return vec![];
@@ -168,7 +183,17 @@ impl ContentDecoder {
                 ];
             }
         }
-        parse_events(line)
+        let synthetic_start = if method == "item/completed" && self.remember_tool(id) {
+            parse_item(p, false)
+        } else {
+            if method == "item/started" {
+                self.remember_tool(id);
+            }
+            None
+        };
+        let mut events = synthetic_start.into_iter().collect::<Vec<_>>();
+        events.extend(parse_events(line));
+        events
     }
 }
 
@@ -410,6 +435,22 @@ pub(super) fn parse_item(params: &Value, completed: bool) -> Option<SessionEvent
                         })
                     })
                     .collect(),
+            })
+            .unwrap_or(ToolResult::Opaque)
+    } else if kind == "mcpToolCall" {
+        item.get("result")
+            .filter(|result| !result.is_null())
+            .map(|value| ToolResult::Structured {
+                value: value.clone(),
+                duration_ms: item.get("durationMs").and_then(Value::as_u64),
+            })
+            .unwrap_or(ToolResult::Opaque)
+    } else if kind == "dynamicToolCall" {
+        item.get("contentItems")
+            .filter(|items| !items.is_null())
+            .map(|value| ToolResult::Structured {
+                value: value.clone(),
+                duration_ms: item.get("durationMs").and_then(Value::as_u64),
             })
             .unwrap_or(ToolResult::Opaque)
     } else {

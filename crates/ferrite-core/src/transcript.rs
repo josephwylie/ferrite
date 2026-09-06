@@ -1008,7 +1008,7 @@ impl Transcript {
                             .collect(),
                         None,
                     ),
-                    ToolResult::Structured { value } => (Vec::new(), Some(value)),
+                    ToolResult::Structured { value, .. } => (Vec::new(), Some(value)),
                     _ => (Vec::new(), None),
                 };
                 // A failure already carries its message in the state; a

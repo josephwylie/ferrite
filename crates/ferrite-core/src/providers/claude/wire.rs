@@ -556,6 +556,7 @@ pub(super) fn parse_tool_result(value: Option<&Value>) -> ToolResult {
     }
     ToolResult::Structured {
         value: value.clone(),
+        duration_ms: None,
     }
 }
 

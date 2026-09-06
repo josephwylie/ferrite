@@ -271,12 +271,27 @@ pub enum ToolResult {
         duration_ms: Option<u64>,
     },
     /// A provider payload Ferrite preserves without claiming a narrower shape.
-    Structured { value: serde_json::Value },
+    Structured {
+        value: serde_json::Value,
+        duration_ms: Option<u64>,
+    },
     /// A file was written. `hunks` is empty when the file was created, which
     /// has nothing to diff against.
     FileEdit { path: String, hunks: Vec<Hunk> },
     /// One call changed several files.
     FileEdits { edits: Vec<FileEdit> },
+}
+
+impl ToolResult {
+    /// Native execution time when the provider supplied one.
+    pub fn duration_ms(&self) -> Option<u64> {
+        match self {
+            Self::Command { duration_ms, .. } | Self::Structured { duration_ms, .. } => {
+                *duration_ms
+            }
+            _ => None,
+        }
+    }
 }
 
 /// One file in a multi-file tool result.

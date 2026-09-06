@@ -418,8 +418,8 @@ impl SubjectState {
                 }
             }
             Input::Event(SessionEvent::ToolCompleted { id, result, .. }) => {
-                if let ToolResult::Command { duration_ms: Some(duration_ms), .. } = result {
-                    self.timings.insert(id.clone(), ToolTiming::Done(Duration::from_millis(*duration_ms)));
+                if let Some(duration_ms) = result.duration_ms() {
+                    self.timings.insert(id.clone(), ToolTiming::Done(Duration::from_millis(duration_ms)));
                 } else if let Some(ToolTiming::Running(since)) = self.timings.get(id) {
                     self.timings.insert(
                         id.clone(),
@@ -2151,7 +2151,7 @@ fn input_bytes(input: &Input) -> usize {
                     + output.len()
                     + match result {
                         ToolResult::Command { stdout, stderr, .. } => stdout.len() + stderr.len(),
-                        ToolResult::Structured { value } => value.to_string().len(),
+                        ToolResult::Structured { value, .. } => value.to_string().len(),
                         ToolResult::FileEdit { path, hunks } => {
                             path.len()
                                 + hunks
