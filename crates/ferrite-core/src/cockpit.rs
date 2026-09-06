@@ -60,6 +60,15 @@ pub struct SpawnRequest<'a> {
 /// How a Session is started. Injected so the cockpit can be driven with
 /// scripted Sessions in tests — nothing below this line spawns a process.
 pub trait Spawner {
+    /// Metadata only: discover the selected workspace's effective commands.
+    fn discover_commands(
+        &mut self,
+        _provider: Provider,
+        _cwd: &std::path::Path,
+    ) -> Option<crate::providers::commands::Discovery> {
+        None
+    }
+
     /// Discover provider menus off-thread, without creating a Session or
     /// sending a prompt. Unsupported adapters keep the fallback catalog.
     fn discover_models(&mut self) -> Option<Receiver<(Provider, Vec<ModelInfo>)>> {
@@ -2250,8 +2259,16 @@ impl Cockpit {
         self.limit_cache.get(provider)
     }
 
-    /// The picker's rows for `provider`: what its adapter announced,
-    /// else the fallback catalog — never empty, so a draft can choose.
+    /// Request workspace commands without creating a Thread or Session.
+    pub fn discover_commands(
+        &mut self,
+        provider: Provider,
+        cwd: &std::path::Path,
+    ) -> Option<crate::providers::commands::Discovery> {
+        self.spawner.discover_commands(provider, cwd)
+    }
+
+    /// The provider's announced model rows, else the fallback catalog.
     pub fn model_catalog(&self, provider: Provider) -> Vec<ModelInfo> {
         crate::providers::models::catalog(provider, &self.announced_models(provider))
     }

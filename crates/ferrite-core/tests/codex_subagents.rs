@@ -40,6 +40,7 @@ while IFS= read -r line; do
   printf '%s\n' "$line" >> '__LOG__'
   case "$line" in
     *'"method":"initialize"'*) echo '{"id":1,"result":{}}' ;;
+    *'"method":"skills/list"'*) echo '{"id":3,"result":{"data":[]}}' ;;
     *'"method":"thread/start"'*) echo '{"id":2,"result":{"thread":{"id":"main"},"model":"stub"}}' ;;
     *'"text":"launch"'*)
       echo '{"method":"turn/started","params":{"threadId":"main","turn":{"id":"main-turn"}}}'
@@ -273,6 +274,7 @@ case "$1" in --version) echo 'codex-cli 0.153.4'; exit 0;; esac
 while IFS= read -r line; do
   case "$line" in
     *'"method":"initialize"'*) echo '{{"id":1,"result":{{}}}}' ;;
+    *'"method":"skills/list"'*) echo '{{"id":3,"result":{{"data":[]}}}}' ;;
     *'"method":"thread/resume"'*) echo '{response}' ;;
   esac
 done

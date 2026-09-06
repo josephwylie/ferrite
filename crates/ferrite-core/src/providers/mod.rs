@@ -11,6 +11,7 @@ use crate::{DecisionAnswer, SessionEvent};
 
 mod claude;
 mod codex;
+pub mod commands;
 pub mod discover;
 pub mod limits;
 pub mod models;
