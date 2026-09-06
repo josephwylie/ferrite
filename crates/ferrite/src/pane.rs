@@ -6034,18 +6034,11 @@ mod tests {
         );
     }
 
-    /// #23: the mode chip speaks the prototype's name for acceptEdits and
-    /// the provider's own word for everything else — never an invented
-    /// label, and no `⏵` prefix: the pencil icon is the whole mark.
     #[test]
-    fn the_mode_chip_labels_accept_edits_the_prototypes_way_and_the_rest_verbatim() {
-        assert_eq!(mode_chip_label("acceptEdits").as_ref(), "auto-edit");
-        assert_eq!(
-            mode_chip_label("bypassPermissions").as_ref(),
-            "bypassPermissions"
-        );
-        assert_eq!(mode_chip_label("plan").as_ref(), "plan");
-        assert_eq!(mode_chip_label("default").as_ref(), "default");
+    fn the_mode_chip_uses_provider_supplied_labels() {
+        let choices = vec![ferrite_core::PermissionModeChoice {value:"opaque-mode".into(),label:"Ask for changes".into()}];
+        assert_eq!(permission_mode_label("opaque-mode", &choices).as_ref(), "Ask for changes");
+        assert_eq!(permission_mode_label("unknown", &choices).as_ref(), "unknown");
     }
 
     /// #22 amendment: durations read in the comps' grammar at every scale.
