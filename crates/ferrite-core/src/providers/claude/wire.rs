@@ -1150,7 +1150,7 @@ mod tests {
             10 + 18865 + 4,
             "input + cache writes + output"
         );
-        assert_eq!(*context_window, Some(200_000), "haiku's window, off the id");
+        assert_eq!(*context_window, None, "unknown native window is not inferred from a model name");
         let SessionEvent::TokenUsage {
             total_tokens,
             context_window,
@@ -1169,8 +1169,6 @@ mod tests {
         );
         assert_eq!(*output_tokens, 48);
         assert_eq!(*reasoning_output_tokens, 39);
-        assert_eq!(window_of_model("claude-opus-5[1m]"), 1_000_000);
-        assert_eq!(window_of_model("claude-fable-5-1"), 200_000);
         assert_eq!(parse_usage(r#"{"type":"user"}"#), None);
     }
 

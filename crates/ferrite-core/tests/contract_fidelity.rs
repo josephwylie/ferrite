@@ -248,3 +248,19 @@ fn claude_conversation_reset_immediately_clears_visible_old_content() {
     assert!(prose(&a).is_empty());
     assert_eq!(a.view().main().transcript().session_id(), Some("fresh"));
 }
+
+#[test]
+fn codex_child_raw_reasoning_parts_reconcile_independently() {
+    let r=Replay::new("codex",vec![
+        json!({"method":"thread/started","params":{"thread":{"id":"child","parentThreadId":"root","source":{"subAgent":{"thread_spawn":{"parent_thread_id":"root"}}}}}}),
+        json!({"method":"item/reasoning/textDelta","params":{"threadId":"child","turnId":"turn","itemId":"r","contentIndex":0,"delta":"old first"}}),
+        json!({"method":"item/reasoning/textDelta","params":{"threadId":"child","turnId":"turn","itemId":"r","contentIndex":1,"delta":"old second"}}),
+        json!({"method":"item/completed","params":{"threadId":"child","turnId":"turn","item":{"id":"r","type":"reasoning","summary":["Summary"],"content":["Correct first","Correct second"]}}}),
+        json!({"method":"thread/name/updated","params":{"threadId":"child","threadName":"Named child"}}),
+    ]);
+    let a=fold(r.drain());let child=a.view().children().into_iter().next().expect("known child");
+    let text:Vec<_>=child.transcript().blocks().iter().filter_map(|b| match &b.body{ferrite_core::transcript::Body::Thinking(s)=>Some(s.as_str()),_=>None}).collect();
+    assert_eq!(text,["Correct first","Correct second","Summary"]);
+    assert_eq!(child.info().name.as_deref(),Some("Named child"));
+    assert!(reasoning(&a).is_empty(),"child content must not enter Main");
+}

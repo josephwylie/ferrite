@@ -2473,6 +2473,25 @@ mod tests {
     /// speaks, and it carries the conversation before it as exchanges —
     /// marked delivered once a prompt follows it.
     #[test]
+    fn contract_late_retraction_is_excluded_from_all_handover_exchanges() {
+        let dir = scratch("late-retraction-carry");
+        let store = Store::open(&dir).unwrap();
+        let (id,mut writer) = store.create(Provider::Claude,None,main_choice()).unwrap();
+        writer.record_prompt("first").unwrap();
+        writer.record_event(&SessionEvent::Activity(crate::activity::ActivityEvent::MainContent {
+            id:Some("old".into()),event:crate::activity::ExecutionEvent::Text {text:"Must not carry".into()},
+        }),None).unwrap();
+        writer.record_prompt("second").unwrap();
+        writer.record_event(&SessionEvent::Activity(crate::activity::ActivityEvent::MainContent {
+            id:None,event:crate::activity::ExecutionEvent::Retract {ids:vec!["old".into()]},
+        }),None).unwrap();
+        writer.record_handover(Provider::Claude,Provider::Codex,None).unwrap();
+        writer.flush().unwrap();
+        let handover=store.load(id).unwrap().last_handover().unwrap();
+        assert_eq!(handover.exchanges,[("first".into(),String::new()),("second".into(),String::new())]);
+    }
+
+    #[test]
     fn a_handover_is_replayed_and_shadows_the_old_providers_init() {
         let dir = scratch("handover");
         let store = Store::open(&dir).unwrap();
