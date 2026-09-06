@@ -80,6 +80,13 @@ pub trait Session {
             "this Session cannot change effort",
         ))
     }
+    /// Select the model for subsequent turns on this Session.
+    fn set_model(&mut self, _model: Option<&str>) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "this Session cannot change model",
+        ))
+    }
     /// Native follow-ups are optional; providers without them use the
     /// one-shot prediction path. These never enter the durable transcript.
     fn set_suggestions_enabled(&mut self, _enabled: bool) -> io::Result<()> {
@@ -118,6 +125,9 @@ impl Session for ClaudeSession {
     fn set_effort(&mut self, effort: Option<&str>) -> io::Result<()> {
         ClaudeSession::set_effort(self, effort)
     }
+    fn set_model(&mut self, model: Option<&str>) -> io::Result<()> {
+        ClaudeSession::set_model(self, model)
+    }
     fn set_name(&mut self, name: &str) -> io::Result<()> {
         ClaudeSession::set_name(self, name)
     }
@@ -145,6 +155,9 @@ impl Session for ClaudeSession {
 impl Session for CodexSession {
     fn set_effort(&mut self, effort: Option<&str>) -> io::Result<()> {
         CodexSession::set_effort(self, effort)
+    }
+    fn set_model(&mut self, model: Option<&str>) -> io::Result<()> {
+        CodexSession::set_model(self, model)
     }
     fn events(&self) -> &Receiver<SessionEvent> {
         CodexSession::events(self)

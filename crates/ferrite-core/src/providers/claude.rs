@@ -180,7 +180,7 @@ pub struct ClaudeCapabilities {
     pub commands: Vec<crate::SessionCommand>,
 }
 
-type EffortReply = Arc<Mutex<Option<(String, SyncSender<io::Result<()>>)>>>;
+type SettingReply = Arc<Mutex<Option<(String, SyncSender<io::Result<()>>)>>>;
 
 /// A live Claude Session: one CLI process serving one Thread.
 pub struct ClaudeSession {
@@ -196,7 +196,7 @@ pub struct ClaudeSession {
     cwd: Option<PathBuf>,
     events: Receiver<SessionEvent>,
     capabilities: ClaudeCapabilities,
-    effort_reply: EffortReply,
+    setting_reply: SettingReply,
     decoder: Arc<Mutex<activity::Decoder>>,
     next_request_id: u64,
     suggestions: Arc<Mutex<suggestions::Inbox>>,
@@ -289,7 +289,7 @@ impl ClaudeSession {
 
         let (sender, events) = sync_channel(EVENT_CHANNEL_CAPACITY);
         let child = Arc::new(Mutex::new(child));
-        let effort_reply = Arc::new(Mutex::new(None));
+        let setting_reply = Arc::new(Mutex::new(None));
         let decoder = Arc::new(Mutex::new(activity::Decoder::default()));
         let mut inbox = suggestions::Inbox::default();
         inbox.configure(config.prompt_suggestions);
@@ -299,7 +299,7 @@ impl ClaudeSession {
             sender,
             Arc::clone(&child),
             stderr_tail,
-            effort_reply.clone(),
+            setting_reply.clone(),
             decoder.clone(),
             suggestions.clone(),
         );
@@ -312,7 +312,7 @@ impl ClaudeSession {
             cwd: config.cwd.clone(),
             events,
             capabilities: ClaudeCapabilities::default(),
-            effort_reply,
+            setting_reply,
             decoder,
             next_request_id: 1,
             suggestions,
@@ -344,21 +344,39 @@ impl ClaudeSession {
     /// The SDK's applyFlagSettings control, effective from the next turn.
     /// Wait for acceptance so a rejected setting cannot look successful.
     pub fn set_effort(&mut self, effort: Option<&str>) -> io::Result<()> {
+        self.set_setting(
+            serde_json::json!({
+                "subtype": "apply_flag_settings",
+                "settings": {"effortLevel": effort},
+            }),
+            "effort change was not acknowledged",
+        )
+    }
+
+    /// Select a model through Claude's native control protocol and wait for
+    /// its acknowledgement before reporting success.
+    pub fn set_model(&mut self, model: Option<&str>) -> io::Result<()> {
+        self.set_setting(
+            serde_json::json!({"subtype": "set_model", "model": model}),
+            "model change was not acknowledged",
+        )
+    }
+
+    fn set_setting(&mut self, request: serde_json::Value, timeout_message: &str) -> io::Result<()> {
         let request_id = self.take_request_id();
         let (tx, rx) = sync_channel(1);
-        *lock(&self.effort_reply) = Some((request_id.clone(), tx));
+        *lock(&self.setting_reply) = Some((request_id.clone(), tx));
         let result = self
             .write_line(&serde_json::json!({
                 "type": "control_request",
                 "request_id": request_id,
-                "request": {"subtype": "apply_flag_settings", "settings": {"effortLevel": effort}},
+                "request": request,
             }))
             .and_then(|()| {
-                rx.recv_timeout(HANDSHAKE_TIMEOUT).map_err(|e| {
-                    io::Error::other(format!("effort change was not acknowledged: {e}"))
-                })?
+                rx.recv_timeout(HANDSHAKE_TIMEOUT)
+                    .map_err(|e| io::Error::other(format!("{timeout_message}: {e}")))?
             });
-        *lock(&self.effort_reply) = None;
+        *lock(&self.setting_reply) = None;
         result
     }
 
@@ -511,7 +529,7 @@ fn read_stdout(
     sender: SyncSender<SessionEvent>,
     child: Arc<Mutex<Child>>,
     stderr_tail: Arc<Mutex<StderrTail>>,
-    effort_reply: EffortReply,
+    setting_reply: SettingReply,
     decoder: Arc<Mutex<activity::Decoder>>,
     suggestions: Arc<Mutex<suggestions::Inbox>>,
 ) -> Receiver<ClaudeCapabilities> {
@@ -533,7 +551,7 @@ fn read_stdout(
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(text) {
                 lock(&suggestions).observe(&value);
                 let response = &value["response"];
-                let mut pending = lock(&effort_reply);
+                let mut pending = lock(&setting_reply);
                 if value["type"] == "control_response"
                     && pending
                         .as_ref()
@@ -546,7 +564,7 @@ fn read_stdout(
                         Err(io::Error::other(
                             response["error"]
                                 .as_str()
-                                .unwrap_or("effort change refused"),
+                                .unwrap_or("setting change refused"),
                         ))
                     };
                     let _ = reply.send(result);

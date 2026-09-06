@@ -214,6 +214,7 @@ pub struct CodexSession {
     capabilities: CodexCapabilities,
     thread_id: String,
     model: String,
+    model_override: Option<String>,
     effort: Option<String>,
     models: Arc<Mutex<Vec<crate::ModelInfo>>>,
     /// Main's running turn, tracked by the reader from scoped lifecycle:
@@ -300,6 +301,7 @@ impl CodexSession {
             capabilities: CodexCapabilities::default(),
             thread_id: String::new(),
             model: String::new(),
+            model_override: None,
             effort: config.effort.clone(),
             models,
             current_turn,
@@ -445,6 +447,19 @@ impl CodexSession {
         Ok(())
     }
 
+    /// Select a model for the next turn on this thread. The app-server keeps
+    /// the process and thread alive; the choice travels on `turn/start`.
+    pub fn set_model(&mut self, model: Option<&str>) -> io::Result<()> {
+        let Some(model) = model else {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "Codex cannot restore an unknown default model",
+            ));
+        };
+        self.model_override = Some(model.to_string());
+        Ok(())
+    }
+
     /// Send one user prompt; the server starts a turn on the Session's thread.
     ///
     /// The text is translated to typed input items first (#23): a leading
@@ -460,6 +475,9 @@ impl CodexSession {
             serde_json::json!({"threadId": self.thread_id, "input": input, "summary": "detailed"});
         if let Some(effort) = &self.effort {
             params["effort"] = serde_json::json!(effort);
+        }
+        if let Some(model) = &self.model_override {
+            params["model"] = serde_json::json!(model);
         }
         let id = self.take_request_id();
         self.write_line(&serde_json::json!({
