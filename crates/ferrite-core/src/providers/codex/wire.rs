@@ -375,23 +375,23 @@ pub(super) fn parse_item(params: &Value, completed: bool) -> Option<SessionEvent
             input: item.clone(),
         });
     }
+    // What the run produced: an execution reports its merged output stream;
+    // a patch has no prose, so its changes stand in as compact JSON.
+    let output = match item.get("aggregatedOutput") {
+        Some(Value::String(text)) => text.clone(),
+        _ => ["error", "result", "contentItems", "results", "changes"]
+            .iter()
+            .find_map(|key| item.get(*key).filter(|v| !v.is_null()))
+            .map(|v| {
+                v.as_str()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| v.to_string())
+            })
+            .unwrap_or_default(),
+    };
     Some(SessionEvent::ToolCompleted {
         id,
-        // What the run produced: an execution reports its merged output
-        // stream; a patch has no prose, so its changes stand in as compact
-        // JSON.
-        output: match item.get("aggregatedOutput") {
-            Some(Value::String(text)) => text.clone(),
-            _ => ["error", "result", "contentItems", "results", "changes"]
-                .iter()
-                .find_map(|key| item.get(*key).filter(|v| !v.is_null()))
-                .map(|v| {
-                    v.as_str()
-                        .map(str::to_string)
-                        .unwrap_or_else(|| v.to_string())
-                })
-                .unwrap_or_default(),
-        },
+        output: output.clone(),
         // "completed" is the only success; "failed" and "declined" both mean
         // the tool did not do its work (a declined tool fails without failing
         // the turn — see the approval-deny fixture).
@@ -400,12 +400,16 @@ pub(super) fn parse_item(params: &Value, completed: bool) -> Option<SessionEvent
             Some("failed" | "declined" | "error")
         ) || item["success"].as_bool() == Some(false)
             || !item.get("error").unwrap_or(&Value::Null).is_null(),
-        // Opaque by decision, not omission: Codex merges stdout and stderr
-        // into one aggregate (not the two streams `ToolResult::Command`
-        // promises), and its patches arrive as per-file diff *text*, not the
-        // structured hunks `FileEdit` is built from. The committed fixtures
-        // carry both shapes for whoever builds Codex diff cards.
-        result: ToolResult::Opaque,
+        result: if kind == "commandExecution" {
+            // Codex supplies one combined stream, so preserve it as the
+            // primary output instead of pretending it supplied stderr.
+            ToolResult::Command {
+                stdout: output,
+                stderr: String::new(),
+            }
+        } else {
+            ToolResult::Opaque
+        },
     })
 }
 
