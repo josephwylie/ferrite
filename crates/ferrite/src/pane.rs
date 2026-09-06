@@ -5447,6 +5447,44 @@ mod tests {
         cx.run_until_parked();
     }
 
+    #[gpui::test]
+    fn contract_structured_tool_result_is_visible_in_shared_disclosure(cx: &mut TestAppContext) {
+        let mut transcript = Transcript::default();
+        transcript.apply(Input::Event(SessionEvent::ToolStarted {
+            id: "structured".into(), name: "Tool".into(), input: serde_json::json!({}),
+        }));
+        transcript.apply(Input::Event(SessionEvent::ToolCompleted {
+            id: "structured".into(), output: String::new(), is_error: false,
+            result: ToolResult::Structured { value: serde_json::json!({"detail":"visible-provider-detail"}) },
+        }));
+        let (view, cx) = cx.add_window_view(|_, cx| {
+            gpui::component::init(cx);
+            let mut view = shows_blocks(transcript.blocks().to_vec());
+            view.expanded.insert("structured".into());
+            view
+        });
+        cx.simulate_resize(size(px(900.), px(600.)));
+        cx.run_until_parked();
+        let runs = view.read_with(cx, |view, _| view.selection.registered(ThreadId::new(1)));
+        assert!(runs.iter().any(|(_, _, _, text)| text.contains("visible-provider-detail")), "preserved provider data must be inspectable even without model-facing output");
+    }
+
+    #[test]
+    fn contract_multi_file_tool_verdict_counts_all_native_hunks() {
+        let mut transcript = Transcript::default();
+        transcript.apply(Input::Event(SessionEvent::ToolStarted {
+            id: "edit".into(), name: "Edit".into(), input: serde_json::json!({}),
+        }));
+        transcript.apply(Input::Event(SessionEvent::ToolCompleted {
+            id: "edit".into(), output: String::new(), is_error: false,
+            result: ToolResult::FileEdits { edits: ["a.txt", "b.txt"].into_iter().map(|path| ferrite_core::FileEdit {
+                path: path.into(), hunks: vec![Hunk { old_start: 1, old_lines: 1, new_start: 1, new_lines: 1, lines: vec!["-old".into(), "+new".into()] }],
+            }).collect() },
+        }));
+        let Body::Tool(tool) = &transcript.blocks()[0].body else { panic!("expected tool") };
+        assert_eq!(tool_verdicts(tool), [ToolVerdict::Diff(2, 2)]);
+    }
+
     /// AC2's copy half, relocated from `block_text` (#27): every Block kind
     /// must register its text with the selection overlay when it renders —
     /// a kind that registers nothing would select and copy as a silent
