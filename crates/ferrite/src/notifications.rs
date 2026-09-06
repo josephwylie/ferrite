@@ -292,6 +292,9 @@ fn request_toast(row: &Row, handle: Handle) -> Notification {
     let id = id.clone();
     Notification::new()
         .id1::<Request>(request_key(&id))
+        // Requests retain their toast but live below the Pane header, whose
+        // attention control must remain reachable while rows transition.
+        .placement(Anchor::BottomRight)
         .title(row.title.clone())
         .message(row.detail())
         .with_type(NotificationType::Info)
