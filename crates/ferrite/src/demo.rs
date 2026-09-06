@@ -162,7 +162,10 @@ impl DemoSession {
             // The demo's agent cannot tell "allow once" from "allow always":
             // the standing answer changes what the provider asks next time,
             // which a script has no next time to show.
-            DecisionAnswer::Allow { .. } | DecisionAnswer::AllowAlways { .. } => {
+            DecisionAnswer::Allow { .. }
+            | DecisionAnswer::AllowAlways { .. }
+            | DecisionAnswer::Questions { .. }
+            | DecisionAnswer::Form { .. } => {
                 let mut steps = vec![Step::new(
                     60,
                     SessionEvent::ToolCompleted {
@@ -187,7 +190,7 @@ impl DemoSession {
                 steps.extend(turn(&[], ALLOWED, 0.0124));
                 steps
             }
-            DecisionAnswer::Deny { .. } => turn(&[], DENIED, 0.0018),
+            DecisionAnswer::Deny { .. } | DecisionAnswer::Cancel => turn(&[], DENIED, 0.0018),
         };
         if let Some(first) = steps.first_mut() {
             first.after = Duration::from_millis(120);

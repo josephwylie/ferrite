@@ -3188,11 +3188,13 @@ pub fn decide_row(level: Level) -> Div {
 
 // -------------------------------------------------------------- questions
 
-/// The questions a Decision carries, when it is Claude's question tool.
+/// The normalized questions a Decision carries. Providers classify the wire
+/// request before it reaches the shared renderer.
 pub fn question_of(decision: &Decision) -> Option<Vec<ferrite_core::questions::Question>> {
-    ferrite_core::questions::is_question_tool(&decision.tool_name)
-        .then(|| ferrite_core::questions::parse(&decision.input))
-        .flatten()
+    match &decision.kind {
+        ferrite_core::DecisionKind::Questions(questions) => Some(questions.clone()),
+        _ => None,
+    }
 }
 
 // ------------------------------------------------------------ shared bits

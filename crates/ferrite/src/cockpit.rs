@@ -2616,9 +2616,20 @@ impl CockpitView {
         else {
             return;
         };
+        if matches!(answer, Answer::Allow | Answer::Always) && !decision.policy.allow {
+            return;
+        }
+        if answer == Answer::Deny && !decision.policy.deny {
+            return;
+        }
+        if decision.policy.interaction_required && answer != Answer::Deny {
+            return;
+        }
         // A question is answered by its form, never by a bare "allow" —
         // allowing an unanswered question would send the model nothing.
-        if pane::question_of(&decision).is_some() && answer != Answer::Deny {
+        if (pane::question_of(&decision).is_some()
+            || matches!(decision.kind, ferrite_core::DecisionKind::Form { .. } | ferrite_core::DecisionKind::External { .. } | ferrite_core::DecisionKind::Unsupported { .. }))
+            && answer != Answer::Deny {
             cx.notify();
             return;
         }
