@@ -71,14 +71,30 @@ pub(super) fn fields(schema: &Value) -> Result<Vec<FormField>, String> {
 fn choices(schema: &Value) -> Result<Option<Vec<FormChoice>>, String> {
     if let Some(values) = schema.get("enum") {
         let values = values.as_array().ok_or_else(|| "enum is not an array".to_string())?;
-        return values.iter().map(|value| {
+        let labels = match schema.get("enumNames") {
+            Some(names) => {
+                let names = names.as_array().ok_or_else(|| "enumNames is not an array".to_string())?;
+                if names.len() != values.len() {
+                    return Err("enumNames does not match enum choices".into());
+                }
+                Some(names)
+            }
+            None => None,
+        };
+        let choices = values.iter().enumerate().map(|(index, value)| {
             let value = value.as_str().ok_or_else(|| "enum choice is not text".to_string())?;
-            Ok(FormChoice { value: value.into(), label: value.into() })
-        }).collect::<Result<Vec<_>, _>>().map(Some);
+            let label = labels
+                .and_then(|labels| labels[index].as_str())
+                .filter(|label| !label.is_empty())
+                .unwrap_or(value);
+            Ok(FormChoice { value: value.into(), label: label.into() })
+        }).collect::<Result<Vec<_>, String>>()?;
+        ensure_unique(&choices)?;
+        return Ok(Some(choices));
     }
     let alternatives = schema.get("oneOf").or_else(|| schema.get("anyOf"));
     let Some(alternatives) = alternatives else { return Ok(None) };
-    alternatives.as_array().ok_or_else(|| "choices are not an array".to_string())?
+    let choices = alternatives.as_array().ok_or_else(|| "choices are not an array".to_string())?
         .iter()
         .map(|choice| {
             let value = choice.get("const").and_then(Value::as_str)
@@ -88,6 +104,15 @@ fn choices(schema: &Value) -> Result<Option<Vec<FormChoice>>, String> {
                 label: choice.get("title").and_then(Value::as_str).filter(|title| !title.is_empty()).unwrap_or(value).into(),
             })
         })
-        .collect::<Result<Vec<_>, _>>()
-        .map(Some)
+        .collect::<Result<Vec<_>, String>>()?;
+    ensure_unique(&choices)?;
+    Ok(Some(choices))
+}
+
+fn ensure_unique(choices: &[FormChoice]) -> Result<(), String> {
+    if choices.iter().enumerate().any(|(index, choice)| choices[..index].iter().any(|other| other.value == choice.value)) {
+        Err("form choices contain duplicate values".into())
+    } else {
+        Ok(())
+    }
 }

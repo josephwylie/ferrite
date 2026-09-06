@@ -755,7 +755,7 @@ impl Requests {
             Request::Questions { questions, input } => question_response(questions, input, answer),
             Request::Form(fields) => elicitation_response(Some(fields), answer),
             Request::External => elicitation_response(None, answer),
-            Request::Unsupported => elicitation_response(None, answer),
+            Request::Unsupported => unsupported_response(answer),
             Request::Approval { allow, deny, input, suggestions } => {
                 approval_response(*allow, *deny, input, suggestions, answer)
             }
@@ -764,6 +764,14 @@ impl Requests {
 
     pub fn resolved(&mut self, id: &str) {
         self.pending.remove(id);
+    }
+}
+
+fn unsupported_response(answer: &crate::DecisionAnswer) -> std::io::Result<Value> {
+    match answer {
+        crate::DecisionAnswer::Deny { .. } => Ok(serde_json::json!({"action":"decline","content":null})),
+        crate::DecisionAnswer::Cancel => Ok(serde_json::json!({"action":"cancel","content":null})),
+        _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "unsupported elicitation can only be declined or cancelled")),
     }
 }
 

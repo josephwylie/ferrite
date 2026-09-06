@@ -172,7 +172,11 @@ impl NativeRequests {
                     .map(|decision| NativeRequest::Permissions(decision.input))
             }
             Some("item/commandExecution/requestApproval" | "item/fileChange/requestApproval") => {
-                let choices = frame["params"]["availableDecisions"].as_array().cloned().unwrap_or_default();
+                let choices = match frame["params"].get("availableDecisions") {
+                    None | Some(Value::Null) => vec![json!("accept"), json!("decline"), json!("cancel")],
+                    Some(Value::Array(choices)) => choices.clone(),
+                    Some(_) => vec![],
+                };
                 Some(NativeRequest::Approval {
                     allow: choices.iter().any(|choice| choice == "accept"),
                     deny: choices.iter().any(|choice| choice == "decline"),
@@ -193,13 +197,21 @@ impl NativeRequests {
             NativeRequest::Form(fields) => elicitation_response(Some(fields), answer),
             NativeRequest::External => elicitation_response(None, answer),
             NativeRequest::Permissions(profile) => permission_response(profile, answer),
-            NativeRequest::Unsupported => elicitation_response(None, answer),
+            NativeRequest::Unsupported => unsupported_response(answer),
             NativeRequest::Approval { allow, deny, choices } => approval_response(*allow, *deny, choices, answer),
         })
     }
 
     pub fn resolved(&mut self, id: &str) {
         self.pending.remove(id);
+    }
+}
+
+fn unsupported_response(answer: &DecisionAnswer) -> io::Result<Value> {
+    match answer {
+        DecisionAnswer::Deny { .. } => Ok(json!({"action":"decline","content":null,"_meta":null})),
+        DecisionAnswer::Cancel => Ok(json!({"action":"cancel","content":null,"_meta":null})),
+        _ => Err(io::Error::new(io::ErrorKind::InvalidInput, "unsupported elicitation can only be declined or cancelled")),
     }
 }
 
