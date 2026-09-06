@@ -753,6 +753,7 @@ pub fn thread_row_with_title(row: &ThreadRow, title: impl IntoElement) -> Statef
 /// The compact facts at the right edge of line 2. They stay one group so
 /// free space separates them from the Project, not from each other.
 fn meta_tail(thread: ThreadId, subagents: usize, since: Option<SharedString>) -> Div {
+    let separated = subagents > 0 && since.is_some();
     div()
         .flex()
         .flex_shrink_0()
@@ -761,23 +762,25 @@ fn meta_tail(thread: ThreadId, subagents: usize, since: Option<SharedString>) ->
         .pl(px(ROW_ICON_GAP))
         .gap(px(ROW_ICON_GAP))
         .child(subagent_tail(thread, subagents))
+        .children(separated.then(|| {
+            meta_text()
+                .flex_shrink_0()
+                .child("·")
+        }))
         .child(since_tail(thread, since))
 }
 
-/// The number of direct subagents attached to a Thread. The noun keeps a
+/// The number of subagents attached to a Thread. The noun keeps a
 /// bare number from competing with recency, and singular/plural copy keeps
 /// the compact line natural. Threads without children spend no space here.
 fn subagent_tail(thread: ThreadId, count: usize) -> Div {
-    let cell = div()
+    let cell = meta_text()
         .flex_shrink_0()
         .debug_selector(move || format!("nav-subagents-{}", thread.get()));
     let Some(label) = subagent_label(count) else {
         return cell;
     };
-    cell.text_size(px(FS_SM))
-        .line_height(relative(LINE_TIGHT))
-        .text_color(rgb(TEXT_MUTED))
-        .child(label)
+    cell.child(label)
 }
 
 fn subagent_label(count: usize) -> Option<SharedString> {
@@ -795,16 +798,20 @@ fn subagent_label(count: usize) -> Option<SharedString> {
 /// whose Project is unknown still puts the age where every other row's age
 /// is. Never a date: the nav says how long ago, and the Pane says when.
 fn since_tail(thread: ThreadId, label: Option<SharedString>) -> Div {
-    let cell = div()
+    let cell = meta_text()
         .flex_shrink_0()
         .debug_selector(move || format!("nav-since-{}", thread.get()));
     let Some(label) = label else {
         return cell;
     };
-    cell.text_size(px(FS_SM))
+    cell.child(label)
+}
+
+fn meta_text() -> Div {
+    div()
+        .text_size(px(FS_SM))
         .line_height(relative(LINE_TIGHT))
         .text_color(rgb(TEXT_MUTED))
-        .child(label)
 }
 
 /// One run of solo Threads — those no Group claims — at root indent with
