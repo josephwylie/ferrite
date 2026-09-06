@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1254 1254" role="img" aria-labelledby="title desc">
+  <title id="title">Rounded Ferrite shard logo</title>
+  <desc id="desc">A tall two-piece crystal shard with softly rounded corners, a diagonal negative-space break, and a continuous light steel-blue gradient.</desc>
+  <defs>
+    <linearGradient id="steel" x1="0" y1="50" x2="0" y2="1139" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#C7D5E8"/>
+      <stop offset="0.52" stop-color="#9FB3D0"/>
+      <stop offset="1" stop-color="#748EBA"/>
+    </linearGradient>
+  </defs>
+  <g fill="url(#steel)" stroke="url(#steel)" stroke-width="26" stroke-linejoin="round">
+    <path d="M628 50 950 572 901 658 469 307Z"/>
+    <path d="M437 363 305 568 619 1139 806 834 751 767Z"/>
+  </g>
+</svg>
