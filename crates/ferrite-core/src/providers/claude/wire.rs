@@ -527,8 +527,8 @@ pub(super) fn parse_tool_result(value: Option<&Value>) -> ToolResult {
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string(),
-            exit_code: value.get("exitCode").and_then(Value::as_i64),
-            duration_ms: value.get("durationMs").and_then(Value::as_u64),
+            exit_code: None,
+            duration_ms: None,
         };
     }
     ToolResult::Structured {

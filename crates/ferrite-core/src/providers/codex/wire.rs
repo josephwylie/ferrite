@@ -379,11 +379,7 @@ pub(super) fn parse_item(params: &Value, completed: bool) -> Option<SessionEvent
                         .filter_map(|change| {
                             Some(FileEdit {
                                 path: change.get("path")?.as_str()?.to_string(),
-                                hunks: change
-                                    .get("diff")
-                                    .and_then(Value::as_str)
-                                    .map(parse_unified_diff)
-                                    .unwrap_or_default(),
+                                hunks: parse_file_change(change),
                             })
                         })
                         .collect(),
@@ -413,6 +409,41 @@ pub(super) fn parse_item(params: &Value, completed: bool) -> Option<SessionEvent
 
 /// Decode Codex's per-file unified diff without assigning a tool identity or
 /// inferring files absent from the native `changes` list.
+fn parse_file_change(change: &Value) -> Vec<Hunk> {
+    let diff = change
+        .get("diff")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    match change
+        .get("kind")
+        .and_then(|kind| kind.get("type"))
+        .and_then(Value::as_str)
+    {
+        Some("add") => raw_file_hunk(diff, '+'),
+        Some("delete") => raw_file_hunk(diff, '-'),
+        Some("update") => parse_unified_diff(diff),
+        _ => Vec::new(),
+    }
+}
+
+fn raw_file_hunk(content: &str, marker: char) -> Vec<Hunk> {
+    let lines: Vec<_> = content
+        .lines()
+        .map(|line| format!("{marker}{line}"))
+        .collect();
+    if lines.is_empty() {
+        return Vec::new();
+    }
+    let count = lines.len() as u32;
+    vec![Hunk {
+        old_start: if marker == '-' { 1 } else { 0 },
+        old_lines: if marker == '-' { count } else { 0 },
+        new_start: if marker == '+' { 1 } else { 0 },
+        new_lines: if marker == '+' { count } else { 0 },
+        lines,
+    }]
+}
+
 fn parse_unified_diff(diff: &str) -> Vec<Hunk> {
     let mut hunks = Vec::new();
     let mut current: Option<Hunk> = None;
@@ -428,20 +459,8 @@ fn parse_unified_diff(diff: &str) -> Vec<Hunk> {
                 new_lines,
                 lines: Vec::new(),
             });
-        } else if matches!(line.as_bytes().first(), Some(b' ' | b'+' | b'-'))
-            && !line.starts_with("+++")
-            && !line.starts_with("---")
-        {
-            current
-                .get_or_insert_with(|| Hunk {
-                    old_start: if line.starts_with('-') { 1 } else { 0 },
-                    old_lines: 0,
-                    new_start: if line.starts_with('+') { 1 } else { 0 },
-                    new_lines: 0,
-                    lines: Vec::new(),
-                })
-                .lines
-                .push(line.to_string());
+        } else if current.is_some() && matches!(line.as_bytes().first(), Some(b' ' | b'+' | b'-')) {
+            current.as_mut().unwrap().lines.push(line.to_string());
         }
     }
     if let Some(hunk) = current {
@@ -453,7 +472,7 @@ fn parse_unified_diff(diff: &str) -> Vec<Hunk> {
 fn parse_hunk_header(line: &str) -> Option<(u32, u32, u32, u32)> {
     let middle = line.strip_prefix("@@ -")?.split_once(" +")?;
     let (old, rest) = middle;
-    let new = rest.strip_suffix(" @@")?.split_whitespace().next()?;
+    let (new, _) = rest.split_once(" @@")?;
     fn range(range: &str) -> Option<(u32, u32)> {
         let (start, count) = range.split_once(',').unwrap_or((range, "1"));
         Some((start.parse().ok()?, count.parse().ok()?))
