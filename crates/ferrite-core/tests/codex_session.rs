@@ -314,6 +314,8 @@ fn a_command_run_arrives_as_a_start_and_a_completion() {
             output: "ferrite-tool-ok\n".into(),
             is_error: false,
             result: ToolResult::Command {
+                duration_ms: None,
+                exit_code: None,
                 stdout: "ferrite-tool-ok\n".into(),
                 stderr: String::new()
             },

@@ -1124,6 +1124,7 @@ mod tests {
             // model, never a list, so its picker offers no model rows.
             SessionEvent::Models { .. } => return None,
             SessionEvent::ContextDetails { .. } => return None,
+            SessionEvent::FileChanges { .. } | SessionEvent::TurnDiff { .. } => return None,
             SessionEvent::McpServers { .. } | SessionEvent::McpAuthorization { .. } => return None,
             SessionEvent::ContextUsage { .. } | SessionEvent::UsageDetails { .. } => return None,
             // Claude's concept: Codex never streams raw chain-of-thought, only

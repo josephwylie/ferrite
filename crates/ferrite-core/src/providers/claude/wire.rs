@@ -1369,6 +1369,7 @@ mod tests {
             SessionEvent::PermissionMode { .. } => return None,
             SessionEvent::Models { .. } => return None,
             SessionEvent::ContextDetails { .. } => return None,
+            SessionEvent::FileChanges { .. } | SessionEvent::TurnDiff { .. } => return None,
             SessionEvent::McpServers { .. } | SessionEvent::McpAuthorization { .. } => return None,
             SessionEvent::ContextUsage { .. } | SessionEvent::UsageDetails { .. } => return None,
             // Codex's own concept (#9); the Claude CLI never emits one.
