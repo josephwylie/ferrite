@@ -11,6 +11,7 @@ use gpui::component::{
     group_box::{GroupBox, GroupBoxVariants},
     input::{Input, InputState},
     radio::{Radio, RadioGroup},
+    scroll::ScrollableElement,
     tab::{Tab, TabBar},
     Disableable, Sizable,
 };
@@ -1125,19 +1126,17 @@ impl CockpitView {
                 let mut form_inputs = HashMap::new();
                 for field in &fields {
                     let initial = match &field.kind {
-                        ferrite_core::FormFieldKind::String { default, .. } => default.clone(),
-                        ferrite_core::FormFieldKind::Number { default, .. } => default.map(|value| value.to_string()),
-                        ferrite_core::FormFieldKind::Integer { default, .. } => default.map(|value| value.to_string()),
-                        _ => None,
+                        ferrite_core::FormFieldKind::String { default, .. } => default.clone().unwrap_or_default(),
+                        ferrite_core::FormFieldKind::Number { default, .. } => default.map(|value| value.to_string()).unwrap_or_default(),
+                        ferrite_core::FormFieldKind::Integer { default, .. } => default.map(|value| value.to_string()).unwrap_or_default(),
+                        _ => continue,
                     };
-                    if let Some(initial) = initial {
-                        let input = cx.new(|cx| {
-                            let mut input = InputState::new(window, cx);
-                            input.set_value(initial, window, cx);
-                            input
-                        });
-                        form_inputs.insert(field.id.clone(), input);
-                    }
+                    let input = cx.new(|cx| {
+                        let mut input = InputState::new(window, cx);
+                        input.set_value(initial, window, cx);
+                        input
+                    });
+                    form_inputs.insert(field.id.clone(), input);
                 }
                 forms.0.borrow_mut().insert(handle.clone(), RequestForm {
                     answers: Vec::new(), inputs: Vec::new(), form_inputs, values: form_defaults(&fields),
@@ -1147,7 +1146,7 @@ impl CockpitView {
             let selector = format!("request-submit-{}-{}", thread.get(), handle.serial);
             let mut body = div().w_full().flex().flex_col().gap(px(12.));
             for (field_index, field) in fields.iter().enumerate() {
-                let mut section = div().w_full().flex().flex_col().gap(px(6.)).child(
+                let mut section = div().w_full().flex().flex_col().gap(px(6.)).debug_selector({ let id = field.id.clone(); move || format!("form-field-{id}") }).child(
                     div().text_color(rgb(theme::TEXT)).child(field.label.clone()),
                 );
                 if !field.description.is_empty() {
@@ -1197,7 +1196,17 @@ impl CockpitView {
                 }
                 body = body.child(section);
             }
-            return GroupBox::new().fill().child(body.child(
+            if let Some((failed, error)) = &self.panes[index].request_error {
+                if failed == &handle {
+                    body = body.child(div().debug_selector(|| "form-validation-error".into()).text_color(rgb(theme::BLOCKED)).child(error.clone()));
+                }
+            }
+            let cancel_handle = handle.clone();
+            return card
+            .child(div().max_h(px((f32::from(window.viewport_size().height) * 0.45).min(360.))).flex().flex_col().overflow_y_scrollbar().child(body))
+            .child(div().flex().justify_end().gap(px(8.)).child(
+                gpui::component::button::Button::new("form-cancel").small().label("Cancel").disabled(!request.decision.policy.deny || request.submitting).debug_selector(|| "form-cancel".into()).on_click(cx.listener(move |view, _, _, cx| view.respond_exact(thread, &cancel_handle, DecisionAnswer::Cancel, cx)))
+            ).child(
                 gpui::component::button::Button::new("form-send")
                     .primary().small().label("Send").disabled(request.submitting)
                     .debug_selector(move || selector.clone())
@@ -1206,7 +1215,15 @@ impl CockpitView {
                         let Some(form) = state.get_mut(&submit_handle) else { return; };
                         for field in &fields {
                             let Some(input) = form.form_inputs.get(&field.id) else { continue; };
-                            let text = input.read(cx).value().trim().to_string();
+                            let text = input.read(cx).value().to_string();
+                            if text.trim().is_empty() {
+                                if field.required {
+                                    form.values.insert(field.id.clone(), serde_json::Value::Null);
+                                } else {
+                                    form.values.remove(&field.id);
+                                }
+                                continue;
+                            }
                             let value = match &field.kind {
                                 ferrite_core::FormFieldKind::String { .. } => serde_json::Value::String(text),
                                 ferrite_core::FormFieldKind::Number { .. } => match text.parse::<f64>().ok().and_then(serde_json::Number::from_f64) { Some(value) => serde_json::Value::Number(value), None => { form.values.insert(field.id.clone(), serde_json::Value::String(text)); continue; } },
@@ -1236,7 +1253,7 @@ impl CockpitView {
                     .child(components::label("Complete this request in your browser, then confirm here.", theme::TEXT_2))
                     .child(gpui::component::button::Button::new("external-open").small().label("Open link").disabled(!safe_external_url(&url)).on_click(cx.listener(move |_, _, _, cx| cx.open_url(&url))))
                     .child(div().flex().justify_end().gap(px(8.))
-                        .child(gpui::component::button::Button::new("external-cancel").small().label("Cancel").disabled(!request.decision.policy.deny || request.submitting).on_click(cx.listener(move |view, _, _, cx| view.respond_exact(thread, &cancel_handle, DecisionAnswer::Deny { message: "The operator cancelled this request.".into() }, cx))))
+                        .child(gpui::component::button::Button::new("external-cancel").small().label("Cancel").disabled(!request.decision.policy.deny || request.submitting).on_click(cx.listener(move |view, _, _, cx| view.respond_exact(thread, &cancel_handle, DecisionAnswer::Cancel, cx))))
                         .child(gpui::component::button::Button::new("external-complete").primary().small().label("Complete").disabled(!request.decision.policy.allow || request.submitting).on_click(cx.listener(move |view, _, _, cx| view.respond_exact(thread, &complete_handle, DecisionAnswer::Allow { input: serde_json::Value::Null }, cx))))),
             ).into_any_element();
         } else if let ferrite_core::DecisionKind::Unsupported { reason } = &request.decision.kind {
@@ -1244,7 +1261,7 @@ impl CockpitView {
             return GroupBox::new().fill().child(
                 div().flex().flex_col().gap(px(10.))
                     .child(components::label(reason.clone(), theme::TEXT_2))
-                    .child(gpui::component::button::Button::new("unsupported-cancel").small().label("Cancel").disabled(!request.decision.policy.deny || request.submitting).on_click(cx.listener(move |view, _, _, cx| view.respond_exact(thread, &cancel_handle, DecisionAnswer::Deny { message: "The operator cancelled this unsupported request.".into() }, cx)))),
+                    .child(gpui::component::button::Button::new("unsupported-cancel").small().label("Cancel").disabled(!request.decision.policy.deny || request.submitting).on_click(cx.listener(move |view, _, _, cx| view.respond_exact(thread, &cancel_handle, DecisionAnswer::Cancel, cx)))),
             ).into_any_element();
         } else {
             let accepted = request.decision.input.clone();
@@ -1470,7 +1487,14 @@ fn form_defaults(fields: &[ferrite_core::FormField]) -> serde_json::Map<String, 
                     default.map(serde_json::Value::from)
                 }
                 ferrite_core::FormFieldKind::Boolean { default } => default.map(serde_json::Value::from),
-                ferrite_core::FormFieldKind::Enum { default, .. } => default.clone(),
+                ferrite_core::FormFieldKind::Enum { options, multi_select, default, .. } => {
+                    let allowed = |value: &str| options.iter().any(|option| option.value == value);
+                    match default {
+                        Some(serde_json::Value::String(value)) if !multi_select && allowed(value) => Some(serde_json::Value::String(value.clone())),
+                        Some(serde_json::Value::Array(values)) if *multi_select => Some(serde_json::Value::Array(values.iter().filter(|value| value.as_str().is_some_and(allowed)).cloned().collect())),
+                        _ => None,
+                    }
+                }
             }?;
             Some((field.id.clone(), value))
         })

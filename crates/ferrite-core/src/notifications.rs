@@ -24,8 +24,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::{Duration, Instant, SystemTime};
 
 use crate::activity::{ActivityView, AgentStatus, DecisionHandle, Subject};
-use crate::questions::is_question_tool;
-use crate::{ThreadId, TurnOutcome};
+use crate::{DecisionKind, ThreadId, TurnOutcome};
 
 /// How long Main may sit idle after its last child settles before the
 /// deferral concludes that no provider is going to resume it.
@@ -261,7 +260,7 @@ impl Notifications {
                 .or_insert_with(|| DecisionNotice {
                     id,
                     subject: pending.subject.clone(),
-                    kind: if is_question_tool(&pending.decision.tool_name) {
+                    kind: if matches!(pending.decision.kind, DecisionKind::Questions(_) | DecisionKind::Form { .. }) {
                         RequestKind::Question
                     } else {
                         RequestKind::Permission
