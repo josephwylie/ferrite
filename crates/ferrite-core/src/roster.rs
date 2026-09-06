@@ -73,6 +73,7 @@ pub enum View {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DraftScope {
     pub group: Option<GroupId>,
+    pub new_group_with: Option<ThreadId>,
     pub pending_leave: Option<ThreadId>,
 }
 
@@ -86,6 +87,12 @@ pub struct Layout {
     /// prototype specifies a board for four Panes and no other count, so
     /// every other count keeps the chunked rows (R-01).
     pub tall_left: bool,
+}
+
+#[derive(Clone, Copy)]
+struct PendingPair {
+    thread: ThreadId,
+    draft: DraftId,
 }
 
 #[derive(Debug, Default)]
@@ -180,7 +187,18 @@ impl Roster {
     /// pair as three.
     pub fn visible(&self, groups: &Groups) -> Vec<PaneIdentity> {
         match self.view {
-            View::Solo => self.focused().into_iter().collect(),
+            View::Solo => {
+                if let Some(pair) = self.pending_pair() {
+                    return [
+                        PaneIdentity::Thread(pair.thread),
+                        PaneIdentity::Draft(pair.draft),
+                    ]
+                    .into_iter()
+                    .filter(|identity| self.panes.contains(identity))
+                    .collect();
+                }
+                self.focused().into_iter().collect()
+            }
             View::Group(group) => {
                 let Some(members) = groups.get(group).map(|group| &group.members) else {
                     return Vec::new();
@@ -217,6 +235,7 @@ impl Roster {
             };
         }
         let columns = match self.view {
+            View::Solo if self.pending_pair().is_some() => grid(visible).1.max(1),
             View::Solo => 1,
             View::Group(_) => grid(visible).1.max(1),
         };
@@ -363,6 +382,22 @@ impl Roster {
         Some(scope)
     }
 
+    /// A provisional pair is a view of retained Draft scope, not separate
+    /// state: focusing either Pane restores the pair after navigating away.
+    fn pending_pair(&self) -> Option<PendingPair> {
+        let focused = self.focused()?;
+        self.drafts.iter().find_map(|(draft, scope)| {
+            let thread = scope.new_group_with?;
+            let pair = PendingPair {
+                thread,
+                draft: *draft,
+            };
+            [PaneIdentity::Thread(thread), PaneIdentity::Draft(*draft)]
+                .contains(&focused)
+                .then_some(pair)
+        })
+    }
+
     /// Discard a draft Pane: nothing durable dies with it. The scope comes
     /// back so the Cockpit can apply a leave it was holding.
     pub(crate) fn remove_draft(&mut self, draft: DraftId) -> Option<DraftScope> {
@@ -494,6 +529,7 @@ mod tests {
         );
         let draft = roster.open_draft(DraftScope {
             group: Some(group),
+            new_group_with: None,
             pending_leave: None,
         });
         assert_eq!(roster.visible(&groups).len(), 3, "the pending draft shows");

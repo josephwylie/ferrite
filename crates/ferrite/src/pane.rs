@@ -786,13 +786,16 @@ pub fn render_pane(
 
     let mut pane = shell.child(pane_head(
         view,
-        branch.as_ref(),
-        checkout,
-        status,
-        title,
-        agents,
-        ci,
-        activity_attention,
+        PaneHeadState {
+            branch: branch.as_ref(),
+            checkout,
+            status,
+            title,
+            agents,
+            ci,
+            attention: activity_attention,
+            action: None,
+        },
     ));
     match transcript {
         Some(transcript) => {
@@ -964,6 +967,8 @@ fn ring_overlay(color: u32, radius: f32) -> Div {
 /// clicks are wired — the Pane only lays it out.
 pub struct DraftState<'a> {
     pub attachments: Option<AnyElement>,
+    /// The draft-only close control in the Pane header.
+    pub discard: AnyElement,
     /// The draft's setup chips — project and workspace — riding the left
     /// of the controls row, where a live Composer's mode chip rides.
     pub band: AnyElement,
@@ -985,6 +990,7 @@ pub struct DraftState<'a> {
 pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> impl IntoElement {
     let DraftState {
         attachments,
+        discard,
         band,
         picker,
         menu,
@@ -996,17 +1002,19 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
 
     if level != Level::Transcript {
         return focus_wrapper(
-            shell.child(
-                div()
-                    .flex()
-                    .flex_1()
-                    .min_h_0()
-                    .items_center()
-                    .justify_center()
-                    .text_size(px(theme::FS_SM))
-                    .text_color(rgb(TEXT_MUTED))
-                    .child("draft"),
-            ),
+            shell
+                .child(
+                    div()
+                        .flex()
+                        .flex_1()
+                        .min_h_0()
+                        .items_center()
+                        .justify_center()
+                        .text_size(px(theme::FS_SM))
+                        .text_color(rgb(TEXT_MUTED))
+                        .child("draft"),
+                )
+                .child(div().absolute().top(px(2.)).right(px(2.)).child(discard)),
             focused,
             None,
         );
@@ -1014,7 +1022,13 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
 
     focus_wrapper(
         shell
-            .child(pane_head(view, None, None, None, None, None, None, None))
+            .child(pane_head(
+                view,
+                PaneHeadState {
+                    action: Some(discard),
+                    ..Default::default()
+                },
+            ))
             .child(div().flex().flex_1().min_h_0())
             .child(composer_region(
                 view,
@@ -1038,6 +1052,20 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
         focused,
         None,
     )
+}
+
+/// A Draft is disposable state, so its Pane advertises the same close action
+/// as cmd-w directly in the header. Live Threads deliberately keep keyboard
+/// and context-menu closure instead of adding this control to every Pane.
+pub fn draft_close_button(draft: DraftId) -> gpui::component::button::Button {
+    components::button(("discard-draft", draft.get() as usize))
+        .debug_selector(|| "discard-draft".into())
+        .ml_auto()
+        .w(px(theme::ICON_BUTTON))
+        .h(px(theme::ICON_BUTTON))
+        .p_0()
+        .tooltip("Discard Draft")
+        .child(icon(icons::CLOSE, theme::ICON_BUTTON_GLYPH, TEXT_MUTED))
 }
 
 /// Draft setup controls use the same 20px controls row as a live Composer.
@@ -1614,16 +1642,29 @@ fn l2_decision_body(decision: &Decision, decide: Option<AnyElement>) -> Div {
 ///
 /// There is no model chip here (the Composer's picker is the only model
 /// surface) and no window controls (park and zoom stay on the keyboard).
-fn pane_head(
-    view: &PaneView,
-    branch: Option<&SharedString>,
-    checkout: Option<&BranchStatus>,
+#[derive(Default)]
+struct PaneHeadState<'a> {
+    branch: Option<&'a SharedString>,
+    checkout: Option<&'a BranchStatus>,
     status: Option<Status>,
     title: Option<AnyElement>,
     agents: Option<AnyElement>,
     ci: Option<AnyElement>,
     attention: Option<AnyElement>,
-) -> Div {
+    action: Option<AnyElement>,
+}
+
+fn pane_head(view: &PaneView, state: PaneHeadState<'_>) -> Div {
+    let PaneHeadState {
+        branch,
+        checkout,
+        status,
+        title,
+        agents,
+        ci,
+        attention,
+        action,
+    } = state;
     // The dot's base is the muted ink — the parked look — and each live
     // state takes its own signal colour. The no-dot ruling is scoped to
     // navigation; a Pane head keeps its dot.
@@ -1668,6 +1709,9 @@ fn pane_head(
     }
     if let Some(attention) = attention {
         top = top.child(attention);
+    }
+    if let Some(action) = action {
+        top = top.child(action);
     }
     // The checkout keeps its own line now, so the title line no longer
     // has to share its width with a branch name.

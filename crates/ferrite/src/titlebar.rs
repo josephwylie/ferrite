@@ -27,15 +27,25 @@
 //! Drawing only, like `nav.rs`: the cockpit places these and owns the state
 //! they read.
 
+use gpui::component::button::Button;
 use gpui::prelude::*;
 use gpui::{div, px, rgb, Div, MouseButton, SharedString, Stateful, WindowControlArea};
 
 use crate::icons::{self, icon};
 use crate::pointer::{Pointer, PointerPressed};
 use crate::theme::{
-    BLOCKED, CAPTION_GLYPH, CAPTION_RESIZE_EDGE, CAPTION_W, FS_SM, GRID_PAD, TEXT, TEXT_MUTED,
-    WIN_CHROME_H,
+    BLOCKED, CAPTION_GLYPH, CAPTION_RESIZE_EDGE, CAPTION_W, FS_LG, FS_SM, GRID_PAD, ICON_BUTTON,
+    ICON_BUTTON_GLYPH, TEXT, TEXT_MUTED, WIN_CHROME_H,
 };
+
+/// The active location named in the window chrome. A Group may span
+/// Projects, so the Project follows the focused Pane rather than trying to
+/// summarize the whole Group.
+#[derive(Clone)]
+pub struct Title {
+    pub project: Option<SharedString>,
+    pub group: Option<SharedString>,
+}
 
 /// Whether this build draws its own titlebar. macOS keeps the host's, and
 /// hiding it there would take the traffic lights with it.
@@ -54,7 +64,25 @@ pub const CUSTOM: bool = cfg!(target_os = "windows");
 /// `draggable` is false while a menu, popover or the settings panel is
 /// open. Such an overlay can reach into the band, and Windows would route
 /// the press to the frame instead of to the row under the pointer.
-pub fn strip(nav_width: f32, title: Option<SharedString>, draggable: bool, maximized: bool) -> Div {
+pub fn strip(
+    nav_width: f32,
+    title: Title,
+    add_thread: Button,
+    draggable: bool,
+    maximized: bool,
+) -> Div {
+    let trailing_drag = if CUSTOM && draggable {
+        drag_region(
+            "titlebar-drag",
+            Title {
+                project: None,
+                group: None,
+            },
+            maximized,
+        )
+    } else {
+        div().flex_1().h_full()
+    };
     div()
         .absolute()
         .top_0()
@@ -63,19 +91,35 @@ pub fn strip(nav_width: f32, title: Option<SharedString>, draggable: bool, maxim
         .h(px(WIN_CHROME_H))
         .flex()
         .flex_row()
+        .items_center()
         .child(div().flex_shrink_0().w(px(nav_width)))
-        .child(if draggable {
-            drag_region("titlebar-drag", title, maximized)
-        } else {
-            title_region(title)
-        })
-        .child(caption_buttons(maximized))
+        // The location stays anchored to the content edge. The empty stretch
+        // absorbs spare width and remains the Windows drag target, while the
+        // contextual creation door sits at the trailing edge immediately
+        // before the caption controls.
+        .child(title_region(title))
+        .child(trailing_drag)
+        .child(add_thread)
+        .children(CUSTOM.then(|| caption_buttons(maximized)))
+}
+
+/// The titlebar's contextual creation door. It is a sibling of the Windows
+/// drag region, never a child, so its click reaches the app instead of the
+/// non-client frame. macOS receives the same control in its transparent band.
+pub fn add_thread_button(tooltip: &'static str) -> Button {
+    crate::components::button("titlebar-add-thread")
+        .debug_selector(|| "titlebar-add-thread".into())
+        .w(px(ICON_BUTTON))
+        .h(px(ICON_BUTTON))
+        .p_0()
+        .tooltip(tooltip)
+        .child(icon(icons::PLUS, ICON_BUTTON_GLYPH, TEXT_MUTED))
 }
 
 /// An empty stretch Windows drags the window by. The tagged part starts
 /// below the resize edge on a restored window, so the top border still
 /// resizes; maximized, there is no border to preserve and it runs flush.
-pub fn drag_region(id: &'static str, title: Option<SharedString>, maximized: bool) -> Div {
+pub fn drag_region(id: &'static str, title: Title, maximized: bool) -> Div {
     let inset = if maximized { 0.0 } else { CAPTION_RESIZE_EDGE };
     div()
         .flex_1()
@@ -104,22 +148,39 @@ pub fn drag_region(id: &'static str, title: Option<SharedString>, maximized: boo
         )
 }
 
-fn title_region(title: Option<SharedString>) -> Div {
+fn title_region(title: Title) -> Div {
+    let has_both = title.project.is_some() && title.group.is_some();
     div()
         .h_full()
-        .flex_1()
         .flex()
         .items_center()
         .justify_start()
         .min_w_0()
         .px(px(GRID_PAD))
-        .text_size(px(FS_SM))
-        .text_color(rgb(TEXT_MUTED))
-        .children(title.map(|title| {
+        .gap(px(7.0))
+        .children(title.project.map(|project| {
+            div()
+                .debug_selector(|| "project-titlebar-name".into())
+                .truncate()
+                .text_size(px(FS_SM))
+                .text_color(rgb(TEXT_MUTED))
+                .child(project)
+        }))
+        .when(has_both, |title| {
+            title.child(
+                div()
+                    .text_size(px(FS_SM))
+                    .text_color(rgb(TEXT_MUTED))
+                    .child("/"),
+            )
+        })
+        .children(title.group.map(|group| {
             div()
                 .debug_selector(|| "group-titlebar-name".into())
                 .truncate()
-                .child(title)
+                .text_size(px(FS_LG))
+                .text_color(rgb(TEXT))
+                .child(group)
         }))
 }
 
@@ -167,6 +228,7 @@ fn button(
 ) -> Stateful<Div> {
     div()
         .id(id)
+        .debug_selector(move || id.into())
         .group(id)
         .flex()
         .flex_shrink_0()
@@ -224,7 +286,16 @@ mod tests {
     /// take no layout of its own, or every Pane would move down by 42px.
     #[test]
     fn the_strip_is_an_overlay_of_the_band_the_board_reserves() {
-        let mut strip = strip(crate::nav::WIDTH, Some("Group Alpha".into()), true, false);
+        let mut strip = strip(
+            crate::nav::WIDTH,
+            Title {
+                project: Some("Ferrite".into()),
+                group: Some("Group Alpha".into()),
+            },
+            add_thread_button("New Thread in Group"),
+            true,
+            false,
+        );
         assert_eq!(strip.style().size.height, Some(px(WIN_CHROME_H).into()));
         assert_eq!(strip.style().position, Some(gpui::Position::Absolute));
     }
