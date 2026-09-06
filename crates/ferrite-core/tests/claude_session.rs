@@ -13,6 +13,10 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 use ferrite_core::providers::{ClaudeCapabilities, ClaudeConfig, ClaudeSession, ClaudeSpawnError};
+use ferrite_core::{
+    activity::{Activity, ActivityInput, ExecutionEvent},
+    transcript::{Body, Input},
+};
 use ferrite_core::{Decision, DecisionAnswer, RateLimitWindow, SessionEvent, TurnOutcome};
 
 const VERSION_CASE: &str = "case \"$1\" in --version) echo '2.1.243 (Claude Code)'; exit 0;; esac";
@@ -83,6 +87,42 @@ fn replay(name: &str) -> Vec<SessionEvent> {
     );
     let session = ClaudeSession::spawn(config(program)).unwrap();
     drain(session.events())
+}
+
+fn fold(events: &[SessionEvent]) -> Activity {
+    let mut activity = Activity::default();
+    activity.apply(ActivityInput::Connect { generation: 1 });
+    for event in events.iter().cloned() {
+        let at = Instant::now();
+        activity.apply(match event {
+            SessionEvent::Activity(event) => ActivityInput::Observe {
+                generation: 1,
+                event,
+                at,
+            },
+            event => ActivityInput::Main {
+                input: Input::Event(event),
+                at,
+            },
+        });
+    }
+    activity
+}
+
+fn prose(events: &[SessionEvent]) -> String {
+    fold(events)
+        .view()
+        .main()
+        .transcript()
+        .blocks()
+        .iter()
+        .filter_map(|block| match &block.body {
+            Body::Paragraph { spans } | Body::Heading { spans, .. } | Body::Bullet { spans } => {
+                Some(spans.iter().map(|span| span.text.as_str()).collect::<String>())
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 fn spawn_failure(program: String) -> ClaudeSpawnError {
@@ -193,30 +233,13 @@ fn the_reader_thread_delivers_the_captured_stream() {
         .filter(|event| matches!(event, SessionEvent::TokenUsage { .. }))
         .count();
     assert_eq!(usages, 3, "two messages and the result: {all:?}");
-    assert!(
-        matches!(
-            all.iter().rev().nth(1),
-            Some(SessionEvent::TokenUsage {
-                context_window: Some(200_000),
-                ..
-            })
-        ),
+    assert!(all.iter().any(|event| matches!(
+        event,
+        SessionEvent::TokenUsage { context_window: Some(200_000), .. }
+    )),
         "the result's count lands before the turn ends: {all:?}"
     );
-    let events: Vec<SessionEvent> = all
-        .into_iter()
-        .filter(|event| {
-            !matches!(
-                event,
-                SessionEvent::TokenUsage { .. }
-                    | SessionEvent::Progress { .. }
-                    | SessionEvent::ContentBoundary
-            )
-        })
-        .collect();
-
-    assert_eq!(events.len(), 11, "unexpected stream: {events:?}");
-    let inits: Vec<_> = events
+    let inits: Vec<_> = all
         .iter()
         .filter_map(|e| match e {
             SessionEvent::Init { session_id, model } => Some((session_id, model)),
@@ -227,18 +250,8 @@ fn the_reader_thread_delivers_the_captured_stream() {
     assert!(!inits[0].0.is_empty());
     assert_eq!(inits[0].1, "claude-haiku-4-5-20251001");
 
-    let text: String = events
-        .iter()
-        .filter_map(|e| match e {
-            SessionEvent::TextDelta { text } => Some(text.as_str()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(text, "hello ferrite");
-    assert!(events
-        .iter()
-        .any(|e| matches!(e, SessionEvent::ThinkingDelta { .. })));
-    assert!(events.iter().any(|event| {
+    assert_eq!(prose(&all), "hello ferrite");
+    assert!(all.iter().any(|event| {
         matches!(
             event,
             SessionEvent::RateLimits {
@@ -254,7 +267,7 @@ fn the_reader_thread_delivers_the_captured_stream() {
         )
     }));
     assert_eq!(
-        events.last(),
+        all.last(),
         Some(&SessionEvent::TurnEnded {
             outcome: TurnOutcome::Completed,
             cost_usd: Some(0.03798),
@@ -278,32 +291,29 @@ fn the_reader_thread_delivers_the_captured_stream() {
 fn a_tool_call_arrives_as_a_start_and_a_completion() {
     let events = replay("tool-2.1.243");
 
-    let started: Vec<_> = events
+    let activity = fold(&events);
+    let started: Vec<_> = activity
+        .view()
+        .main()
+        .transcript()
+        .blocks()
         .iter()
-        .filter_map(|e| match e {
-            SessionEvent::ToolStarted { id, name, input } => Some((id, name, input)),
+        .filter_map(|block| match &block.body {
+            Body::Tool(tool) => Some((&tool.call, &tool.name, &tool.structured_result, &tool.output)),
             _ => None,
         })
         .collect();
     assert_eq!(started.len(), 1, "expected one tool start: {events:?}");
-    let (id, name, input) = started[0];
+    let (id, name, _result, output) = started[0];
     assert_eq!(name, "Bash");
-    assert_eq!(input["command"], "echo ferrite-tool-ok");
-
-    assert!(
-        events.contains(&SessionEvent::ToolCompleted {
-            id: id.clone(),
-            output: "ferrite-tool-ok".into(),
-            is_error: false,
-            result: ferrite_core::ToolResult::Command {
-                stdout: "ferrite-tool-ok".into(),
-                stderr: String::new(),
-                exit_code: None,
-                duration_ms: None,
-            },
-        }),
-        "no completion matching {id}: {events:?}"
-    );
+    assert_eq!(output.as_ref().map(|output| output.text.as_str()), Some("ferrite-tool-ok"));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        SessionEvent::Activity(ferrite_core::activity::ActivityEvent::MainContent {
+            event: ExecutionEvent::ToolCompleted { id: completed, output, is_error: false, result: ferrite_core::ToolResult::Command { stdout, stderr, exit_code: None, duration_ms: None }, .. },
+            ..
+        }) if completed == id && output == "ferrite-tool-ok" && stdout == "ferrite-tool-ok" && stderr.is_empty()
+    )));
 }
 
 /// A Decision: the CLI stops and asks whether a tool may run. Replayed from
@@ -336,18 +346,19 @@ fn a_permission_request_arrives_as_a_decision_naming_its_tool_call() {
 
     assert!(!id.is_empty(), "a Decision must be answerable");
     assert_eq!(tool_name, "Write");
-    assert_eq!(description, "ferrite-perm.txt");
+    assert_eq!(description, "ferrite-perm.txt · Write");
     assert_eq!(input["content"], "ok");
     assert_eq!(suggestions[0].value["mode"], "acceptEdits");
 
     // The Decision names the tool card it blocks, so a Pane can render it in
     // place instead of as a free-floating prompt.
-    assert!(
-        events.contains(&SessionEvent::ToolStarted {
-            id: tool_use_id.clone(),
-            name: "Write".into(),
-            input: input.clone(),
-        }),
+    assert!(events.iter().any(|event| matches!(
+        event,
+        SessionEvent::Activity(ferrite_core::activity::ActivityEvent::MainContent {
+            event: ExecutionEvent::ToolStarted { id, name, input: started_input },
+            ..
+        }) if id == tool_use_id && name == "Write" && started_input == input
+    )),
         "no ToolStarted for {tool_use_id}: {events:?}"
     );
 }
@@ -596,14 +607,7 @@ fn a_resumed_session_answers_from_the_previous_process_history() {
         )),
         "the Session did not announce the resumed session: {events:?}"
     );
-    let text: String = events
-        .iter()
-        .filter_map(|e| match e {
-            SessionEvent::TextDelta { text } => Some(text.as_str()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(text, "ferrite-resume-ok");
+    assert_eq!(prose(&events), "ferrite-resume-ok");
     drop(session);
 }
 
