@@ -33,9 +33,18 @@ use gpui::{div, px, rgb, Div, MouseButton, SharedString, Stateful, WindowControl
 use crate::icons::{self, icon};
 use crate::pointer::{Pointer, PointerPressed};
 use crate::theme::{
-    BLOCKED, CAPTION_GLYPH, CAPTION_RESIZE_EDGE, CAPTION_W, FS_SM, GRID_PAD, TEXT, TEXT_MUTED,
-    WIN_CHROME_H,
+    BLOCKED, CAPTION_GLYPH, CAPTION_RESIZE_EDGE, CAPTION_W, FS_LG, FS_SM, GRID_PAD, TEXT,
+    TEXT_MUTED, WIN_CHROME_H,
 };
+
+/// The active location named in the window chrome. A Group may span
+/// Projects, so the Project follows the focused Pane rather than trying to
+/// summarize the whole Group.
+#[derive(Clone)]
+pub struct Title {
+    pub project: Option<SharedString>,
+    pub group: Option<SharedString>,
+}
 
 /// Whether this build draws its own titlebar. macOS keeps the host's, and
 /// hiding it there would take the traffic lights with it.
@@ -54,7 +63,7 @@ pub const CUSTOM: bool = cfg!(target_os = "windows");
 /// `draggable` is false while a menu, popover or the settings panel is
 /// open. Such an overlay can reach into the band, and Windows would route
 /// the press to the frame instead of to the row under the pointer.
-pub fn strip(nav_width: f32, title: Option<SharedString>, draggable: bool, maximized: bool) -> Div {
+pub fn strip(nav_width: f32, title: Title, draggable: bool, maximized: bool) -> Div {
     div()
         .absolute()
         .top_0()
@@ -75,7 +84,7 @@ pub fn strip(nav_width: f32, title: Option<SharedString>, draggable: bool, maxim
 /// An empty stretch Windows drags the window by. The tagged part starts
 /// below the resize edge on a restored window, so the top border still
 /// resizes; maximized, there is no border to preserve and it runs flush.
-pub fn drag_region(id: &'static str, title: Option<SharedString>, maximized: bool) -> Div {
+pub fn drag_region(id: &'static str, title: Title, maximized: bool) -> Div {
     let inset = if maximized { 0.0 } else { CAPTION_RESIZE_EDGE };
     div()
         .flex_1()
@@ -104,7 +113,8 @@ pub fn drag_region(id: &'static str, title: Option<SharedString>, maximized: boo
         )
 }
 
-fn title_region(title: Option<SharedString>) -> Div {
+fn title_region(title: Title) -> Div {
+    let has_both = title.project.is_some() && title.group.is_some();
     div()
         .h_full()
         .flex_1()
@@ -113,13 +123,30 @@ fn title_region(title: Option<SharedString>) -> Div {
         .justify_start()
         .min_w_0()
         .px(px(GRID_PAD))
-        .text_size(px(FS_SM))
-        .text_color(rgb(TEXT_MUTED))
-        .children(title.map(|title| {
+        .gap(px(7.0))
+        .children(title.project.map(|project| {
+            div()
+                .debug_selector(|| "project-titlebar-name".into())
+                .truncate()
+                .text_size(px(FS_SM))
+                .text_color(rgb(TEXT_MUTED))
+                .child(project)
+        }))
+        .when(has_both, |title| {
+            title.child(
+                div()
+                    .text_size(px(FS_SM))
+                    .text_color(rgb(TEXT_MUTED))
+                    .child("/"),
+            )
+        })
+        .children(title.group.map(|group| {
             div()
                 .debug_selector(|| "group-titlebar-name".into())
                 .truncate()
-                .child(title)
+                .text_size(px(FS_LG))
+                .text_color(rgb(TEXT))
+                .child(group)
         }))
 }
 
@@ -224,7 +251,15 @@ mod tests {
     /// take no layout of its own, or every Pane would move down by 42px.
     #[test]
     fn the_strip_is_an_overlay_of_the_band_the_board_reserves() {
-        let mut strip = strip(crate::nav::WIDTH, Some("Group Alpha".into()), true, false);
+        let mut strip = strip(
+            crate::nav::WIDTH,
+            Title {
+                project: Some("Ferrite".into()),
+                group: Some("Group Alpha".into()),
+            },
+            true,
+            false,
+        );
         assert_eq!(strip.style().size.height, Some(px(WIN_CHROME_H).into()));
         assert_eq!(strip.style().position, Some(gpui::Position::Absolute));
     }

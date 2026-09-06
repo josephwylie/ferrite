@@ -5096,9 +5096,22 @@ impl Render for CockpitView {
                         .map(|group| SharedString::from(group.display_title())),
                     View::Solo => None,
                 };
+                let project_title = self.panes.get(self.focused()).and_then(|pane| {
+                    let project = pane
+                        .thread()
+                        .and_then(|thread| self.cockpit.project_id(thread))
+                        .or_else(|| pane.draft().map(|draft| draft.binding.project()))?;
+                    self.cockpit
+                        .registry()
+                        .project(project)
+                        .map(|project| SharedString::from(project.title.clone()))
+                });
                 root.child(crate::titlebar::strip(
                     self.nav_width(),
-                    group_title,
+                    crate::titlebar::Title {
+                        project: project_title,
+                        group: group_title,
+                    },
                     !self.overlay_open(),
                     self.maximized,
                 ))
@@ -6098,7 +6111,14 @@ impl CockpitView {
         // titlebar, so it drags like one (`titlebar.rs`).
         if !state.collapsed {
             chrome = chrome.child(if crate::titlebar::CUSTOM {
-                crate::titlebar::drag_region("nav-chrome-drag", None, self.maximized)
+                crate::titlebar::drag_region(
+                    "nav-chrome-drag",
+                    crate::titlebar::Title {
+                        project: None,
+                        group: None,
+                    },
+                    self.maximized,
+                )
             } else {
                 div().flex_1()
             });
