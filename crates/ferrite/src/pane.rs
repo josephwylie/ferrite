@@ -2510,12 +2510,19 @@ fn working_line(transcript: &Transcript, compact: bool) -> Div {
                 .child(
                     div()
                         .debug_selector(|| "progress-reasoning".into())
+                        .flex()
+                        .items_center()
+                        .gap(px(theme::ROW_ICON_GAP))
                         .min_w_0()
                         .w_full()
                         .truncate()
                         .text_color(rgb(TEXT_2))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .child(SharedString::from(format!("◐ {caption}"))),
+                        .child(icons::animated_ferrite_icon(
+                            theme::ROW_ICON,
+                            "progress-ferrite",
+                        ))
+                        .child(caption),
                 )
                 .child(
                     div()

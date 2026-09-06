@@ -23,7 +23,13 @@
 use std::borrow::Cow;
 
 use gpui::prelude::*;
-use gpui::{px, rgb, svg, AssetSource, SharedString, Svg};
+use gpui::{
+    div, point, px, rgb, svg, Animation, AnimationExt, AnyElement, AssetSource, ElementId,
+    SharedString, Svg, Transformation,
+};
+use std::time::Duration;
+
+use crate::theme;
 
 macro_rules! icons {
     ($($name:literal),* $(,)?) => {
@@ -48,6 +54,8 @@ icons![
     "branch",
     "codex",
     "claude",
+    "ferrite-upper",
+    "ferrite-lower",
     "plus",
     "gear",
     "window-minimize",
@@ -76,6 +84,8 @@ pub const BRANCH: &str = "icons/branch.svg";
 pub const CODEX: &str = "icons/codex.svg";
 #[allow(dead_code)]
 pub const CLAUDE: &str = "icons/claude.svg";
+const FERRITE_UPPER: &str = "icons/ferrite-upper.svg";
+const FERRITE_LOWER: &str = "icons/ferrite-lower.svg";
 /// `+` — add a Project.
 pub const PLUS: &str = "icons/plus.svg";
 /// The settings gear.
@@ -127,6 +137,108 @@ pub fn icon(path: &'static str, size: f32, color: u32) -> Svg {
         .text_color(rgb(color))
 }
 
+/// Ferrite's two shards pull apart and snap home on the supplied logo's
+/// three-second timeline. GPUI rasterizes SVG rather than running its CSS, so
+/// the two paths are embedded separately and their transforms run on GPUI's
+/// animation clock. That also gives reduced-motion users the assembled mark.
+pub fn animated_ferrite_icon(size: f32, id: impl Into<ElementId>) -> AnyElement {
+    let id = id.into();
+    let animation = || {
+        Animation::new(Duration::from_millis(theme::FERRITE_SNAP_MS))
+            .repeat_synced()
+            .with_easing(ferrite_snap)
+    };
+    let shard = |path, id: ElementId, x: f32, y: f32| {
+        svg()
+            .absolute()
+            .top_0()
+            .left_0()
+            .w(px(size))
+            .h(px(size))
+            .path(path)
+            .with_animation(id, animation(), move |shard, displacement| {
+                shard.with_transformation(Transformation::translate(point(
+                    px(x * size * displacement),
+                    px(y * size * displacement),
+                )))
+            })
+    };
+    div()
+        .relative()
+        .flex_shrink_0()
+        .w(px(size))
+        .h(px(size))
+        .child(shard(
+            FERRITE_UPPER,
+            (id.clone(), "upper").into(),
+            theme::FERRITE_SHARD_X,
+            -theme::FERRITE_SHARD_Y,
+        ))
+        .child(shard(
+            FERRITE_LOWER,
+            (id, "lower").into(),
+            -theme::FERRITE_SHARD_X,
+            theme::FERRITE_SHARD_Y,
+        ))
+        .into_any_element()
+}
+
+fn ferrite_snap(phase: f32) -> f32 {
+    let [pull_x1, pull_y1, pull_x2, pull_y2] = theme::FERRITE_PULL_EASING;
+    let [snap_x1, snap_y1, snap_x2, snap_y2] = theme::FERRITE_SNAP_EASING;
+    match phase {
+        phase if phase < theme::FERRITE_PULL_START => 0.0,
+        phase if phase < theme::FERRITE_PULL_END => cubic_bezier(
+            (phase - theme::FERRITE_PULL_START)
+                / (theme::FERRITE_PULL_END - theme::FERRITE_PULL_START),
+            pull_x1,
+            pull_y1,
+            pull_x2,
+            pull_y2,
+        ),
+        phase if phase < theme::FERRITE_HOLD_END => 1.0,
+        phase if phase < theme::FERRITE_SNAP_END => {
+            1.0 - cubic_bezier(
+                (phase - theme::FERRITE_HOLD_END)
+                    / (theme::FERRITE_SNAP_END - theme::FERRITE_HOLD_END),
+                snap_x1,
+                snap_y1,
+                snap_x2,
+                snap_y2,
+            )
+        }
+        _ => 0.0,
+    }
+}
+
+/// Evaluate a CSS cubic-bezier easing at an x-position. The curve is
+/// monotonic for both easings in the supplied artwork, so a small binary
+/// search is stable and more than precise enough for a rendered frame.
+fn cubic_bezier(x: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
+    if x <= 0.0 {
+        return 0.0;
+    }
+    if x >= 1.0 {
+        return 1.0;
+    }
+    let component = |t: f32, first: f32, second: f32| {
+        let inverse = 1.0 - t;
+        3.0 * inverse * inverse * t * first + 3.0 * inverse * t * t * second + t * t * t
+    };
+    let mut low = 0.0;
+    let mut high = 1.0;
+    const SEARCH_STEPS: usize = 12;
+    for _ in 0..SEARCH_STEPS {
+        let t = (low + high) / 2.0;
+        if component(t, x1, x2) < x {
+            low = t;
+        } else {
+            high = t;
+        }
+    }
+    component((low + high) / 2.0, y1, y2)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,6 +260,8 @@ mod tests {
             BRANCH,
             CODEX,
             CLAUDE,
+            FERRITE_UPPER,
+            FERRITE_LOWER,
             GEAR,
             WINDOW_MINIMIZE,
             WINDOW_MAXIMIZE,
@@ -164,7 +278,7 @@ mod tests {
         }
         assert_eq!(
             ICONS.len(),
-            17,
+            19,
             "the prototype and app controls, including disclosure and close,              and the four Windows caption glyphs"
         );
     }
@@ -211,6 +325,16 @@ mod tests {
     #[test]
     fn an_unknown_key_is_absent_rather_than_an_error() {
         assert!(Assets.load("icons/nope.svg").unwrap().is_none());
-        assert_eq!(Assets.list("icons/").unwrap().len(), 17);
+        assert_eq!(Assets.list("icons/").unwrap().len(), 19);
+    }
+
+    #[test]
+    fn ferrite_snap_matches_the_supplied_animation_timeline() {
+        assert_eq!(ferrite_snap(0.0), 0.0);
+        assert_eq!(ferrite_snap(theme::FERRITE_PULL_START), 0.0);
+        assert_eq!(ferrite_snap(theme::FERRITE_PULL_END), 1.0);
+        assert_eq!(ferrite_snap(theme::FERRITE_HOLD_END), 1.0);
+        assert_eq!(ferrite_snap(theme::FERRITE_SNAP_END), 0.0);
+        assert_eq!(ferrite_snap(1.0), 0.0);
     }
 }
