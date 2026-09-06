@@ -156,6 +156,11 @@ pub fn animated_ferrite_icon(size: f32, id: impl Into<ElementId>) -> AnyElement 
             .w(px(size))
             .h(px(size))
             .path(path)
+            // GPUI skips `paint_svg` entirely without a concrete text color,
+            // even when the SVG paints only its own gradient. Set it on the
+            // shard itself because AnimationElement does not carry the
+            // surrounding text style into the animated child.
+            .text_color(rgb(theme::TEXT))
             .with_animation(id, animation(), move |shard, displacement| {
                 shard.with_transformation(Transformation::translate(point(
                     px(x * size * displacement),
