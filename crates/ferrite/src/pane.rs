@@ -2884,9 +2884,15 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         .flex_shrink_0()
         .min_w_0()
         .when_some(attachments, |stack, attachments| {
-            stack.child(div().px(px(theme::PANE_PAD_X)).child(attachments))
+            // The island floats clear of the prompt: its own rounded edge,
+            // clearance below it, and the composer's top edge left whole.
+            stack.child(
+                div()
+                    .px(px(theme::PANE_PAD_X))
+                    .pb(px(theme::ATTACHMENT_ISLAND_GAP))
+                    .child(attachments),
+            )
         })
-        // The attachment shoulders meet this matching surface at its top edge.
         .child(region.child(controls))
 }
 

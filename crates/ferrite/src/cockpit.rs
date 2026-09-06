@@ -4518,13 +4518,13 @@ impl CockpitView {
     /// ⌘V anywhere in the window lands in the focused Pane's Composer.
     /// The Composer's own Paste runs first while it holds the keyboard;
     /// this is the fallback for when a click in the transcript — a drag
-    /// to select, a tool row — took the keyboard away: the text goes
-    /// where the operator is about to type, and the keyboard follows it.
+    /// to select, a tool row — took the keyboard away: pasted text or files
+    /// go where the operator is about to type, and the keyboard follows.
     fn paste_into_composer(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
         if !self.panes[self.focused()].is_main() {
             return;
         }
-        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
+        let Some(item) = cx.read_from_clipboard() else {
             return;
         };
         let index = self.focused();
@@ -4535,7 +4535,7 @@ impl CockpitView {
             return;
         }
         let composer = pane.composer.clone();
-        composer.update(cx, |composer, cx| composer.insert(&text, cx));
+        composer.update(cx, |composer, cx| composer.paste_item(item, cx));
         window.focus(&composer.focus_handle(cx), cx);
         cx.notify();
     }

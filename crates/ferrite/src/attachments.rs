@@ -82,12 +82,14 @@ impl RenderOnce for Attachments {
         });
         let stock = &cx.global::<Appearance>().0;
         let tokens = stock.semantic_tokens();
+        let composer_edge = gpui::rgba(crate::theme::COMPOSER_EDGE);
         let cards = AttachmentGroup::new(self.id)
             .when(self.island.is_some(), |group| {
                 group.w_auto().max_w_full().gap_1p5().py_0()
             })
             .font_family(stock.font_family.clone())
             .children(self.files.into_iter().enumerate().map(|(index, path)| {
+                let island = self.island.is_some();
                 let name = path
                     .file_name()
                     .unwrap_or_default()
@@ -113,7 +115,7 @@ impl RenderOnce for Attachments {
                     } else {
                         tokens.radius.md
                     });
-                Attachment::new()
+                let card = Attachment::new()
                     .id(("attachment", index))
                     .when(self.island.is_some(), |attachment| {
                         attachment.xsmall().min_w_0().w_32()
@@ -189,7 +191,24 @@ impl RenderOnce for Attachments {
                                     }),
                             ),
                         )
-                    })
+                    });
+                // The kit's own hover tints the card with `muted`, which is
+                // the island's ground here, so a hovered card dissolves into
+                // it. A ring outside the card is immune to that tint and
+                // answers for every card, clickable or not.
+                if island {
+                    gpui::div()
+                        .flex_none()
+                        .min_w_0()
+                        .rounded(tokens.radius.xl + px(1.))
+                        .border_1()
+                        .border_color(gpui::rgba(crate::theme::TRANSPARENT))
+                        .hover(|style| style.border_color(gpui::rgb(crate::theme::FILL_HOVER)))
+                        .child(card)
+                        .into_any_element()
+                } else {
+                    card.into_any_element()
+                }
             }));
         KitScale {
             child: if let Some(entrance) = entrance {
@@ -197,10 +216,9 @@ impl RenderOnce for Attachments {
                 let radius = Theme::global(cx).radius_2xl();
                 let surface = gpui::div()
                     .bg(background)
-                    .rounded_tl(radius)
-                    .rounded_tr(radius)
-                    .rounded_bl(px(0.))
-                    .rounded_br(px(0.))
+                    .rounded(radius)
+                    .border_1()
+                    .border_color(composer_edge)
                     .p_1p5()
                     .min_w_0()
                     .style()
@@ -218,7 +236,6 @@ impl RenderOnce for Attachments {
                             .relative()
                             .top(px(8. * (1. - entrance)))
                             .opacity(0.6 + 0.4 * entrance)
-                            .child(crate::components::composer_join(radius, background))
                             .child(
                                 GroupBox::new()
                                     .id("attachment-island")

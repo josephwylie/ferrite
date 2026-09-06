@@ -14,12 +14,12 @@ use ferrite_core::prompt_files;
 
 use gpui::prelude::*;
 use gpui::{
-    actions, div, fill, point, px, relative, rgb, size, App, AvailableSpace, Bounds, ClipboardItem,
-    ContentMask, Context, DispatchPhase, Element, ElementId, ElementInputHandler, Entity,
-    EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId, LayoutId,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, SharedString,
-    Style, Task, TextAlign, TextRun, TextStyle, UTF16Selection, UnderlineStyle, Window,
-    WrappedLine,
+    actions, div, fill, point, px, relative, rgb, size, App, AvailableSpace, Bounds,
+    ClipboardEntry, ClipboardItem, ContentMask, Context, DispatchPhase, Element, ElementId,
+    ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable,
+    GlobalElementId, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    PaintQuad, Pixels, SharedString, Style, Task, TextAlign, TextRun, TextStyle, UTF16Selection,
+    UnderlineStyle, Window, WrappedLine,
 };
 
 use crate::line::Line;
@@ -275,6 +275,32 @@ impl Composer {
         self.edited(cx);
     }
 
+    /// Paste native file clipboard entries as attachments, falling back to
+    /// ordinary text when the clipboard contains no files. Some platforms
+    /// expose both a file list and its path text; files win so their paths do
+    /// not leak into the editable prompt.
+    pub(crate) fn paste_item(&mut self, item: ClipboardItem, cx: &mut Context<Self>) {
+        let paths: Vec<PathBuf> = item
+            .entries()
+            .iter()
+            .filter_map(|entry| match entry {
+                ClipboardEntry::ExternalPaths(paths) => Some(paths.paths()),
+                _ => None,
+            })
+            .flatten()
+            .cloned()
+            .collect();
+        if !paths.is_empty() {
+            self.add_files(&paths, cx);
+        } else if let Some(text) = item.text() {
+            // The draft holds hard newlines now, so pasted ones stay — only
+            // carriage returns are normalized.
+            self.line
+                .replace(None, &text.replace("\r\n", "\n").replace('\r', "\n"));
+            self.edited(cx);
+        }
+    }
+
     pub fn text(&self) -> &str {
         self.line.text()
     }
@@ -416,12 +442,8 @@ impl Composer {
     }
 
     fn paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            // The draft holds hard newlines now, so pasted ones stay —
-            // only the carriage returns go.
-            self.line
-                .replace(None, &text.replace("\r\n", "\n").replace('\r', "\n"));
-            self.edited(cx);
+        if let Some(item) = cx.read_from_clipboard() {
+            self.paste_item(item, cx);
         }
     }
 
@@ -1442,6 +1464,47 @@ mod tests {
 
     fn composer(host: &Entity<Host>, cx: &mut VisualTestContext) -> Entity<Composer> {
         host.read_with(cx, |host, _| host.composer.clone())
+    }
+
+    #[gpui::test]
+    fn paste_attaches_clipboard_files_without_inserting_their_paths(cx: &mut TestAppContext) {
+        let (host, cx) = host(cx);
+        let composer = composer(&host, cx);
+        let files = vec![
+            std::env::temp_dir().join("one.png"),
+            std::env::temp_dir().join("notes.txt"),
+        ];
+        composer.update(cx, |composer, cx| {
+            composer.paste_item(
+                ClipboardItem {
+                    entries: vec![ClipboardEntry::ExternalPaths(gpui::ExternalPaths(
+                        files.clone().into(),
+                    ))],
+                },
+                cx,
+            );
+        });
+
+        composer.read_with(cx, |composer, _| {
+            assert!(composer.text().is_empty(), "file paths stay out of prose");
+            assert_eq!(
+                ferrite_core::prompt_files::paths(&composer.prompt(), None),
+                files
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn paste_keeps_the_existing_text_behavior(cx: &mut TestAppContext) {
+        let (host, cx) = host(cx);
+        let composer = composer(&host, cx);
+        cx.update(|_, cx| {
+            cx.write_to_clipboard(ClipboardItem::new_string("one\r\ntwo".into()));
+        });
+
+        cx.dispatch_action(Paste);
+
+        composer.read_with(cx, |composer, _| assert_eq!(composer.text(), "one\ntwo"));
     }
 
     /// The box's painted bounds and row pitch.

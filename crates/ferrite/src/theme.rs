@@ -523,6 +523,10 @@ pub const COMPOSER_PAD_B: f32 = 8.0;
 pub const COMPOSER_ROW_H: f32 = 20.0;
 #[allow(dead_code)]
 pub const COMPOSER_GAP: f32 = 3.0;
+
+/// Clearance between the floating attachment island and the prompt's
+/// top edge, so the island reads as its own surface.
+pub const ATTACHMENT_ISLAND_GAP: f32 = 6.0;
 pub const CARET_W: f32 = 2.0;
 #[allow(dead_code)]
 pub const CARET_H: f32 = 14.0;
