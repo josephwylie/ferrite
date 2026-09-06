@@ -305,10 +305,180 @@ pub enum DecisionDelivery {
     Async,
 }
 
+/// The one provider-neutral interaction a Decision asks the operator to make.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum DecisionKind {
+    /// Permit or reject an action without collecting extra input.
+    #[default]
+    Approval,
+    /// A sequence of choices and optional free-text answers.
+    Questions(Vec<crate::questions::Question>),
+    /// A typed, flat set of MCP fields.
+    Form { fields: Vec<FormField> },
+    /// A URL the operator may complete outside Ferrite. Ferrite never opens it.
+    External { url: String },
+}
+
+/// Provider-normalized controls for an approval card.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DecisionPolicy {
+    pub allow: bool,
+    pub deny: bool,
+    pub prefer_deny: bool,
+    pub interaction_required: bool,
+}
+
+impl Default for DecisionPolicy {
+    fn default() -> Self {
+        Self {
+            allow: true,
+            deny: true,
+            prefer_deny: false,
+            interaction_required: false,
+        }
+    }
+}
+
+/// One provider-neutral field in an MCP elicitation form.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FormField {
+    pub id: String,
+    pub label: String,
+    pub description: String,
+    pub required: bool,
+    pub kind: FormFieldKind,
+}
+
+/// Constraints and defaults for the MCP flat primitive subset.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FormFieldKind {
+    String {
+        min_length: Option<usize>,
+        max_length: Option<usize>,
+        default: Option<String>,
+    },
+    Number {
+        minimum: Option<f64>,
+        maximum: Option<f64>,
+        default: Option<f64>,
+    },
+    Integer {
+        minimum: Option<i64>,
+        maximum: Option<i64>,
+        default: Option<i64>,
+    },
+    Boolean {
+        default: Option<bool>,
+    },
+    Enum {
+        options: Vec<String>,
+        multi_select: bool,
+        default: Option<serde_json::Value>,
+    },
+}
+
+impl FormField {
+    /// Validate one operator-provided JSON value before its adapter writes an
+    /// MCP response. Schema decoding is deliberately outside this module.
+    pub fn validate(&self, value: &serde_json::Value) -> Result<(), String> {
+        match &self.kind {
+            FormFieldKind::String {
+                min_length,
+                max_length,
+                ..
+            } => {
+                let Some(text) = value.as_str() else {
+                    return Err(format!("{} must be a string", self.label));
+                };
+                let length = text.chars().count();
+                if min_length.is_some_and(|min| length < min)
+                    || max_length.is_some_and(|max| length > max)
+                {
+                    return Err(format!("{} is outside its allowed length", self.label));
+                }
+            }
+            FormFieldKind::Number {
+                minimum, maximum, ..
+            } => {
+                let Some(number) = value.as_f64() else {
+                    return Err(format!("{} must be a number", self.label));
+                };
+                if minimum.is_some_and(|min| number < min)
+                    || maximum.is_some_and(|max| number > max)
+                {
+                    return Err(format!("{} is outside its allowed range", self.label));
+                }
+            }
+            FormFieldKind::Integer {
+                minimum, maximum, ..
+            } => {
+                let Some(number) = value.as_i64() else {
+                    return Err(format!("{} must be an integer", self.label));
+                };
+                if minimum.is_some_and(|min| number < min)
+                    || maximum.is_some_and(|max| number > max)
+                {
+                    return Err(format!("{} is outside its allowed range", self.label));
+                }
+            }
+            FormFieldKind::Boolean { .. } if !value.is_boolean() => {
+                return Err(format!("{} must be true or false", self.label));
+            }
+            FormFieldKind::Boolean { .. } => {}
+            FormFieldKind::Enum {
+                options,
+                multi_select,
+                ..
+            } => {
+                let values: Vec<&str> = if *multi_select {
+                    value
+                        .as_array()
+                        .ok_or_else(|| format!("{} must be a list", self.label))?
+                        .iter()
+                        .map(|value| {
+                            value
+                                .as_str()
+                                .ok_or_else(|| format!("{} has an invalid choice", self.label))
+                        })
+                        .collect::<Result<_, _>>()?
+                } else {
+                    vec![value
+                        .as_str()
+                        .ok_or_else(|| format!("{} has an invalid choice", self.label))?]
+                };
+                if values
+                    .iter()
+                    .any(|value| !options.iter().any(|option| option == value))
+                {
+                    return Err(format!("{} has an unavailable choice", self.label));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Validate the values for a normalized Form before encoding a provider reply.
+pub fn validate_form(fields: &[FormField], values: &serde_json::Value) -> Result<(), String> {
+    let values = values
+        .as_object()
+        .ok_or_else(|| "form values must be an object".to_string())?;
+    for field in fields {
+        match values.get(&field.id) {
+            Some(value) if !value.is_null() => field.validate(value)?,
+            _ if field.required => return Err(format!("{} is required", field.label)),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 /// A provider request for operator input.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Decision {
     pub delivery: DecisionDelivery,
+    pub kind: DecisionKind,
+    pub policy: DecisionPolicy,
     /// Opaque provider handle for this Decision. Echo it unchanged when
     /// answering; its spelling need not match the provider's raw wire ID.
     pub id: String,
@@ -346,6 +516,8 @@ mod tests {
     fn decision(suggestions: Vec<serde_json::Value>) -> Decision {
         Decision {
             delivery: Default::default(),
+            kind: Default::default(),
+            policy: Default::default(),
             id: "1".into(),
             tool_use_id: "toolu_1".into(),
             tool_name: "Write".into(),
@@ -383,6 +555,15 @@ pub enum DecisionAnswer {
         input: serde_json::Value,
         suggestion: serde_json::Value,
     },
+    /// Answers a normalized question form. The provider adapter maps its
+    /// stable IDs and native payload independently of the renderer.
+    Questions {
+        answers: Vec<crate::questions::Answer>,
+    },
+    /// Values for a normalized MCP form.
+    Form { values: serde_json::Value },
+    /// Cancel an elicitation without treating it as a tool denial.
+    Cancel,
 }
 
 /// How a turn ended.

@@ -29,6 +29,10 @@ pub struct Question {
     pub options: Vec<Choice>,
     /// Whether the operator may pick more than one option.
     pub multi_select: bool,
+    /// Whether the answer must be obscured while it is entered and displayed.
+    pub secret: bool,
+    /// Whether the operator can supply text outside the listed choices.
+    pub allow_other: bool,
 }
 
 /// One option of a [`Question`].
@@ -108,6 +112,14 @@ fn parse_question(value: &Value, asynchronous: bool) -> Option<Question> {
             .get("multiSelect")
             .and_then(Value::as_bool)
             .unwrap_or(false),
+        secret: value
+            .get("secret")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        allow_other: value
+            .get("allowOther")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
     })
 }
 
@@ -161,6 +173,13 @@ pub fn answered_input(input: &Value, answers: &[Answer], questions: &[Question])
 }
 
 fn answer_values(question: &Question, answer: &Answer) -> Option<Vec<String>> {
+    let parts = selected_values(question, answer);
+    (!parts.is_empty()).then_some(parts)
+}
+
+/// The selected labels and free text in their original boundaries. Adapters
+/// choose whether their provider needs strings joined or a JSON array.
+pub fn selected_values(question: &Question, answer: &Answer) -> Vec<String> {
     let mut parts: Vec<String> = answer
         .picks
         .iter()
@@ -172,11 +191,7 @@ fn answer_values(question: &Question, answer: &Answer) -> Option<Vec<String>> {
             parts.push(other.to_string());
         }
     }
-    if parts.is_empty() {
-        None
-    } else {
-        Some(parts)
-    }
+    parts
 }
 
 /// One line for a cell too small to show the questions: the count and the

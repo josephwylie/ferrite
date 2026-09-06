@@ -201,6 +201,7 @@ pub struct ClaudeSession {
     setting_reply: SettingReply,
     control_replies: ControlReplies,
     decoder: Arc<Mutex<activity::Decoder>>,
+    requests: Arc<Mutex<wire::Requests>>,
     next_request_id: u64,
     suggestions: Arc<Mutex<suggestions::Inbox>>,
 }
@@ -295,6 +296,7 @@ impl ClaudeSession {
         let setting_reply = Arc::new(Mutex::new(None));
         let control_replies = Arc::new(Mutex::new(HashMap::new()));
         let decoder = Arc::new(Mutex::new(activity::Decoder::default()));
+        let requests = Arc::new(Mutex::new(wire::Requests::default()));
         let mut inbox = suggestions::Inbox::default();
         inbox.configure(config.prompt_suggestions);
         let suggestions = Arc::new(Mutex::new(inbox));
@@ -307,6 +309,7 @@ impl ClaudeSession {
             control_replies.clone(),
             Arc::clone(&stdin),
             decoder.clone(),
+            requests.clone(),
             suggestions.clone(),
         );
 
@@ -321,6 +324,7 @@ impl ClaudeSession {
             setting_reply,
             control_replies,
             decoder,
+            requests,
             next_request_id: 1,
             suggestions,
         };
@@ -505,21 +509,33 @@ impl ClaudeSession {
     /// on. Unlike `interrupt`, the request id is the CLI's, not Ferrite's —
     /// this is a response to its question, so it must not be renumbered.
     pub fn respond_to_decision(&mut self, id: &str, answer: DecisionAnswer) -> io::Result<()> {
-        let body = match answer {
-            DecisionAnswer::Allow { input } => {
-                serde_json::json!({"behavior": "allow", "updatedInput": input})
+        let body = if let Some(body) = lock(&self.requests).response(id, &answer) {
+            body?
+        } else {
+            match answer {
+                DecisionAnswer::Allow { input } => {
+                    serde_json::json!({"behavior": "allow", "updatedInput": input})
+                }
+                DecisionAnswer::Deny { message } => {
+                    serde_json::json!({"behavior": "deny", "message": message})
+                }
+                // `updatedPermissions` carries the CLI's own suggestion back to
+                // it; the permission-always capture proves a second call in the
+                // same turn is then not gated at all.
+                DecisionAnswer::AllowAlways { input, suggestion } => serde_json::json!({
+                    "behavior": "allow",
+                    "updatedInput": input,
+                    "updatedPermissions": [suggestion],
+                }),
+                DecisionAnswer::Questions { .. }
+                | DecisionAnswer::Form { .. }
+                | DecisionAnswer::Cancel => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "Decision answer does not match a pending request",
+                    ))
+                }
             }
-            DecisionAnswer::Deny { message } => {
-                serde_json::json!({"behavior": "deny", "message": message})
-            }
-            // `updatedPermissions` carries the CLI's own suggestion back to
-            // it; the permission-always capture proves a second call in the
-            // same turn is then not gated at all.
-            DecisionAnswer::AllowAlways { input, suggestion } => serde_json::json!({
-                "behavior": "allow",
-                "updatedInput": input,
-                "updatedPermissions": [suggestion],
-            }),
         };
         // Serialize response bookkeeping with stdout decoding: a progress or
         // cancellation frame can arrive as soon as this write reaches the CLI.
@@ -533,6 +549,7 @@ impl ClaudeSession {
                 "response": body,
             },
         }))?;
+        lock(&self.requests).resolved(id);
         decoder.decision_resolved(id);
         Ok(())
     }
@@ -599,6 +616,7 @@ fn read_stdout(
     control_replies: ControlReplies,
     stdin: Arc<Mutex<ChildStdin>>,
     decoder: Arc<Mutex<activity::Decoder>>,
+    requests: Arc<Mutex<wire::Requests>>,
     suggestions: Arc<Mutex<suggestions::Inbox>>,
 ) -> Receiver<ClaudeCapabilities> {
     let (handshake, capabilities) = sync_channel(1);
@@ -618,6 +636,7 @@ fn read_stdout(
             let text = text.trim_end();
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(text) {
                 lock(&suggestions).observe(&value);
+                lock(&requests).observe(&value);
                 let response = &value["response"];
                 let mut pending = lock(&setting_reply);
                 if value["type"] == "control_response"

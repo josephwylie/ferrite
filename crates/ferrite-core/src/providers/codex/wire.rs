@@ -18,8 +18,8 @@ use serde_json::Value;
 use super::CodexCapabilities;
 use crate::progress::{Phase, PlanStep, ProgressEvent, StepStatus};
 use crate::{
-    Decision, FileEdit, Hunk, ModelInfo, RateLimitWindow, SessionCommand, SessionEvent, ToolResult,
-    TurnOutcome,
+    Decision, DecisionPolicy, FileEdit, Hunk, ModelInfo, RateLimitWindow, SessionCommand,
+    SessionEvent, ToolResult, TurnOutcome,
 };
 
 /// The item types Ferrite reads as tool runs. Everything else the server
@@ -73,6 +73,14 @@ pub(super) fn parse_line(line: &str) -> Option<SessionEvent> {
         "item/fileChange/requestApproval" => parse_approval_request(&value, params, "fileChange"),
         "item/tool/requestUserInput" => {
             super::questions::decode_native(params, rpc_id_string(value.get("id")?)?)
+                .map(|decision| SessionEvent::DecisionRequested { decision })
+        }
+        "mcpServer/elicitation/request" => {
+            super::questions::decode_elicitation(params, rpc_id_string(value.get("id")?)?)
+                .map(|decision| SessionEvent::DecisionRequested { decision })
+        }
+        "item/permissions/requestApproval" => {
+            super::questions::decode_permissions(params, rpc_id_string(value.get("id")?)?)
                 .map(|decision| SessionEvent::DecisionRequested { decision })
         }
         "thread/tokenUsage/updated" => parse_token_usage(params),
@@ -510,6 +518,8 @@ fn parse_approval_request(value: &Value, params: &Value, tool_name: &str) -> Opt
     Some(SessionEvent::DecisionRequested {
         decision: Decision {
             delivery: Default::default(),
+            kind: Default::default(),
+            policy: approval_policy(params),
             id: rpc_id_string(value.get("id")?)?,
             tool_use_id: params.get("itemId")?.as_str()?.to_string(),
             tool_name: tool_name.to_string(),
@@ -534,6 +544,23 @@ fn parse_approval_request(value: &Value, params: &Value, tool_name: &str) -> Opt
                 .collect(),
         },
     })
+}
+
+/// Available decisions are wire details, so normalize their actionable shape
+/// before handing the shared card its policy.
+fn approval_policy(params: &Value) -> DecisionPolicy {
+    let Some(choices) = params.get("availableDecisions").and_then(Value::as_array) else {
+        return DecisionPolicy::default();
+    };
+    DecisionPolicy {
+        allow: choices.iter().any(|choice| {
+            choice == "accept" || choice == "acceptForSession" || standing_choice(choice)
+        }),
+        deny: choices
+            .iter()
+            .any(|choice| choice == "decline" || choice == "cancel"),
+        ..DecisionPolicy::default()
+    }
 }
 
 /// Only documented permission expansions may be offered as standing approval.

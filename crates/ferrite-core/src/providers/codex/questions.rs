@@ -1,6 +1,9 @@
 //! Codex's asynchronous questions are structured agent messages. Native
 //! request_user_input calls block on their JSON-RPC response instead.
-use crate::{activity::ActivityEvent, Decision, DecisionAnswer, SessionEvent};
+use crate::{
+    activity::ActivityEvent, validate_form, Decision, DecisionAnswer, DecisionKind, FormField,
+    FormFieldKind, SessionEvent,
+};
 use serde_json::{json, Value};
 use std::{
     collections::{HashMap, HashSet},
@@ -40,20 +43,164 @@ pub(super) fn decode_native(params: &Value, id: String) -> Option<Decision> {
                 "header": header,
                 "question": text,
                 "options": options,
+                "secret": question["isSecret"].as_bool().unwrap_or(false),
+                "allowOther": question["isOther"].as_bool().unwrap_or(true),
             }))
         })
         .collect::<Option<Vec<_>>>()?;
     let input = json!({"questions": questions});
     let parsed = crate::questions::parse(&input)?;
+    let description = crate::questions::summary(&parsed);
     Some(Decision {
         delivery: crate::DecisionDelivery::Blocking,
+        kind: DecisionKind::Questions(parsed),
+        policy: Default::default(),
         id,
         tool_use_id: item_id.into(),
         tool_name: crate::questions::NATIVE_TOOL_NAME.into(),
-        description: crate::questions::summary(&parsed),
+        description,
         input,
         suggestions: vec![],
     })
+}
+
+pub(super) fn decode_elicitation(params: &Value, id: String) -> Option<Decision> {
+    let message = params.get("message")?.as_str()?.trim();
+    if message.is_empty() {
+        return None;
+    }
+    let kind = match params.get("mode")?.as_str()? {
+        "form" => DecisionKind::Form {
+            fields: form_fields(params.get("requestedSchema")?)?,
+        },
+        "url" => DecisionKind::External {
+            url: params.get("url")?.as_str()?.to_string(),
+        },
+        _ => return None,
+    };
+    Some(Decision {
+        delivery: crate::DecisionDelivery::Blocking,
+        kind,
+        policy: Default::default(),
+        id,
+        tool_use_id: params
+            .get("itemId")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .into(),
+        tool_name: "mcp_elicitation".into(),
+        description: message.into(),
+        input: Value::Null,
+        suggestions: vec![],
+    })
+}
+
+pub(super) fn decode_permissions(params: &Value, id: String) -> Option<Decision> {
+    let permissions = params.get("permissions")?.as_object()?;
+    Some(Decision {
+        delivery: crate::DecisionDelivery::Blocking,
+        kind: DecisionKind::Approval,
+        policy: Default::default(),
+        id,
+        tool_use_id: params.get("itemId")?.as_str()?.to_string(),
+        tool_name: "permissions".into(),
+        description: params
+            .get("reason")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .into(),
+        input: Value::Object(permissions.clone()),
+        suggestions: vec![],
+    })
+}
+
+pub(super) fn form_fields(schema: &Value) -> Option<Vec<FormField>> {
+    if schema.get("type")?.as_str()? != "object" {
+        return None;
+    }
+    let required = schema.get("required").and_then(Value::as_array);
+    schema
+        .get("properties")?
+        .as_object()?
+        .iter()
+        .map(|(id, field)| {
+            let kind = match field.get("type")?.as_str()? {
+                "string" if field.get("enum").is_some() => FormFieldKind::Enum {
+                    options: field
+                        .get("enum")?
+                        .as_array()?
+                        .iter()
+                        .map(Value::as_str)
+                        .collect::<Option<Vec<_>>>()?
+                        .into_iter()
+                        .map(str::to_string)
+                        .collect(),
+                    multi_select: false,
+                    default: field.get("default").cloned(),
+                },
+                "string" => FormFieldKind::String {
+                    min_length: field
+                        .get("minLength")
+                        .and_then(Value::as_u64)
+                        .map(|v| v as usize),
+                    max_length: field
+                        .get("maxLength")
+                        .and_then(Value::as_u64)
+                        .map(|v| v as usize),
+                    default: field
+                        .get("default")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                },
+                "number" => FormFieldKind::Number {
+                    minimum: field.get("minimum").and_then(Value::as_f64),
+                    maximum: field.get("maximum").and_then(Value::as_f64),
+                    default: field.get("default").and_then(Value::as_f64),
+                },
+                "integer" => FormFieldKind::Integer {
+                    minimum: field.get("minimum").and_then(Value::as_i64),
+                    maximum: field.get("maximum").and_then(Value::as_i64),
+                    default: field.get("default").and_then(Value::as_i64),
+                },
+                "boolean" => FormFieldKind::Boolean {
+                    default: field.get("default").and_then(Value::as_bool),
+                },
+                "array" => FormFieldKind::Enum {
+                    options: field
+                        .get("items")?
+                        .get("enum")?
+                        .as_array()?
+                        .iter()
+                        .map(Value::as_str)
+                        .collect::<Option<Vec<_>>>()?
+                        .into_iter()
+                        .map(str::to_string)
+                        .collect(),
+                    multi_select: true,
+                    default: field.get("default").cloned(),
+                },
+                _ => return None,
+            };
+            Some(FormField {
+                id: id.clone(),
+                label: field
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .filter(|text| !text.is_empty())
+                    .unwrap_or(id)
+                    .into(),
+                description: field
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .into(),
+                required: required.is_some_and(|required| {
+                    required.iter().any(|value| value.as_str() == Some(id))
+                }),
+                kind,
+            })
+        })
+        .collect()
 }
 
 /// Native request handles are registered by the reader, and selected here at
@@ -61,40 +208,159 @@ pub(super) fn decode_native(params: &Value, id: String) -> Option<Decision> {
 /// inferring it from a renderer-visible tool name.
 #[derive(Default)]
 pub(super) struct NativeRequests {
-    pending: HashSet<String>,
+    pending: HashMap<String, NativeRequest>,
+    resolved: HashSet<String>,
+}
+
+enum NativeRequest {
+    Questions(Vec<crate::questions::Question>),
+    Form(Vec<FormField>),
+    External,
+    Permissions(Value),
 }
 
 impl NativeRequests {
     pub fn observe(&mut self, frame: &Value) {
-        if frame.get("method").and_then(Value::as_str) != Some("item/tool/requestUserInput") {
+        if frame.get("method").and_then(Value::as_str) == Some("serverRequest/resolved") {
+            if let Some(id @ (Value::Number(_) | Value::String(_))) =
+                frame["params"].get("requestId")
+            {
+                let id = id.to_string();
+                self.pending.remove(&id);
+                self.resolved.insert(id);
+            }
             return;
         }
         let Some(id @ (Value::Number(_) | Value::String(_))) = frame.get("id") else {
             return;
         };
-        if self.pending.len() < 128 {
-            self.pending.insert(id.to_string());
+        let id = id.to_string();
+        let request = match frame.get("method").and_then(Value::as_str) {
+            Some("item/tool/requestUserInput") => decode_native(&frame["params"], id.clone())
+                .and_then(|decision| match decision.kind {
+                    DecisionKind::Questions(questions) => Some(NativeRequest::Questions(questions)),
+                    _ => None,
+                }),
+            Some("mcpServer/elicitation/request") => {
+                decode_elicitation(&frame["params"], id.clone()).and_then(|decision| match decision
+                    .kind
+                {
+                    DecisionKind::Form { fields } => Some(NativeRequest::Form(fields)),
+                    DecisionKind::External { .. } => Some(NativeRequest::External),
+                    _ => None,
+                })
+            }
+            Some("item/permissions/requestApproval") => {
+                decode_permissions(&frame["params"], id.clone())
+                    .map(|decision| NativeRequest::Permissions(decision.input))
+            }
+            _ => None,
+        };
+        if let Some(request) = request {
+            self.pending.insert(id, request);
         }
     }
 
-    pub fn contains(&self, id: &str) -> bool {
-        self.pending.contains(id)
+    pub fn response(&self, id: &str, answer: &DecisionAnswer) -> Option<io::Result<Value>> {
+        if self.resolved.contains(id) {
+            return Some(Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Decision is no longer pending",
+            )));
+        }
+        let request = self.pending.get(id)?;
+        Some(match request {
+            NativeRequest::Questions(questions) => question_response(questions, answer),
+            NativeRequest::Form(fields) => elicitation_response(Some(fields), answer),
+            NativeRequest::External => elicitation_response(None, answer),
+            NativeRequest::Permissions(profile) => permission_response(profile, answer),
+        })
     }
 
     pub fn resolved(&mut self, id: &str) {
         self.pending.remove(id);
+        self.resolved.insert(id.into());
     }
+}
+
+fn question_response(
+    questions: &[crate::questions::Question],
+    answer: &DecisionAnswer,
+) -> io::Result<Value> {
+    match answer {
+        DecisionAnswer::Questions { answers } => {
+            let mut values = serde_json::Map::new();
+            for (question, answer) in questions.iter().zip(answers) {
+                let id = question
+                    .id
+                    .as_ref()
+                    .ok_or_else(|| io::Error::other("native question has no id"))?;
+                let values_for_question = crate::questions::selected_values(question, answer);
+                if !values_for_question.is_empty() {
+                    values.insert(id.clone(), json!({"answers": values_for_question}));
+                }
+            }
+            Ok(json!({"answers": values}))
+        }
+        DecisionAnswer::Allow { input } | DecisionAnswer::AllowAlways { input, .. } => {
+            native_response(input)
+        }
+        DecisionAnswer::Deny { .. } | DecisionAnswer::Cancel => Ok(json!({"answers": {}})),
+        DecisionAnswer::Form { .. } => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "question requires question answers",
+        )),
+    }
+}
+
+fn elicitation_response(
+    fields: Option<&[FormField]>,
+    answer: &DecisionAnswer,
+) -> io::Result<Value> {
+    match answer {
+        DecisionAnswer::Form { values } => {
+            if let Some(fields) = fields {
+                validate_form(fields, values)
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+            }
+            Ok(json!({"action":"accept","content":values,"_meta":null}))
+        }
+        DecisionAnswer::Allow { .. } | DecisionAnswer::AllowAlways { .. } if fields.is_none() => {
+            Ok(json!({"action":"accept","content":null,"_meta":null}))
+        }
+        DecisionAnswer::Deny { .. } => Ok(json!({"action":"decline","content":null,"_meta":null})),
+        DecisionAnswer::Cancel => Ok(json!({"action":"cancel","content":null,"_meta":null})),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "elicitation answer does not match its form",
+        )),
+    }
+}
+
+fn permission_response(profile: &Value, answer: &DecisionAnswer) -> io::Result<Value> {
+    let empty = json!({});
+    let permissions = match answer {
+        DecisionAnswer::Allow { .. } | DecisionAnswer::AllowAlways { .. } => profile,
+        DecisionAnswer::Deny { .. } | DecisionAnswer::Cancel => &empty,
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "permission approval requires allow or deny",
+            ))
+        }
+    };
+    let mut granted = serde_json::Map::new();
+    for key in ["network", "fileSystem"] {
+        if let Some(value) = permissions.get(key).filter(|value| !value.is_null()) {
+            granted.insert(key.into(), value.clone());
+        }
+    }
+    Ok(json!({"permissions": granted, "scope":"turn"}))
 }
 
 /// The native wire accepts only its response object, never the normalized
 /// questions carried for rendering.
-pub(super) fn native_response(answer: &DecisionAnswer) -> io::Result<Value> {
-    let input = match answer {
-        DecisionAnswer::Allow { input } | DecisionAnswer::AllowAlways { input, .. } => input,
-        // The protocol has no denial variant. An empty optional answer map is
-        // the only valid way to decline while releasing the blocked request.
-        DecisionAnswer::Deny { .. } => return Ok(json!({"answers": {}})),
-    };
+pub(super) fn native_response(input: &Value) -> io::Result<Value> {
     let answers = input
         .get("answers")
         .and_then(Value::as_object)
@@ -132,12 +398,15 @@ pub(super) fn decode(params: &Value) -> Option<Decision> {
         .collect();
     let input = json!({"delivery":"async","questions":questions?});
     let parsed = crate::questions::parse(&input)?;
+    let description = crate::questions::summary(&parsed);
     Some(Decision {
         delivery: crate::DecisionDelivery::Async,
+        kind: DecisionKind::Questions(parsed),
+        policy: Default::default(),
         id: format!("{PREFIX}{}", json!([thread, id])),
         tool_use_id: id.into(),
         tool_name: crate::questions::ASYNC_TOOL_NAME.into(),
-        description: crate::questions::summary(&parsed),
+        description,
         input,
         suggestions: vec![],
     })
@@ -188,6 +457,14 @@ impl Replies {
             }
             DecisionAnswer::Deny { message } => {
                 format!("Skip your async question {}. {}", identity[1], message)
+            }
+            DecisionAnswer::Questions { .. }
+            | DecisionAnswer::Form { .. }
+            | DecisionAnswer::Cancel => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "async question reply requires its legacy input",
+                ));
             }
         };
         let mut params = json!({"threadId":thread,"input":[{"type":"text","text":text}]});

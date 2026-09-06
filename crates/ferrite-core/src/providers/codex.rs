@@ -567,10 +567,11 @@ impl CodexSession {
             return result;
         }
 
-        if lock(&self.native_questions).contains(id) {
+        let native = { lock(&self.native_questions).response(id, &answer) };
+        if let Some(result) = native {
             let handle = id.to_owned();
             let id = wire::decision_request_id(&handle)?;
-            let result = questions::native_response(&answer)?;
+            let result = result?;
             self.write_line(&serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": id,
@@ -587,6 +588,14 @@ impl CodexSession {
             // `availableDecisions`, echoed back whole: the server takes the
             // object exactly as it offered it.
             DecisionAnswer::AllowAlways { suggestion, .. } => suggestion.clone(),
+            DecisionAnswer::Questions { .. }
+            | DecisionAnswer::Form { .. }
+            | DecisionAnswer::Cancel => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Decision answer does not match a pending request",
+                ));
+            }
         };
         let id = wire::decision_request_id(id)?;
         self.write_line(&serde_json::json!({
