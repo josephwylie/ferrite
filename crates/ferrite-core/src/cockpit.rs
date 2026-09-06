@@ -2542,7 +2542,9 @@ impl Cockpit {
             let subject = self
                 .visible_subjects
                 .get(&thread)
-                .cloned()
+                .map(|subject| self.threads.get(&thread)
+                    .map(|state| state.activity.view().canonical_subject(subject))
+                    .unwrap_or(Subject::Main))
                 .filter(|subject| {
                     self.threads
                         .get(&thread)

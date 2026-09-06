@@ -183,3 +183,19 @@ fn claude_live_permission_mode_is_reflected_from_native_status() {
         .iter()
         .any(|e| matches!(e,SessionEvent::PermissionMode{mode} if mode=="plan")));
 }
+
+#[test]
+fn claude_session_state_is_authoritative_without_inventing_turn_completion() {
+    for (state, busy, status) in [
+        ("running", true, ferrite_core::activity::AgentStatus::Working),
+        ("requires_action", true, ferrite_core::activity::AgentStatus::Waiting),
+        ("idle", false, ferrite_core::activity::AgentStatus::Idle),
+    ] {
+        let r = Replay::new("claude", vec![json!({"type":"system","subtype":"session_state_changed","state":state,"session_id":"root","uuid":"state"})]);
+        let events = r.drain();
+        assert!(!events.iter().any(|e| matches!(e, SessionEvent::TurnEnded { .. })), "a state snapshot cannot release queued prompts or announce a completed turn");
+        let a = fold(events);
+        assert_eq!(a.view().main().busy(), busy);
+        assert_eq!(a.view().main().status(), status);
+    }
+}
