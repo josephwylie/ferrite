@@ -468,9 +468,24 @@ pub(super) fn parse_tool_result(value: Option<&Value>) -> ToolResult {
         let Some(path) = value.get("filePath").and_then(Value::as_str) else {
             return ToolResult::Opaque;
         };
+        let mut hunks: Vec<Hunk> = patch.iter().filter_map(parse_hunk).collect();
+        if hunks.is_empty() {
+            // A creation has nothing to diff against, so the CLI sends an
+            // empty patch and the whole written file instead. Without this
+            // the file arrived as a change of nothing: a diff card and a
+            // `+N −N` stat reading zero for a file just written whole.
+            match creation_hunk(value) {
+                Some(hunk) => hunks.push(hunk),
+                // An empty patch that is not a creation is a tool that
+                // touched a file and changed nothing in it. There is no
+                // card to draw and no chip to earn.
+                None if !is_creation(value) => return ToolResult::Opaque,
+                None => {}
+            }
+        }
         return ToolResult::FileEdit {
             path: path.to_string(),
-            hunks: patch.iter().filter_map(parse_hunk).collect(),
+            hunks,
         };
     }
     if let Some(stdout) = value.get("stdout").and_then(Value::as_str) {
@@ -484,6 +499,34 @@ pub(super) fn parse_tool_result(value: Option<&Value>) -> ToolResult {
         };
     }
     ToolResult::Opaque
+}
+
+/// Whether the result describes a file the tool wrote where there was
+/// none — `Write` on a new path, which the CLI marks `create`.
+fn is_creation(value: &Value) -> bool {
+    value.get("type").and_then(Value::as_str) == Some("create")
+}
+
+/// The patch the CLI does not send for a creation: every line it wrote, as
+/// additions, in the shape git gives a new file — `@@ -0,0 +1,n @@`. Built
+/// here so nothing downstream has to know a creation from an edit; the
+/// diff card, the `+N −N` stats and the L2 counts all read one shape.
+///
+/// `None` for a file created empty. It is a real change with no lines in
+/// it, and a hunk of nothing would be a lie in the other direction.
+fn creation_hunk(value: &Value) -> Option<Hunk> {
+    if !is_creation(value) {
+        return None;
+    }
+    let content = value.get("content").and_then(Value::as_str)?;
+    let lines: Vec<String> = content.lines().map(|line| format!("+{line}")).collect();
+    (!lines.is_empty()).then(|| Hunk {
+        old_start: 0,
+        old_lines: 0,
+        new_start: 1,
+        new_lines: lines.len() as u32,
+        lines,
+    })
 }
 
 fn parse_hunk(value: &Value) -> Option<Hunk> {
@@ -985,8 +1028,75 @@ mod tests {
         }));
     }
 
-    /// A create has no hunks by definition, so only an edit proves the patch
-    /// shape the diff cards are built from.
+    /// A creation arrives with an empty patch and its whole content, and
+    /// is read as the additions it is — such a file counted as `+0 −0`
+    /// until it was.
+    #[test]
+    fn a_creation_counts_the_lines_it_wrote() {
+        let result = parse_tool_result(Some(&serde_json::json!({
+            "type": "create",
+            "filePath": "/workspace/new.txt",
+            "content": "alpha\nbravo\n",
+            "structuredPatch": [],
+            "originalFile": Value::Null,
+        })));
+        let ToolResult::FileEdit { path, hunks } = result else {
+            panic!("a creation is a file edit");
+        };
+        assert_eq!(path, "/workspace/new.txt");
+        assert_eq!(hunks.len(), 1);
+        assert_eq!(hunks[0].lines, ["+alpha", "+bravo"]);
+        assert_eq!((hunks[0].old_start, hunks[0].old_lines), (0, 0));
+        assert_eq!((hunks[0].new_start, hunks[0].new_lines), (1, 2));
+    }
+
+    /// The `create` in the permission fixture is a real one, straight off
+    /// the CLI — the same reading, from a captured line rather than a
+    /// hand-built one.
+    #[test]
+    fn the_captured_creation_reports_its_one_line() {
+        let hunks = events_of("permission-allow")
+            .into_iter()
+            .find_map(|event| match event {
+                SessionEvent::ToolCompleted {
+                    result: ToolResult::FileEdit { hunks, .. },
+                    ..
+                } => Some(hunks),
+                _ => None,
+            })
+            .expect("the fixture writes a file");
+        assert_eq!(hunks.len(), 1);
+        assert_eq!(hunks[0].lines, ["+ok"]);
+    }
+
+    /// A file created empty changed no lines, and says so rather than
+    /// claiming a hunk it does not have.
+    #[test]
+    fn an_empty_creation_claims_no_lines() {
+        let result = parse_tool_result(Some(&serde_json::json!({
+            "type": "create",
+            "filePath": "/workspace/empty.txt",
+            "content": "",
+            "structuredPatch": [],
+        })));
+        let ToolResult::FileEdit { hunks, .. } = result else {
+            panic!("an empty creation is still a file edit");
+        };
+        assert!(hunks.is_empty());
+    }
+
+    /// A tool that touched a file and changed nothing in it earns no diff
+    /// card: an empty patch that is not a creation is not a change at all.
+    #[test]
+    fn an_empty_patch_that_is_no_creation_is_no_change() {
+        let result = parse_tool_result(Some(&serde_json::json!({
+            "filePath": "/workspace/untouched.txt",
+            "structuredPatch": [],
+        })));
+        assert_eq!(result, ToolResult::Opaque);
+    }
+
+    /// An edit proves the patch shape the diff cards are built from.
     #[test]
     fn an_edit_carries_the_patch_hunks_it_applied() {
         let hunks = events_of("edit")
