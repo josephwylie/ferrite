@@ -507,6 +507,9 @@ pub struct Cockpit {
     /// What every Thread has to tell the operator once they look away:
     /// the Notices, and the per-Thread deferrals behind them.
     notifications: Notifications,
+    /// The Subject the window has actually selected in each open Thread.
+    /// Main is implicit until the renderer records a child selection.
+    visible_subjects: BTreeMap<ThreadId, Subject>,
     sampler: Option<Box<dyn RssSampler>>,
     /// Bytes one Session may hold before the watchdog replaces it.
     limit: u64,
@@ -542,6 +545,7 @@ impl Cockpit {
             bootstrap_results: Vec::new(),
             history_loader: None,
             notifications: Notifications::default(),
+            visible_subjects: BTreeMap::new(),
             sampler: None,
             limit: u64::MAX,
             suggestions: channel(),
@@ -661,6 +665,7 @@ impl Cockpit {
 
         let mut restarts = Vec::new();
         for (id, rss) in over {
+            self.visible_subjects.remove(&id);
             let Some(thread) = self.threads.get_mut(&id) else {
                 continue;
             };
@@ -949,6 +954,7 @@ impl Cockpit {
         thread: ThreadId,
         root: Option<PathBuf>,
     ) -> Result<(), LoadError> {
+        self.visible_subjects.remove(&thread);
         match self.threads.get_mut(&thread) {
             Some(state) => {
                 state.session = None;
@@ -1111,6 +1117,7 @@ impl Cockpit {
         thread: ThreadId,
         replacement: Replacement,
     ) -> Result<(), ProvisionError> {
+        self.visible_subjects.remove(&thread);
         let Replacement {
             session,
             provider,
@@ -1229,6 +1236,7 @@ impl Cockpit {
                     .map_err(DeleteError::Io)?;
             }
             self.threads.remove(&thread);
+            self.visible_subjects.remove(&thread);
             self.roster.remove_thread(thread);
             self.notifications.forget(thread);
             self.store.delete(thread).map_err(DeleteError::Io)
@@ -1274,6 +1282,7 @@ impl Cockpit {
         }
         let mut state = self.threads.remove(&thread).expect("checked");
         self.notifications.disconnect(thread);
+        self.visible_subjects.remove(&thread);
         self.roster.remove_thread(thread);
         state.session = None;
         state.replacement = None;
@@ -1401,6 +1410,13 @@ impl Cockpit {
         if self.bootstraps.contains_key(&thread) {
             return;
         }
+        if self
+            .threads
+            .get(&thread)
+            .is_some_and(|state| state.session.is_none())
+        {
+            self.visible_subjects.remove(&thread);
+        }
         let Some(state) = self.threads.get_mut(&thread) else {
             return;
         };
@@ -1458,6 +1474,14 @@ impl Cockpit {
         if self.bootstraps.contains_key(&thread) {
             let _ = self.park(thread);
             return;
+        }
+        if self.threads.get(&thread).is_some_and(|state| {
+            state
+                .session
+                .as_ref()
+                .is_some_and(SessionLifecycle::is_starting)
+        }) {
+            self.visible_subjects.remove(&thread);
         }
         let Some(state) = self.threads.get_mut(&thread) else {
             return;
@@ -1967,6 +1991,7 @@ impl Cockpit {
                 thread.session = None;
                 thread.history.clear();
                 thread.activity.apply(ActivityInput::Disconnect);
+                self.visible_subjects.remove(id);
                 update.activity_changed = true;
             }
             if thread.queued_ready
@@ -2489,7 +2514,14 @@ impl Cockpit {
     /// through Activity, so opening it cannot complete a turn or release a
     /// queued prompt.
     pub fn open_decision_notice(&mut self, id: &DecisionNoticeId) -> Option<ThreadId> {
+        let subject = self
+            .notifications
+            .decision(id)?
+            .subject
+            .clone()
+            .unwrap_or(Subject::Main);
         let thread = self.notifications.open_decision(id)?;
+        self.set_visible_subject(thread, subject);
         if !self.focus_thread(thread) {
             self.reopen(thread).ok()?;
         }
@@ -2507,7 +2539,20 @@ impl Cockpit {
 
     fn acknowledge_focus(&mut self) {
         if let Some(thread) = self.roster.focused_thread() {
-            self.notifications.acknowledge(thread);
+            let subject = self
+                .visible_subjects
+                .get(&thread)
+                .cloned()
+                .filter(|subject| {
+                    self.threads
+                        .get(&thread)
+                        .is_some_and(|state| state.activity.view().subject(subject).is_some())
+                })
+                .unwrap_or(Subject::Main);
+            if subject == Subject::Main {
+                self.visible_subjects.remove(&thread);
+            }
+            self.notifications.acknowledge_subject(thread, &subject);
         }
     }
 }
@@ -2732,6 +2777,28 @@ impl Cockpit {
         let landed = self.roster.focus(identity);
         self.acknowledge_focus();
         landed
+    }
+
+    /// Record the Subject the renderer is actually showing. Invalid or stale
+    /// children fall back to Main, so a replacement Session cannot suppress a
+    /// later Main request with an old selection.
+    pub fn set_visible_subject(&mut self, thread: ThreadId, subject: Subject) {
+        let subject = self
+            .threads
+            .get(&thread)
+            .map(|state| state.activity.view().canonical_subject(&subject))
+            .filter(|subject| {
+                self.threads
+                    .get(&thread)
+                    .is_some_and(|state| state.activity.view().subject(subject).is_some())
+            })
+            .unwrap_or(Subject::Main);
+        if subject == Subject::Main {
+            self.visible_subjects.remove(&thread);
+        } else {
+            self.visible_subjects.insert(thread, subject);
+        }
+        self.acknowledge_focus();
     }
 
     /// cmd-] / cmd-[: walk the visible Panes, wrapping.

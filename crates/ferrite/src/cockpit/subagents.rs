@@ -195,6 +195,8 @@ impl CockpitView {
         self.facts.selected(&self.cockpit, thread, &subject);
         self.panes[index].select_subject(subject, generation, cx);
         self.retry_subject_history(index, cx);
+        self.cockpit
+            .set_visible_subject(thread, self.panes[index].selected.clone());
         self.cockpit.focus_thread(thread);
         self.focus_pane(index);
         self.popover = None;
@@ -230,6 +232,8 @@ impl CockpitView {
         self.facts.selected(&self.cockpit, thread, &subject);
         self.panes[index].select_subject(subject, subject_view.revision(), cx);
         self.retry_subject_history(index, cx);
+        self.cockpit
+            .set_visible_subject(thread, self.panes[index].selected.clone());
         self.popover = None;
         self.context_usage = None;
         cx.notify();

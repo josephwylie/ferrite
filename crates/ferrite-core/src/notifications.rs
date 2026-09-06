@@ -327,6 +327,13 @@ impl Notifications {
     /// The operator landed on this Thread: everything it had to say is
     /// seen.
     pub fn acknowledge(&mut self, thread: ThreadId) -> bool {
+        self.acknowledge_subject(thread, &Subject::Main)
+    }
+
+    /// The operator is viewing this Subject. Completion Notices belong to the
+    /// whole Thread; live Decisions are read only when their own Subject is
+    /// visible.
+    pub fn acknowledge_subject(&mut self, thread: ThreadId, subject: &Subject) -> bool {
         let mut changed = false;
         for notice in self.notices.iter_mut() {
             if notice.thread == thread && !notice.read {
@@ -334,10 +341,8 @@ impl Notifications {
                 changed = true;
             }
         }
-        // Landing on a Thread presents Main. Child requests remain unread
-        // until their own Subject is selected or their notice is opened.
         for notice in self.decisions.values_mut() {
-            if notice.id.thread == thread && notice.subject == Some(Subject::Main) && !notice.read {
+            if notice.id.thread == thread && notice.subject.as_ref() == Some(subject) && !notice.read {
                 notice.read = true;
                 changed = true;
             }
