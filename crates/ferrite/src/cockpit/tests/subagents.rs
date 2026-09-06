@@ -516,10 +516,10 @@ fn unattributed_question_keeps_native_input_focus_across_repaint_and_sends_exact
     let answered = fake.answered.borrow();
     assert_eq!(answered.len(), 1);
     assert_eq!(answered[0].0, "unattributed-question");
-    let DecisionAnswer::Allow { input } = &answered[0].1 else {
+    let DecisionAnswer::Questions { answers } = &answered[0].1 else {
         panic!("freeform answer");
     };
-    assert_eq!(input["answers"]["Which approach?"], "neither, wait 2 days");
+    assert_eq!(answers[0].other.as_deref(), Some("neither, wait 2 days"));
 }
 
 #[gpui::test]

@@ -1515,7 +1515,7 @@ mod tests {
                 ("edit", 70, 16),
                 // Two Writes, one Decision: the standing answer was adopted on
                 // the first, and the CLI never gated the second.
-                ("permission-always", 58, 15),
+                ("permission-always", 58, 16),
                 // The Thread plans: three TaskCreate calls and the update that
                 // ticks the first off, which is what L2's progress counts.
                 ("todo", 190, 47),

@@ -1249,7 +1249,7 @@ mod tests {
         let text: String = events
             .iter()
             .filter_map(|event| match event {
-                SessionEvent::TextDelta { text } => Some(text.as_str()),
+                SessionEvent::TextDelta { text } | SessionEvent::Activity(ActivityEvent::MainContent { event: ExecutionEvent::TextDelta { text }, .. }) => Some(text.as_str()),
                 _ => None,
             })
             .collect();

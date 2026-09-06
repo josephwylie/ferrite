@@ -1377,18 +1377,39 @@ mod tests {
                 })
                 .collect();
             let (_, new) = replay(fixture);
-            // Added native metadata does not change the existing prose,
-            // tool, usage, approval, or turn-result projection.
-            let old_projection: Vec<_> = new
-                .into_iter()
-                .filter(|event| {
-                    !matches!(
-                        event,
-                        SessionEvent::Progress { .. } | SessionEvent::ContentBoundary
-                    )
-                })
-                .collect();
-            assert_eq!(old_projection, old);
+            let fold = |events: Vec<SessionEvent>| {
+                let mut activity = Activity::default();
+                activity.apply(ActivityInput::Connect { generation: 1 });
+                for event in events {
+                    activity.apply(match event {
+                        SessionEvent::Activity(event) => ActivityInput::Observe { generation: 1, event, at: Instant::now() },
+                        event => ActivityInput::Main { input: crate::transcript::Input::Event(event), at: Instant::now() },
+                    });
+                }
+                activity
+            };
+            let old = fold(old);
+            let new = fold(new);
+            let projection = |activity: &Activity| {
+                let mut prose = String::new();
+                let mut thinking = String::new();
+                let mut tools = Vec::new();
+                for block in activity.view().main().transcript().blocks() {
+                    use crate::transcript::Body;
+                    match &block.body {
+                        Body::Paragraph { spans } | Body::Heading { spans, .. } | Body::Bullet { spans, .. } => {
+                            for span in spans { prose.push_str(&span.text); }
+                        }
+                        Body::Thinking(text) => thinking.push_str(text),
+                        Body::Tool(tool) => tools.push((tool.call.clone(), tool.name.clone(), tool.output.clone())),
+                        _ => {}
+                    }
+                }
+                (prose, thinking, tools)
+            };
+            assert_eq!(projection(&new), projection(&old));
+            assert_eq!(new.view().main().transcript().turn_completed(), old.view().main().transcript().turn_completed());
+            assert_eq!(new.view().main().transcript().usage(), old.view().main().transcript().usage());
         }
     }
 

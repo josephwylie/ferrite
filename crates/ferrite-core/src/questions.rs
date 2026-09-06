@@ -394,7 +394,7 @@ mod tests {
     }
 
     #[test]
-    fn out_of_range_picks_are_ignored() {
+    fn out_of_range_picks_do_not_silently_change_the_answer() {
         let input = realistic();
         let questions = parse(&input).unwrap();
         let answers = [Answer {
@@ -403,8 +403,8 @@ mod tests {
         }];
         let updated = answered_input(&input, &answers, &questions);
         assert_eq!(
-            updated["answers"]["Which approach should we take for the retry logic?"],
-            "Fixed delay"
+            updated["answers"],
+            json!({})
         );
     }
 

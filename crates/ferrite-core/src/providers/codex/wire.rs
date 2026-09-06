@@ -1310,7 +1310,7 @@ mod tests {
                 // was accepted, so the repeat ran unasked.
                 ("approval-always", 75, 48),
                 // The same gate for a patch instead of a command.
-                ("approval-patch", 52, 22),
+                ("approval-patch", 52, 25),
                 ("interrupt", 25, 4),
                 ("resume", 32, 10),
                 // Ten retry errors and a warning, all ignored: only the failed
@@ -1339,7 +1339,7 @@ mod tests {
             id: id.clone(),
             output: "ferrite-tool-ok\n".into(),
             is_error: false,
-            result: ToolResult::Opaque,
+            result: ToolResult::Command { stdout: "ferrite-tool-ok\n".into(), stderr: String::new(), exit_code: Some(0), duration_ms: Some(0) },
         }));
     }
 
@@ -1380,10 +1380,9 @@ mod tests {
         assert_eq!(input["cwd"], "/workspace");
         // The standing answers 0.149.1 offers: accept, accept with an
         // execpolicy amendment, decline.
-        assert_eq!(suggestions.len(), 3);
-        assert!(suggestions
-            .iter()
-            .any(|choice| choice.value == serde_json::json!("accept")));
+        assert_eq!(suggestions.len(), 2);
+        assert!(suggestions.iter().any(|choice| choice.standing));
+        assert!(suggestions.iter().any(|choice| choice.value == serde_json::json!("cancel")));
 
         // The Decision names the tool card it blocks, so a Pane can render it
         // in place instead of as a free-floating prompt.

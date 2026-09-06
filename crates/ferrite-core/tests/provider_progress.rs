@@ -72,12 +72,25 @@ mod tests {
         fs::remove_file(path).unwrap();
         out
     }
-    fn fold(events: Vec<SessionEvent>) -> Transcript {
-        let mut t = Transcript::default();
-        t.apply(Input::Prompt("Investigate progress".into()));
-        for e in events {
-            t.apply(Input::Event(e));
+    struct Projection(ferrite_core::activity::Activity);
+    impl std::ops::Deref for Projection {
+        type Target = Transcript;
+        fn deref(&self) -> &Transcript { self.0.view().main().transcript() }
+    }
+    impl Projection {
+        fn apply(&mut self, input: Input) {
+            use ferrite_core::activity::ActivityInput;
+            self.0.apply(match input {
+                Input::Event(SessionEvent::Activity(event)) => ActivityInput::Observe { generation:1,event,at:std::time::Instant::now() },
+                input => ActivityInput::Main { input,at:std::time::Instant::now() },
+            });
         }
+    }
+    fn fold(events: Vec<SessionEvent>) -> Projection {
+        let mut t = Projection(ferrite_core::activity::Activity::default());
+        t.0.apply(ferrite_core::activity::ActivityInput::Connect{generation:1});
+        t.apply(Input::Prompt("Investigate progress".into()));
+        for e in events { t.apply(Input::Event(e)); }
         t
     }
     #[test]
@@ -247,7 +260,7 @@ mod tests {
     #[test]
     fn native_reasoning_items_keep_distinct_headings_and_deduplicate_snapshots() {
         let item = |method: &str, id: &str, summary: Value| json!({"method": method, "params": {"threadId":"root","turnId":"turn","item":{"type":"reasoning","id":id,"summary":summary}}});
-        let delta = |id: &str, text: &str| json!({"method":"item/reasoning/summaryTextDelta","params":{"threadId":"root","itemId":id,"summaryIndex":0,"delta":text}});
+        let delta = |id: &str, text: &str| json!({"method":"item/reasoning/summaryTextDelta","params":{"threadId":"root","turnId":"turn","itemId":id,"summaryIndex":0,"delta":text}});
         let events = replay(
             "codex",
             "headings",
@@ -304,10 +317,8 @@ mod tests {
         }
         writer.flush().unwrap();
         drop(writer);
-        let mut restored = Transcript::default();
-        for input in store.load(id).unwrap().inputs() {
-            restored.apply(input);
-        }
+        let mut restored = Projection(ferrite_core::activity::Activity::default());
+        for input in store.load(id).unwrap().activity_inputs() { restored.0.apply(input); }
         let restored_headings: Vec<_> = restored
             .blocks()
             .iter()

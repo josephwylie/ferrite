@@ -8359,7 +8359,10 @@ mod tests {
         SessionEvent::DecisionRequested {
             decision: Decision {
                 delivery: Default::default(),
-                kind: Default::default(),
+                kind: ferrite_core::DecisionKind::Questions(vec![ferrite_core::questions::Question {
+                    id: None, question: "Which approach?".into(), header: "Approach".into(), multi_select: false, secret: false, allow_other: true,
+                    options: vec![ferrite_core::questions::Choice {label:"Rewrite".into(),description:"Start over".into(),preview:None},ferrite_core::questions::Choice {label:"Patch".into(),description:"Smallest change".into(),preview:None}],
+                }]),
                 policy: Default::default(),
                 id: id.into(),
                 tool_use_id: "toolu_q".into(),
@@ -8422,12 +8425,12 @@ mod tests {
             "form submission preserves the chat draft"
         );
         let answered = fake.answered.borrow();
-        let (id, DecisionAnswer::Allow { input }) = answered.last().unwrap() else {
+        let (id, DecisionAnswer::Questions { answers }) = answered.last().unwrap() else {
             panic!("answered question");
         };
         assert_eq!(id, "q_01");
-        assert_eq!(input["answers"]["Which approach?"], "Patch");
-        assert!(input["questions"].is_array());
+        assert_eq!(answers[0].picks, vec![1]);
+        assert_eq!(answers[0].other, None);
         assert!(cx.debug_bounds("question-island").is_none());
     }
 
@@ -8466,10 +8469,10 @@ mod tests {
         cx.simulate_click(submit.center(), gpui::Modifiers::none());
         cx.run_until_parked();
         let answered = fake.answered.borrow();
-        let DecisionAnswer::Allow { input } = &answered.last().unwrap().1 else {
+        let DecisionAnswer::Questions { answers } = &answered.last().unwrap().1 else {
             panic!("answer");
         };
-        assert_eq!(input["answers"]["Which approach?"], "neither, wait 2 days");
+        assert_eq!(answers[0].other.as_deref(), Some("neither, wait 2 days"));
         assert!(fake.sent.borrow().is_empty());
     }
 

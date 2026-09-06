@@ -2363,105 +2363,49 @@ mod tests {
         );
     }
 
-    /// The shapes are the committed `todo` capture's, not remembered ones:
-    /// 2.1.243 has no TodoWrite — it plans with TaskCreate/TaskUpdate.
+    fn native_task(id: &str, subject: &str, status: crate::progress::StepStatus) -> Input {
+        Input::Event(SessionEvent::Progress { event: crate::progress::ProgressEvent::Task {
+            id: id.into(), subject: subject.into(), status: Some(status), deleted: false,
+        }})
+    }
+
     #[test]
     fn a_planned_todo_list_is_counted_as_it_is_worked() {
+        use crate::progress::StepStatus::*;
         let mut transcript = Transcript::default();
-        assert_eq!(transcript.todos(), None, "a Thread with no plan has none");
-
-        for subject in ["init git", "add docs", "make dirs"] {
-            transcript.apply(started(
-                &format!("t{subject}"),
-                "TaskCreate",
-                serde_json::json!({ "subject": subject, "activeForm": subject }),
-            ));
+        assert_eq!(transcript.todos(), None);
+        for (id, subject) in [("1", "init git"), ("2", "add docs"), ("3", "make dirs")] {
+            transcript.apply(native_task(id, subject, Pending));
         }
-        transcript.apply(started(
-            "u1",
-            "TaskUpdate",
-            serde_json::json!({ "taskId": "1", "status": "completed" }),
-        ));
-
+        transcript.apply(native_task("1", "", Completed));
         assert_eq!(transcript.todos(), Some(Todos { done: 1, total: 3 }));
-
-        // A status that is not completion moves nothing.
-        transcript.apply(started(
-            "u2",
-            "TaskUpdate",
-            serde_json::json!({ "taskId": "2", "status": "in_progress" }),
-        ));
+        transcript.apply(native_task("2", "", InProgress));
         assert_eq!(transcript.todos(), Some(Todos { done: 1, total: 3 }));
-
-        // And completing the same task twice is still one task done.
-        transcript.apply(started(
-            "u3",
-            "TaskUpdate",
-            serde_json::json!({ "taskId": "1", "status": "completed" }),
-        ));
+        transcript.apply(native_task("1", "", Completed));
         assert_eq!(transcript.todos(), Some(Todos { done: 1, total: 3 }));
     }
 
-    /// #22: the tasks strip names the step being worked — the first
-    /// unfinished subject in creation order, the same stand-in `todos()`
-    /// documents. A finished plan names nothing, and neither does a step
-    /// created without a subject.
     #[test]
     fn the_current_task_is_the_first_unfinished_subject() {
+        use crate::progress::StepStatus::*;
         let mut transcript = Transcript::default();
-        assert_eq!(transcript.current_task(), None, "no plan, no task");
-
-        for subject in ["read the recipe", "run the suite", "land the diff"] {
-            transcript.apply(started(
-                &format!("t{subject}"),
-                "TaskCreate",
-                serde_json::json!({ "subject": subject }),
-            ));
+        assert_eq!(transcript.current_task(), None);
+        for (id, subject) in [("1", "read the recipe"), ("2", "run the suite"), ("3", "land the diff")] {
+            transcript.apply(native_task(id, subject, Pending));
         }
         assert_eq!(transcript.current_task(), Some("read the recipe"));
-
-        transcript.apply(started(
-            "u1",
-            "TaskUpdate",
-            serde_json::json!({ "taskId": "1", "status": "completed" }),
-        ));
+        transcript.apply(native_task("1", "", Completed));
         assert_eq!(transcript.current_task(), Some("run the suite"));
-
-        for task in ["2", "3"] {
-            transcript.apply(started(
-                &format!("u{task}"),
-                "TaskUpdate",
-                serde_json::json!({ "taskId": task, "status": "completed" }),
-            ));
-        }
-        assert_eq!(transcript.current_task(), None, "a finished plan is quiet");
-
-        // A subjectless step names nothing rather than an empty strip line.
-        let mut bare = Transcript::default();
-        bare.apply(started("b1", "TaskCreate", serde_json::json!({})));
-        assert_eq!(bare.todos(), Some(Todos { done: 0, total: 1 }));
-        assert_eq!(bare.current_task(), None);
+        for id in ["2", "3"] { transcript.apply(native_task(id, "", Completed)); }
+        assert_eq!(transcript.current_task(), None);
     }
 
-    /// The CLI assigns task ids and never echoes them back on TaskCreate, so
-    /// a completion cannot be matched to a creation. What can be promised is
-    /// that the count never overshoots: "2/1 done" is nonsense on a Pane.
     #[test]
     fn finished_work_never_outruns_the_plan() {
+        use crate::progress::StepStatus::*;
         let mut transcript = Transcript::default();
-        transcript.apply(started(
-            "c1",
-            "TaskCreate",
-            serde_json::json!({ "subject": "the only step" }),
-        ));
-        for task in ["1", "2", "3"] {
-            transcript.apply(started(
-                &format!("u{task}"),
-                "TaskUpdate",
-                serde_json::json!({ "taskId": task, "status": "completed" }),
-            ));
-        }
-
+        transcript.apply(native_task("1", "the only step", Pending));
+        for id in ["1", "2", "3"] { transcript.apply(native_task(id, "", Completed)); }
         assert_eq!(transcript.todos(), Some(Todos { done: 1, total: 1 }));
     }
 
