@@ -168,9 +168,9 @@ fn main() {
                         demo::seed_load_group(&mut core);
                     }
                 } else {
-                    // The default launch revives the newest parked Thread; an
-                    // empty store starts as a draft Pane (#29) — nothing
-                    // spawns before the operator's choice.
+                    // The default launch revives the most recently used
+                    // parked Thread; an empty store starts as a draft Pane
+                    // (#29) — nothing spawns before the operator's choice.
                     revive_latest(&mut core);
                 }
             }
@@ -252,11 +252,17 @@ fn adopt(store: &Store, paths: &[String]) -> (Vec<ThreadId>, Vec<String>) {
     (adopted, refused)
 }
 
-/// Revive the newest parked Thread for launch, if the store holds any. An
-/// empty store starts as a draft Pane instead (#29): nothing spawns before
-/// the operator's choice.
+/// Revive the most recently used parked Thread for launch, if the store holds
+/// any. Creation order breaks ties, including logs whose timestamp cannot be
+/// read. An empty store starts as a draft Pane instead (#29): nothing spawns
+/// before the operator's choice.
 fn revive_latest(cockpit: &mut Cockpit) {
-    let Some(thread) = cockpit.parked().unwrap_or_default().last().copied() else {
+    let Some(thread) = cockpit
+        .parked()
+        .unwrap_or_default()
+        .into_iter()
+        .max_by_key(|thread| (cockpit.last_used(*thread), *thread))
+    else {
         return;
     };
     if let Err(e) = cockpit.revive(thread) {
@@ -429,7 +435,7 @@ fn store_dir() -> std::path::PathBuf {
 mod tests {
     // No `use super::*`: the crate root globs `gpui::*`, whose `test` macro
     // would capture the `#[test]` this macro expands to and recurse.
-    use super::{adopt, demo, dock_launch_dir, keymap, load_bindings};
+    use super::{adopt, demo, dock_launch_dir, keymap, load_bindings, revive_latest};
     use ferrite_core::cockpit::Cockpit;
     use ferrite_core::store::{Provider, Store};
     use ferrite_core::workspace::WorkspaceChoice;
@@ -489,6 +495,36 @@ mod tests {
         // still exists the one that answers.
         let core = Cockpit::new(Store::open(dir).unwrap(), Box::new(demo::Spawn::new(false)));
         assert_eq!(dock_launch_dir(&core), checkout);
+    }
+
+    #[test]
+    fn the_default_thread_is_the_one_the_operator_used_most_recently() {
+        let dir = std::env::temp_dir().join(format!(
+            "ferrite-launch-{}-recent-thread",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store::open(dir).unwrap();
+        let mut core = Cockpit::new(store, Box::new(demo::Spawn::new(false)));
+        let checkout = std::env::current_dir().unwrap();
+        let older = core
+            .open(
+                Provider::Claude,
+                WorkspaceChoice::Main {
+                    checkout: checkout.clone(),
+                },
+            )
+            .unwrap();
+        let newer = core
+            .open(Provider::Claude, WorkspaceChoice::Main { checkout })
+            .unwrap();
+
+        core.send(older, "worked here last".into());
+        core.park(older).unwrap();
+        core.park(newer).unwrap();
+        revive_latest(&mut core);
+
+        assert_eq!(core.roster().focused_thread(), Some(older));
     }
 
     /// Leg 3: a file that is not a session file is refused in the operator's
