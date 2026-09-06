@@ -13,7 +13,9 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
+use ferrite_core::activity::{Activity, ActivityEvent, ActivityInput, ExecutionEvent};
 use ferrite_core::providers::{CodexCapabilities, CodexConfig, CodexSession, CodexSpawnError};
+use ferrite_core::transcript::{Body, Input};
 use ferrite_core::{
     Decision, DecisionAnswer, RateLimitWindow, SessionEvent, ToolResult, TurnOutcome,
 };
@@ -72,6 +74,44 @@ fn drain(events: &Receiver<SessionEvent>) -> Vec<SessionEvent> {
             return drained;
         }
     }
+}
+
+/// Reconcile native deltas and final snapshots through the same public fold
+/// used by the cockpit. Counting either independently duplicates final text.
+fn fold(events: &[SessionEvent]) -> Activity {
+    let mut activity = Activity::default();
+    activity.apply(ActivityInput::Connect { generation: 1 });
+    for event in events.iter().cloned() {
+        let at = Instant::now();
+        activity.apply(match event {
+            SessionEvent::Activity(event) => ActivityInput::Observe {
+                generation: 1,
+                event,
+                at,
+            },
+            event => ActivityInput::Main {
+                input: Input::Event(event),
+                at,
+            },
+        });
+    }
+    activity
+}
+
+fn prose(activity: &Activity) -> Vec<String> {
+    activity
+        .view()
+        .main()
+        .transcript()
+        .blocks()
+        .iter()
+        .filter_map(|block| match &block.body {
+            Body::Paragraph { spans } => {
+                Some(spans.iter().map(|span| span.text.as_str()).collect())
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 /// The whole path for one committed capture: real process, real pipes, real
@@ -225,37 +265,26 @@ fn the_reader_thread_delivers_the_captured_stream() {
     let session = CodexSession::spawn(config(program)).unwrap();
     let events = drain(session.events());
 
-    assert_eq!(
-        events
-            .iter()
-            .filter(|e| !matches!(
-                e,
-                SessionEvent::Progress { .. }
-                    | SessionEvent::ContentBoundary
-                    | SessionEvent::ReasoningSummaryPart { snapshot: true, .. }
-            ))
-            .count(),
-        8,
-        "unexpected content stream: {events:?}"
-    );
     let SessionEvent::Init { session_id, model } = &events[0] else {
         panic!("the Session must announce itself first: {events:?}");
     };
     assert!(!session_id.is_empty());
     assert_eq!(model, "gpt-5.4-mini");
 
-    let text: String = events
+    let activity = fold(&events);
+    assert_eq!(prose(&activity), ["hello ferrite"]);
+    let reasoning: Vec<_> = activity
+        .view()
+        .main()
+        .transcript()
+        .blocks()
         .iter()
-        .filter_map(|e| match e {
-            SessionEvent::TextDelta { text } => Some(text.as_str()),
+        .filter_map(|block| match &block.body {
+            Body::Thinking(text) => Some(text.as_str()),
             _ => None,
         })
         .collect();
-    assert_eq!(text, "hello ferrite");
-    assert!(events.iter().any(|e| matches!(
-        e,
-        SessionEvent::ReasoningSummaryDelta { .. } | SessionEvent::ReasoningSummaryPart { .. }
-    )));
+    assert_eq!(reasoning, ["**Confirming exact output requirement**"]);
     assert!(events
         .iter()
         .any(|e| matches!(e, SessionEvent::TokenUsage { .. })));
@@ -314,8 +343,8 @@ fn a_command_run_arrives_as_a_start_and_a_completion() {
             output: "ferrite-tool-ok\n".into(),
             is_error: false,
             result: ToolResult::Command {
-                duration_ms: None,
-                exit_code: None,
+                duration_ms: Some(0),
+                exit_code: Some(0),
                 stdout: "ferrite-tool-ok\n".into(),
                 stderr: String::new()
             },
@@ -419,20 +448,38 @@ fn an_interrupted_capture_replays_as_an_interrupted_turn() {
     );
 }
 
-/// Answering a Decision has to put the exact bytes on the wire that the real
-/// server accepted, so the assertion is the recorded host side of the capture
-/// itself: whatever `respond_to_decision` writes must match what the live
-/// capture proved works (accept → the tool ran; decline → the turn survived).
+/// Answer a live Decision with its exact native ID. Emit the capture only up
+/// to its request until the matching response arrives: replaying the later
+/// resolution first would correctly retire the handle before we could answer.
 /// `tag` keeps each caller's stub and log its own — tests run in parallel.
 fn answering(fixture_name: &str, tag: &str, answer: impl Fn(&Decision) -> DecisionAnswer) -> Value {
     let log = log_path(&format!("{tag}-answer.log"));
     let _ = fs::remove_file(&log);
+    let capture = fs::read_to_string(fixture(fixture_name)).unwrap();
+    let (request_line, request) = capture
+        .lines()
+        .enumerate()
+        .find_map(|(line, frame)| {
+            let frame: Value = serde_json::from_str(frame).unwrap();
+            frame["method"]
+                .as_str()
+                .is_some_and(|method| method.ends_with("/requestApproval"))
+                .then_some((line + 1, frame))
+        })
+        .expect("the capture contains an approval request");
+    let request_id = request["id"].clone();
+    let id_pattern = format!("\"id\":{},", request_id).replace('\'', "'\\''");
     let program = stub(
         &format!("codex-decides-{tag}"),
         &format!(
-            "{VERSION_CASE}\ncat '{}'\ncat >> '{}'",
-            fixture(fixture_name).display(),
-            log.display()
+            "{VERSION_CASE}\nsed -n '1,{request_line}p' '{capture}'\n\
+             while IFS= read -r line; do\n\
+             printf '%s\\n' \"$line\" >> '{log}'\n\
+             case \"$line\" in *'{id_pattern}'*'\"result\":'*) break;; esac\n\
+             done\nsed -n '{tail_line},$p' '{capture}'\ncat >> '{log}'",
+            capture = fixture(fixture_name).display(),
+            log = log.display(),
+            tail_line = request_line + 1,
         ),
     );
     let mut session = CodexSession::spawn(config(program)).unwrap();
@@ -456,7 +503,11 @@ fn answering(fixture_name: &str, tag: &str, answer: impl Fn(&Decision) -> Decisi
     // and model/list requests (#23, #25); the answer follows.
     let written = read_lines(&log, 6);
     drop(session);
-    serde_json::from_str(&written[5]).expect("one JSON object per line")
+    written
+        .iter()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .find(|frame| frame["id"] == request_id && frame.get("result").is_some())
+        .expect("the answer quotes the pending request's exact native ID")
 }
 
 /// What the recording sent back for the same Decision.
@@ -514,11 +565,22 @@ fn an_allow_with_edited_input_still_writes_the_bare_accept() {
 
 #[test]
 fn denying_a_decision_writes_what_the_server_accepted() {
-    let sent = answering("approval-deny-0.149.1", "deny", |_| DecisionAnswer::Deny {
-        // Dropped by design: the codex wire's decline carries no message.
-        message: "Ferrite operator denied this tool".into(),
+    let sent = answering("approval-deny-0.149.1", "deny", |decision| {
+        DecisionAnswer::Choose {
+            value: decision
+                .suggestions
+                .iter()
+                .find(|offered| offered.value == "cancel")
+                .expect("this capture offers cancellation, not decline")
+                .value
+                .clone(),
+        }
     });
-    assert_eq!(sent, recorded_answer("approval-deny-0.149.1"));
+    // The old capture submitted an unadvertised decline. Preserve its response
+    // envelope and ID while choosing the cancellation this request offers.
+    let mut expected = recorded_answer("approval-deny-0.149.1");
+    expected["result"]["decision"] = "cancel".into();
+    assert_eq!(sent, expected);
 }
 
 /// A failed turn has to say what failed, in the server's own words. Replayed
@@ -729,14 +791,10 @@ fn a_resumed_session_answers_from_the_previous_process_history() {
         )),
         "the Session did not announce the resumed thread: {events:?}"
     );
-    let text: String = events
-        .iter()
-        .filter_map(|e| match e {
-            SessionEvent::TextDelta { text } => Some(text.as_str()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(text, "ferrite-resume-ok");
+    assert_eq!(
+        prose(&fold(&events)).last().map(String::as_str),
+        Some("ferrite-resume-ok")
+    );
 }
 
 /// A server that answers nothing is a failed spawn, not a mute Session: a
@@ -1292,20 +1350,19 @@ fn a_line_of_invalid_utf8_does_not_end_the_session() {
     let session = CodexSession::spawn(config(program)).unwrap();
     let events = drain(session.events());
     assert_eq!(
-        events,
-        vec![
-            SessionEvent::Init {
-                session_id: "stub-thread".into(),
-                model: "stub-model".into(),
-            },
-            SessionEvent::TextDelta {
-                text: "still here".into()
-            },
-            SessionEvent::TurnEnded {
-                outcome: TurnOutcome::Completed,
-                cost_usd: None,
-            },
-        ]
+        events.first(),
+        Some(&SessionEvent::Init {
+            session_id: "stub-thread".into(),
+            model: "stub-model".into(),
+        })
+    );
+    assert_eq!(prose(&fold(&events)), ["still here"]);
+    assert_eq!(
+        events.last(),
+        Some(&SessionEvent::TurnEnded {
+            outcome: TurnOutcome::Completed,
+            cost_usd: None,
+        })
     );
 }
 
@@ -1345,7 +1402,11 @@ fn a_slow_consumer_stalls_the_server_instead_of_losing_events() {
     let text: String = events
         .iter()
         .filter_map(|e| match e {
-            SessionEvent::TextDelta { text } => Some(text.as_str()),
+            SessionEvent::TextDelta { text }
+            | SessionEvent::Activity(ActivityEvent::MainContent {
+                event: ExecutionEvent::TextDelta { text },
+                ..
+            }) => Some(text.as_str()),
             _ => None,
         })
         .collect();
