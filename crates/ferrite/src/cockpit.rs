@@ -6940,6 +6940,35 @@ mod tests {
     }
 
     #[gpui::test]
+    fn titlebar_add_sits_beside_the_group_title(cx: &mut TestAppContext) {
+        let (mut core, _fake) = cockpit("titlebar-add-placement", 2);
+        let threads = core.threads();
+        let group = core
+            .apply_group(GroupChange::Create {
+                first: threads[0],
+                second: threads[1],
+            })
+            .unwrap()
+            .group
+            .unwrap();
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, cx| view.enter_group(group, cx));
+        tick(cx);
+
+        let title = cx
+            .debug_bounds("group-titlebar-name")
+            .expect("the group title is visible");
+        let button = cx
+            .debug_bounds("titlebar-add-thread")
+            .expect("the titlebar add button is visible");
+        assert!(button.origin.x >= title.right());
+        assert!(
+            button.origin.x - title.right() <= px(crate::theme::GRID_PAD + 1.0),
+            "the add button belongs to the title cluster"
+        );
+    }
+
+    #[gpui::test]
     fn multi_project_groups_keep_bindings_and_filter_only_navigation(cx: &mut TestAppContext) {
         let (mut core, _) = cockpit("multi-project-group", 2);
         let original = core.threads();

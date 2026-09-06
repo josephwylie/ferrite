@@ -71,10 +71,17 @@ pub fn strip(
     draggable: bool,
     maximized: bool,
 ) -> Div {
-    let title = if CUSTOM && draggable {
-        drag_region("titlebar-drag", title, maximized)
+    let trailing_drag = if CUSTOM && draggable {
+        drag_region(
+            "titlebar-drag",
+            Title {
+                project: None,
+                group: None,
+            },
+            maximized,
+        )
     } else {
-        title_region(title)
+        div().flex_1().h_full()
     };
     div()
         .absolute()
@@ -85,8 +92,12 @@ pub fn strip(
         .flex()
         .flex_row()
         .child(div().flex_shrink_0().w(px(nav_width)))
-        .child(title)
+        // Location and creation are one compact cluster. The empty stretch
+        // after them absorbs spare width and remains the Windows drag target,
+        // rather than pushing creation against the caption controls.
+        .child(title_region(title))
         .child(add_thread)
+        .child(trailing_drag)
         .children(CUSTOM.then(|| caption_buttons(maximized)))
 }
 
@@ -139,7 +150,6 @@ fn title_region(title: Title) -> Div {
     let has_both = title.project.is_some() && title.group.is_some();
     div()
         .h_full()
-        .flex_1()
         .flex()
         .items_center()
         .justify_start()
