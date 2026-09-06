@@ -6175,14 +6175,14 @@ impl CockpitView {
                 && open.supports_control(ferrite_core::ControlKind::StopTask)
             {
                 let id = task.id.clone();
-                row =
-                    row.child(
-                        crate::components::button(SharedString::from(format!(
-                            "background-stop-{index}"
-                        )))
-                        .debug_selector(move || format!("background-stop-{index}"))
-                        .child("Stop")
-                        .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                row = row.child(
+                    crate::components::button(SharedString::from(format!(
+                        "background-stop-{index}"
+                    )))
+                    .debug_selector(move || format!("background-stop-{index}"))
+                    .child("Stop")
+                    .on_click(cx.listener(
+                        move |view, _: &ClickEvent, _, cx| {
                             let exists = view.cockpit.thread(thread).is_some_and(|open| {
                                 open.generation() == generation
                                     && open.transcript().progress().background().iter().any(
@@ -6201,8 +6201,9 @@ impl CockpitView {
                                 );
                             }
                             cx.notify();
-                        })),
-                    );
+                        },
+                    )),
+                );
             }
             card = card.child(row);
         }
