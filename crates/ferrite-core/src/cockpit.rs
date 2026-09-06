@@ -2268,7 +2268,63 @@ impl Cockpit {
         model: Option<String>,
     ) -> Result<(), ProvisionError> {
         let effort = self.tuning(thread)?.1;
-        self.retune(thread, model, effort)
+        let Some(state) = self.threads.get_mut(&thread) else {
+            let meta = self.store.peek(thread).map_err(ProvisionError::Store)?;
+            return self
+                .store
+                .set_provider(thread, meta.provider, model, effort, None)
+                .map_err(ProvisionError::Store);
+        };
+        if state.busy()
+            || state.replacement.is_some()
+            || state
+                .session
+                .as_ref()
+                .is_some_and(SessionLifecycle::is_starting)
+        {
+            return Err(ProvisionError::Busy);
+        }
+        if state.model == model {
+            state.replacement = None;
+            return Ok(());
+        }
+        let previous = state.model.clone();
+        let native = state
+            .session
+            .as_mut()
+            .and_then(SessionLifecycle::session_mut)
+            .map(|session| session.set_model(model.as_deref()));
+        match native {
+            Some(Ok(())) => {}
+            Some(Err(error)) if error.kind() != io::ErrorKind::Unsupported => {
+                return Err(ProvisionError::Tune(error));
+            }
+            None | Some(Err(_)) => {
+                return self.retune(thread, model, effort);
+            }
+        }
+        state.history.clear();
+        if let Err(error) = self.store.set_provider(
+            thread,
+            state.provider,
+            model.clone(),
+            effort,
+            Some(&mut state.writer),
+        ) {
+            if let Some(session) = state
+                .session
+                .as_mut()
+                .and_then(SessionLifecycle::session_mut)
+            {
+                let _ = session.set_model(previous.as_deref());
+            }
+            return Err(ProvisionError::Store(error));
+        }
+        let label =
+            crate::providers::models::label(model.as_deref().unwrap_or("default"), &state.models);
+        state.apply(Input::Notice(format!("model changed to {label}")));
+        state.model = model;
+        Ok(())
     }
 
     /// Change the next turn's effort on the existing Session. A turn or

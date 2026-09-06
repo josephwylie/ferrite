@@ -436,8 +436,8 @@ impl CodexSession {
                     lock(&self.models)
                         .iter()
                         .find(|row| {
-                            row.value == self.model
-                                || row.resolved.as_deref() == Some(self.model.as_str())
+                            let model = self.model_override.as_deref().unwrap_or(&self.model);
+                            row.value == model || row.resolved.as_deref() == Some(model)
                         })
                         .and_then(|row| row.default_effort.clone())
                 })
@@ -546,6 +546,9 @@ impl CodexSession {
             if request["method"] == "turn/start" {
                 if let Some(effort) = &self.effort {
                     request["params"]["effort"] = effort.clone().into();
+                }
+                if let Some(model) = &self.model_override {
+                    request["params"]["model"] = model.clone().into();
                 }
             }
             let result = self.write_line(&request);
