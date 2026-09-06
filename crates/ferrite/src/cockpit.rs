@@ -7219,6 +7219,11 @@ mod tests {
     }
 
     impl Session for Scripted {
+        fn permission_modes(&self) -> Vec<ferrite_core::PermissionModeChoice> {
+            if *self.native_controls.borrow() {
+                vec![ferrite_core::PermissionModeChoice { value: "native-mode".into(), label: "Ask for changes".into() }]
+            } else { vec![] }
+        }
         fn supports_control(&self, _: ferrite_core::ControlKind) -> bool {
             *self.native_controls.borrow()
         }

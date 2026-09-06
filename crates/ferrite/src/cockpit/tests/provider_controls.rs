@@ -39,3 +39,22 @@ fn contract_session_controls_use_shared_native_handles(cx:&mut TestAppContext) {
     assert!(cx.debug_bounds("mcp-reconnect-0").is_none(),"Escape closes controls rather than interrupting Main");
     assert_eq!(*fake.interrupts.borrow(),0);
 }
+
+#[gpui::test]
+fn contract_permission_and_mcp_auth_controls_are_native(cx:&mut TestAppContext) {
+    let(core,fake)=cockpit("native-auth-ui",1);bind_production_keys(cx);*fake.native_controls.borrow_mut()=true;
+    let(_view,cx)=add_cockpit_window(cx,|_,cx|CockpitView::new(core,cx));cx.simulate_resize(gpui::size(px(1100.),px(1000.)));
+    fake.streams.borrow()[0].send(SessionEvent::McpServers{servers:vec![ferrite_core::McpServer{name:"search".into(),status:ferrite_core::McpStatus::NeedsAuth,error:None}]}).unwrap();tick(cx);
+    let controls=cx.debug_bounds("session-controls-1").unwrap();cx.simulate_click(controls.center(),gpui::Modifiers::none());cx.run_until_parked();
+    let mode=cx.debug_bounds("permission-mode-0").expect("provider-supplied permission mode exposed");cx.simulate_click(mode.center(),gpui::Modifiers::none());cx.run_until_parked();
+    assert!(fake.controls.borrow().contains(&ferrite_core::SessionControl::SetPermissionMode{mode:"native-mode".into()}));
+    let login=cx.debug_bounds("mcp-login-0").expect("native sign-in action");cx.simulate_click(login.center(),gpui::Modifiers::none());cx.run_until_parked();
+    assert!(fake.controls.borrow().contains(&ferrite_core::SessionControl::LoginMcp{server:"search".into()}));
+    fake.streams.borrow()[0].send(SessionEvent::McpAuthorization{server:"search".into(),url:Some("https://example.com/authorize".into())}).unwrap();tick(cx);
+    assert!(cx.debug_bounds("mcp-authorize-0").is_some(),"authorization link requires an explicit user click");
+    let reload=cx.debug_bounds("mcp-reload").unwrap();cx.simulate_click(reload.center(),gpui::Modifiers::none());cx.run_until_parked();
+    assert!(fake.controls.borrow().contains(&ferrite_core::SessionControl::ReloadMcp));
+    assert!(fake.sent.borrow().is_empty());
+    fake.streams.borrow()[0].send(SessionEvent::McpAuthorization{server:"search".into(),url:None}).unwrap();tick(cx);
+    assert!(cx.debug_bounds("mcp-authorize-0").is_none());
+}
