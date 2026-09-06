@@ -86,6 +86,17 @@ pub struct ToolBlock {
     pub output: Option<ToolOutput>,
 }
 
+impl ToolBlock {
+    /// A bounded, selectable JSON preview for an otherwise unmodelled result.
+    /// The original value remains on this block for persistence and replay.
+    pub fn structured_output(&self) -> Option<ToolOutput> {
+        self.structured_result
+            .as_ref()
+            .and_then(|value| serde_json::to_string_pretty(value).ok())
+            .and_then(|text| retained_output(&text))
+    }
+}
+
 /// A compact display run, never an assertion that calls executed in parallel.
 /// Visible prose, reasoning, prompts and notices remain chronological boundaries.
 pub struct ToolActivity<'a> {
@@ -978,19 +989,17 @@ impl Transcript {
                 } else {
                     ToolState::Ok
                 };
-                let diffs = match &result {
-                    ToolResult::FileEdit { path, hunks } => {
-                        vec![Diff::new(path.clone(), hunks.clone())]
-                    }
-                    ToolResult::FileEdits { edits } => edits
-                        .iter()
-                        .map(|edit| Diff::new(edit.path.clone(), edit.hunks.clone()))
-                        .collect(),
-                    _ => Vec::new(),
-                };
-                let structured_result = match &result {
-                    ToolResult::Structured { value } => Some(value.clone()),
-                    _ => None,
+                let (diffs, structured_result) = match result {
+                    ToolResult::FileEdit { path, hunks } => (vec![Diff::new(path, hunks)], None),
+                    ToolResult::FileEdits { edits } => (
+                        edits
+                            .into_iter()
+                            .map(|edit| Diff::new(edit.path, edit.hunks))
+                            .collect(),
+                        None,
+                    ),
+                    ToolResult::Structured { value } => (Vec::new(), Some(value)),
+                    _ => (Vec::new(), None),
                 };
                 // A failure already carries its message in the state; a
                 // success keeps its first output line for the `⎿` row.

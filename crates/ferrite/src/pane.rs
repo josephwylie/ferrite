@@ -2195,7 +2195,7 @@ pub fn rendered_window(blocks: &[Block], level: Level) -> &[Block] {
 /// cycling, focus validation, and controls all consume this one eligibility
 /// rule so an invisible row can never remain keyboard-addressable.
 pub fn tool_has_details(tool: &ToolBlock) -> bool {
-    tool.output.is_some() || !tool.summary.is_empty()
+    tool.output.is_some() || tool.structured_result.is_some() || !tool.summary.is_empty()
 }
 
 /// One visibility rule for rendering controls, keyboard cycling and focus.
@@ -4317,6 +4317,29 @@ fn render_tool(
                 details = details.child(result_line(TEXT_MUTED).child(div().min_w_0().child(
                     format!("… {} bytes omitted from inline view", output.omitted_bytes),
                 )));
+            }
+        }
+        if let Some(details_output) = tool.structured_output() {
+            details = details.child(
+                div()
+                    .ml(px(theme::INDENT))
+                    .mt(px(theme::EVENT_GAP))
+                    .text_color(rgb(TEXT_MUTED))
+                    .child("Details"),
+            );
+            details = details.child(output_block(
+                block,
+                "details",
+                &details_output.text,
+                TEXT_MUTED,
+                selection,
+            ));
+            if details_output.omitted_bytes > 0 {
+                details =
+                    details.child(result_line(TEXT_MUTED).child(div().min_w_0().child(format!(
+                        "… {} bytes omitted from inline view",
+                        details_output.omitted_bytes
+                    ))));
             }
         }
         card = card.content(details);
