@@ -402,8 +402,8 @@ pub struct Transcript {
     /// the working line's clock. None between turns.
     turn_started: Option<std::time::Instant>,
     /// Output tokens the running turn has produced, summed across the
-    /// messages it streams (Claude reports each message's own count and
-    /// Codex a running total; `last_report` tells the two apart).
+    /// messages it streams. Adapters normalize current reports to a per-turn
+    /// total; the smaller-report fallback supports older stored events.
     turn_output_tokens: u64,
     last_report: u64,
     /// Which reasoning summary part the tail Block belongs to.

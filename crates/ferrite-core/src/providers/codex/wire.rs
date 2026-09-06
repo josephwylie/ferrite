@@ -1128,9 +1128,8 @@ mod tests {
             SessionEvent::FileChanges { .. } | SessionEvent::TurnDiff { .. } => return None,
             SessionEvent::McpServers { .. } | SessionEvent::McpAuthorization { .. } => return None,
             SessionEvent::ContextUsage { .. } | SessionEvent::UsageDetails { .. } => return None,
-            // Claude's concept: Codex never streams raw chain-of-thought, only
-            // summaries of it, so no codex line may ever produce this — that
-            // is the capability difference, stated rather than papered over.
+            // Raw reasoning is scoped by the activity router; these legacy
+            // captures only contain reasoning summaries.
             SessionEvent::ThinkingDelta { .. } => return None,
             // Not a wire line at all: the reader thread synthesises Closed
             // when the process exits, so no capture can contain it. Proved by
@@ -1379,8 +1378,8 @@ mod tests {
             "/bin/zsh -lc \"printf 'ok' > ferrite-perm.txt\""
         );
         assert_eq!(input["cwd"], "/workspace");
-        // The standing answers 0.149.1 offers: accept, accept with an
-        // execpolicy amendment, decline.
+        // Plain Allow is the policy button; additional native choices are
+        // an execpolicy amendment and cancellation.
         assert_eq!(suggestions.len(), 2);
         assert!(suggestions.iter().any(|choice| choice.standing));
         assert!(suggestions.iter().any(|choice| choice.value == serde_json::json!("cancel")));

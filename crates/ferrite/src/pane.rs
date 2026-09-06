@@ -691,7 +691,7 @@ pub fn render_pane(
     };
     let queued = thread.and_then(|thread| thread.queued());
     let workspace = thread.and_then(|thread| thread.workspace());
-    let permission_mode = thread.and_then(|thread| thread.permission_mode());
+    let permission_mode = thread.and_then(|thread| thread.permission_mode().map(|mode| permission_mode_label(mode, &thread.permission_modes())));
     let suggestion = thread.and_then(|thread| thread.suggestion());
     let timings = subject.as_ref().map(|subject| subject.timings());
     let status = subject.as_ref().map(|subject| {
@@ -760,7 +760,7 @@ pub fn render_pane(
                     attachments,
                     history_available,
                     menu: None,
-                    mode: permission_mode,
+                    mode: permission_mode.as_deref(),
                     model_picker: None,
                     usage_meter: None,
                     session_controls: None,
@@ -876,7 +876,7 @@ pub fn render_pane(
                         attachments,
                         history_available,
                         menu,
-                        mode: permission_mode,
+                        mode: permission_mode.as_deref(),
                         model_picker,
                         usage_meter,
                         session_controls,
@@ -2909,7 +2909,7 @@ fn mode_chip(mode: &str) -> Div {
         .bg(rgb(HOVER))
         .text_color(rgb(TEXT_2))
         .child(icon(icons::PENCIL, theme::ICON_PENCIL, TEXT_MUTED))
-        .child(mode_chip_label(mode))
+        .child(mode.to_owned())
         .hover_raised()
 }
 
@@ -2954,15 +2954,10 @@ pub fn offers_import(transcript: Option<&Transcript>) -> bool {
     transcript.is_some_and(Transcript::offers_import)
 }
 
-/// The meta row's mode chip text: the comp's own name for acceptEdits
-/// ("⏵ auto-edit"); every other mode wears the provider's word verbatim
-/// rather than a guessed translation.
-fn mode_chip_label(mode: &str) -> SharedString {
-    let label = match mode {
-        "acceptEdits" => "auto-edit",
-        other => other,
-    };
-    SharedString::from(label.to_string())
+/// Display the adapter's label for its native mode; unknown values stay visible.
+fn permission_mode_label(mode: &str, choices: &[ferrite_core::PermissionModeChoice]) -> SharedString {
+    choices.iter().find(|choice| choice.value == mode)
+        .map(|choice| choice.label.clone()).unwrap_or_else(|| mode.to_owned()).into()
 }
 
 /// One row of the `/` or `@` popover, ready to draw: what a pick inserts,
