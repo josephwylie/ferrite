@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::{ControlKind, DecisionAnswer, SessionControl, SessionEvent};
+use crate::{ControlKind, DecisionAnswer, PermissionModeChoice, SessionControl, SessionEvent};
 
 /// Minimum `claude` CLI version for stable stream-json + stdio control
 /// protocol. Vendor releases below this break loudly at spawn, not weirdly
@@ -371,6 +371,23 @@ impl ClaudeSession {
             serde_json::json!({"subtype": "set_model", "model": model}),
             "model change was not acknowledged",
         )
+    }
+
+    pub fn permission_modes(&self) -> Vec<PermissionModeChoice> {
+        [
+            ("default", "Default"),
+            ("acceptEdits", "Accept edits"),
+            ("plan", "Plan"),
+            ("dontAsk", "Don't ask"),
+            ("bypassPermissions", "Bypass permissions"),
+            ("auto", "Auto"),
+        ]
+        .into_iter()
+        .map(|(value, label)| PermissionModeChoice {
+            value: value.into(),
+            label: label.into(),
+        })
+        .collect()
     }
 
     pub fn supports_control(&self, kind: ControlKind) -> bool {

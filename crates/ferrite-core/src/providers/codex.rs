@@ -26,7 +26,7 @@ use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::{DecisionAnswer, SessionEvent};
+use crate::{DecisionAnswer, PermissionModeChoice, SessionEvent};
 
 use wire::ThreadHandshake;
 
@@ -515,6 +515,20 @@ impl CodexSession {
     /// spawn — never assumed.
     pub fn capabilities(&self) -> &CodexCapabilities {
         &self.capabilities
+    }
+
+    pub fn permission_modes(&self) -> Vec<PermissionModeChoice> {
+        [
+            ("untrusted", "Ask for untrusted commands"),
+            ("on-request", "Ask as needed"),
+            ("never", "Never ask"),
+        ]
+        .into_iter()
+        .map(|(value, label)| PermissionModeChoice {
+            value: value.into(),
+            label: label.into(),
+        })
+        .collect()
     }
 
     /// Rename the thread server-side (`thread/name/set`), so the server's

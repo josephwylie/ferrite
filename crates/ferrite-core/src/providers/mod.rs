@@ -7,7 +7,7 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 
-use crate::{ControlKind, DecisionAnswer, SessionControl, SessionEvent};
+use crate::{ControlKind, DecisionAnswer, PermissionModeChoice, SessionControl, SessionEvent};
 
 mod claude;
 mod codex;
@@ -97,6 +97,9 @@ pub trait Session {
             "this Session cannot change model",
         ))
     }
+    fn permission_modes(&self) -> Vec<PermissionModeChoice> {
+        Vec::new()
+    }
     /// Native follow-ups are optional; providers without them use the
     /// one-shot prediction path. These never enter the durable transcript.
     fn set_suggestions_enabled(&mut self, _enabled: bool) -> io::Result<()> {
@@ -144,6 +147,9 @@ impl Session for ClaudeSession {
     fn set_model(&mut self, model: Option<&str>) -> io::Result<()> {
         ClaudeSession::set_model(self, model)
     }
+    fn permission_modes(&self) -> Vec<PermissionModeChoice> {
+        ClaudeSession::permission_modes(self)
+    }
     fn set_name(&mut self, name: &str) -> io::Result<()> {
         ClaudeSession::set_name(self, name)
     }
@@ -169,6 +175,9 @@ impl Session for ClaudeSession {
 }
 
 impl Session for CodexSession {
+    fn permission_modes(&self) -> Vec<PermissionModeChoice> {
+        CodexSession::permission_modes(self)
+    }
     fn set_effort(&mut self, effort: Option<&str>) -> io::Result<()> {
         CodexSession::set_effort(self, effort)
     }

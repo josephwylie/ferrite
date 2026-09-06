@@ -2607,6 +2607,14 @@ impl<'a> ThreadView<'a> {
             .and_then(SessionLifecycle::session)
             .is_some_and(|session| session.supports_control(kind))
     }
+
+    pub fn permission_modes(&self) -> Vec<crate::PermissionModeChoice> {
+        self.state
+            .session
+            .as_ref()
+            .and_then(SessionLifecycle::session)
+            .map_or_else(Vec::new, Session::permission_modes)
+    }
     pub fn activity(&self) -> ActivityView<'a> {
         self.state.activity.view()
     }

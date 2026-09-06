@@ -429,6 +429,13 @@ pub struct FormChoice {
     pub label: String,
 }
 
+/// A provider-native permission mode offered by the shared picker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PermissionModeChoice {
+    pub value: String,
+    pub label: String,
+}
+
 /// Constraints and defaults for the MCP flat primitive subset.
 #[derive(Debug, Clone, PartialEq)]
 pub enum FormFieldKind {
