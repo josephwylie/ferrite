@@ -2700,7 +2700,6 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
     } = stack;
     let is_draft = setup_controls.is_some();
     let blocking = decision.is_some_and(Decision::blocks_execution);
-    let has_attachments = attachments.is_some();
     let mut region = div()
         .relative()
         .flex()
@@ -2709,9 +2708,8 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         .gap(px(theme::COMPOSER_GAP))
         .min_w_0()
         .bg(rgb(RAISED))
-        .when(!has_attachments, |region| {
-            region.border_t_1().border_color(rgba(COMPOSER_EDGE))
-        })
+        .border_t_1()
+        .border_color(rgba(COMPOSER_EDGE))
         // gpui's `overflow_hidden()` content mask is an axis-aligned rect, so
         // the shell's 8px radius never clips this ground. The bottom-most
         // child carries the shell's padding-box radius itself: 8 - 1 border.
@@ -2883,25 +2881,15 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         .flex_shrink_0()
         .min_w_0()
         .when_some(attachments, |stack, attachments| {
+            // The island floats clear of the prompt: its own rounded edge,
+            // clearance below it, and the composer's top edge left whole.
             stack.child(
                 div()
-                    .relative()
-                    // Paint the uninterrupted outer edge first. The opaque
-                    // island and shoulders replace its middle with the
-                    // raised, stroked notch when they paint above it.
-                    .child(
-                        div()
-                            .absolute()
-                            .left_0()
-                            .right_0()
-                            .bottom_0()
-                            .border_b_1()
-                            .border_color(rgba(COMPOSER_EDGE)),
-                    )
-                    .child(div().px(px(theme::PANE_PAD_X)).child(attachments)),
+                    .px(px(theme::PANE_PAD_X))
+                    .pb(px(theme::ATTACHMENT_ISLAND_GAP))
+                    .child(attachments),
             )
         })
-        // The attachment shoulders meet this matching surface at its top edge.
         .child(region.child(controls))
 }
 
