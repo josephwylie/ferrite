@@ -169,6 +169,7 @@ pub struct CockpitView {
     /// windows are real before the first prompt — so this is a
     /// `PaneIdentity`, not a Thread.
     context_usage: Option<(PaneIdentity, gpui::Point<gpui::Pixels>)>,
+    session_controls: Option<(ThreadId, gpui::Point<gpui::Pixels>)>,
     /// The header `ci` mark's checks card, tied to its Thread and click
     /// position (#29). The runs it lists are read from the same cached
     /// `BranchStatus` the mark was drawn from, so the card can never
@@ -590,6 +591,7 @@ impl CockpitView {
             rename: None,
             context_menu: None,
             context_usage: None,
+            session_controls: None,
             context_checks: None,
             nav_collapsed: prefs.settings.nav_collapsed,
             nav_has_toggled: false,
@@ -5276,6 +5278,7 @@ impl Render for CockpitView {
             })
             .children(self.context_menu_element(cx))
             .children(self.context_usage_element(cx))
+            .children(self.session_controls_element(cx))
             .children(self.context_checks_element(cx))
             .children(self.settings_element(cx))
             .children(gpui::component::Root::render_dialog_layer(window, cx))
@@ -5459,6 +5462,9 @@ impl CockpitView {
             menu: l1.then(|| self.popover_element(index, cx)).flatten(),
             model_picker: l1.then(|| self.model_picker(index, cx)).flatten(),
             usage_meter: l1.then(|| self.usage_meter(index, cx)).flatten(),
+            session_controls: l1
+                .then(|| self.session_controls_button(index, cx))
+                .flatten(),
             decide: (level != Level::Wall)
                 .then(|| self.decide_keycaps(index, level, cx))
                 .flatten(),
@@ -5760,7 +5766,7 @@ impl CockpitView {
     /// No reading is invented when the provider has not reported usage.
     fn usage_meter(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
         let identity = self.panes[index].identity;
-        let (fraction, provider, key) = match identity {
+        let (fraction, provider, key, can_refresh) = match identity {
             PaneIdentity::Thread(thread) => {
                 let open = self.cockpit.thread(thread)?;
                 let usage = open.transcript().usage()?;
@@ -5768,7 +5774,12 @@ impl CockpitView {
                     .context_window
                     .filter(|window| *window > 0)
                     .map_or(0., |window| usage.total_tokens as f32 / window as f32);
-                (fraction, open.provider(), thread.get().to_string())
+                (
+                    fraction,
+                    open.provider(),
+                    thread.get().to_string(),
+                    open.supports_control(ferrite_core::ControlKind::RefreshContext),
+                )
             }
             // A draft has spent no context yet, and that empty window is
             // half of what the operator came to check before writing a
@@ -5777,6 +5788,7 @@ impl CockpitView {
                 0.,
                 self.panes[index].draft()?.binding.provider().provider,
                 format!("draft-{}", draft.get()),
+                false,
             ),
         };
         // Account-wide and remembered across launches, so the meter is
@@ -5805,6 +5817,14 @@ impl CockpitView {
                     cx.listener(move |view, event: &MouseDownEvent, _, cx| {
                         cx.stop_propagation();
                         view.focus_pane(index);
+                        if can_refresh {
+                            let PaneIdentity::Thread(thread) = identity else {
+                                return;
+                            };
+                            let _ = view
+                                .cockpit
+                                .control(thread, ferrite_core::SessionControl::RefreshContext);
+                        }
                         view.popover = None;
                         view.context_menu = None;
                         // Outside-click dismissal runs in capture phase, before this
@@ -5815,6 +5835,171 @@ impl CockpitView {
                     }),
                 )
                 .into_any_element(),
+        )
+    }
+
+    fn session_controls_button(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let thread = self.panes[index].thread()?;
+        let open = self.cockpit.thread(thread)?;
+        let capable = [
+            ferrite_core::ControlKind::RefreshMcp,
+            ferrite_core::ControlKind::ReconnectMcp,
+            ferrite_core::ControlKind::StopTask,
+            ferrite_core::ControlKind::BackgroundTasks,
+        ]
+        .into_iter()
+        .any(|kind| open.supports_control(kind));
+        if !capable || !self.panes[index].is_main() {
+            return None;
+        }
+        let was_open = self
+            .session_controls
+            .is_some_and(|(shown, _)| shown == thread);
+        Some(
+            div()
+                .id(SharedString::from(format!(
+                    "session-controls-{}",
+                    thread.get()
+                )))
+                .debug_selector(move || format!("session-controls-{}", thread.get()))
+                .rounded(px(crate::theme::R_CHIP))
+                .px(px(6.))
+                .child("•••")
+                .hover_raised()
+                .press_raised()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |view, event: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        view.focus_pane(index);
+                        if !was_open
+                            && view.cockpit.thread(thread).is_some_and(|open| {
+                                open.supports_control(ferrite_core::ControlKind::RefreshMcp)
+                            })
+                        {
+                            let _ = view
+                                .cockpit
+                                .control(thread, ferrite_core::SessionControl::RefreshMcp);
+                        }
+                        view.session_controls = (!was_open).then_some((thread, event.position));
+                        cx.notify();
+                    }),
+                )
+                .into_any_element(),
+        )
+    }
+
+    fn session_controls_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (thread, at) = self.session_controls?;
+        let open = self.cockpit.thread(thread)?;
+        let transcript = open.transcript();
+        let mut card = menu::shell()
+            .id("session-controls-card")
+            .p(px(8.))
+            .gap(px(6.))
+            .flex()
+            .flex_col();
+        if transcript.mcp_servers().is_empty() {
+            card = card.child(
+                div()
+                    .text_color(rgb(crate::theme::TEXT_MUTED))
+                    .child("No MCP servers reported"),
+            );
+        }
+        for (index, server) in transcript.mcp_servers().iter().enumerate() {
+            let name = server.name.clone();
+            let label = server
+                .error
+                .as_deref()
+                .unwrap_or(server.name.as_str())
+                .to_string();
+            let mut row = div().flex().items_center().gap(px(6.)).child(label);
+            if open.supports_control(ferrite_core::ControlKind::ReconnectMcp) {
+                row = row.child(
+                    div()
+                        .id(SharedString::from(format!("mcp-reconnect-{index}")))
+                        .debug_selector(move || format!("mcp-reconnect-{index}"))
+                        .child("Reconnect")
+                        .hover_raised()
+                        .press_raised()
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                                cx.stop_propagation();
+                                let _ = view.cockpit.control(
+                                    thread,
+                                    ferrite_core::SessionControl::ReconnectMcp {
+                                        server: name.clone(),
+                                    },
+                                );
+                                cx.notify();
+                            }),
+                        ),
+                );
+            }
+            card = card.child(row);
+        }
+        for (index, task) in transcript.progress().background().iter().enumerate() {
+            let mut row = div()
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .child(task.label.clone());
+            if task.status == ferrite_core::progress::TaskStatus::Working
+                && open.supports_control(ferrite_core::ControlKind::StopTask)
+            {
+                let id = task.id.clone();
+                row = row.child(
+                    div()
+                        .id(SharedString::from(format!("background-stop-{index}")))
+                        .debug_selector(move || format!("background-stop-{index}"))
+                        .child("Stop")
+                        .hover_raised()
+                        .press_raised()
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                                cx.stop_propagation();
+                                let _ = view.cockpit.control(
+                                    thread,
+                                    ferrite_core::SessionControl::StopTask { id: id.clone() },
+                                );
+                                cx.notify();
+                            }),
+                        ),
+                );
+            }
+            card = card.child(row);
+        }
+        if open.supports_control(ferrite_core::ControlKind::BackgroundTasks) {
+            card = card.child(
+                div()
+                    .id("background-all")
+                    .child("Show background tasks")
+                    .hover_raised()
+                    .press_raised()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            let _ = view
+                                .cockpit
+                                .control(thread, ferrite_core::SessionControl::BackgroundTasks);
+                            cx.notify();
+                        }),
+                    ),
+            );
+        }
+        Some(
+            deferred(
+                anchored()
+                    .position(at)
+                    .snap_to_window_with_margin(px(crate::theme::GRID_PAD))
+                    .child(card)
+                    .into_any_element(),
+            )
+            .with_priority(2)
+            .into_any_element(),
         )
     }
 
@@ -5918,10 +6103,14 @@ impl CockpitView {
 
     fn context_usage_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let (identity, at) = self.context_usage?;
-        let (usage, provider) = match identity {
+        let (usage, provider, details) = match identity {
             PaneIdentity::Thread(thread) => {
                 let open = self.cockpit.thread(thread)?;
-                (open.transcript().usage()?, open.provider())
+                (
+                    open.transcript().usage()?,
+                    open.provider(),
+                    open.transcript().context_details(),
+                )
             }
             // Nothing spent, and no window to divide by until the Provider
             // reports one: the card says the context is not reported
@@ -5939,6 +6128,7 @@ impl CockpitView {
                     .binding
                     .provider()
                     .provider,
+                None,
             ),
         };
         let card = menu::shell()
@@ -5947,6 +6137,7 @@ impl CockpitView {
             .child(pane::context_usage(
                 usage,
                 self.cockpit.account_limits(provider),
+                details,
             ))
             .on_mouse_down(
                 MouseButton::Left,
@@ -6317,13 +6508,13 @@ impl CockpitView {
             .decisions()
             .take(50)
             .map(|notice| {
-            NoticeRow::decision(
-                notice,
-                self.facts.name(notice.id.thread),
-                self.facts
-                    .get(notice.id.thread)
-                    .and_then(|facts| facts.project_label.clone()),
-            )
+                NoticeRow::decision(
+                    notice,
+                    self.facts.name(notice.id.thread),
+                    self.facts
+                        .get(notice.id.thread)
+                        .and_then(|facts| facts.project_label.clone()),
+                )
             })
             .collect();
         rows.extend(
@@ -6907,8 +7098,8 @@ fn transcript_text(blocks: &[ferrite_core::transcript::Block]) -> String {
 
 #[cfg(test)]
 mod tests {
-    mod provider_forms;
     mod provider_controls;
+    mod provider_forms;
     mod subagents;
     use super::*;
     use std::cell::RefCell;
@@ -6934,8 +7125,13 @@ mod tests {
     }
 
     impl Session for Scripted {
-        fn supports_control(&self, _: ferrite_core::ControlKind) -> bool { *self.native_controls.borrow() }
-        fn control(&mut self, action:ferrite_core::SessionControl) -> std::io::Result<()> { self.controls.borrow_mut().push(action); Ok(()) }
+        fn supports_control(&self, _: ferrite_core::ControlKind) -> bool {
+            *self.native_controls.borrow()
+        }
+        fn control(&mut self, action: ferrite_core::SessionControl) -> std::io::Result<()> {
+            self.controls.borrow_mut().push(action);
+            Ok(())
+        }
 
         fn set_effort(&mut self, _effort: Option<&str>) -> std::io::Result<()> {
             Ok(())
@@ -7004,8 +7200,8 @@ mod tests {
                 fail_send: self.fail_send.clone(),
                 sent: self.sent.clone(),
                 answered: self.answered.clone(),
-                controls:self.controls.clone(),
-                native_controls:self.native_controls.clone(),
+                controls: self.controls.clone(),
+                native_controls: self.native_controls.clone(),
             }))
         }
     }
@@ -14709,31 +14905,61 @@ mod tests {
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         view.update(cx, |view, cx| view.enter_group(group, cx));
         for name in ["AskUserQuestion", "Bash"] {
-            fake.streams.borrow()[1].send(SessionEvent::DecisionRequested {
-                decision: ferrite_core::Decision {
-                    delivery: Default::default(),
-                    kind: Default::default(),
-                    policy: Default::default(),
-                    id: name.into(), tool_use_id: name.into(),
-                    tool_name: name.into(), description: "Needs your input".into(),
-                    input: serde_json::json!({}), suggestions: vec![],
-                },
-            }).unwrap();
+            fake.streams.borrow()[1]
+                .send(SessionEvent::DecisionRequested {
+                    decision: ferrite_core::Decision {
+                        delivery: Default::default(),
+                        kind: Default::default(),
+                        policy: Default::default(),
+                        id: name.into(),
+                        tool_use_id: name.into(),
+                        tool_name: name.into(),
+                        description: "Needs your input".into(),
+                        input: serde_json::json!({}),
+                        suggestions: vec![],
+                    },
+                })
+                .unwrap();
         }
         tick(cx);
-        view.read_with(cx, |view, _| assert_eq!(view.cockpit.notifications().unread(), 2));
-        cx.update(|window, cx| assert_eq!(window.notifications(cx).len(), 2, "each pending request must be visible before the turn ends"));
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.cockpit.notifications().unread(), 2)
+        });
+        cx.update(|window, cx| {
+            assert_eq!(
+                window.notifications(cx).len(),
+                2,
+                "each pending request must be visible before the turn ends"
+            )
+        });
         tick(cx);
-        cx.update(|window, cx| assert_eq!(window.notifications(cx).len(), 2, "pumping must not duplicate request toasts"));
+        cx.update(|window, cx| {
+            assert_eq!(
+                window.notifications(cx).len(),
+                2,
+                "pumping must not duplicate request toasts"
+            )
+        });
         for name in ["AskUserQuestion", "Bash"] {
-            fake.streams.borrow()[1].send(SessionEvent::Activity(ActivityEvent::DecisionCancelled { id: name.into() })).unwrap();
+            fake.streams.borrow()[1]
+                .send(SessionEvent::Activity(ActivityEvent::DecisionCancelled {
+                    id: name.into(),
+                }))
+                .unwrap();
         }
         tick(cx);
-        view.read_with(cx, |view, _| assert_eq!(view.cockpit.notifications().unread(), 0));
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.cockpit.notifications().unread(), 0)
+        });
         // GPUI removes a dismissed toast after its exit animation.
         cx.executor().advance_clock(Duration::from_millis(300));
         cx.run_until_parked();
-        cx.update(|window, cx| assert!(window.notifications(cx).is_empty(), "cancelled requests must not leave stale toast actions"));
+        cx.update(|window, cx| {
+            assert!(
+                window.notifications(cx).is_empty(),
+                "cancelled requests must not leave stale toast actions"
+            )
+        });
     }
 
     #[gpui::test]
@@ -14746,24 +14972,45 @@ mod tests {
         let key = AgentKey::new(Provider::Claude, "native", "child");
         let mut info = AgentInfo::new(key.clone());
         info.parent = Some(Subject::Main);
-        fake.streams.borrow()[1].send(SessionEvent::Activity(ActivityEvent::Discovered(info))).unwrap();
-        fake.streams.borrow()[1].send(SessionEvent::Activity(ActivityEvent::Decision {
-            subject: Some(Subject::Subagent(key.clone())),
-            decision: ferrite_core::Decision {
-                delivery: Default::default(),
-                kind: Default::default(),
-                policy: Default::default(),
-                id: "child-request".into(), tool_use_id: "tool".into(),
-                tool_name: "Bash".into(), description: "Allow command".into(), input: serde_json::json!({}), suggestions: vec![],
-            },
-        })).unwrap();
+        fake.streams.borrow()[1]
+            .send(SessionEvent::Activity(ActivityEvent::Discovered(info)))
+            .unwrap();
+        fake.streams.borrow()[1]
+            .send(SessionEvent::Activity(ActivityEvent::Decision {
+                subject: Some(Subject::Subagent(key.clone())),
+                decision: ferrite_core::Decision {
+                    delivery: Default::default(),
+                    kind: Default::default(),
+                    policy: Default::default(),
+                    id: "child-request".into(),
+                    tool_use_id: "tool".into(),
+                    tool_name: "Bash".into(),
+                    description: "Allow command".into(),
+                    input: serde_json::json!({}),
+                    suggestions: vec![],
+                },
+            }))
+            .unwrap();
         tick(cx);
-        let id = view.read_with(cx, |view, _| view.cockpit.notifications().decisions().next().unwrap().id.clone());
-        view.update(cx, |view, cx| view.notice_verb(Verb::OpenDecision(id.clone()), cx));
+        let id = view.read_with(cx, |view, _| {
+            view.cockpit
+                .notifications()
+                .decisions()
+                .next()
+                .unwrap()
+                .id
+                .clone()
+        });
+        view.update(cx, |view, cx| {
+            view.notice_verb(Verb::OpenDecision(id.clone()), cx)
+        });
         tick(cx);
         view.read_with(cx, |view, _| {
             assert_eq!(view.focused(), 1);
-            assert_eq!(view.panes[view.focused()].selected, Subject::Subagent(key.clone()));
+            assert_eq!(
+                view.panes[view.focused()].selected,
+                Subject::Subagent(key.clone())
+            );
             assert!(view.cockpit.notifications().decision(&id).unwrap().read);
             assert!(!view.bell.open);
         });

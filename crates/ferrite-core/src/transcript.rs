@@ -381,6 +381,7 @@ pub struct Transcript {
     turn_outcome: Option<TurnOutcome>,
     usage: Option<Usage>,
     context_details: Option<crate::ContextDetails>,
+    mcp_servers: Vec<crate::McpServer>,
     rate_limits: RateLimits,
     /// When the running turn began — the operator's prompt went out — for
     /// the working line's clock. None between turns.
@@ -481,6 +482,7 @@ impl Transcript {
             turn_outcome: None,
             usage: None,
             context_details: None,
+            mcp_servers: Vec::new(),
             rate_limits: RateLimits::default(),
             turn_started: None,
             turn_output_tokens: 0,
@@ -603,6 +605,10 @@ impl Transcript {
 
     pub fn context_details(&self) -> Option<&crate::ContextDetails> {
         self.context_details.as_ref()
+    }
+
+    pub fn mcp_servers(&self) -> &[crate::McpServer] {
+        &self.mcp_servers
     }
 
     pub fn rate_limits(&self) -> RateLimits {
@@ -1115,7 +1121,10 @@ impl Transcript {
             Input::Event(SessionEvent::Commands { .. }) => Update::default(),
             Input::Event(SessionEvent::PermissionMode { .. }) => Update::default(),
             Input::Event(SessionEvent::Models { .. }) => Update::default(),
-            Input::Event(SessionEvent::McpServers { .. }) => Update::default(),
+            Input::Event(SessionEvent::McpServers { servers }) => {
+                self.mcp_servers = servers;
+                Update::default()
+            }
             Input::Event(SessionEvent::Closed { reason }) => {
                 self.progress.disconnected();
                 self.latest_reasoning_part = None;

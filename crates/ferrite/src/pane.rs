@@ -506,6 +506,7 @@ pub struct PaneWiring {
     pub model_picker: Option<AnyElement>,
     /// Context and account usage lines beside the model control.
     pub usage_meter: Option<AnyElement>,
+    pub session_controls: Option<AnyElement>,
     /// The pending Decision's keycaps, wired to the exact decide verbs the
     /// keys run (#26) — laid into the L1 card or the L2 body. None while
     /// nothing pends, and at the wall, which draws no keycaps.
@@ -669,6 +670,7 @@ pub fn render_pane(
         menu,
         model_picker,
         usage_meter,
+        session_controls,
         mut decide,
         mut tool_controls,
         title,
@@ -759,6 +761,7 @@ pub fn render_pane(
                     mode: permission_mode,
                     model_picker: None,
                     usage_meter: None,
+                    session_controls: None,
                     setup_controls: None,
                     draft_error: None,
                     suggestion,
@@ -874,6 +877,7 @@ pub fn render_pane(
                         mode: permission_mode,
                         model_picker,
                         usage_meter,
+                        session_controls,
                         setup_controls: None,
                         draft_error: None,
                         suggestion,
@@ -1052,6 +1056,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
                     mode: None,
                     model_picker: Some(picker),
                     usage_meter,
+                    session_controls: None,
                     setup_controls: Some(band),
                     draft_error: error.cloned(),
                     // A draft has no conversation yet, so nothing to predict.
@@ -2583,6 +2588,7 @@ struct ComposerStack<'a> {
     model_picker: Option<AnyElement>,
     /// Live usage sits immediately beside the model picker.
     usage_meter: Option<AnyElement>,
+    session_controls: Option<AnyElement>,
     setup_controls: Option<AnyElement>,
     draft_error: Option<SharedString>,
     /// The follow-up predicted for this Thread's last response, if one has
@@ -2621,6 +2627,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         mode,
         model_picker,
         usage_meter,
+        session_controls,
         setup_controls,
         draft_error,
         suggestion,
@@ -2794,11 +2801,14 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
     // `margin-inline-start: auto` on the picker. It renders in every Pane,
     // before and after the first-prompt lock — there is no plain-label
     // fallback and no second model surface anywhere.
-    if model_picker.is_some() || usage_meter.is_some() {
+    if model_picker.is_some() || usage_meter.is_some() || session_controls.is_some() {
         controls = controls.child(div().flex_1().min_w_0());
     }
     if let Some(meter) = usage_meter {
         controls = controls.child(div().flex_shrink_0().child(meter));
+    }
+    if let Some(session_controls) = session_controls {
+        controls = controls.child(div().flex_shrink_0().child(session_controls));
     }
     if let Some(picker) = model_picker {
         controls = controls.child(div().flex_shrink_0().child(picker));
@@ -3327,6 +3337,7 @@ fn reset_label(resets_at: Option<u64>, span: Duration, now: SystemTime) -> Share
 pub fn context_usage(
     usage: ferrite_core::transcript::Usage,
     limits: ferrite_core::transcript::RateLimits,
+    details: Option<&ferrite_core::ContextDetails>,
 ) -> Div {
     fn count_label(count: u64) -> String {
         let digits = count.to_string();
@@ -3454,7 +3465,7 @@ pub fn context_usage(
         .child("/")
         .child(count_value("maximum", maximum))
         .child("tokens");
-    div()
+    let mut card = div()
         .flex()
         .flex_col()
         .w(px(theme::USAGE_CARD_W))
@@ -3487,7 +3498,39 @@ pub fn context_usage(
                 limits.weekly.and_then(|limit| limit.resets_at),
                 Duration::from_secs(7 * 86_400),
             )),
-        ))
+        ));
+    if let Some(details) = details {
+        if let Some(usable) = details.usable_window {
+            card = card.child(
+                div()
+                    .id(SharedString::from(format!("context-usable-{usable}")))
+                    .debug_selector(move || format!("context-usable-{usable}"))
+                    .child(format!("Usable {usable}")),
+            );
+        }
+        if let Some(threshold) = details.auto_compact_threshold {
+            card = card.child(
+                div()
+                    .id(SharedString::from(format!(
+                        "context-compaction-{threshold}"
+                    )))
+                    .debug_selector(move || format!("context-compaction-{threshold}"))
+                    .child(format!("Compacts at {threshold}")),
+            );
+        }
+        for (index, category) in details.categories.iter().enumerate() {
+            let tokens = category.tokens;
+            card = card.child(
+                div()
+                    .id(SharedString::from(format!(
+                        "context-category-{index}-{tokens}"
+                    )))
+                    .debug_selector(move || format!("context-category-{index}-{tokens}"))
+                    .child(format!("{} {tokens}", category.name)),
+            );
+        }
+    }
+    card
 }
 
 /// A usage bar's ink: the Pane's own status inks, so a budget reads like
@@ -5474,11 +5517,18 @@ mod tests {
     fn contract_structured_tool_result_is_visible_in_shared_disclosure(cx: &mut TestAppContext) {
         let mut transcript = Transcript::default();
         transcript.apply(Input::Event(SessionEvent::ToolStarted {
-            id: "structured".into(), name: "Tool".into(), input: serde_json::json!({}),
+            id: "structured".into(),
+            name: "Tool".into(),
+            input: serde_json::json!({}),
         }));
         transcript.apply(Input::Event(SessionEvent::ToolCompleted {
-            id: "structured".into(), output: String::new(), is_error: false,
-            result: ToolResult::Structured { value: serde_json::json!({"detail":"visible-provider-detail"}), duration_ms: None },
+            id: "structured".into(),
+            output: String::new(),
+            is_error: false,
+            result: ToolResult::Structured {
+                value: serde_json::json!({"detail":"visible-provider-detail"}),
+                duration_ms: None,
+            },
         }));
         let (view, cx) = cx.add_window_view(|_, cx| {
             gpui::component::init(cx);
@@ -5489,22 +5539,44 @@ mod tests {
         cx.simulate_resize(size(px(900.), px(600.)));
         cx.run_until_parked();
         let runs = view.read_with(cx, |view, _| view.selection.registered(ThreadId::new(1)));
-        assert!(runs.iter().any(|(_, _, _, text)| text.contains("visible-provider-detail")), "preserved provider data must be inspectable even without model-facing output");
+        assert!(
+            runs.iter()
+                .any(|(_, _, _, text)| text.contains("visible-provider-detail")),
+            "preserved provider data must be inspectable even without model-facing output"
+        );
     }
 
     #[test]
     fn contract_multi_file_tool_verdict_counts_all_native_hunks() {
         let mut transcript = Transcript::default();
         transcript.apply(Input::Event(SessionEvent::ToolStarted {
-            id: "edit".into(), name: "Edit".into(), input: serde_json::json!({}),
+            id: "edit".into(),
+            name: "Edit".into(),
+            input: serde_json::json!({}),
         }));
         transcript.apply(Input::Event(SessionEvent::ToolCompleted {
-            id: "edit".into(), output: String::new(), is_error: false,
-            result: ToolResult::FileEdits { edits: ["a.txt", "b.txt"].into_iter().map(|path| ferrite_core::FileEdit {
-                path: path.into(), hunks: vec![Hunk { old_start: 1, old_lines: 1, new_start: 1, new_lines: 1, lines: vec!["-old".into(), "+new".into()] }],
-            }).collect() },
+            id: "edit".into(),
+            output: String::new(),
+            is_error: false,
+            result: ToolResult::FileEdits {
+                edits: ["a.txt", "b.txt"]
+                    .into_iter()
+                    .map(|path| ferrite_core::FileEdit {
+                        path: path.into(),
+                        hunks: vec![Hunk {
+                            old_start: 1,
+                            old_lines: 1,
+                            new_start: 1,
+                            new_lines: 1,
+                            lines: vec!["-old".into(), "+new".into()],
+                        }],
+                    })
+                    .collect(),
+            },
         }));
-        let Body::Tool(tool) = &transcript.blocks()[0].body else { panic!("expected tool") };
+        let Body::Tool(tool) = &transcript.blocks()[0].body else {
+            panic!("expected tool")
+        };
         assert_eq!(tool_verdicts(tool), [ToolVerdict::Diff(2, 2)]);
     }
 
