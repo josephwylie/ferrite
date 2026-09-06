@@ -12,6 +12,9 @@ pub enum SessionEvent {
     /// The provider session is live. `session_id` is the provider-native id
     /// later used for resume.
     Init { session_id: String, model: String },
+    /// The provider rerouted the live Session to a different effective model.
+    /// The Session identity and the Thread's chosen model do not change.
+    ModelChanged { model: String },
     /// The provider replaced its native conversation while this Session stays live.
     ConversationReset { session_id: String },
     /// Assistant text streamed in.

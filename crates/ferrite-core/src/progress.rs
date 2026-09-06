@@ -75,6 +75,11 @@ pub enum ProgressEvent {
         status: TaskStatus,
         detail: String,
     },
+    /// One authoritative provider snapshot. It replaces the visible
+    /// background set without inventing lifecycle events for its entries.
+    BackgroundSnapshot {
+        tasks: Vec<BackgroundTask>,
+    },
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -213,6 +218,18 @@ impl Progress {
                         detail: one_line(detail, MAX_TEXT),
                     });
                 }
+            }
+            ProgressEvent::BackgroundSnapshot { tasks } => {
+                self.tasks = tasks
+                    .iter()
+                    .take(MAX_ENTRIES)
+                    .map(|task| BackgroundTask {
+                        id: task.id.clone(),
+                        label: one_line(&task.label, MAX_TEXT),
+                        status: task.status,
+                        detail: one_line(&task.detail, MAX_TEXT),
+                    })
+                    .collect();
             }
         }
     }
@@ -385,6 +402,10 @@ impl ProgressEvent {
             Self::Background {
                 id, label, detail, ..
             } => id.len() + label.len() + detail.len(),
+            Self::BackgroundSnapshot { tasks } => tasks
+                .iter()
+                .map(|task| task.id.len() + task.label.len() + task.detail.len() + 16)
+                .sum(),
         }
         .saturating_add(64)
     }

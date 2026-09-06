@@ -249,9 +249,14 @@ impl Router {
         {
             return;
         }
-        if method == "warning" && scope.is_none() {
+        if matches!(method, "warning" | "configWarning" | "deprecationNotice") && scope.is_none() {
             if self.root.is_some() {
-                if let Some(text) = frame["params"]["message"].as_str() {
+                let text = frame["params"]["message"].as_str().or_else(|| {
+                    frame["params"]["details"]
+                        .as_str()
+                        .or(frame["params"]["summary"].as_str())
+                });
+                if let Some(text) = text {
                     update.activity(ActivityEvent::MainContent {
                         id: None,
                         event: ExecutionEvent::Notice { text: text.into() },
@@ -305,8 +310,11 @@ impl Router {
         }
         let scope = scope.expect("known scope");
         let params = &frame["params"];
-        if method == "warning" {
-            if let Some(text) = params["message"].as_str() {
+        if matches!(method, "warning" | "configWarning" | "deprecationNotice") {
+            let text = params["message"]
+                .as_str()
+                .or_else(|| params["details"].as_str().or(params["summary"].as_str()));
+            if let Some(text) = text {
                 let event = ExecutionEvent::Notice { text: text.into() };
                 if self.root.as_deref() == Some(scope.as_str()) {
                     update.activity(ActivityEvent::MainContent { id: None, event });

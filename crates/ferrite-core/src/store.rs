@@ -229,6 +229,9 @@ enum Record {
         session_id: String,
         model: String,
     },
+    ModelChanged {
+        model: String,
+    },
     ConversationReset {
         session_id: String,
     },
@@ -485,6 +488,16 @@ enum PersistedProgress {
         status: StoredTaskStatus,
         detail: String,
     },
+    BackgroundSnapshot {
+        tasks: Vec<StoredBackgroundTask>,
+    },
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct StoredBackgroundTask {
+    id: String,
+    label: String,
+    status: StoredTaskStatus,
+    detail: String,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct StoredStep {
@@ -649,6 +662,17 @@ impl PersistedProgress {
                 status: StoredTaskStatus::from_live(*status),
                 detail: detail.clone(),
             },
+            E::BackgroundSnapshot { tasks } => Self::BackgroundSnapshot {
+                tasks: tasks
+                    .iter()
+                    .map(|task| StoredBackgroundTask {
+                        id: task.id.clone(),
+                        label: task.label.clone(),
+                        status: StoredTaskStatus::from_live(task.status),
+                        detail: task.detail.clone(),
+                    })
+                    .collect(),
+            },
         }
     }
     fn live(&self) -> crate::progress::ProgressEvent {
@@ -699,6 +723,17 @@ impl PersistedProgress {
                 status: status.live(),
                 detail: detail.clone(),
             },
+            Self::BackgroundSnapshot { tasks } => E::BackgroundSnapshot {
+                tasks: tasks
+                    .iter()
+                    .map(|task| crate::progress::BackgroundTask {
+                        id: task.id.clone(),
+                        label: task.label.clone(),
+                        status: task.status.live(),
+                        detail: task.detail.clone(),
+                    })
+                    .collect(),
+            },
         }
     }
 }
@@ -735,6 +770,9 @@ impl Record {
             },
             SessionEvent::Init { session_id, model } => Record::Init {
                 session_id: session_id.clone(),
+                model: model.clone(),
+            },
+            SessionEvent::ModelChanged { model } => Record::ModelChanged {
                 model: model.clone(),
             },
             SessionEvent::ConversationReset { session_id } => Record::ConversationReset {
@@ -830,6 +868,9 @@ impl Record {
             }
             Record::Init { session_id, model } => Input::Event(SessionEvent::Init {
                 session_id: session_id.clone(),
+                model: model.clone(),
+            }),
+            Record::ModelChanged { model } => Input::Event(SessionEvent::ModelChanged {
                 model: model.clone(),
             }),
             Record::ConversationReset { session_id } => {

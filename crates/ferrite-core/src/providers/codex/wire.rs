@@ -77,6 +77,22 @@ pub(super) fn parse_line(line: &str) -> Option<SessionEvent> {
         }
         "thread/tokenUsage/updated" => parse_token_usage(params),
         "account/rateLimits/updated" => parse_rate_limits(params),
+        "model/rerouted" => {
+            params
+                .get("toModel")
+                .and_then(Value::as_str)
+                .map(|model| SessionEvent::ModelChanged {
+                    model: model.into(),
+                })
+        }
+        "thread/settings/updated" => {
+            params
+                .get("model")
+                .and_then(Value::as_str)
+                .map(|model| SessionEvent::ModelChanged {
+                    model: model.into(),
+                })
+        }
         "turn/completed" => parse_turn_completed(params),
         _ => None,
     }
@@ -186,6 +202,11 @@ pub(super) fn parse_events(line: &str) -> Vec<SessionEvent> {
                     snapshot: true,
                 })
             }));
+        }
+    }
+    if method == "thread/settings/updated" {
+        if let Some(mode) = params["approvalPolicy"].as_str() {
+            events.push(SessionEvent::PermissionMode { mode: mode.into() });
         }
     }
     let phase = |phase, detail| SessionEvent::Progress {
@@ -362,32 +383,32 @@ pub(super) fn parse_item(params: &Value, completed: bool) -> Option<SessionEvent
             .unwrap_or_default(),
     };
     let result = if kind == "commandExecution" {
-            // Codex supplies one combined stream, so preserve it as the
-            // primary output instead of pretending it supplied stderr.
-            ToolResult::Command {
-                stdout: output.clone(),
-                stderr: String::new(),
-                exit_code: item.get("exitCode").and_then(Value::as_i64),
-                duration_ms: item.get("durationMs").and_then(Value::as_u64),
-            }
-        } else if kind == "fileChange" {
-            item.get("changes")
-                .and_then(Value::as_array)
-                .map(|changes| ToolResult::FileEdits {
-                    edits: changes
-                        .iter()
-                        .filter_map(|change| {
-                            Some(FileEdit {
-                                path: change.get("path")?.as_str()?.to_string(),
-                                hunks: parse_file_change(change),
-                            })
+        // Codex supplies one combined stream, so preserve it as the
+        // primary output instead of pretending it supplied stderr.
+        ToolResult::Command {
+            stdout: output.clone(),
+            stderr: String::new(),
+            exit_code: item.get("exitCode").and_then(Value::as_i64),
+            duration_ms: item.get("durationMs").and_then(Value::as_u64),
+        }
+    } else if kind == "fileChange" {
+        item.get("changes")
+            .and_then(Value::as_array)
+            .map(|changes| ToolResult::FileEdits {
+                edits: changes
+                    .iter()
+                    .filter_map(|change| {
+                        Some(FileEdit {
+                            path: change.get("path")?.as_str()?.to_string(),
+                            hunks: parse_file_change(change),
                         })
-                        .collect(),
-                })
-                .unwrap_or(ToolResult::Opaque)
-        } else {
-            ToolResult::Opaque
-        };
+                    })
+                    .collect(),
+            })
+            .unwrap_or(ToolResult::Opaque)
+    } else {
+        ToolResult::Opaque
+    };
     Some(SessionEvent::ToolCompleted {
         id,
         output,

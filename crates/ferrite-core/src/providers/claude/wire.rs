@@ -285,6 +285,36 @@ pub(super) fn parse_events_value(value: &Value) -> Vec<SessionEvent> {
                     },
                 })
             }
+            Some("background_tasks_changed") => {
+                value["tasks"]
+                    .as_array()
+                    .map(|tasks| SessionEvent::Progress {
+                        event: ProgressEvent::BackgroundSnapshot {
+                            tasks: tasks
+                                .iter()
+                                .filter(|task| task["ambient"] != true)
+                                .filter_map(|task| {
+                                    Some(crate::progress::BackgroundTask {
+                                        id: task.get("task_id")?.as_str()?.into(),
+                                        label: task["description"].as_str().unwrap_or("").into(),
+                                        status: match task["status"].as_str() {
+                                            Some("running" | "in_progress") => TaskStatus::Working,
+                                            Some("completed") => TaskStatus::Completed,
+                                            Some("failed") => TaskStatus::Failed,
+                                            Some("stopped") => TaskStatus::Stopped,
+                                            _ => TaskStatus::Unknown,
+                                        },
+                                        detail: task["summary"]
+                                            .as_str()
+                                            .or(task["last_tool_name"].as_str())
+                                            .unwrap_or("")
+                                            .into(),
+                                    })
+                                })
+                                .collect(),
+                        },
+                    })
+            }
             _ => None,
         },
         _ => None,

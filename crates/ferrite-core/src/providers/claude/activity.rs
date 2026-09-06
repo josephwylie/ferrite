@@ -49,6 +49,7 @@ pub(super) struct Decoder {
     requests: HashMap<String, (Option<Subject>, String)>,
     seen_child_frames: HashSet<String>,
     frame_order: VecDeque<String>,
+    excluded_tasks: HashSet<String>,
     main_stream_message: Option<String>,
     main_stream_blocks: HashMap<(String, u64), MainStreamBlock>,
     main_stream_order: VecDeque<(String, u64)>,
@@ -143,7 +144,26 @@ impl Decoder {
             });
         }
         match string(&value, "type") {
+            Some("system") if string(&value, "subtype") == Some("init") => {
+                if let Some(mode) = string(&value, "permissionMode") {
+                    events.push(SessionEvent::PermissionMode { mode: mode.into() });
+                }
+                if let Some(event) = wire::parse_value(&value) {
+                    events.push(event);
+                }
+                if turn_head {
+                    events.push(SessionEvent::Progress {
+                        event: crate::progress::ProgressEvent::Phase {
+                            phase: crate::progress::Phase::Working,
+                            detail: String::new(),
+                        },
+                    });
+                }
+            }
             Some("system") if string(&value, "subtype") != Some("init") => {
+                if string(&value, "subtype") == Some("informational") {
+                    self.notice(&value, string(&value, "content"), &mut events);
+                }
                 if string(&value, "subtype") == Some("model_refusal_fallback") {
                     self.retract_uuids(
                         value["retracted_message_uuids"]
@@ -173,6 +193,17 @@ impl Decoder {
                         session_id: next.into(),
                     });
                 }
+            }
+            Some("auth_status") => {
+                let output = value["output"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let text = value["error"].as_str().unwrap_or(&output);
+                self.notice(&value, (!text.is_empty()).then_some(text), &mut events);
             }
             Some("control_request") => self.decision(&value, &mut events),
             Some("control_cancel_request") => {
@@ -1035,6 +1066,28 @@ impl Decoder {
         }
     }
 
+    fn notice(&mut self, value: &Value, text: Option<&str>, events: &mut Vec<SessionEvent>) {
+        let Some(text) = text.filter(|text| !text.is_empty()) else {
+            return;
+        };
+        match self.scope(value, events) {
+            Some(Subject::Main) => push(
+                events,
+                ActivityEvent::MainContent {
+                    id: delivery_id(value, "notice"),
+                    event: ExecutionEvent::Notice { text: text.into() },
+                },
+            ),
+            Some(Subject::Subagent(key)) => self.content(
+                &key,
+                delivery_id(value, "notice"),
+                ExecutionEvent::Notice { text: text.into() },
+                events,
+            ),
+            None => {}
+        }
+    }
+
     fn task(&mut self, value: &Value, events: &mut Vec<SessionEvent>) {
         let subtype = string(value, "subtype").unwrap_or("");
         if !matches!(
@@ -1049,6 +1102,13 @@ impl Decoder {
         let Some(task_id) = string(value, "task_id") else {
             return;
         };
+        if value["ambient"] == true || value["skip_transcript"] == true {
+            self.excluded_tasks.insert(task_id.into());
+            return;
+        }
+        if self.excluded_tasks.contains(task_id) {
+            return;
+        }
         // Bash jobs have task IDs too. Classification or an existing agent
         // alias is necessary; owned_by_subagent means a child tool, not a child.
         if string(value, "task_type").is_some_and(|kind| kind != "local_agent") {
