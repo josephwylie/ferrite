@@ -415,6 +415,19 @@ pub const STATUS_HALO_INSET: f32 = 4.0;
 /// 1.4s — one full breath of a working Thread's dot. Slow enough to read
 /// as breathing rather than blinking.
 pub const STATUS_PULSE_MS: u64 = 1_400;
+
+/// The Ferrite progress mark follows the timing and geometry of the supplied
+/// animated logo. These are artwork tokens rather than general motion tokens:
+/// the SVG's 1254-unit viewBox is the coordinate system behind both offsets.
+pub const FERRITE_SNAP_MS: u64 = 3_000;
+pub const FERRITE_SHARD_X: f32 = 38.0 / 1254.0;
+pub const FERRITE_SHARD_Y: f32 = 46.0 / 1254.0;
+pub const FERRITE_PULL_START: f32 = 0.12;
+pub const FERRITE_PULL_END: f32 = 0.34;
+pub const FERRITE_HOLD_END: f32 = 0.54;
+pub const FERRITE_SNAP_END: f32 = 0.615;
+pub const FERRITE_PULL_EASING: [f32; 4] = [0.4, 0.0, 0.2, 1.0];
+pub const FERRITE_SNAP_EASING: [f32; 4] = [0.16, 1.0, 0.3, 1.0];
 /// The dimmest the halo goes: never all the way out, so the dot keeps a
 /// ring at the bottom of the breath instead of flickering off.
 pub const PULSE_MIN: f32 = 0.15;

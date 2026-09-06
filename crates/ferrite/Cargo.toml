@@ -19,6 +19,9 @@ percent-encoding = "2"
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_ProcessStatus", "Win32_System_Threading"] }
 
+[target.'cfg(windows)'.build-dependencies]
+winresource = { version = "0.1", default-features = false }
+
 [dev-dependencies]
 # The smoke render needs a window; gpui's own test harness provides a headless
 # one, so the app's rendering is exercised without a display.
