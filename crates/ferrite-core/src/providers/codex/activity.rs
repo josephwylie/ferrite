@@ -958,6 +958,7 @@ impl Router {
                                         event,
                                         ExecutionEvent::TokenUsage { .. }
                                             | ExecutionEvent::Progress { .. }
+                                            | ExecutionEvent::TurnDiff { .. }
                                             | ExecutionEvent::ContentBoundary
                                     )
                                 {
@@ -1172,7 +1173,8 @@ fn scoped_execution(mut event: ExecutionEvent, turn: Option<&str>) -> ExecutionE
         match &mut event {
             ExecutionEvent::ToolStarted { id, .. }
             | ExecutionEvent::ToolCompleted { id, .. }
-            | ExecutionEvent::ToolOutputDelta { id, .. } => *id = item_key(turn, id),
+            | ExecutionEvent::ToolOutputDelta { id, .. }
+            | ExecutionEvent::FileChanges { id, .. } => *id = item_key(turn, id),
             ExecutionEvent::ReasoningSummaryPart { item_id, .. } => {
                 *item_id = item_key(turn, item_id)
             }
