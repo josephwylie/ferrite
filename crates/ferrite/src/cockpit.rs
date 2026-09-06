@@ -3314,6 +3314,23 @@ impl CockpitView {
         placement: DraftPlacement,
         cx: &mut Context<Self>,
     ) {
+        // A second press with a draft already up must not stack another:
+        // focus the standing draft and re-aim it at the caller's target.
+        // A draft mid-bootstrap is on its way out and does not count.
+        if let Some(index) = self.panes.iter().position(|pane| {
+            pane.identity
+                .draft()
+                .is_some_and(|draft| !self.cockpit.draft_starting(draft))
+        }) {
+            let identity = self.panes[index].identity;
+            if let Some(draft) = self.panes[index].draft_mut() {
+                draft.binding.choose_target(target);
+            }
+            self.cockpit.focus(identity);
+            self.sync_panes(cx);
+            cx.notify();
+            return;
+        }
         // The project starts where the operator is looking: a Group's own
         // Project, or the launch project.
         let project = match placement {
@@ -7046,6 +7063,30 @@ mod tests {
         );
     }
 
+    /// Pressing new-thread with a draft already up re-aims that draft
+    /// rather than stacking a second one.
+    #[gpui::test]
+    fn a_second_new_thread_reuses_the_standing_draft(cx: &mut TestAppContext) {
+        let (core, _) = cockpit("second-draft", 1);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, cx| {
+            view.open_draft(DraftTarget::Main, cx);
+            let drafts = |view: &CockpitView| {
+                view.panes.iter().filter(|p| p.draft().is_some()).count()
+            };
+            assert_eq!(drafts(view), 1);
+            view.open_draft(DraftTarget::Main, cx);
+            assert_eq!(drafts(view), 1);
+            view.open_draft_in_current_view(DraftTarget::New, cx);
+            assert_eq!(drafts(view), 1);
+            assert!(view.panes[view.focused()].draft().is_some());
+            assert_eq!(
+                view.focused_draft_mut().unwrap().binding.target(),
+                &DraftTarget::New
+            );
+        });
+    }
+
     #[gpui::test]
     fn multi_project_groups_keep_bindings_and_filter_only_navigation(cx: &mut TestAppContext) {
         let (mut core, _) = cockpit("multi-project-group", 2);
@@ -10218,12 +10259,16 @@ mod tests {
 
         cx.simulate_keystrokes("cmd-t");
         view.read_with(cx, |view, _| {
-            assert_eq!(view.panes.len(), 2, "cmd-t opened a Thread");
+            assert_eq!(view.panes.len(), 2, "cmd-t opened a draft");
+            assert!(view.panes[view.focused()].draft().is_some());
         });
 
+        // cmd-n reaches the same action; with that draft still up it
+        // re-focuses it rather than stacking a second.
         cx.simulate_keystrokes("cmd-n");
         view.read_with(cx, |view, _| {
-            assert_eq!(view.panes.len(), 3, "and cmd-n still does");
+            assert_eq!(view.panes.len(), 2, "and cmd-n reuses the standing draft");
+            assert!(view.panes[view.focused()].draft().is_some());
         });
     }
 
