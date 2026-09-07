@@ -600,6 +600,7 @@ pub struct PaneFacts<'a> {
     /// line away entirely rather than claiming a clean tree it has not
     /// read.
     pub checkout: Option<&'a BranchStatus>,
+    pub project_branches: &'a [(SharedString, SharedString)],
     /// Whether the Composer line is empty — what decides the idle
     /// placeholder, read where the cockpit has a `cx` to read it with.
     pub composer_empty: bool,
@@ -787,6 +788,7 @@ pub fn render_pane(
         thread,
         branch,
         checkout,
+        project_branches,
         composer_empty,
         history_available,
         focused,
@@ -932,6 +934,7 @@ pub fn render_pane(
         PaneHeadState {
             branch: branch.as_ref(),
             checkout,
+            project_branches,
             status,
             title,
             agents,
@@ -1796,6 +1799,7 @@ fn l2_decision_body(decision: &Decision, decide: Option<AnyElement>) -> Div {
 struct PaneHeadState<'a> {
     branch: Option<&'a SharedString>,
     checkout: Option<&'a BranchStatus>,
+    project_branches: &'a [(SharedString, SharedString)],
     status: Option<Status>,
     title: Option<AnyElement>,
     agents: Option<AnyElement>,
@@ -1808,6 +1812,7 @@ fn pane_head(view: &PaneView, state: PaneHeadState<'_>) -> Div {
     let PaneHeadState {
         branch,
         checkout,
+        project_branches,
         status,
         title,
         agents,
@@ -1865,7 +1870,7 @@ fn pane_head(view: &PaneView, state: PaneHeadState<'_>) -> Div {
     }
     // The checkout keeps its own line now, so the title line no longer
     // has to share its width with a branch name.
-    let checkout_line = checkout_strip(checkout, branch, ci);
+    let checkout_line = checkout_strip(checkout, branch, project_branches, ci);
     div()
         .flex()
         .flex_col()
@@ -1895,6 +1900,7 @@ fn pane_head(view: &PaneView, state: PaneHeadState<'_>) -> Div {
 fn checkout_strip(
     checkout: Option<&BranchStatus>,
     branch: Option<&SharedString>,
+    project_branches: &[(SharedString, SharedString)],
     ci: Option<AnyElement>,
 ) -> Option<Div> {
     // A branch label with no status behind it still deserves the line: the
@@ -1904,6 +1910,45 @@ fn checkout_strip(
         (None, Some(name)) => name.clone(),
         (None, None) => return None,
     };
+    let branches = if project_branches.is_empty() {
+        vec![(None, name)]
+    } else {
+        project_branches
+            .iter()
+            .map(|(directory, branch)| (Some(directory.clone()), branch.clone()))
+            .collect()
+    };
+    let mut branch_list = div()
+        .flex()
+        .min_w_0()
+        .flex_shrink(1.)
+        .items_center()
+        .gap(px(theme::CHECKOUT_GAP));
+    for (index, (directory, branch)) in branches.into_iter().enumerate() {
+        branch_list = branch_list.child(
+            div()
+                .debug_selector(move || format!("project-branch-{index}"))
+                .flex()
+                .min_w_0()
+                .items_center()
+                .gap(px(theme::ROW_ICON_GAP))
+                .when_some(directory, |item, directory| {
+                    item.child(
+                        div()
+                            .flex_shrink_0()
+                            .text_color(rgb(TEXT_MUTED))
+                            .child(directory),
+                    )
+                })
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(rgb(TEXT_2))
+                        .child(branch),
+                ),
+        );
+    }
     let mut strip = div()
         .flex()
         .flex_shrink_0()
@@ -1923,13 +1968,7 @@ fn checkout_strip(
                 .items_center()
                 .gap(px(theme::ROW_ICON_GAP))
                 .child(icon(icons::BRANCH, theme::ROW_ICON, TEXT_MUTED))
-                .child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .text_color(rgb(TEXT_2))
-                        .child(name),
-                ),
+                .child(branch_list),
         );
     let Some(status) = checkout else {
         return Some(strip);

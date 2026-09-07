@@ -39,6 +39,8 @@ pub struct ThreadFacts {
     /// `gh` can answer. Collected on the same slow cadence as the branch
     /// itself, and `None` until it has been.
     pub status: Option<BranchStatus>,
+    /// Directory label and branch for every root attached to the Project.
+    pub project_branches: Vec<(SharedString, SharedString)>,
     /// The Project the Thread recorded (#29) — what the nav filter matches
     /// on, so a Thread whose Project is unknown appears under `All
     /// Projects` alone rather than being quietly filed under someone
@@ -168,6 +170,15 @@ impl Facts {
                 .and_then(|status| status.branch.clone())
                 .map(SharedString::from);
             facts.status = status;
+        }
+    }
+
+    pub fn set_project_branches(
+        &mut self,
+        branches: Vec<(ThreadId, Vec<(SharedString, SharedString)>)>,
+    ) {
+        for (thread, project_branches) in branches {
+            self.threads.entry(thread).or_default().project_branches = project_branches;
         }
     }
 
