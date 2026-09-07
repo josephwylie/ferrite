@@ -8379,7 +8379,7 @@ impl CockpitView {
         };
         let title = self.editable_thread_title(thread, row.name.clone(), cx);
         let head = if compact {
-            nav::project_thread_row_with_title(row, title)
+            nav::project_thread_row_with_title(row, title, group.is_some())
         } else {
             nav::thread_row_with_title(row, title)
         };
@@ -8401,6 +8401,11 @@ impl CockpitView {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                    if let Some(group) = group {
+                        view.enter_group(group, cx);
+                        view.focus_thread(thread, cx);
+                        return;
+                    }
                     if open {
                         view.focus_thread(thread, cx);
                         return;
@@ -9568,6 +9573,49 @@ mod tests {
             );
             assert!(!view.nav_order_open, "choosing an order closes its menu");
             assert_eq!(view.nav_state().project_sections.len(), 1);
+        });
+    }
+
+    #[gpui::test]
+    fn project_order_group_member_opens_the_whole_group(cx: &mut TestAppContext) {
+        let (mut core, _) = cockpit("project-order-group-open", 2);
+        let threads = core.threads();
+        let group = core
+            .apply_group(GroupChange::Create {
+                first: threads[0],
+                second: threads[1],
+            })
+            .unwrap()
+            .group
+            .unwrap();
+        core.park(threads[0]).unwrap();
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, cx| {
+            view.change_settings(
+                |settings| settings.thread_list_order = ThreadListOrder::ByProject,
+                cx,
+            );
+        });
+        tick(cx);
+
+        let target: &'static str = format!("nav-thread-{}", threads[1].get()).leak();
+        let row = cx
+            .debug_bounds(target)
+            .expect("the grouped Thread appears in the Project section");
+        let membership: &'static str =
+            format!("nav-group-membership-{}", threads[1].get()).leak();
+        assert!(
+            cx.debug_bounds(membership).is_some(),
+            "Project order marks Threads that retain Group membership"
+        );
+        cx.simulate_click(row.center(), gpui::Modifiers::none());
+        cx.run_until_parked();
+
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.cockpit.roster().view(), View::Group(group));
+            assert_eq!(view.visible_indices().len(), 2, "every Group Pane is visible");
+            assert_eq!(view.panes.len(), 2, "every Group Pane has been restored");
+            assert_eq!(view.focused_thread(), Some(threads[1]));
         });
     }
 

@@ -451,9 +451,8 @@ pub fn order_option(index: usize, label: &'static str, selected: bool) -> Button
         .group(FILTER_OPTION_GROUP)
         .w_full()
         .min_h(px(MENU_ROW_H))
-        .px(px(ROW_PAD_X))
-        .justify_between()
-        .gap(px(ROW_PAD_X))
+        .pl(px(MENU_ROW_PAD_L))
+        .pr(px(ROW_PAD_X))
         .rounded(px(R_CONTROL))
         .when(selected, |on| {
             on.bg(rgb(FILL))
@@ -461,8 +460,26 @@ pub fn order_option(index: usize, label: &'static str, selected: bool) -> Button
                 .font_weight(FontWeight::MEDIUM)
         })
         .when(!selected, |off| off.text_color(rgb(TEXT_2)))
-        .child(div().min_w_0().truncate().child(label))
-        .children(selected.then(|| icon(icons::CHECK, ICON_CHEVRON_LG, TEXT)))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .w_full()
+                .min_w_0()
+                .gap(px(ROW_PAD_X))
+                .text_size(px(FS_MD))
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .group_hover(FILTER_OPTION_GROUP, |style| {
+                            style.text_color(rgb(TEXT_STRONG))
+                        })
+                        .child(label),
+                )
+                .children(selected.then(|| icon(icons::CHECK, ICON_CHEVRON_LG, TEXT))),
+        )
 }
 
 /// A quiet Project label separates grouped runs without turning each one
@@ -882,7 +899,11 @@ pub fn thread_row_with_title(row: &ThreadRow, title: impl IntoElement) -> Statef
 /// the useful title, state, provider, subagent count and recency while
 /// dropping only the now-redundant Project label. This is the screenshot's
 /// compact section rhythm, expressed in Ferrite's existing row grammar.
-pub fn project_thread_row_with_title(row: &ThreadRow, title: impl IntoElement) -> Stateful<Div> {
+pub fn project_thread_row_with_title(
+    row: &ThreadRow,
+    title: impl IntoElement,
+    grouped: bool,
+) -> Stateful<Div> {
     row_frame(
         ("nav-thread", row.thread.get() as usize),
         ICON_BUTTON,
@@ -896,6 +917,7 @@ pub fn project_thread_row_with_title(row: &ThreadRow, title: impl IntoElement) -
     .flex_row()
     .items_center()
     .gap(px(ROW_PAD_X))
+    .children(grouped.then(|| group_membership_indicator(row.thread)))
     .child(status_dot(row.thread, row.status))
     .child(
         div()
@@ -918,6 +940,20 @@ pub fn project_thread_row_with_title(row: &ThreadRow, title: impl IntoElement) -
             })
             .child(provider_mark(row.provider, PROVIDER_MARK)),
     )
+}
+
+/// A short piece of the Group members' rail. Project order flattens Groups
+/// into their Projects, so this keeps durable membership visible without
+/// competing with the Thread's status dot or provider mark.
+fn group_membership_indicator(thread: ThreadId) -> Stateful<Div> {
+    div()
+        .id(("nav-group-membership", thread.get() as usize))
+        .debug_selector(move || format!("nav-group-membership-{}", thread.get()))
+        .flex_shrink_0()
+        .w(px(1.))
+        .h(px(14.))
+        .bg(rgb(GROUP_RAIL))
+        .tooltip(|window, cx| Tooltip::new("In a group").build(window, cx))
 }
 
 /// The compact facts at the right edge of line 2. They stay one group so
