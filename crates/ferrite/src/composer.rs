@@ -279,8 +279,13 @@ impl Composer {
     /// ordinary text when the clipboard contains no files. Some platforms
     /// expose both a file list and its path text; files win so their paths do
     /// not leak into the editable prompt.
+    ///
+    /// A screenshot copied from a capture tool arrives as clipboard image
+    /// bytes with no file behind it. Spilling those bytes to a scratch file
+    /// gives the attachment the path every provider wire needs, so pasting a
+    /// screenshot and pasting its file attach the same way.
     pub(crate) fn paste_item(&mut self, item: ClipboardItem, cx: &mut Context<Self>) {
-        let paths: Vec<PathBuf> = item
+        let mut paths: Vec<PathBuf> = item
             .entries()
             .iter()
             .filter_map(|entry| match entry {
@@ -290,6 +295,12 @@ impl Composer {
             .flatten()
             .cloned()
             .collect();
+        if paths.is_empty() {
+            paths.extend(item.entries().iter().filter_map(|entry| match entry {
+                ClipboardEntry::Image(image) => spill_pasted_image(image),
+                _ => None,
+            }));
+        }
         if !paths.is_empty() {
             self.add_files(&paths, cx);
         } else if let Some(text) = item.text() {
@@ -1304,6 +1315,32 @@ impl Element for LineElement {
     }
 }
 
+/// Write clipboard image bytes to a per-process scratch file and return its
+/// path. The name carries the pasted image's own id, so pasting the same
+/// screenshot twice reuses one file instead of growing the directory.
+fn spill_pasted_image(image: &gpui::Image) -> Option<PathBuf> {
+    let dir = std::env::temp_dir().join(format!("ferrite-pastes-{}", std::process::id()));
+    let path = dir.join(format!(
+        "pasted-{:016x}.{}",
+        image.id,
+        image.format.extension()
+    ));
+    if path.exists() {
+        return Some(path);
+    }
+    if let Err(error) = std::fs::create_dir_all(&dir).and_then(|()| {
+        // A partly written file would attach as a corrupt image, so publish
+        // the name only once every byte is on disk.
+        let scratch = path.with_extension("part");
+        std::fs::write(&scratch, image.bytes())?;
+        std::fs::rename(&scratch, &path)
+    }) {
+        eprintln!("ferrite: the pasted image could not be saved: {error}");
+        return None;
+    }
+    Some(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1491,6 +1528,35 @@ mod tests {
                 ferrite_core::prompt_files::paths(&composer.prompt(), None),
                 files
             );
+        });
+    }
+
+    #[gpui::test]
+    fn paste_attaches_a_clipboard_image_as_a_file(cx: &mut TestAppContext) {
+        let (host, cx) = host(cx);
+        let composer = composer(&host, cx);
+        // A one-pixel PNG: the screenshot path a capture tool leaves on the
+        // clipboard with no file behind it.
+        let bytes = vec![137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3];
+        composer.update(cx, |composer, cx| {
+            composer.paste_item(
+                ClipboardItem::new_image(&gpui::Image {
+                    format: gpui::ImageFormat::Png,
+                    bytes: bytes.clone(),
+                    id: 7,
+                }),
+                cx,
+            );
+        });
+
+        composer.read_with(cx, |composer, _| {
+            assert!(composer.text().is_empty(), "the bytes stay out of prose");
+            let attached = ferrite_core::prompt_files::paths(&composer.prompt(), None);
+            let [path] = attached.as_slice() else {
+                panic!("the pasted image attaches as one file: {attached:?}");
+            };
+            assert_eq!(path.extension().unwrap(), "png");
+            assert_eq!(std::fs::read(path).unwrap(), bytes);
         });
     }
 
