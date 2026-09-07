@@ -272,3 +272,46 @@ fn contract_native_turn_diff_is_disclosed_without_a_fake_tool(cx: &mut TestAppCo
         );
     });
 }
+
+#[gpui::test]
+fn the_composer_mode_chip_opens_a_native_mode_menu_while_idle(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("native-mode-chip", 1);
+    bind_production_keys(cx);
+    *fake.native_controls.borrow_mut() = true;
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1100.), px(800.)));
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    fake.streams.borrow()[0]
+        .send(SessionEvent::PermissionMode {
+            mode: "native-mode".into(),
+        })
+        .unwrap();
+    tick(cx);
+    let selector: &'static str = Box::leak(format!("mode-picker-{}", thread.get()).into_boxed_str());
+    let chip = cx
+        .debug_bounds(selector)
+        .expect("the mode chip rides an idle Pane, not only a streaming one");
+    cx.simulate_click(chip.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| {
+        assert!(view.mode_picker.is_some(), "a click opens the mode menu");
+    });
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert!(view.mode_picker.is_some(), "the menu survives a redraw");
+    });
+    // Anchored BottomLeft, the menu hangs above the chip; its one item sits
+    // just above the chip's top edge.
+    let above = gpui::point(chip.origin.x + px(30.), chip.origin.y - px(18.));
+    cx.simulate_click(above, gpui::Modifiers::none());
+    cx.run_until_parked();
+    assert!(
+        fake.controls
+            .borrow()
+            .contains(&ferrite_core::SessionControl::SetPermissionMode {
+                mode: "native-mode".into()
+            }),
+        "a pick is the native control: {:?}",
+        fake.controls.borrow()
+    );
+}
