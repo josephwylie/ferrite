@@ -112,6 +112,10 @@ pub fn add_thread_button(tooltip: &'static str) -> Button {
         .w(px(ICON_BUTTON))
         .h(px(ICON_BUTTON))
         .p_0()
+        // Windows follows this control with its caption buttons. macOS has
+        // no trailing sibling, so keep the creation door inside the same
+        // shell inset as the Pane board instead of flush with the window.
+        .when(cfg!(target_os = "macos"), |button| button.mr(px(GRID_PAD)))
         .tooltip(tooltip)
         .child(icon(icons::PLUS, ICON_BUTTON_GLYPH, TEXT_MUTED))
 }
