@@ -507,6 +507,19 @@ pub fn filter_option(index: usize, option: &FilterOption) -> Stateful<Div> {
         )
 }
 
+/// The visible door to Project management. The all-projects option has no
+/// matching button because it is a filter state, not a Project.
+pub fn project_edit_button(index: usize) -> gpui::component::button::Button {
+    components::button(("project-edit", index))
+        .tab_stop(true)
+        .debug_selector(move || format!("project-edit-{index}"))
+        .w(px(ICON_BUTTON))
+        .h(px(ICON_BUTTON))
+        .p_0()
+        .tooltip("Edit Project")
+        .child(icon(icons::PENCIL, ROW_ICON, TEXT_MUTED))
+}
+
 /// The filter menu's last row: a verb, not an option — `Add Project…`
 /// with a `+` mark, in the muted ink until hovered. The caller wires the
 /// press to the folder picker.

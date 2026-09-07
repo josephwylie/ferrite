@@ -110,7 +110,10 @@ With the pointer:
   prompts and history recall. Claude and Codex receive supported images as native image
   input; other formats remain local file references for the Provider's tools.
 
-- **Right-click** a Thread, Group or Project in the nav for its menu:
+- **Click the pencil beside a Project** in the Project filter to manage the
+  directories assigned to it or remove it. Its original directory always
+  remains primary; Projects with Threads cannot be removed.
+- **Right-click** a Thread or Group in the nav for its menu:
   rename, open or resume, fullscreen, new Thread in the same Project,
   reveal in Finder, copy path, park, leave or dissolve a Group, delete
   (two presses). Right-click a transcript for the Pane's own menu: copy

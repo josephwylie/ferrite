@@ -21,6 +21,7 @@ mod notifications;
 mod pane;
 mod pointer;
 mod prefs;
+mod project_editor;
 mod prompt_drop;
 mod rich;
 mod scrollbar;
