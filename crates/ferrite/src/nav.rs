@@ -43,7 +43,7 @@ use crate::theme::{
     ICON_BUTTON, ICON_BUTTON_GLYPH, ICON_CHEVRON_LG, IDLE, LINE_TIGHT, MEMBERS_TOP, MEMBER_GAP,
     MEMBER_INDENT, MENU, MENU_PAD, MENU_ROW_H, MENU_TOP, NAV, NAV_HEAD_H, NAV_TREE_PAD,
     NAV_TREE_PAD_B, PROVIDER_CLAUDE, PROVIDER_CODEX, PROVIDER_MARK, PULSE_MIN, RAIL_INSET,
-    RAIL_OFFSET, RAISED, ROW_GAP, ROW_ICON, ROW_ICON_GAP, ROW_PAD_X, ROW_PAD_Y, ROW_TEXT_W,
+    RAIL_OFFSET, ROW_GAP, ROW_ICON, ROW_ICON_GAP, ROW_PAD_X, ROW_PAD_Y, ROW_TEXT_W,
     RUNNING, RUNNING_HALO, R_CONTROL, R_MENU, R_TIGHT, SEP, SHADOW_FAR, SHADOW_FAR_BLUR,
     SHADOW_FAR_SPREAD, SHADOW_FAR_Y, SHADOW_NEAR, SHADOW_NEAR_BLUR, SHADOW_NEAR_Y, SOLOS_TOP,
     STATUS_DOT, STATUS_HALO_INSET, STATUS_PULSE_MS, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG,
@@ -507,9 +507,9 @@ pub fn project_section(label: SharedString, count: usize, first: bool) -> Div {
         )
 }
 
-/// The Project filter trigger keeps a quiet inset ground at rest, distinguishing
-/// the primary scope selector from its transparent neighboring icon actions.
-/// Its folder and edge-aligned chevron frame the current Project name.
+/// The Project filter trigger rests transparently with its neighboring actions.
+/// Its folder and edge-aligned chevron frame the current Project name; hover
+/// and open states supply the ground only while the control is engaged.
 pub fn filter_trigger(state: &FilterState) -> Stateful<Div> {
     let chevron = icon(icons::CHEVRON_DOWN, ICON_CHEVRON_LG, TEXT_MUTED);
     let chevron = if state.open {
@@ -529,7 +529,6 @@ pub fn filter_trigger(state: &FilterState) -> Stateful<Div> {
         .pr(px(R_CONTROL))
         .gap(px(TRIGGER_GAP))
         .rounded(px(R_CONTROL))
-        .bg(rgb(RAISED))
         .text_size(px(FS_LG))
         .font_weight(FontWeight::SEMIBOLD)
         // NOT `relative(LINE_UI)`: 13 x 1.45 = 18.85 leaves the line box at
