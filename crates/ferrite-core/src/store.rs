@@ -61,7 +61,8 @@ mod activity_tests;
 ///   Old logs remain Main-only; live Decision handles are never persisted.
 /// - **10** — native progress, identified summary sections, and live tool output
 ///   in both Main and attributed execution records.
-const SCHEMA_VERSION: u32 = 10;
+/// - **11** — durable locally observed completion time and elapsed duration.
+const SCHEMA_VERSION: u32 = 11;
 
 /// How far `peek_first_prompt` reads before giving up: the first prompt
 /// is normally the second line, and a log whose first prompt sits past
@@ -274,6 +275,10 @@ enum Record {
     TurnEnded {
         outcome: Outcome,
         cost_usd: Option<f64>,
+    },
+    CompletionObservation {
+        elapsed_ms: u64,
+        completed_at: String,
     },
     Closed {
         reason: String,
@@ -786,6 +791,13 @@ impl Record {
                 },
                 cost_usd: *cost_usd,
             }),
+            Record::CompletionObservation {
+                elapsed_ms,
+                completed_at,
+            } => Input::CompletionObservation {
+                elapsed_ms: *elapsed_ms,
+                completed_at: completed_at.clone(),
+            },
             Record::ReasoningSummary {
                 text,
                 summary_index,
@@ -824,7 +836,10 @@ impl Record {
         matches!(self, Record::Activity { observation } if observation.is_boundary())
             || matches!(
                 self,
-                Record::TurnEnded { .. } | Record::Closed { .. } | Record::Handover { .. }
+                Record::TurnEnded { .. }
+                    | Record::CompletionObservation { .. }
+                    | Record::Closed { .. }
+                    | Record::Handover { .. }
             )
     }
 
@@ -1751,6 +1766,34 @@ impl ThreadWriter {
     ) -> io::Result<()> {
         let Some(record) = Record::from_event(event, duration) else {
             return Ok(());
+        };
+        self.push(record)
+    }
+
+    /// Persist the values observed at a live completion. These are Ferrite
+    /// facts, separate from the provider event that ended the turn.
+    pub fn record_completion(
+        &mut self,
+        subject: &crate::activity::Subject,
+        elapsed_ms: u64,
+        completed_at: &str,
+    ) -> io::Result<()> {
+        let record = match subject {
+            crate::activity::Subject::Main => Record::CompletionObservation {
+                elapsed_ms,
+                completed_at: completed_at.into(),
+            },
+            crate::activity::Subject::Subagent(_) => Record::Activity {
+                observation: PersistedActivity::from_live(
+                    &crate::activity::ActivityEvent::CompletionObservation {
+                        subject: subject.clone(),
+                        elapsed_ms,
+                        completed_at: completed_at.into(),
+                    },
+                    None,
+                )
+                .expect("completion observation is durable"),
+            },
         };
         self.push(record)
     }

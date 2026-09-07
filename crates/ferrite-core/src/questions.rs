@@ -149,8 +149,8 @@ fn answer_text(question: &Question, answer: &Answer) -> Option<String> {
         .filter_map(|&pick| question.options.get(pick))
         .map(|choice| choice.label.as_str())
         .collect();
-    if let Some(other) = answer.other.as_deref().map(str::trim) {
-        if !other.is_empty() {
+    if let Some(other) = answer.other.as_deref() {
+        if !other.trim().is_empty() {
             parts.push(other);
         }
     }
@@ -334,7 +334,7 @@ mod tests {
         assert_eq!(
             updated["answers"],
             json!({
-                "Which approach should we take for the retry logic?": "Jittered backoff",
+                "Which approach should we take for the retry logic?": "  Jittered backoff  ",
                 "Which libraries may I add?": "tokio-retry, reqwest-retry"
             })
         );

@@ -53,6 +53,11 @@ pub(super) enum PersistedActivity {
         outcome: Outcome,
         cost_usd: Option<f64>,
     },
+    CompletionObservation {
+        subject: PersistedSubject,
+        elapsed_ms: u64,
+        completed_at: String,
+    },
     Alias {
         from: String,
         to: String,
@@ -454,6 +459,15 @@ impl PersistedActivity {
                 outcome: Outcome::from_live(outcome),
                 cost_usd: *cost_usd,
             },
+            ActivityEvent::CompletionObservation {
+                subject,
+                elapsed_ms,
+                completed_at,
+            } => Self::CompletionObservation {
+                subject: PersistedSubject::from_live(subject),
+                elapsed_ms: *elapsed_ms,
+                completed_at: completed_at.clone(),
+            },
             ActivityEvent::Alias { from, to } => Self::Alias {
                 from: from.as_str().into(),
                 to: to.as_str().into(),
@@ -513,6 +527,15 @@ impl PersistedActivity {
                 outcome: outcome.live(),
                 cost_usd: *cost_usd,
             },
+            Self::CompletionObservation {
+                subject,
+                elapsed_ms,
+                completed_at,
+            } => ActivityEvent::CompletionObservation {
+                subject: subject.live(),
+                elapsed_ms: *elapsed_ms,
+                completed_at: completed_at.clone(),
+            },
             Self::Alias { from, to } => ActivityEvent::Alias {
                 from: AgentKey::from_stored(from.clone()),
                 to: AgentKey::from_stored(to.clone()),
@@ -539,6 +562,7 @@ impl PersistedActivity {
                 event: Execution::TurnEnded { .. },
                 ..
             } | Self::BackgroundTurnEnded { .. }
+                | Self::CompletionObservation { .. }
         )
     }
     pub(super) fn tool_duration(&self) -> Option<(Subject, String, Duration)> {

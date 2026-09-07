@@ -16,6 +16,7 @@ use ferrite_core::activity::Subject;
 use ferrite_core::cockpit::{ThreadView, ToolTiming};
 use ferrite_core::docview::{is_test_run, passed_count, Instruments, Level, Tests};
 use ferrite_core::followup::{self, Followup};
+use ferrite_core::progress::Phase;
 use ferrite_core::roster::{DraftId, PaneIdentity};
 use ferrite_core::store::Provider;
 use ferrite_core::transcript::{
@@ -33,7 +34,6 @@ use gpui::{
     FontWeight, HighlightStyle, PathBuilder, ScrollHandle, SharedString, Stateful, Styled,
     StyledText,
 };
-#[cfg(test)]
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -85,6 +85,7 @@ pub struct PaneView {
     pub selection_scope: gpui::base::TextSelectionScopeId,
     pub transcript_focus: FocusHandle,
     pub follow_tail: Rc<Flag<bool>>,
+    reading_anchor: Rc<RefCell<ReadingAnchorState>>,
     /// A pending Decision takes the keyboard: y and n are answers, not text.
     pub decision_focus: FocusHandle,
     disclosure: ToolDisclosure,
@@ -97,7 +98,35 @@ struct TranscriptViewport {
     selection_scope: gpui::base::TextSelectionScopeId,
     transcript_focus: FocusHandle,
     follow_tail: Rc<Flag<bool>>,
+    reading_anchor: Rc<RefCell<ReadingAnchorState>>,
     disclosure: ToolDisclosure,
+}
+
+/// The rendered unit a reader has stopped beside. Block identities survive
+/// stream updates and eviction; group identities survive disclosure changes.
+#[derive(Clone, PartialEq, Eq)]
+enum ReadingAnchor {
+    Markdown(BlockId),
+    Group(String),
+    Block(BlockId),
+}
+
+struct ReadingAnchorState {
+    target: Option<ReadingAnchor>,
+    offset: gpui::Pixels,
+    width: gpui::Pixels,
+    pending: bool,
+}
+
+impl Default for ReadingAnchorState {
+    fn default() -> Self {
+        Self {
+            target: None,
+            offset: px(0.),
+            width: px(0.),
+            pending: false,
+        }
+    }
 }
 
 /// Independent disclosure identities keep a group's first call separate from
@@ -126,6 +155,7 @@ impl std::fmt::Display for DisclosureId {
 
 struct ToolDisclosure {
     expanded: HashSet<DisclosureId>,
+    collapsed_groups: HashSet<String>,
     target: Option<DisclosureId>,
     focus: FocusHandle,
     #[cfg(test)]
@@ -202,9 +232,11 @@ impl PaneView {
             selection_scope: gpui::base::TextSelectionScopeId::new(),
             transcript_focus: cx.focus_handle(),
             follow_tail: Rc::new(Flag::new(true)),
+            reading_anchor: Default::default(),
             decision_focus: cx.focus_handle(),
             disclosure: ToolDisclosure {
                 expanded: HashSet::new(),
+                collapsed_groups: HashSet::new(),
                 target: None,
                 focus: cx.focus_handle(),
                 #[cfg(test)]
@@ -241,9 +273,11 @@ impl PaneView {
             selection_scope: gpui::base::TextSelectionScopeId::new(),
             transcript_focus: cx.focus_handle(),
             follow_tail: Rc::new(Flag::new(true)),
+            reading_anchor: Default::default(),
             decision_focus: cx.focus_handle(),
             disclosure: ToolDisclosure {
                 expanded: HashSet::new(),
+                collapsed_groups: HashSet::new(),
                 target: None,
                 focus: cx.focus_handle(),
                 #[cfg(test)]
@@ -309,8 +343,10 @@ impl PaneView {
                 selection_scope: gpui::base::TextSelectionScopeId::new(),
                 transcript_focus: cx.focus_handle(),
                 follow_tail: Rc::new(Flag::new(true)),
+                reading_anchor: Default::default(),
                 disclosure: ToolDisclosure {
                     expanded: HashSet::new(),
+                    collapsed_groups: HashSet::new(),
                     target: None,
                     focus: cx.focus_handle(),
                     #[cfg(test)]
@@ -325,6 +361,7 @@ impl PaneView {
         std::mem::swap(&mut next.selection_scope, &mut self.selection_scope);
         std::mem::swap(&mut next.transcript_focus, &mut self.transcript_focus);
         std::mem::swap(&mut next.follow_tail, &mut self.follow_tail);
+        std::mem::swap(&mut next.reading_anchor, &mut self.reading_anchor);
         std::mem::swap(&mut next.disclosure, &mut self.disclosure);
         self.subject_views
             .insert(std::mem::replace(&mut self.selected, subject), next);
@@ -353,14 +390,33 @@ impl PaneView {
     }
 
     pub(crate) fn toggle_tool(&mut self, call: &DisclosureId) {
-        if !self.disclosure.expanded.remove(call) {
+        if let DisclosureId::Group(group) = call {
+            if self.tool_state(call) == DisclosureState::Expanded {
+                self.disclosure.expanded.remove(call);
+                self.disclosure.collapsed_groups.insert(group.clone());
+            } else {
+                self.disclosure.collapsed_groups.remove(group);
+                self.disclosure.expanded.insert(call.clone());
+            }
+        } else if !self.disclosure.expanded.remove(call) {
             self.disclosure.expanded.insert(call.clone());
         }
         self.disclosure.target = Some(call.clone());
     }
 
     pub(crate) fn tool_state(&self, call: impl Into<DisclosureId>) -> DisclosureState {
-        if self.disclosure.expanded.contains(&call.into()) {
+        let call = call.into();
+        let inherited_open = match &call {
+            DisclosureId::Group(group) => {
+                !self.disclosure.collapsed_groups.contains(group)
+                    && self
+                        .disclosure
+                        .expanded
+                        .contains(&DisclosureId::Tool(group.clone()))
+            }
+            _ => false,
+        };
+        if self.disclosure.expanded.contains(&call) || inherited_open {
             DisclosureState::Expanded
         } else {
             DisclosureState::Collapsed
@@ -419,6 +475,9 @@ impl PaneView {
 
     pub(crate) fn prune_tools(&mut self, calls: &HashSet<DisclosureId>) {
         self.disclosure.expanded.retain(|call| calls.contains(call));
+        self.disclosure
+            .collapsed_groups
+            .retain(|group| calls.contains(&DisclosureId::Group(group.clone())));
         if self
             .disclosure
             .target
@@ -825,9 +884,13 @@ pub fn render_pane(
             // Once scrollback fills the pane, pin the same line above Composer.
             if transcript.status() == Status::Streaming && progress_is_pinned(view) {
                 pane = pane.child(
-                    working_line(transcript, false)
-                        .px(px(theme::PANE_PAD_X))
-                        .py(px(theme::KEYS_GAP)),
+                    working_line(
+                        transcript,
+                        false,
+                        received_reasoning_is_visible(view, transcript, level),
+                    )
+                    .px(px(theme::PANE_PAD_X))
+                    .py(px(theme::KEYS_GAP)),
                 );
             }
             // The Decision card is a **sibling of the body**, not a child
@@ -852,7 +915,12 @@ pub fn render_pane(
                 }
             }
             if let Some(decision) = decision.filter(|_| activity_decisions.is_none()) {
-                pane = pane.child(decision_card(decision, decide.take()));
+                pane = pane.child(decision_card(
+                    decision,
+                    decide.take(),
+                    &view.rich,
+                    view.text_namespace(),
+                ));
             }
             if let Some(decisions) = activity_decisions {
                 pane = pane.child(decisions);
@@ -1506,7 +1574,7 @@ fn l2_cell(
                 .child("❯ idle"),
         );
     } else if transcript.status() == Status::Streaming {
-        body = body.child(working_line(transcript, true));
+        body = body.child(working_line(transcript, true, false));
     }
 
     let mut content = cell.child(header).child(body).children(composer);
@@ -2191,6 +2259,103 @@ pub fn rendered_window(blocks: &[Block], level: Level) -> &[Block] {
     &blocks[tail..]
 }
 
+fn rendered_items(window: &[Block]) -> Vec<ReadingAnchor> {
+    let mut items = Vec::new();
+    let mut index = 0;
+    while index < window.len() {
+        let block = &window[index];
+        if block.markdown.is_some() {
+            let first = block.markdown_run.unwrap_or(block.id);
+            while window
+                .get(index)
+                .is_some_and(|block| block.markdown.is_some())
+            {
+                index += 1;
+            }
+            items.push(ReadingAnchor::Markdown(first));
+            continue;
+        }
+        if let Some(activity) = ToolActivity::at_start(&window[index..]) {
+            items.push(ReadingAnchor::Group(activity.leader().call.clone()));
+            index += activity.blocks.len();
+            continue;
+        }
+        if !matches!(&block.body, Body::Thinking(text) if text.trim().is_empty()) {
+            items.push(ReadingAnchor::Block(block.id));
+        }
+        index += 1;
+    }
+    items
+}
+
+/// A supplied reasoning caption belongs to the live row only while its
+/// matching transcript block is outside the current reading viewport.
+fn received_reasoning_is_visible(view: &PaneView, transcript: &Transcript, level: Level) -> bool {
+    let Some(caption) = transcript.progress().caption() else {
+        return false;
+    };
+    let window = rendered_window(transcript.blocks(), level);
+    let items = rendered_items(window);
+    let viewport = view.scroll.bounds();
+    let offset = view.scroll.offset().y;
+    items.iter().enumerate().any(|(index, item)| {
+        let ReadingAnchor::Block(id) = item else { return false; };
+        let matches_caption = window.iter().any(|block| {
+            block.id == *id && matches!(&block.body, Body::Thinking(thought) if reasoning_text(thought).0 == caption)
+        });
+        matches_caption && (view.scroll.max_offset().y <= px(0.) || view.scroll.bounds_for_item(index).is_some_and(|bounds| {
+            bounds.bottom() + offset > viewport.top() && bounds.top() + offset < viewport.bottom()
+        }))
+    })
+}
+
+/// Capture the next rendered unit below the viewport edge and preserve its
+/// inset from that edge after a streaming update or reflow.
+fn reading_anchor(view: &PaneView, items: &[ReadingAnchor]) -> Option<(usize, gpui::Pixels)> {
+    let mut state = view.reading_anchor.borrow_mut();
+    if view.follow_tail.get() || items.is_empty() {
+        state.target = None;
+        state.pending = false;
+        return None;
+    }
+    let item = state
+        .target
+        .as_ref()
+        .and_then(|target| items.iter().position(|item| item == target))
+        .or_else(|| {
+            let viewport = view.scroll.bounds();
+            let offset = view.scroll.offset().y;
+            items
+                .iter()
+                .enumerate()
+                .find(|(index, _)| {
+                    view.scroll.bounds_for_item(*index).is_some_and(|bounds| {
+                        let top = bounds.top() + offset;
+                        top >= viewport.top() && top < viewport.bottom()
+                    })
+                })
+                .map(|(index, _)| index)
+                .or_else(|| Some(view.scroll.top_item().min(items.len() - 1)))
+        });
+    let Some(item) = item else {
+        return None;
+    };
+    let width = view.scroll.bounds().size.width;
+    if state.target.as_ref() != Some(&items[item]) {
+        let viewport = view.scroll.bounds();
+        let offset = view.scroll.offset().y;
+        state.offset = view
+            .scroll
+            .bounds_for_item(item)
+            .map(|bounds| bounds.top() + offset - viewport.top())
+            .unwrap_or(px(0.));
+        state.target = Some(items[item].clone());
+        state.width = width;
+        state.pending = true;
+    }
+    state.pending.then_some((item, state.offset))
+}
+
 /// Tool rows with output or input in exactly the window L1 draws. Disclosure
 /// cycling, focus validation, and controls all consume this one eligibility
 /// rule so an invisible row can never remain keyboard-addressable.
@@ -2240,6 +2405,7 @@ pub fn rendered_disclosures(view: &PaneView, blocks: &[Block], level: Level) -> 
 struct TranscriptScrollbar {
     scroll: ScrollHandle,
     follow_tail: Rc<Flag<bool>>,
+    reading_anchor: Rc<RefCell<ReadingAnchorState>>,
 }
 
 impl gpui::base::ScrollbarHandle for TranscriptScrollbar {
@@ -2252,6 +2418,7 @@ impl gpui::base::ScrollbarHandle for TranscriptScrollbar {
     }
 
     fn set_offset(&self, offset: gpui::Point<gpui::Pixels>) {
+        self.reading_anchor.borrow_mut().target = None;
         self.follow_tail
             .set(self.scroll.max_offset().y + offset.y <= px(2.));
         self.scroll.set_offset(offset);
@@ -2262,6 +2429,7 @@ impl gpui::base::ScrollbarHandle for TranscriptScrollbar {
     }
 
     fn start_drag(&self) {
+        self.reading_anchor.borrow_mut().target = None;
         self.follow_tail.set(false);
     }
 
@@ -2290,6 +2458,7 @@ fn scrollback(view: &PaneView, body: impl IntoElement) -> Div {
             &TranscriptScrollbar {
                 scroll: view.scroll.clone(),
                 follow_tail: view.follow_tail.clone(),
+                reading_anchor: view.reading_anchor.clone(),
             },
         ))
 }
@@ -2339,6 +2508,8 @@ fn body(
     // Pane's border can never disagree.
     let signal = signal_color(status);
     let window = rendered_window(transcript.blocks(), level);
+    let items = rendered_items(window);
+    let restore_anchor = reading_anchor(view, &items);
     let mut index = 0;
     while index < window.len() {
         let block = &window[index];
@@ -2361,11 +2532,20 @@ fn body(
                     .min_w_0()
                     .w_full()
                     .flex_shrink_0()
-                    .child(crate::rich::Markdown::new(
+                    .flex()
+                    .gap(px(theme::EVENT_GAP))
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .w(px(theme::GUTTER_W))
+                            .text_color(rgb(TEXT))
+                            .child("●"),
+                    )
+                    .child(div().flex_1().min_w_0().child(crate::rich::Markdown::new(
                         format!("markdown-{}-{first:?}", view.text_namespace()),
                         source,
                         view.rich.clone(),
-                    )),
+                    ))),
             );
             continue;
         }
@@ -2409,12 +2589,17 @@ fn body(
         index += 1;
     }
     if transcript.status() == Status::Streaming && !progress_is_pinned(view) {
-        body = body.child(working_line(transcript, false));
+        body = body.child(working_line(
+            transcript,
+            false,
+            received_reasoning_is_visible(view, transcript, level),
+        ));
     }
     let wheel_scroll = view.scroll.clone();
     let follow = view.follow_tail.clone();
     let paint_scroll = view.scroll.clone();
     let paint_follow = view.follow_tail.clone();
+    let paint_anchor = view.reading_anchor.clone();
     let progress_was_pinned = progress_is_pinned(view);
     let streaming = transcript.status() == Status::Streaming;
     let body = body
@@ -2438,6 +2623,16 @@ fn body(
             gpui::canvas(
                 |_, _, _| (),
                 move |_, _, window, cx| {
+                    {
+                        let mut anchor = paint_anchor.borrow_mut();
+                        if anchor.target.is_some()
+                            && anchor.width != paint_scroll.bounds().size.width
+                        {
+                            anchor.width = paint_scroll.bounds().size.width;
+                            anchor.pending = true;
+                            window.defer(cx, |window, _| window.refresh());
+                        }
+                    }
                     if streaming && progress_was_pinned != (paint_scroll.max_offset().y > px(0.)) {
                         window.defer(cx, |window, _| window.refresh());
                     }
@@ -2448,6 +2643,16 @@ fn body(
                         let view = window.current_view();
                         window.on_next_frame(move |_, cx| cx.notify(view));
                     }
+                    if let Some((item, inset)) = restore_anchor {
+                        if let Some(bounds) = paint_scroll.bounds_for_item(item) {
+                            let viewport = paint_scroll.bounds();
+                            let offset = (viewport.top() + inset - bounds.top())
+                                .clamp(-paint_scroll.max_offset().y, px(0.));
+                            paint_scroll.set_offset(point(px(0.), offset));
+                            window.defer(cx, |window, _| window.refresh());
+                        }
+                        paint_anchor.borrow_mut().pending = false;
+                    }
                     window.on_mouse_event(move |event: &gpui::ScrollWheelEvent, phase, _, _| {
                         if !phase.capture() || !wheel_scroll.bounds().contains(&event.position) {
                             return;
@@ -2455,6 +2660,9 @@ fn body(
                         let delta = event.delta.pixel_delta(px(theme::FS_MD * theme::LINE_BODY));
                         let max = wheel_scroll.max_offset().y;
                         let offset = (wheel_scroll.offset().y + delta.y).clamp(-max, px(0.));
+                        let mut anchor = paint_anchor.borrow_mut();
+                        anchor.target = None;
+                        anchor.pending = false;
                         follow.set(max + offset <= px(2.));
                     });
                 },
@@ -2473,10 +2681,14 @@ fn progress_is_pinned(view: &PaneView) -> bool {
 /// The provider's live caption, followed by a quieter metadata line.
 /// Elapsed time and output tokens belong to the turn; command details stay
 /// in their tool disclosures.
-fn working_line(transcript: &Transcript, compact: bool) -> Div {
+fn working_line(
+    transcript: &Transcript,
+    compact: bool,
+    received_reasoning_is_visible: bool,
+) -> Div {
     let mut facts: Vec<String> = Vec::new();
     if let Some(elapsed) = transcript.turn_elapsed() {
-        facts.push(duration_label(elapsed).to_string());
+        facts.push(format!("{} elapsed", duration_label(elapsed)));
     }
     let tokens = transcript.turn_output_tokens();
     if tokens > 0 && !compact {
@@ -2486,7 +2698,13 @@ fn working_line(transcript: &Transcript, compact: bool) -> Div {
         facts.push("esc to interrupt".into());
     }
     let progress = transcript.progress();
-    let caption = progress.caption();
+    let caption = progress.caption().map(|caption| {
+        if !compact && received_reasoning_is_visible {
+            progress.phase.map(Phase::label).unwrap_or("Working").into()
+        } else {
+            caption
+        }
+    });
     let mut row = div()
         .flex()
         .flex_col()
@@ -2509,10 +2727,22 @@ fn working_line(transcript: &Transcript, compact: bool) -> Div {
                         .debug_selector(|| "progress-reasoning".into())
                         .min_w_0()
                         .w_full()
-                        .truncate()
+                        .flex()
+                        .items_start()
+                        .gap(px(theme::EVENT_GAP))
                         .text_color(rgb(TEXT_2))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .child(SharedString::from(format!("◐ {caption}"))),
+                        .child(live_text(
+                            div().flex_shrink_0().child("◐"),
+                            "live-progress-indicator".into(),
+                        ))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .flex_1()
+                                .truncate()
+                                .child(SharedString::from(caption)),
+                        ),
                 )
                 .child(
                     div()
@@ -2525,11 +2755,7 @@ fn working_line(transcript: &Transcript, compact: bool) -> Div {
                 ),
         );
     }
-    div()
-        .w_full()
-        .min_w_0()
-        .flex_shrink_0()
-        .child(live_text(row, "live-progress".into()))
+    div().w_full().min_w_0().flex_shrink_0().child(row)
 }
 
 pub(crate) fn live_text(row: Div, id: SharedString) -> AnyElement {
@@ -3034,7 +3260,12 @@ fn queued_line(held: &str) -> impl IntoElement {
 ///
 /// Kept free of focus and key wiring so it can be drawn — and smoke-
 /// rendered — on its own; the keycaps arrive wired from the cockpit (#26).
-fn decision_card(decision: &Decision, decide: Option<AnyElement>) -> Div {
+fn decision_card(
+    decision: &Decision,
+    decide: Option<AnyElement>,
+    cache: &crate::rich::TextCache,
+    namespace: SharedString,
+) -> Div {
     let subject = decision_subject(decision);
     let wants = decision_wants(decision);
     div()
@@ -3056,11 +3287,12 @@ fn decision_card(decision: &Decision, decide: Option<AnyElement>) -> Div {
             div()
                 .flex()
                 .flex_col()
+                .gap(px(theme::KEYS_GAP))
                 .flex_1()
                 .min_w_0()
                 .child(
                     div()
-                        .truncate()
+                        .flex_shrink_0()
                         .text_size(px(theme::FS_MD))
                         .line_height(relative(theme::LINE_UI))
                         .font_weight(FontWeight::SEMIBOLD)
@@ -3069,14 +3301,62 @@ fn decision_card(decision: &Decision, decide: Option<AnyElement>) -> Div {
                 )
                 .child(
                     div()
+                        .flex_shrink_0()
                         .truncate()
                         .text_size(px(theme::FS_SM))
                         .line_height(relative(theme::LINE_UI))
                         .text_color(rgb(TEXT_MUTED))
                         .child(wants),
-                ),
+                )
+                .children(approval_input(
+                    decision,
+                    cache,
+                    format!("approval-input-{namespace}-{}", decision.id).into(),
+                )),
         )
         .children(decide)
+}
+
+/// The exact tool input an approval would send. Commands retain their source;
+/// other provider input remains inspectable as its JSON value.
+pub(crate) fn approval_input(
+    decision: &Decision,
+    cache: &crate::rich::TextCache,
+    id: SharedString,
+) -> Option<AnyElement> {
+    use gpui::component::scroll::ScrollableElement as _;
+
+    if question_of(decision).is_some() {
+        return None;
+    }
+    let source = decision
+        .input
+        .get("command")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .or_else(|| decision.input.as_str().map(str::to_owned))
+        .or_else(|| {
+            (!decision.input.is_null()).then(|| {
+                serde_json::to_string_pretty(&decision.input)
+                    .expect("decision input is serializable")
+            })
+        })?;
+    Some(
+        div()
+            .debug_selector(|| "approval-input".into())
+            .w_full()
+            .min_w_0()
+            .flex_shrink_0()
+            .max_h(px(160.))
+            .overflow_y_scrollbar()
+            .child(crate::rich::Literal {
+                id,
+                text: source.into(),
+                highlights: Vec::new(),
+                cache: cache.clone(),
+            })
+            .into_any_element(),
+    )
 }
 
 /// The Decision's subject — what it wants to do, tool-prefixed the comps'
@@ -3930,12 +4210,22 @@ fn render_block(
             let (text, files) = ferrite_core::prompt_files::split(line.clone());
             let row = paragraph(row, TEXT_STRONG)
                 .debug_selector(|| "transcript-prompt".into())
-                .px(px(theme::CODE_PAD_X))
+                .relative()
+                .px(px(theme::INDENT))
                 .py(px(theme::PROMPT_PAD_Y))
                 .rounded(px(theme::R_CONTROL))
                 .bg(rgb(RAISED));
             row.flex()
                 .flex_col()
+                .child(
+                    div()
+                        .absolute()
+                        .left(px(0.))
+                        .top(px(theme::PROMPT_PAD_Y))
+                        .w(px(theme::GUTTER_W))
+                        .text_color(rgb(SEP))
+                        .child("❯"),
+                )
                 .when(!text.is_empty(), |row| {
                     row.child(selection.line(block.id, text, Vec::new()))
                 })
@@ -4043,11 +4333,10 @@ fn render_block(
         Body::Meta(text) => paragraph(row, TEXT_2)
             .child(selection.line(block.id, text.clone(), Vec::new()))
             .into_any_element(),
-        // `.codeblock` (§E.7): 4px radius on `--raised`, a language label
-        // at `5px 10px 0`, then the `pre` at `4px 10px 8px`. No border, no
-        // language bar, no rule between them.
+        // Code keeps its literal indentation and highlighting without a
+        // separate language header or raised container.
         Body::Code {
-            language,
+            language: _,
             source,
             tokens,
         } => row
@@ -4055,25 +4344,13 @@ fn render_block(
                 div()
                     .flex()
                     .flex_col()
-                    .bg(rgb(RAISED))
-                    .rounded(px(theme::R_CHIP))
                     .overflow_hidden()
                     .text_size(px(theme::FS_MD))
                     .line_height(relative(theme::LINE_BODY))
-                    .children(language.as_ref().map(|language| {
-                        div()
-                            .px(px(theme::CODE_PAD_X))
-                            .pt(px(theme::CODE_LANG_PAD_T))
-                            .text_color(rgb(TEXT_MUTED))
-                            .child(SharedString::from(language.clone()))
-                    }))
                     .child(
                         div()
                             .flex()
                             .flex_col()
-                            .px(px(theme::CODE_PAD_X))
-                            .pt(px(theme::CODE_PRE_PAD_T))
-                            .pb(px(theme::CODE_PRE_PAD_B))
                             .text_color(rgb(TEXT_2))
                             // One child per hard line. Handed the whole
                             // multi-line source, the shaper drops the run of
@@ -4272,7 +4549,10 @@ fn render_tool(
                     .text_size(px(theme::FS_MONO))
                     .line_height(relative(theme::LINE_BODY))
                     .text_color(rgb(TEXT_MUTED))
-                    .child(duration_label(total)),
+                    .child(SharedString::from(format!(
+                        "{} elapsed",
+                        duration_label(total)
+                    ))),
             ));
         }
         line = line.child(div().flex_1().min_w_0()).child(trail);
@@ -4387,7 +4667,21 @@ fn render_tool_activity(
     } else {
         activity.summary()
     };
-    let summary = div().min_w_0().child(label);
+    let counts = label
+        .match_indices(|character: char| character.is_ascii_digit())
+        .map(|(at, digit)| {
+            (
+                at..at + digit.len(),
+                HighlightStyle {
+                    font_weight: Some(FontWeight::BOLD),
+                    ..Default::default()
+                },
+            )
+        })
+        .collect();
+    let summary = div()
+        .min_w_0()
+        .child(selection.line(activity.blocks[0].id, label, counts));
     let summary = if activity.running > 0 {
         live_text(summary, format!("live-group-{call}").into())
     } else {
@@ -4549,7 +4843,7 @@ fn result_ink(state: &ToolState) -> u32 {
 /// column's width. Blank lines keep their height so the shape of the
 /// output survives.
 fn output_block(block: BlockId, part: &str, text: &str, ink: u32, selection: &TextRuns) -> Div {
-    let mut rows = div()
+    let rows = div()
         .flex()
         .flex_col()
         .w_full()
@@ -4583,25 +4877,25 @@ fn output_block(block: BlockId, part: &str, text: &str, ink: u32, selection: &Te
                 ),
         );
     }
-    for (index, line) in text.split('\n').enumerate() {
-        let run = if line.is_empty() {
-            selection.line(block, " ", Vec::new())
-        } else {
-            selection.line(block, line.to_string(), Vec::new())
-        };
-        let mut row = div().flex().w_full().min_w_0().gap(px(theme::EVENT_GAP));
-        row = row.child(
-            div()
-                .flex_shrink_0()
-                .w(px(theme::FS_MD * theme::MONO_ADVANCE))
-                .text_color(rgb(SEP))
-                .child(if index == 0 { "⎿" } else { " " }),
-        );
-        let mut body = div().flex_1().min_w_0().child(run);
-        body.style().size.width = None;
-        rows = rows.child(row.child(body));
-    }
-    rows
+    rows.child(
+        div()
+            .flex()
+            .w_full()
+            .min_w_0()
+            .gap(px(theme::EVENT_GAP))
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .w(px(theme::FS_MD * theme::MONO_ADVANCE))
+                    .text_color(rgb(SEP))
+                    .child("⎿"),
+            )
+            .child(div().flex_1().min_w_0().child(selection.line(
+                block,
+                text.to_string(),
+                Vec::new(),
+            ))),
+    )
 }
 
 /// `.result` (§E.10): `padding: 1px 0 3px 17px`, an 8px gap, 10.5px muted
@@ -4914,14 +5208,9 @@ fn inline(spans: &[Span]) -> (String, Vec<(std::ops::Range<usize>, HighlightStyl
 fn span_style(style: Style) -> Option<HighlightStyle> {
     match style {
         Style::Plain => None,
-        // Inline `code` (§E.4): a `--raised` chip. The prototype leaves the
-        // ink inherited; the operator asked for an ink of its own, so a
-        // path or a flag stands out of the sentence and not only its
-        // ground. A gpui highlight carries no padding or radius — see
-        // `prose` for why the run is flat.
+        // Inline code keeps its own ink without adding a chip to prose.
         Style::Code => Some(HighlightStyle {
             color: Some(rgb(INLINE_CODE_INK).into()),
-            background_color: Some(rgb(RAISED).into()),
             ..Default::default()
         }),
         // `strong` (§E.5): weight 600 in `--text-strong`.
@@ -5075,7 +5364,7 @@ mod tests {
 
     impl Render for ShowsProgress {
         fn render(&mut self, _: &mut gpui::Window, _: &mut Context<Self>) -> impl IntoElement {
-            div().w_full().child(working_line(&self.0, false))
+            div().w_full().child(working_line(&self.0, false, false))
         }
     }
 
@@ -5243,6 +5532,7 @@ mod tests {
     }
 
     struct ShowsDecisions {
+        cache: crate::rich::TextCache,
         decisions: Vec<Decision>,
     }
 
@@ -5268,6 +5558,8 @@ mod tests {
                                 .child(keycap_always())
                                 .into_any_element(),
                         ),
+                        &self.cache,
+                        "decision-reference".into(),
                     )
                 }))
                 .children(self.decisions.iter().map(|decision| {
@@ -5560,6 +5852,7 @@ mod tests {
 
     #[gpui::test]
     fn a_blocked_thread_paints_its_decision_card(cx: &mut TestAppContext) {
+        cx.update(gpui::component::init);
         let event = crate::demo::script()
             .into_iter()
             .map(|step| step.event)
@@ -5579,6 +5872,7 @@ mod tests {
         };
 
         let (_, cx) = cx.add_window_view(|_, _| ShowsDecisions {
+            cache: Default::default(),
             decisions: vec![decision, unreadable],
         });
         cx.simulate_resize(size(px(900.), px(300.)));
@@ -5886,7 +6180,7 @@ mod tests {
     fn inline_code_and_links_carry_their_own_ink() {
         let code = span_style(Style::Code).unwrap();
         assert_eq!(code.color, Some(rgb(INLINE_CODE_INK).into()));
-        assert_eq!(code.background_color, Some(rgb(RAISED).into()));
+        assert_eq!(code.background_color, None);
         let link = span_style(Style::Link).unwrap();
         assert_eq!(link.color, Some(rgb(LINK_INK).into()));
         assert_eq!(

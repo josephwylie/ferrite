@@ -9,6 +9,9 @@ The toolkit owns rich-text parsing and selection, popup-menu interaction,
 and Settings categories. Ferrite supplies its existing tokens,
 provider icons, pane frames, command actions and durable Thread identity.
 
+[ADR 0006](0006-claude-transcript-presentation.md) establishes Claude as the
+shared transcript presentation reference for both Providers.
+
 Keep Ferrite's existing split-tree layout and resize/drop handling. Native dock
 integration produced flashing and unacceptable streaming latency in the real
 macOS app despite passing headless geometry checks. The operator requested the
@@ -25,10 +28,15 @@ text; selection and copying of offscreen text remain unchanged. See
 Tool output remains literal and selectable. HTML code fences offer a native
 formatted preview; this is not a browser, CSS layout engine or JavaScript host.
 The transcript uses a shared 10px gap between semantic blocks. Markdown uses
-the same gap between block siblings and list items, recursively through quotes
-and lists, with no trailing gap or extra space for reference definitions.
+the same gap between block siblings and loose list items, recursively through
+quotes and lists. Tight list items and tight nested continuations have no extra
+gap. Final blocks and reference definitions introduce no trailing spacing.
 Code line spacing and table cell padding remain local to their content.
-User prompts use a neutral raised background for both providers. Live progress
+Prompts, answers and top-level tools share the existing 17px content gutter
+(9px marker plus 8px gap); markers are not selectable source text. User prompts
+use a neutral raised background for both providers. Quotes use a thin italic
+rail treatment, code loses raised chrome, and tables retain native grid lines
+with centered regular-weight headers. Proportional prose and heading sizes stay. Live progress
 places elapsed time, tokens and the interrupt hint below its reasoning caption;
 command details remain in the transcript's tool disclosure. Successful tools
 use their green verb without additional passed or exit-zero badges.
@@ -41,7 +49,8 @@ in that scope, with inactive panes isolated. A document evicted from the render
 window clears its selection. Native double-click selects a word and triple-click
 a paragraph; GPUI Kit 0.6 does not extend a double-click drag word-wise.
 
-Consecutive tool calls of every kind share a display disclosure, retaining each call's
+Completed singleton tools and consecutive tool calls of every kind share the
+compact activity presentation, retaining each call's
 identity and result. Group expansion reveals compact call summaries; each call
 independently discloses its input/output. Failure previews stay visible. Reasoning
 starts as its provider-authored heading or first line, with the chevron immediately

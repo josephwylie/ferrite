@@ -1784,6 +1784,7 @@ version = "0.1.0"
 dependencies = [
  "ferrite-core",
  "gpui-kit",
+ "gpui-pre-platform",
  "serde_json",
  "windows-sys 0.61.2",
 ]
@@ -1793,6 +1794,7 @@ name = "ferrite-core"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "chrono",
  "serde",
  "serde_json",
  "windows-sys 0.61.2",

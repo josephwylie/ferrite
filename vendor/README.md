@@ -16,11 +16,22 @@ selection calculation and copying of offscreen text remain unchanged.
 Markdown block spacing is centralized in `BlockNode::render_block`. The
 configured paragraph gap applies to headings, paragraphs, code, quotes, lists,
 tables, rules and custom blocks, including nested siblings and virtualized
-documents. List items share that gap; final visible children have no trailing
-padding, and reference definitions introduce no spacing. Code line spacing and
+documents. Loose list items share that gap; tight items and tight nested
+continuations do not add a gap. The parser carries Markdown's list-spread flag
+to its items. Ordered-list start values survive parsing, marker rendering and
+source reconstruction instead of restarting at one. Final visible children have no trailing padding, and reference
+definitions introduce no spacing. Code line spacing and
 table cell padding remain independent. The Markdown parser also preserves hard
 line breaks instead of dropping them. Ferrite's native geometry tests in
 `rich.rs` cover block pairs, nesting, zero-gap overrides and hard breaks.
+
+Quotes use a restrained 1px rail and italic text. Table header refinements reach
+individual cells so header centering can override a data column's alignment.
+Ferrite's styles retain the toolkit's table grid and remove raised code chrome;
+prose fonts and heading sizes are unchanged. Heading emphasis is explicit: H1
+bold/italic/underlined, H2–H6 bold. Ferrite opts into the existing adaptive
+horizontal-scroll table renderer for narrow overflow; the track carries a debug
+selector for native geometry acceptance.
 
 Cargo applies this through the root `[patch.crates-io]`. Remove the patch when
 an upstream release includes equivalent clipping. Registry cache markers and

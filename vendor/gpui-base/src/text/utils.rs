@@ -5,11 +5,11 @@ const NUMBERED_PREFIXES_2: &str = "abcdefghijklmnopqrstuvwxyz";
 
 const BULLETS: [&str; 5] = ["•", "◦", "▪", "‣", "⁃"];
 
-/// Returns the prefix for a list item.
-pub(super) fn list_item_prefix(ix: usize, ordered: bool, depth: usize) -> String {
+/// Returns the prefix for a list item with an explicit ordered-list start.
+pub(super) fn list_item_prefix(ix: usize, ordered: bool, depth: usize, start: u32) -> String {
     if ordered {
         if depth == 0 {
-            return format!("{}. ", ix + 1);
+            return format!("{}. ", start as usize + ix);
         }
 
         if depth == 1 {
@@ -80,22 +80,22 @@ mod tests {
 
     #[test]
     fn test_list_item_prefix() {
-        assert_eq!(list_item_prefix(0, true, 0), "1. ");
-        assert_eq!(list_item_prefix(1, true, 0), "2. ");
-        assert_eq!(list_item_prefix(2, true, 0), "3. ");
-        assert_eq!(list_item_prefix(10, true, 0), "11. ");
-        assert_eq!(list_item_prefix(0, true, 1), "A. ");
-        assert_eq!(list_item_prefix(1, true, 1), "B. ");
-        assert_eq!(list_item_prefix(2, true, 1), "C. ");
-        assert_eq!(list_item_prefix(0, true, 2), "a. ");
-        assert_eq!(list_item_prefix(1, true, 2), "b. ");
-        assert_eq!(list_item_prefix(6, true, 2), "g. ");
-        assert_eq!(list_item_prefix(0, true, 1), "A. ");
-        assert_eq!(list_item_prefix(0, true, 2), "a. ");
-        assert_eq!(list_item_prefix(0, false, 0), "• ");
-        assert_eq!(list_item_prefix(0, false, 1), "◦ ");
-        assert_eq!(list_item_prefix(0, false, 2), "▪ ");
-        assert_eq!(list_item_prefix(0, false, 3), "‣ ");
-        assert_eq!(list_item_prefix(0, false, 4), "⁃ ");
+        assert_eq!(list_item_prefix(0, true, 0, 1), "1. ");
+        assert_eq!(list_item_prefix(1, true, 0, 1), "2. ");
+        assert_eq!(list_item_prefix(2, true, 0, 1), "3. ");
+        assert_eq!(list_item_prefix(10, true, 0, 1), "11. ");
+        assert_eq!(list_item_prefix(0, true, 1, 1), "A. ");
+        assert_eq!(list_item_prefix(1, true, 1, 1), "B. ");
+        assert_eq!(list_item_prefix(2, true, 1, 1), "C. ");
+        assert_eq!(list_item_prefix(0, true, 2, 1), "a. ");
+        assert_eq!(list_item_prefix(1, true, 2, 1), "b. ");
+        assert_eq!(list_item_prefix(6, true, 2, 1), "g. ");
+        assert_eq!(list_item_prefix(0, true, 1, 1), "A. ");
+        assert_eq!(list_item_prefix(0, true, 2, 1), "a. ");
+        assert_eq!(list_item_prefix(0, false, 0, 1), "• ");
+        assert_eq!(list_item_prefix(0, false, 1, 1), "◦ ");
+        assert_eq!(list_item_prefix(0, false, 2, 1), "▪ ");
+        assert_eq!(list_item_prefix(0, false, 3, 1), "‣ ");
+        assert_eq!(list_item_prefix(0, false, 4, 1), "⁃ ");
     }
 }

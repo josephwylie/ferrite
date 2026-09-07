@@ -243,29 +243,24 @@ pub fn style(rem_size: gpui::Pixels) -> TextViewStyle {
         .with_muted_foreground(rgb(theme::TEXT_2).into())
         .with_link(rgb(theme::LINK_INK).into())
         .with_selection(rgba(theme::TEXT_SELECTION_WASH).into())
-        .with_code_background(rgb(theme::RAISED).into())
+        .with_code_background(rgb(theme::PANE).into())
+        .with_code_block(gpui::StyleRefinement::default().p_0())
         .with_inline_code(gpui::HighlightStyle {
             color: Some(rgb(theme::INLINE_CODE_INK).into()),
-            background_color: Some(rgb(theme::RAISED).into()),
             ..Default::default()
         })
         .with_border(rgb(theme::TABLE_RULE).into())
-        .with_table(
-            gpui::StyleRefinement::default()
-                .bg(rgb(theme::PANE))
-                .border_0(),
-        )
+        .with_table({
+            let mut table = gpui::StyleRefinement::default().bg(rgb(theme::PANE));
+            table.overflow.x = Some(gpui::Overflow::Scroll);
+            table
+        })
         .with_table_head(
             gpui::StyleRefinement::default()
                 .bg(rgb(theme::PANE))
                 .text_color(rgb(theme::TEXT))
-                .font_weight(gpui::FontWeight::SEMIBOLD),
-        )
-        .with_table_cell(
-            gpui::StyleRefinement::default()
-                .border_0()
-                .px(px(8.))
-                .py(px(6.)),
+                .font_weight(gpui::FontWeight::NORMAL)
+                .text_center(),
         )
         .with_paragraph_gap(rems(theme::BLOCK_GAP / f32::from(rem_size)))
         .with_heading_base_font_size(px(theme::FS_MD))
@@ -468,7 +463,7 @@ pub mod testing {
 mod spacing_tests {
     use super::*;
     use gpui::{div, Context, Render, TestAppContext};
-    const SELECTORS: [&str; 7] = [
+    const SELECTORS: [&str; 9] = [
         "spacing-0",
         "spacing-1",
         "spacing-2",
@@ -476,6 +471,8 @@ mod spacing_tests {
         "spacing-4",
         "spacing-5",
         "spacing-6",
+        "spacing-7",
+        "spacing-8",
     ];
 
     struct SpacingRoot {
@@ -546,6 +543,120 @@ mod spacing_tests {
     }
 
     #[gpui::test]
+    fn narrow_table_uses_the_native_overflow_track(cx: &mut TestAppContext) {
+        struct TableRoot;
+        impl Render for TableRoot {
+            fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div().w(px(220.)).debug_selector(|| "table-frame".into()).child(
+                    TextView::markdown("overflow-table", "| One | Two | Three | Four | Five | Six |\n| --- | --- | --- | --- | --- | --- |\n| aaaaaaaaaaaaaaaaaaaa | bbbbbbbbbbbbbbbbbbbb | cccccccccccccccccccc | dddddddddddddddddddd | eeeeeeeeeeeeeeeeeeee | ffffffffffffffffffff |")
+                    .max_lines(usize::MAX).style(style(window.rem_size())))
+            }
+        }
+        cx.update(gpui::component::init);
+        let (_, cx) = cx.add_window_view(|_, _| TableRoot);
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let frame = cx.debug_bounds("table-frame").unwrap();
+        let track = cx
+            .debug_bounds("markdown-table-track")
+            .expect("wide table must provide a scrollable track");
+        assert!(track.size.width > frame.size.width);
+        // Wheel routing belongs to the toolkit's horizontal_scroll_area;
+        // its own tests exercise ScrollHandle offsets. Debug bounds are
+        // layout coordinates and do not report that paint translation.
+    }
+
+    #[gpui::test]
+    fn native_markdown_preserves_literal_bytes_and_link_destinations(cx: &mut TestAppContext) {
+        use gpui::base::text::SelectionFormat;
+        use std::sync::{Arc, Mutex};
+        struct TextRoot {
+            state: Entity<TextViewState>,
+            clicked: Arc<Mutex<Vec<String>>>,
+            format: SelectionFormat,
+        }
+        impl Render for TextRoot {
+            fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let clicked = self.clicked.clone();
+                div().w(px(220.)).child(
+                    TextView::new(&self.state)
+                        .selection_format(self.format)
+                        .max_lines(usize::MAX)
+                        .style(style(window.rem_size()))
+                        .on_link_click(move |url, _, _, _| {
+                            clicked.lock().unwrap().push(url.to_string())
+                        }),
+                )
+            }
+        }
+        cx.update(gpui::component::init);
+        let clicked = Arc::new(Mutex::new(Vec::new()));
+        let (root, cx) = cx.add_window_view(|_, cx| TextRoot {
+            state: cx.new(|cx| {
+                TextViewState::markdown("[label](https://example.com/path?q=a%20b#part)", cx)
+                    .selectable(true)
+            }),
+            clicked: clicked.clone(),
+            format: SelectionFormat::Plain,
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        cx.simulate_click(gpui::point(px(10.), px(10.)), gpui::Modifiers::none());
+        assert_eq!(
+            *clicked.lock().unwrap(),
+            vec!["https://example.com/path?q=a%20b#part"]
+        );
+        let state = root.read_with(cx, |root, _| root.state.clone());
+        for (source, plain) in [
+            (
+                "**bold**, *italic*; `one  two` [link](https://example.com).".to_string(),
+                "bold, italic; one  two link.\n".to_string(),
+            ),
+            (
+                "```text\n    one  two\n\n\tCJK 漢字 é   \n```".to_string(),
+                "    one  two\n\n\tCJK 漢字 é   \n".to_string(),
+            ),
+            ("W".repeat(124), format!("{}\n", "W".repeat(124))),
+        ] {
+            root.update(cx, |root, cx| {
+                root.format = SelectionFormat::Plain;
+                cx.notify();
+            });
+            state.update(cx, |state, cx| {
+                state.set_text(&source, cx);
+                state.set_selection_format(SelectionFormat::Plain, cx);
+                state.select_all(cx);
+            });
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+            state.read_with(cx, |state, _| assert_eq!(state.selected_text(), plain));
+            if source.len() == 124 {
+                state.read_with(cx, |state, _| {
+                    assert!(
+                        state.bounds().size.height > px(30.),
+                        "long token must wrap into visible lines"
+                    )
+                });
+            }
+            root.update(cx, |root, cx| {
+                root.format = SelectionFormat::Source;
+                cx.notify();
+            });
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+            state.read_with(cx, |state, _| assert_eq!(state.selected_text(), source));
+        }
+    }
+
+    #[gpui::test]
     fn markdown_spacing_nested_lists_and_zero_gap(cx: &mut TestAppContext) {
         cx.update(gpui::component::init);
         let samples = vec![
@@ -556,13 +667,15 @@ mod spacing_tests {
             "- One\n\n  Two\n\n  Three".into(),
             "> One\n>\n> Two\n>\n> Three".into(),
             "- One\n\n  ```text\n  Two\n  ```\n\n  Three".into(),
+            "- One\n\n- Two\n\n- Three".into(),
+            "- One\n\n  - Two\n  - Three".into(),
         ];
         let (root, cx) = cx.add_window_view(|_, _| SpacingRoot { samples, gap: 0. });
         cx.run_until_parked();
         cx.update(|window, cx| {
             let _ = window.draw(cx);
         });
-        let compact: Vec<_> = (0..7)
+        let compact: Vec<_> = (0..9)
             .map(|ix| cx.debug_bounds(SELECTORS[ix]).unwrap().size.height)
             .collect();
         root.update(cx, |root, cx| {
@@ -573,13 +686,63 @@ mod spacing_tests {
         cx.update(|window, cx| {
             let _ = window.draw(cx);
         });
+        // Tight unordered, ordered, task and nested lists gain no inter-item
+        // gap. Actual paragraphs and loose lists retain two 10px boundaries.
+        let extra_space = [0., 0., 0., 0., 20., 20., 20., 20., 10.];
         for (ix, before) in compact.into_iter().enumerate() {
             let after = cx.debug_bounds(SELECTORS[ix]).unwrap().size.height;
             assert!(
-                (after - before - px(20.)).abs() < px(0.5),
+                (after - before - px(extra_space[ix])).abs() < px(0.5),
                 "nested sample {ix}: {before:?} -> {after:?}"
             );
         }
+    }
+
+    #[gpui::test]
+    fn ordered_list_start_controls_the_native_marker_width(cx: &mut TestAppContext) {
+        struct OrderedLists {
+            width: f32,
+        }
+        impl Render for OrderedLists {
+            fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div().w(px(self.width)).children([
+                    div().debug_selector(|| "ordered-nine".into()).child(
+                        TextView::markdown("ordered-nine", "9. alpha beta gamma delta")
+                            .max_lines(usize::MAX)
+                            .style(style(window.rem_size())),
+                    ),
+                    div().debug_selector(|| "ordered-hundred".into()).child(
+                        TextView::markdown("ordered-hundred", "100. alpha beta gamma delta")
+                            .max_lines(usize::MAX)
+                            .style(style(window.rem_size())),
+                    ),
+                ])
+            }
+        }
+        cx.update(gpui::component::init);
+        let (view, cx) = cx.add_window_view(|_, _| OrderedLists { width: 80. });
+        let mut longer_prefix_wraps_earlier = false;
+        for width in [60., 70., 80., 90., 100., 110., 120.] {
+            view.update(cx, |view, cx| {
+                view.width = width;
+                cx.notify();
+            });
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+            let nine = cx.debug_bounds("ordered-nine").unwrap().size.height;
+            let hundred = cx.debug_bounds("ordered-hundred").unwrap().size.height;
+            assert!(
+                hundred >= nine,
+                "a longer number cannot create more room for item text"
+            );
+            longer_prefix_wraps_earlier |= hundred > nine;
+        }
+        assert!(
+            longer_prefix_wraps_earlier,
+            "native layout must retain source numbering: 100. needs more marker width than 9."
+        );
     }
 
     #[gpui::test]
