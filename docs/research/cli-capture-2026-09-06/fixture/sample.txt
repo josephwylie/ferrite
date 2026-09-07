@@ -1,0 +1,7 @@
+# Terminal transcript fixture
+
+Alpha beta gamma.
+one  two   three    four
+	Tabbed input
+Unicode: café naïve → ✓ 界 é
+Long line: word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word END

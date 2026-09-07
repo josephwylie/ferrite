@@ -1,0 +1,157 @@
+{"time": 1788693805.99763, "action": "mark", "provider": "claude", "label": "01-idle"}
+{"time": 1788693806.098895, "action": "mark", "provider": "codex", "label": "01-workspace-trust"}
+{"time": 1788693806.158918, "action": "key", "provider": "codex", "key": "Enter"}
+{"time": 1788693806.220733, "action": "text", "provider": "claude", "text": "Read only sample.txt and sample.py in this synthetic fixture directory using the built-in Read tool. Do not modify files, inspect anything outside this directory, use network tools, or delegate. Briefly announce the task before reading. After reading, give a short response with a heading, bold text, inline code, two bullets, and a fenced Python example. Preserve the double and triple spaces in the fixture when quoting it.", "enter": true}
+{"time": 1788693806.613284, "action": "text", "provider": "codex", "text": "Read only sample.txt and sample.py in this synthetic fixture directory. Do not modify files, inspect anything outside this directory, use network tools, or delegate. Briefly announce the task before reading. After reading, give a short response with a heading, bold text, inline code, two bullets, and a fenced Python example. Preserve the double and triple spaces in the fixture when quoting it.", "enter": true}
+{"time": 1788693850.915422, "action": "mark", "provider": "claude", "label": "02-read-complete"}
+{"time": 1788693851.034322, "action": "mark", "provider": "codex", "label": "02-read-complete"}
+{"time": 1788693851.102745, "action": "key", "provider": "claude", "key": "C-o"}
+{"time": 1788693851.186027, "action": "key", "provider": "codex", "key": "C-t"}
+{"time": 1788693879.118309, "action": "mark", "provider": "claude", "label": "03-detailed-transcript"}
+{"time": 1788693879.2322261, "action": "mark", "provider": "codex", "label": "03-detailed-transcript"}
+{"time": 1788693879.301143, "action": "key", "provider": "claude", "key": "C-o"}
+{"time": 1788693879.389121, "action": "key", "provider": "codex", "key": "q"}
+{"time": 1788693879.516886, "action": "text", "provider": "claude", "text": "Run this harmless shell command once to demonstrate streamed stdout, stderr, and a nonzero exit. Do not fix or retry it. Do not modify any file or use any external tool. Command: python3 -c 'import time,sys; print(\"first  second   third\", flush=True); time.sleep(8); print(\"fixture stderr\", file=sys.stderr, flush=True); sys.exit(7)'. Explain the outcome in one sentence.", "enter": true}
+{"time": 1788693879.871389, "action": "text", "provider": "codex", "text": "Run this harmless shell command once to demonstrate streamed stdout, stderr, and a nonzero exit. Do not fix or retry it. Do not modify any file or use any external tool. Command: python3 -c 'import time,sys; print(\"first  second   third\", flush=True); time.sleep(8); print(\"fixture stderr\", file=sys.stderr, flush=True); sys.exit(7)'. Explain the outcome in one sentence.", "enter": true}
+{"time": 1788694072.152292, "action": "mark", "provider": "claude", "label": "04-command-approval"}
+{"time": 1788694072.1945522, "action": "mark", "provider": "codex", "label": "04-command-failed"}
+{"time": 1788694072.219727, "action": "key", "provider": "claude", "key": "Enter"}
+{"time": 1788694072.250807, "action": "key", "provider": "codex", "key": "C-t"}
+{"time": 1788694072.305293, "action": "mark", "provider": "codex", "label": "05-failure-detailed"}
+{"time": 1788694072.3313138, "action": "key", "provider": "codex", "key": "q"}
+{"time": 1788694080.851068, "action": "mark", "provider": "claude", "label": "05-command-running"}
+{"time": 1788694105.7337239, "action": "mark", "provider": "claude", "label": "06-command-failed"}
+{"time": 1788694105.8356, "action": "text", "provider": "codex", "text": "For a harmless long-output display test, run exactly once: python3 -c 'for i in range(1,41): print(f\"row {i:02d}  alpha   beta    gamma\")'. Do not write files or inspect anything else. Then respond with only 'Output complete.'", "enter": true}
+{"time": 1788694106.189831, "action": "text", "provider": "claude", "text": "For a harmless long-output display test, run exactly once: python3 -c 'for i in range(1,41): print(f\"row {i:02d}  alpha   beta    gamma\")'. Do not write files or inspect anything else. Then respond with only 'Output complete.'", "enter": true}
+{"time": 1788694161.264426, "action": "mark", "provider": "codex", "label": "06-output-truncated"}
+{"time": 1788694161.32794, "action": "key", "provider": "codex", "key": "C-t"}
+{"time": 1788694161.433985, "action": "mark", "provider": "codex", "label": "07-long-output-detailed"}
+{"time": 1788694161.496057, "action": "key", "provider": "codex", "key": "q"}
+{"time": 1788694161.567256, "action": "key", "provider": "claude", "key": "Enter"}
+{"time": 1788694161.640482, "action": "text", "provider": "codex", "text": "This turn tests the command approval UI. Request one-time approval via the tool approval mechanism to run the harmless command printf \"approval fixture\\n\". Do not run it without asking. I will reject it to capture the rejection screen. Do not write files, use network tools, or attempt alternative commands.", "enter": true}
+{"time": 1788694219.481586, "action": "mark", "provider": "codex", "label": "08-command-approval"}
+{"time": 1788694219.510304, "action": "key", "provider": "codex", "key": "Escape"}
+{"time": 1788694219.5667489, "action": "mark", "provider": "claude", "label": "07-output-collapsed"}
+{"time": 1788694219.595038, "action": "key", "provider": "claude", "key": "C-o"}
+{"time": 1788694219.65319, "action": "mark", "provider": "claude", "label": "08-long-output-detailed"}
+{"time": 1788694219.682506, "action": "key", "provider": "claude", "key": "C-o"}
+{"time": 1788694219.722065, "action": "text", "provider": "claude", "text": "Use AskUserQuestion to show a single-choice question titled Display with two options Compact and Detailed, each with a short description. This is only a disposable UI capture; do not change any setting or file. After I answer, acknowledge my selection in one sentence.", "enter": true}
+{"time": 1788694253.5174952, "action": "mark", "provider": "codex", "label": "09-approval-rejected"}
+{"time": 1788694269.722477, "action": "mark", "provider": "claude", "label": "09-question"}
+{"time": 1788694269.7509298, "action": "key", "provider": "claude", "key": "Down"}
+{"time": 1788694269.800962, "action": "mark", "provider": "claude", "label": "10-question-selected"}
+{"time": 1788694269.82931, "action": "key", "provider": "claude", "key": "Enter"}
+{"time": 1788694269.862696, "action": "text", "provider": "codex", "text": "Read formatting.md in this synthetic directory. Reply with its exact complete contents as Markdown, preserving all whitespace. Do not wrap the whole response in an extra code fence. No preface or suffix. Do not write or change files or use external tools.", "enter": true}
+{"time": 1788694322.9189818, "action": "mark", "provider": "claude", "label": "11-question-answered"}
+{"time": 1788694322.949843, "action": "text", "provider": "claude", "text": "Read formatting.md in this synthetic directory. Reply with its exact complete contents as Markdown, preserving all whitespace. Do not wrap the whole response in an extra code fence. No preface or suffix. Do not write or change files or use external tools.", "enter": true}
+{"time": 1788694323.268094, "action": "mark", "provider": "codex", "label": "10-markdown-120"}
+{"time": 1788694323.300117, "action": "resize", "provider": "codex", "columns": 120, "rows": 90}
+{"time": 1788694375.5162518, "action": "mark", "provider": "codex", "label": "11-markdown-120x90"}
+{"time": 1788694375.563584, "action": "resize", "provider": "codex", "columns": 80, "rows": 90}
+{"time": 1788694376.009575, "action": "mark", "provider": "codex", "label": "12-markdown-80x90"}
+{"time": 1788694376.0559518, "action": "resize", "provider": "codex", "columns": 60, "rows": 90}
+{"time": 1788694376.49337, "action": "mark", "provider": "codex", "label": "13-markdown-60x90"}
+{"time": 1788694376.537915, "action": "resize", "provider": "codex", "columns": 120, "rows": 44}
+{"time": 1788694376.589155, "action": "resize", "provider": "claude", "columns": 120, "rows": 90}
+{"time": 1788694377.048491, "action": "mark", "provider": "claude", "label": "12-markdown-120x90"}
+{"time": 1788694377.115913, "action": "resize", "provider": "claude", "columns": 80, "rows": 90}
+{"time": 1788694377.5833569, "action": "mark", "provider": "claude", "label": "13-markdown-80x90"}
+{"time": 1788694377.622543, "action": "resize", "provider": "claude", "columns": 60, "rows": 90}
+{"time": 1788694378.066493, "action": "mark", "provider": "claude", "label": "14-markdown-60x90"}
+{"time": 1788694378.096857, "action": "resize", "provider": "claude", "columns": 120, "rows": 44}
+{"time": 1788694412.316132, "action": "text", "provider": "claude", "text": "/", "enter": false}
+{"time": 1788694412.725054, "action": "mark", "provider": "claude", "label": "15-slash-menu"}
+{"time": 1788694412.752955, "action": "text", "provider": "codex", "text": "/", "enter": false}
+{"time": 1788694413.164376, "action": "mark", "provider": "codex", "label": "14-slash-menu"}
+{"time": 1788694413.19243, "action": "key", "provider": "claude", "key": "C-u"}
+{"time": 1788694413.2263649, "action": "key", "provider": "codex", "key": "C-u"}
+{"time": 1788694413.259244, "action": "text", "provider": "claude", "text": "/model", "enter": true}
+{"time": 1788694413.560659, "action": "text", "provider": "codex", "text": "/model", "enter": true}
+{"time": 1788694414.2325928, "action": "mark", "provider": "claude", "label": "16-model-menu"}
+{"time": 1788694414.6432698, "action": "mark", "provider": "codex", "label": "15-model-menu"}
+{"time": 1788694451.8447418, "action": "key", "provider": "claude", "key": "Escape"}
+{"time": 1788694451.8784618, "action": "key", "provider": "codex", "key": "Escape"}
+{"time": 1788694451.963722, "action": "text", "provider": "claude", "text": "Draft  has   three    gaps.\n    Indented second line; NBSP: alpha beta; wide: 界; combining: é.\nThis final line deliberately contains enough words to wrap across a narrower composer and expose its continuation indentation.", "enter": false}
+{"time": 1788694452.0037482, "action": "text", "provider": "codex", "text": "Draft  has   three    gaps.\n    Indented second line; NBSP: alpha beta; wide: 界; combining: é.\nThis final line deliberately contains enough words to wrap across a narrower composer and expose its continuation indentation.", "enter": false}
+{"time": 1788694452.416227, "action": "mark", "provider": "claude", "label": "17-multiline-draft"}
+{"time": 1788694452.820632, "action": "mark", "provider": "codex", "label": "16-multiline-draft"}
+{"time": 1788694452.851983, "action": "resize", "provider": "claude", "columns": 60, "rows": 44}
+{"time": 1788694452.888362, "action": "resize", "provider": "codex", "columns": 60, "rows": 44}
+{"time": 1788694453.298757, "action": "mark", "provider": "claude", "label": "18-multiline-draft-60"}
+{"time": 1788694453.7052128, "action": "mark", "provider": "codex", "label": "17-multiline-draft-60"}
+{"time": 1788694470.615679, "action": "key", "provider": "claude", "key": "C-c"}
+{"time": 1788694470.651505, "action": "key", "provider": "codex", "key": "C-c"}
+{"time": 1788694471.057463, "action": "mark", "provider": "claude", "label": "19-draft-cleared"}
+{"time": 1788694471.459253, "action": "mark", "provider": "codex", "label": "18-draft-cleared"}
+{"time": 1788694471.4887319, "action": "resize", "provider": "claude", "columns": 120, "rows": 44}
+{"time": 1788694471.5230238, "action": "resize", "provider": "codex", "columns": 120, "rows": 44}
+{"time": 1788694484.990608, "action": "text", "provider": "claude", "text": "Run only this harmless waiting command once: python3 -c 'import time; print(\"waiting fixture\", flush=True); time.sleep(20); print(\"finished fixture\", flush=True)'. Do not write files or use external tools. I will test the queue and interrupt controls while it waits.", "enter": true}
+{"time": 1788694485.317962, "action": "text", "provider": "codex", "text": "Run only this harmless waiting command once: python3 -c 'import time; print(\"waiting fixture\", flush=True); time.sleep(20); print(\"finished fixture\", flush=True)'. Do not write files or use external tools. I will test the queue and interrupt controls while it waits.", "enter": true}
+{"time": 1788694511.254313, "action": "mark", "provider": "codex", "label": "19-working-background"}
+{"time": 1788694511.282281, "action": "text", "provider": "codex", "text": "After this finishes, reply only: queued fixture.", "enter": false}
+{"time": 1788694511.318748, "action": "key", "provider": "codex", "key": "Tab"}
+{"time": 1788694511.725378, "action": "mark", "provider": "codex", "label": "20-queued"}
+{"time": 1788694511.753421, "action": "key", "provider": "codex", "key": "Escape"}
+{"time": 1788694511.7892349, "action": "key", "provider": "claude", "key": "Enter"}
+{"time": 1788694511.825095, "action": "text", "provider": "claude", "text": "After this finishes, reply only: queued fixture.", "enter": true}
+{"time": 1788694512.4934258, "action": "mark", "provider": "claude", "label": "20-queued"}
+{"time": 1788694512.5237818, "action": "key", "provider": "claude", "key": "Escape"}
+{"time": 1788694520.6986701, "action": "mark", "provider": "claude", "label": "21-interrupted"}
+{"time": 1788694521.095201, "action": "mark", "provider": "codex", "label": "21-interrupted"}
+{"time": 1788694540.7962508, "action": "key", "provider": "codex", "key": "C-u"}
+{"time": 1788694540.8533719, "action": "text", "provider": "codex", "text": "/plan", "enter": true}
+{"time": 1788694541.565063, "action": "mark", "provider": "codex", "label": "22-plan-mode"}
+{"time": 1788694541.613438, "action": "text", "provider": "claude", "text": "Use AskUserQuestion to show one multi-select question with header Elements and three options Text, Tools, and Timing, with short descriptions. This only tests the question UI; change no files or settings. Acknowledge my answers briefly.", "enter": true}
+{"time": 1788694595.664185, "action": "text", "provider": "codex", "text": "This is only a question-form display test. Use request_user_input to ask one single-choice question titled Display with options Compact and Detailed and short descriptions. Do not inspect files or make changes. After the answer, acknowledge it briefly; no implementation or further work is wanted.", "enter": true}
+{"time": 1788694657.3847558, "action": "mark", "provider": "claude", "label": "22-multiselect"}
+{"time": 1788694657.419472, "action": "key", "provider": "claude", "key": "Space"}
+{"time": 1788694657.454467, "action": "key", "provider": "claude", "key": "Down"}
+{"time": 1788694657.4918962, "action": "key", "provider": "claude", "key": "Space"}
+{"time": 1788694657.8953412, "action": "mark", "provider": "claude", "label": "23-multiselect-checked"}
+{"time": 1788694657.927039, "action": "key", "provider": "claude", "key": "Right"}
+{"time": 1788694658.342101, "action": "mark", "provider": "claude", "label": "24-multiselect-review"}
+{"time": 1788694658.751062, "action": "mark", "provider": "codex", "label": "23-question"}
+{"time": 1788694658.7832088, "action": "key", "provider": "codex", "key": "Tab"}
+{"time": 1788694658.8206022, "action": "text", "provider": "codex", "text": "Keep  two   spaces.", "enter": false}
+{"time": 1788694659.235979, "action": "mark", "provider": "codex", "label": "24-question-notes"}
+{"time": 1788694718.6953542, "action": "key", "provider": "claude", "key": "Enter"}
+{"time": 1788694718.734499, "action": "key", "provider": "codex", "key": "Enter"}
+{"time": 1788694843.691422, "action": "mark", "provider": "claude", "label": "25-multiselect-answered"}
+{"time": 1788694844.300607, "action": "mark", "provider": "codex", "label": "25-question-answered"}
+{"time": 1788694882.329723, "action": "text", "provider": "claude", "text": "@sa", "enter": false}
+{"time": 1788694882.427936, "action": "text", "provider": "codex", "text": "@sa", "enter": false}
+{"time": 1788694882.9815, "action": "mark", "provider": "claude", "label": "26-file-completion"}
+{"time": 1788694883.514403, "action": "mark", "provider": "codex", "label": "26-file-completion"}
+{"time": 1788694883.605155, "action": "key", "provider": "claude", "key": "C-c"}
+{"time": 1788694883.7023811, "action": "key", "provider": "codex", "key": "C-c"}
+{"time": 1788694883.802367, "action": "text", "provider": "claude", "text": "?", "enter": false}
+{"time": 1788694883.9118972, "action": "text", "provider": "codex", "text": "?", "enter": false}
+{"time": 1788694884.45326, "action": "mark", "provider": "claude", "label": "27-shortcuts"}
+{"time": 1788694884.994865, "action": "mark", "provider": "codex", "label": "27-shortcuts"}
+{"time": 1788694900.357265, "action": "key", "provider": "claude", "key": "C-u"}
+{"time": 1788694900.4455092, "action": "key", "provider": "codex", "key": "C-u"}
+{"time": 1788694900.540021, "action": "key", "provider": "claude", "key": "?"}
+{"time": 1788694900.627254, "action": "key", "provider": "codex", "key": "?"}
+{"time": 1788694901.1292312, "action": "mark", "provider": "claude", "label": "28-shortcut-key"}
+{"time": 1788694901.6107469, "action": "mark", "provider": "codex", "label": "28-shortcut-key"}
+{"time": 1788694935.7819788, "action": "key", "provider": "claude", "key": "Escape"}
+{"time": 1788694935.862286, "action": "key", "provider": "codex", "key": "Escape"}
+{"time": 1788694935.942658, "action": "key", "provider": "claude", "key": "C-o"}
+{"time": 1788694936.031017, "action": "key", "provider": "codex", "key": "C-t"}
+{"time": 1788694936.125751, "action": "key", "provider": "claude", "key": "Home"}
+{"time": 1788694936.26597, "action": "key", "provider": "codex", "key": "Home"}
+{"time": 1788694936.782629, "action": "mark", "provider": "claude", "label": "29-transcript-top"}
+{"time": 1788694937.280947, "action": "mark", "provider": "codex", "label": "29-transcript-top"}
+{"time": 1788694937.354361, "action": "key", "provider": "claude", "key": "PageDown"}
+{"time": 1788694937.444624, "action": "key", "provider": "codex", "key": "PageDown"}
+{"time": 1788694937.9508748, "action": "mark", "provider": "claude", "label": "30-transcript-page"}
+{"time": 1788694938.4817312, "action": "mark", "provider": "codex", "label": "30-transcript-page"}
+{"time": 1788694938.573218, "action": "key", "provider": "claude", "key": "["}
+{"time": 1788694939.144938, "action": "mark", "provider": "claude", "label": "31-export-scrollback"}
+{"time": 1788694969.597698, "action": "key", "provider": "claude", "key": "C-o"}
+{"time": 1788694969.803172, "action": "key", "provider": "codex", "key": "q"}
+{"time": 1788694969.994816, "action": "text", "provider": "claude", "text": "/exit", "enter": true}
+{"time": 1788694970.426145, "action": "text", "provider": "codex", "text": "/quit", "enter": true}
+{"time": 1788694971.292963, "action": "mark", "provider": "claude", "label": "32-exit"}
+{"time": 1788694971.837227, "action": "mark", "provider": "codex", "label": "31-exit"}
+{"time": 1788694996.1961138, "action": "stop"}

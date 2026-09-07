@@ -44,9 +44,17 @@ impl Highlighter for Lexer {
 /// Classify `source`. Every byte lands in exactly one token, in order, so the
 /// tokens concatenate back to the source a Pane already has.
 pub fn tokens(language: Option<&str>, source: &str) -> Vec<Token> {
+    if !matches!(language, Some("rust" | "rs" | "python" | "py")) {
+        return (!source.is_empty())
+            .then(|| Token {
+                text: source.into(),
+                class: Class::Plain,
+            })
+            .into_iter()
+            .collect();
+    }
+
     let keywords: &[&str] = match language {
-        // An unknown language still gets strings, comments and numbers; only
-        // the keyword list is a guess Ferrite refuses to make.
         Some("rust" | "rs") => RUST,
         _ => &[],
     };
@@ -176,16 +184,54 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_language_still_reads_its_strings_but_claims_no_keywords() {
-        let tokens = tokens(None, "print \"hi\" 3");
+    fn plain_and_unknown_fences_preserve_literal_text_without_syntax_claims() {
+        let source = "print  \"hi\" 3\t# literal  \n\n界";
+        for language in [
+            None,
+            Some("text"),
+            Some("plaintext"),
+            Some("not-a-language"),
+        ] {
+            let result = tokens(language, source);
+            assert_eq!(
+                result
+                    .iter()
+                    .map(|token| token.text.as_str())
+                    .collect::<String>(),
+                source
+            );
+            assert!(
+                result.iter().all(|token| token.class == Class::Plain),
+                "{language:?}: {result:?}"
+            );
+        }
+        assert!(tokens(Some("rust"), "let x = 3;")
+            .iter()
+            .any(|token| token.class == Class::Keyword));
+    }
 
-        assert!(tokens.iter().all(|token| token.class != Class::Keyword));
-        assert!(tokens
-            .iter()
-            .any(|token| token.class == Class::Str && token.text == "\"hi\""));
-        assert!(tokens
-            .iter()
-            .any(|token| token.class == Class::Number && token.text == "3"));
+    #[test]
+    fn python_fences_style_strings_comments_and_numbers_without_losing_spacing() {
+        let source = "print(\"hi\",  3)  # note\n";
+        for language in ["python", "py"] {
+            let result = tokens(Some(language), source);
+            assert_eq!(
+                result
+                    .iter()
+                    .map(|token| token.text.as_str())
+                    .collect::<String>(),
+                source
+            );
+            assert!(result
+                .iter()
+                .any(|token| token.class == Class::Str && token.text == "\"hi\""));
+            assert!(result
+                .iter()
+                .any(|token| token.class == Class::Number && token.text == "3"));
+            assert!(result
+                .iter()
+                .any(|token| token.class == Class::Comment && token.text == "# note"));
+        }
     }
 
     /// The Pane maps tokens onto the source by length; a lexer that dropped or

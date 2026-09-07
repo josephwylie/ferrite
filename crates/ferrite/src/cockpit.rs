@@ -5,6 +5,10 @@
 
 pub(crate) mod subagents;
 
+#[cfg(feature = "visual-reference")]
+#[path = "visual_reference.rs"]
+pub(crate) mod visual_reference;
+
 use std::time::Duration;
 
 use ferrite_core::cockpit::{CloseError, Cockpit, HistoryDirection, ProviderChoice};
@@ -4810,9 +4814,8 @@ impl CockpitView {
     /// Copy the active native selection. Its retained document keeps logical
     /// transcript fragments available even while their rows are offscreen.
     fn copy_selection(&mut self, _: &CopySelection, window: &mut Window, cx: &mut Context<Self>) {
-        let text = gpui::base::TextSelection::selected_text(window, cx)
-            .trim_end_matches('\n')
-            .to_string();
+        let text = gpui::base::TextSelection::selected_text(window, cx);
+        let text = text.strip_suffix('\n').unwrap_or(&text).to_string();
         if !text.is_empty() {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
         }
@@ -5758,8 +5761,17 @@ impl CockpitView {
         // Only L1 draws a Composer to hang a popover over (#23), a model
         // picker (#25) or usage meter; the wall answers with keys alone.
         let l1 = level == Level::Transcript;
+        let received_reasoning_visible = open
+            .and_then(|thread| thread.activity().subject(&pane.selected))
+            .and_then(|subject| subject.transcript().progress().caption())
+            .is_some_and(|caption| {
+                pane.transcript().is_some_and(|transcript| {
+                    transcript.read(cx).received_reasoning_is_visible(&caption)
+                })
+            });
         let wiring = pane::PaneWiring {
             transcript: retained_transcript,
+            received_reasoning_visible,
             attachments: Composer::attachments(&pane.composer, &pane.preview, cx),
             menu: l1.then(|| self.popover_element(index, cx)).flatten(),
             model_picker: l1.then(|| self.model_picker(index, cx)).flatten(),
@@ -7112,6 +7124,7 @@ fn transcript_text(blocks: &[ferrite_core::transcript::Block]) -> String {
 
 #[cfg(test)]
 mod tests {
+    mod completion_checks;
     mod render_performance;
     mod subagents;
     use super::*;
@@ -7580,6 +7593,13 @@ mod tests {
         let button = cx
             .debug_bounds("titlebar-add-thread")
             .expect("the titlebar add button is visible");
+        if !crate::titlebar::CUSTOM {
+            assert!(
+                cx.debug_bounds("caption-minimize").is_none(),
+                "host owns native caption controls"
+            );
+            return;
+        }
         let minimize = cx
             .debug_bounds("caption-minimize")
             .expect("the minimize button is visible");
@@ -9724,7 +9744,7 @@ mod tests {
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         fake.streams.borrow()[0]
             .send(SessionEvent::TextDelta {
-                text: "alpha\n\nbravo\n\ncharlie\n\n".into(),
+                text: "alpha\n\nbravo  two   three\t界 e\u{301}\u{a0}fin\n\ncharlie\n\n".into(),
             })
             .unwrap();
         tick(cx);
@@ -9736,7 +9756,10 @@ mod tests {
         cx.simulate_mouse_move(to, gpui::MouseButton::Left, gpui::Modifiers::none());
         cx.simulate_mouse_up(to, gpui::MouseButton::Left, gpui::Modifiers::none());
         cx.simulate_keystrokes("cmd-c");
-        assert_eq!(clipboard(cx).as_deref(), Some("pha\nbravo\nchar"));
+        assert_eq!(
+            clipboard(cx).as_deref(),
+            Some("pha\nbravo  two   three\t界 e\u{301}\u{a0}fin\nchar")
+        );
 
         // A plain click clears the selection; copying then changes nothing.
         cx.update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string("kept".into())));
@@ -10053,8 +10076,8 @@ mod tests {
         cx.simulate_keystrokes("cmd-c");
         assert_eq!(
             clipboard(cx).as_deref(),
-            Some("before\n\nBash(echo hi)\n\ndone\n\nafter"),
-            "the exit-0 chip and the ⏺ are chrome and must not copy"
+            Some("before\n\nRan 1 shell command\n\nafter"),
+            "copy visible summary text; omit hidden output and disclosure/marker chrome"
         );
     }
 
@@ -10210,6 +10233,15 @@ mod tests {
         });
         cx.simulate_click(reasoning, gpui::Modifiers::none());
         tick(cx);
+        let group = view.read_with(cx, |view, _| {
+            view.panes[0]
+                .tool_bounds(pane::DisclosureId::Group("wrap-tool".into()))
+                .expect("completed tool group")
+                .center()
+        });
+        cx.simulate_click(group, gpui::Modifiers::none());
+        tick(cx);
+
         let chevron = view.read_with(cx, |view, _| {
             view.panes[0].tool_bounds("wrap-tool").unwrap().center()
         });
@@ -10231,7 +10263,7 @@ mod tests {
                         Body::Thinking(_) => {
                             vec![format!("thinking-{}-{:?}", pane.text_namespace(), block.id)]
                         }
-                        Body::Tool(_) => (1..=2)
+                        Body::Tool(_) => (2..=3)
                             .map(|ordinal| {
                                 format!(
                                     "literal-{}-{:?}-{ordinal}",
@@ -10263,7 +10295,7 @@ mod tests {
         let (mut core, fake) = cockpit("transcript-spacing", 1);
         let thread = core.threads()[0];
         core.send(thread, "Check the build".into());
-        let (_, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         for index in 0..2 {
             fake.streams.borrow()[0]
                 .send(SessionEvent::ToolStarted {
@@ -10294,7 +10326,130 @@ mod tests {
             let answer = cx.debug_bounds("transcript-answer").unwrap();
             assert_eq!(tools.top() - prompt.bottom(), px(crate::theme::BLOCK_GAP));
             assert_eq!(answer.top() - tools.bottom(), px(crate::theme::BLOCK_GAP));
+            let prompt_start = caret(&view, cx, 0, 0).x;
+            let answer_start = caret(&view, cx, 3, 0).x;
+            assert_eq!(
+                prompt_start, answer_start,
+                "prompt and answer text share the tool summary's reading column"
+            );
+            assert_eq!(
+                answer_start - tools.left(),
+                px(17.5),
+                "17px native gutter plus the caret helper's half-pixel inset"
+            );
         }
+    }
+
+    #[gpui::test]
+    fn singleton_tool_disclosure_keeps_the_users_choice_when_it_settles(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("singleton-disclosure", 1);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(1000.)));
+        let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+
+        // Two separate turns: one call the operator closes before completion,
+        // and one they leave open. Grouping must honor both choices.
+        for (id, leave_open) in [("closed", false), ("open", true)] {
+            fake.streams.borrow()[0]
+                .send(SessionEvent::TextDelta {
+                    text: format!("Checking {id}.\n\n"),
+                })
+                .unwrap();
+            fake.streams.borrow()[0]
+                .send(SessionEvent::ToolStarted {
+                    id: id.into(),
+                    name: "Read".into(),
+                    input: serde_json::json!({"file_path": "sample.txt"}),
+                })
+                .unwrap();
+            tick(cx);
+            let control = view.read_with(cx, |view, _| {
+                view.panes[0].tool_bounds(id).unwrap().center()
+            });
+            cx.simulate_click(control, gpui::Modifiers::none());
+            tick(cx);
+            if !leave_open {
+                cx.simulate_click(control, gpui::Modifiers::none());
+                tick(cx);
+            }
+            fake.streams.borrow()[0]
+                .send(SessionEvent::ToolCompleted {
+                    id: id.into(),
+                    output: "first  line\nsecond   line".into(),
+                    is_error: false,
+                    result: ferrite_core::ToolResult::Opaque,
+                })
+                .unwrap();
+            tick(cx);
+            let selector = if leave_open {
+                "tool-group-open"
+            } else {
+                "tool-group-closed"
+            };
+            assert!(
+                cx.debug_bounds(selector).is_some(),
+                "a settled singleton has the same compact activity row as several tools"
+            );
+            view.read_with(cx, |view, _| {
+                let text = view.selection.registered(thread);
+                assert!(text.iter().any(|(_, _, _, text)| text == "Read 1 file"));
+                assert_eq!(
+                    text.iter()
+                        .any(|(_, _, _, text)| text.lines().any(|line| line == "second   line")),
+                    leave_open,
+                    "settling must honor the operator's last disclosure choice"
+                );
+            });
+        }
+
+        fake.streams.borrow()[0]
+            .send(SessionEvent::ToolStarted {
+                id: "sibling".into(),
+                name: "Bash".into(),
+                input: serde_json::json!({"command": "printf 'output'"}),
+            })
+            .unwrap();
+        fake.streams.borrow()[0]
+            .send(SessionEvent::ToolCompleted {
+                id: "sibling".into(),
+                output: "failure preview\nprivate detail".into(),
+                is_error: true,
+                result: ferrite_core::ToolResult::Opaque,
+            })
+            .unwrap();
+        tick(cx);
+        view.read_with(cx, |view, _| {
+            let text = view.selection.registered(thread);
+            assert!(
+                text.iter()
+                    .any(|(_, _, _, text)| text.lines().any(|line| line == "second   line")),
+                "adding a sibling must preserve the first call's open details"
+            );
+            assert!(
+                !text
+                    .iter()
+                    .any(|(_, _, _, text)| text.contains("private detail")),
+                "the new sibling's detailed output starts independently collapsed"
+            );
+        });
+        let group = view.read_with(cx, |view, _| {
+            view.panes[0]
+                .tool_bounds(pane::DisclosureId::Group("open".into()))
+                .unwrap()
+                .center()
+        });
+        cx.simulate_click(group, gpui::Modifiers::none());
+        tick(cx);
+        view.read_with(cx, |view, _| {
+            let text = view.selection.registered(thread);
+            assert!(
+                text.iter().any(|(_, _, _, text)| text == "failure preview"),
+                "closing a group must keep its failure preview visible"
+            );
+            assert!(!text
+                .iter()
+                .any(|(_, _, _, text)| text.lines().any(|line| line == "second   line")));
+        });
     }
 
     #[gpui::test]
@@ -10472,7 +10627,7 @@ mod tests {
                 .selection
                 .registered(thread)
                 .iter()
-                .any(|(_, _, _, text)| text == "let answer = 42;"));
+                .any(|(_, _, _, text)| text == command));
         });
 
         // Subsequent events must not prune an input-only disclosure.
@@ -10570,8 +10725,20 @@ mod tests {
             );
         });
 
+        let group = view.read_with(cx, |view, _| {
+            view.panes[0]
+                .tool_bounds(pane::DisclosureId::Group("toolu_9".into()))
+                .expect("completed tool group")
+                .center()
+        });
+        cx.simulate_click(group, gpui::Modifiers::none());
+        tick(cx);
+
         let collapsed = view.read_with(cx, |view, _| view.selection.registered(thread));
-        assert!(collapsed.iter().any(|(_, _, _, text)| text == "first line"));
+        assert!(collapsed
+            .iter()
+            .any(|(_, _, _, text)| text == "Bash(echo hi)"));
+        assert!(!collapsed.iter().any(|(_, _, _, text)| text == "first line"));
         let chevron = view.read_with(cx, |view, _| {
             let bounds = view.panes[0]
                 .tool_bounds("toolu_9")
@@ -10697,7 +10864,7 @@ mod tests {
         cx.run_until_parked();
         view.read_with(cx, |view, _| {
             assert!(!view.panes[0].tool_expanded("toolu_9"));
-            assert!(view
+            assert!(!view
                 .selection
                 .registered(thread)
                 .iter()
@@ -10843,8 +11010,12 @@ mod tests {
             .unwrap();
         tick(cx);
         let before = cx
-            .debug_bounds("progress-caption-Checking fold call sites")
-            .expect("native heading is pinned above the composer");
+            .debug_bounds("progress-metadata")
+            .expect("live metadata is pinned above the composer");
+        assert!(
+            cx.debug_bounds("progress-caption-Thinking").is_some(),
+            "visible reasoning is not duplicated in the pinned row"
+        );
         view.update(cx, |view, cx| {
             view.panes[0]
                 .transcript()
@@ -10856,9 +11027,13 @@ mod tests {
             cx.notify();
         });
         cx.run_until_parked();
-        assert_eq!(
+        assert!(
             cx.debug_bounds("progress-caption-Checking fold call sites")
-                .unwrap(),
+                .is_some(),
+            "pinned headline remains available when its history is offscreen"
+        );
+        assert_eq!(
+            cx.debug_bounds("progress-metadata").unwrap(),
             before,
             "scrollback cannot move the progress component"
         );
@@ -10945,6 +11120,15 @@ mod tests {
         tick(cx);
         cx.simulate_input("unsent draft");
 
+        cx.simulate_keystrokes("tab");
+        view.read_with(cx, |view, _| {
+            assert!(view.panes[0].tool_targeted(pane::DisclosureId::Group("toolu_9".into())));
+        });
+        cx.simulate_keystrokes("enter");
+        view.read_with(cx, |view, _| {
+            assert!(view.panes[0].tool_expanded(pane::DisclosureId::Group("toolu_9".into())));
+            assert_eq!(fake.sent.borrow().as_slice(), ["prior prompt"]);
+        });
         cx.simulate_keystrokes("tab");
         view.read_with(cx, |view, _| {
             assert!(view.panes[0].tool_targeted("toolu_9"));

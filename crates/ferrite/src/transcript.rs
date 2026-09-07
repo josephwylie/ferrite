@@ -224,6 +224,23 @@ impl TranscriptView {
         self.scroll.is_following_tail()
     }
 
+    /// Whether the received reasoning caption's own row is mounted in the
+    /// viewport. Cockpit uses this to keep the pinned live caption from
+    /// duplicating historical prose.
+    pub(crate) fn received_reasoning_is_visible(&self, caption: &str) -> bool {
+        self.rows.rows().iter().enumerate().any(|(index, row)| {
+            // Parent Pane rendering asks before the list's first child has
+            // measured. At the followed tail the final row is nevertheless
+            // the visible row; once geometry exists, use its exact bounds.
+            (self.scroll.item_is_visible(index)
+                || (self.scroll.is_following_tail() && index + 1 == self.rows.len()))
+                && row.blocks().iter().any(|block| {
+                    matches!(&block.body, Body::Thinking(thought)
+                        if pane::reasoning_text(thought).0 == caption)
+                })
+        })
+    }
+
     pub(crate) fn scroll_to_bottom(&self, cx: &mut Context<Self>) {
         self.scroll.scroll_to_bottom();
         cx.notify();
@@ -278,7 +295,21 @@ impl TranscriptView {
                 .min_w_0()
                 .w_full()
                 .flex_shrink_0()
-                .child(selection.answer(first, source.to_owned()))
+                .flex()
+                .gap(px(theme::EVENT_GAP))
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .w(px(theme::GUTTER_W))
+                        .text_color(gpui::rgb(theme::TEXT))
+                        .child("●"),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .child(selection.answer(first, source.to_owned())),
+                )
                 .into_any_element();
         }
         if let Some(activity) = ToolActivity::at_start(blocks) {
@@ -335,36 +366,33 @@ impl TranscriptView {
         _cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let call = call.clone();
-        #[cfg(test)]
-        let measured = call.clone();
         let control = pane::tool_disclosure_control(
             &call,
             self.tool_state(&call) == DisclosureState::Expanded,
             self.tool_targeted(&call),
             &self.input.disclosure_focus,
-        )
-        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-            cx.stop_propagation();
-            gpui::base::TextSelection::clear(window, cx);
-            view.update(cx, |view, cx| {
-                view.clear_output_selection(cx);
-                cx.emit(TranscriptEvent::ToggleDisclosure(call.clone()));
-            });
-            window.focus(&view.read(cx).tool_focus(), cx);
-        });
+        );
         #[cfg(test)]
-        {
+        let control = {
             let sink = self.input.disclosure_bounds.clone();
-            return div()
-                .child(control)
-                .on_children_prepainted(move |bounds, _, _| {
-                    if let Some(bounds) = bounds.first() {
-                        sink.borrow_mut().insert(measured.clone(), *bounds);
-                    }
-                })
-                .into_any_element();
-        }
-        #[cfg(not(test))]
+            let measured = call.clone();
+            control.on_children_prepainted(move |bounds, _, _| {
+                if let Some(bounds) = bounds.first() {
+                    sink.borrow_mut().insert(measured.clone(), *bounds);
+                }
+            })
+        };
+        let control = control
+            .id(SharedString::from(format!("tool-disclosure-{call}")))
+            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                cx.stop_propagation();
+                gpui::base::TextSelection::clear(window, cx);
+                view.update(cx, |view, cx| {
+                    view.clear_output_selection(cx);
+                    cx.emit(TranscriptEvent::ToggleDisclosure(call.clone()));
+                });
+                window.focus(&view.read(cx).tool_focus(), cx);
+            });
         control.into_any_element()
     }
 }
@@ -402,7 +430,13 @@ impl Render for TranscriptView {
         )
         .size_full()
         .min_h_0();
+        let scroll = self.scroll.clone();
         let list = div()
+            .on_children_prepainted(move |_, window, cx| {
+                if scroll.did_layout() {
+                    window.defer(cx, |window, _| window.refresh());
+                }
+            })
             .id(SharedString::from(format!(
                 "transcript-{}",
                 self.input.namespace

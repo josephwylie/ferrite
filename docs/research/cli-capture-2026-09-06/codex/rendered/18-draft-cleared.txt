@@ -1,0 +1,44 @@
+      - Nested item with a long continuation that should    
+        wrap naturally when the terminal width becomes      
+        narrow enough to require another row.               
+                                                            
+  - Second outer item.                                      
+                                                            
+  9. Ninth item.                                            
+  10. Tenth item with continuation text long enough to wrap 
+     in a narrow terminal and show the hanging indentation. 
+                                                            
+  > Quoted alpha  beta.                                     
+  > Second quoted line.                                     
+                                                            
+   Name     Count    Note                                   
+  ━━━━━━━  ━━━━━━━  ━━━━━━━━━━━━━━━━━━━━━                   
+   Alpha        2    two  spaces                            
+  ───────  ───────  ─────────────────────                   
+   Beta        12    a longer table cell                    
+                                                            
+  ———                                                       
+                                                            
+  one two                                                   
+  one  two   three    four                                  
+      four leading spaces                                   
+        actual tab character                                
+  trailing two spaces:                                      
+                                                            
+  Unicode: café naïve → ✓ 界 é                              
+                                                            
+  0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuv
+  wxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqr
+  stuvwxyz                                                  
+                                                            
+────────────────────────────────────────────────────────────
+                                                            
+                                                            
+› Ask Codex to do anything                                  
+                                                            
+  Ready · gpt-5.6-terra low · Context 97% left · weekly 74%…
+                                                            
+                                                            
+                                                            
+                                                            
+                                                            

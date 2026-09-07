@@ -16,6 +16,7 @@ use ferrite_core::activity::Subject;
 use ferrite_core::cockpit::{ThreadView, ToolTiming};
 use ferrite_core::docview::{is_test_run, passed_count, Instruments, Level, Tests};
 use ferrite_core::followup::{self, Followup};
+use ferrite_core::progress::Phase;
 use ferrite_core::roster::{DraftId, PaneIdentity};
 use ferrite_core::store::Provider;
 use ferrite_core::transcript::{
@@ -126,6 +127,9 @@ impl std::fmt::Display for DisclosureId {
 
 struct ToolDisclosure {
     expanded: HashSet<DisclosureId>,
+    /// A completed singleton inherits its call's open state until the
+    /// operator explicitly closes the group.
+    collapsed_groups: HashSet<String>,
     target: Option<DisclosureId>,
     focus: FocusHandle,
     #[cfg(test)]
@@ -210,6 +214,7 @@ impl PaneView {
             decision_focus: cx.focus_handle(),
             disclosure: ToolDisclosure {
                 expanded: HashSet::new(),
+                collapsed_groups: HashSet::new(),
                 target: None,
                 focus: cx.focus_handle(),
                 #[cfg(test)]
@@ -263,6 +268,7 @@ impl PaneView {
             decision_focus: cx.focus_handle(),
             disclosure: ToolDisclosure {
                 expanded: HashSet::new(),
+                collapsed_groups: HashSet::new(),
                 target: None,
                 focus: cx.focus_handle(),
                 #[cfg(test)]
@@ -366,6 +372,7 @@ impl PaneView {
                 selection_scope: gpui::base::TextSelectionScopeId::new(),
                 disclosure: ToolDisclosure {
                     expanded: HashSet::new(),
+                    collapsed_groups: HashSet::new(),
                     target: None,
                     focus: cx.focus_handle(),
                     #[cfg(test)]
@@ -409,7 +416,15 @@ impl PaneView {
     }
 
     pub(crate) fn toggle_tool(&mut self, call: &DisclosureId) {
-        if !self.disclosure.expanded.remove(call) {
+        if let DisclosureId::Group(group) = call {
+            if self.tool_state(call) == DisclosureState::Expanded {
+                self.disclosure.expanded.remove(call);
+                self.disclosure.collapsed_groups.insert(group.clone());
+            } else {
+                self.disclosure.collapsed_groups.remove(group);
+                self.disclosure.expanded.insert(call.clone());
+            }
+        } else if !self.disclosure.expanded.remove(call) {
             self.disclosure.expanded.insert(call.clone());
         }
         self.disclosure.target = Some(call.clone());
@@ -417,7 +432,18 @@ impl PaneView {
     }
 
     pub(crate) fn tool_state(&self, call: impl Into<DisclosureId>) -> DisclosureState {
-        if self.disclosure.expanded.contains(&call.into()) {
+        let call = call.into();
+        let inherited_open = match &call {
+            DisclosureId::Group(group) => {
+                !self.disclosure.collapsed_groups.contains(group)
+                    && self
+                        .disclosure
+                        .expanded
+                        .contains(&DisclosureId::Tool(group.clone()))
+            }
+            _ => false,
+        };
+        if self.disclosure.expanded.contains(&call) || inherited_open {
             DisclosureState::Expanded
         } else {
             DisclosureState::Collapsed
@@ -480,8 +506,12 @@ impl PaneView {
 
     pub(crate) fn prune_tools(&mut self, calls: &HashSet<DisclosureId>) {
         let expanded = self.disclosure.expanded.clone();
+        let collapsed_groups = self.disclosure.collapsed_groups.clone();
         let target = self.disclosure.target.clone();
         self.disclosure.expanded.retain(|call| calls.contains(call));
+        self.disclosure
+            .collapsed_groups
+            .retain(|group| calls.contains(&DisclosureId::Group(group.clone())));
         if self
             .disclosure
             .target
@@ -490,7 +520,10 @@ impl PaneView {
         {
             self.disclosure.target = None;
         }
-        if self.disclosure.expanded != expanded || self.disclosure.target != target {
+        if self.disclosure.expanded != expanded
+            || self.disclosure.collapsed_groups != collapsed_groups
+            || self.disclosure.target != target
+        {
             self.disclosure_revision = self.disclosure_revision.wrapping_add(1);
         }
     }
@@ -504,8 +537,20 @@ impl PaneView {
     pub(crate) fn transcript_disclosure_snapshot(
         &self,
     ) -> (HashSet<DisclosureId>, Option<DisclosureId>, FocusHandle) {
+        let mut expanded = self.disclosure.expanded.clone();
+        // The retained renderer receives a snapshot, so materialize inherited
+        // singleton-group openness here. Its display revision changes for
+        // every state transition above, including an explicit group close.
+        for call in &self.disclosure.expanded {
+            let DisclosureId::Tool(group) = call else {
+                continue;
+            };
+            if !self.disclosure.collapsed_groups.contains(group) {
+                expanded.insert(DisclosureId::Group(group.clone()));
+            }
+        }
         (
-            self.disclosure.expanded.clone(),
+            expanded,
             self.disclosure.target.clone(),
             self.disclosure.focus.clone(),
         )
@@ -517,7 +562,7 @@ impl PaneView {
 
     #[cfg(test)]
     pub(crate) fn tool_expanded(&self, call: impl Into<DisclosureId>) -> bool {
-        self.disclosure.expanded.contains(&call.into())
+        self.tool_state(call) == DisclosureState::Expanded
     }
 
     #[cfg(test)]
@@ -577,6 +622,9 @@ pub struct PaneWiring {
     /// row layout; the Pane only places the allocated viewport.
     pub transcript: Option<AnyElement>,
     pub attachments: Option<AnyElement>,
+    /// The retained transcript reports whether its received-reasoning row is
+    /// mounted; this keeps the pinned live progress caption singular.
+    pub received_reasoning_visible: bool,
     /// The open `/` or `@` popover for this Pane's Composer, rows wired to
     /// their picks in the cockpit and hung above the input line here (#23).
     pub menu: Option<AnyElement>,
@@ -744,6 +792,7 @@ pub fn render_pane(
     let PaneWiring {
         transcript: retained_transcript,
         attachments,
+        received_reasoning_visible,
         menu,
         model_picker,
         usage_meter,
@@ -894,7 +943,11 @@ pub fn render_pane(
                         .debug_selector(|| "transcript-progress".into())
                         .px(px(theme::PANE_PAD_X))
                         .py(px(theme::KEYS_GAP))
-                        .child(working_line(transcript, false)),
+                        .child(working_line(
+                            transcript,
+                            false,
+                            received_reasoning_visible,
+                        )),
                 );
             }
             // The Decision card is a **sibling of the body**, not a child
@@ -919,7 +972,12 @@ pub fn render_pane(
                 }
             }
             if let Some(decision) = decision.filter(|_| activity_decisions.is_none()) {
-                pane = pane.child(decision_card(decision, decide.take()));
+                pane = pane.child(decision_card(
+                    decision,
+                    decide.take(),
+                    &view.rich,
+                    view.text_namespace(),
+                ));
             }
             if let Some(decisions) = activity_decisions {
                 pane = pane.child(decisions);
@@ -1573,7 +1631,7 @@ fn l2_cell(
                 .child("❯ idle"),
         );
     } else if transcript.status() == Status::Streaming {
-        body = body.child(working_line(transcript, true));
+        body = body.child(working_line(transcript, true, false));
     }
 
     let mut content = cell.child(header).child(body).children(composer);
@@ -2304,10 +2362,14 @@ pub fn rendered_disclosures(view: &PaneView, blocks: &[Block], level: Level) -> 
 /// The provider's live caption, followed by a quieter metadata line.
 /// Elapsed time and output tokens belong to the turn; command details stay
 /// in their tool disclosures.
-fn working_line(transcript: &Transcript, compact: bool) -> Div {
+fn working_line(
+    transcript: &Transcript,
+    compact: bool,
+    received_reasoning_is_visible: bool,
+) -> Div {
     let mut facts: Vec<String> = Vec::new();
     if let Some(elapsed) = transcript.turn_elapsed() {
-        facts.push(duration_label(elapsed).to_string());
+        facts.push(format!("{} elapsed", duration_label(elapsed)));
     }
     let tokens = transcript.turn_output_tokens();
     if tokens > 0 && !compact {
@@ -2317,7 +2379,13 @@ fn working_line(transcript: &Transcript, compact: bool) -> Div {
         facts.push("esc to interrupt".into());
     }
     let progress = transcript.progress();
-    let caption = progress.caption();
+    let caption = progress.caption().map(|caption| {
+        if !compact && received_reasoning_is_visible {
+            progress.phase.map(Phase::label).unwrap_or("Working").into()
+        } else {
+            caption
+        }
+    });
     let mut row = div()
         .flex()
         .flex_col()
@@ -2338,19 +2406,24 @@ fn working_line(transcript: &Transcript, compact: bool) -> Div {
                 .child(
                     div()
                         .debug_selector(|| "progress-reasoning".into())
-                        .flex()
-                        .items_center()
-                        .gap(px(theme::ROW_ICON_GAP))
                         .min_w_0()
                         .w_full()
-                        .truncate()
+                        .flex()
+                        .items_start()
+                        .gap(px(theme::EVENT_GAP))
                         .text_color(rgb(TEXT_2))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .child(icons::animated_ferrite_icon(
-                            theme::ROW_ICON,
-                            "progress-ferrite",
+                        .child(live_text(
+                            div().flex_shrink_0().child("◐"),
+                            "live-progress-indicator".into(),
                         ))
-                        .child(caption),
+                        .child(
+                            div()
+                                .min_w_0()
+                                .flex_1()
+                                .truncate()
+                                .child(SharedString::from(caption)),
+                        ),
                 )
                 .child(
                     div()
@@ -2363,11 +2436,7 @@ fn working_line(transcript: &Transcript, compact: bool) -> Div {
                 ),
         );
     }
-    div()
-        .w_full()
-        .min_w_0()
-        .flex_shrink_0()
-        .child(live_text(row, "live-progress".into()))
+    div().w_full().min_w_0().flex_shrink_0().child(row)
 }
 
 pub(crate) fn live_text(row: Div, id: SharedString) -> AnyElement {
@@ -2883,7 +2952,12 @@ fn queued_line(held: &str) -> impl IntoElement {
 ///
 /// Kept free of focus and key wiring so it can be drawn — and smoke-
 /// rendered — on its own; the keycaps arrive wired from the cockpit (#26).
-fn decision_card(decision: &Decision, decide: Option<AnyElement>) -> Div {
+fn decision_card(
+    decision: &Decision,
+    decide: Option<AnyElement>,
+    cache: &crate::rich::TextCache,
+    namespace: SharedString,
+) -> Div {
     let subject = decision_subject(decision);
     let wants = decision_wants(decision);
     div()
@@ -2905,11 +2979,12 @@ fn decision_card(decision: &Decision, decide: Option<AnyElement>) -> Div {
             div()
                 .flex()
                 .flex_col()
+                .gap(px(theme::KEYS_GAP))
                 .flex_1()
                 .min_w_0()
                 .child(
                     div()
-                        .truncate()
+                        .flex_shrink_0()
                         .text_size(px(theme::FS_MD))
                         .line_height(relative(theme::LINE_UI))
                         .font_weight(FontWeight::SEMIBOLD)
@@ -2918,14 +2993,63 @@ fn decision_card(decision: &Decision, decide: Option<AnyElement>) -> Div {
                 )
                 .child(
                     div()
+                        .flex_shrink_0()
                         .truncate()
                         .text_size(px(theme::FS_SM))
                         .line_height(relative(theme::LINE_UI))
                         .text_color(rgb(TEXT_MUTED))
                         .child(wants),
-                ),
+                )
+                .children(approval_input(
+                    decision,
+                    cache,
+                    format!("approval-input-{namespace}-{}", decision.id).into(),
+                )),
         )
         .children(decide)
+}
+
+/// The exact tool input an approval would send. Commands retain their source;
+/// other provider input remains inspectable as its JSON value.
+pub(crate) fn approval_input(
+    decision: &Decision,
+    cache: &crate::rich::TextCache,
+    id: SharedString,
+) -> Option<AnyElement> {
+    use gpui::component::scroll::ScrollableElement as _;
+
+    if question_of(decision).is_some() {
+        return None;
+    }
+    let source = decision
+        .input
+        .get("command")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .or_else(|| decision.input.as_str().map(str::to_owned))
+        .or_else(|| {
+            (!decision.input.is_null()).then(|| {
+                serde_json::to_string_pretty(&decision.input)
+                    .expect("decision input is serializable")
+            })
+        })?;
+    Some(
+        div()
+            .debug_selector(|| "approval-input".into())
+            .w_full()
+            .min_w_0()
+            .flex_shrink_0()
+            .max_h(px(160.))
+            .overflow_y_scrollbar()
+            .child(crate::rich::Literal {
+                id,
+                document: None,
+                text: source.into(),
+                highlights: Vec::new(),
+                cache: cache.clone(),
+            })
+            .into_any_element(),
+    )
 }
 
 /// The Decision's subject — what it wants to do, tool-prefixed the comps'
@@ -3731,7 +3855,7 @@ pub fn popover_footer(hints: &'static str) -> Div {
 /// A preview of received text, never a second provider reasoning channel.
 /// Keep a short first line in the header; disclose only what follows it.
 /// A shortened first line needs the original text in the disclosure too.
-fn reasoning_text(thought: &str) -> (String, Option<&str>) {
+pub(crate) fn reasoning_text(thought: &str) -> (String, Option<&str>) {
     let thought = thought.trim();
     let (first, rest) = thought.split_once('\n').unwrap_or((thought, ""));
     let first = first.trim();
@@ -3783,12 +3907,22 @@ pub(crate) fn render_block(
             let (text, files) = ferrite_core::prompt_files::split(line.clone());
             let row = paragraph(row, TEXT_STRONG)
                 .debug_selector(|| "transcript-prompt".into())
-                .px(px(theme::CODE_PAD_X))
+                .relative()
+                .px(px(theme::INDENT))
                 .py(px(theme::PROMPT_PAD_Y))
                 .rounded(px(theme::R_CONTROL))
                 .bg(rgb(RAISED));
             row.flex()
                 .flex_col()
+                .child(
+                    div()
+                        .absolute()
+                        .left(px(0.))
+                        .top(px(theme::PROMPT_PAD_Y))
+                        .w(px(theme::GUTTER_W))
+                        .text_color(rgb(SEP))
+                        .child("❯"),
+                )
                 .when(!text.is_empty(), |row| {
                     row.child(selection.line(block.id, text, Vec::new()))
                 })
@@ -3896,11 +4030,10 @@ pub(crate) fn render_block(
         Body::Meta(text) => paragraph(row, TEXT_2)
             .child(selection.line(block.id, text.clone(), Vec::new()))
             .into_any_element(),
-        // `.codeblock` (§E.7): 4px radius on `--raised`, a language label
-        // at `5px 10px 0`, then the `pre` at `4px 10px 8px`. No border, no
-        // language bar, no rule between them.
+        // Code keeps literal indentation and highlighting without a
+        // separate language header or raised container.
         Body::Code {
-            language,
+            language: _,
             source,
             tokens,
         } => row
@@ -3908,25 +4041,13 @@ pub(crate) fn render_block(
                 div()
                     .flex()
                     .flex_col()
-                    .bg(rgb(RAISED))
-                    .rounded(px(theme::R_CHIP))
                     .overflow_hidden()
                     .text_size(px(theme::FS_MD))
                     .line_height(relative(theme::LINE_BODY))
-                    .children(language.as_ref().map(|language| {
-                        div()
-                            .px(px(theme::CODE_PAD_X))
-                            .pt(px(theme::CODE_LANG_PAD_T))
-                            .text_color(rgb(TEXT_MUTED))
-                            .child(SharedString::from(language.clone()))
-                    }))
                     .child(
                         div()
                             .flex()
                             .flex_col()
-                            .px(px(theme::CODE_PAD_X))
-                            .pt(px(theme::CODE_PRE_PAD_T))
-                            .pb(px(theme::CODE_PRE_PAD_B))
                             .text_color(rgb(TEXT_2))
                             // One child per hard line. Handed the whole
                             // multi-line source, the shaper drops the run of
@@ -4125,7 +4246,10 @@ fn render_tool(
                     .text_size(px(theme::FS_MONO))
                     .line_height(relative(theme::LINE_BODY))
                     .text_color(rgb(TEXT_MUTED))
-                    .child(duration_label(total)),
+                    .child(SharedString::from(format!(
+                        "{} elapsed",
+                        duration_label(total)
+                    ))),
             ));
         }
         line = line.child(div().flex_1().min_w_0()).child(trail);
@@ -4244,7 +4368,21 @@ where
     } else {
         activity.summary()
     };
-    let summary = div().min_w_0().child(label);
+    let counts = label
+        .match_indices(|character: char| character.is_ascii_digit())
+        .map(|(at, digit)| {
+            (
+                at..at + digit.len(),
+                HighlightStyle {
+                    font_weight: Some(FontWeight::BOLD),
+                    ..Default::default()
+                },
+            )
+        })
+        .collect();
+    let summary = div()
+        .min_w_0()
+        .child(selection.line(activity.blocks[0].id, label, counts));
     let summary = if activity.running > 0 {
         live_text(summary, format!("live-group-{call}").into())
     } else {
@@ -4406,7 +4544,7 @@ fn result_ink(state: &ToolState) -> u32 {
 /// column's width. Blank lines keep their height so the shape of the
 /// output survives.
 fn output_block(block: BlockId, part: &str, text: &str, ink: u32, selection: &TextRuns) -> Div {
-    let mut rows = div()
+    let rows = div()
         .flex()
         .flex_col()
         .w_full()
@@ -4440,25 +4578,25 @@ fn output_block(block: BlockId, part: &str, text: &str, ink: u32, selection: &Te
                 ),
         );
     }
-    for (index, line) in text.split('\n').enumerate() {
-        let run = if line.is_empty() {
-            selection.line(block, " ", Vec::new())
-        } else {
-            selection.line(block, line.to_string(), Vec::new())
-        };
-        let mut row = div().flex().w_full().min_w_0().gap(px(theme::EVENT_GAP));
-        row = row.child(
-            div()
-                .flex_shrink_0()
-                .w(px(theme::FS_MD * theme::MONO_ADVANCE))
-                .text_color(rgb(SEP))
-                .child(if index == 0 { "⎿" } else { " " }),
-        );
-        let mut body = div().flex_1().min_w_0().child(run);
-        body.style().size.width = None;
-        rows = rows.child(row.child(body));
-    }
-    rows
+    rows.child(
+        div()
+            .flex()
+            .w_full()
+            .min_w_0()
+            .gap(px(theme::EVENT_GAP))
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .w(px(theme::FS_MD * theme::MONO_ADVANCE))
+                    .text_color(rgb(SEP))
+                    .child("⎿"),
+            )
+            .child(div().flex_1().min_w_0().child(selection.line(
+                block,
+                text.to_string(),
+                Vec::new(),
+            ))),
+    )
 }
 
 /// `.result` (§E.10): `padding: 1px 0 3px 17px`, an 8px gap, 10.5px muted
@@ -4509,7 +4647,7 @@ pub fn tool_disclosure_control(
     expanded: bool,
     targeted: bool,
     focus: &FocusHandle,
-) -> Stateful<Div> {
+) -> Div {
     let control = crate::components::button(SharedString::from(format!("tool-button-{call}")))
         .w(px(theme::TOOL_DISCLOSURE_HIT))
         .h(px(theme::TOOL_DISCLOSURE_HIT))
@@ -4532,7 +4670,6 @@ pub fn tool_disclosure_control(
             TEXT_MUTED,
         ));
     div()
-        .id(SharedString::from(format!("tool-disclosure-{call}")))
         .absolute()
         .left(px((theme::GUTTER_W - theme::TOOL_DISCLOSURE_HIT) / 2.))
         .top(px(-1.))
@@ -4771,14 +4908,9 @@ fn inline(spans: &[Span]) -> (String, Vec<(std::ops::Range<usize>, HighlightStyl
 fn span_style(style: Style) -> Option<HighlightStyle> {
     match style {
         Style::Plain => None,
-        // Inline `code` (§E.4): a `--raised` chip. The prototype leaves the
-        // ink inherited; the operator asked for an ink of its own, so a
-        // path or a flag stands out of the sentence and not only its
-        // ground. A gpui highlight carries no padding or radius — see
-        // `prose` for why the run is flat.
+        // Inline code keeps its own ink without adding a chip to prose.
         Style::Code => Some(HighlightStyle {
             color: Some(rgb(INLINE_CODE_INK).into()),
-            background_color: Some(rgb(RAISED).into()),
             ..Default::default()
         }),
         // `strong` (§E.5): weight 600 in `--text-strong`.
@@ -4932,7 +5064,7 @@ mod tests {
 
     impl Render for ShowsProgress {
         fn render(&mut self, _: &mut gpui::Window, _: &mut Context<Self>) -> impl IntoElement {
-            div().w_full().child(working_line(&self.0, false))
+            div().w_full().child(working_line(&self.0, false, false))
         }
     }
 
@@ -5142,6 +5274,7 @@ mod tests {
     }
 
     struct ShowsDecisions {
+        cache: crate::rich::TextCache,
         decisions: Vec<Decision>,
     }
 
@@ -5167,6 +5300,8 @@ mod tests {
                                 .child(keycap_always())
                                 .into_any_element(),
                         ),
+                        &self.cache,
+                        "decision-reference".into(),
                     )
                 }))
                 .children(self.decisions.iter().map(|decision| {
@@ -5468,6 +5603,7 @@ mod tests {
 
     #[gpui::test]
     fn a_blocked_thread_paints_its_decision_card(cx: &mut TestAppContext) {
+        cx.update(gpui::component::init);
         let event = crate::demo::script()
             .into_iter()
             .map(|step| step.event)
@@ -5487,6 +5623,7 @@ mod tests {
         };
 
         let (_, cx) = cx.add_window_view(|_, _| ShowsDecisions {
+            cache: Default::default(),
             decisions: vec![decision, unreadable],
         });
         cx.simulate_resize(size(px(900.), px(300.)));
@@ -5794,7 +5931,7 @@ mod tests {
     fn inline_code_and_links_carry_their_own_ink() {
         let code = span_style(Style::Code).unwrap();
         assert_eq!(code.color, Some(rgb(INLINE_CODE_INK).into()));
-        assert_eq!(code.background_color, Some(rgb(RAISED).into()));
+        assert_eq!(code.background_color, None);
         let link = span_style(Style::Link).unwrap();
         assert_eq!(link.color, Some(rgb(LINK_INK).into()));
         assert_eq!(

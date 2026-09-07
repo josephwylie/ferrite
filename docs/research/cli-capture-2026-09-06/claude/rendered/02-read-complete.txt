@@ -1,0 +1,44 @@
+                                                                                                                        
+ ▐▛███▛█   Claude Code v2.1.263                                                                                         
+▝▜██████▀  Fable 5.1 with high effort · Claude Max                                                                      
+  ▝▝ ▝▝    /private/var/folders/5y/hnh41b2j29z8kqxy7ftzfdn80000gn/T/ferrite-cli-fixture-2qxmbany                        
+                                                                                                                        
+                                                                                                                        
+❯ Read only sample.txt and sample.py in this synthetic fixture directory using the built-in Read tool. Do not modify    
+  files, inspect anything outside this directory, use network tools, or delegate. Briefly announce the task before      
+  reading. After reading, give a short response with a heading, bold text, inline code, two bullets, and a fenced       
+  Python example. Preserve the double and triple spaces in the fixture when quoting it.                                 
+                                                                                                                        
+⏺ Reading sample.txt and sample.py.                                                                                     
+                                                                                                                        
+  Read 2 files                                                                                                          
+                                                                                                                        
+⏺ Fixture contents                                                                                                      
+                                                                                                                        
+  sample.txt is a terminal transcript fixture with mixed whitespace and Unicode. sample.py defines greet and prints its 
+  result.                                                                                                               
+                                                                                                                        
+  - Spacing line quoted verbatim: one  two   three    four (double, triple, quadruple spaces), plus a tab-indented line 
+    and Unicode café naïve → ✓ 界 é.                                                                                    
+  - The Python file is two statements: a function returning an f-string, then a print call.                             
+                                                                                                                        
+  def greet(name):                                                                                                      
+      return f'Hello, {name}!'                                                                                          
+                                                                                                                        
+  print(greet('world'))  # Hello, world!                                                                                
+                                                                                                                        
+✻ Worked for 7s · done 8:53 pm                                                                                          
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ run sample.py                                                                                                         
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on · ? for shortcuts                                                                               /rc  

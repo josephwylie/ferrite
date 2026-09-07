@@ -1973,6 +1973,7 @@ impl Cockpit {
                     }
                     _ => false,
                 };
+                let completion = completion_observation(thread, &event);
                 fold(thread, &event);
                 let content_changed = event_changes_content(&event);
                 let applied = match &event {
@@ -2007,6 +2008,46 @@ impl Cockpit {
                     let duration = settled_duration(thread, &event);
                     if let Err(error) = thread.writer.record_event(&event, duration) {
                         thread.report_store_error(error);
+                    }
+                }
+                let completion_accepted = match &event {
+                    SessionEvent::Activity(event) => {
+                        applied.accepted.iter().any(|accepted| accepted == event)
+                    }
+                    _ => applied.main_turn_ended,
+                };
+                if completion_accepted {
+                    if let Some((subject, elapsed_ms, completed_at)) = completion {
+                        let observation = ActivityEvent::CompletionObservation {
+                            subject: subject.clone(),
+                            elapsed_ms,
+                            completed_at: completed_at.clone(),
+                        };
+                        if matches!(&subject, Subject::Subagent(_)) {
+                            thread.buffer_history(&observation);
+                        }
+                        let observed = match subject {
+                            Subject::Main => thread.activity.apply(ActivityInput::Main {
+                                input: Input::CompletionObservation {
+                                    elapsed_ms,
+                                    completed_at: completed_at.clone(),
+                                },
+                                at: Instant::now(),
+                            }),
+                            Subject::Subagent(_) => thread.activity.apply(ActivityInput::Observe {
+                                generation: thread.generation,
+                                event: observation,
+                                at: Instant::now(),
+                            }),
+                        };
+                        if let Err(error) =
+                            thread
+                                .writer
+                                .record_completion(&subject, elapsed_ms, &completed_at)
+                        {
+                            thread.report_store_error(error);
+                        }
+                        update.absorb(observed, true);
                     }
                 }
                 if alias_needs_reload {
@@ -3467,6 +3508,40 @@ fn settled_duration(state: &Thread, event: &SessionEvent) -> Option<Duration> {
     }
 }
 
+fn completion_observation(thread: &Thread, event: &SessionEvent) -> Option<(Subject, u64, String)> {
+    use crate::activity::ExecutionEvent;
+    let (subject, outcome) = match event {
+        SessionEvent::TurnEnded { outcome, .. } => (Subject::Main, outcome),
+        SessionEvent::Activity(ActivityEvent::Content {
+            key,
+            event: ExecutionEvent::TurnEnded { outcome, .. },
+            ..
+        }) => (Subject::Subagent(key.clone()), outcome),
+        SessionEvent::Activity(ActivityEvent::MainContent {
+            event: ExecutionEvent::TurnEnded { outcome, .. },
+            ..
+        }) => (Subject::Main, outcome),
+        SessionEvent::Activity(ActivityEvent::BackgroundTurnEnded { outcome, .. }) => {
+            (Subject::Main, outcome)
+        }
+        _ => return None,
+    };
+    if !matches!(outcome, crate::TurnOutcome::Completed) {
+        return None;
+    }
+    let elapsed = thread
+        .activity
+        .view()
+        .subject(&subject)?
+        .transcript()
+        .turn_elapsed()?;
+    Some((
+        subject,
+        elapsed.as_millis().min(u64::MAX as u128) as u64,
+        chrono::Local::now().format("%H:%M").to_string(),
+    ))
+}
+
 /// Only Session-level metadata belongs here; execution state lives in Activity.
 fn fold(state: &mut Thread, event: &SessionEvent) {
     match event {
@@ -4651,10 +4726,242 @@ mod tests {
             .is_empty());
     }
 
-    /// #22: durations are stamped at ingestion — a call runs on a live
-    /// clock until its completion fixes the total, and a call the cockpit
-    /// never saw live has none. No sleeps: monotonic clocks never run
-    /// backwards, so the invariants hold without waiting on a scheduler.
+    #[test]
+    fn completion_observation_is_quiet_factual_and_unchanged_after_reopen() {
+        let dir = scratch("completion-reference");
+        let fake = Fake::default();
+        let mut cockpit = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake.clone()));
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        cockpit.send(thread, "work".into());
+        fake.streams.borrow()[0].send(text("answer")).unwrap();
+        cockpit.pump();
+        let before = cockpit
+            .thread(thread)
+            .unwrap()
+            .transcript()
+            .turn_elapsed()
+            .unwrap();
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TurnEnded {
+                outcome: crate::TurnOutcome::Completed,
+                cost_usd: Some(0.038),
+            })
+            .unwrap();
+        cockpit.pump();
+        let completion = |cockpit: &Cockpit| {
+            let rows: Vec<_> = cockpit
+                .thread(thread)
+                .unwrap()
+                .transcript()
+                .blocks()
+                .iter()
+                .filter_map(|block| match &block.body {
+                    Body::Meta(text) if text.starts_with("Completed") => Some(text.clone()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(rows.len(), 1, "one quiet historical completion row");
+            rows[0].clone()
+        };
+        let first = completion(&cockpit);
+        let fields: Vec<_> = first.split(" · ").collect();
+        assert_eq!(
+            fields.len(),
+            3,
+            "completion, observed elapsed and local completion time"
+        );
+        let seconds: f64 = fields[1]
+            .strip_suffix("s elapsed")
+            .expect("elapsed is explicitly labelled, not process runtime")
+            .parse()
+            .unwrap();
+        assert!(seconds + 0.1 >= before.as_secs_f64());
+        assert!(fields[2].contains(':'), "human-readable completion time");
+        assert!(
+            !first.contains('$') && !first.contains("0.038"),
+            "provider cost stays private"
+        );
+        fake.streams.borrow()[0].send(ended()).unwrap();
+        cockpit.pump();
+        assert_eq!(
+            completion(&cockpit),
+            first,
+            "repeated end must not invent another completion"
+        );
+        cockpit.park(thread).unwrap();
+        drop(cockpit);
+        let mut reopened = Cockpit::new(Store::open(&dir).unwrap(), Box::new(Fake::default()));
+        reopened.revive(thread).unwrap();
+        assert_eq!(
+            completion(&reopened),
+            first,
+            "replay uses the original observation, never now"
+        );
+        reopened.send(thread, "next turn".into());
+        assert_eq!(
+            completion(&reopened),
+            first,
+            "new work retains historical completion"
+        );
+    }
+
+    #[test]
+    fn completion_observations_follow_only_accepted_live_turn_ends() {
+        use crate::activity::{ActivityEvent, AgentKey, ExecutionEvent, Subject};
+        let (mut cockpit, fake) = cockpit("completion-attribution-reference");
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        let key = AgentKey::new(Provider::Claude, "root", "child");
+        let emit = |event| {
+            fake.streams.borrow()[0]
+                .send(SessionEvent::Activity(event))
+                .unwrap()
+        };
+        let count = |cockpit: &Cockpit, subject: &Subject| {
+            cockpit.thread(thread).unwrap().activity().subject(subject).unwrap()
+            .transcript().blocks().iter().filter(|block| matches!(&block.body, Body::Meta(text) if text.starts_with("Completed"))).count()
+        };
+        emit(ActivityEvent::Content {
+            key: key.clone(),
+            id: Some("live-text".into()),
+            event: ExecutionEvent::Text {
+                text: "Working".into(),
+            },
+        });
+        cockpit.pump();
+        emit(ActivityEvent::HistoryContent {
+            key: key.clone(),
+            id: Some("historical-end".into()),
+            event: ExecutionEvent::TurnEnded {
+                outcome: TurnOutcome::Completed,
+                cost_usd: None,
+            },
+        });
+        cockpit.pump();
+        let subject = Subject::Subagent(key.clone());
+        assert_eq!(
+            count(&cockpit, &subject),
+            0,
+            "historical content has no newly observed completion time"
+        );
+        let end = ActivityEvent::Content {
+            key: key.clone(),
+            id: Some("live-end".into()),
+            event: ExecutionEvent::TurnEnded {
+                outcome: TurnOutcome::Completed,
+                cost_usd: None,
+            },
+        };
+        emit(end.clone());
+        cockpit.pump();
+        assert_eq!(count(&cockpit, &subject), 1);
+        emit(ActivityEvent::Content {
+            key: key.clone(),
+            id: Some("next-text".into()),
+            event: ExecutionEvent::Text {
+                text: "New work".into(),
+            },
+        });
+        cockpit.pump();
+        emit(end);
+        cockpit.pump();
+        assert_eq!(
+            count(&cockpit, &subject),
+            1,
+            "a deduplicated old end cannot stamp the new turn"
+        );
+        fake.streams.borrow()[0]
+            .send(text("Background main work"))
+            .unwrap();
+        cockpit.pump();
+        emit(ActivityEvent::BackgroundTurnEnded {
+            outcome: TurnOutcome::Completed,
+            cost_usd: None,
+        });
+        cockpit.pump();
+        assert_eq!(
+            count(&cockpit, &Subject::Main),
+            1,
+            "observed autonomous work gets the same completion presentation"
+        );
+    }
+
+    #[test]
+    fn child_completion_survives_a_history_read_already_in_flight() {
+        use crate::activity::{ActivityEvent, ActivityInput, AgentKey, ExecutionEvent, Subject};
+        let (mut cockpit, fake) = cockpit("completion-history-race");
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        let key = AgentKey::new(Provider::Claude, "root", "child");
+        let subject = Subject::Subagent(key.clone());
+        let emit = |event| {
+            fake.streams.borrow()[0]
+                .send(SessionEvent::Activity(event))
+                .unwrap()
+        };
+        emit(ActivityEvent::Content {
+            key: key.clone(),
+            id: Some("start".into()),
+            event: ExecutionEvent::Text {
+                text: "Working".into(),
+            },
+        });
+        cockpit.pump();
+        // Arrange the normal evicted-child state, and gate the disk boundary.
+        cockpit
+            .threads
+            .get_mut(&thread)
+            .unwrap()
+            .activity
+            .apply(ActivityInput::Evict(subject.clone()));
+        let (loader, finish) = history::gated_loader();
+        cockpit.history_loader = Some(loader);
+        assert!(cockpit.ensure_subject_history(thread, &subject).unwrap());
+        emit(ActivityEvent::Content {
+            key,
+            id: Some("end".into()),
+            event: ExecutionEvent::TurnEnded {
+                outcome: TurnOutcome::Completed,
+                cost_usd: None,
+            },
+        });
+        cockpit.pump();
+        finish(&cockpit.store);
+        cockpit.pump();
+        let view = cockpit.thread(thread).unwrap().activity();
+        let child = view.subject(&subject).unwrap();
+        assert!(child.retained());
+        assert_eq!(
+            child
+                .transcript()
+                .blocks()
+                .iter()
+                .filter(
+                    |block| matches!(&block.body,Body::Meta(text) if text.starts_with("Completed"))
+                )
+                .count(),
+            1,
+            "a prefix reload must merge the completion observed after its checkpoint"
+        );
+        let completion = |cockpit: &Cockpit| {
+            cockpit.thread(thread).unwrap().activity().subject(&subject).unwrap()
+                .transcript().blocks().iter().filter_map(|block| match &block.body {
+                    Body::Meta(text) if text.starts_with("Completed") => Some(text.clone()),
+                    _ => None,
+                }).collect::<Vec<_>>()
+        };
+        let observed = completion(&cockpit);
+        // A later ordinary reload must use the same persisted observation,
+        // after the in-flight buffer that supplied it above has been consumed.
+        cockpit.threads.get_mut(&thread).unwrap().activity
+            .apply(ActivityInput::Evict(subject.clone()));
+        let (loader, finish) = history::gated_loader();
+        cockpit.history_loader = Some(loader);
+        assert!(cockpit.ensure_subject_history(thread, &subject).unwrap());
+        finish(&cockpit.store);
+        cockpit.pump();
+        assert_eq!(completion(&cockpit), observed,
+            "ordinary disk reload must preserve the exact child completion observation");
+    }
+
     #[test]
     fn tool_calls_are_clocked_at_ingestion() {
         let (mut cockpit, fake) = cockpit("timings");

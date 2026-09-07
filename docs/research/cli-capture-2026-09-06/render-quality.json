@@ -1,0 +1,29 @@
+{
+  "unknown_sequences": [],
+  "style_count": 93,
+  "excluded_resize_race_frames": [
+    {
+      "provider": "claude",
+      "index": 747,
+      "time": 1788694377.125396,
+      "reason": [
+        "grid-overflow:120>80"
+      ]
+    }
+  ],
+  "frame_counts": {
+    "claude": 952,
+    "codex": 707
+  },
+  "packed_grid_bytes": 79194,
+  "render": {
+    "font": "Menlo",
+    "size_px": 16,
+    "cell_width_px": 10,
+    "row_height_px": 22,
+    "padding_px": 20,
+    "dim_opacity": 0.5,
+    "palette_0_15": "xterm reference palette (reconstruction choice)",
+    "cursor": "outline reconstruction; actual cursor shape not derived"
+  }
+}

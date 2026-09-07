@@ -1,0 +1,44 @@
+                                                                                                                        
+                                                                                                                        
+✻ Baked for 10s · done 9:02 pm                                                                                          
+                                                                                                                        
+❯ /model                                                                                                                
+  ⎿  Kept model as Fable 5.1                                                                                            
+                                                                                                                        
+❯ Run only this harmless waiting command once: python3 -c 'import time; print("waiting fixture", flush=True);           
+  time.sleep(20); print("finished fixture", flush=True)'. Do not write files or use external tools. I will test the     
+  queue and interrupt controls while it waits.                                                                          
+                                                                                                                        
+⏺ Running the 20-second waiting command once.                                                                           
+                                                                                                                        
+  Ran 1 shell command                                                                                                   
+  ⎿  Interrupted · What should Claude do instead?                                                                       
+                                                                                                                        
+❯ After this finishes, reply only: queued fixture.                                                                      
+                                                                                                                        
+⏺ queued fixture.                                                                                                       
+                                                                                                                        
+✻ Cogitated for 1s · done 9:05 pm                                                                                       
+                                                                                                                        
+❯ Use AskUserQuestion to show one multi-select question with header Elements and three options Text, Tools, and Timing, 
+  with short descriptions. This only tests the question UI; change no files or settings. Acknowledge my answers         
+  briefly.                                                                                                              
+                                                                                                                        
+⏺ Showing the Elements multi-select question.                                                                           
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+←  ☒ Elements  ✔ Submit  →                                                                                              
+                                                                                                                        
+Which elements should the capture include?                                                                              
+                                                                                                                        
+  1. [✔] Text                                                                                                           
+  Rendered Markdown and plain prose.                                                                                    
+❯ 2. [✔] Tools                                                                                                          
+  Tool call and result blocks.                                                                                          
+  3. [ ] Timing                                                                                                         
+  Durations and wait indicators.                                                                                        
+  4. [ ] Type something                                                                                                 
+     Submit                                                                                                             
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  5. Chat about this                                                                                                    
+                                                                                                                        
+Enter to select · ↑/↓ to navigate · Esc to cancel                                                                       

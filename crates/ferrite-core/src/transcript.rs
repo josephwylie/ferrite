@@ -99,7 +99,7 @@ impl<'a> ToolActivity<'a> {
             .iter()
             .take_while(|block| matches!(&block.body, Body::Tool(_)))
             .count();
-        if len < 2 {
+        if len == 0 {
             return None;
         }
         let blocks = &blocks[..len];
@@ -110,6 +110,9 @@ impl<'a> ToolActivity<'a> {
             )
             .count();
         let failed = blocks.iter().filter(|block| matches!(&block.body, Body::Tool(tool) if matches!(tool.state, ToolState::Failed(_)))).count();
+        if len == 1 && running > 0 {
+            return None;
+        }
         Some(Self {
             blocks,
             running,
@@ -293,6 +296,12 @@ pub enum Input {
     Highlighted {
         block: BlockId,
         tokens: Vec<Token>,
+    },
+    /// A completion fact observed while the turn was live. Replay must use
+    /// these stored values, never a fresh clock or wall time.
+    CompletionObservation {
+        elapsed_ms: u64,
+        completed_at: String,
     },
 }
 
@@ -717,6 +726,19 @@ impl Transcript {
     /// of a superset event model — a wildcard would silently render nothing.
     fn fold(&mut self, input: Input) -> Update {
         match input {
+            Input::CompletionObservation {
+                elapsed_ms,
+                completed_at,
+            } => {
+                let elapsed = elapsed_ms as f64 / 1_000.0;
+                let id = self.push(Body::Meta(format!(
+                    "Completed · {elapsed:.1}s elapsed · {completed_at}"
+                )));
+                Update {
+                    dirty: vec![id],
+                    ..Update::default()
+                }
+            }
             Input::Event(SessionEvent::ReasoningSummaryPart {
                 item_id,
                 summary_index,
@@ -1615,6 +1637,38 @@ fn link_at(rest: &str) -> Option<(&str, usize)> {
 mod tests {
     use super::*;
     use crate::Decision;
+
+    #[test]
+    fn completed_single_tool_has_a_compact_summary_without_crossing_commentary() {
+        let mut transcript = Transcript::default();
+        transcript.apply(started(
+            "first",
+            "Read",
+            serde_json::json!({"file_path": "one.txt"}),
+        ));
+        transcript.apply(completed("first", "contents", false));
+        transcript.apply(text("Now checking another file."));
+        transcript.apply(started(
+            "second",
+            "Read",
+            serde_json::json!({"file_path": "two.txt"}),
+        ));
+
+        let first = ToolActivity::at_start(transcript.blocks())
+            .expect("one completed read has a compact activity summary");
+        assert_eq!(first.summary(), "Read 1 file");
+        assert_eq!(first.blocks.len(), 1, "commentary ends the activity group");
+        assert_eq!(first.leader().call, "first");
+        assert!(ToolActivity::at_start(&transcript.blocks()[1..]).is_none());
+        assert!(
+            ToolActivity::at_start(&transcript.blocks()[2..]).is_none(),
+            "a lone running call retains its live command presentation"
+        );
+        transcript.apply(completed("second", "contents", false));
+        let second = ToolActivity::at_start(&transcript.blocks()[2..]).unwrap();
+        assert_eq!(second.summary(), "Read 1 file");
+        assert_eq!(second.leader().call, "second");
+    }
 
     #[test]
     fn mixed_tools_group_between_visible_reasoning_and_commentary() {

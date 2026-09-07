@@ -1,0 +1,10 @@
+{
+  "parser_tests": 8,
+  "byte_stream_integrity": "all four files indexed continuously, hashes verified",
+  "grid_schema": "all replay row dimensions, style references and wide-cell continuations checked",
+  "unique_visible_glyph_clusters": 150,
+  "missing_regular_glyphs": [],
+  "viewer": "loaded locally; state navigation, spaces/grid toggles and cell inspector exercised in pane browser; JavaScript syntax checked",
+  "raw_sampled_frames": 1589,
+  "labelled_states": 71
+}

@@ -780,6 +780,19 @@ impl CockpitView {
                 theme::TEXT_MUTED,
             ));
         }
+        if let Some(input) = pane::approval_input(
+            &request.decision,
+            &self.panes[index].rich,
+            format!(
+                "approval-input-request-{}-{}-{}",
+                thread.get(),
+                handle.generation,
+                handle.serial
+            )
+            .into(),
+        ) {
+            card = card.child(input);
+        }
         if let Some((failed, error)) = &self.panes[index].request_error {
             if failed == &handle {
                 card = card.child(components::label(
@@ -842,6 +855,7 @@ impl CockpitView {
                         let handle = handle.clone();
                         section = section.child(
                             Checkbox::new(("question-checkbox", qi * 256 + oi))
+                                .debug_selector(move || format!("question-choice-{qi}-{oi}"))
                                 .checked(checked)
                                 .disabled(request.submitting)
                                 .accessibility_label(option.label.clone())

@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 description = "Ferrite: native multi-provider agent cockpit (GPUI app)"
 
+[features]
+# Opt-in native framebuffer artifacts; excluded from normal application builds.
+visual-reference = ["gpui/test-support", "dep:gpui-reference-platform"]
+
 [dependencies]
 ferrite-core = { path = "../ferrite-core" }
 # The kit facade keeps the renderer, native platform and components on one
@@ -13,6 +17,8 @@ gpui = { package = "gpui-kit", version = "=0.6.0" }
 # The demo script builds real provider events, whose payloads are the vendors'
 # own JSON. Already in the tree via ferrite-core.
 serde_json = { workspace = true }
+# Same platform already used by GPUI Kit; enable its framebuffer test hook only.
+gpui-reference-platform = { package = "gpui-pre-platform", version = "=0.3.3", features = ["test-support"], optional = true }
 url = "2"
 percent-encoding = "2"
 

@@ -197,12 +197,26 @@ fn child_scroll_disclosure_and_native_text_entity_survive_switching(cx: &mut Tes
     }
     tick(cx);
     click_child(cx, "Atlas");
+    let group = view.read_with(cx, |view, _| {
+        view.panes[0]
+            .tool_bounds(pane::DisclosureId::Group("same-call".into()))
+            .expect("completed tool group")
+            .center()
+    });
+    cx.simulate_click(group, gpui::Modifiers::none());
+    // Opening the retained group changes its measured height and tail offset.
+    // Draw that layout before targeting its newly visible child control.
+    tick(cx);
+    let viewport = view.read_with(cx, |view, cx| {
+        view.panes[0].transcript().unwrap().read(cx).scroll().bounds()
+    });
     let toggle = view.read_with(cx, |view, _| {
         view.panes[0]
             .tool_bounds("same-call")
             .expect("tool control")
             .center()
     });
+    assert!(viewport.contains(&toggle), "tool control is visibly clickable");
     cx.simulate_mouse_down(toggle, MouseButton::Left, gpui::Modifiers::none());
     cx.simulate_mouse_up(toggle, MouseButton::Left, gpui::Modifiers::none());
     cx.run_until_parked();
@@ -754,9 +768,7 @@ fn native_child_progress_uses_the_shared_pinned_row_and_selected_wall_cache(
     );
     tick(cx);
     click_child(cx, "Atlas");
-    assert!(cx
-        .debug_bounds("progress-caption-Checking child paths")
-        .is_some());
+    assert!(cx.debug_bounds("progress-caption-Thinking").is_some());
     emit(
         &fake,
         ActivityEvent::Content {

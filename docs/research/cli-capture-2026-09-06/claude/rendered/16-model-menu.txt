@@ -1,0 +1,44 @@
+      require another row.                                                                                              
+  - Second outer item.                                                                                                  
+                                                                                                                        
+  9. Ninth item.                                                                                                        
+  10. Tenth item with continuation text long enough to wrap in a narrow terminal and show the hanging indentation.      
+                                                                                                                        
+  ▎ Quoted alpha  beta.                                                                                                 
+  ▎ Second quoted line.                                                                                                 
+                                                                                                                        
+  ┌───────┬───────┬─────────────────────┐                                                                               
+  │ Name  │ Count │        Note         │                                                                               
+  ├───────┼───────┼─────────────────────┤                                                                               
+  │ Alpha │     2 │ two  spaces         │                                                                               
+  ├───────┼───────┼─────────────────────┤                                                                               
+  │ Beta  │    12 │ a longer table cell │                                                                               
+  └───────┴───────┴─────────────────────┘                                                                               
+                                                                                                                        
+  ---                                                                                                                   
+                                                                                                                        
+  one two                                                                                                               
+  one  two   three    four                                                                                              
+      four leading spaces                                                                                               
+        actual tab character                                                                                            
+  trailing two spaces:                                                                                                  
+                                                                                                                        
+  Unicode: café naïve → ✓ 界 é                                                                                          
+  0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrst
+  uvwxyz                                                                                                                
+                                                                                                                        
+✻ Baked for 10s · done 9:02 pm                                                                                          
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+   Select model                                                                                                         
+   Switch between Claude models. Your pick becomes the default for new sessions. For other/previous model names,        
+   specify with --model.                                                                                                
+                                                                                                                        
+     1. Default (recommended)  Opus 5 with 1M context · Best for everyday, complex tasks                                
+     2. Opus (1M context)      Opus 5 with 1M context · Best for everyday, complex tasks                                
+   ❯ 3. Fable ✔                Fable 5.1 · Most capable for your hardest and longest-running tasks                      
+     4. Sonnet                 Sonnet 5 · Efficient for routine tasks                                                   
+     5. Haiku                  Haiku 4.5 · Fastest for quick answers                                                    
+                                                                                                                        
+   ● High effort (default) ←/→ to adjust                                                                                
+                                                                                                                        
+   Enter to set as default · s to use this session only · Esc to cancel                                                 

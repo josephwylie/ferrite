@@ -1,0 +1,23 @@
+   Compiling ferrite v0.1.0 (/Users/josephwylie/Desktop/Projects/ferrite/crates/ferrite)
+warning: method `ordered_solos` is never used
+   --> crates/ferrite/src/nav.rs:137:12
+    |
+122 | impl NavState {
+    | ------------- method in this implementation
+...
+137 |     pub fn ordered_solos(&self) -> Vec<&ThreadRow> {
+    |            ^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `model_label` is never used
+    --> crates/ferrite/src/pane.rs:2200:8
+     |
+2200 | pub fn model_label(model: &str) -> SharedString {
+     |        ^^^^^^^^^^^
+
+warning: `ferrite` (bin "ferrite") generated 2 warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.19s
+warning: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running `/Users/josephwylie/.cache/codingos-target/debug/ferrite --visual-reference /tmp/ferrite-native-final`

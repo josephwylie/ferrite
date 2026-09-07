@@ -1,0 +1,8 @@
+--- fixture
++++ codex
+@@ -39,4 +39,4 @@
+ 
+ Unicode: café naïve → ✓ 界 é
+ 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz
+-```
++```

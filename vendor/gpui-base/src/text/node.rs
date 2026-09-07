@@ -58,6 +58,8 @@ pub(crate) enum BlockNode {
         /// Only contains ListItem, others will be ignored
         children: Vec<BlockNode>,
         ordered: bool,
+        /// The first displayed marker of an ordered list.
+        start: u32,
         span: Option<Span>,
     },
     ListItem {
@@ -194,12 +196,15 @@ impl BlockNode {
                 }
             }
             BlockNode::List {
-                children, ordered, ..
+                children,
+                ordered,
+                start,
+                ..
             } => {
                 if matches!(kind, BlockTextKind::SelectedSource) {
                     // Reconstruct the list source, indenting nested lists and
                     // restoring list markers and task-list checkboxes.
-                    text.push_str(&list_selected_source(children, *ordered, ""));
+                    text.push_str(&list_selected_source(children, *ordered, *start, ""));
                 } else {
                     text.push_str(&Self::children_text(children, kind));
                 }
@@ -707,7 +712,7 @@ fn table_selected_source(table: &Table) -> String {
 /// and sub-list lines align under the item text. Items with no selected content
 /// are skipped but still consume an ordered number, so the remaining items keep
 /// their original numbering.
-fn list_selected_source(children: &[BlockNode], ordered: bool, indent: &str) -> String {
+fn list_selected_source(children: &[BlockNode], ordered: bool, start: u32, indent: &str) -> String {
     let mut out = String::new();
     let mut item_ix = 0usize;
 
@@ -722,7 +727,7 @@ fn list_selected_source(children: &[BlockNode], ordered: bool, indent: &str) -> 
         };
 
         let marker = if ordered {
-            format!("{}. ", item_ix + 1)
+            format!("{}. ", start as usize + item_ix)
         } else {
             "- ".to_string()
         };
@@ -741,12 +746,14 @@ fn list_selected_source(children: &[BlockNode], ordered: bool, indent: &str) -> 
             if let BlockNode::List {
                 children: sub_children,
                 ordered: sub_ordered,
+                start: sub_start,
                 ..
             } = sub
             {
                 nested.push_str(&list_selected_source(
                     sub_children,
                     *sub_ordered,
+                    *sub_start,
                     &child_indent,
                 ));
             } else {
@@ -1728,13 +1735,16 @@ impl BlockNode {
                     .join("\n")
             }
             BlockNode::List {
-                children, ordered, ..
+                children,
+                ordered,
+                start,
+                ..
             } => children
                 .iter()
                 .enumerate()
                 .map(|(i, child)| {
                     let prefix = if *ordered {
-                        format!("{}. ", i + 1)
+                        format!("{}. ", *start as usize + i)
                     } else {
                         "- ".to_string()
                     };
@@ -1813,7 +1823,12 @@ impl BlockNode {
             .items_start()
             .content_start()
             .when(!options.todo && checked.is_none(), |this| {
-                this.child(list_item_prefix(ix, options.ordered, options.depth))
+                this.child(list_item_prefix(
+                    ix,
+                    options.ordered,
+                    options.depth,
+                    options.list_start,
+                ))
             })
             .when_some(checked, |this, checked| {
                 // Todo list checkbox
@@ -1863,7 +1878,7 @@ impl BlockNode {
     ) -> AnyElement {
         match item {
             BlockNode::ListItem {
-                children, checked, ..
+                children, checked, spread, ..
             } => v_flex()
                 .id(("li", options.ix))
                 .w_full()
@@ -1884,7 +1899,18 @@ impl BlockNode {
                                         depth: options.depth + 1,
                                         todo: checked.is_some(),
                                         ix: child_ix,
-                                        is_last: child_ix + 1 == children.len(),
+                                        // A nested list continues this item's
+                                        // text flow. Its own list rhythm starts
+                                        // below the paragraph, so the paragraph
+                                        // must not leave a block gap first when
+                                        // the item is tight. An explicit blank
+                                        // line keeps the normal block gap.
+                                        is_last: child_ix + 1 == children.len()
+                                            || (!*spread
+                                                && matches!(
+                                                    children.get(child_ix + 1),
+                                                    Some(BlockNode::List { .. })
+                                                )),
                                         ..options
                                     },
                                     node_cx,
@@ -2167,6 +2193,7 @@ impl BlockNode {
                             this.border_r_1().border_color(style.border())
                         })
                         .refine_style(&style.table_cell())
+                        .when(row_ix == 0, |this| this.refine_style(&style.table_head()))
                         .child(cell.children.render(node_cx, window, cx)),
                 );
             }
@@ -2215,7 +2242,11 @@ impl BlockNode {
                     // shrink-to-fit (their text wrapping), the definite
                     // `w(min_total_w)` keeps the floors once they are reached,
                     // letting the track exceed the viewport and scroll.
-                    div().min_w_full().w(px(min_total_w)).children(rows),
+                    div()
+                        .debug_selector(|| "markdown-table-track".into())
+                        .min_w_full()
+                        .w(px(min_total_w))
+                        .children(rows),
                 ),
             )
             // Custom actions row (e.g. copy / download) rendered below the
@@ -2274,6 +2305,7 @@ impl BlockNode {
                             this.border_r_1().border_color(style.border())
                         })
                         .refine_style(&style.table_cell())
+                        .when(row_ix == 0, |this| this.refine_style(&style.table_head()))
                         .child(cell.children.render(node_cx, window, cx)),
                 );
             }
@@ -2372,11 +2404,11 @@ impl BlockNode {
             } => {
                 let (text_size, font_weight) = match level {
                     1 => (rems(2.), FontWeight::BOLD),
-                    2 => (rems(1.5), FontWeight::SEMIBOLD),
-                    3 => (rems(1.25), FontWeight::SEMIBOLD),
-                    4 => (rems(1.125), FontWeight::SEMIBOLD),
-                    5 => (rems(1.), FontWeight::SEMIBOLD),
-                    6 => (rems(1.), FontWeight::MEDIUM),
+                    2 => (rems(1.5), FontWeight::BOLD),
+                    3 => (rems(1.25), FontWeight::BOLD),
+                    4 => (rems(1.125), FontWeight::BOLD),
+                    5 => (rems(1.), FontWeight::BOLD),
+                    6 => (rems(1.), FontWeight::BOLD),
                     _ => (rems(1.), FontWeight::NORMAL),
                 };
 
@@ -2390,6 +2422,7 @@ impl BlockNode {
                     .whitespace_normal()
                     .text_size(text_size)
                     .font_weight(font_weight)
+                    .when(*level == 1, |heading| heading.italic().underline())
                     .child(children.render(node_cx, window, cx))
                     .into_any_element()
             }
@@ -2400,9 +2433,10 @@ impl BlockNode {
                         .id(("blockquote", ix))
                         .w_full()
                         .text_color(node_cx.style.muted_foreground())
-                        .border_l_3()
+                        .border_l_1()
                         .border_color(node_cx.style.border())
-                        .px_4()
+                        .px_2()
+                        .italic()
                         .children({
                             let last = children.iter().rposition(Self::is_visible);
                             children.into_iter().enumerate().map(move |(index, c)| {
@@ -2421,10 +2455,22 @@ impl BlockNode {
                 )
                 .into_any_element(),
             BlockNode::List {
-                children, ordered, ..
+                children,
+                ordered,
+                start,
+                ..
             } => v_flex()
                 .id((if *ordered { "ol" } else { "ul" }, ix))
-                .gap(node_cx.style.paragraph_gap())
+                .gap(
+                    if children
+                        .iter()
+                        .any(|item| matches!(item, BlockNode::ListItem { spread: true, .. }))
+                    {
+                        node_cx.style.paragraph_gap()
+                    } else {
+                        rems(0.)
+                    },
+                )
                 .w_full()
                 .min_w_0()
                 .children({
@@ -2441,6 +2487,7 @@ impl BlockNode {
                             NodeRenderOptions {
                                 ix,
                                 ordered: *ordered,
+                                list_start: *start,
                                 ..options
                             },
                             node_cx,
@@ -2692,6 +2739,7 @@ mod tests {
     #[test]
     fn unordered_list_selected_source_prefixes_dash() {
         let list = BlockNode::List {
+            start: 1,
             ordered: false,
             span: None,
             children: vec![
@@ -2718,6 +2766,7 @@ mod tests {
     #[test]
     fn ordered_list_selected_source_prefixes_numbers() {
         let list = BlockNode::List {
+            start: 1,
             ordered: true,
             span: None,
             children: vec![
@@ -2747,6 +2796,7 @@ mod tests {
         //   - nested
         // - two
         let nested = BlockNode::List {
+            start: 1,
             ordered: false,
             span: None,
             children: vec![BlockNode::ListItem {
@@ -2757,6 +2807,7 @@ mod tests {
             }],
         };
         let list = BlockNode::List {
+            start: 1,
             ordered: false,
             span: None,
             children: vec![
@@ -2783,6 +2834,7 @@ mod tests {
     #[test]
     fn task_list_selected_source_restores_checkboxes() {
         let list = BlockNode::List {
+            start: 1,
             ordered: false,
             span: None,
             children: vec![
@@ -3014,6 +3066,7 @@ mod tests {
             blocks: vec![
                 BlockNode::Paragraph(selected_paragraph("start")),
                 BlockNode::List {
+                    start: 1,
                     ordered: true,
                     children: vec![],
                     span: Some(Span {
@@ -3156,6 +3209,7 @@ mod tests {
                 BlockNode::Paragraph(selected_paragraph("A paragraph.")),
                 selected_code_block("let x = 1;\n", Some("rust")),
                 BlockNode::List {
+                    start: 1,
                     ordered: true,
                     span: None,
                     children: vec![

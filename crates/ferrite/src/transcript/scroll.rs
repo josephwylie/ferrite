@@ -3,6 +3,7 @@
 use gpui::{px, FollowMode, ListAlignment, ListState, Pixels};
 #[cfg(test)]
 use gpui::{Bounds, Point};
+use std::{cell::Cell, rc::Rc};
 
 use super::rows::RowDelta;
 
@@ -13,6 +14,8 @@ const OVERDRAW: Pixels = px(200.);
 #[derive(Clone, Debug)]
 pub(crate) struct TranscriptScroll {
     list: ListState,
+    // A fully visible row's inset, sampled from native layout for width reflow.
+    resize_anchor: Rc<Cell<Option<(Pixels, usize, Pixels)>>>,
 }
 
 impl TranscriptScroll {
@@ -21,7 +24,10 @@ impl TranscriptScroll {
     pub(crate) fn new(row_count: usize) -> Self {
         let list = ListState::new(row_count, ListAlignment::Top, OVERDRAW);
         list.set_follow_mode(FollowMode::Tail);
-        Self { list }
+        Self {
+            list,
+            resize_anchor: Default::default(),
+        }
     }
 
     #[cfg(test)]
@@ -53,6 +59,48 @@ impl TranscriptScroll {
 
     pub(crate) fn is_following_tail(&self) -> bool {
         self.list.is_following_tail()
+    }
+
+    pub(crate) fn item_is_visible(&self, index: usize) -> bool {
+        let viewport = self.list.viewport_bounds();
+        self.list.bounds_for_item(index).is_some_and(|bounds| {
+            bounds.bottom() > viewport.top() && bounds.top() < viewport.bottom()
+        })
+    }
+
+    /// Retain the next fully visible row when wrapping above it changes.
+    /// GPUI still owns every offset, measurement and tail-follow transition.
+    pub(crate) fn did_layout(&self) -> bool {
+        let viewport = self.list.viewport_bounds();
+        if self.list.is_following_tail() {
+            self.resize_anchor.set(None);
+            return false;
+        }
+        let mut adjusted = false;
+        if let Some((width, index, inset)) = self.resize_anchor.get() {
+            if width != viewport.size.width && index < self.list.item_count() {
+                if let Some(bounds) = self.list.bounds_for_item(index) {
+                    let delta = bounds.top() - viewport.top() - inset;
+                    if delta.abs() > px(0.5) {
+                        self.list.scroll_by(delta);
+                        adjusted = true;
+                    }
+                } else {
+                    // Reflow can move the held row beyond native overdraw.
+                    // Measure it before restoring the original inset.
+                    self.list.scroll_to_reveal_item(index);
+                    return true;
+                }
+            }
+        }
+        let anchor = (self.list.logical_scroll_top().item_ix..self.list.item_count())
+            .find_map(|index| {
+                let bounds = self.list.bounds_for_item(index)?;
+                (bounds.top() >= viewport.top() && bounds.top() < viewport.bottom())
+                    .then_some((viewport.size.width, index, bounds.top() - viewport.top()))
+            });
+        self.resize_anchor.set(anchor);
+        adjusted
     }
 
     /// Freeze tail following while retaining its automatic re-engagement rule.

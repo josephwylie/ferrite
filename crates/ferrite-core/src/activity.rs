@@ -118,6 +118,11 @@ pub enum ActivityEvent {
         outcome: TurnOutcome,
         cost_usd: Option<f64>,
     },
+    CompletionObservation {
+        subject: Subject,
+        elapsed_ms: u64,
+        completed_at: String,
+    },
     /// None retains a visible connection-owned request with unresolved owner.
     Decision {
         subject: Option<Subject>,
@@ -841,9 +846,13 @@ impl Activity {
             ActivityEvent::Content { key, .. }
             | ActivityEvent::HistoryContent { key, .. }
             | ActivityEvent::Status { key, .. } => Some(Subject::Subagent(self.resolve(key))),
-            ActivityEvent::MainContent { .. } | ActivityEvent::BackgroundTurnEnded { .. } => {
-                Some(Subject::Main)
-            }
+            ActivityEvent::MainContent { .. }
+            | ActivityEvent::BackgroundTurnEnded { .. }
+            | ActivityEvent::CompletionObservation {
+                subject: Subject::Main,
+                ..
+            } => Some(Subject::Main),
+            ActivityEvent::CompletionObservation { subject, .. } => Some(subject.clone()),
             _ => None,
         };
         let previous = if self.connected {
@@ -1189,6 +1198,35 @@ impl Activity {
                     update.main_settled = false;
                 }
                 update.attention_changed = false;
+            }
+            ActivityEvent::CompletionObservation {
+                subject,
+                elapsed_ms,
+                completed_at,
+            } => {
+                let subject = self.resolve_subject(subject);
+                if let Subject::Subagent(key) = &subject {
+                    self.ensure_agent(key.clone());
+                }
+                let sequence = self.sequence;
+                let limits = self.limits;
+                let Some(state) = self.state_mut(&subject) else {
+                    update.rejected = true;
+                    return update;
+                };
+                let blocks = state.append(
+                    Input::CompletionObservation {
+                        elapsed_ms: *elapsed_ms,
+                        completed_at: completed_at.clone(),
+                    },
+                    None,
+                    sequence,
+                    at,
+                    live,
+                    limits,
+                );
+                update.changed.push(subject.clone());
+                update.blocks.push((subject, blocks));
             }
             ActivityEvent::Decision { subject, decision } => {
                 if !live {

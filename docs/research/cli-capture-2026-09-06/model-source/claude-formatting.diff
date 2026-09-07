@@ -1,0 +1,20 @@
+--- fixture
++++ claude
+@@ -5,7 +5,7 @@
+ ##### Heading five
+ ###### Heading six
+ 
+-Normal alpha beta. Double alpha  beta. Triple alpha   beta. NBSP alpha beta.
++Normal alpha beta. Double alpha  beta. Triple alpha   beta. NBSP alpha beta.
+ This is a soft break
+ on the next source line.
+ This is a hard break  
+@@ -37,6 +37,6 @@
+ 	actual tab character
+ trailing two spaces:  
+ 
+-Unicode: café naïve → ✓ 界 é
++Unicode: café naïve → ✓ 界 é
+ 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz
+-```
++```
