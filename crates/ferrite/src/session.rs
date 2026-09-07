@@ -202,6 +202,22 @@ struct SessionWithDefaults {
 }
 
 impl Session for SessionWithDefaults {
+    fn supports_control(&self, kind: ferrite_core::ControlKind) -> bool {
+        self.inner.supports_control(kind)
+    }
+
+    fn control(&mut self, action: ferrite_core::SessionControl) -> io::Result<()> {
+        self.inner.control(action)
+    }
+
+    fn permission_modes(&self) -> Vec<ferrite_core::PermissionModeChoice> {
+        self.inner.permission_modes()
+    }
+
+    fn set_model(&mut self, model: Option<&str>) -> io::Result<()> {
+        self.inner.set_model(model)
+    }
+
     fn search_files(
         &mut self,
         query: &str,
@@ -410,6 +426,232 @@ pub(crate) fn rss_bytes(pid: u32) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Default)]
+    struct NativeCalls {
+        spawns: usize,
+        model: Option<String>,
+        controls: Vec<ferrite_core::SessionControl>,
+    }
+
+    struct NativeProvider {
+        calls: Arc<Mutex<NativeCalls>>,
+        events: Receiver<ferrite_core::SessionEvent>,
+        sender: Sender<ferrite_core::SessionEvent>,
+    }
+
+    impl Session for NativeProvider {
+        fn events(&self) -> &Receiver<ferrite_core::SessionEvent> {
+            &self.events
+        }
+        fn send(&mut self, _: &str) -> io::Result<()> {
+            let model = self
+                .calls
+                .lock()
+                .unwrap()
+                .model
+                .clone()
+                .unwrap_or("default".into());
+            self.sender
+                .send(ferrite_core::SessionEvent::TextDelta { text: model })
+                .unwrap();
+            self.sender
+                .send(ferrite_core::SessionEvent::TurnEnded {
+                    outcome: ferrite_core::TurnOutcome::Completed,
+                    cost_usd: None,
+                })
+                .unwrap();
+            Ok(())
+        }
+        fn interrupt(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+        fn respond_to_decision(
+            &mut self,
+            _: &str,
+            _: ferrite_core::DecisionAnswer,
+        ) -> io::Result<()> {
+            Ok(())
+        }
+        fn set_model(&mut self, model: Option<&str>) -> io::Result<()> {
+            if model == Some("unavailable") {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "native model unavailable",
+                ));
+            }
+            self.calls.lock().unwrap().model = model.map(str::to_owned);
+            Ok(())
+        }
+        fn supports_control(&self, kind: ferrite_core::ControlKind) -> bool {
+            kind != ferrite_core::ControlKind::LoginMcp
+        }
+        fn permission_modes(&self) -> Vec<ferrite_core::PermissionModeChoice> {
+            vec![ferrite_core::PermissionModeChoice {
+                value: "native-mode".into(),
+                label: "Provider mode".into(),
+            }]
+        }
+        fn control(&mut self, action: ferrite_core::SessionControl) -> io::Result<()> {
+            if matches!(action, ferrite_core::SessionControl::LoginMcp { .. }) {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "native login refused",
+                ));
+            }
+            self.calls.lock().unwrap().controls.push(action);
+            Ok(())
+        }
+    }
+
+    struct WrappedNative(Arc<Mutex<NativeCalls>>);
+    impl Spawner for WrappedNative {
+        fn spawn(&mut self, request: SpawnRequest) -> io::Result<Box<dyn Session>> {
+            let (sender, events) = mpsc::channel();
+            self.0.lock().unwrap().spawns += 1;
+            sender
+                .send(ferrite_core::SessionEvent::Init {
+                    session_id: "same-native-conversation".into(),
+                    model: "initial".into(),
+                })
+                .unwrap();
+            Ok(Box::new(SessionWithDefaults {
+                inner: Box::new(NativeProvider {
+                    calls: self.0.clone(),
+                    events,
+                    sender,
+                }),
+                provider: request.provider,
+                defaults: Arc::new(Mutex::new(SessionDefaults::default())),
+            }))
+        }
+    }
+
+    #[test]
+    fn production_wrapper_changes_model_without_replacing_the_conversation() {
+        use ferrite_core::{cockpit::Cockpit, store::Store, workspace::WorkspaceChoice};
+        for provider in [Provider::Claude, Provider::Codex] {
+            let path = std::env::temp_dir().join(format!(
+                "ferrite-wrapped-model-{}-{provider:?}",
+                std::process::id()
+            ));
+            let calls = Arc::new(Mutex::new(NativeCalls::default()));
+            let mut cockpit = Cockpit::new(
+                Store::open(path.join("store")).unwrap(),
+                Box::new(WrappedNative(calls.clone())),
+            );
+            let thread = cockpit
+                .open(
+                    provider,
+                    WorkspaceChoice::Main {
+                        checkout: path.clone(),
+                    },
+                )
+                .unwrap();
+            cockpit.pump();
+            cockpit.send(thread, "first turn".into());
+            cockpit.pump();
+            cockpit.set_model(thread, Some("selected".into())).unwrap();
+            assert_eq!(
+                calls.lock().unwrap().spawns,
+                1,
+                "a model choice must not spawn a replacement"
+            );
+            assert_eq!(calls.lock().unwrap().model.as_deref(), Some("selected"));
+            assert_eq!(
+                cockpit.peek(thread).unwrap().model.as_deref(),
+                Some("selected")
+            );
+            assert_eq!(
+                cockpit.thread(thread).unwrap().transcript().session_id(),
+                Some("same-native-conversation")
+            );
+            let error = cockpit
+                .set_model(thread, Some("unavailable".into()))
+                .unwrap_err();
+            assert!(error.to_string().contains("native model unavailable"));
+            assert_eq!(calls.lock().unwrap().spawns, 1);
+            assert_eq!(
+                cockpit.peek(thread).unwrap().model.as_deref(),
+                Some("selected")
+            );
+            cockpit.send(thread, "after rejected model change".into());
+            cockpit.pump();
+            assert_eq!(
+                cockpit.thread(thread).unwrap().transcript().session_id(),
+                Some("same-native-conversation")
+            );
+            cockpit.set_model(thread, None).unwrap();
+            assert_eq!(calls.lock().unwrap().model, None);
+            assert_eq!(calls.lock().unwrap().spawns, 1);
+            drop(cockpit);
+            std::fs::remove_dir_all(path).unwrap();
+        }
+    }
+
+    #[test]
+    fn production_wrapper_exposes_native_modes_and_routes_controls() {
+        use ferrite_core::{ControlKind as K, SessionControl as C};
+        let calls = Arc::new(Mutex::new(NativeCalls::default()));
+        let (sender, events) = mpsc::channel();
+        let mut session: Box<dyn Session> = Box::new(SessionWithDefaults {
+            inner: Box::new(NativeProvider {
+                calls: calls.clone(),
+                events,
+                sender,
+            }),
+            provider: Provider::Claude,
+            defaults: Arc::new(Mutex::new(SessionDefaults::default())),
+        });
+        for kind in [
+            K::RefreshContext,
+            K::RefreshMcp,
+            K::ReconnectMcp,
+            K::ReloadMcp,
+            K::StopTask,
+            K::BackgroundTasks,
+            K::SetPermissionMode,
+        ] {
+            assert!(
+                session.supports_control(kind),
+                "native capability {kind:?} was lost"
+            );
+        }
+        assert!(!session.supports_control(K::LoginMcp));
+        assert_eq!(
+            session.permission_modes(),
+            vec![ferrite_core::PermissionModeChoice {
+                value: "native-mode".into(),
+                label: "Provider mode".into()
+            }]
+        );
+        let actions = vec![
+            C::RefreshContext,
+            C::RefreshMcp,
+            C::ReconnectMcp {
+                server: "server:exact/id".into(),
+            },
+            C::ReloadMcp,
+            C::StopTask {
+                id: "task:exact/id".into(),
+            },
+            C::BackgroundTasks,
+            C::SetPermissionMode {
+                mode: "native-mode".into(),
+            },
+        ];
+        for action in &actions {
+            session.control(action.clone()).unwrap();
+        }
+        assert_eq!(calls.lock().unwrap().controls, actions);
+        let error = session
+            .control(C::LoginMcp {
+                server: "refused".into(),
+            })
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(error.to_string(), "native login refused");
+    }
 
     #[test]
     fn default_effort_reads_current_settings_for_the_ready_sessions_provider() {

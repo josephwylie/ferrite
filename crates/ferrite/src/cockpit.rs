@@ -4281,9 +4281,8 @@ impl CockpitView {
         (rows, selected)
     }
 
-    /// A model-row pick: the same Provider re-aims the model — before the
-    /// first prompt eagerly, after it by resuming the conversation under
-    /// the new model; another Provider is `set_provider`'s pre-prompt swap.
+    /// A model-row pick uses the current Provider's live model control;
+    /// another Provider is `set_provider`'s pre-prompt swap or handover.
     /// A refusal changed nothing, and the core's own words land in this
     /// Thread's transcript.
     fn pick_provider(&mut self, thread: ThreadId, choice: ProviderChoice, cx: &mut Context<Self>) {
@@ -5662,11 +5661,18 @@ fn mention_rows(files: &[String], filter: &str) -> Vec<pane::MenuRow> {
         .collect()
 }
 
-/// Provider results are already ordered and matched; only translate their
-/// relative paths into the menu's basename/detail representation.
+/// Preserve provider order and matches, while keeping repository metadata
+/// and repeated paths from crowding working files out of the bounded menu.
 fn native_mention_rows(files: &[ferrite_core::providers::FileSuggestion]) -> Vec<pane::MenuRow> {
+    let mut seen = std::collections::HashSet::new();
     files
         .iter()
+        .filter(|file| {
+            !std::path::Path::new(&file.path)
+                .components()
+                .any(|part| part.as_os_str() == ".git")
+                && seen.insert(file.path.trim_end_matches('/'))
+        })
         .take(MENU_ROWS_MAX)
         .map(|file| {
             let mut path = file.path.clone();
