@@ -7032,7 +7032,10 @@ mod tests {
             cockpit.revive(ThreadId::new(id)).unwrap();
             let elapsed = started.elapsed();
             let open = cockpit.thread(ThreadId::new(id)).unwrap();
-            let subject = open.activity().subject(&crate::activity::Subject::Main).unwrap();
+            let subject = open
+                .activity()
+                .subject(&crate::activity::Subject::Main)
+                .unwrap();
             eprintln!(
                 "PERF thread={id} revive_ms={:.3} blocks={}",
                 elapsed.as_secs_f64() * 1000.0,

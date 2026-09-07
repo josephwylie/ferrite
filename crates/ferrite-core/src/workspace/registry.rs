@@ -734,11 +734,16 @@ mod tests {
 
         assert_eq!(reopened.projects().len(), 1);
         assert_eq!(reopened.project(project).unwrap().title, "repo");
+        // The entry names its repo the way the registry does — canonically.
+        // Spelling the raw temp path here fails wherever canonicalizing
+        // rewrites it: the `\\?\` prefix on Windows, `/private/var` on macOS.
+        let canonical = reopened.project(project).unwrap().root.clone();
+        assert_eq!(canonical, repo.canonicalize().unwrap());
         assert_eq!(
             reopened.worktrees(project),
             [WorktreeEntry {
                 project,
-                repo: repo.clone(),
+                repo: canonical,
                 branch: branch.clone(),
                 path: path.clone(),
             }]
