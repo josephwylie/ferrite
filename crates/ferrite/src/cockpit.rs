@@ -5245,9 +5245,8 @@ impl CockpitView {
         let mut project_sections: Vec<nav::ProjectSection> = Vec::new();
         for row in rows {
             let project = self.facts.get(row.thread).and_then(|facts| facts.project);
-            let label = row
-                .project
-                .clone()
+            let label = project
+                .and_then(|_| row.project.clone())
                 .unwrap_or_else(|| SharedString::from("Other"));
             if let Some(section) = project_sections
                 .iter_mut()
