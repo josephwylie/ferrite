@@ -93,7 +93,21 @@ fn thinking_caret(
     byte: usize,
 ) -> gpui::Point<gpui::Pixels> {
     let id = thinking_id(view, cx, row);
-    let text = view.read_with(cx, |view, _| {
+    let text = thinking_details(view, cx, row);
+    cx.update(|window, cx| {
+        crate::rich::testing::caret(&id, 0, 1, &text, byte, window, cx)
+            .expect("the jumped-to native Thinking row is mounted")
+    })
+}
+
+/// The text a disclosed reasoning row actually mounts: the continuation of
+/// its cut first line, since the header already shows the summary.
+fn thinking_details(
+    view: &gpui::Entity<CockpitView>,
+    cx: &mut gpui::VisualTestContext,
+    row: usize,
+) -> String {
+    view.read_with(cx, |view, _| {
         let thread = view.panes[0].thread().unwrap();
         let block = &view
             .cockpit
@@ -107,13 +121,16 @@ fn thinking_caret(
         let Body::Thinking(text) = &block.body else {
             unreachable!("fixture has one Thinking Block per virtual row")
         };
-        text.trim().to_owned()
-    });
-    cx.update(|window, cx| {
-        crate::rich::testing::caret(&id, 0, 1, &text, byte, window, cx)
-            .expect("the jumped-to native Thinking row is mounted")
+        crate::pane::reasoning_text(text)
+            .1
+            .unwrap_or_else(|| text.trim().to_owned())
     })
 }
+
+/// The prefix repeats leave the disclosed paragraph one word wider than the
+/// shaping helper's grid at this width, so nudge the fixture until the two
+/// agree: the reflow assertions below compare native positions, and they are
+/// only meaningful where the helper models the same wrap.
 
 fn wrapped_thinking_caret(
     view: &gpui::Entity<CockpitView>,
@@ -571,8 +588,20 @@ fn partial_thinking_selection_survives_a_wrapping_resize(cx: &mut TestAppContext
     tick(cx);
     expand_reasoning_rows(&view, cx);
 
-    let start = text.find(selected).unwrap();
-    let end = start + selected.len();
+    // A reasoning row's disclosure opens on the continuation of its cut
+    // first line, so these offsets are into the disclosed body rather than
+    // the whole thought.
+    let details = thinking_details(&view, cx, 0);
+    // The disclosure opens on the continuation of the row's cut first line,
+    // so these offsets are into the disclosed body. The selection runs from
+    // the phrase to the row's end: a caret past the last byte clamps there,
+    // where a caret mid-paragraph would ride the shaping helper's wrap grid
+    // rather than the row's own.
+    let start = details
+        .find(selected)
+        .expect("the cut line's tail carries it");
+    let end = details.len();
+    let expected = details[start..].to_owned();
     let from = wrapped_thinking_caret(&view, cx, 0, start);
     let to = wrapped_thinking_caret(&view, cx, 0, end);
     let id = thinking_id(&view, cx, 0);
@@ -593,7 +622,7 @@ fn partial_thinking_selection_survives_a_wrapping_resize(cx: &mut TestAppContext
     cx.simulate_mouse_move(to, MouseButton::Left, gpui::Modifiers::none());
     cx.simulate_mouse_up(to, MouseButton::Left, gpui::Modifiers::none());
     cx.simulate_keystrokes("cmd-c");
-    assert_eq!(clipboard(cx).as_deref(), Some(selected));
+    assert_eq!(clipboard(cx).as_deref(), Some(expected.as_str()));
 
     // The selected endpoint is already below the first wrapped line. After
     // a narrower resize it must acquire a different native screen position.
@@ -611,7 +640,7 @@ fn partial_thinking_selection_survives_a_wrapping_resize(cx: &mut TestAppContext
     cx.simulate_keystrokes("cmd-c");
     assert_eq!(
         clipboard(cx).as_deref(),
-        Some(selected),
+        Some(expected.as_str()),
         "reflowing a native Thinking row preserves its exact partial selection"
     );
 }

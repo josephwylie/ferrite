@@ -297,14 +297,16 @@ impl TranscriptView {
                 .w_full()
                 .flex_shrink_0()
                 .flex()
-                .gap(px(theme::EVENT_GAP))
+                .gap(px(theme::ANSWER_GAP))
+                .py(px(theme::ANSWER_PAD_Y))
+                .text_size(px(theme::FS_ANSWER))
                 .child(
                     // The answer wears Ferrite's mark where Claude Code's
-                    // transcript puts its `●`, at rest: the gutter stays
-                    // `GUTTER_W` so answer prose keeps the tool rows' text
-                    // edge while the mark itself draws twice that wide out of
-                    // the flow, and the offset drops it onto the first line's
-                    // optical center rather than the row's top.
+                    // transcript puts its `●`, at rest. The gutter cell keeps
+                    // `GUTTER_W` and the mark draws wider out of the flow, so
+                    // the overhang eats into the gap instead of moving the
+                    // prose; the offset drops it onto the first line's optical
+                    // center rather than the row's top.
                     div()
                         .relative()
                         .flex_shrink_0()

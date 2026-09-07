@@ -226,6 +226,10 @@ pub const FS_LG: f32 = 13.0;
 /// or typed in a Pane (prose, prompts, tool rows, results, code, diffs,
 /// the Composer), body headings, a Decision's subject.
 pub const FS_MD: f32 = 12.0;
+/// 13px — an answer's prose, a step above everything else read in a Pane:
+/// the model's own words are what an operator reads at length, and the mark
+/// beside them gives the row the room to carry the extra pixel.
+pub const FS_ANSWER: f32 = 13.0;
 /// 11px — `--fs-sm`: the Project and checkout lines, the tasks strip, tool
 /// events, the pass chip, the Composer and its controls.
 pub const FS_SM: f32 = 11.0;
@@ -561,15 +565,24 @@ pub const ICON_BUTTON_GLYPH: f32 = 16.0;
 /// 17px, is the inset a result line and a hunk share so both land under the
 /// verb's first character. Keep the relationship, not just the numbers.
 pub const GUTTER_W: f32 = 9.0;
-/// 18px — an answer's Ferrite mark, twice the `GUTTER_W` gutter it hangs in.
-/// It draws out of the flow so answer prose keeps the tool rows' text edge;
-/// its own overhang lands in the row's `EVENT_GAP`.
-pub const ANSWER_MARK: f32 = 18.0;
-/// 1.3px — the offset that drops that mark onto the first prose line's
-/// optical center. A prose line boxes 20.6px tall, so its center sits 10.3px
-/// down (the measure the 4px bullet's 8.3px top derives from) and the mark is
-/// half of its own 18px above that.
-pub const ANSWER_MARK_TOP: f32 = 1.3;
+/// 15px — an answer's Ferrite mark. It draws wider than the `GUTTER_W`
+/// gutter it hangs in and out of the flow, so its overhang lands in the
+/// answer row's own `ANSWER_GAP` rather than moving the prose.
+pub const ANSWER_MARK: f32 = 15.0;
+/// 2.6px — the offset that drops that mark onto the first prose line's
+/// optical center. An answer line boxes 20.2px tall (`FS_ANSWER` on
+/// `LINE_BODY`), so its center sits 10.1px down and the mark is half of its
+/// own 15px above that.
+pub const ANSWER_MARK_TOP: f32 = 2.6;
+/// 14px — the answer row's gutter-to-prose gap, wider than the `EVENT_GAP`
+/// the tool rows use: an answer's prose is indented off the mark rather than
+/// held on the tool rows' text edge, and the gap clears the mark's overhang.
+pub const ANSWER_GAP: f32 = 14.0;
+/// 6px — the answer row's own block padding, on top of the transcript
+/// stack's 10px `BLOCK_GAP`: the model's prose gets more air than the
+/// events around it, so an answer reads as its own passage. It pads rather
+/// than margins so the mark, laid out inside the row, moves with the prose.
+pub const ANSWER_PAD_Y: f32 = 6.0;
 #[allow(dead_code)]
 pub const EVENT_GAP: f32 = 8.0;
 pub const INDENT: f32 = 17.0;

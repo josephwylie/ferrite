@@ -943,11 +943,7 @@ pub fn render_pane(
                         .debug_selector(|| "transcript-progress".into())
                         .px(px(theme::PANE_PAD_X))
                         .py(px(theme::KEYS_GAP))
-                        .child(working_line(
-                            transcript,
-                            false,
-                            received_reasoning_visible,
-                        )),
+                        .child(working_line(transcript, false, received_reasoning_visible)),
                 );
             }
             // The Decision card is a **sibling of the body**, not a child
@@ -3856,10 +3852,25 @@ pub fn popover_footer(hints: &'static str) -> Div {
 
 // ----------------------------------------------------------- Block render
 
+/// The text left after the first `n` whitespace-separated words.
+fn skip_words(text: &str, n: usize) -> &str {
+    let mut rest = text.trim_start();
+    for _ in 0..n {
+        match rest.find(char::is_whitespace) {
+            Some(cut) => rest = rest[cut..].trim_start(),
+            None => return "",
+        }
+    }
+    rest
+}
+
 /// A preview of received text, never a second provider reasoning channel.
 /// Keep a short first line in the header; disclose only what follows it.
-/// A shortened first line needs the original text in the disclosure too.
-pub(crate) fn reasoning_text(thought: &str) -> (String, Option<&str>) {
+/// The disclosure never repeats what the header already shows: where the
+/// first line was cut to fit, the details open on the rest of that line and
+/// run into the paragraphs under it, so expanding reads as a continuation
+/// rather than the same sentence twice.
+pub(crate) fn reasoning_text(thought: &str) -> (String, Option<String>) {
     let thought = thought.trim();
     let (first, rest) = thought.split_once('\n').unwrap_or((thought, ""));
     let first = first.trim();
@@ -3872,11 +3883,25 @@ pub(crate) fn reasoning_text(thought: &str) -> (String, Option<&str>) {
         })
         .unwrap_or(first);
     let summary = ferrite_core::progress::one_line(heading, 160);
-    let details = if summary != ferrite_core::progress::one_line(heading, usize::MAX) {
-        Some(thought)
-    } else {
-        let rest = rest.trim();
-        (!rest.is_empty()).then_some(rest)
+    let rest = rest.trim();
+    // `one_line` cuts the header at 160 characters and marks the cut with
+    // `…`. The disclosure picks the line up from the last word the header
+    // shows, so expanding continues the sentence instead of repeating it —
+    // and that one word is shared, because the cut can land mid-word and
+    // half a word is no place to resume reading. The tail runs through
+    // `one_line` too: a header and its continuation are one sentence, so
+    // they collapse whitespace the same way.
+    let tail = summary
+        .strip_suffix('…')
+        .map(|shown| skip_words(heading, shown.split_whitespace().count().saturating_sub(1)))
+        .map(|tail| ferrite_core::progress::one_line(tail, usize::MAX))
+        .unwrap_or_default();
+    let tail = tail.as_str();
+    let details = match (tail.is_empty(), rest.is_empty()) {
+        (true, true) => None,
+        (true, false) => Some(rest.to_owned()),
+        (false, true) => Some(tail.to_owned()),
+        (false, false) => Some(format!("{tail}\n\n{rest}")),
     };
     (summary, details)
 }
@@ -4017,7 +4042,7 @@ pub(crate) fn render_block(
                     div()
                         .min_w_0()
                         .mt(px(theme::KEYS_GAP))
-                        .child(selection.markdown(block.id, details.to_owned()).muted()),
+                        .child(selection.markdown(block.id, details.clone()).muted()),
                 );
             }
             paragraph(row, TEXT_2).child(reasoning).into_any_element()

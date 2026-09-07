@@ -208,7 +208,12 @@ fn child_scroll_disclosure_and_native_text_entity_survive_switching(cx: &mut Tes
     // Draw that layout before targeting its newly visible child control.
     tick(cx);
     let viewport = view.read_with(cx, |view, cx| {
-        view.panes[0].transcript().unwrap().read(cx).scroll().bounds()
+        view.panes[0]
+            .transcript()
+            .unwrap()
+            .read(cx)
+            .scroll()
+            .bounds()
     });
     let toggle = view.read_with(cx, |view, _| {
         view.panes[0]
@@ -216,7 +221,10 @@ fn child_scroll_disclosure_and_native_text_entity_survive_switching(cx: &mut Tes
             .expect("tool control")
             .center()
     });
-    assert!(viewport.contains(&toggle), "tool control is visibly clickable");
+    assert!(
+        viewport.contains(&toggle),
+        "tool control is visibly clickable"
+    );
     cx.simulate_mouse_down(toggle, MouseButton::Left, gpui::Modifiers::none());
     cx.simulate_mouse_up(toggle, MouseButton::Left, gpui::Modifiers::none());
     cx.run_until_parked();

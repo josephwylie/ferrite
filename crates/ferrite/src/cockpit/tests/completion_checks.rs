@@ -194,7 +194,14 @@ fn reading_anchor_survives_streaming_disclosure_and_narrower_window(cx: &mut Tes
         })
         .unwrap();
     tick(cx);
-    let viewport = view.read_with(cx, |view, cx| view.panes[0].transcript().unwrap().read(cx).scroll().bounds());
+    let viewport = view.read_with(cx, |view, cx| {
+        view.panes[0]
+            .transcript()
+            .unwrap()
+            .read(cx)
+            .scroll()
+            .bounds()
+    });
     // The retained list mounts only its viewport. Scroll the existing tool
     // into view before measuring the reading anchor, as a reader would.
     for _ in 0..30 {
@@ -219,7 +226,11 @@ fn reading_anchor_survives_streaming_disclosure_and_narrower_window(cx: &mut Tes
     });
     tick(cx);
     let held = cx.debug_bounds("tool-group-anchor-tool").unwrap().top();
-    assert!(!view.read_with(cx, |view, cx| view.panes[0].transcript().unwrap().read(cx).is_following_tail()));
+    assert!(!view.read_with(cx, |view, cx| view.panes[0]
+        .transcript()
+        .unwrap()
+        .read(cx)
+        .is_following_tail()));
     fake.streams.borrow()[0]
         .send(SessionEvent::TextDelta {
             text: "New streamed material.\n\n".repeat(5),
@@ -245,7 +256,11 @@ fn reading_anchor_survives_streaming_disclosure_and_narrower_window(cx: &mut Tes
     );
     assert!(view.read_with(cx, |view, _| view.panes[0]
         .tool_expanded(pane::DisclosureId::Group("anchor-tool".into()))));
-    assert!(!view.read_with(cx, |view, cx| view.panes[0].transcript().unwrap().read(cx).is_following_tail()));
+    assert!(!view.read_with(cx, |view, cx| view.panes[0]
+        .transcript()
+        .unwrap()
+        .read(cx)
+        .is_following_tail()));
 }
 
 #[gpui::test]
@@ -335,7 +350,14 @@ fn reading_anchor_survives_expanding_earlier_tool_details(cx: &mut TestAppContex
             .unwrap();
     }
     tick(cx);
-    let viewport = view.read_with(cx, |view, cx| view.panes[0].transcript().unwrap().read(cx).scroll().bounds());
+    let viewport = view.read_with(cx, |view, cx| {
+        view.panes[0]
+            .transcript()
+            .unwrap()
+            .read(cx)
+            .scroll()
+            .bounds()
+    });
     let initial = cx.debug_bounds("tool-group-visible").unwrap();
     cx.simulate_event(gpui::ScrollWheelEvent {
         position: viewport.center(),

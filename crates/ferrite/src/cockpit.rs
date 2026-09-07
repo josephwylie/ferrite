@@ -10935,12 +10935,17 @@ mod tests {
             assert_eq!(answer.top() - tools.bottom(), px(crate::theme::BLOCK_GAP));
             let prompt_start = caret(&view, cx, 0, 0).x;
             let answer_start = caret(&view, cx, 3, 0).x;
+            // An answer is indented off its Ferrite mark rather than held on
+            // the tool summary's reading column: its gutter is the same
+            // `GUTTER_W` the tool rows use, and the extra step is the answer
+            // row's wider gap.
             assert_eq!(
-                prompt_start, answer_start,
-                "prompt and answer text share the tool summary's reading column"
+                answer_start - prompt_start,
+                px(crate::theme::ANSWER_GAP - crate::theme::EVENT_GAP),
+                "an answer's prose is indented past the prompt's reading column"
             );
             assert_eq!(
-                answer_start - tools.left(),
+                prompt_start - tools.left(),
                 px(17.5),
                 "17px native gutter plus the caret helper's half-pixel inset"
             );
