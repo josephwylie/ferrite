@@ -2432,13 +2432,17 @@ fn working_line(
                         .min_w_0()
                         .w_full()
                         .flex()
-                        .items_start()
+                        .items_center()
                         .gap(px(theme::EVENT_GAP))
                         .text_color(rgb(TEXT_2))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .child(live_text(
-                            div().flex_shrink_0().child("◐"),
-                            "live-progress-indicator".into(),
+                        // The shard snap is this row's liveness signal, so the
+                        // mark carries no extra `live_text` opacity pulse. Its
+                        // element id is a constant: the 3s timeline has to
+                        // survive every re-render of the working line.
+                        .child(icons::animated_ferrite_icon(
+                            theme::ROW_ICON,
+                            "live-progress-indicator",
                         ))
                         .child(
                             div()
@@ -3966,10 +3970,25 @@ pub fn popover_footer(hints: &'static str) -> Div {
 
 // ----------------------------------------------------------- Block render
 
+/// The text left after the first `n` whitespace-separated words.
+fn skip_words(text: &str, n: usize) -> &str {
+    let mut rest = text.trim_start();
+    for _ in 0..n {
+        match rest.find(char::is_whitespace) {
+            Some(cut) => rest = rest[cut..].trim_start(),
+            None => return "",
+        }
+    }
+    rest
+}
+
 /// A preview of received text, never a second provider reasoning channel.
 /// Keep a short first line in the header; disclose only what follows it.
-/// A shortened first line needs the original text in the disclosure too.
-pub(crate) fn reasoning_text(thought: &str) -> (String, Option<&str>) {
+/// The disclosure never repeats what the header already shows: where the
+/// first line was cut to fit, the details open on the rest of that line and
+/// run into the paragraphs under it, so expanding reads as a continuation
+/// rather than the same sentence twice.
+pub(crate) fn reasoning_text(thought: &str) -> (String, Option<String>) {
     let thought = thought.trim();
     let (first, rest) = thought.split_once('\n').unwrap_or((thought, ""));
     let first = first.trim();
@@ -3982,11 +4001,25 @@ pub(crate) fn reasoning_text(thought: &str) -> (String, Option<&str>) {
         })
         .unwrap_or(first);
     let summary = ferrite_core::progress::one_line(heading, 160);
-    let details = if summary != ferrite_core::progress::one_line(heading, usize::MAX) {
-        Some(thought)
-    } else {
-        let rest = rest.trim();
-        (!rest.is_empty()).then_some(rest)
+    let rest = rest.trim();
+    // `one_line` cuts the header at 160 characters and marks the cut with
+    // `…`. The disclosure picks the line up from the last word the header
+    // shows, so expanding continues the sentence instead of repeating it —
+    // and that one word is shared, because the cut can land mid-word and
+    // half a word is no place to resume reading. The tail runs through
+    // `one_line` too: a header and its continuation are one sentence, so
+    // they collapse whitespace the same way.
+    let tail = summary
+        .strip_suffix('…')
+        .map(|shown| skip_words(heading, shown.split_whitespace().count().saturating_sub(1)))
+        .map(|tail| ferrite_core::progress::one_line(tail, usize::MAX))
+        .unwrap_or_default();
+    let tail = tail.as_str();
+    let details = match (tail.is_empty(), rest.is_empty()) {
+        (true, true) => None,
+        (true, false) => Some(rest.to_owned()),
+        (false, true) => Some(tail.to_owned()),
+        (false, false) => Some(format!("{tail}\n\n{rest}")),
     };
     (summary, details)
 }
@@ -4127,7 +4160,7 @@ pub(crate) fn render_block(
                     div()
                         .min_w_0()
                         .mt(px(theme::KEYS_GAP))
-                        .child(selection.markdown(block.id, details.to_owned()).muted()),
+                        .child(selection.markdown(block.id, details.clone()).muted()),
                 );
             }
             paragraph(row, TEXT_2).child(reasoning).into_any_element()

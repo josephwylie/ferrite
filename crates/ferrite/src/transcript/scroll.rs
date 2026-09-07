@@ -93,11 +93,14 @@ impl TranscriptScroll {
                 }
             }
         }
-        let anchor = (self.list.logical_scroll_top().item_ix..self.list.item_count())
-            .find_map(|index| {
+        let anchor =
+            (self.list.logical_scroll_top().item_ix..self.list.item_count()).find_map(|index| {
                 let bounds = self.list.bounds_for_item(index)?;
-                (bounds.top() >= viewport.top() && bounds.top() < viewport.bottom())
-                    .then_some((viewport.size.width, index, bounds.top() - viewport.top()))
+                (bounds.top() >= viewport.top() && bounds.top() < viewport.bottom()).then_some((
+                    viewport.size.width,
+                    index,
+                    bounds.top() - viewport.top(),
+                ))
             });
         self.resize_anchor.set(anchor);
         adjusted

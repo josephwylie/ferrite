@@ -137,6 +137,31 @@ pub fn icon(path: &'static str, size: f32, color: u32) -> Svg {
         .text_color(rgb(color))
 }
 
+/// Ferrite's mark at rest: the same two shards the animated icon uses, drawn
+/// assembled. A finished answer is not live, so its mark does not move.
+pub fn ferrite_icon(size: f32) -> AnyElement {
+    let shard = |path| {
+        svg()
+            .absolute()
+            .top_0()
+            .left_0()
+            .w(px(size))
+            .h(px(size))
+            .path(path)
+            // GPUI skips `paint_svg` without a concrete text color, even
+            // where the SVG paints only its own gradient.
+            .text_color(rgb(theme::TEXT))
+    };
+    div()
+        .relative()
+        .flex_shrink_0()
+        .w(px(size))
+        .h(px(size))
+        .child(shard(FERRITE_UPPER))
+        .child(shard(FERRITE_LOWER))
+        .into_any_element()
+}
+
 /// Ferrite's two shards pull apart and snap home on the supplied logo's
 /// three-second timeline. GPUI rasterizes SVG rather than running its CSS, so
 /// the two paths are embedded separately and their transforms run on GPUI's
