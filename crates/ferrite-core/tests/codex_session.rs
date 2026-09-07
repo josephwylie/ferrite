@@ -279,6 +279,16 @@ fn the_reader_thread_delivers_the_captured_stream() {
     assert!(!session_id.is_empty());
     assert_eq!(model, "gpt-5.4-mini");
 
+    // thread/start's approvalPolicy is the Composer's mode chip from the
+    // first frame, not from a later thread/settings/updated.
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            SessionEvent::PermissionMode { mode } if mode == "never"
+        )),
+        "the starting approval policy must be announced: {events:?}"
+    );
+
     let activity = fold(&events);
     assert_eq!(prose(&activity), ["hello ferrite"]);
     let reasoning: Vec<_> = activity
@@ -659,7 +669,7 @@ fn a_listed_skill_is_sent_as_the_typed_item_never_as_slash_text() {
         let left = deadline.saturating_duration_since(Instant::now());
         match session.events().recv_timeout(left) {
             Ok(SessionEvent::Commands { commands }) => break commands,
-            Ok(SessionEvent::Init { .. }) => continue,
+            Ok(SessionEvent::Init { .. } | SessionEvent::PermissionMode { .. }) => continue,
             Ok(other) => panic!("unexpected event before the menu: {other:?}"),
             Err(e) => panic!("no menu arrived: {e}"),
         }
@@ -1007,7 +1017,7 @@ fn the_model_list_is_announced_on_the_event_stream() {
         let left = deadline.saturating_duration_since(Instant::now());
         match session.events().recv_timeout(left) {
             Ok(SessionEvent::Models { models }) => break models,
-            Ok(SessionEvent::Init { .. }) => continue,
+            Ok(SessionEvent::Init { .. } | SessionEvent::PermissionMode { .. }) => continue,
             Ok(other) => panic!("unexpected event before the menu: {other:?}"),
             Err(e) => panic!("no menu arrived: {e}"),
         }
@@ -1052,7 +1062,7 @@ fn astra_from_the_installed_cli_reaches_the_model_picker() {
             .recv_timeout(deadline.saturating_duration_since(Instant::now()))
         {
             Ok(SessionEvent::Models { models }) => break models,
-            Ok(SessionEvent::Init { .. }) => continue,
+            Ok(SessionEvent::Init { .. } | SessionEvent::PermissionMode { .. }) => continue,
             other => panic!("expected a model announcement: {other:?}"),
         }
     };
@@ -1293,7 +1303,8 @@ fn stdout_eof_closes_the_session_with_the_exit_status() {
     );
     let session = CodexSession::spawn(config(program)).unwrap();
     match drain(session.events()).as_slice() {
-        [SessionEvent::Init { .. }, SessionEvent::Closed { reason }] => {
+        [SessionEvent::Init { .. }, SessionEvent::PermissionMode { .. }, SessionEvent::Closed { reason }] =>
+        {
             assert!(reason.contains("exit status: 0"), "reason: {reason}")
         }
         other => panic!("expected Init then Closed, got {other:?}"),
@@ -1308,7 +1319,8 @@ fn an_abnormal_exit_explains_itself_with_stderr() {
     );
     let session = CodexSession::spawn(config(program)).unwrap();
     match drain(session.events()).as_slice() {
-        [SessionEvent::Init { .. }, SessionEvent::Closed { reason }] => {
+        [SessionEvent::Init { .. }, SessionEvent::PermissionMode { .. }, SessionEvent::Closed { reason }] =>
+        {
             assert!(reason.contains("exit status: 3"), "reason: {reason}");
             assert!(reason.contains("fatal: no auth token"), "reason: {reason}");
         }
@@ -1328,7 +1340,8 @@ fn only_the_tail_of_a_noisy_stderr_is_kept() {
     );
     let session = CodexSession::spawn(config(program)).unwrap();
     match drain(session.events()).as_slice() {
-        [SessionEvent::Init { .. }, SessionEvent::Closed { reason }] => {
+        [SessionEvent::Init { .. }, SessionEvent::PermissionMode { .. }, SessionEvent::Closed { reason }] =>
+        {
             let tail = reason
                 .split_once("stderr: ")
                 .unwrap_or_else(|| panic!("no stderr tail in reason: {reason}"))

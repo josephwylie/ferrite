@@ -180,6 +180,8 @@ pub struct CockpitView {
     /// `PaneIdentity`, not a Thread.
     context_usage: Option<(PaneIdentity, gpui::Point<gpui::Pixels>)>,
     session_controls: Option<(ThreadId, u64, gpui::Point<gpui::Pixels>)>,
+    /// The Composer's mode menu, open on one Thread's Session generation.
+    mode_picker: Option<(ThreadId, u64)>,
     session_control_error: Option<(ThreadId, u64, String)>,
     /// The header `ci` mark's checks card, tied to its Thread and click
     /// position (#29). The runs it lists are read from the same cached
@@ -689,6 +691,7 @@ impl CockpitView {
             context_menu: None,
             context_usage: None,
             session_controls: None,
+            mode_picker: None,
             session_control_error: None,
             context_checks: None,
             nav_collapsed: prefs.settings.nav_collapsed,
@@ -5858,6 +5861,18 @@ impl Render for CockpitView {
             self.session_controls = None;
         }
 
+        if self.mode_picker.is_some_and(|(thread, generation)| {
+            level != Level::Transcript
+                || self.settings_open
+                || self.focused_thread() != Some(thread)
+                || self
+                    .cockpit
+                    .thread(thread)
+                    .is_none_or(|open| open.generation() != generation)
+        }) {
+            self.mode_picker = None;
+        }
+
         if self.context_usage.is_some_and(|(identity, _)| {
             level != Level::Transcript
                 || self.settings_open
@@ -6486,6 +6501,7 @@ impl CockpitView {
             session_controls: l1
                 .then(|| self.session_controls_button(index, cx))
                 .flatten(),
+            mode_picker: l1.then(|| self.mode_picker(index, cx)).flatten(),
             decide: (level != Level::Wall)
                 .then(|| self.decide_keycaps(index, level, cx))
                 .flatten(),
@@ -6826,6 +6842,82 @@ impl CockpitView {
             .control(thread, action)
             .err()
             .map(|error| (thread, generation, error.to_string()));
+    }
+
+    /// The Composer's mode chip as a menu (§D.7): the Session's own list of
+    /// permission modes, ✓ on the one in force, a pick sent as the native
+    /// `SetPermissionMode` control. None when the Session has announced no
+    /// mode or offers no list — the Pane then draws the plain chip.
+    fn mode_picker(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let thread = self.panes[index].thread()?;
+        let open = self.cockpit.thread(thread)?;
+        let generation = open.generation();
+        let mode = open.permission_mode()?;
+        let modes = open.permission_modes();
+        if modes.is_empty() || !open.supports_control(ferrite_core::ControlKind::SetPermissionMode)
+        {
+            return None;
+        }
+        let label = pane::permission_mode_label(mode, &modes);
+        let choices = modes
+            .iter()
+            .map(|choice| crate::components::Choice {
+                label: choice.label.clone().into(),
+                icon: None,
+                checked: choice.value == mode,
+                disabled: false,
+                section: false,
+            })
+            .collect();
+        let values: std::rc::Rc<Vec<String>> =
+            std::rc::Rc::new(modes.into_iter().map(|choice| choice.value).collect());
+        let is_open = self.mode_picker.is_some_and(|(shown, shown_generation)| {
+            shown == thread && shown_generation == generation
+        });
+        let weak = cx.entity().downgrade();
+        let picker = weak.clone();
+        Some(
+            crate::components::ChoiceMenu {
+                id: format!("mode-picker-{}", thread.get()).into(),
+                trigger: crate::components::button(("mode-picker", thread.get() as usize))
+                    .p_0()
+                    .h_auto()
+                    .tooltip("Permission mode")
+                    .child(pane::mode_chip(&label)),
+                choices,
+                open: is_open,
+                return_focus: self.panes[index].composer.focus_handle(cx),
+                on_open: std::rc::Rc::new(move |open, _, cx| {
+                    let _ = weak.update(cx, |view, cx| {
+                        if open {
+                            view.focus_pane(index);
+                            view.popover = None;
+                            view.context_menu = None;
+                            view.session_controls = None;
+                            view.mode_picker = Some((thread, generation));
+                        } else if view.mode_picker == Some((thread, generation)) {
+                            view.mode_picker = None;
+                        }
+                        cx.notify();
+                    });
+                }),
+                on_pick: std::rc::Rc::new(move |at, _, cx| {
+                    let Some(value) = values.get(at).cloned() else {
+                        return;
+                    };
+                    let _ = picker.update(cx, |view, cx| {
+                        view.run_session_control(
+                            thread,
+                            generation,
+                            ferrite_core::SessionControl::SetPermissionMode { mode: value },
+                        );
+                        view.mode_picker = None;
+                        cx.notify();
+                    });
+                }),
+            }
+            .into_any_element(),
+        )
     }
 
     fn session_controls_button(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
