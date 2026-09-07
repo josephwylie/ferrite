@@ -20,6 +20,7 @@
 //! `.font_weight(..)` is correct here.
 
 use ferrite_core::groups::GroupId;
+use ferrite_core::settings::ThreadListOrder;
 use ferrite_core::store::Provider;
 use ferrite_core::workspace::registry::ProjectId;
 use ferrite_core::ThreadId;
@@ -39,14 +40,14 @@ use crate::icons::{self, icon};
 use crate::pointer::{Pointer, PointerPressed};
 use crate::theme::{
     ATTENTION, BLOCKED, FILL, FONT_UI, FS_LG, FS_MD, FS_SM, GROUP_GAP, GROUP_RAIL, GROUP_ROW_H,
-    HOVER, ICON_BUTTON, ICON_BUTTON_GLYPH, ICON_CHEVRON_LG, IDLE, LINE_TIGHT, MEMBERS_TOP,
-    MEMBER_GAP, MEMBER_INDENT, MENU, MENU_PAD, MENU_ROW_H, MENU_TOP, NAV, NAV_HEAD_H, NAV_TREE_PAD,
+    ICON_BUTTON, ICON_BUTTON_GLYPH, ICON_CHEVRON_LG, IDLE, LINE_TIGHT, MEMBERS_TOP, MEMBER_GAP,
+    MEMBER_INDENT, MENU, MENU_PAD, MENU_ROW_H, MENU_TOP, NAV, NAV_HEAD_H, NAV_TREE_PAD,
     NAV_TREE_PAD_B, PROVIDER_CLAUDE, PROVIDER_CODEX, PROVIDER_MARK, PULSE_MIN, RAIL_INSET,
-    RAIL_OFFSET, ROW_GAP, ROW_ICON, ROW_ICON_GAP, ROW_PAD_X, ROW_PAD_Y, ROW_TEXT_W, RUNNING,
-    RUNNING_HALO, R_CONTROL, R_MENU, R_TIGHT, SEP, SHADOW_FAR, SHADOW_FAR_BLUR, SHADOW_FAR_SPREAD,
-    SHADOW_FAR_Y, SHADOW_NEAR, SHADOW_NEAR_BLUR, SHADOW_NEAR_Y, SOLOS_TOP, STATUS_DOT,
-    STATUS_HALO_INSET, STATUS_PULSE_MS, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG, THREAD_ROW_H,
-    TRAFFIC_RESERVE, WIN_CHROME_H,
+    RAIL_OFFSET, ROW_GAP, ROW_ICON, ROW_ICON_GAP, ROW_PAD_X, ROW_PAD_Y, ROW_TEXT_W,
+    RUNNING, RUNNING_HALO, R_CONTROL, R_MENU, R_TIGHT, SEP, SHADOW_FAR, SHADOW_FAR_BLUR,
+    SHADOW_FAR_SPREAD, SHADOW_FAR_Y, SHADOW_NEAR, SHADOW_NEAR_BLUR, SHADOW_NEAR_Y, SOLOS_TOP,
+    STATUS_DOT, STATUS_HALO_INSET, STATUS_PULSE_MS, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG,
+    THREAD_ROW_H, TRAFFIC_RESERVE, WIN_CHROME_H,
 };
 
 /// The nav's two widths — 286px, and the 56px rail cmd-b folds it to.
@@ -61,6 +62,9 @@ const TITLE_MD_H: f32 = FS_MD * LINE_TIGHT;
 /// The Project and checkout lines: 11px tight → 13.75px. A row keeps this
 /// height even when the fact is unknown, so nothing reflows on a cache fill.
 const META_H: f32 = FS_SM * LINE_TIGHT;
+/// The Group card's mark spans both text rows instead of reading as title
+/// decoration. It is deliberately larger than the 12px inline row icons.
+const GROUP_MARK_LG: f32 = 20.0;
 
 /// The slack a truncating title's budget gets over its visible box.
 ///
@@ -83,13 +87,14 @@ const COLLAPSE_GROUP: &str = "nav-collapse";
 const RAIL_FILTER_GROUP: &str = "nav-rail-filter";
 const FILTER_GROUP: &str = "nav-filter";
 const FILTER_OPTION_GROUP: &str = "nav-filter-option";
+const ORDER_GROUP: &str = "nav-order";
 
 // The handful of nav metrics `theme.rs` does not name, kept here rather
 // than written inline so each one is said once and explained once.
 //
-/// 4px — the gap between the filter trigger's label and its chevron. The
-/// chevron belongs to the word, not to the control's right edge.
-const TRIGGER_GAP: f32 = 4.0;
+/// 7px — enough separation for the leading folder, label, and trailing
+/// chevron to remain legible as one compact field.
+const TRIGGER_GAP: f32 = 7.0;
 /// 9px — a filter option's leading inset. One more than a row's, so the
 /// option's label hangs under the trigger's label rather than under its box.
 const MENU_ROW_PAD_L: f32 = 9.0;
@@ -115,7 +120,19 @@ pub struct NavState {
     /// interleaved, most recently used first. The two lists above are the
     /// membership; this is the sequence.
     pub order: Vec<NavItem>,
+    pub project_sections: Vec<ProjectSection>,
+    pub thread_list_order: ThreadListOrder,
+    pub order_open: bool,
     pub collapsed: bool,
+}
+
+/// A flat newest-first run of Threads under one Project heading. Group
+/// membership still exists and is restored when a row is opened; this view
+/// simply makes Project the visible hierarchy.
+pub struct ProjectSection {
+    pub project: Option<ProjectId>,
+    pub label: SharedString,
+    pub rows: Vec<ThreadRow>,
 }
 
 impl NavState {
@@ -186,6 +203,7 @@ pub struct GroupBlock {
 /// One Thread's row — identical whether it is a Group member or a solo; only
 /// the container differs. Title, Project, and the provider mark in
 /// the top-right corner, plus a subagent count when the Thread has children.
+#[derive(Clone)]
 pub struct ThreadRow {
     pub thread: ThreadId,
     pub name: SharedString,
@@ -385,9 +403,113 @@ pub fn add_thread_button() -> Button {
         .child(icon(icons::PLUS, ICON_BUTTON_GLYPH, TEXT_MUTED))
 }
 
-/// The Project filter trigger — the one dropdown navigation has. The
-/// chevron sits **immediately after the label**, never pushed to the right
-/// edge: the control is a word with a mark, not a full-width select.
+/// Easy-access ordering control beside New Thread. Its selected state is
+/// visible even while the menu is closed.
+pub fn order_button(active: bool, open: bool) -> Button {
+    components::button("thread-list-order")
+        .tab_stop(true)
+        .debug_selector(|| "thread-list-order".into())
+        .group(ORDER_GROUP)
+        .w(px(ICON_BUTTON))
+        .h(px(ICON_BUTTON))
+        .p_0()
+        .when(open, |button| button.bg(rgb(FILL)))
+        .tooltip(if open {
+            "Close thread order menu"
+        } else if active {
+            "Threads grouped by Project"
+        } else {
+            "Thread list order"
+        })
+        .child(
+            icon(
+                icons::LIST_FILTER,
+                ICON_BUTTON_GLYPH,
+                if active || open { TEXT } else { TEXT_MUTED },
+            )
+            .group_hover(ORDER_GROUP, |style| style.text_color(rgb(TEXT))),
+        )
+}
+
+/// Ordering menu anchored to the compact button rather than occupying the
+/// full Project-filter width.
+pub fn order_menu() -> Div {
+    filter_menu().left_auto().w(px(218.)).child(
+        div()
+            .h(px(24.))
+            .px(px(ROW_PAD_X))
+            .flex()
+            .items_center()
+            .text_size(px(FS_SM))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(rgb(TEXT_MUTED))
+            .child("Order threads by"),
+    )
+}
+
+pub fn order_option(index: usize, label: &'static str, selected: bool) -> Button {
+    components::button(("thread-list-order-option", index))
+        .tab_stop(true)
+        .debug_selector(move || format!("thread-list-order-option-{index}"))
+        .group(FILTER_OPTION_GROUP)
+        .w_full()
+        .min_h(px(MENU_ROW_H))
+        .pl(px(MENU_ROW_PAD_L))
+        .pr(px(ROW_PAD_X))
+        .rounded(px(R_CONTROL))
+        .when(selected, |on| {
+            on.bg(rgb(FILL))
+                .text_color(rgb(TEXT_STRONG))
+                .font_weight(FontWeight::MEDIUM)
+        })
+        .when(!selected, |off| off.text_color(rgb(TEXT_2)))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .w_full()
+                .min_w_0()
+                .gap(px(ROW_PAD_X))
+                .text_size(px(FS_MD))
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .group_hover(FILTER_OPTION_GROUP, |style| {
+                            style.text_color(rgb(TEXT_STRONG))
+                        })
+                        .child(label),
+                )
+                .children(selected.then(|| icon(icons::CHECK, ICON_CHEVRON_LG, TEXT))),
+        )
+}
+
+/// A quiet Project label separates grouped runs without turning each one
+/// into a card. The count helps scan long lists and costs no extra row.
+pub fn project_section(label: SharedString, count: usize, first: bool) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .h(px(30.))
+        .when(!first, |section| section.mt(px(SOLOS_TOP)))
+        .px(px(ROW_PAD_X))
+        .gap(px(ROW_ICON_GAP))
+        .text_size(px(FS_SM))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(rgb(TEXT_2))
+        .child(div().flex_1().min_w_0().truncate().child(label))
+        .child(
+            div()
+                .font_weight(FontWeight::NORMAL)
+                .text_color(rgb(TEXT_MUTED))
+                .child(count.to_string()),
+        )
+}
+
+/// The Project filter trigger rests transparently with its neighboring actions.
+/// Its folder and edge-aligned chevron frame the current Project name; hover
+/// and open states supply the ground only while the control is engaged.
 pub fn filter_trigger(state: &FilterState) -> Stateful<Div> {
     let chevron = icon(icons::CHEVRON_DOWN, ICON_CHEVRON_LG, TEXT_MUTED);
     let chevron = if state.open {
@@ -418,13 +540,18 @@ pub fn filter_trigger(state: &FilterState) -> Stateful<Div> {
         // An open trigger wears its hover face: the menu is the hover made
         // permanent, so the control does not blink when the pointer leaves.
         .when(state.open, |open| {
-            open.bg(rgb(HOVER)).text_color(rgb(TEXT_STRONG))
+            open.bg(rgb(FILL)).text_color(rgb(TEXT_STRONG))
         })
         .when(!state.open, |shut| shut.text_color(rgb(TEXT)))
         .hover_control()
         .press_control()
         .child(
+            icon(icons::FOLDER, ROW_ICON, TEXT_MUTED)
+                .group_hover(FILTER_GROUP, |style| style.text_color(rgb(TEXT))),
+        )
+        .child(
             div()
+                .flex_1()
                 .min_w_0()
                 .truncate()
                 .group_hover(FILTER_GROUP, |style| style.text_color(rgb(TEXT_STRONG)))
@@ -468,8 +595,9 @@ pub fn filter_menu() -> Div {
         ])
 }
 
-/// One filter row. The selected Project is named in white at weight 500 and
-/// carries a trailing check — the only tick the nav draws.
+/// One filter row. The selected Project carries a restrained fill as well as
+/// white medium-weight type and a trailing check, so the current scope is
+/// apparent before the operator starts scanning labels.
 pub fn filter_option(index: usize, option: &FilterOption) -> Stateful<Div> {
     div()
         .id(("nav-filter-option", index))
@@ -485,7 +613,8 @@ pub fn filter_option(index: usize, option: &FilterOption) -> Stateful<Div> {
         .rounded(px(R_CONTROL))
         .text_size(px(FS_MD))
         .when(option.selected, |on| {
-            on.text_color(rgb(TEXT_STRONG))
+            on.bg(rgb(FILL))
+                .text_color(rgb(TEXT_STRONG))
                 .font_weight(FontWeight::MEDIUM)
         })
         .when(!option.selected, |off| off.text_color(rgb(TEXT_2)))
@@ -503,7 +632,7 @@ pub fn filter_option(index: usize, option: &FilterOption) -> Stateful<Div> {
         .children(
             option
                 .selected
-                .then(|| icon(icons::CHECK, ICON_CHEVRON_LG, TEXT_MUTED)),
+                .then(|| icon(icons::CHECK, ICON_CHEVRON_LG, TEXT)),
         )
 }
 
@@ -625,7 +754,8 @@ pub fn member_tail(id: GroupId) -> Stateful<Div> {
 
 /// The 43px Group parent row: the title, then its Projects summary.
 /// **The Group is what carries the selected fill** — a Thread row never
-/// does — and the current Group also takes the white title. No provider
+/// does — and the current Group also takes the white title. Its four-Pane
+/// mark is the same one Project order uses for grouped Threads. No provider
 /// mark, no checkout line, no disclosure glyph, no member count.
 #[cfg(test)]
 pub fn group_row(row: &GroupBlock) -> Stateful<Div> {
@@ -647,6 +777,9 @@ pub fn group_row_with_title(row: &GroupBlock, title: impl IntoElement) -> Statef
         let id = row.id;
         move || format!("nav-group-{}", id.get())
     })
+    .flex_row()
+    .items_center()
+    .gap(px(ROW_PAD_X))
     // A truncating title needs a **definite** width on its very first
     // measure. gpui caches a nowrap line's first measure permanently
     // (gpui-0.2.2 elements/text.rs:373 — `wrap_width` is `None` for
@@ -661,25 +794,36 @@ pub fn group_row_with_title(row: &GroupBlock, title: impl IntoElement) -> Statef
     // own content box.
     .child(
         div()
-            .w(px(ROW_TEXT_W))
-            .h(px(TITLE_LG_H))
-            .overflow_hidden()
+            .w(px(ROW_TEXT_W - GROUP_MARK_LG - ROW_PAD_X))
+            .flex()
+            .flex_col()
+            .gap(px(ROW_GAP))
             .child(
                 div()
-                    .flex()
-                    .flex_col()
-                    .min_w(px(ROW_TEXT_W + TRUNCATE_SLOP))
-                    .max_w(px(ROW_TEXT_W + TRUNCATE_SLOP))
-                    .truncate()
                     .h(px(TITLE_LG_H))
-                    .text_size(px(FS_LG))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .line_height(relative(LINE_TIGHT))
-                    .text_color(rgb(if row.current { TEXT_STRONG } else { TEXT }))
-                    .child(title),
-            ),
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .min_w(px(
+                                ROW_TEXT_W - GROUP_MARK_LG - ROW_PAD_X + TRUNCATE_SLOP,
+                            ))
+                            .max_w(px(
+                                ROW_TEXT_W - GROUP_MARK_LG - ROW_PAD_X + TRUNCATE_SLOP,
+                            ))
+                            .truncate()
+                            .h(px(TITLE_LG_H))
+                            .text_size(px(FS_LG))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .line_height(relative(LINE_TIGHT))
+                            .text_color(rgb(if row.current { TEXT_STRONG } else { TEXT }))
+                            .child(title),
+                    ),
+            )
+            .child(meta_line(icons::FOLDER, row.projects.clone(), TEXT_2)),
     )
-    .child(meta_line(icons::FOLDER, row.projects.clone(), TEXT_2))
+    .child(group_header_icon(row.id))
 }
 
 /// The members container, and the one line the whole Soft system draws: a
@@ -768,6 +912,81 @@ pub fn thread_row_with_title(row: &ThreadRow, title: impl IntoElement) -> Statef
     )
 }
 
+/// The grouped view has already named the Project, so its Thread rows keep
+/// the useful title, state, provider, subagent count and recency while
+/// dropping only the now-redundant Project label. This is the screenshot's
+/// compact section rhythm, expressed in Ferrite's existing row grammar.
+pub fn project_thread_row_with_title(
+    row: &ThreadRow,
+    title: impl IntoElement,
+    grouped: bool,
+) -> Stateful<Div> {
+    row_frame(
+        ("nav-thread", row.thread.get() as usize),
+        ICON_BUTTON,
+        row.current,
+    )
+    .debug_selector({
+        let thread = row.thread;
+        move || format!("nav-thread-{}", thread.get())
+    })
+    .flex()
+    .flex_row()
+    .items_center()
+    .gap(px(ROW_PAD_X))
+    .child(status_dot(row.thread, row.status))
+    .children(grouped.then(|| group_membership_indicator(row.thread)))
+    .child(
+        div()
+            .flex_1()
+            .min_w_0()
+            .truncate()
+            .text_size(px(FS_MD))
+            .font_weight(FontWeight::MEDIUM)
+            .line_height(relative(LINE_TIGHT))
+            .text_color(rgb(if row.current { TEXT_STRONG } else { TEXT }))
+            .child(title),
+    )
+    .child(meta_tail(row.thread, row.subagents, row.last_used.clone()))
+    .child(
+        div()
+            .flex_shrink_0()
+            .debug_selector({
+                let thread = row.thread;
+                move || format!("nav-mark-{}", thread.get())
+            })
+            .child(provider_mark(row.provider, PROVIDER_MARK)),
+    )
+}
+
+fn group_header_icon(group: GroupId) -> Stateful<Div> {
+    div()
+        .id(("nav-group-icon", group.get() as usize))
+        .debug_selector(move || format!("nav-group-icon-{}", group.get()))
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .justify_center()
+        .w(px(GROUP_MARK_LG))
+        .h_full()
+        .child(icon(icons::GROUP, GROUP_MARK_LG, TEXT_MUTED))
+        .tooltip(|window, cx| Tooltip::new("Group").build(window, cx))
+}
+
+/// The four-Pane Group mark. Project order flattens Groups into their
+/// Projects, so this keeps durable membership visible without competing
+/// with the Thread's status dot or provider mark.
+fn group_membership_indicator(thread: ThreadId) -> Stateful<Div> {
+    div()
+        .id(("nav-group-membership", thread.get() as usize))
+        .debug_selector(move || format!("nav-group-membership-{}", thread.get()))
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .child(icon(icons::GROUP, ROW_ICON, TEXT_MUTED))
+        .tooltip(|window, cx| Tooltip::new("In a group").build(window, cx))
+}
+
 /// The compact facts at the right edge of line 2. They stay one group so
 /// free space separates them from the Project, not from each other.
 fn meta_tail(thread: ThreadId, subagents: usize, since: Option<SharedString>) -> Div {
@@ -784,27 +1003,32 @@ fn meta_tail(thread: ThreadId, subagents: usize, since: Option<SharedString>) ->
         .child(since_tail(thread, since))
 }
 
-/// The number of subagents attached to a Thread. The noun keeps a
-/// bare number from competing with recency, and singular/plural copy keeps
-/// the compact line natural. Threads without children spend no space here.
-fn subagent_tail(thread: ThreadId, count: usize) -> Div {
+/// The number of subagents attached to a Thread. Its branching mark keeps
+/// the compact count distinct from recency without spelling out a noun.
+/// Threads without children spend no space here.
+fn subagent_tail(thread: ThreadId, count: usize) -> Stateful<Div> {
     let cell = meta_text()
+        .id(("nav-subagents", thread.get() as usize))
+        .flex()
         .flex_shrink_0()
+        .items_center()
+        .gap(px(3.))
         .debug_selector(move || format!("nav-subagents-{}", thread.get()));
     let Some(label) = subagent_label(count) else {
         return cell;
     };
-    cell.child(label)
+    let tooltip = if count == 1 {
+        "1 subagent".to_owned()
+    } else {
+        format!("{count} subagents")
+    };
+    cell.tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+        .child(icon(icons::SUBAGENTS, ROW_ICON, TEXT_MUTED))
+        .child(label)
 }
 
 fn subagent_label(count: usize) -> Option<SharedString> {
-    (count > 0).then(|| {
-        SharedString::from(if count == 1 {
-            "1 subagent".to_owned()
-        } else {
-            format!("{count} subagents")
-        })
-    })
+    (count > 0).then(|| SharedString::from(count.to_string()))
 }
 
 /// The age at the tail of a row's last line — `40m`, `2h`, `3d`. It is
@@ -1150,6 +1374,17 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_order_button_is_clear_at_rest_and_filled_while_open() {
+        let background = |mut button: Button| button.style().background.clone();
+        assert_eq!(background(order_button(false, false)), None);
+        assert_eq!(background(order_button(true, false)), None);
+        assert_eq!(
+            background(order_button(false, true)),
+            Some(rgb(FILL).into())
+        );
+    }
+
     /// A row whose Project or checkout has not resolved keeps its full
     /// height: the caches fill asynchronously, and the tree must not jump
     /// under the pointer when they do.
@@ -1202,10 +1437,10 @@ mod tests {
     }
 
     #[test]
-    fn subagent_count_is_hidden_at_zero_and_uses_natural_copy() {
+    fn subagent_count_is_hidden_at_zero_and_uses_compact_numeric_copy() {
         assert_eq!(subagent_label(0), None);
-        assert_eq!(subagent_label(1).as_deref(), Some("1 subagent"));
-        assert_eq!(subagent_label(3).as_deref(), Some("3 subagents"));
+        assert_eq!(subagent_label(1).as_deref(), Some("1"));
+        assert_eq!(subagent_label(3).as_deref(), Some("3"));
     }
 
     /// The nav column draws no border on any edge: Soft separates the
