@@ -62,6 +62,9 @@ const TITLE_MD_H: f32 = FS_MD * LINE_TIGHT;
 /// The Project and checkout lines: 11px tight → 13.75px. A row keeps this
 /// height even when the fact is unknown, so nothing reflows on a cache fill.
 const META_H: f32 = FS_SM * LINE_TIGHT;
+/// The Group card's mark spans both text rows instead of reading as title
+/// decoration. It is deliberately larger than the 12px inline row icons.
+const GROUP_MARK_LG: f32 = 20.0;
 
 /// The slack a truncating title's budget gets over its visible box.
 ///
@@ -775,6 +778,9 @@ pub fn group_row_with_title(row: &GroupBlock, title: impl IntoElement) -> Statef
         let id = row.id;
         move || format!("nav-group-{}", id.get())
     })
+    .flex_row()
+    .items_center()
+    .gap(px(ROW_PAD_X))
     // A truncating title needs a **definite** width on its very first
     // measure. gpui caches a nowrap line's first measure permanently
     // (gpui-0.2.2 elements/text.rs:373 — `wrap_width` is `None` for
@@ -789,28 +795,36 @@ pub fn group_row_with_title(row: &GroupBlock, title: impl IntoElement) -> Statef
     // own content box.
     .child(
         div()
-            .w(px(ROW_TEXT_W))
-            .h(px(TITLE_LG_H))
+            .w(px(ROW_TEXT_W - GROUP_MARK_LG - ROW_PAD_X))
             .flex()
-            .items_center()
-            .gap(px(ROW_PAD_X))
-            .child(group_header_icon(row.id))
+            .flex_col()
+            .gap(px(ROW_GAP))
             .child(
                 div()
-                    .flex()
-                    .flex_col()
-                    .min_w(px(ROW_TEXT_W - ROW_ICON - ROW_PAD_X + TRUNCATE_SLOP))
-                    .max_w(px(ROW_TEXT_W - ROW_ICON - ROW_PAD_X + TRUNCATE_SLOP))
-                    .truncate()
                     .h(px(TITLE_LG_H))
-                    .text_size(px(FS_LG))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .line_height(relative(LINE_TIGHT))
-                    .text_color(rgb(if row.current { TEXT_STRONG } else { TEXT }))
-                    .child(title),
-            ),
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .min_w(px(
+                                ROW_TEXT_W - GROUP_MARK_LG - ROW_PAD_X + TRUNCATE_SLOP,
+                            ))
+                            .max_w(px(
+                                ROW_TEXT_W - GROUP_MARK_LG - ROW_PAD_X + TRUNCATE_SLOP,
+                            ))
+                            .truncate()
+                            .h(px(TITLE_LG_H))
+                            .text_size(px(FS_LG))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .line_height(relative(LINE_TIGHT))
+                            .text_color(rgb(if row.current { TEXT_STRONG } else { TEXT }))
+                            .child(title),
+                    ),
+            )
+            .child(meta_line(icons::FOLDER, row.projects.clone(), TEXT_2)),
     )
-    .child(meta_line(icons::FOLDER, row.projects.clone(), TEXT_2))
+    .child(group_header_icon(row.id))
 }
 
 /// The members container, and the one line the whole Soft system draws: a
@@ -953,7 +967,10 @@ fn group_header_icon(group: GroupId) -> Stateful<Div> {
         .flex()
         .flex_shrink_0()
         .items_center()
-        .child(icon(icons::GROUP, ROW_ICON, TEXT_MUTED))
+        .justify_center()
+        .w(px(GROUP_MARK_LG))
+        .h_full()
+        .child(icon(icons::GROUP, GROUP_MARK_LG, TEXT_MUTED))
         .tooltip(|window, cx| Tooltip::new("Group").build(window, cx))
 }
 
