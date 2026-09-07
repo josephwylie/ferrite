@@ -8011,12 +8011,6 @@ impl CockpitView {
                 cx.notify();
             }),
         ));
-        let head = head.child(nav::add_thread_button().on_click(cx.listener(
-            |view, _: &ClickEvent, _, cx| {
-                cx.stop_propagation();
-                view.open_draft(DraftTarget::Main, cx);
-            },
-        )));
         let head = head.child(
             nav::order_button(
                 state.thread_list_order == ThreadListOrder::ByProject,
@@ -8031,6 +8025,12 @@ impl CockpitView {
                 }),
             ),
         );
+        let head = head.child(nav::add_thread_button().on_click(cx.listener(
+            |view, _: &ClickEvent, _, cx| {
+                cx.stop_propagation();
+                view.open_draft(DraftTarget::Main, cx);
+            },
+        )));
         // The pencil belongs to the chosen Project, so it lives beside the
         // dropdown that names it — not inside the menu, which is shut for
         // most of the Project's life. `All Projects` is a filter state, not
