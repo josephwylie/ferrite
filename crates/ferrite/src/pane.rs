@@ -2409,13 +2409,17 @@ fn working_line(
                         .min_w_0()
                         .w_full()
                         .flex()
-                        .items_start()
+                        .items_center()
                         .gap(px(theme::EVENT_GAP))
                         .text_color(rgb(TEXT_2))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .child(live_text(
-                            div().flex_shrink_0().child("◐"),
-                            "live-progress-indicator".into(),
+                        // The shard snap is this row's liveness signal, so the
+                        // mark carries no extra `live_text` opacity pulse. Its
+                        // element id is a constant: the 3s timeline has to
+                        // survive every re-render of the working line.
+                        .child(icons::animated_ferrite_icon(
+                            theme::ROW_ICON,
+                            "live-progress-indicator",
                         ))
                         .child(
                             div()
