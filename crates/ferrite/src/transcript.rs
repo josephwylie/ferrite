@@ -26,6 +26,7 @@ use self::{
 };
 use crate::{
     attachment_preview::Preview,
+    icons,
     pane::{self, DisclosureId, DisclosureState},
     pointer::Pointer,
     rich::TextCache,
@@ -298,11 +299,23 @@ impl TranscriptView {
                 .flex()
                 .gap(px(theme::EVENT_GAP))
                 .child(
+                    // The answer wears Ferrite's mark where Claude Code's
+                    // transcript puts its `●`, at rest: the gutter stays
+                    // `GUTTER_W` so answer prose keeps the tool rows' text
+                    // edge while the mark itself draws twice that wide out of
+                    // the flow, and the offset drops it onto the first line's
+                    // optical center rather than the row's top.
                     div()
+                        .relative()
                         .flex_shrink_0()
                         .w(px(theme::GUTTER_W))
-                        .text_color(gpui::rgb(theme::TEXT))
-                        .child("●"),
+                        .child(
+                            div()
+                                .absolute()
+                                .left(px(0.))
+                                .top(px(theme::ANSWER_MARK_TOP))
+                                .child(icons::ferrite_icon(theme::ANSWER_MARK)),
+                        ),
                 )
                 .child(
                     div()

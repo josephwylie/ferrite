@@ -561,6 +561,15 @@ pub const ICON_BUTTON_GLYPH: f32 = 16.0;
 /// 17px, is the inset a result line and a hunk share so both land under the
 /// verb's first character. Keep the relationship, not just the numbers.
 pub const GUTTER_W: f32 = 9.0;
+/// 18px — an answer's Ferrite mark, twice the `GUTTER_W` gutter it hangs in.
+/// It draws out of the flow so answer prose keeps the tool rows' text edge;
+/// its own overhang lands in the row's `EVENT_GAP`.
+pub const ANSWER_MARK: f32 = 18.0;
+/// 1.3px — the offset that drops that mark onto the first prose line's
+/// optical center. A prose line boxes 20.6px tall, so its center sits 10.3px
+/// down (the measure the 4px bullet's 8.3px top derives from) and the mark is
+/// half of its own 18px above that.
+pub const ANSWER_MARK_TOP: f32 = 1.3;
 #[allow(dead_code)]
 pub const EVENT_GAP: f32 = 8.0;
 pub const INDENT: f32 = 17.0;
