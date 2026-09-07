@@ -66,6 +66,40 @@ impl Spawn {
 }
 
 impl Spawner for Spawn {
+    fn discover_sessions(
+        &mut self,
+        roots: Vec<(Provider, std::path::PathBuf)>,
+        cap: usize,
+    ) -> Option<Receiver<io::Result<Vec<ferrite_core::import::Candidate>>>> {
+        let (tx, rx) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("ferrite-session-discovery".into())
+            .spawn(move || {
+                let mut rows = Vec::new();
+                for (provider, root) in roots {
+                    let discovered = match provider {
+                        Provider::Claude => ferrite_core::providers::claude_sessions(&root, cap),
+                        Provider::Codex => {
+                            let program = ferrite_core::providers::discover::program(provider);
+                            ferrite_core::providers::codex_sessions(&program, cap)
+                        }
+                    };
+                    match discovered {
+                        Ok(found) => rows.extend(found),
+                        Err(error) => {
+                            eprintln!("ferrite: native session discovery failed: {error}");
+                            rows.extend(ferrite_core::import::candidates(&[(provider, root)], cap));
+                        }
+                    }
+                }
+                rows.sort_by_key(|row| std::cmp::Reverse(row.modified));
+                rows.truncate(cap);
+                let _ = tx.send(Ok(rows));
+            })
+            .ok()?;
+        Some(rx)
+    }
+
     fn suggest(
         &mut self,
         request: ferrite_core::suggest::Request,
@@ -146,6 +180,13 @@ struct SessionWithDefaults {
 }
 
 impl Session for SessionWithDefaults {
+    fn search_files(
+        &mut self,
+        query: &str,
+    ) -> io::Result<Receiver<io::Result<Vec<ferrite_core::providers::FileSuggestion>>>> {
+        self.inner.search_files(query)
+    }
+
     fn set_suggestions_enabled(&mut self, enabled: bool) -> io::Result<()> {
         self.inner.set_suggestions_enabled(enabled)
     }

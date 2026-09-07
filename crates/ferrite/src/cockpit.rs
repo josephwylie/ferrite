@@ -5,6 +5,7 @@
 
 pub(crate) mod subagents;
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use ferrite_core::cockpit::{CloseError, Cockpit, HistoryDirection, ProviderChoice};
@@ -153,6 +154,9 @@ pub struct CockpitView {
     /// to the real homes and aimed at scratch directories by tests. Read
     /// once per picker open, never per frame.
     session_file_roots: Vec<(Provider, std::path::PathBuf)>,
+    discovery_request: u64,
+    pending_files: Option<PendingFileSearch>,
+    pending_discovery: Option<PendingDiscovery>,
     /// The launch directory's registered project (#29) — every draft's
     /// starting choice.
     launch_project: ProjectId,
@@ -396,6 +400,7 @@ enum Kind {
         files: std::rc::Rc<Vec<String>>,
         token_start: usize,
         query: String,
+        request_id: u64,
     },
     /// #11: adopt a CLI session file into a still-blank Thread.
     ImportFile,
@@ -410,6 +415,27 @@ enum Kind {
     /// which re-derives from the Composer line per edit.
     Band(pane::BandChip),
 }
+
+struct PendingFileSearch {
+    pane: PaneIdentity,
+    thread: ThreadId,
+    generation: u64,
+    request_id: u64,
+    query: String,
+    token_start: usize,
+    root: std::path::PathBuf,
+    started: std::time::Instant,
+    reply: std::sync::mpsc::Receiver<std::io::Result<Vec<ferrite_core::providers::FileSuggestion>>>,
+    fallback: Option<std::sync::mpsc::Receiver<Vec<pane::MenuRow>>>,
+}
+struct PendingDiscovery {
+    pane: PaneIdentity,
+    request_id: u64,
+    started: std::time::Instant,
+    reply: std::sync::mpsc::Receiver<std::io::Result<Vec<ferrite_core::import::Candidate>>>,
+}
+
+static NEXT_FILE_SEARCH: AtomicU64 = AtomicU64::new(1);
 
 impl Kind {
     fn picker_slot(&self) -> Option<(bool, bool)> {
@@ -589,6 +615,9 @@ impl CockpitView {
             menu_muted: false,
             suppress_recall_menu_once: false,
             session_file_roots: ferrite_core::import::default_roots(),
+            discovery_request: 0,
+            pending_files: None,
+            pending_discovery: None,
             launch_project,
             rename: None,
             context_menu: None,
@@ -754,6 +783,7 @@ impl CockpitView {
     /// One frame for the whole cockpit. Only Panes the pump reports as
     /// changed are worth a repaint; a frame where nothing moved costs nothing.
     fn pump(&mut self, cx: &mut Context<Self>) {
+        self.poll_navigation(cx);
         let frame = self.cockpit.pump();
         let models_changed = self.cockpit.take_models_changed();
         if models_changed {
@@ -2873,40 +2903,42 @@ impl CockpitView {
                 .to_path_buf(),
             _ => return None,
         };
-        if let Some(open) = &self.popover {
-            if open.pane == pane.identity
-                && matches!(&open.kind, Kind::Files { query, .. } if query == filter)
-                && open.rows.first().is_some_and(Row::consequence_is_inert)
-            {
-                return Some(Popover {
-                    pane: pane.identity,
-                    kind: Kind::Files { files: std::rc::Rc::new(Vec::new()), token_start, query: filter.to_string() },
-                    rows: vec![Row { row: pane::MenuRow { insert: SharedString::new(), name: "Searching files…".into(), matched: Vec::new(), detail: SharedString::new(), prose_detail: true, inert: true }, active: false, consequence: Consequence::Inert }],
-                    selected: 0,
-                });
-            }
-        }
         if let Some(thread) = thread {
             if let Ok(receiver) = self.cockpit.search_files(thread, filter) {
-                let pane_identity = pane.identity;
-                let query = filter.to_string();
-                let token_start = token_start;
-                cx.spawn(async move |this, cx| {
-                    let reply = cx.background_executor().spawn(async move || receiver.recv()).await;
-                    let Ok(Ok(files)) = reply else { return; };
-                    this.update(cx, |view, cx| {
-                        let Some(open) = view.popover.as_mut() else { return; };
-                        let Kind::Files { query: current, token_start: current_start, .. } = &open.kind else { return; };
-                        if open.pane != pane_identity || current != &query || *current_start != token_start { return; }
-                        open.rows = native_mention_rows(&files).into_iter().map(|row| Row { consequence: Consequence::Mention(row.insert.clone()), row, active: false }).collect();
-                        open.selected = 0;
-                        cx.notify();
-                    }).ok();
-                }).detach();
+                let request_id = NEXT_FILE_SEARCH.fetch_add(1, Ordering::Relaxed);
+                let generation = self.cockpit.thread(thread)?.generation();
+                self.pending_files = Some(PendingFileSearch {
+                    pane: pane.identity,
+                    thread,
+                    generation,
+                    request_id,
+                    query: filter.to_string(),
+                    token_start,
+                    root: root.clone(),
+                    started: std::time::Instant::now(),
+                    reply: receiver,
+                    fallback: None,
+                });
                 return Some(Popover {
                     pane: pane.identity,
-                    kind: Kind::Files { files: std::rc::Rc::new(Vec::new()), token_start, query: filter.to_string() },
-                    rows: vec![Row { row: pane::MenuRow { insert: SharedString::new(), name: "Searching files…".into(), matched: Vec::new(), detail: SharedString::new(), prose_detail: true, inert: true }, active: false, consequence: Consequence::Inert }],
+                    kind: Kind::Files {
+                        files: std::rc::Rc::new(Vec::new()),
+                        token_start,
+                        query: filter.to_string(),
+                        request_id,
+                    },
+                    rows: vec![Row {
+                        row: pane::MenuRow {
+                            insert: SharedString::default(),
+                            name: "Searching files…".into(),
+                            matched: Vec::new(),
+                            detail: SharedString::default(),
+                            prose_detail: true,
+                            inert: true,
+                        },
+                        active: false,
+                        consequence: Consequence::Inert,
+                    }],
                     selected: 0,
                 });
             }
@@ -2938,7 +2970,12 @@ impl CockpitView {
         }
         Some(Popover {
             pane: pane.identity,
-            kind: Kind::Files { files, token_start, query: filter.to_string() },
+            kind: Kind::Files {
+                files,
+                token_start,
+                query: filter.to_string(),
+                request_id: 0,
+            },
             rows,
             selected: 0,
         })
@@ -3133,12 +3170,191 @@ impl CockpitView {
         cx.notify();
     }
 
+    fn poll_navigation(&mut self, cx: &mut Context<Self>) {
+        use std::sync::mpsc::TryRecvError;
+        if let Some(mut pending) = self.pending_files.take() {
+            let current = self.panes.get(self.focused()).is_some_and(|pane| pane.identity == pending.pane)
+                && self.cockpit.thread(pending.thread).is_some_and(|live| live.generation() == pending.generation)
+                && self.popover.as_ref().is_some_and(|open| open.pane == pending.pane && matches!(&open.kind, Kind::Files { request_id, query, token_start, .. } if *request_id == pending.request_id && query == &pending.query && *token_start == pending.token_start));
+            if current {
+                let rows = if let Some(fallback) = &pending.fallback {
+                    match fallback.try_recv() {
+                        Ok(rows) => Some(rows),
+                        Err(TryRecvError::Empty) => None,
+                        Err(TryRecvError::Disconnected) => Some(Vec::new()),
+                    }
+                } else {
+                    match pending.reply.try_recv() {
+                        Ok(Ok(files)) => Some(native_mention_rows(&files)),
+                        Err(TryRecvError::Empty)
+                            if pending.started.elapsed() < Duration::from_secs(5) =>
+                        {
+                            None
+                        }
+                        _ => {
+                            let root = pending.root.clone();
+                            let query = pending.query.clone();
+                            let (tx, rx) = std::sync::mpsc::channel();
+                            if std::thread::Builder::new()
+                                .name("ferrite-file-fallback".into())
+                                .spawn(move || {
+                                    let paths = ferrite_core::workspace::mention_files(
+                                        &root,
+                                        MENTION_FILE_CAP,
+                                    );
+                                    let _ = tx.send(mention_rows(&paths, &query));
+                                })
+                                .is_ok()
+                            {
+                                pending.fallback = Some(rx);
+                                None
+                            } else {
+                                Some(Vec::new())
+                            }
+                        }
+                    }
+                };
+                if let Some(rows) = rows {
+                    if let Some(open) = &mut self.popover {
+                        open.rows = rows
+                            .into_iter()
+                            .map(|row| Row {
+                                consequence: Consequence::Mention(row.insert.clone()),
+                                row,
+                                active: false,
+                            })
+                            .collect();
+                        open.selected = 0;
+                    }
+                    cx.notify();
+                } else {
+                    self.pending_files = Some(pending);
+                }
+            }
+        }
+        if let Some(pending) = self.pending_discovery.take() {
+            let current = self.index_of(pending.pane).is_some()
+                && self.discovery_request == pending.request_id
+                && self.popover.as_ref().is_some_and(|open| {
+                    open.pane == pending.pane && matches!(open.kind, Kind::ImportFile)
+                });
+            if current {
+                let result = match pending.reply.try_recv() {
+                    Ok(result) => Some(result.map_err(|error| error.to_string())),
+                    Err(TryRecvError::Empty)
+                        if pending.started.elapsed() < Duration::from_secs(15) =>
+                    {
+                        None
+                    }
+                    Err(error) => Some(Err(error.to_string())),
+                };
+                if let Some(result) = result {
+                    let now = std::time::SystemTime::now();
+                    let rows = match result {
+                        Ok(candidates) if !candidates.is_empty() => candidates
+                            .into_iter()
+                            .map(|candidate| {
+                                let title = candidate.title.unwrap_or_else(|| {
+                                    candidate
+                                        .path
+                                        .file_name()
+                                        .map(|name| name.to_string_lossy().into_owned())
+                                        .unwrap_or_default()
+                                });
+                                let cwd = candidate
+                                    .cwd
+                                    .as_deref()
+                                    .map(|path| path.display().to_string())
+                                    .unwrap_or_default();
+                                Row {
+                                    row: pane::MenuRow {
+                                        insert: SharedString::default(),
+                                        name: title.into(),
+                                        matched: Vec::new(),
+                                        detail: format!(
+                                            "{} · {} · {}",
+                                            provider_label(candidate.provider),
+                                            cwd,
+                                            age_label(candidate.modified, now)
+                                        )
+                                        .into(),
+                                        prose_detail: false,
+                                        inert: false,
+                                    },
+                                    active: false,
+                                    consequence: Consequence::Adopt(candidate.path),
+                                }
+                            })
+                            .collect(),
+                        other => {
+                            let message = match other {
+                                Ok(_) => "No sessions found".to_string(),
+                                Err(error) => format!("Could not find sessions: {error}"),
+                            };
+                            vec![Row {
+                                row: pane::MenuRow {
+                                    insert: SharedString::default(),
+                                    name: message.into(),
+                                    matched: Vec::new(),
+                                    detail: SharedString::default(),
+                                    prose_detail: true,
+                                    inert: true,
+                                },
+                                active: false,
+                                consequence: Consequence::Inert,
+                            }]
+                        }
+                    };
+                    if let Some(open) = &mut self.popover {
+                        open.rows = rows;
+                        open.selected = 0;
+                    }
+                    cx.notify();
+                } else {
+                    self.pending_discovery = Some(pending);
+                }
+            }
+        }
+    }
+
     /// #11: discovery and the file-pick popover, run once per open — never
     /// per frame. With nothing to list it says so in the transcript instead
     /// of opening an empty popover; the Notice is Ferrite's own out-of-band
     /// line, so the Thread keeps offering import. On a draft the words land
     /// where the band is.
     fn open_import_picker(&mut self, from: PaneIdentity, cx: &mut Context<Self>) {
+        self.discovery_request = self.discovery_request.wrapping_add(1);
+        let request_id = self.discovery_request;
+        if let Some(receiver) = self
+            .cockpit
+            .discover_sessions(self.session_file_roots.clone(), IMPORT_ROWS_MAX)
+        {
+            self.popover = Some(Popover {
+                pane: from,
+                kind: Kind::ImportFile,
+                rows: vec![Row {
+                    row: pane::MenuRow {
+                        insert: SharedString::default(),
+                        name: "Searching sessions…".into(),
+                        matched: Vec::new(),
+                        detail: SharedString::default(),
+                        prose_detail: true,
+                        inert: true,
+                    },
+                    active: false,
+                    consequence: Consequence::Inert,
+                }],
+                selected: 0,
+            });
+            self.pending_discovery = Some(PendingDiscovery {
+                pane: from,
+                request_id,
+                started: std::time::Instant::now(),
+                reply: receiver,
+            });
+            cx.notify();
+            return;
+        }
         let candidates =
             ferrite_core::import::candidates(&self.session_file_roots, IMPORT_ROWS_MAX);
         if candidates.is_empty() {
@@ -4742,22 +4958,42 @@ fn mention_rows(files: &[String], filter: &str) -> Vec<pane::MenuRow> {
 /// Provider results are already ordered and matched; only translate their
 /// relative paths into the menu's basename/detail representation.
 fn native_mention_rows(files: &[ferrite_core::providers::FileSuggestion]) -> Vec<pane::MenuRow> {
-    files.iter().map(|file| {
-        let path = file.path.as_str();
-        let stem = path.strip_suffix('/').unwrap_or(path);
-        let split = stem.rfind('/').map(|at| at + 1).unwrap_or(0);
-        pane::MenuRow {
-            insert: path.into(),
-            name: path[split..].to_string().into(),
-            matched: file.matched.iter().filter_map(|range| {
-                let start = range.start.max(split);
-                (range.end > split).then(|| start - split..range.end - split)
-            }).collect(),
-            detail: if split == 0 { "".into() } else { path[..split - 1].to_string().into() },
-            prose_detail: false,
-            inert: false,
-        }
-    }).collect()
+    files
+        .iter()
+        .take(MENU_ROWS_MAX)
+        .map(|file| {
+            let mut path = file.path.clone();
+            if file.is_directory && !path.ends_with('/') {
+                path.push('/');
+            }
+            let stem = path.strip_suffix('/').unwrap_or(&path);
+            let split = stem.rfind('/').map(|at| at + 1).unwrap_or(0);
+            let chars: Vec<_> = path.char_indices().collect();
+            let matched = file
+                .matched
+                .iter()
+                .filter_map(|index| {
+                    let (start, character) = *chars.get(*index)?;
+                    (start >= split).then_some(
+                        start.saturating_sub(split)
+                            ..start.saturating_sub(split) + character.len_utf8(),
+                    )
+                })
+                .collect();
+            pane::MenuRow {
+                insert: path.clone().into(),
+                name: path[split..].to_string().into(),
+                matched,
+                detail: if split == 0 {
+                    "".into()
+                } else {
+                    path[..split - 1].to_string().into()
+                },
+                prose_detail: false,
+                inert: false,
+            }
+        })
+        .collect()
 }
 
 /// How many session files the import picker lists (#11) — the same dense
@@ -7426,9 +7662,9 @@ fn transcript_text(blocks: &[ferrite_core::transcript::Block]) -> String {
 
 #[cfg(test)]
 mod tests {
-    mod provider_navigation;
     mod provider_controls;
     mod provider_forms;
+    mod provider_navigation;
     mod subagents;
     use super::*;
     use std::cell::RefCell;
@@ -7451,13 +7687,26 @@ mod tests {
         answered: Rc<RefCell<Vec<(String, DecisionAnswer)>>>,
         controls: Rc<RefCell<Vec<ferrite_core::SessionControl>>>,
         native_controls: Rc<RefCell<bool>>,
-        file_searches: Rc<RefCell<Vec<(String, Sender<std::io::Result<Vec<ferrite_core::providers::FileSuggestion>>>)>>>>,
+        file_searches: Rc<
+            RefCell<
+                Vec<(
+                    String,
+                    Sender<std::io::Result<Vec<ferrite_core::providers::FileSuggestion>>>,
+                )>,
+            >,
+        >,
         native_files: Rc<RefCell<bool>>,
     }
 
     impl Session for Scripted {
-        fn search_files(&mut self, query: &str) -> std::io::Result<Receiver<std::io::Result<Vec<ferrite_core::providers::FileSuggestion>>>> {
-            if !*self.native_files.borrow() { return Err(std::io::ErrorKind::Unsupported.into()); }
+        fn search_files(
+            &mut self,
+            query: &str,
+        ) -> std::io::Result<Receiver<std::io::Result<Vec<ferrite_core::providers::FileSuggestion>>>>
+        {
+            if !*self.native_files.borrow() {
+                return Err(std::io::ErrorKind::Unsupported.into());
+            }
             let (tx, rx) = mpsc::channel();
             self.file_searches.borrow_mut().push((query.into(), tx));
             Ok(rx)
@@ -7508,7 +7757,8 @@ mod tests {
     struct Fake {
         interrupts: Rc<RefCell<usize>>,
         model_discovery: Rc<RefCell<Option<Receiver<(Provider, Vec<ferrite_core::ModelInfo>)>>>>,
-        session_discovery: Rc<RefCell<Option<Receiver<std::io::Result<Vec<ferrite_core::import::Candidate>>>>>>,
+        session_discovery:
+            Rc<RefCell<Option<Receiver<std::io::Result<Vec<ferrite_core::import::Candidate>>>>>>,
         streams: Rc<RefCell<Vec<Sender<SessionEvent>>>>,
         /// Every spawn's choice, in call order — what the provider-picker
         /// tests read back (#25).
@@ -7521,12 +7771,23 @@ mod tests {
         answered: Rc<RefCell<Vec<(String, DecisionAnswer)>>>,
         controls: Rc<RefCell<Vec<ferrite_core::SessionControl>>>,
         native_controls: Rc<RefCell<bool>>,
-        file_searches: Rc<RefCell<Vec<(String, Sender<std::io::Result<Vec<ferrite_core::providers::FileSuggestion>>>)>>>>,
+        file_searches: Rc<
+            RefCell<
+                Vec<(
+                    String,
+                    Sender<std::io::Result<Vec<ferrite_core::providers::FileSuggestion>>>,
+                )>,
+            >,
+        >,
         native_files: Rc<RefCell<bool>>,
     }
 
     impl Spawner for Fake {
-        fn discover_sessions(&mut self, _: Vec<(Provider, std::path::PathBuf)>, _: usize) -> Option<Receiver<std::io::Result<Vec<ferrite_core::import::Candidate>>>> {
+        fn discover_sessions(
+            &mut self,
+            _: Vec<(Provider, std::path::PathBuf)>,
+            _: usize,
+        ) -> Option<Receiver<std::io::Result<Vec<ferrite_core::import::Candidate>>>> {
             self.session_discovery.borrow_mut().take()
         }
 

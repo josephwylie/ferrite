@@ -99,6 +99,9 @@ pub struct Candidate {
     pub provider: Provider,
     pub path: PathBuf,
     pub modified: Option<SystemTime>,
+    pub title: Option<String>,
+    pub cwd: Option<PathBuf>,
+    pub session_id: Option<String>,
 }
 
 /// Candidate session files under the vendors' roots: every `.jsonl` in
@@ -123,6 +126,9 @@ pub fn candidates(roots: &[(Provider, PathBuf)], cap: usize) -> Vec<Candidate> {
             {
                 into.push(Candidate {
                     provider,
+                    title: None,
+                    cwd: None,
+                    session_id: None,
                     modified: std::fs::metadata(&path)
                         .and_then(|metadata| metadata.modified())
                         .ok(),

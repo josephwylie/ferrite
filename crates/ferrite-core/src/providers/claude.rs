@@ -7,6 +7,8 @@
 //! dropped.
 
 mod activity;
+pub(super) mod discovery;
+mod file_search;
 mod suggestions;
 mod wire;
 
@@ -20,6 +22,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::{ControlKind, DecisionAnswer, PermissionModeChoice, SessionControl, SessionEvent};
+
+use super::FileSuggestion;
 
 /// Minimum `claude` CLI version for stable stream-json + stdio control
 /// protocol. Vendor releases below this break loudly at spawn, not weirdly
@@ -204,6 +208,7 @@ pub struct ClaudeSession {
     requests: Arc<Mutex<wire::Requests>>,
     next_request_id: u64,
     suggestions: Arc<Mutex<suggestions::Inbox>>,
+    file_search: Arc<Mutex<file_search::Requests>>,
 }
 
 impl ClaudeSession {
@@ -300,6 +305,7 @@ impl ClaudeSession {
         let mut inbox = suggestions::Inbox::default();
         inbox.configure(config.prompt_suggestions);
         let suggestions = Arc::new(Mutex::new(inbox));
+        let file_search = Arc::new(Mutex::new(file_search::Requests::default()));
         let capabilities = read_stdout(
             stdout,
             sender,
@@ -311,6 +317,7 @@ impl ClaudeSession {
             decoder.clone(),
             requests.clone(),
             suggestions.clone(),
+            file_search.clone(),
         );
 
         let mut session = Self {
@@ -327,6 +334,7 @@ impl ClaudeSession {
             requests,
             next_request_id: 1,
             suggestions,
+            file_search,
         };
         // Before the operator is offered anything: ask the CLI what it can do.
         // A write failure here is a CLI that died on startup, which the reader
@@ -499,6 +507,26 @@ impl ClaudeSession {
         lock(&self.suggestions).take()
     }
 
+    /// Ask the live CLI for ranked paths. A newer query cancels the previous
+    /// receiver locally; the control response is consumed by the reader.
+    pub fn search_files(
+        &mut self,
+        query: &str,
+    ) -> io::Result<Receiver<io::Result<Vec<FileSuggestion>>>> {
+        let id = self.take_request_id();
+        let (reply, receiver) = sync_channel(1);
+        lock(&self.file_search).begin(id.clone(), reply);
+        if let Err(error) = self.write_line(&serde_json::json!({
+            "type": "control_request",
+            "request_id": id.clone(),
+            "request": {"subtype": "file_suggestions", "query": query},
+        })) {
+            lock(&self.file_search).discard(&id);
+            return Err(error);
+        }
+        Ok(receiver)
+    }
+
     /// Send one user prompt; the CLI starts (or queues) a turn.
     pub fn send(&mut self, text: &str) -> io::Result<()> {
         lock(&self.suggestions).sent();
@@ -614,6 +642,7 @@ fn read_stdout(
     decoder: Arc<Mutex<activity::Decoder>>,
     requests: Arc<Mutex<wire::Requests>>,
     suggestions: Arc<Mutex<suggestions::Inbox>>,
+    file_search: Arc<Mutex<file_search::Requests>>,
 ) -> Receiver<ClaudeCapabilities> {
     let (handshake, capabilities) = sync_channel(1);
     thread::spawn(move || {
@@ -631,6 +660,9 @@ fn read_stdout(
             let text = String::from_utf8_lossy(&line);
             let text = text.trim_end();
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(text) {
+                if lock(&file_search).observe(&value) {
+                    continue;
+                }
                 lock(&suggestions).observe(&value);
                 lock(&requests).observe(&value);
                 let response = &value["response"];
@@ -756,6 +788,7 @@ fn read_stdout(
                 }
             }
         }
+        lock(&file_search).disconnect();
         lock(&control_replies).clear();
         let _ = sender.send(closed_event(&child, &stderr_tail));
     });

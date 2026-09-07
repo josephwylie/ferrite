@@ -27,3 +27,10 @@ Claude image content blocks for supported images, local paths for other
 file types. Claude's native image reads are capped at 5 MiB each; larger or
 unreadable images remain file references. The agent's tools and permissions
 still determine how it reads other formats.
+
+Provider parity extension: Claude also receives PDF attachments as native
+base64 document blocks. Inline images and PDFs are limited to 5 MiB each and
+20 MiB total per prompt; skipped attachments keep their file references. Codex
+receives WAV, MP3, M4A, WebM and OGG attachments as native local audio input.
+Other formats retain the existing reference/mention behavior. Both adapters use
+the same attachment cards and persisted path representation.

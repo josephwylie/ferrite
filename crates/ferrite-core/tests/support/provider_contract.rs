@@ -61,6 +61,12 @@ impl Replay {
             quote(&directory.join("host"))
         ));
         script.push_str(r#"case "$frame" in
+*'"method":"fuzzyFileSearch"'*)
+request=$(printf '%s' "$frame" | sed -n 's/.*"id":\([^,}]*\).*/\1/p')
+printf '{"id":%s,"result":{"files":[{"root":"/workspace","path":"src/zé.rs","match_type":"file","file_name":"zé.rs","score":90,"indices":[5]},{"root":"/workspace","path":"src/a","match_type":"directory","file_name":"a","score":80,"indices":null}]}}\n' "$request";;
+*'"subtype":"file_suggestions"'*)
+request=$(printf '%s' "$frame" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
+printf '{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{"suggestions":[{"path":"src/zé.rs"},{"path":"src/a/"},{"path":"/external/file.md"}]}}}\n' "$request";;
 *'"method":"mcpServerStatus/list"'*)
 request=$(printf '%s' "$frame" | sed -n 's/.*"id":\([^,}]*\).*/\1/p')
 printf '{"id":%s,"result":{"data":[{"name":"search","runtimeStatus":"authenticationRequired","authStatus":"notLoggedIn","tools":{},"resources":[],"resourceTemplates":[]}],"nextCursor":null}}\n' "$request";;

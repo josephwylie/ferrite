@@ -70,6 +70,18 @@ fn cmd_shim(program: &str, path: Option<&OsStr>) -> Option<PathBuf> {
 /// No park: a Thread is parked by dropping its Session, which is the whole
 /// lifecycle the caller needs and the only one a provider can honour.
 pub trait Session {
+    /// Provider-ranked file matches. Replies are transient, correlated to this
+    /// request, and never enter the transcript. Unsupported Sessions let the
+    /// caller use local discovery.
+    fn search_files(
+        &mut self,
+        _query: &str,
+    ) -> io::Result<Receiver<io::Result<Vec<FileSuggestion>>>> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "native file search unavailable",
+        ))
+    }
     fn supports_control(&self, _kind: ControlKind) -> bool {
         false
     }
@@ -127,7 +139,23 @@ pub trait Session {
     }
 }
 
+/// A native match, in provider ranking order. Highlight offsets are character
+/// indices in `path`, not byte offsets. Paths are relative to the Session cwd or absolute.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileSuggestion {
+    pub path: String,
+    pub is_directory: bool,
+    pub matched: Vec<usize>,
+}
+
 impl Session for ClaudeSession {
+    fn search_files(
+        &mut self,
+        query: &str,
+    ) -> io::Result<Receiver<io::Result<Vec<FileSuggestion>>>> {
+        ClaudeSession::search_files(self, query)
+    }
+
     fn supports_control(&self, kind: ControlKind) -> bool {
         ClaudeSession::supports_control(self, kind)
     }
@@ -175,6 +203,13 @@ impl Session for ClaudeSession {
 }
 
 impl Session for CodexSession {
+    fn search_files(
+        &mut self,
+        query: &str,
+    ) -> io::Result<Receiver<io::Result<Vec<FileSuggestion>>>> {
+        CodexSession::search_files(self, query)
+    }
+
     fn permission_modes(&self) -> Vec<PermissionModeChoice> {
         CodexSession::permission_modes(self)
     }
@@ -215,6 +250,7 @@ impl Session for CodexSession {
         CodexSession::pid(self)
     }
 }
+pub use claude::discovery::list as claude_sessions;
 /// Each Provider's title filler, beside its Session — the titler runs
 /// whichever the Thread's Provider is.
 pub use claude::title as claude_title;
@@ -223,6 +259,7 @@ pub use claude::{
     CLAUDE_CLI_MAX_VERSION_EXCLUSIVE, CLAUDE_CLI_MIN_VERSION,
 };
 pub use codex::catalog::list as codex_models;
+pub use codex::discovery::list as codex_sessions;
 pub use codex::title as codex_title;
 pub use codex::{
     CodexCapabilities, CodexConfig, CodexSession, CodexSpawnError, CODEX_CLI_MAX_VERSION_EXCLUSIVE,

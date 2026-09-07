@@ -13,6 +13,8 @@
 mod activity;
 pub(super) mod catalog;
 mod controls;
+pub(super) mod discovery;
+mod file_search;
 mod live_catalogs;
 mod questions;
 mod requests;
@@ -28,6 +30,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::{ControlKind, DecisionAnswer, PermissionModeChoice, SessionControl, SessionEvent};
+
+use super::FileSuggestion;
 
 use wire::ThreadHandshake;
 
@@ -233,6 +237,7 @@ pub struct CodexSession {
     next_request_id: u64,
     question_replies: Arc<Mutex<questions::Replies>>,
     native_questions: Arc<Mutex<questions::NativeRequests>>,
+    file_search: Arc<Mutex<file_search::Requests>>,
 }
 
 impl CodexSession {
@@ -284,6 +289,7 @@ impl CodexSession {
         let models = Arc::new(Mutex::new(Vec::new()));
         let question_replies = Arc::new(Mutex::new(questions::Replies::default()));
         let native_questions = Arc::new(Mutex::new(questions::NativeRequests::default()));
+        let file_search = Arc::new(Mutex::new(file_search::Requests::default()));
         let handshake = read_stdout(
             stdout,
             Arc::downgrade(&stdin),
@@ -296,6 +302,7 @@ impl CodexSession {
             Arc::clone(&models),
             Arc::clone(&question_replies),
             Arc::clone(&native_questions),
+            Arc::clone(&file_search),
             config.cwd.clone(),
         );
 
@@ -318,6 +325,7 @@ impl CodexSession {
             next_request_id: 1,
             question_replies,
             native_questions,
+            file_search,
         };
 
         // The handshake, in the server's required order. A failed one must
@@ -336,6 +344,7 @@ impl CodexSession {
                 },
             }
         })?;
+        lock(&session.file_search).configure(&session.thread_id);
         // Ask for the `/` menu (#23) — after the handshake, before the
         // operator can speak. The answer arrives on the reader's own thread
         // and is announced as `SessionEvent::Commands`; a write failure here
@@ -503,6 +512,40 @@ impl CodexSession {
             lock(&self.requests).discard(id);
         }
         result
+    }
+
+    /// Ask the app-server for its ranked fuzzy matches. Its one cancellation
+    /// token is stable for the Session, so each native query supersedes the
+    /// prior search while normal requests retain their own IDs.
+    pub fn search_files(
+        &mut self,
+        query: &str,
+    ) -> io::Result<Receiver<io::Result<Vec<FileSuggestion>>>> {
+        let root = match &self.cwd {
+            Some(cwd) => cwd.clone(),
+            None => std::env::current_dir()?,
+        };
+        let id = self.take_request_id();
+        let (reply, receiver) = sync_channel(1);
+        let token = {
+            let mut searches = lock(&self.file_search);
+            searches.begin(id, reply);
+            searches.token().to_owned()
+        };
+        if let Err(error) = self.write_line(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "fuzzyFileSearch",
+            "params": {
+                "query": query,
+                "roots": [root.display().to_string()],
+                "cancellationToken": token,
+            },
+        })) {
+            lock(&self.file_search).discard(id);
+            return Err(error);
+        }
+        Ok(receiver)
     }
 
     /// Interrupt Main. When a sent start has not yet named its turn, retain
@@ -732,6 +775,7 @@ fn read_stdout(
     model_catalog: Arc<Mutex<Vec<crate::ModelInfo>>>,
     question_replies: Arc<Mutex<questions::Replies>>,
     native_questions: Arc<Mutex<questions::NativeRequests>>,
+    file_search: Arc<Mutex<file_search::Requests>>,
     cwd: Option<PathBuf>,
 ) -> Receiver<Result<HandshakeStep, String>> {
     let (step_sender, steps) = sync_channel(2);
@@ -804,6 +848,9 @@ fn read_stdout(
             }
             turns.observe(text);
             if let Ok(frame) = serde_json::from_str(text) {
+                if lock(&file_search).observe(&frame) {
+                    continue;
+                }
                 let control = turns
                     .main_thread_id
                     .as_deref()
@@ -917,6 +964,7 @@ fn read_stdout(
         }
         *lock(&requests) = requests::Requests::default();
         *lock(&controls) = controls::Controls::default();
+        lock(&file_search).disconnect();
         let _ = sender.send(closed_event(&child, &stderr_tail));
     });
     steps

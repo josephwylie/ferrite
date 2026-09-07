@@ -21,8 +21,7 @@ pub(super) fn input_content(text: &str, cwd: Option<&std::path::Path>) -> Vec<se
         let Some((block, media_type)) = crate::prompt_files::image_type(&path)
             .map(|media_type| ("image", media_type))
             .or_else(|| {
-                crate::prompt_files::pdf_type(&path)
-                    .map(|media_type| ("document", media_type))
+                crate::prompt_files::pdf_type(&path).map(|media_type| ("document", media_type))
             })
         else {
             continue;
@@ -37,7 +36,10 @@ pub(super) fn input_content(text: &str, cwd: Option<&std::path::Path>) -> Vec<se
             continue;
         }
         let mut bytes = Vec::new();
-        if file.take(ATTACHMENT_LIMIT + 1).read_to_end(&mut bytes).is_err()
+        if file
+            .take(ATTACHMENT_LIMIT + 1)
+            .read_to_end(&mut bytes)
+            .is_err()
             || bytes.is_empty()
             || bytes.len() as u64 > ATTACHMENT_LIMIT
             || inline_bytes + bytes.len() as u64 > INLINE_ATTACHMENT_LIMIT

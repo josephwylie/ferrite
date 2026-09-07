@@ -60,6 +60,14 @@ pub struct SpawnRequest<'a> {
 /// How a Session is started. Injected so the cockpit can be driven with
 /// scripted Sessions in tests — nothing below this line spawns a process.
 pub trait Spawner {
+    fn discover_sessions(
+        &mut self,
+        _roots: Vec<(Provider, PathBuf)>,
+        _cap: usize,
+    ) -> Option<Receiver<io::Result<Vec<crate::import::Candidate>>>> {
+        None
+    }
+
     /// Discover provider menus off-thread, without creating a Session or
     /// sending a prompt. Unsupported adapters keep the fallback catalog.
     fn discover_models(&mut self) -> Option<Receiver<(Provider, Vec<ModelInfo>)>> {
@@ -1593,6 +1601,29 @@ impl Cockpit {
     /// borrows the Cockpit, not the handle.
     pub fn thread(&self, thread: ThreadId) -> Option<ThreadView<'_>> {
         self.threads.get(&thread).map(|state| ThreadView { state })
+    }
+
+    pub fn discover_sessions(
+        &mut self,
+        roots: Vec<(Provider, PathBuf)>,
+        cap: usize,
+    ) -> Option<Receiver<io::Result<Vec<crate::import::Candidate>>>> {
+        self.spawner.discover_sessions(roots, cap)
+    }
+
+    pub fn search_files(
+        &mut self,
+        thread: ThreadId,
+        query: &str,
+    ) -> io::Result<Receiver<io::Result<Vec<crate::providers::FileSuggestion>>>> {
+        self.threads
+            .get_mut(&thread)
+            .and_then(|state| state.session.as_mut())
+            .and_then(SessionLifecycle::session_mut)
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::Unsupported, "Thread has no live Session")
+            })?
+            .search_files(query)
     }
 
     /// Route a provider-native control to the live Session for this Thread.
