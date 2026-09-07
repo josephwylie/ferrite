@@ -1145,25 +1145,31 @@ fn a_resumed_session_passes_effort_on_its_next_turn() {
     session.send("next").unwrap();
     let recorded = read_lines(&log, 7);
     drop(session);
-    let resume: Value = serde_json::from_str(&recorded[3]).unwrap();
-    assert_eq!(resume["method"], "thread/resume");
+    // The stub answers the whole handshake up front, so the reader's
+    // history request races the spawning thread's later writes: find each
+    // request by method rather than by position.
+    let request = |method: &str| -> Value {
+        recorded
+            .iter()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .find(|frame| frame["method"] == method)
+            .unwrap_or_else(|| panic!("no {method} in {recorded:?}"))
+    };
     // Metadata and live state only: full-history hydration is deprecated,
     // and the Thread's transcript is the store's to replay.
     assert_eq!(
-        resume["params"],
+        request("thread/resume")["params"],
         serde_json::json!({
             "threadId": "stub-thread",
             "excludeTurns": true,
         })
     );
     // The resumed Main's history is paged for subagent discovery, oldest
-    // first, before the turn goes out.
-    let history: Value = serde_json::from_str(&recorded[5]).unwrap();
-    assert_eq!(history["method"], "thread/turns/list");
+    // first.
+    let history = request("thread/turns/list");
     assert_eq!(history["params"]["threadId"], "stub-thread");
     assert_eq!(history["params"]["sortDirection"], "asc");
-    let turn: Value = serde_json::from_str(&recorded[6]).unwrap();
-    assert_eq!(turn["method"], "turn/start");
+    let turn = request("turn/start");
     assert_eq!(turn["params"]["threadId"], "stub-thread");
     assert_eq!(turn["params"]["effort"], "xhigh");
 }
