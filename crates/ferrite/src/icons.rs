@@ -59,6 +59,7 @@ icons![
     "plus",
     "gear",
     "list-filter",
+    "subagents",
     "window-minimize",
     "window-maximize",
     "window-restore",
@@ -93,6 +94,8 @@ pub const PLUS: &str = "icons/plus.svg";
 pub const GEAR: &str = "icons/gear.svg";
 /// Sort and grouping choices for the Thread list.
 pub const LIST_FILTER: &str = "icons/list-filter.svg";
+/// A parent Agent branching to two children.
+pub const SUBAGENTS: &str = "icons/subagents.svg";
 /// The four caption marks the Windows titlebar draws (`titlebar.rs`). They
 /// are 10px chrome, not 16px UI: on a 10-unit viewBox the line family's 1.5
 /// stroke would render a blob, so these carry the 1px hairline Windows' own
@@ -297,6 +300,7 @@ mod tests {
             FERRITE_LOWER,
             GEAR,
             LIST_FILTER,
+            SUBAGENTS,
             WINDOW_MINIMIZE,
             WINDOW_MAXIMIZE,
             WINDOW_RESTORE,
@@ -312,7 +316,7 @@ mod tests {
         }
         assert_eq!(
             ICONS.len(),
-            20,
+            21,
             "the prototype and app controls, including disclosure and close,              and the four Windows caption glyphs"
         );
     }
@@ -332,6 +336,7 @@ mod tests {
             CHECK,
             GEAR,
             LIST_FILTER,
+            SUBAGENTS,
         ] {
             let bytes = Assets.load(key).unwrap().unwrap();
             let svg = std::str::from_utf8(&bytes).unwrap();
@@ -360,7 +365,7 @@ mod tests {
     #[test]
     fn an_unknown_key_is_absent_rather_than_an_error() {
         assert!(Assets.load("icons/nope.svg").unwrap().is_none());
-        assert_eq!(Assets.list("icons/").unwrap().len(), 20);
+        assert_eq!(Assets.list("icons/").unwrap().len(), 21);
     }
 
     #[test]

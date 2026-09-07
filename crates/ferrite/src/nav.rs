@@ -915,27 +915,32 @@ fn meta_tail(thread: ThreadId, subagents: usize, since: Option<SharedString>) ->
         .child(since_tail(thread, since))
 }
 
-/// The number of subagents attached to a Thread. The noun keeps a
-/// bare number from competing with recency, and singular/plural copy keeps
-/// the compact line natural. Threads without children spend no space here.
-fn subagent_tail(thread: ThreadId, count: usize) -> Div {
+/// The number of subagents attached to a Thread. Its branching mark keeps
+/// the compact count distinct from recency without spelling out a noun.
+/// Threads without children spend no space here.
+fn subagent_tail(thread: ThreadId, count: usize) -> Stateful<Div> {
     let cell = meta_text()
+        .id(("nav-subagents", thread.get() as usize))
+        .flex()
         .flex_shrink_0()
+        .items_center()
+        .gap(px(3.))
         .debug_selector(move || format!("nav-subagents-{}", thread.get()));
     let Some(label) = subagent_label(count) else {
         return cell;
     };
-    cell.child(label)
+    let tooltip = if count == 1 {
+        "1 subagent".to_owned()
+    } else {
+        format!("{count} subagents")
+    };
+    cell.tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+        .child(icon(icons::SUBAGENTS, ROW_ICON, TEXT_MUTED))
+        .child(label)
 }
 
 fn subagent_label(count: usize) -> Option<SharedString> {
-    (count > 0).then(|| {
-        SharedString::from(if count == 1 {
-            "1 subagent".to_owned()
-        } else {
-            format!("{count} subagents")
-        })
-    })
+    (count > 0).then(|| SharedString::from(count.to_string()))
 }
 
 /// The age at the tail of a row's last line — `40m`, `2h`, `3d`. It is
@@ -1340,10 +1345,10 @@ mod tests {
     }
 
     #[test]
-    fn subagent_count_is_hidden_at_zero_and_uses_natural_copy() {
+    fn subagent_count_is_hidden_at_zero_and_uses_compact_numeric_copy() {
         assert_eq!(subagent_label(0), None);
-        assert_eq!(subagent_label(1).as_deref(), Some("1 subagent"));
-        assert_eq!(subagent_label(3).as_deref(), Some("3 subagents"));
+        assert_eq!(subagent_label(1).as_deref(), Some("1"));
+        assert_eq!(subagent_label(3).as_deref(), Some("3"));
     }
 
     /// The nav column draws no border on any edge: Soft separates the
