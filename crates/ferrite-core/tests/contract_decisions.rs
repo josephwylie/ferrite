@@ -5,6 +5,43 @@ mod support;
 use ferrite_core::DecisionAnswer;
 use serde_json::json;
 use support::*;
+
+#[test]
+fn codex_computer_use_approval_exposes_session_persistence_and_returns_native_meta() {
+    let mut r = Replay::new(
+        "codex",
+        vec![json!({
+            "id":"computer-use", "method":"mcpServer/elicitation/request",
+            "params":{"threadId":"root","serverName":"computer-use","mode":"form",
+                "message":"Allow Computer Use to use Ferrite?",
+                "requestedSchema":{"type":"object","properties":{}},
+                "_meta":{"codex_approval_kind":"mcp_tool_call","persist":["session","always"]}}
+        })],
+    );
+    let ds = decisions(&r.drain());
+    assert!(matches!(ds[0].kind, ferrite_core::DecisionKind::Approval));
+    let choice = ds[0]
+        .suggestions
+        .iter()
+        .find(|choice| choice.label == "Allow for this session")
+        .expect("native persistence must be offered by the shared approval UI");
+    r.session
+        .respond_to_decision(
+            &ds[0].id,
+            DecisionAnswer::Choose {
+                value: choice.value.clone(),
+            },
+        )
+        .unwrap();
+    let reply = r.wait_host(|v| v["id"] == "computer-use" && v.get("result").is_some());
+    assert_eq!(
+        reply["result"],
+        json!({
+            "action":"accept","content":null,"_meta":{"persist":"session"}
+        })
+    );
+}
+
 #[test]
 fn codex_native_question_is_answerable_with_original_wire_id() {
     let mut r = Replay::new(
@@ -32,6 +69,122 @@ fn codex_native_question_is_answerable_with_original_wire_id() {
     assert_eq!(
         reply["result"],
         json!({"answers":{"choice":{"answers":["Local"]}}})
+    );
+}
+
+#[test]
+fn codex_mcp_approval_never_invents_or_implicitly_selects_persistence() {
+    for persist in [
+        json!("session"),
+        json!(["session"]),
+        json!(null),
+        json!(["unknown"]),
+    ] {
+        let mut r = Replay::new(
+            "codex",
+            vec![json!({
+                "id":90,"method":"mcpServer/elicitation/request",
+                "params":{"threadId":"root","mode":"openai/form","message":"Allow access?",
+                    "requestedSchema":null,
+                    "_meta":{"codex_approval_kind":"mcp_tool_call","persist":persist}}
+            })],
+        );
+        let ds = decisions(&r.drain());
+        assert!(matches!(ds[0].kind, ferrite_core::DecisionKind::Approval));
+        assert!(!ds[0]
+            .suggestions
+            .iter()
+            .any(|choice| choice.label == "Always allow"));
+        assert!(r.session.respond_to_decision(&ds[0].id, DecisionAnswer::Choose {
+            value: json!({"action":"accept","content":null,"_meta":{"persist":"always"}}),
+        }).is_err(), "unadvertised persistence must be rejected");
+        r.session
+            .respond_to_decision(&ds[0].id, DecisionAnswer::Allow { input: json!(null) })
+            .unwrap();
+        assert_eq!(
+            r.wait_host(|v| v["id"] == 90 && v.get("result").is_some())["result"],
+            json!({"action":"accept","content":null,"_meta":null}),
+            "ordinary Allow must remain one-shot, even when persistence was offered"
+        );
+    }
+}
+
+#[test]
+fn codex_mcp_approval_always_and_cancel_keep_distinct_native_replies() {
+    for (label, expected) in [
+        (
+            "Always allow",
+            json!({"action":"accept","content":null,"_meta":{"persist":"always"}}),
+        ),
+        (
+            "Cancel",
+            json!({"action":"cancel","content":null,"_meta":null}),
+        ),
+    ] {
+        let mut r = Replay::new(
+            "codex",
+            vec![json!({
+                "id":91,"method":"mcpServer/elicitation/request",
+                "params":{"threadId":"root","mode":"form","message":"Allow access?",
+                    "requestedSchema":{"type":"object","properties":{}},
+                    "_meta":{"codex_approval_kind":"mcp_tool_call","persist":"always"}}
+            })],
+        );
+        let ds = decisions(&r.drain());
+        assert!(!ds[0]
+            .suggestions
+            .iter()
+            .any(|choice| choice.label == "Allow for this session"));
+        let choice = ds[0]
+            .suggestions
+            .iter()
+            .find(|choice| choice.label == label)
+            .unwrap();
+        assert_eq!(choice.standing, label == "Always allow");
+        r.session
+            .respond_to_decision(
+                &ds[0].id,
+                DecisionAnswer::Choose {
+                    value: choice.value.clone(),
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            r.wait_host(|v| v["id"] == 91 && v.get("result").is_some())["result"],
+            expected
+        );
+    }
+}
+
+#[test]
+fn codex_mcp_approval_metadata_does_not_discard_required_form_fields() {
+    let mut r = Replay::new(
+        "codex",
+        vec![json!({
+            "id":92,"method":"mcpServer/elicitation/request",
+            "params":{"threadId":"root","mode":"form","message":"Specify access",
+                "requestedSchema":{"type":"object","properties":{"scope":{"type":"string"}},"required":["scope"]},
+                "_meta":{"codex_approval_kind":"mcp_tool_call","persist":["session","always"]}}
+        })],
+    );
+    let ds = decisions(&r.drain());
+    assert!(matches!(&ds[0].kind, ferrite_core::DecisionKind::Form { fields } if fields.len()==1));
+    assert!(ds[0].suggestions.is_empty());
+    assert!(r
+        .session
+        .respond_to_decision(&ds[0].id, DecisionAnswer::Allow { input: json!(null) })
+        .is_err());
+    r.session
+        .respond_to_decision(
+            &ds[0].id,
+            DecisionAnswer::Form {
+                values: json!({"scope":"read"}),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        r.wait_host(|v| v["id"] == 92 && v.get("result").is_some())["result"],
+        json!({"action":"accept","content":{"scope":"read"},"_meta":null})
     );
 }
 #[test]
