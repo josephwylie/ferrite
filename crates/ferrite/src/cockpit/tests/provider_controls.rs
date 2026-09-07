@@ -245,8 +245,10 @@ fn contract_native_turn_diff_is_disclosed_without_a_fake_tool(cx: &mut TestAppCo
     cx.simulate_resize(gpui::size(px(1100.), px(900.)));
     fake.streams.borrow()[0].send(SessionEvent::TurnDiff{turn_id:"native-turn".into(),diff:"diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old-native\n+new-native\n".into()}).unwrap();
     tick(cx);
-    let show = cx
-        .debug_bounds("turn-diff-disclosure")
+    let show = view
+        .read_with(cx, |view, _| {
+            view.panes[0].tool_bounds(pane::DisclosureId::TurnDiff("native-turn".into()))
+        })
         .expect("aggregate changes have their own shared disclosure");
     cx.simulate_click(show.center(), gpui::Modifiers::none());
     cx.run_until_parked();

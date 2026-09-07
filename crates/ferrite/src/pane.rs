@@ -16,11 +16,12 @@ use ferrite_core::activity::Subject;
 use ferrite_core::cockpit::{ThreadView, ToolTiming};
 use ferrite_core::docview::{is_test_run, passed_count, Instruments, Level, Tests};
 use ferrite_core::followup::{self, Followup};
+use ferrite_core::progress::Phase;
 use ferrite_core::roster::{DraftId, PaneIdentity};
 use ferrite_core::store::Provider;
 use ferrite_core::transcript::{
     Block, BlockId, Body, Class, Diff, Span, Status, Style, Todos, Token, ToolActivity, ToolBlock,
-    ToolState, Transcript, TurnDiff,
+    ToolState, Transcript,
 };
 use ferrite_core::workspace::{
     BranchStatus, Check, CheckState, PrState, PullRequest, WorkspaceBinding,
@@ -30,14 +31,14 @@ use gpui::prelude::*;
 use gpui::{
     canvas, deferred, div, point, pulsating_between, px, relative, rgb, rgba, Animation,
     AnimationExt, AnyElement, BoxShadow, Context, Div, Entity, FocusHandle, FontFeatures,
-    FontWeight, HighlightStyle, PathBuilder, ScrollHandle, SharedString, Stateful, Styled,
-    StyledText,
+    FontWeight, HighlightStyle, PathBuilder, SharedString, Stateful, Styled, StyledText,
 };
 #[cfg(test)]
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+#[cfg(test)]
+use std::rc::Rc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use std::{cell::Cell as Flag, rc::Rc};
 
 use crate::components;
 use crate::composer::Composer;
@@ -81,23 +82,23 @@ pub struct PaneView {
     pub history_error: Option<String>,
     pub request_forms: crate::cockpit::subagents::RequestForms,
     pub request_error: Option<(ferrite_core::activity::DecisionHandle, String)>,
+    /// Retained, virtualized transcript entities keyed by Subject. The pane
+    /// still owns chrome and cross-pane coordination; each Subject owns its
+    /// expensive row tree, scroll position and native text cache.
+    pub transcripts: HashMap<Subject, Entity<crate::transcript::TranscriptView>>,
     subject_views: HashMap<Subject, TranscriptViewport>,
-    pub scroll: ScrollHandle,
     pub selection_scope: gpui::base::TextSelectionScopeId,
     pub transcript_focus: FocusHandle,
-    pub follow_tail: Rc<Flag<bool>>,
     /// A pending Decision takes the keyboard: y and n are answers, not text.
     pub decision_focus: FocusHandle,
     disclosure: ToolDisclosure,
+    disclosure_revision: u64,
 }
 
 /// View ownership stays with a Subject even while its transcript is hidden.
 struct TranscriptViewport {
     generation: u64,
-    scroll: ScrollHandle,
     selection_scope: gpui::base::TextSelectionScopeId,
-    transcript_focus: FocusHandle,
-    follow_tail: Rc<Flag<bool>>,
     disclosure: ToolDisclosure,
 }
 
@@ -128,6 +129,9 @@ impl std::fmt::Display for DisclosureId {
 
 struct ToolDisclosure {
     expanded: HashSet<DisclosureId>,
+    /// A completed singleton inherits its call's open state until the
+    /// operator explicitly closes the group.
+    collapsed_groups: HashSet<String>,
     target: Option<DisclosureId>,
     focus: FocusHandle,
     #[cfg(test)]
@@ -175,43 +179,50 @@ impl BandChip {
 
 impl PaneView {
     pub fn new<T: 'static>(thread: ThreadId, cx: &mut Context<T>) -> Self {
-        // A Pane opens on its tail, never on its first line: a fresh
-        // ScrollHandle sits at offset 0 (the top), so a Thread with history
-        // — reopened, or revived at launch — would land on its oldest block.
-        // gpui applies the request at the first prepaint, when the transcript
-        // has a height; from there tail-follow keeps it at the bottom until
-        // the operator scrolls up.
-        let scroll = ScrollHandle::new();
-        scroll.scroll_to_bottom();
+        let preview = crate::attachment_preview::Preview::new(cx);
+        let rich = crate::rich::TextCache::default();
+        let transcript_preview = preview.clone();
+        let transcript_rich = rich.clone();
+        let transcript = cx.new(move |cx| {
+            crate::transcript::TranscriptView::empty(
+                thread,
+                format!("{thread}-main-0").into(),
+                transcript_preview.clone(),
+                transcript_rich.clone(),
+                cx,
+            )
+        });
+        let transcript_focus = transcript.read(cx).transcript_focus();
         Self {
             identity: PaneIdentity::Thread(thread),
             draft: None,
             name: SharedString::from(format!("thread-{thread:02}")),
             composer: cx.new(Composer::new),
-            preview: crate::attachment_preview::Preview::new(cx),
+            preview,
             controls_focus: cx.focus_handle(),
             selected: Subject::Main,
             generation: 0,
-            rich: Default::default(),
+            rich,
             agent_menu_open: false,
             subject_strip_width: 0.,
             tab_interaction: Default::default(),
             history_error: None,
             request_forms: Default::default(),
             request_error: None,
+            transcripts: HashMap::from([(Subject::Main, transcript)]),
             subject_views: HashMap::new(),
-            scroll,
             selection_scope: gpui::base::TextSelectionScopeId::new(),
-            transcript_focus: cx.focus_handle(),
-            follow_tail: Rc::new(Flag::new(true)),
+            transcript_focus,
             decision_focus: cx.focus_handle(),
             disclosure: ToolDisclosure {
                 expanded: HashSet::new(),
+                collapsed_groups: HashSet::new(),
                 target: None,
                 focus: cx.focus_handle(),
                 #[cfg(test)]
                 bounds: Rc::new(RefCell::new(HashMap::new())),
             },
+            disclosure_revision: 0,
         }
     }
 
@@ -222,35 +233,50 @@ impl PaneView {
         binding: DraftBinding,
         cx: &mut Context<T>,
     ) -> Self {
+        let preview = crate::attachment_preview::Preview::new(cx);
+        let rich = crate::rich::TextCache::default();
+        let transcript_preview = preview.clone();
+        let transcript_rich = rich.clone();
+        let transcript = cx.new(move |cx| {
+            crate::transcript::TranscriptView::empty(
+                ThreadId::new(0),
+                "0-main-0".into(),
+                transcript_preview.clone(),
+                transcript_rich.clone(),
+                cx,
+            )
+        });
+        let transcript_focus = transcript.read(cx).transcript_focus();
         Self {
             identity: PaneIdentity::Draft(draft),
             draft: Some(binding),
             name: SharedString::from("new thread"),
             composer: cx.new(Composer::new),
-            preview: crate::attachment_preview::Preview::new(cx),
+            preview,
             controls_focus: cx.focus_handle(),
             selected: Subject::Main,
             generation: 0,
-            rich: Default::default(),
+            rich,
             agent_menu_open: false,
             subject_strip_width: 0.,
             tab_interaction: Default::default(),
             history_error: None,
             request_forms: Default::default(),
             request_error: None,
+            transcripts: HashMap::from([(Subject::Main, transcript)]),
             subject_views: HashMap::new(),
-            scroll: ScrollHandle::new(),
             selection_scope: gpui::base::TextSelectionScopeId::new(),
-            transcript_focus: cx.focus_handle(),
-            follow_tail: Rc::new(Flag::new(true)),
+            transcript_focus,
             decision_focus: cx.focus_handle(),
             disclosure: ToolDisclosure {
                 expanded: HashSet::new(),
+                collapsed_groups: HashSet::new(),
                 target: None,
                 focus: cx.focus_handle(),
                 #[cfg(test)]
                 bounds: Rc::new(RefCell::new(HashMap::new())),
             },
+            disclosure_revision: 0,
         }
     }
 
@@ -289,6 +315,44 @@ impl PaneView {
         }
     }
 
+    pub fn transcript(&self) -> Option<Entity<crate::transcript::TranscriptView>> {
+        self.transcripts.get(&self.selected).cloned()
+    }
+
+    /// Core evicted this Subject's rendered projection. Drop its heavy view;
+    /// ordinary Subject switches retain their entity and scroll position.
+    pub fn release_transcript(
+        &mut self,
+        subject: &Subject,
+    ) -> Option<Entity<crate::transcript::TranscriptView>> {
+        self.transcripts.remove(subject)
+    }
+
+    /// Each Subject keeps one retained transcript entity while hidden. The
+    /// entity itself owns scroll/layout state; this map only preserves the
+    /// identity across Subject switches and roster redraws.
+    pub fn ensure_transcript<T: 'static>(
+        &mut self,
+        cx: &mut Context<T>,
+    ) -> Option<Entity<crate::transcript::TranscriptView>> {
+        let thread = self.thread()?;
+        let subject = self.selected.clone();
+        let namespace = self.text_namespace();
+        if !self.transcripts.contains_key(&subject) {
+            let preview = self.preview.clone();
+            let rich = self.rich.clone();
+            let transcript = cx.new(|cx| {
+                crate::transcript::TranscriptView::empty(thread, namespace, preview, rich, cx)
+            });
+            self.transcripts.insert(subject.clone(), transcript);
+        }
+        let transcript = self.transcripts.get(&subject).cloned();
+        if let Some(transcript) = &transcript {
+            self.transcript_focus = transcript.read(cx).transcript_focus();
+        }
+        transcript
+    }
+
     pub fn select_subject<T: 'static>(
         &mut self,
         subject: Subject,
@@ -307,12 +371,10 @@ impl PaneView {
             .remove(&subject)
             .unwrap_or_else(|| TranscriptViewport {
                 generation,
-                scroll: ScrollHandle::new(),
                 selection_scope: gpui::base::TextSelectionScopeId::new(),
-                transcript_focus: cx.focus_handle(),
-                follow_tail: Rc::new(Flag::new(true)),
                 disclosure: ToolDisclosure {
                     expanded: HashSet::new(),
+                    collapsed_groups: HashSet::new(),
                     target: None,
                     focus: cx.focus_handle(),
                     #[cfg(test)]
@@ -323,13 +385,11 @@ impl PaneView {
             next.generation = generation;
         }
         std::mem::swap(&mut next.generation, &mut self.generation);
-        std::mem::swap(&mut next.scroll, &mut self.scroll);
         std::mem::swap(&mut next.selection_scope, &mut self.selection_scope);
-        std::mem::swap(&mut next.transcript_focus, &mut self.transcript_focus);
-        std::mem::swap(&mut next.follow_tail, &mut self.follow_tail);
         std::mem::swap(&mut next.disclosure, &mut self.disclosure);
         self.subject_views
             .insert(std::mem::replace(&mut self.selected, subject), next);
+        self.ensure_transcript(cx);
         self.agent_menu_open = false;
         self.history_error = None;
     }
@@ -350,25 +410,49 @@ impl PaneView {
             self.selected = to.clone();
         }
         if let Some(old) = self.subject_views.remove(&from) {
-            self.subject_views.entry(to).or_insert(old);
+            self.subject_views.entry(to.clone()).or_insert(old);
+        }
+        if let Some(old) = self.transcripts.remove(&from) {
+            self.transcripts.entry(to).or_insert(old);
         }
     }
 
     pub(crate) fn toggle_tool(&mut self, call: &DisclosureId) {
-        if !self.disclosure.expanded.remove(call) {
+        if let DisclosureId::Group(group) = call {
+            if self.tool_state(call) == DisclosureState::Expanded {
+                self.disclosure.expanded.remove(call);
+                self.disclosure.collapsed_groups.insert(group.clone());
+            } else {
+                self.disclosure.collapsed_groups.remove(group);
+                self.disclosure.expanded.insert(call.clone());
+            }
+        } else if !self.disclosure.expanded.remove(call) {
             self.disclosure.expanded.insert(call.clone());
         }
         self.disclosure.target = Some(call.clone());
+        self.disclosure_revision = self.disclosure_revision.wrapping_add(1);
     }
 
     pub(crate) fn tool_state(&self, call: impl Into<DisclosureId>) -> DisclosureState {
-        if self.disclosure.expanded.contains(&call.into()) {
+        let call = call.into();
+        let inherited_open = match &call {
+            DisclosureId::Group(group) => {
+                !self.disclosure.collapsed_groups.contains(group)
+                    && self
+                        .disclosure
+                        .expanded
+                        .contains(&DisclosureId::Tool(group.clone()))
+            }
+            _ => false,
+        };
+        if self.disclosure.expanded.contains(&call) || inherited_open {
             DisclosureState::Expanded
         } else {
             DisclosureState::Collapsed
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn tool_targeted(&self, call: impl Into<DisclosureId>) -> bool {
         self.disclosure.target.as_ref() == Some(&call.into())
     }
@@ -415,12 +499,21 @@ impl PaneView {
                 Some(at) => calls.get(at + 1).cloned(),
             }
         };
-        self.disclosure.target = next;
+        if self.disclosure.target != next {
+            self.disclosure.target = next;
+            self.disclosure_revision = self.disclosure_revision.wrapping_add(1);
+        }
         self.disclosure.target.as_ref()
     }
 
     pub(crate) fn prune_tools(&mut self, calls: &HashSet<DisclosureId>) {
+        let expanded = self.disclosure.expanded.clone();
+        let collapsed_groups = self.disclosure.collapsed_groups.clone();
+        let target = self.disclosure.target.clone();
         self.disclosure.expanded.retain(|call| calls.contains(call));
+        self.disclosure
+            .collapsed_groups
+            .retain(|group| calls.contains(&DisclosureId::Group(group.clone())));
         if self
             .disclosure
             .target
@@ -429,15 +522,49 @@ impl PaneView {
         {
             self.disclosure.target = None;
         }
+        if self.disclosure.expanded != expanded
+            || self.disclosure.collapsed_groups != collapsed_groups
+            || self.disclosure.target != target
+        {
+            self.disclosure_revision = self.disclosure_revision.wrapping_add(1);
+        }
     }
 
     pub(crate) fn clear_tool_target(&mut self) {
-        self.disclosure.target = None;
+        if self.disclosure.target.take().is_some() {
+            self.disclosure_revision = self.disclosure_revision.wrapping_add(1);
+        }
+    }
+
+    pub(crate) fn transcript_disclosure_snapshot(
+        &self,
+    ) -> (HashSet<DisclosureId>, Option<DisclosureId>, FocusHandle) {
+        let mut expanded = self.disclosure.expanded.clone();
+        // The retained renderer receives a snapshot, so materialize inherited
+        // singleton-group openness here. Its display revision changes for
+        // every state transition above, including an explicit group close.
+        for call in &self.disclosure.expanded {
+            let DisclosureId::Tool(group) = call else {
+                continue;
+            };
+            if !self.disclosure.collapsed_groups.contains(group) {
+                expanded.insert(DisclosureId::Group(group.clone()));
+            }
+        }
+        (
+            expanded,
+            self.disclosure.target.clone(),
+            self.disclosure.focus.clone(),
+        )
+    }
+
+    pub(crate) fn disclosure_revision(&self) -> u64 {
+        self.disclosure_revision
     }
 
     #[cfg(test)]
     pub(crate) fn tool_expanded(&self, call: impl Into<DisclosureId>) -> bool {
-        self.disclosure.expanded.contains(&call.into())
+        self.tool_state(call) == DisclosureState::Expanded
     }
 
     #[cfg(test)]
@@ -486,11 +613,6 @@ pub struct PaneFacts<'a> {
     /// everything the L3 recipe needs that is not an O(1) transcript read.
     /// None for a Thread the facts have not met, which draws as empty.
     pub wall: Option<&'a WallCard>,
-    /// This frame's selection seam (#27): every text run the transcript
-    /// draws goes through it — registered for hit-testing and copy, and
-    /// washed where the selection covers it. The cockpit owns the drag;
-    /// the Pane only routes its runs.
-    pub selection: TextRuns,
 }
 
 /// The click-wired elements only the cockpit can build — gpui listeners
@@ -498,7 +620,13 @@ pub struct PaneFacts<'a> {
 /// `None` (or empty) below the level that draws it.
 #[derive(Default)]
 pub struct PaneWiring {
+    /// The retained L1 transcript. Its cached entity owns native text and
+    /// row layout; the Pane only places the allocated viewport.
+    pub transcript: Option<AnyElement>,
     pub attachments: Option<AnyElement>,
+    /// The retained transcript reports whether its received-reasoning row is
+    /// mounted; this keeps the pinned live progress caption singular.
+    pub received_reasoning_visible: bool,
     /// The open `/` or `@` popover for this Pane's Composer, rows wired to
     /// their picks in the cockpit and hung above the input line here (#23).
     pub menu: Option<AnyElement>,
@@ -513,8 +641,6 @@ pub struct PaneWiring {
     /// keys run (#26) — laid into the L1 card or the L2 body. None while
     /// nothing pends, and at the wall, which draws no keycaps.
     pub decide: Option<AnyElement>,
-    /// L1 tool chevrons, already wired to the cockpit's shared toggle door.
-    pub tool_controls: HashMap<DisclosureId, AnyElement>,
     /// The head's title cell, wired: the name with a double-click that
     /// opens the rename editor, or the editor itself while renaming. None
     /// draws the plain name (L2, L3, drafts).
@@ -662,19 +788,19 @@ pub fn render_pane(
         focused,
         attention,
         wall,
-        selection,
     } = facts;
     let pulse = attention.then(|| view.thread()).flatten();
     let empty = WallCard::default();
     let wall = wall.unwrap_or(&empty);
     let PaneWiring {
+        transcript: retained_transcript,
         attachments,
+        received_reasoning_visible,
         menu,
         model_picker,
         usage_meter,
         session_controls,
         mut decide,
-        mut tool_controls,
         title,
         agents,
         ci,
@@ -816,27 +942,17 @@ pub fn render_pane(
             if let Some(todos) = transcript.todos() {
                 pane = pane.child(tasks_strip(todos, transcript.current_task()));
             }
-            pane = pane.child(scrollback(
-                view,
-                body(
-                    view,
-                    transcript,
-                    status,
-                    focused,
-                    level,
-                    &selection,
-                    timings,
-                    &mut tool_controls,
-                    thread.map(|thread| thread.provider()),
-                ),
-            ));
-            // Short transcripts keep progress directly after their last block.
-            // Once scrollback fills the pane, pin the same line above Composer.
-            if transcript.status() == Status::Streaming && progress_is_pinned(view) {
+            view.rich
+                .file_context(workspace.map(WorkspaceBinding::cwd), &view.preview);
+            pane = pane
+                .child(retained_transcript.expect("L1 transcript entity is wired by CockpitView"));
+            if transcript.status() == Status::Streaming {
                 pane = pane.child(
-                    working_line(transcript, false)
+                    div()
+                        .debug_selector(|| "transcript-progress".into())
                         .px(px(theme::PANE_PAD_X))
-                        .py(px(theme::KEYS_GAP)),
+                        .py(px(theme::KEYS_GAP))
+                        .child(working_line(transcript, false, received_reasoning_visible)),
                 );
             }
             // The Decision card is a **sibling of the body**, not a child
@@ -861,7 +977,12 @@ pub fn render_pane(
                 }
             }
             if let Some(decision) = decision.filter(|_| activity_decisions.is_none()) {
-                pane = pane.child(decision_card(decision, decide.take()));
+                pane = pane.child(decision_card(
+                    decision,
+                    decide.take(),
+                    &view.rich,
+                    view.text_namespace(),
+                ));
             }
             if let Some(decisions) = activity_decisions {
                 pane = pane.child(decisions);
@@ -1517,7 +1638,7 @@ fn l2_cell(
                 .child("❯ idle"),
         );
     } else if transcript.status() == Status::Streaming {
-        body = body.child(working_line(transcript, true));
+        body = body.child(working_line(transcript, true, false));
     }
 
     let mut content = cell.child(header).child(body).children(composer);
@@ -2245,6 +2366,7 @@ pub fn rendered_disclosures(view: &PaneView, blocks: &[Block], level: Level) -> 
     controls
 }
 
+/// The turn-wide change summary has its own disclosure, not a fabricated tool.
 pub fn turn_diff_disclosure(transcript: &Transcript, level: Level) -> Option<DisclosureId> {
     (level == Level::Transcript)
         .then(|| transcript.turn_diff())
@@ -2252,309 +2374,17 @@ pub fn turn_diff_disclosure(transcript: &Transcript, level: Level) -> Option<Dis
         .map(|diff| DisclosureId::TurnDiff(diff.turn_id.clone()))
 }
 
-/// A scrollbar gesture owns the viewport until it reaches the tail again.
-/// Keep this on the handle so both dragging and track clicks agree with the wheel.
-#[derive(Clone)]
-struct TranscriptScrollbar {
-    scroll: ScrollHandle,
-    follow_tail: Rc<Flag<bool>>,
-}
-
-impl gpui::base::ScrollbarHandle for TranscriptScrollbar {
-    fn viewport_bounds(&self) -> gpui::Bounds<gpui::Pixels> {
-        self.scroll.bounds()
-    }
-
-    fn offset(&self) -> gpui::Point<gpui::Pixels> {
-        self.scroll.offset()
-    }
-
-    fn set_offset(&self, offset: gpui::Point<gpui::Pixels>) {
-        self.follow_tail
-            .set(self.scroll.max_offset().y + offset.y <= px(2.));
-        self.scroll.set_offset(offset);
-    }
-
-    fn content_size(&self) -> gpui::Size<gpui::Pixels> {
-        (self.scroll.max_offset() + self.scroll.bounds().size.into()).into()
-    }
-
-    fn start_drag(&self) {
-        self.follow_tail.set(false);
-    }
-
-    fn end_drag(&self) {
-        self.follow_tail
-            .set(self.scroll.max_offset().y + self.scroll.offset().y <= px(2.));
-    }
-}
-
-/// The scrollback and its bar. The bar is a *sibling* of the scrolling
-/// body inside this one `relative()` parent — as a child it would scroll
-/// away with the transcript. Its identity follows the selected transcript,
-/// so a tab switch cannot carry a thumb drag into a different Subject.
-fn scrollback(view: &PaneView, body: impl IntoElement) -> Div {
-    div()
-        .relative()
-        .flex()
-        .flex_col()
-        .flex_1()
-        .min_w_0()
-        .w_full()
-        .min_h_0()
-        .child(body)
-        .child(components::scrollbar(
-            SharedString::from(format!("transcript-scrollbar-{}", view.text_namespace())),
-            &TranscriptScrollbar {
-                scroll: view.scroll.clone(),
-                follow_tail: view.follow_tail.clone(),
-            },
-        ))
-}
-
-fn body(
-    view: &PaneView,
-    transcript: &Transcript,
-    status: Option<Status>,
-    focused: bool,
-    level: Level,
-    selection: &TextRuns,
-    timings: Option<&HashMap<String, ToolTiming>>,
-    tool_controls: &mut HashMap<DisclosureId, AnyElement>,
-    provider: Option<Provider>,
-) -> impl IntoElement {
-    use gpui::base::ElementExt as _;
-    if view.follow_tail.get() {
-        view.scroll.scroll_to_bottom();
-    }
-    // Only Thread Panes have a transcript body; a draft never lands here.
-    let mut body = div()
-        .id(SharedString::from(format!(
-            "transcript-{}",
-            view.text_namespace()
-        )))
-        .flex()
-        .flex_col()
-        .flex_1()
-        .min_w_0()
-        .w_full()
-        .min_h_0()
-        .overflow_y_scroll()
-        .track_scroll(&view.scroll)
-        // One gap between semantic blocks; tool-group internals remain compact.
-        .gap(px(theme::BLOCK_GAP))
-        .px(px(theme::PANE_PAD_X))
-        .pt(px(theme::BODY_PAD_T))
-        .pb(px(theme::BODY_PAD_B))
-        .text_size(px(theme::FS_MD))
-        .line_height(relative(theme::LINE_BODY))
-        .text_color(rgb(TEXT_2))
-        // Characters here are grabbable (#27): the I-beam says so over the
-        // whole scrollback, gutters and gaps included, because a press
-        // anywhere in it anchors at the nearest character.
-        .hover_text();
-    // A `.signal` line wears the Pane's own state, so the line and the
-    // Pane's border can never disagree.
-    let signal = signal_color(status);
-    let window = rendered_window(transcript.blocks(), level);
-    let mut index = 0;
-    while index < window.len() {
-        let block = &window[index];
-        if block.markdown.is_some() {
-            let mut source = String::new();
-            // Every retained section carries the original answer identity,
-            // including after the core's 2,000-block history buffer evicts it.
-            let first = block.markdown_run.unwrap_or(block.id);
-            while let Some(markdown) = window.get(index).and_then(|block| block.markdown.as_ref()) {
-                source.push_str(markdown);
-                index += 1;
-            }
-            body = body.child(
-                div()
-                    .id(SharedString::from(format!(
-                        "answer-{}-{first:?}",
-                        view.text_namespace()
-                    )))
-                    .debug_selector(|| "transcript-answer".into())
-                    .min_w_0()
-                    .w_full()
-                    .flex_shrink_0()
-                    .child(crate::rich::Markdown::new(
-                        format!("markdown-{}-{first:?}", view.text_namespace()),
-                        source,
-                        view.rich.clone(),
-                    )),
-            );
-            continue;
-        }
-        if let Some(activity) = ToolActivity::at_start(&window[index..]) {
-            let call = DisclosureId::Group(activity.leader().call.clone());
-            let len = activity.blocks.len();
-            body = body.child(render_tool_activity(
-                activity,
-                selection,
-                timings,
-                view.tool_state(&call) == DisclosureState::Expanded,
-                tool_controls.remove(&call),
-                view,
-                tool_controls,
-            ));
-            index += len;
-            continue;
-        }
-        if matches!(&block.body, Body::Thinking(text) if text.trim().is_empty()) {
-            index += 1;
-            continue;
-        }
-        body = body.child(render_block(
-            block,
-            selection,
-            timings,
-            match &block.body {
-                Body::Tool(tool) => view.tool_state(tool.call.as_str()),
-                Body::Thinking(_) => view.tool_state(DisclosureId::Reasoning(block.id)),
-                _ => DisclosureState::Collapsed,
-            } == DisclosureState::Expanded,
-            match &block.body {
-                Body::Tool(tool) => tool_controls.remove(&DisclosureId::Tool(tool.call.clone())),
-                Body::Thinking(_) => tool_controls.remove(&DisclosureId::Reasoning(block.id)),
-                _ => None,
-            },
-            signal,
-            provider,
-            &view.preview,
-        ));
-        index += 1;
-    }
-    if let Some(diff) = transcript.turn_diff() {
-        let call = DisclosureId::TurnDiff(diff.turn_id.clone());
-        body = body.child(render_turn_diff(
-            diff,
-            selection,
-            view.tool_state(&call) == DisclosureState::Expanded,
-            tool_controls.remove(&call),
-        ));
-    }
-    if transcript.status() == Status::Streaming && !progress_is_pinned(view) {
-        body = body.child(working_line(transcript, false));
-    }
-    let wheel_scroll = view.scroll.clone();
-    let follow = view.follow_tail.clone();
-    let paint_scroll = view.scroll.clone();
-    let paint_follow = view.follow_tail.clone();
-    let progress_was_pinned = progress_is_pinned(view);
-    let streaming = transcript.status() == Status::Streaming;
-    let body = body
-        .track_focus(&view.transcript_focus)
-        .text_selection_scope(if focused {
-            gpui::base::TextSelectionScopeId::default()
-        } else {
-            view.selection_scope
-        });
-    // Observe outside the scroller: a full-size observation canvas inside
-    // the padded scroller would itself enlarge the content extent.
-    div()
-        .relative()
-        .flex()
-        .flex_1()
-        .min_w_0()
-        .w_full()
-        .min_h_0()
-        .child(body)
-        .child(
-            gpui::canvas(
-                |_, _, _| (),
-                move |_, _, window, cx| {
-                    if streaming && progress_was_pinned != (paint_scroll.max_offset().y > px(0.)) {
-                        window.defer(cx, |window, _| window.refresh());
-                    }
-                    if paint_follow.get()
-                        && paint_scroll.max_offset().y + paint_scroll.offset().y > px(2.)
-                    {
-                        paint_scroll.scroll_to_bottom();
-                        let view = window.current_view();
-                        window.on_next_frame(move |_, cx| cx.notify(view));
-                    }
-                    window.on_mouse_event(move |event: &gpui::ScrollWheelEvent, phase, _, _| {
-                        if !phase.capture() || !wheel_scroll.bounds().contains(&event.position) {
-                            return;
-                        }
-                        let delta = event.delta.pixel_delta(px(theme::FS_MD * theme::LINE_BODY));
-                        let max = wheel_scroll.max_offset().y;
-                        let offset = (wheel_scroll.offset().y + delta.y).clamp(-max, px(0.));
-                        follow.set(max + offset <= px(2.));
-                    });
-                },
-            )
-            .absolute()
-            .size_full(),
-        )
-}
-
-fn render_turn_diff(
-    diff: &TurnDiff,
-    selection: &TextRuns,
-    expanded: bool,
-    disclosure: Option<AnyElement>,
-) -> AnyElement {
-    let gutter = div()
-        .relative()
-        .flex_shrink_0()
-        .w(px(theme::GUTTER_W))
-        .children(disclosure);
-    let header = div()
-        .flex()
-        .items_baseline()
-        .min_w_0()
-        .gap(px(theme::EVENT_GAP))
-        .py(px(theme::EVENT_PAD_Y))
-        .text_size(px(theme::FS_MD))
-        .line_height(relative(theme::LINE_BODY))
-        .text_color(rgb(TEXT_MUTED))
-        .child(gutter)
-        .child(selection.line(BlockId::TURN_DIFF, "Turn changes", Vec::new()));
-    let mut card = gpui::component::collapsible::Collapsible::new()
-        .w_full()
-        .open(expanded)
-        .child(header);
-    if expanded {
-        let mut details = div().flex().flex_col().min_w_0().child(output_block(
-            BlockId::TURN_DIFF,
-            "turn-diff",
-            &diff.diff,
-            TEXT_MUTED,
-            selection,
-        ));
-        if diff.omitted_bytes > 0 {
-            details = details.child(result_line(TEXT_MUTED).child(div().min_w_0().child(format!(
-                "… {} bytes omitted from inline view",
-                diff.omitted_bytes
-            ))));
-        }
-        card = card.content(details);
-    }
-    div()
-        .id(SharedString::from(format!("turn-diff-{}", diff.turn_id)))
-        .debug_selector(|| "turn-diff".into())
-        .flex_shrink_0()
-        .w_full()
-        .child(card)
-        .into_any_element()
-}
-
-// Moving progress out of the scroll content shrinks the viewport by the same
-// height, keeping its overflow stable across the inline → pinned transition.
-fn progress_is_pinned(view: &PaneView) -> bool {
-    view.scroll.max_offset().y > px(0.)
-}
-
 /// The provider's live caption, followed by a quieter metadata line.
 /// Elapsed time and output tokens belong to the turn; command details stay
 /// in their tool disclosures.
-fn working_line(transcript: &Transcript, compact: bool) -> Div {
+fn working_line(
+    transcript: &Transcript,
+    compact: bool,
+    received_reasoning_is_visible: bool,
+) -> Div {
     let mut facts: Vec<String> = Vec::new();
     if let Some(elapsed) = transcript.turn_elapsed() {
-        facts.push(duration_label(elapsed).to_string());
+        facts.push(format!("{} elapsed", duration_label(elapsed)));
     }
     let tokens = transcript.turn_output_tokens();
     if tokens > 0 && !compact {
@@ -2564,7 +2394,13 @@ fn working_line(transcript: &Transcript, compact: bool) -> Div {
         facts.push("esc to interrupt".into());
     }
     let progress = transcript.progress();
-    let caption = progress.caption();
+    let caption = progress.caption().map(|caption| {
+        if !compact && received_reasoning_is_visible {
+            progress.phase.map(Phase::label).unwrap_or("Working").into()
+        } else {
+            caption
+        }
+    });
     let mut row = div()
         .flex()
         .flex_col()
@@ -2587,10 +2423,22 @@ fn working_line(transcript: &Transcript, compact: bool) -> Div {
                         .debug_selector(|| "progress-reasoning".into())
                         .min_w_0()
                         .w_full()
-                        .truncate()
+                        .flex()
+                        .items_start()
+                        .gap(px(theme::EVENT_GAP))
                         .text_color(rgb(TEXT_2))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .child(SharedString::from(format!("◐ {caption}"))),
+                        .child(live_text(
+                            div().flex_shrink_0().child("◐"),
+                            "live-progress-indicator".into(),
+                        ))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .flex_1()
+                                .truncate()
+                                .child(SharedString::from(caption)),
+                        ),
                 )
                 .child(
                     div()
@@ -2603,11 +2451,7 @@ fn working_line(transcript: &Transcript, compact: bool) -> Div {
                 ),
         );
     }
-    div()
-        .w_full()
-        .min_w_0()
-        .flex_shrink_0()
-        .child(live_text(row, "live-progress".into()))
+    div().w_full().min_w_0().flex_shrink_0().child(row)
 }
 
 pub(crate) fn live_text(row: Div, id: SharedString) -> AnyElement {
@@ -2805,23 +2649,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
                 .child("\u{203a}"),
         );
     }
-    input = input.child(line).child(
-        div()
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .h(px(theme::COMPOSER_ROW_H))
-            .whitespace_nowrap()
-            .text_size(px(theme::FS_MONO))
-            .text_color(rgb(TEXT_MUTED))
-            .child(composer_hints(
-                is_draft,
-                history_available,
-                followup::suggest(decision.is_some(), transcript, suggestion)
-                    .acceptable()
-                    .is_some(),
-            )),
-    );
+    input = input.child(line);
     region = region.child(input);
     // The popover paints above the stack — deferred, so it escapes the
     // Pane's clip and draws over the transcript (#24).
@@ -2837,7 +2665,8 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         ));
     }
 
-    // `.composer-controls`: setup or mode at left; usage and model at right.
+    // `.composer-controls`: setup or mode and the `@`/`/` hints at left;
+    // usage and model at right.
     let mut controls = div()
         .flex()
         .flex_shrink_0()
@@ -2871,6 +2700,26 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
                 .child(escape),
         );
     }
+    // The `@`/`/` hints ride the controls row rather than the text row: the
+    // line is free to grow across its full width, and every key the Composer
+    // offers reads on one bottom edge.
+    controls = controls.child(
+        div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .h(px(theme::COMPOSER_ROW_H))
+            .whitespace_nowrap()
+            .text_size(px(theme::FS_MONO))
+            .text_color(rgb(TEXT_MUTED))
+            .child(composer_hints(
+                is_draft,
+                history_available,
+                followup::suggest(decision.is_some(), transcript, suggestion)
+                    .acceptable()
+                    .is_some(),
+            )),
+    );
     // `margin-inline-start: auto` on the picker. It renders in every Pane,
     // before and after the first-prompt lock — there is no plain-label
     // fallback and no second model surface anywhere.
@@ -2892,9 +2741,15 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         .flex_shrink_0()
         .min_w_0()
         .when_some(attachments, |stack, attachments| {
-            stack.child(div().px(px(theme::PANE_PAD_X)).child(attachments))
+            // The island floats clear of the prompt: its own rounded edge,
+            // clearance below it, and the composer's top edge left whole.
+            stack.child(
+                div()
+                    .px(px(theme::PANE_PAD_X))
+                    .pb(px(theme::ATTACHMENT_ISLAND_GAP))
+                    .child(attachments),
+            )
         })
-        // The attachment shoulders meet this matching surface at its top edge.
         .child(region.child(controls))
 }
 
@@ -2917,7 +2772,7 @@ fn mode_chip(mode: &str) -> Div {
         .hover_raised()
 }
 
-/// The hints beside the line. A showing prediction takes the first slot: it
+/// The hints under the line, on the controls row. A showing prediction takes the first slot: it
 /// is the only one of these the operator cannot discover by looking at the
 /// box, and an accept key nobody knows about is the same as no accept key.
 fn composer_hints(is_draft: bool, history_available: bool, suggested: bool) -> &'static str {
@@ -3119,7 +2974,12 @@ fn queued_line(held: &str) -> impl IntoElement {
 ///
 /// Kept free of focus and key wiring so it can be drawn — and smoke-
 /// rendered — on its own; the keycaps arrive wired from the cockpit (#26).
-fn decision_card(decision: &Decision, decide: Option<AnyElement>) -> Div {
+fn decision_card(
+    decision: &Decision,
+    decide: Option<AnyElement>,
+    cache: &crate::rich::TextCache,
+    namespace: SharedString,
+) -> Div {
     let subject = decision_subject(decision);
     let wants = decision_wants(decision);
     div()
@@ -3141,11 +3001,12 @@ fn decision_card(decision: &Decision, decide: Option<AnyElement>) -> Div {
             div()
                 .flex()
                 .flex_col()
+                .gap(px(theme::KEYS_GAP))
                 .flex_1()
                 .min_w_0()
                 .child(
                     div()
-                        .truncate()
+                        .flex_shrink_0()
                         .text_size(px(theme::FS_MD))
                         .line_height(relative(theme::LINE_UI))
                         .font_weight(FontWeight::SEMIBOLD)
@@ -3154,14 +3015,63 @@ fn decision_card(decision: &Decision, decide: Option<AnyElement>) -> Div {
                 )
                 .child(
                     div()
+                        .flex_shrink_0()
                         .truncate()
                         .text_size(px(theme::FS_SM))
                         .line_height(relative(theme::LINE_UI))
                         .text_color(rgb(TEXT_MUTED))
                         .child(wants),
-                ),
+                )
+                .children(approval_input(
+                    decision,
+                    cache,
+                    format!("approval-input-{namespace}-{}", decision.id).into(),
+                )),
         )
         .children(decide)
+}
+
+/// The exact tool input an approval would send. Commands retain their source;
+/// other provider input remains inspectable as its JSON value.
+pub(crate) fn approval_input(
+    decision: &Decision,
+    cache: &crate::rich::TextCache,
+    id: SharedString,
+) -> Option<AnyElement> {
+    use gpui::component::scroll::ScrollableElement as _;
+
+    if question_of(decision).is_some() {
+        return None;
+    }
+    let source = decision
+        .input
+        .get("command")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .or_else(|| decision.input.as_str().map(str::to_owned))
+        .or_else(|| {
+            (!decision.input.is_null()).then(|| {
+                serde_json::to_string_pretty(&decision.input)
+                    .expect("decision input is serializable")
+            })
+        })?;
+    Some(
+        div()
+            .debug_selector(|| "approval-input".into())
+            .w_full()
+            .min_w_0()
+            .flex_shrink_0()
+            .max_h(px(160.))
+            .overflow_y_scrollbar()
+            .child(crate::rich::Literal {
+                id,
+                document: None,
+                text: source.into(),
+                highlights: Vec::new(),
+                cache: cache.clone(),
+            })
+            .into_any_element(),
+    )
 }
 
 /// The Decision's subject — what it wants to do, tool-prefixed the comps'
@@ -4044,7 +3954,7 @@ pub fn popover_footer(hints: &'static str) -> Div {
 /// A preview of received text, never a second provider reasoning channel.
 /// Keep a short first line in the header; disclose only what follows it.
 /// A shortened first line needs the original text in the disclosure too.
-fn reasoning_text(thought: &str) -> (String, Option<&str>) {
+pub(crate) fn reasoning_text(thought: &str) -> (String, Option<&str>) {
     let thought = thought.trim();
     let (first, rest) = thought.split_once('\n').unwrap_or((thought, ""));
     let first = first.trim();
@@ -4066,6 +3976,10 @@ fn reasoning_text(thought: &str) -> (String, Option<&str>) {
     (summary, details)
 }
 
+pub(crate) fn reasoning_has_details(thought: &str) -> bool {
+    reasoning_text(thought).1.is_some()
+}
+
 /// One Block in the prototype's transcript vocabulary (§E). The body draws
 /// **no gutter at all** for prose: paragraphs, headings and list items sit
 /// flush at the content edge, and the only glyphs left are the event row's
@@ -4075,7 +3989,7 @@ fn reasoning_text(thought: &str) -> (String, Option<&str>) {
 /// Every text run routes through the selection overlay (#27) — that is what
 /// makes it selectable and copyable; the disc markers, chips, elbows and
 /// diff line numbers around the runs are chrome, and stay plain.
-fn render_block(
+pub(crate) fn render_block(
     block: &Block,
     selection: &TextRuns,
     timings: Option<&HashMap<String, ToolTiming>>,
@@ -4092,12 +4006,22 @@ fn render_block(
             let (text, files) = ferrite_core::prompt_files::split(line.clone());
             let row = paragraph(row, TEXT_STRONG)
                 .debug_selector(|| "transcript-prompt".into())
-                .px(px(theme::CODE_PAD_X))
+                .relative()
+                .px(px(theme::INDENT))
                 .py(px(theme::PROMPT_PAD_Y))
                 .rounded(px(theme::R_CONTROL))
                 .bg(rgb(RAISED));
             row.flex()
                 .flex_col()
+                .child(
+                    div()
+                        .absolute()
+                        .left(px(0.))
+                        .top(px(theme::PROMPT_PAD_Y))
+                        .w(px(theme::GUTTER_W))
+                        .text_color(rgb(SEP))
+                        .child("❯"),
+                )
                 .when(!text.is_empty(), |row| {
                     row.child(selection.line(block.id, text, Vec::new()))
                 })
@@ -4205,11 +4129,10 @@ fn render_block(
         Body::Meta(text) => paragraph(row, TEXT_2)
             .child(selection.line(block.id, text.clone(), Vec::new()))
             .into_any_element(),
-        // `.codeblock` (§E.7): 4px radius on `--raised`, a language label
-        // at `5px 10px 0`, then the `pre` at `4px 10px 8px`. No border, no
-        // language bar, no rule between them.
+        // Code keeps literal indentation and highlighting without a
+        // separate language header or raised container.
         Body::Code {
-            language,
+            language: _,
             source,
             tokens,
         } => row
@@ -4217,25 +4140,13 @@ fn render_block(
                 div()
                     .flex()
                     .flex_col()
-                    .bg(rgb(RAISED))
-                    .rounded(px(theme::R_CHIP))
                     .overflow_hidden()
                     .text_size(px(theme::FS_MD))
                     .line_height(relative(theme::LINE_BODY))
-                    .children(language.as_ref().map(|language| {
-                        div()
-                            .px(px(theme::CODE_PAD_X))
-                            .pt(px(theme::CODE_LANG_PAD_T))
-                            .text_color(rgb(TEXT_MUTED))
-                            .child(SharedString::from(language.clone()))
-                    }))
                     .child(
                         div()
                             .flex()
                             .flex_col()
-                            .px(px(theme::CODE_PAD_X))
-                            .pt(px(theme::CODE_PRE_PAD_T))
-                            .pb(px(theme::CODE_PRE_PAD_B))
                             .text_color(rgb(TEXT_2))
                             // One child per hard line. Handed the whole
                             // multi-line source, the shaper drops the run of
@@ -4293,7 +4204,7 @@ fn separators(text: &str) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
 
 /// Which colour a `.signal` line wears — the Pane's own state, so the line
 /// and the Pane's border can never disagree.
-fn signal_color(status: Option<Status>) -> u32 {
+pub(crate) fn signal_color(status: Option<Status>) -> u32 {
     match status {
         Some(Status::Blocked) => ATTENTION,
         Some(Status::Closed) => BLOCKED,
@@ -4434,7 +4345,10 @@ fn render_tool(
                     .text_size(px(theme::FS_MONO))
                     .line_height(relative(theme::LINE_BODY))
                     .text_color(rgb(TEXT_MUTED))
-                    .child(duration_label(total)),
+                    .child(SharedString::from(format!(
+                        "{} elapsed",
+                        duration_label(total)
+                    ))),
             ));
         }
         line = line.child(div().flex_1().min_w_0()).child(trail);
@@ -4547,17 +4461,21 @@ fn render_tool(
     row.child(card).into_any_element()
 }
 
-/// One stable summary; expanding reveals the original command/result pairs.
-/// Failure previews remain visible even when successful siblings are hidden.
-fn render_tool_activity(
+/// The retained transcript supplies disclosure state and builds controls only
+/// for rows GPUI actually asks it to mount.
+pub(crate) fn render_tool_activity_with<S, C>(
     activity: ToolActivity<'_>,
     selection: &TextRuns,
     timings: Option<&HashMap<String, ToolTiming>>,
     expanded: bool,
     disclosure: Option<AnyElement>,
-    view: &PaneView,
-    controls: &mut HashMap<DisclosureId, AnyElement>,
-) -> AnyElement {
+    state: S,
+    mut control: C,
+) -> AnyElement
+where
+    S: Fn(&DisclosureId) -> DisclosureState,
+    C: FnMut(&DisclosureId) -> Option<AnyElement>,
+{
     let call = activity.leader().call.clone();
     let total = activity.blocks.len();
     let unavailable = activity
@@ -4572,7 +4490,21 @@ fn render_tool_activity(
     } else {
         activity.summary()
     };
-    let summary = div().min_w_0().child(label);
+    let counts = label
+        .match_indices(|character: char| character.is_ascii_digit())
+        .map(|(at, digit)| {
+            (
+                at..at + digit.len(),
+                HighlightStyle {
+                    font_weight: Some(FontWeight::BOLD),
+                    ..Default::default()
+                },
+            )
+        })
+        .collect();
+    let summary = div()
+        .min_w_0()
+        .child(selection.line(activity.blocks[0].id, label, counts));
     let summary = if activity.running > 0 {
         live_text(summary, format!("live-group-{call}").into())
     } else {
@@ -4631,8 +4563,8 @@ fn render_tool_activity(
                 tool,
                 selection,
                 timings,
-                view.tool_state(tool.call.as_str()) == DisclosureState::Expanded,
-                controls.remove(&DisclosureId::Tool(tool.call.clone())),
+                state(&DisclosureId::Tool(tool.call.clone())) == DisclosureState::Expanded,
+                control(&DisclosureId::Tool(tool.call.clone())),
                 true,
             ));
         }
@@ -4649,8 +4581,8 @@ fn render_tool_activity(
                     tool,
                     selection,
                     timings,
-                    view.tool_state(tool.call.as_str()) == DisclosureState::Expanded,
-                    controls.remove(&DisclosureId::Tool(tool.call.clone())),
+                    state(&DisclosureId::Tool(tool.call.clone())) == DisclosureState::Expanded,
+                    control(&DisclosureId::Tool(tool.call.clone())),
                     true,
                 )));
             }
@@ -4733,8 +4665,14 @@ fn result_ink(state: &ToolState) -> u32 {
 /// hard line stretched to the column under it, each wrapping at the
 /// column's width. Blank lines keep their height so the shape of the
 /// output survives.
-fn output_block(block: BlockId, part: &str, text: &str, ink: u32, selection: &TextRuns) -> Div {
-    let mut rows = div()
+pub(crate) fn output_block(
+    block: BlockId,
+    part: &str,
+    text: &str,
+    ink: u32,
+    selection: &TextRuns,
+) -> Div {
+    let rows = div()
         .flex()
         .flex_col()
         .w_full()
@@ -4768,32 +4706,32 @@ fn output_block(block: BlockId, part: &str, text: &str, ink: u32, selection: &Te
                 ),
         );
     }
-    for (index, line) in text.split('\n').enumerate() {
-        let run = if line.is_empty() {
-            selection.line(block, " ", Vec::new())
-        } else {
-            selection.line(block, line.to_string(), Vec::new())
-        };
-        let mut row = div().flex().w_full().min_w_0().gap(px(theme::EVENT_GAP));
-        row = row.child(
-            div()
-                .flex_shrink_0()
-                .w(px(theme::FS_MD * theme::MONO_ADVANCE))
-                .text_color(rgb(SEP))
-                .child(if index == 0 { "⎿" } else { " " }),
-        );
-        let mut body = div().flex_1().min_w_0().child(run);
-        body.style().size.width = None;
-        rows = rows.child(row.child(body));
-    }
-    rows
+    rows.child(
+        div()
+            .flex()
+            .w_full()
+            .min_w_0()
+            .gap(px(theme::EVENT_GAP))
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .w(px(theme::FS_MD * theme::MONO_ADVANCE))
+                    .text_color(rgb(SEP))
+                    .child("⎿"),
+            )
+            .child(div().flex_1().min_w_0().child(selection.line(
+                block,
+                text.to_string(),
+                Vec::new(),
+            ))),
+    )
 }
 
 /// `.result` (§E.10): `padding: 1px 0 3px 17px`, an 8px gap, 10.5px muted
 /// — with the `└` elbow in `--sep`. The 17px inset is exactly the event's
 /// glyph column plus its gap, so the elbow lands under the verb's first
 /// character.
-fn result_line(ink: u32) -> Div {
+pub(crate) fn result_line(ink: u32) -> Div {
     div()
         .flex()
         .min_w_0()
@@ -4840,7 +4778,7 @@ pub fn tool_disclosure_control(
     expanded: bool,
     targeted: bool,
     focus: &FocusHandle,
-) -> Stateful<Div> {
+) -> Div {
     let control = crate::components::button(SharedString::from(format!("tool-button-{call}")))
         .w(px(theme::TOOL_DISCLOSURE_HIT))
         .h(px(theme::TOOL_DISCLOSURE_HIT))
@@ -4864,13 +4802,7 @@ pub fn tool_disclosure_control(
             theme::ICON_CHEVRON,
             TEXT_MUTED,
         ));
-    let id = match call {
-        DisclosureId::TurnDiff(_) => SharedString::from("turn-diff-disclosure"),
-        _ => SharedString::from(format!("tool-disclosure-{call}")),
-    };
     div()
-        .id(id.clone())
-        .debug_selector(move || id.to_string())
         .absolute()
         .left(px((theme::GUTTER_W - theme::TOOL_DISCLOSURE_HIT) / 2.))
         .top(px(-1.))
@@ -5109,14 +5041,9 @@ fn inline(spans: &[Span]) -> (String, Vec<(std::ops::Range<usize>, HighlightStyl
 fn span_style(style: Style) -> Option<HighlightStyle> {
     match style {
         Style::Plain => None,
-        // Inline `code` (§E.4): a `--raised` chip. The prototype leaves the
-        // ink inherited; the operator asked for an ink of its own, so a
-        // path or a flag stands out of the sentence and not only its
-        // ground. A gpui highlight carries no padding or radius — see
-        // `prose` for why the run is flat.
+        // Inline code keeps its own ink without adding a chip to prose.
         Style::Code => Some(HighlightStyle {
             color: Some(rgb(INLINE_CODE_INK).into()),
-            background_color: Some(rgb(RAISED).into()),
             ..Default::default()
         }),
         // `strong` (§E.5): weight 600 in `--text-strong`.
@@ -5270,7 +5197,7 @@ mod tests {
 
     impl Render for ShowsProgress {
         fn render(&mut self, _: &mut gpui::Window, _: &mut Context<Self>) -> impl IntoElement {
-            div().w_full().child(working_line(&self.0, false))
+            div().w_full().child(working_line(&self.0, false, false))
         }
     }
 
@@ -5388,56 +5315,101 @@ mod tests {
         blocks: Vec<Block>,
         expanded: HashSet<String>,
         reasoning_expanded: bool,
-        /// Exercise the same prompt rendering for each Thread Provider.
-        provider: Option<Provider>,
+        transcript: Entity<crate::transcript::TranscriptView>,
+        display_revision: u64,
     }
 
     impl Render for ShowsBlocks {
         fn render(
             &mut self,
             _window: &mut gpui::Window,
-            _cx: &mut Context<Self>,
+            cx: &mut Context<Self>,
         ) -> impl IntoElement {
-            let overlay = self.selection.overlay(self.thread, &self.blocks);
-            let preview = crate::attachment_preview::Preview::new(_cx);
-            div()
-                .flex()
-                .flex_col()
-                .w(px(900.))
-                .font_family(crate::theme::FONT_MONO)
-                .text_size(px(12.))
-                .children(self.blocks.iter().map(|block| {
-                    let expanded = match &block.body {
-                        Body::Tool(tool) => self.expanded.contains(&tool.call),
-                        Body::Thinking(_) => self.reasoning_expanded,
-                        _ => false,
-                    };
-                    render_block(
-                        block,
-                        &overlay,
-                        None,
-                        expanded,
-                        None,
-                        TEXT_MUTED,
-                        self.provider,
-                        &preview,
-                    )
-                }))
+            self.display_revision = self.display_revision.wrapping_add(1);
+            let mut expanded: HashSet<DisclosureId> = self
+                .expanded
+                .iter()
+                .cloned()
+                .map(DisclosureId::Tool)
+                .collect();
+            // Per-block fixtures show every call; individual tool details
+            // retain their own collapsed/expanded state.
+            expanded.extend(self.blocks.iter().filter_map(|block| match &block.body {
+                Body::Tool(tool) => Some(DisclosureId::Group(tool.call.clone())),
+                _ => None,
+            }));
+            if self.reasoning_expanded {
+                expanded.extend(self.blocks.iter().filter_map(|block| {
+                    matches!(&block.body, Body::Thinking(_))
+                        .then_some(DisclosureId::Reasoning(block.id))
+                }));
+            }
+            let input = crate::transcript::TranscriptInput {
+                thread: self.thread,
+                namespace: "pane-block-test".into(),
+                content_revision: (0, 0),
+                display_revision: self.display_revision,
+                blocks: self.blocks.clone(),
+                turn_diff: None,
+                signal_status: Some(Status::Idle),
+                timings: HashMap::new(),
+                focused: true,
+                selection_scope: gpui::base::TextSelectionScopeId::new(),
+                preview: crate::attachment_preview::Preview::new(cx),
+                expanded,
+                target: None,
+                disclosure_focus: cx.focus_handle(),
+                #[cfg(test)]
+                disclosure_bounds: Rc::new(RefCell::new(HashMap::new())),
+            };
+            let selection = self.selection.clone();
+            self.transcript
+                .update(cx, |transcript, cx| transcript.sync(input, selection, cx));
+            self.transcript.clone()
         }
     }
 
-    fn shows_blocks(blocks: Vec<Block>) -> ShowsBlocks {
+    fn shows_blocks(blocks: Vec<Block>, cx: &mut Context<ShowsBlocks>) -> ShowsBlocks {
+        let thread = ThreadId::new(1);
+        let selection = crate::select::TranscriptText::default();
+        let transcript = cx.new(|cx| {
+            crate::transcript::TranscriptView::new(
+                crate::transcript::TranscriptInput {
+                    thread,
+                    namespace: "pane-block-test".into(),
+                    content_revision: (0, 0),
+                    display_revision: 0,
+                    blocks: blocks.clone(),
+                    turn_diff: None,
+                    signal_status: Some(Status::Idle),
+                    timings: HashMap::new(),
+                    focused: true,
+                    selection_scope: gpui::base::TextSelectionScopeId::new(),
+                    preview: crate::attachment_preview::Preview::new(cx),
+                    expanded: HashSet::new(),
+                    target: None,
+                    disclosure_focus: cx.focus_handle(),
+                    #[cfg(test)]
+                    disclosure_bounds: Rc::new(RefCell::new(HashMap::new())),
+                },
+                crate::rich::TextCache::default(),
+                selection.clone(),
+                cx,
+            )
+        });
         ShowsBlocks {
-            thread: ThreadId::new(1),
-            selection: crate::select::TranscriptText::default(),
+            thread,
+            selection,
             blocks,
             expanded: HashSet::new(),
             reasoning_expanded: false,
-            provider: Some(Provider::Claude),
+            transcript,
+            display_revision: 0,
         }
     }
 
     struct ShowsDecisions {
+        cache: crate::rich::TextCache,
         decisions: Vec<Decision>,
     }
 
@@ -5463,6 +5435,8 @@ mod tests {
                                 .child(keycap_always())
                                 .into_any_element(),
                         ),
+                        &self.cache,
+                        "decision-reference".into(),
                     )
                 }))
                 .children(self.decisions.iter().map(|decision| {
@@ -5629,7 +5603,7 @@ mod tests {
 
         let (_view, cx) = cx.add_window_view(|_, cx| {
             gpui::component::init(cx);
-            shows_blocks(blocks)
+            shows_blocks(blocks, cx)
         });
         // A resize forces a real layout-and-paint pass through the view.
         cx.simulate_resize(size(px(900.), px(600.)));
@@ -5658,7 +5632,7 @@ mod tests {
         }));
         let (view, cx) = cx.add_window_view(|_, cx| {
             gpui::component::init(cx);
-            let mut view = shows_blocks(transcript.blocks().to_vec());
+            let mut view = shows_blocks(transcript.blocks().to_vec(), cx);
             view.expanded.insert("structured".into());
             view
         });
@@ -5716,8 +5690,16 @@ mod tests {
         let transcript = every_kind();
         let instruments = Instruments::of(&transcript);
         let blocks: Vec<Block> = transcript.blocks().to_vec();
-        let ids: Vec<ferrite_core::transcript::BlockId> =
-            blocks.iter().map(|block| block.id).collect();
+        let ids: Vec<ferrite_core::transcript::BlockId> = blocks
+            .iter()
+            .map(|block| {
+                if block.markdown.is_some() {
+                    block.markdown_run.unwrap_or(block.id)
+                } else {
+                    block.id
+                }
+            })
+            .collect();
         let reasoning: Vec<_> = blocks
             .iter()
             .filter(|block| {
@@ -5728,7 +5710,7 @@ mod tests {
         let thread = ThreadId::new(1);
         let (view, cx) = cx.add_window_view(|_, cx| {
             gpui::component::init(cx);
-            shows_blocks(blocks)
+            shows_blocks(blocks, cx)
         });
         cx.simulate_resize(size(px(900.), px(600.)));
         cx.run_until_parked();
@@ -5772,15 +5754,9 @@ mod tests {
             all.contains("Bash(cargo test)"),
             "tool pieces compose the call: {all}"
         );
-        // A hunk registers its code, never its sign column: the `+`/`−` is
-        // chrome the prototype draws beside the cell, not text inside it.
         assert!(
-            all.contains("delta") && all.contains("bravo"),
-            "a diff registers its lines: {all}"
-        );
-        assert!(
-            !all.contains("+delta") && !all.contains("-bravo"),
-            "the sign column is chrome and never copies: {all}"
+            !all.contains("delta") && !all.contains("bravo"),
+            "a grouped tool's hidden diff must not join copied text: {all}"
         );
         // The result line registers where it renders (Edit's); Bash's was
         // kept inside its disclosure — so its count never
@@ -5800,7 +5776,14 @@ mod tests {
                 .filter(|(_, _, _, text)| text == "delta" || text == "bravo")
                 .count(),
             2,
-            "the edit diff still renders exactly once expanded"
+            "the disclosed edit diff registers each line exactly once"
+        );
+        // A hunk registers its code, never its sign or number columns.
+        assert!(
+            expanded
+                .iter()
+                .all(|(_, _, _, text)| text != "+delta" && text != "-bravo"),
+            "the diff sign column is chrome and never copies: {expanded:?}"
         );
         assert!(expanded.iter().any(|(_, _, _, text)| text == "applied"));
         assert_eq!(instruments.changed.len(), 1);
@@ -5815,13 +5798,14 @@ mod tests {
             assert!(!all.contains(chrome), "{chrome} is chrome: {all}");
         }
         assert!(
-            runs.iter().any(|(_, _, _, text)| text == "delta"),
-            "a diff cell is its bare code — no number, no sign: {runs:?}"
+            expanded.iter().any(|(_, _, _, text)| text == "delta"),
+            "a diff cell is its bare code — no number, no sign: {expanded:?}"
         );
     }
 
     #[gpui::test]
     fn a_blocked_thread_paints_its_decision_card(cx: &mut TestAppContext) {
+        cx.update(gpui::component::init);
         let event = crate::demo::script()
             .into_iter()
             .map(|step| step.event)
@@ -5841,6 +5825,7 @@ mod tests {
         };
 
         let (_, cx) = cx.add_window_view(|_, _| ShowsDecisions {
+            cache: Default::default(),
             decisions: vec![decision, unreadable],
         });
         cx.simulate_resize(size(px(900.), px(300.)));
@@ -6160,7 +6145,7 @@ mod tests {
     fn inline_code_and_links_carry_their_own_ink() {
         let code = span_style(Style::Code).unwrap();
         assert_eq!(code.color, Some(rgb(INLINE_CODE_INK).into()));
-        assert_eq!(code.background_color, Some(rgb(RAISED).into()));
+        assert_eq!(code.background_color, None);
         let link = span_style(Style::Link).unwrap();
         assert_eq!(link.color, Some(rgb(LINK_INK).into()));
         assert_eq!(

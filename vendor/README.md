@@ -7,23 +7,54 @@
 upstream commit `94a313a72a2513aee2780240cd322d552b2395f0`.
 Its Apache-2.0 license and upstream README are retained in that directory.
 
-`Inline::text_line_bounds` returns immediately when its
+Rendering patches:
+
+- `Inline::text_line_bounds` returns immediately when its
 text layout is entirely outside the content mask. This avoids per-character
 hitbox calculations for clipped transcript paragraphs during streaming.
 The original function already clipped every returned hitbox to that mask;
 selection calculation and copying of offscreen text remain unchanged.
 
+- `TextView::link_renderer` lets Ferrite replace local file links with native
+  inline attachment cards. The callback leaves ordinary links alone and never
+  rewrites Markdown. InlineFlow measures/wraps each card as one element, scopes
+  its interaction identity, and maps fragment selections back to the original
+  text run, including wrapped text. Remove this extension when upstream offers
+  equivalent inline link rendering and selection support.
+
 Markdown block spacing is centralized in `BlockNode::render_block`. The
 configured paragraph gap applies to headings, paragraphs, code, quotes, lists,
 tables, rules and custom blocks, including nested siblings and virtualized
-documents. List items share that gap; final visible children have no trailing
-padding, and reference definitions introduce no spacing. Code line spacing and
+documents. Loose list items share that gap; tight items and tight nested
+continuations do not add a gap. The parser carries Markdown's list-spread flag
+to its items. Ordered-list start values survive parsing, marker rendering and
+source reconstruction instead of restarting at one. Final visible children have no trailing padding, and reference
+definitions introduce no spacing. Code line spacing and
 table cell padding remain independent. The Markdown parser also preserves hard
 line breaks instead of dropping them. Ferrite's native geometry tests in
 `rich.rs` cover block pairs, nesting, zero-gap overrides and hard breaks.
 
+Quotes use a restrained 1px rail and italic text. Table header refinements reach
+individual cells so header centering can override a data column's alignment.
+Ferrite's styles retain the toolkit's table grid and remove raised code chrome;
+prose fonts and heading sizes are unchanged. Heading emphasis is explicit: H1
+bold/italic/underlined, H2–H6 bold. Ferrite opts into the existing adaptive
+horizontal-scroll table renderer for narrow overflow; the track carries a debug
+selector for native geometry acceptance.
+
+Native selection registration updates one participant at a time, then sweeps
+and publishes once after the frame. `TextSelectionDocument` separates retained
+logical text membership from viewport geometry; its owner wrapper replays the
+visible registrations when a cached view reuses its scene. Viewport unmounting
+preserves selection, while logical eviction, source replacement, scope changes
+and owner unmounting clear it. Only active endpoints pin native text states
+beyond the host cache. Logical inline/UTF-8 positions preserve partial ranges
+through reflow; paint and copy share their projection. Copy callbacks supply
+never-mounted intermediate text. See
+[ADR 0006](../docs/adr/0006-retained-transcript-rendering.md).
+
 Cargo applies this through the root `[patch.crates-io]`. Remove the patch when
-an upstream release includes equivalent clipping. Registry cache markers and
+an upstream release includes equivalent behavior. Registry cache markers and
 the dependency's own lockfile are omitted. Source fixtures and the small test
 and benchmark targets named by its unchanged manifest are retained.
 

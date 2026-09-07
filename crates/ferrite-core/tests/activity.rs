@@ -894,3 +894,40 @@ fn frozen_history_duration_cannot_replace_a_newer_live_completed_tool() {
         matches!(timings["older"], ferrite_core::activity::ToolTiming::Done(total) if total == Duration::from_secs(2))
     );
 }
+
+#[test]
+fn restored_timings_advance_presentation_without_rebuilding_history() {
+    let mut activity = Activity::default();
+    activity.apply(ActivityInput::Replay(Input::Notice("retained row".into())));
+
+    let (presentation, history_revision, block_ids) = {
+        let view = activity.view().main();
+        (
+            view.presentation_revision(),
+            view.revision(),
+            view.transcript()
+                .blocks()
+                .iter()
+                .map(|block| block.id)
+                .collect::<Vec<_>>(),
+        )
+    };
+
+    activity.apply(ActivityInput::RestoreTimings {
+        subject: Subject::Main,
+        timings: [("restored".into(), Duration::from_secs(2))].into(),
+    });
+
+    let view = activity.view().main();
+    assert_eq!(view.presentation_revision().0, presentation.0);
+    assert_eq!(view.presentation_revision().1, presentation.1 + 1);
+    assert_eq!(view.revision(), history_revision);
+    assert_eq!(
+        view.transcript()
+            .blocks()
+            .iter()
+            .map(|block| block.id)
+            .collect::<Vec<_>>(),
+        block_ids
+    );
+}

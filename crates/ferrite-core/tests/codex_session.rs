@@ -43,7 +43,15 @@ fn stub(name: &str, script: &str) -> String {
     let dir = std::env::temp_dir().join(format!("ferrite-codex-{}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
     let path = dir.join(name);
-    fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
+    // Most fixtures predate mandatory skill discovery; supply an empty
+    // successful catalog unless this stub explicitly exercises that request.
+    let metadata = if script.contains("skills-0.149.1") || name.starts_with("codex-skill-") {
+        ""
+    } else {
+        "echo '{\"id\":3,\"result\":{\"data\":[]}}'"
+    };
+    let (version, body) = script.split_once('\n').unwrap_or((script, ""));
+    fs::write(&path, format!("#!/bin/sh\n{version}\n{metadata}\n{body}\n")).unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
     path.display().to_string()
 }
@@ -669,11 +677,11 @@ fn a_listed_skill_is_sent_as_the_typed_item_never_as_slash_text() {
 
     session.send("/probe-body follow the skill").unwrap();
 
-    // Five handshake lines (initialize, initialized, thread/start,
-    // skills/list, model/list), then the turn.
+    // Five non-queue startup lines (initialize, initialized, skills/list,
+    // thread/start, model/list), then the turn.
     let recorded = read_lines(&log, 6);
     drop(session);
-    let skills_request: Value = serde_json::from_str(&recorded[3]).unwrap();
+    let skills_request: Value = serde_json::from_str(&recorded[2]).unwrap();
     assert_eq!(skills_request["method"], "skills/list");
     let turn: Value = serde_json::from_str(&recorded[5]).unwrap();
     assert_eq!(turn["method"], "turn/start");
@@ -777,7 +785,7 @@ fn a_resumed_session_answers_from_the_previous_process_history() {
     // replay this fixture identically otherwise.
     let recorded = read_lines(&log, 3);
     drop(session);
-    let request: Value = serde_json::from_str(&recorded[2]).unwrap();
+    let request: Value = serde_json::from_str(&recorded[3]).unwrap();
     assert_eq!(request["method"], "thread/resume");
     assert_eq!(
         request["params"]["threadId"].as_str(),
@@ -870,10 +878,11 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
     let mut session = CodexSession::spawn(CodexConfig {
         program,
         cwd: Some(std::env::temp_dir()),
+        additional_directories: vec![std::path::PathBuf::from("/extra/project")],
         model: Some("gpt-5.4-mini".into()),
         effort: Some("high".into()),
         approval_policy: Some("on-request".into()),
-        sandbox: Some("read-only".into()),
+        sandbox: Some("workspace-write".into()),
         resume: None,
     })
     .unwrap();
@@ -892,12 +901,19 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
     assert_eq!(sent[0]["method"], "initialize");
     assert_eq!(sent[0]["id"], 1);
     assert_eq!(sent[0]["params"]["clientInfo"]["name"], "ferrite");
+    assert_eq!(sent[0]["params"]["capabilities"]["experimentalApi"], true);
+    assert!(fs::read_to_string(&log)
+        .unwrap()
+        .lines()
+        .any(|line| serde_json::from_str::<Value>(line)
+            .ok()
+            .is_some_and(|frame| frame["method"] == "thread/queue/list")));
     assert_eq!(
         sent[1],
         serde_json::json!({"jsonrpc": "2.0", "method": "initialized"})
     );
     assert_eq!(
-        sent[2],
+        sent[3],
         serde_json::json!({
             "jsonrpc": "2.0",
             "id": 2,
@@ -906,14 +922,13 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
                 "cwd": std::env::temp_dir().display().to_string(),
                 "model": "gpt-5.4-mini",
                 "approvalPolicy": "on-request",
-                "sandbox": "read-only",
+                "sandbox": "workspace-write",
             },
         })
     );
-    // The `/` menu is asked for as soon as the thread is up (#23), and
-    // the model menu right after it (#25).
+    // Skill metadata is resolved before thread creation; models follow it.
     assert_eq!(
-        sent[3],
+        sent[2],
         serde_json::json!({
             "jsonrpc": "2.0",
             "id": 3,
@@ -941,6 +956,10 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
                 "input": [{"type": "text", "text": "hi"}],
                 "summary": "detailed",
                 "effort": "high",
+                "sandboxPolicy": {
+                    "type": "workspaceWrite",
+                    "writableRoots": ["/extra/project"],
+                },
             },
         })
     );
@@ -1116,7 +1135,7 @@ fn a_resumed_session_passes_effort_on_its_next_turn() {
     session.send("next").unwrap();
     let recorded = read_lines(&log, 6);
     drop(session);
-    let resume: Value = serde_json::from_str(&recorded[2]).unwrap();
+    let resume: Value = serde_json::from_str(&recorded[3]).unwrap();
     assert_eq!(resume["method"], "thread/resume");
     assert_eq!(
         resume["params"],
@@ -1142,7 +1161,7 @@ fn nothing_is_passed_when_the_config_names_nothing() {
     let session = CodexSession::spawn(config(program)).unwrap();
     let recorded = read_lines(&log, 3);
     drop(session);
-    let thread_start: Value = serde_json::from_str(&recorded[2]).unwrap();
+    let thread_start: Value = serde_json::from_str(&recorded[3]).unwrap();
     assert_eq!(thread_start["method"], "thread/start");
     assert_eq!(thread_start["params"], serde_json::json!({}));
 }
@@ -1174,7 +1193,7 @@ fn effort_changes_and_default_stay_on_the_same_thread() {
         .iter()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
-    assert!(sent[2]["params"].get("config").is_none());
+    assert!(sent[3]["params"].get("config").is_none());
     for (turn, effort) in sent[5..].iter().zip(["high", "max", "low", "medium"]) {
         assert_eq!(turn["method"], "turn/start");
         assert_eq!(turn["params"]["threadId"], "stub-thread");
@@ -1433,6 +1452,13 @@ fn read_lines(path: &std::path::Path, wanted: usize) -> Vec<String> {
         let lines: Vec<String> = fs::read_to_string(path)
             .unwrap_or_default()
             .lines()
+            // Queue capability discovery is independent of the older wire
+            // assertions below; its exact handshake is asserted separately.
+            .filter(|line| {
+                serde_json::from_str::<Value>(line)
+                    .ok()
+                    .is_none_or(|frame| frame["method"] != "thread/queue/list")
+            })
             .map(str::to_string)
             .collect();
         if lines.len() >= wanted {
@@ -1444,4 +1470,133 @@ fn read_lines(path: &std::path::Path, wanted: usize) -> Vec<String> {
         );
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+// Regression probe: the first prompt can precede the skills/list response.
+#[test]
+fn a_first_prompt_skill_waits_for_discovery() {
+    let log = log_path("first-skill-send.log");
+    let _ = fs::remove_file(&log);
+    // Respond to actual requests in order; no unsolicited thread response
+    // can accidentally make this startup test pass.
+    let program = stub(
+        "codex-skill-first",
+        &format!(
+            r#"{VERSION_CASE}
+IFS= read -r line; printf '%s\n' "$line" >> '{log}'
+echo '{{"id":1,"result":{{}}}}'
+IFS= read -r line; printf '%s\n' "$line" >> '{log}'
+IFS= read -r line; printf '%s\n' "$line" >> '{log}'
+sleep 0.2
+cat '{skills}'
+IFS= read -r line; printf '%s\n' "$line" >> '{log}'
+echo '{{"id":2,"result":{{"thread":{{"id":"stub-thread"}},"model":"stub-model"}}}}'
+cat >> '{log}'"#,
+            log = log.display(),
+            skills = fixture("skills-0.149.1").display()
+        ),
+    );
+    let mut session = CodexSession::spawn(config(program)).unwrap();
+
+    session.send("/probe-body follow the skill").unwrap();
+
+    // Five non-queue startup lines (initialize, initialized, skills/list,
+    // thread/start, model/list), then the turn.
+    let recorded = read_lines(&log, 6);
+    drop(session);
+    let skills_request: Value = serde_json::from_str(&recorded[2]).unwrap();
+    assert_eq!(skills_request["method"], "skills/list");
+    let turn: Value = serde_json::from_str(&recorded[5]).unwrap();
+    assert_eq!(turn["method"], "turn/start");
+    assert_eq!(
+        turn["params"]["input"],
+        serde_json::json!([
+            {
+                "type": "skill",
+                "name": "probe-body",
+                "path": "/workspace/.codex/skills/probe-body/SKILL.md",
+            },
+            {"type": "text", "text": "follow the skill"},
+        ])
+    );
+}
+
+#[test]
+fn refused_skill_discovery_fails_startup_instead_of_sending_plain_text() {
+    let program = stub("codex-skill-refused", &format!("{VERSION_CASE}\necho '{{\"id\":1,\"result\":{{}}}}'\necho '{{\"id\":3,\"error\":{{\"message\":\"skill discovery refused\"}}}}'\nexec cat > /dev/null"));
+    let error = match CodexSession::spawn(config(program)) {
+        Ok(_) => panic!("a failed catalog must not produce a ready Session"),
+        Err(error) => error.to_string(),
+    };
+    assert!(error.contains("skill discovery refused"), "{error}");
+}
+
+#[test]
+fn native_queue_admission_and_cancellation_use_the_existing_session_pipe() {
+    use ferrite_core::QueueEvent;
+    let capture: Value = serde_json::from_str(include_str!(
+        "../../../docs/research/native-queues/codex-0.153.4.json"
+    ))
+    .unwrap();
+    let item = &capture["after_process_restart"][0];
+    let id = item["id"].as_str().unwrap();
+    let client = item["clientUserMessageId"].as_str().unwrap();
+    let log = log_path("native-queue.log");
+    let program = stub(
+        "native-queue",
+        &format!(
+            r#"{PRELUDE}
+: > '{}'
+for count in 1 2 3 4 5 6; do read -r line; printf '%s\n' "$line" >> '{}'; done
+echo '{{"id":"ferrite-queue-1","result":{{"data":[],"nextCursor":null}}}}'
+read -r line
+printf '%s\n' "$line" >> '{}'
+echo '{{"id":"ferrite-queue-2","result":{{"queuedSubmission":{}}}}}'
+read -r line
+printf '%s\n' "$line" >> '{}'
+echo '{{"id":"ferrite-queue-3","result":{{"deleted":true}}}}'
+exec cat > /dev/null"#,
+            log.display(),
+            log.display(),
+            log.display(),
+            item,
+            log.display()
+        ),
+    );
+    let mut session = CodexSession::spawn(config(program)).unwrap();
+    while !matches!(
+        session
+            .events()
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap(),
+        SessionEvent::Queue(QueueEvent::Snapshot(_))
+    ) {}
+    session.enqueue(client, "operator input").unwrap();
+    assert!(matches!(
+        session
+            .events()
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap(),
+        SessionEvent::Queue(QueueEvent::Accepted(_))
+    ));
+    session.cancel_queued(id).unwrap();
+    assert!(matches!(
+        session
+            .events()
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap(),
+        SessionEvent::Queue(QueueEvent::Cancelled {
+            cancelled: true,
+            ..
+        })
+    ));
+    let lines: Vec<Value> = fs::read_to_string(&log)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(lines[6]["method"], "thread/queue/add");
+    assert_eq!(lines[6]["params"]["clientUserMessageId"], client);
+    assert_eq!(lines[7]["method"], "thread/queue/delete");
+    assert_eq!(lines[7]["params"]["queuedSubmissionId"], id);
 }

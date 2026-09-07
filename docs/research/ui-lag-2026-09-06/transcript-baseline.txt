@@ -1,0 +1,11 @@
+
+running 1 test
+test transcript_frame_cost ... transcript_probe docs=32 selectable=false median_ms=10.117 min_ms=9.709 max_ms=10.342
+transcript_probe docs=32 selectable=true median_ms=15.241 min_ms=15.151 max_ms=16.005
+transcript_probe docs=128 selectable=false median_ms=43.847 min_ms=43.014 max_ms=45.979
+transcript_probe docs=128 selectable=true median_ms=112.281 min_ms=105.509 max_ms=113.377
+transcript_probe docs=200 selectable=false median_ms=80.739 min_ms=80.190 max_ms=82.086
+transcript_probe docs=200 selectable=true median_ms=185.288 min_ms=183.745 max_ms=200.338
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.25s

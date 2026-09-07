@@ -66,6 +66,9 @@ impl Thread {
                     view.canonical_subject(&Subject::Subagent(from.clone())) == target
                         || view.canonical_subject(&Subject::Subagent(to.clone())) == target
                 }
+                ActivityEvent::CompletionObservation { subject, .. } => {
+                    view.canonical_subject(subject) == target
+                }
                 _ => false,
             };
             if belongs {
@@ -304,4 +307,16 @@ impl Cockpit {
         }
         changes
     }
+}
+
+// Test-owned disk boundary: release the frozen prefix after a live event.
+#[cfg(test)]
+pub(super) fn gated_loader() -> (Loader, impl FnOnce(&Store)) {
+    let (requests, receive) = mpsc::sync_channel::<Request>(8);
+    let (send, results) = mpsc::sync_channel(8);
+    (Loader { requests, results }, move |store: &Store| {
+        let request = receive.try_recv().expect("history was requested");
+        let inputs = store.agent_inputs_at(request.thread, &request.key, request.through);
+        send.send(Completed { request, inputs }).unwrap();
+    })
 }

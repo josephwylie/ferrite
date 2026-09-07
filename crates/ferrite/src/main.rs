@@ -1,4 +1,8 @@
 // Ferrite: the cockpit window and the pump behind it.
+// A GUI app, not a console one: without this Windows hands ferrite.exe its
+// own console window at launch. Left on in debug builds so `cargo run`
+// still prints.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod attachment_preview;
 mod attachments;
 mod cockpit;
@@ -6,6 +10,7 @@ mod components;
 mod composer;
 mod demo;
 mod facts;
+mod file_links;
 mod fuzzy;
 mod icons;
 mod keymap;
@@ -16,6 +21,7 @@ mod notifications;
 mod pane;
 mod pointer;
 mod prefs;
+mod project_editor;
 mod prompt_drop;
 mod rich;
 mod scrollbar;
@@ -24,6 +30,7 @@ mod session;
 mod shell;
 mod theme;
 mod titlebar;
+mod transcript;
 
 use ::gpui;
 use ::gpui as kit;
@@ -64,6 +71,15 @@ static JBM_SEMIBOLD: &[u8] = include_bytes!("../assets/fonts/JetBrainsMono-SemiB
 static JBM_BOLD: &[u8] = include_bytes!("../assets/fonts/JetBrainsMono-Bold.ttf");
 
 fn main() {
+    #[cfg(feature = "visual-reference")]
+    if std::env::args().nth(1).as_deref() == Some("--visual-reference") {
+        cockpit::visual_reference::capture(
+            std::env::args()
+                .nth(2)
+                .expect("an output directory is required"),
+        );
+        return;
+    }
     // Before the args, the store, or any spawn: a Dock launch has no PATH
     // worth the name until the login shell is asked (crate::shell).
     let dock = shell::adopt_login_environment();

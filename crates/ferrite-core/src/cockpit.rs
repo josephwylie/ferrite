@@ -32,6 +32,7 @@ use crate::workspace::{self, WorkspaceBinding, WorkspaceChoice};
 use crate::{Decision, DecisionAnswer, ModelInfo, SessionEvent, ThreadId};
 
 mod history;
+mod queue;
 
 /// Everything one spawn needs, in one struct: every path that starts a
 /// Session (open, revive, send-respawn, sweep) reads the Thread's stored
@@ -55,6 +56,24 @@ pub struct SpawnRequest<'a> {
     /// works in; `None` only for a Thread from before bindings were
     /// recorded.
     pub cwd: Option<&'a Path>,
+    /// Other roots in the same Project. Providers expose these alongside
+    /// `cwd`; they never change which directory the Session starts in.
+    pub additional_directories: Vec<PathBuf>,
+}
+
+fn project_additional_directories(
+    registry: &Registry,
+    project: Option<ProjectId>,
+    cwd: Option<&Path>,
+) -> Vec<PathBuf> {
+    let cwd = cwd.map(|cwd| std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf()));
+    project
+        .and_then(|project| registry.project(project))
+        .into_iter()
+        .flat_map(|project| project.directories())
+        .filter(|directory| Some(*directory) != cwd.as_deref())
+        .map(Path::to_path_buf)
+        .collect()
 }
 
 /// How a Session is started. Injected so the cockpit can be driven with
@@ -65,6 +84,15 @@ pub trait Spawner {
         _roots: Vec<(Provider, PathBuf)>,
         _cap: usize,
     ) -> Option<Receiver<io::Result<Vec<crate::import::Candidate>>>> {
+        None
+    }
+
+    /// Metadata only: discover the selected workspace's effective commands.
+    fn discover_commands(
+        &mut self,
+        _provider: Provider,
+        _cwd: &std::path::Path,
+    ) -> Option<crate::providers::commands::Discovery> {
         None
     }
 
@@ -336,7 +364,7 @@ struct Thread {
     title: Option<String>,
     /// A prompt the operator wrote while the turn was still running.
     queued: Option<String>,
-    queued_ready: bool,
+    native_queue: queue::Queue,
     prompt_history: PromptHistory,
     /// The provider-native id a replacement Session resumes from — the latest
     /// the provider announced. Held here rather than read back from the log,
@@ -400,6 +428,7 @@ impl Thread {
         resume: Option<String>,
         workspace: Option<WorkspaceBinding>,
         session_project_root: Option<PathBuf>,
+        queue_path: PathBuf,
     ) -> Self {
         let generation = next_generation();
         let mut activity = Activity::default();
@@ -418,7 +447,7 @@ impl Thread {
             effort,
             title: None,
             queued: None,
-            queued_ready: false,
+            native_queue: queue::Queue::open(queue_path),
             prompt_history: PromptHistory::new(Vec::new()),
             resume,
             workspace,
@@ -470,6 +499,12 @@ impl Thread {
     }
 
     fn replace_generation(&mut self) {
+        if let Some(notice) = self
+            .native_queue
+            .disconnect(self.provider == Provider::Codex)
+        {
+            self.apply(Input::Notice(notice));
+        }
         self.invalidate_suggestion();
         self.history.clear();
         self.history_errors.clear();
@@ -610,6 +645,31 @@ impl Cockpit {
         self.registry.register(root)
     }
 
+    pub fn register_project_directories(&mut self, roots: &[PathBuf]) -> io::Result<ProjectId> {
+        self.registry.register_directories(roots)
+    }
+
+    pub fn add_project_directories(
+        &mut self,
+        project: ProjectId,
+        roots: &[PathBuf],
+    ) -> io::Result<()> {
+        self.registry.add_directories(project, roots)
+    }
+
+    pub fn replace_project_directory(
+        &mut self,
+        project: ProjectId,
+        index: usize,
+        root: &Path,
+    ) -> io::Result<()> {
+        self.registry.replace_directory(project, index, root)
+    }
+
+    pub fn remove_project_directory(&mut self, project: ProjectId, index: usize) -> io::Result<()> {
+        self.registry.remove_directory(project, index)
+    }
+
     /// A Group's Pane layout, reconciled to its members; None for a Group
     /// that no longer exists.
     pub fn group_layout(&self, group: GroupId) -> Option<crate::layout::Tree> {
@@ -674,6 +734,7 @@ impl Cockpit {
         let mut restarts = Vec::new();
         for (id, rss) in over {
             self.visible_subjects.remove(&id);
+            let project = self.project_id(id);
             let Some(thread) = self.threads.get_mut(&id) else {
                 continue;
             };
@@ -695,6 +756,11 @@ impl Cockpit {
                 resume: resume.as_deref(),
                 cwd: cwd.as_deref(),
                 name: thread.title.as_deref(),
+                additional_directories: project_additional_directories(
+                    &self.registry,
+                    project,
+                    cwd.as_deref(),
+                ),
             });
             let note = match spawned {
                 Ok(session) => {
@@ -804,6 +870,11 @@ impl Cockpit {
             resume: None,
             cwd: workspace::effective_cwd(None, Some(&binding)),
             name: None,
+            additional_directories: project_additional_directories(
+                &self.registry,
+                Some(project),
+                Some(binding.cwd()),
+            ),
         }) {
             Ok(session) => session,
             // The bootstrap's failure contract: no Thread. The worktree, if
@@ -824,6 +895,7 @@ impl Cockpit {
                 None,
                 Some(binding),
                 None,
+                self.store.dir().join(id.to_string()).join("queue.json"),
             ),
         );
         self.roster.insert_thread(id);
@@ -1079,8 +1151,10 @@ impl Cockpit {
         effort: Option<String>,
         kind: ReplacementKind,
     ) -> Result<(), ProvisionError> {
+        let project = self.project_id(thread);
         let state = self.threads.get(&thread).expect("checked by caller");
-        if (state.busy() && !matches!(kind, ReplacementKind::Fresh))
+        if state.native_queue.pending()
+            || (state.busy() && !matches!(kind, ReplacementKind::Fresh))
             || state.replacement.is_some()
             || self.bootstraps.contains_key(&thread)
         {
@@ -1103,6 +1177,11 @@ impl Cockpit {
                 resume,
                 cwd,
                 name: state.title.as_deref(),
+                additional_directories: project_additional_directories(
+                    &self.registry,
+                    project,
+                    cwd,
+                ),
             })
             .map_err(ProvisionError::Spawn)?;
         let replacement = Replacement {
@@ -1320,6 +1399,8 @@ impl Cockpit {
         let model = snapshot.model();
         let effort = snapshot.effort();
         let title = snapshot.title().map(str::to_string);
+        let additional_directories =
+            project_additional_directories(&self.registry, snapshot.project_id(), cwd.as_deref());
         let session = self
             .spawner
             .start(SpawnRequest {
@@ -1329,6 +1410,7 @@ impl Cockpit {
                 resume: snapshot.resume_target(),
                 cwd: cwd.as_deref(),
                 name: title.as_deref(),
+                additional_directories,
             })
             .map_err(LoadError::Io)?;
         let writer = self.store.writer(thread)?;
@@ -1343,6 +1425,7 @@ impl Cockpit {
             resume,
             workspace,
             session_project_root,
+            self.store.dir().join(thread.to_string()).join("queue.json"),
         );
         state.title = title;
         // A switch whose carry never went out (parked before the next
@@ -1358,6 +1441,9 @@ impl Cockpit {
             state.activity.apply(input);
         }
         state.apply(Input::Revived);
+        if let Some(notice) = state.native_queue.disconnect(provider == Provider::Codex) {
+            state.apply(Input::Notice(notice));
+        }
         state.activity.apply(ActivityInput::Connect {
             generation: state.generation,
         });
@@ -1425,6 +1511,7 @@ impl Cockpit {
         {
             self.visible_subjects.remove(&thread);
         }
+        let project = self.project_id(thread);
         let Some(state) = self.threads.get_mut(&thread) else {
             return;
         };
@@ -1444,6 +1531,8 @@ impl Cockpit {
                 state.workspace.as_ref(),
             )
             .map(Path::to_path_buf);
+            let additional_directories =
+                project_additional_directories(&self.registry, project, cwd.as_deref());
             match self.spawner.start(SpawnRequest {
                 provider: state.provider,
                 model: state.model.as_deref(),
@@ -1451,6 +1540,7 @@ impl Cockpit {
                 resume: resume.as_deref(),
                 cwd: cwd.as_deref(),
                 name: state.title.as_deref(),
+                additional_directories,
             }) {
                 Ok(session) => {
                     state.session = Some(session);
@@ -1667,6 +1757,21 @@ impl Cockpit {
     /// frame.
     pub fn peek(&self, thread: ThreadId) -> Result<crate::store::ThreadMeta, LoadError> {
         self.store.peek(thread)
+    }
+
+    /// The subagents a Thread knows, live or parked. Parked Threads replay
+    /// their durable activity into a throwaway projection; callers should
+    /// cache this moment-level read rather than ask for it while rendering.
+    pub fn subagent_count(&self, thread: ThreadId) -> Result<usize, LoadError> {
+        if let Some(open) = self.thread(thread) {
+            return Ok(open.activity().children().len());
+        }
+        let snapshot = self.store.load(thread)?;
+        let mut activity = Activity::default();
+        for input in snapshot.activity_inputs() {
+            activity.apply(input);
+        }
+        Ok(activity.view().children().len())
     }
 
     /// When a Thread was last used, live or parked — the nav's default
@@ -1942,7 +2047,6 @@ impl Cockpit {
             }
             let mut closed = false;
             let mut settled = false;
-            let mut resumed = false;
             let mut turn_ended = false;
             for _ in 0..256 {
                 if thread.store_error.is_some() || thread.history_backpressure() {
@@ -1956,6 +2060,34 @@ impl Cockpit {
                 else {
                     break;
                 };
+                if let SessionEvent::Queue(event) = event {
+                    let change = thread.native_queue.observe(event);
+                    if let Some(text) = change.prompt {
+                        if let Err(error) = thread.writer.record_prompt(&text) {
+                            thread.report_store_error(error);
+                        }
+                        thread.prompt_history.append(text.clone());
+                        if change.historical {
+                            update.absorb(
+                                thread
+                                    .activity
+                                    .apply(ActivityInput::Replay(Input::Prompt(text))),
+                                true,
+                            );
+                        } else {
+                            thread.invalidate_suggestion();
+                            let applied = thread.apply(Input::Prompt(text));
+                            update.dirty.extend(applied.dirty);
+                        }
+                    }
+                    if let Some(notice) = change.notice {
+                        update
+                            .dirty
+                            .extend(thread.apply(Input::Notice(notice)).dirty);
+                    }
+                    update.activity_changed = true;
+                    continue;
+                }
                 if let SessionEvent::RateLimits { five_hour, weekly } = &event {
                     self.limit_cache.remember(
                         thread.provider,
@@ -1987,6 +2119,7 @@ impl Cockpit {
                     }
                     _ => false,
                 };
+                let completion = completion_observation(thread, &event);
                 fold(thread, &event);
                 let content_changed = event_changes_content(&event);
                 let applied = match &event {
@@ -2002,7 +2135,6 @@ impl Cockpit {
                         at: Instant::now(),
                     }),
                 };
-                thread.queued_ready |= applied.main_turn_ended;
                 turn_ended |= applied.main_turn_ended;
                 settled |= applied.main_settled;
                 if matches!(&event, SessionEvent::Activity(_)) {
@@ -2024,6 +2156,46 @@ impl Cockpit {
                         thread.report_store_error(error);
                     }
                 }
+                let completion_accepted = match &event {
+                    SessionEvent::Activity(event) => {
+                        applied.accepted.iter().any(|accepted| accepted == event)
+                    }
+                    _ => applied.main_turn_ended,
+                };
+                if completion_accepted {
+                    if let Some((subject, elapsed_ms, completed_at)) = completion {
+                        let observation = ActivityEvent::CompletionObservation {
+                            subject: subject.clone(),
+                            elapsed_ms,
+                            completed_at: completed_at.clone(),
+                        };
+                        if matches!(&subject, Subject::Subagent(_)) {
+                            thread.buffer_history(&observation);
+                        }
+                        let observed = match subject {
+                            Subject::Main => thread.activity.apply(ActivityInput::Main {
+                                input: Input::CompletionObservation {
+                                    elapsed_ms,
+                                    completed_at: completed_at.clone(),
+                                },
+                                at: Instant::now(),
+                            }),
+                            Subject::Subagent(_) => thread.activity.apply(ActivityInput::Observe {
+                                generation: thread.generation,
+                                event: observation,
+                                at: Instant::now(),
+                            }),
+                        };
+                        if let Err(error) =
+                            thread
+                                .writer
+                                .record_completion(&subject, elapsed_ms, &completed_at)
+                        {
+                            thread.report_store_error(error);
+                        }
+                        update.absorb(observed, true);
+                    }
+                }
                 if alias_needs_reload {
                     for (_, canonical) in &applied.redirects {
                         let subject = Subject::Subagent(canonical.clone());
@@ -2043,41 +2215,19 @@ impl Cockpit {
                 update.absorb(applied, content_changed);
             }
             if closed {
+                if let Some(notice) = thread
+                    .native_queue
+                    .disconnect(thread.provider == Provider::Codex)
+                {
+                    update
+                        .dirty
+                        .extend(thread.apply(Input::Notice(notice)).dirty);
+                }
                 thread.session = None;
                 thread.history.clear();
                 thread.activity.apply(ActivityInput::Disconnect);
                 self.visible_subjects.remove(id);
                 update.activity_changed = true;
-            }
-            if thread.queued_ready
-                && thread.store_error.is_none()
-                && thread.replacement.is_none()
-                && thread
-                    .session
-                    .as_ref()
-                    .and_then(SessionLifecycle::session)
-                    .is_some()
-            {
-                if let Some(held) = thread.queued.take() {
-                    match deliver(thread, held.clone(), self.suggestions_enabled) {
-                        Ok(sent) => {
-                            update.dirty.extend(sent.dirty);
-                            update.evicted.extend(sent.evicted);
-                            update.activity_changed = true;
-                            resumed = true;
-                        }
-                        Err(error) => {
-                            thread.queued = Some(held);
-                            update.dirty.extend(
-                                thread
-                                    .apply(Input::Notice(format!("send failed: {error}")))
-                                    .dirty,
-                            );
-                        }
-                    }
-                } else {
-                    thread.queued_ready = false;
-                }
             }
             // Every frame, every Thread: the deferral's grace is a clock
             // only the pump ticks.
@@ -2086,7 +2236,7 @@ impl Cockpit {
                 Frame {
                     activity: thread.activity.view(),
                     settled,
-                    resumed,
+                    resumed: thread.native_queue.pending(),
                 },
                 Instant::now(),
             );
@@ -2102,6 +2252,8 @@ impl Cockpit {
                 if let Some(text) = session.take_suggestion() {
                     if self.suggestions_enabled
                         && !thread.busy()
+                        && !thread.native_queue.pending()
+                        && !thread.activity.view().main_operator_turn()
                         && thread.transcript().status() == crate::transcript::Status::Idle
                     {
                         thread.suggestion = Some(text);
@@ -2144,21 +2296,125 @@ impl Cockpit {
         frame
     }
 
-    /// Hold a prompt written mid-turn. It stays visible and editable until the
-    /// turn ends, which is when it is sent.
-    pub fn queue(&mut self, thread: ThreadId, text: String) {
+    /// Submit immediately; the provider owns admission and execution.
+    /// False leaves the caller's draft intact; no local fallback is installed.
+    pub fn queue(&mut self, thread: ThreadId, text: String) -> bool {
+        let Some(state) = self.threads.get_mut(&thread) else {
+            return false;
+        };
+        state.prompt_history.reset();
+        let id = format!(
+            "{:08x}-{:04x}-4{:03x}-8{:03x}-{:012x}",
+            std::process::id(),
+            state.generation & 0xffff,
+            (state.generation >> 16) & 0xfff,
+            next_generation() & 0xfff,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+                & 0xffffffffffff
+        );
+        if let Some(refusal) = vanished_root_refusal(state) {
+            state.apply(Input::Notice(refusal));
+            return false;
+        }
+        if let Err(error) = state.native_queue.prepare(&id, &text) {
+            state.native_queue.refused(&id);
+            state.apply(Input::Notice(format!(
+                "queue metadata could not be saved: {error}"
+            )));
+            return false;
+        }
+        let result = state
+            .session
+            .as_mut()
+            .and_then(SessionLifecycle::session_mut)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotConnected,
+                    "Session is still starting; retry when ready",
+                )
+            })
+            .and_then(|session| {
+                session.set_suggestions_enabled(self.suggestions_enabled)?;
+                session.enqueue(&id, &text)
+            });
+        if let Err(error) = result {
+            if matches!(
+                error.kind(),
+                io::ErrorKind::Unsupported | io::ErrorKind::NotConnected
+            ) {
+                state.native_queue.refused(&id);
+                state.apply(Input::Notice(format!("native queue failed: {error}")));
+                return false;
+            }
+            // A partial pipe write might have reached the provider. Keep its
+            // correlation metadata and never turn uncertainty into a resend.
+            state.apply(Input::Notice(format!(
+                "native queue delivery is uncertain; not retried: {error}\n{text}"
+            )));
+        }
+        state.invalidate_suggestion();
+        true
+    }
+
+    /// Empty-Composer Enter requests cancellation; retrieval arrives via the pump.
+    pub fn unqueue(&mut self, thread: ThreadId) -> Option<String> {
         if let Some(state) = self.threads.get_mut(&thread) {
-            state.prompt_history.reset();
-            state.queued = Some(text);
+            if let Some(text) = state.queued.take() {
+                return Some(text);
+            }
+        }
+        self.cancel_queued(thread, true);
+        None
+    }
+
+    pub fn cancel_queued(&mut self, thread: ThreadId, restore: bool) {
+        self.cancel_queue(thread, restore, false);
+    }
+
+    /// Up edits the visible queued prompt ahead of the current draft.
+    pub fn edit_queued(&mut self, thread: ThreadId) {
+        self.cancel_queue(thread, true, true);
+    }
+
+    fn cancel_queue(&mut self, thread: ThreadId, restore: bool, prepend: bool) {
+        let Some(state) = self.threads.get_mut(&thread) else {
+            return;
+        };
+        state.prompt_history.reset();
+        // Startup input has never reached a provider and can be taken back locally.
+        if let Some(text) = state.queued.take() {
+            if restore {
+                state.native_queue.recovered.push((text, prepend));
+            }
+            return;
+        }
+        let Some(id) = state.native_queue.cancellation(restore, prepend) else {
+            return;
+        };
+        let result = state
+            .session
+            .as_mut()
+            .and_then(SessionLifecycle::session_mut)
+            .ok_or_else(|| io::Error::other("no live Session to cancel queued input"))
+            .and_then(|session| session.cancel_queued(&id));
+        if let Err(error) = result {
+            state.native_queue.cancel_failed();
+            state.apply(Input::Notice(format!(
+                "native cancellation failed: {error}"
+            )));
         }
     }
 
-    /// Take a held prompt back into the Composer, so a typo written mid-turn
-    /// is fixable before it goes out.
-    pub fn unqueue(&mut self, thread: ThreadId) -> Option<String> {
+    pub fn take_retrieved_prompt(&mut self, thread: ThreadId) -> Option<(String, bool)> {
         let state = self.threads.get_mut(&thread)?;
-        state.prompt_history.reset();
-        state.queued.take()
+        if state.native_queue.recovered.is_empty() {
+            None
+        } else {
+            Some(state.native_queue.recovered.remove(0))
+        }
     }
 
     pub fn recall_prompt(
@@ -2215,7 +2471,9 @@ impl Cockpit {
             let Some(thread) = self.threads.get_mut(&reply.thread) else {
                 continue;
             };
-            if thread.generation != reply.generation || thread.suggestion_revision != reply.revision
+            if thread.generation != reply.generation
+                || thread.suggestion_revision != reply.revision
+                || thread.native_queue.pending()
             {
                 continue;
             }
@@ -2239,7 +2497,7 @@ impl Cockpit {
             return;
         }
         thread.invalidate_suggestion();
-        if !self.suggestions_enabled {
+        if !self.suggestions_enabled || thread.native_queue.pending() {
             return;
         }
         let Some(context) = crate::suggest::context(thread.transcript()) else {
@@ -2330,8 +2588,16 @@ impl Cockpit {
         self.limit_cache.get(provider)
     }
 
-    /// The picker's rows for `provider`: what its adapter announced,
-    /// else the fallback catalog — never empty, so a draft can choose.
+    /// Request workspace commands without creating a Thread or Session.
+    pub fn discover_commands(
+        &mut self,
+        provider: Provider,
+        cwd: &std::path::Path,
+    ) -> Option<crate::providers::commands::Discovery> {
+        self.spawner.discover_commands(provider, cwd)
+    }
+
+    /// The provider's announced model rows, else the fallback catalog.
     pub fn model_catalog(&self, provider: Provider) -> Vec<ModelInfo> {
         crate::providers::models::catalog(provider, &self.announced_models(provider))
     }
@@ -2699,7 +2965,12 @@ impl<'a> ThreadView<'a> {
 
     /// A prompt held back while the turn runs.
     pub fn queued(&self) -> Option<&'a str> {
-        self.state.queued.as_deref()
+        self.state
+            .native_queue
+            .items
+            .last()
+            .map(|item| item.text.as_str())
+            .or(self.state.queued.as_deref())
     }
 
     /// Is a turn running? A prompt written now has to wait for it.
@@ -2716,6 +2987,12 @@ impl<'a> ThreadView<'a> {
 
     pub fn busy(&self) -> bool {
         self.state.busy() || self.starting()
+    }
+
+    pub fn needs_queue(&self) -> bool {
+        self.busy()
+            || self.state.activity.view().main_operator_turn()
+            || self.state.native_queue.pending()
     }
 
     /// The checkout this Thread works in — what the Pane's chrome shows.
@@ -3376,7 +3653,6 @@ fn deliver(state: &mut Thread, text: String, suggestions_enabled: bool) -> io::R
     session.set_suggestions_enabled(suggestions_enabled)?;
     session.send(&wire)?;
     state.invalidate_suggestion();
-    state.queued_ready = false;
     state.carry = None;
     // The Session's first prompt has gone out; every later one is bare.
     state.preface_pending = false;
@@ -3530,6 +3806,40 @@ fn settled_duration(state: &Thread, event: &SessionEvent) -> Option<Duration> {
     }
 }
 
+fn completion_observation(thread: &Thread, event: &SessionEvent) -> Option<(Subject, u64, String)> {
+    use crate::activity::ExecutionEvent;
+    let (subject, outcome) = match event {
+        SessionEvent::TurnEnded { outcome, .. } => (Subject::Main, outcome),
+        SessionEvent::Activity(ActivityEvent::Content {
+            key,
+            event: ExecutionEvent::TurnEnded { outcome, .. },
+            ..
+        }) => (Subject::Subagent(key.clone()), outcome),
+        SessionEvent::Activity(ActivityEvent::MainContent {
+            event: ExecutionEvent::TurnEnded { outcome, .. },
+            ..
+        }) => (Subject::Main, outcome),
+        SessionEvent::Activity(ActivityEvent::BackgroundTurnEnded { outcome, .. }) => {
+            (Subject::Main, outcome)
+        }
+        _ => return None,
+    };
+    if !matches!(outcome, crate::TurnOutcome::Completed) {
+        return None;
+    }
+    let elapsed = thread
+        .activity
+        .view()
+        .subject(&subject)?
+        .transcript()
+        .turn_elapsed()?;
+    Some((
+        subject,
+        elapsed.as_millis().min(u64::MAX as u128) as u64,
+        chrono::Local::now().format("%H:%M").to_string(),
+    ))
+}
+
 /// Only Session-level metadata belongs here; execution state lives in Activity.
 fn fold(state: &mut Thread, event: &SessionEvent) {
     match event {
@@ -3571,6 +3881,8 @@ mod tests {
     /// A Session with no process behind it: the test pushes the events a
     /// provider would have streamed, and reads back what Ferrite sent.
     struct Scripted {
+        tx: Sender<SessionEvent>,
+        native: Rc<RefCell<Vec<(String, String)>>>,
         rx: Receiver<SessionEvent>,
         sent: Rc<RefCell<Vec<String>>>,
         fail_send: Rc<RefCell<bool>>,
@@ -3581,6 +3893,30 @@ mod tests {
     }
 
     impl crate::providers::Session for Scripted {
+        fn enqueue(&mut self, id: &str, text: &str) -> io::Result<()> {
+            self.native.borrow_mut().push((id.into(), text.into()));
+            self.tx
+                .send(SessionEvent::Queue(crate::QueueEvent::Accepted(
+                    crate::QueuedPrompt {
+                        id: id.into(),
+                        client_id: id.into(),
+                        text: text.into(),
+                    },
+                )))
+                .unwrap();
+            Ok(())
+        }
+        fn cancel_queued(&mut self, id: &str) -> io::Result<()> {
+            self.tx
+                .send(SessionEvent::Queue(crate::QueueEvent::Cancelled {
+                    id: id.into(),
+                    cancelled: true,
+                    error: None,
+                }))
+                .unwrap();
+            Ok(())
+        }
+
         fn take_suggestion(&mut self) -> Option<String> {
             self.native_suggestion.borrow_mut().take()
         }
@@ -3628,6 +3964,7 @@ mod tests {
     /// with. Nothing here spawns a process.
     #[derive(Clone, Default)]
     struct Fake {
+        native: Rc<RefCell<Vec<(String, String)>>>,
         streams: Rc<RefCell<Vec<Sender<SessionEvent>>>>,
         sent: Rc<RefCell<Vec<String>>>,
         providers: Rc<RefCell<Vec<Provider>>>,
@@ -3637,6 +3974,7 @@ mod tests {
         fail_effort: Rc<RefCell<bool>>,
         resumed: Rc<RefCell<Vec<Option<String>>>>,
         cwds: Rc<RefCell<Vec<Option<std::path::PathBuf>>>>,
+        additional_directories: Rc<RefCell<Vec<Vec<std::path::PathBuf>>>>,
         /// The title each spawn was handed.
         names: Rc<RefCell<Vec<Option<String>>>>,
         /// Every rename a live Session was told.
@@ -3683,7 +4021,7 @@ mod tests {
                 return Err(std::io::Error::other("stub refused to spawn"));
             }
             let (tx, rx) = mpsc::channel();
-            self.streams.borrow_mut().push(tx);
+            self.streams.borrow_mut().push(tx.clone());
             self.providers.borrow_mut().push(request.provider);
             self.models
                 .borrow_mut()
@@ -3697,10 +4035,15 @@ mod tests {
             self.cwds
                 .borrow_mut()
                 .push(request.cwd.map(|path| path.to_path_buf()));
+            self.additional_directories
+                .borrow_mut()
+                .push(request.additional_directories);
             self.names
                 .borrow_mut()
                 .push(request.name.map(|name| name.to_string()));
             Ok(Box::new(Scripted {
+                tx,
+                native: self.native.clone(),
                 rx,
                 sent: self.sent.clone(),
                 fail_send: self.fail_send.clone(),
@@ -3779,6 +4122,38 @@ mod tests {
             fake.cwds.borrow().last().unwrap().as_deref(),
             Some(path.as_path()),
             "the Session must spawn inside the worktree"
+        );
+    }
+
+    #[test]
+    fn opening_a_project_exposes_its_additional_directories_without_changing_cwd() {
+        let root = scratch("project-extra-roots");
+        let primary = root.join("primary");
+        let extra = root.join("extra");
+        std::fs::create_dir_all(&primary).unwrap();
+        std::fs::create_dir_all(&extra).unwrap();
+        let (mut cockpit, fake) = cockpit("project-extra-roots-store");
+        let project = cockpit.register_project(&primary).unwrap();
+        cockpit
+            .add_project_directories(project, std::slice::from_ref(&extra))
+            .unwrap();
+
+        cockpit
+            .open(
+                Provider::Claude,
+                WorkspaceChoice::Main {
+                    checkout: primary.clone(),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(
+            fake.cwds.borrow().last().unwrap().as_deref(),
+            Some(primary.as_path())
+        );
+        assert_eq!(
+            fake.additional_directories.borrow().last().unwrap(),
+            &[extra.canonicalize().unwrap()]
         );
     }
 
@@ -4693,10 +5068,258 @@ mod tests {
             .is_empty());
     }
 
-    /// #22: durations are stamped at ingestion — a call runs on a live
-    /// clock until its completion fixes the total, and a call the cockpit
-    /// never saw live has none. No sleeps: monotonic clocks never run
-    /// backwards, so the invariants hold without waiting on a scheduler.
+    #[test]
+    fn completion_observation_is_quiet_factual_and_unchanged_after_reopen() {
+        let dir = scratch("completion-reference");
+        let fake = Fake::default();
+        let mut cockpit = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake.clone()));
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        cockpit.send(thread, "work".into());
+        fake.streams.borrow()[0].send(text("answer")).unwrap();
+        cockpit.pump();
+        let before = cockpit
+            .thread(thread)
+            .unwrap()
+            .transcript()
+            .turn_elapsed()
+            .unwrap();
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TurnEnded {
+                outcome: crate::TurnOutcome::Completed,
+                cost_usd: Some(0.038),
+            })
+            .unwrap();
+        cockpit.pump();
+        let completion = |cockpit: &Cockpit| {
+            let rows: Vec<_> = cockpit
+                .thread(thread)
+                .unwrap()
+                .transcript()
+                .blocks()
+                .iter()
+                .filter_map(|block| match &block.body {
+                    Body::Meta(text) if text.starts_with("Completed") => Some(text.clone()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(rows.len(), 1, "one quiet historical completion row");
+            rows[0].clone()
+        };
+        let first = completion(&cockpit);
+        let fields: Vec<_> = first.split(" · ").collect();
+        assert_eq!(
+            fields.len(),
+            3,
+            "completion, observed elapsed and local completion time"
+        );
+        let seconds: f64 = fields[1]
+            .strip_suffix("s elapsed")
+            .expect("elapsed is explicitly labelled, not process runtime")
+            .parse()
+            .unwrap();
+        assert!(seconds + 0.1 >= before.as_secs_f64());
+        assert!(fields[2].contains(':'), "human-readable completion time");
+        assert!(
+            !first.contains('$') && !first.contains("0.038"),
+            "provider cost stays private"
+        );
+        fake.streams.borrow()[0].send(ended()).unwrap();
+        cockpit.pump();
+        assert_eq!(
+            completion(&cockpit),
+            first,
+            "repeated end must not invent another completion"
+        );
+        cockpit.park(thread).unwrap();
+        drop(cockpit);
+        let mut reopened = Cockpit::new(Store::open(&dir).unwrap(), Box::new(Fake::default()));
+        reopened.revive(thread).unwrap();
+        assert_eq!(
+            completion(&reopened),
+            first,
+            "replay uses the original observation, never now"
+        );
+        reopened.send(thread, "next turn".into());
+        assert_eq!(
+            completion(&reopened),
+            first,
+            "new work retains historical completion"
+        );
+    }
+
+    #[test]
+    fn completion_observations_follow_only_accepted_live_turn_ends() {
+        use crate::activity::{ActivityEvent, AgentKey, ExecutionEvent, Subject};
+        let (mut cockpit, fake) = cockpit("completion-attribution-reference");
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        let key = AgentKey::new(Provider::Claude, "root", "child");
+        let emit = |event| {
+            fake.streams.borrow()[0]
+                .send(SessionEvent::Activity(event))
+                .unwrap()
+        };
+        let count = |cockpit: &Cockpit, subject: &Subject| {
+            cockpit.thread(thread).unwrap().activity().subject(subject).unwrap()
+            .transcript().blocks().iter().filter(|block| matches!(&block.body, Body::Meta(text) if text.starts_with("Completed"))).count()
+        };
+        emit(ActivityEvent::Content {
+            key: key.clone(),
+            id: Some("live-text".into()),
+            event: ExecutionEvent::Text {
+                text: "Working".into(),
+            },
+        });
+        cockpit.pump();
+        emit(ActivityEvent::HistoryContent {
+            key: key.clone(),
+            id: Some("historical-end".into()),
+            event: ExecutionEvent::TurnEnded {
+                outcome: TurnOutcome::Completed,
+                cost_usd: None,
+            },
+        });
+        cockpit.pump();
+        let subject = Subject::Subagent(key.clone());
+        assert_eq!(
+            count(&cockpit, &subject),
+            0,
+            "historical content has no newly observed completion time"
+        );
+        let end = ActivityEvent::Content {
+            key: key.clone(),
+            id: Some("live-end".into()),
+            event: ExecutionEvent::TurnEnded {
+                outcome: TurnOutcome::Completed,
+                cost_usd: None,
+            },
+        };
+        emit(end.clone());
+        cockpit.pump();
+        assert_eq!(count(&cockpit, &subject), 1);
+        emit(ActivityEvent::Content {
+            key: key.clone(),
+            id: Some("next-text".into()),
+            event: ExecutionEvent::Text {
+                text: "New work".into(),
+            },
+        });
+        cockpit.pump();
+        emit(end);
+        cockpit.pump();
+        assert_eq!(
+            count(&cockpit, &subject),
+            1,
+            "a deduplicated old end cannot stamp the new turn"
+        );
+        fake.streams.borrow()[0]
+            .send(text("Background main work"))
+            .unwrap();
+        cockpit.pump();
+        emit(ActivityEvent::BackgroundTurnEnded {
+            outcome: TurnOutcome::Completed,
+            cost_usd: None,
+        });
+        cockpit.pump();
+        assert_eq!(
+            count(&cockpit, &Subject::Main),
+            1,
+            "observed autonomous work gets the same completion presentation"
+        );
+    }
+
+    #[test]
+    fn child_completion_survives_a_history_read_already_in_flight() {
+        use crate::activity::{ActivityEvent, ActivityInput, AgentKey, ExecutionEvent, Subject};
+        let (mut cockpit, fake) = cockpit("completion-history-race");
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        let key = AgentKey::new(Provider::Claude, "root", "child");
+        let subject = Subject::Subagent(key.clone());
+        let emit = |event| {
+            fake.streams.borrow()[0]
+                .send(SessionEvent::Activity(event))
+                .unwrap()
+        };
+        emit(ActivityEvent::Content {
+            key: key.clone(),
+            id: Some("start".into()),
+            event: ExecutionEvent::Text {
+                text: "Working".into(),
+            },
+        });
+        cockpit.pump();
+        // Arrange the normal evicted-child state, and gate the disk boundary.
+        cockpit
+            .threads
+            .get_mut(&thread)
+            .unwrap()
+            .activity
+            .apply(ActivityInput::Evict(subject.clone()));
+        let (loader, finish) = history::gated_loader();
+        cockpit.history_loader = Some(loader);
+        assert!(cockpit.ensure_subject_history(thread, &subject).unwrap());
+        emit(ActivityEvent::Content {
+            key,
+            id: Some("end".into()),
+            event: ExecutionEvent::TurnEnded {
+                outcome: TurnOutcome::Completed,
+                cost_usd: None,
+            },
+        });
+        cockpit.pump();
+        finish(&cockpit.store);
+        cockpit.pump();
+        let view = cockpit.thread(thread).unwrap().activity();
+        let child = view.subject(&subject).unwrap();
+        assert!(child.retained());
+        assert_eq!(
+            child
+                .transcript()
+                .blocks()
+                .iter()
+                .filter(
+                    |block| matches!(&block.body,Body::Meta(text) if text.starts_with("Completed"))
+                )
+                .count(),
+            1,
+            "a prefix reload must merge the completion observed after its checkpoint"
+        );
+        let completion = |cockpit: &Cockpit| {
+            cockpit
+                .thread(thread)
+                .unwrap()
+                .activity()
+                .subject(&subject)
+                .unwrap()
+                .transcript()
+                .blocks()
+                .iter()
+                .filter_map(|block| match &block.body {
+                    Body::Meta(text) if text.starts_with("Completed") => Some(text.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let observed = completion(&cockpit);
+        // A later ordinary reload must use the same persisted observation,
+        // after the in-flight buffer that supplied it above has been consumed.
+        cockpit
+            .threads
+            .get_mut(&thread)
+            .unwrap()
+            .activity
+            .apply(ActivityInput::Evict(subject.clone()));
+        let (loader, finish) = history::gated_loader();
+        cockpit.history_loader = Some(loader);
+        assert!(cockpit.ensure_subject_history(thread, &subject).unwrap());
+        finish(&cockpit.store);
+        cockpit.pump();
+        assert_eq!(
+            completion(&cockpit),
+            observed,
+            "ordinary disk reload must preserve the exact child completion observation"
+        );
+    }
+
     #[test]
     fn tool_calls_are_clocked_at_ingestion() {
         let (mut cockpit, fake) = cockpit("timings");
@@ -4853,40 +5476,58 @@ mod tests {
     }
 
     #[test]
-    fn only_successful_delivery_joins_history_and_queued_delivery_waits_for_turn_end() {
-        let (mut cockpit, fake) = cockpit("prompt-history-delivery");
+    fn native_queue_history_records_consumption_once() {
+        let (mut cockpit, fake) = cockpit("native-history");
         let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
         cockpit.send(thread, "sent".into());
-        *fake.fail_send.borrow_mut() = true;
-        cockpit.send(thread, "refused".into());
-        *fake.fail_send.borrow_mut() = false;
+        assert!(cockpit.queue(thread, "held".into()));
+        assert_eq!(
+            cockpit.thread(thread).unwrap().queued(),
+            None,
+            "pipe write is not admission"
+        );
+        cockpit.pump();
+        assert_eq!(cockpit.thread(thread).unwrap().queued(), Some("held"));
+        fake.streams.borrow()[0].send(ended()).unwrap();
+        cockpit.pump();
+        assert_eq!(
+            fake.sent.borrow().as_slice(),
+            ["sent"],
+            "turn end never dispatches"
+        );
         assert_eq!(
             cockpit.recall_prompt(thread, HistoryDirection::Older, "draft"),
             Some("sent".into())
         );
-
-        cockpit.queue(thread, "taken back".into());
-        assert_eq!(cockpit.unqueue(thread).as_deref(), Some("taken back"));
-        assert_eq!(
-            cockpit.recall_prompt(thread, HistoryDirection::Older, "after unqueue"),
-            Some("sent".into()),
-            "unqueue resets traversal and never appends"
-        );
-
-        fake.streams.borrow()[0].send(text("working")).unwrap();
+        let id = fake.native.borrow()[0].0.clone();
+        for _ in 0..2 {
+            fake.streams.borrow()[0]
+                .send(SessionEvent::Queue(crate::QueueEvent::Started {
+                    historical: false,
+                    client_id: id.clone(),
+                    text: None,
+                }))
+                .unwrap();
+        }
         cockpit.pump();
-        cockpit.queue(thread, "held".into());
+        assert_eq!(cockpit.thread(thread).unwrap().queued(), None);
         assert_eq!(
-            cockpit.recall_prompt(thread, HistoryDirection::Older, "while held"),
-            Some("sent".into()),
-            "queueing resets traversal but does not append"
+            cockpit.recall_prompt(thread, HistoryDirection::Older, "draft"),
+            Some("held".into())
         );
-        fake.streams.borrow()[0].send(ended()).unwrap();
-        cockpit.pump();
+        let prompts = cockpit
+            .thread(thread)
+            .unwrap()
+            .transcript()
+            .blocks()
+            .iter()
+            .filter(|block| matches!(&block.body, Body::Prompt(text) if text == "held"))
+            .count();
+        assert_eq!(prompts, 1);
+        cockpit.park(thread).unwrap();
         assert_eq!(
-            cockpit.recall_prompt(thread, HistoryDirection::Older, "after release"),
-            Some("held".into()),
-            "turn-end delivery appends through the single delivery chokepoint"
+            cockpit.store.load(thread).unwrap().prompt_texts(),
+            ["sent", "held"]
         );
     }
 
@@ -5153,81 +5794,31 @@ mod tests {
         );
     }
 
-    /// A prompt queued behind a running turn must not strand when the
-    /// operator changes the root: no turn will ever end to release it, the
-    /// Session being gone. It goes out at once as the new Session's first
-    /// prompt, wearing the new preface — what the operator picked it for.
     #[test]
-    fn changing_the_root_releases_a_queued_prompt_into_the_new_session() {
-        let (mut cockpit, fake) = cockpit("root-queued");
+    fn replacing_a_claude_session_does_not_resubmit_native_pending_work() {
+        let (mut cockpit, fake) = cockpit("native-replacement");
         let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        fake.streams.borrow()[0].send(text("working")).unwrap();
+        assert!(cockpit.queue(thread, "pending text".into()));
         cockpit.pump();
-        assert!(cockpit.thread(thread).is_some_and(|open| open.busy()));
-        cockpit.queue(thread, "and then the tests".into());
-        let root = existing_root("root-queued-root");
-
         cockpit
-            .set_session_project_root(thread, Some(root.clone()))
+            .set_session_project_root(thread, Some(existing_root("native-replacement-root")))
             .unwrap();
-
-        assert_eq!(
-            cockpit.thread(thread).and_then(|open| open.queued()),
-            None,
-            "the held prompt went out"
-        );
-        assert_eq!(fake.streams.borrow().len(), 2, "a fresh Session took it");
-        let binding = std::env::temp_dir();
-        assert_eq!(
-            fake.sent.borrow().as_slice(),
-            [format!("{}and then the tests", preface(&binding, &root))]
-        );
-        // Raw in the Pane: displayed ≠ sent.
-        let blocks = cockpit.thread(thread).unwrap().transcript().blocks();
-        assert!(blocks
+        cockpit.send(thread, "new input".into());
+        fake.streams.borrow()[0]
+            .send(SessionEvent::Queue(crate::QueueEvent::Started {
+                historical: false,
+                client_id: fake.native.borrow()[0].0.clone(),
+                text: None,
+            }))
+            .ok();
+        cockpit.pump();
+        assert_eq!(fake.native.borrow().len(), 1);
+        assert!(!fake
+            .sent
+            .borrow()
             .iter()
-            .any(|b| matches!(&b.body, Body::Prompt(line) if line == "and then the tests")));
-    }
-
-    /// A held prompt released by a turn's end is a prompt like any other:
-    /// on a fresh Session (the watchdog replaced it mid-wait) its wire text
-    /// carries the preface — once — and the Pane keeps the raw text.
-    #[test]
-    fn a_queued_prompt_released_on_a_fresh_session_carries_the_preface_once() {
-        let (mut cockpit, fake) = cockpit("root-queued-release");
-        let rss = Rc::new(RefCell::new(0u64));
-        cockpit.watch_memory(Box::new(Meter(rss.clone())), 1024);
-        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        let root = existing_root("root-queued-release-root");
-        cockpit
-            .set_session_project_root(thread, Some(root.clone()))
-            .unwrap();
-        cockpit.send(thread, "one".into()); // consumes the first preface
-        fake.streams.borrow()[1].send(text("working")).unwrap();
-        cockpit.pump();
-        cockpit.queue(thread, "held".into());
-        *rss.borrow_mut() = 4096; // over the limit: the watchdog acts
-        assert_eq!(cockpit.sweep().len(), 1, "a fresh Session, preface armed");
-        fake.streams.borrow()[2].send(ended()).unwrap();
-
-        cockpit.pump(); // the turn ends; the held prompt is released
-
-        let binding = std::env::temp_dir();
-        assert_eq!(
-            fake.sent.borrow().last().unwrap(),
-            &format!("{}held", preface(&binding, &root))
-        );
-        cockpit.send(thread, "next".into());
-        assert_eq!(
-            fake.sent.borrow().last().unwrap(),
-            "next",
-            "the preface rides once per Session"
-        );
-        let blocks = cockpit.thread(thread).unwrap().transcript().blocks();
-        assert!(
-            !format!("{blocks:?}").contains("ferrite-session-context"),
-            "the preface must never reach the transcript"
-        );
+            .any(|text| text.ends_with("pending text")));
+        assert!(cockpit.thread(thread).unwrap().transcript().blocks().iter().any(|block| matches!(&block.body, Body::Notice(text) if text.contains("delivery is uncertain"))));
     }
 
     /// After a failed watchdog restart the Thread sits in the cockpit with
@@ -5621,39 +6212,45 @@ mod tests {
     }
 
     #[test]
-    fn a_prompt_typed_during_a_turn_is_sent_when_the_turn_ends() {
-        let (mut cockpit, fake) = cockpit("queued");
+    fn native_pending_prompts_survive_turn_end_without_client_dispatch() {
+        let (mut cockpit, fake) = cockpit("native-queued");
         let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
         fake.streams.borrow()[0].send(text("working")).unwrap();
         cockpit.pump();
-        assert!(cockpit.thread(thread).is_some_and(|open| open.busy()));
-
-        cockpit.queue(thread, "and then run the tests".into());
-        assert_eq!(
-            cockpit.thread(thread).and_then(|open| open.queued()),
-            Some("and then run the tests")
-        );
-        assert!(fake.sent.borrow().is_empty(), "nothing goes out mid-turn");
-
+        assert!(cockpit.queue(thread, "and then run the tests".into()));
+        cockpit.pump();
         fake.streams.borrow()[0].send(ended()).unwrap();
         cockpit.pump();
-
-        assert_eq!(fake.sent.borrow().as_slice(), ["and then run the tests"]);
-        assert_eq!(cockpit.thread(thread).and_then(|open| open.queued()), None);
-        assert!(!cockpit.thread(thread).is_some_and(|open| open.busy()));
+        assert!(fake.sent.borrow().is_empty());
+        assert_eq!(fake.native.borrow().len(), 1);
+        assert_eq!(
+            cockpit.thread(thread).unwrap().queued(),
+            Some("and then run the tests")
+        );
     }
 
     #[test]
-    fn a_held_prompt_can_be_taken_back_for_editing() {
-        let (mut cockpit, _fake) = cockpit("unqueue");
+    fn a_native_prompt_is_retrieved_only_after_cancel_receipt() {
+        let (mut cockpit, fake) = cockpit("native-unqueue");
         let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
-        cockpit.queue(thread, "run the tets".into());
-
-        let back = cockpit.unqueue(thread);
-
-        assert_eq!(back.as_deref(), Some("run the tets"));
-        assert_eq!(cockpit.thread(thread).and_then(|open| open.queued()), None);
+        assert!(cockpit.queue(thread, "run the tets".into()));
+        cockpit.pump();
         assert_eq!(cockpit.unqueue(thread), None);
+        assert_eq!(cockpit.take_retrieved_prompt(thread), None);
+        assert_eq!(
+            cockpit.thread(thread).unwrap().queued(),
+            Some("run the tets")
+        );
+        cockpit.pump();
+        assert_eq!(
+            cockpit
+                .take_retrieved_prompt(thread)
+                .map(|(text, _)| text)
+                .as_deref(),
+            Some("run the tets")
+        );
+        assert_eq!(cockpit.thread(thread).unwrap().queued(), None);
+        assert!(fake.sent.borrow().is_empty());
     }
 
     #[test]
@@ -6985,6 +7582,30 @@ mod tests {
         assert_eq!(cockpit.next_decision(), Some(threads[2]));
         assert_eq!(cockpit.roster().view(), View::Group(group));
         assert_eq!(cockpit.roster().focused_thread(), Some(threads[2]));
+    }
+
+    #[test]
+    #[ignore = "local performance probe"]
+    fn local_thread_revival_probe() {
+        let store_dir = std::path::PathBuf::from("/tmp/ferrite-perf.7xYdTK");
+        for id in [1_u64, 5_u64] {
+            let store = Store::open(&store_dir).unwrap();
+            let fake = Fake::default();
+            let mut cockpit = Cockpit::new(store, Box::new(fake));
+            let started = std::time::Instant::now();
+            cockpit.revive(ThreadId::new(id)).unwrap();
+            let elapsed = started.elapsed();
+            let open = cockpit.thread(ThreadId::new(id)).unwrap();
+            let subject = open
+                .activity()
+                .subject(&crate::activity::Subject::Main)
+                .unwrap();
+            eprintln!(
+                "PERF thread={id} revive_ms={:.3} blocks={}",
+                elapsed.as_secs_f64() * 1000.0,
+                subject.transcript().blocks().len(),
+            );
+        }
     }
 }
 

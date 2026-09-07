@@ -9,9 +9,11 @@
 mod activity;
 pub(super) mod discovery;
 mod file_search;
+mod queue;
 mod suggestions;
-mod wire;
+pub(super) mod wire;
 
+use crate::spawn::NoConsoleWindow;
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
@@ -65,6 +67,8 @@ pub struct ClaudeConfig {
     pub program: String,
     /// Working directory for the CLI process (the Thread's workspace binding).
     pub cwd: Option<PathBuf>,
+    /// Project roots exposed in addition to the process working directory.
+    pub additional_directories: Vec<PathBuf>,
     /// Model override passed through to the CLI.
     pub model: Option<String>,
     /// Reasoning effort (`"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`)
@@ -94,6 +98,7 @@ impl Default for ClaudeConfig {
         Self {
             program: "claude".into(),
             cwd: None,
+            additional_directories: Vec::new(),
             model: None,
             effort: None,
             prompt_suggestions: false,
@@ -206,6 +211,7 @@ pub struct ClaudeSession {
     control_replies: ControlReplies,
     decoder: Arc<Mutex<activity::Decoder>>,
     requests: Arc<Mutex<wire::Requests>>,
+    queue: Arc<Mutex<queue::Queue>>,
     next_request_id: u64,
     suggestions: Arc<Mutex<suggestions::Inbox>>,
     file_search: Arc<Mutex<file_search::Requests>>,
@@ -220,6 +226,7 @@ impl ClaudeSession {
         check_version(&program)?;
 
         let mut command = Command::new(&program);
+        command.no_console_window();
         command.args([
             "-p",
             "--input-format",
@@ -272,6 +279,9 @@ impl ClaudeSession {
         if let Some(cwd) = &config.cwd {
             command.current_dir(cwd);
         }
+        for directory in &config.additional_directories {
+            command.arg("--add-dir").arg(directory);
+        }
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -302,6 +312,7 @@ impl ClaudeSession {
         let control_replies = Arc::new(Mutex::new(HashMap::new()));
         let decoder = Arc::new(Mutex::new(activity::Decoder::default()));
         let requests = Arc::new(Mutex::new(wire::Requests::default()));
+        let queue = Arc::new(Mutex::new(queue::Queue::default()));
         let mut inbox = suggestions::Inbox::default();
         inbox.configure(config.prompt_suggestions);
         let suggestions = Arc::new(Mutex::new(inbox));
@@ -316,6 +327,7 @@ impl ClaudeSession {
             Arc::clone(&stdin),
             decoder.clone(),
             requests.clone(),
+            queue.clone(),
             suggestions.clone(),
             file_search.clone(),
         );
@@ -332,6 +344,7 @@ impl ClaudeSession {
             control_replies,
             decoder,
             requests,
+            queue,
             next_request_id: 1,
             suggestions,
             file_search,
@@ -528,6 +541,35 @@ impl ClaudeSession {
     }
 
     /// Send one user prompt; the CLI starts (or queues) a turn.
+    pub fn enqueue(&mut self, client_id: &str, text: &str) -> io::Result<()> {
+        {
+            let mut queue = lock(&self.queue);
+            if !queue.supported {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "Claude has not announced native queue lifecycle support",
+                ));
+            }
+            queue.submitted.insert(client_id.into(), text.into());
+        }
+        lock(&self.suggestions).sent();
+        self.write_line(&serde_json::json!({
+            "type":"user", "uuid":client_id, "isAsync":true,
+            "message":{"role":"user","content":wire::input_content(text,self.cwd.as_deref())}
+        }))
+    }
+
+    pub fn cancel_queued(&mut self, id: &str) -> io::Result<()> {
+        let request_id = self.take_request_id();
+        lock(&self.queue)
+            .cancellations
+            .insert(request_id.clone(), id.into());
+        self.write_line(&serde_json::json!({
+            "type":"control_request", "request_id":request_id,
+            "request":{"subtype":"cancel_async_message","message_uuid":id}
+        }))
+    }
+
     pub fn send(&mut self, text: &str) -> io::Result<()> {
         lock(&self.suggestions).sent();
         self.write_line(&serde_json::json!({
@@ -641,6 +683,7 @@ fn read_stdout(
     stdin: Arc<Mutex<ChildStdin>>,
     decoder: Arc<Mutex<activity::Decoder>>,
     requests: Arc<Mutex<wire::Requests>>,
+    queue: Arc<Mutex<queue::Queue>>,
     suggestions: Arc<Mutex<suggestions::Inbox>>,
     file_search: Arc<Mutex<file_search::Requests>>,
 ) -> Receiver<ClaudeCapabilities> {
@@ -662,6 +705,12 @@ fn read_stdout(
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(text) {
                 if lock(&file_search).observe(&value) {
                     continue;
+                }
+                let queue_events = lock(&queue).observe(&value);
+                for event in queue_events {
+                    if sender.send(event).is_err() {
+                        return;
+                    }
                 }
                 lock(&suggestions).observe(&value);
                 lock(&requests).observe(&value);
@@ -949,6 +998,7 @@ fn spawn_error(program: &str, e: io::Error) -> ClaudeSpawnError {
 fn check_version(program: &str) -> Result<(), ClaudeSpawnError> {
     let output = Command::new(program)
         .arg("--version")
+        .no_console_window()
         .output()
         .map_err(|e| spawn_error(program, e))?;
     if !output.status.success() {

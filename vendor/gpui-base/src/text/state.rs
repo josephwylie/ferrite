@@ -103,6 +103,7 @@ pub struct TextViewState {
     pub(super) code_block_actions: Option<std::sync::Arc<CodeBlockActionsFn>>,
     pub(super) code_block_highlighter: Option<std::sync::Arc<CodeBlockHighlighterFn>>,
     pub(super) table_actions: Option<std::sync::Arc<TableActionsFn>>,
+    pub(super) link_renderer: Option<std::sync::Arc<super::text_view::LinkRendererFn>>,
     pub(super) link_click_handler: Option<std::sync::Arc<LinkClickHandlerFn>>,
     pub(super) markdown_extensions: Arc<MarkdownExtensions>,
 
@@ -203,6 +204,7 @@ impl TextViewState {
             code_block_highlighter: None,
             table_actions: None,
             link_click_handler: None,
+            link_renderer: None,
             markdown_extensions: Arc::default(),
             is_selecting: false,
             auto_scroll: AutoScroll::default(),
@@ -613,6 +615,7 @@ impl Render for TextViewState {
         node_cx.code_block_highlighter = self.code_block_highlighter.clone();
         node_cx.table_actions = self.table_actions.clone();
         node_cx.link_click_handler = self.link_click_handler.clone();
+        node_cx.link_renderer = self.link_renderer.clone();
         node_cx.markdown_extensions = self.markdown_extensions.clone();
         node_cx.style = self.text_view_style.clone();
 
@@ -644,6 +647,7 @@ impl Render for TextViewState {
                     size_changed,
                     selection_involves_view,
                     has_selection_snapshot,
+                    has_document_range,
                     is_selecting,
                     compatible_layout_update,
                 ) = {
@@ -652,6 +656,7 @@ impl Render for TextViewState {
                         state.bounds().size != bounds.size,
                         state.selection_adapter.is_part_of_window_selection(cx),
                         state.selection_adapter.has_selection_snapshot(cx),
+                        state.selection_adapter.document_range(cx).is_some(),
                         state.is_selecting,
                         state.compatible_layout_update,
                     )
@@ -664,7 +669,10 @@ impl Render for TextViewState {
                     state.update_bounds(bounds, cx);
                     state.compatible_layout_update = false;
                 });
+                // Logical documents own source-version invalidation. Their
+                // byte ranges remain valid when native layout reflows.
                 if !is_selecting
+                    && !has_document_range
                     && ((size_changed && selection_involves_view && !compatible_layout_update)
                         || (revision_changed && has_selection_snapshot))
                 {

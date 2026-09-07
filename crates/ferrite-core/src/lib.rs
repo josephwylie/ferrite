@@ -21,6 +21,7 @@ pub mod questions;
 pub mod roster;
 pub mod session;
 pub mod settings;
+pub mod spawn;
 pub mod store;
 pub mod suggest;
 pub mod titler;
@@ -33,7 +34,7 @@ pub use session_event::{
     validate_form, ContextCategory, ContextDetails, ControlKind, Decision, DecisionAnswer,
     DecisionChoice, DecisionDelivery, DecisionKind, DecisionPolicy, FileEdit, FormChoice,
     FormField, FormFieldKind, Hunk, McpServer, McpStatus, ModelInfo, PermissionModeChoice,
-    RateLimitWindow, RunState, SessionCommand, SessionControl, SessionEvent, ToolResult,
-    TurnOutcome, UsageDetails, UsageScope,
+    QueueEvent, QueuedPrompt, RateLimitWindow, RunState, SessionCommand, SessionControl,
+    SessionEvent, ToolResult, TurnOutcome, UsageDetails, UsageScope,
 };
 pub use thread::ThreadId;

@@ -1,0 +1,44 @@
+  ───────  ───────  ─────────────────────                                                                               
+   Beta        12    a longer table cell                                                                                
+                                                                                                                        
+  ———                                                                                                                   
+                                                                                                                        
+  one two                                                                                                               
+  one  two   three    four                                                                                              
+      four leading spaces                                                                                               
+        actual tab character                                                                                            
+  trailing two spaces:                                                                                                  
+                                                                                                                        
+  Unicode: café naïve → ✓ 界 é                                                                                          
+                                                                                                                        
+  0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrst
+  uvwxyz                                                                                                                
+                                                                                                                        
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                                                                                                                        
+                                                                                                                        
+› Run only this harmless waiting command once: python3 -c 'import time; print("waiting fixture", flush=True);           
+  time.sleep(20); print("finished fixture", flush=True)'. Do not write files or use external tools. I will test the     
+  queue and interrupt controls while it waits.                                                                          
+                                                                                                                        
+                                                                                                                        
+• Running the exact waiting command once.                                                                               
+                                                                                                                        
+• Planning exec write_stdin call and output wait                                                                        
+                                                                                                                        
+• Waited for background terminal · python3 -c 'import time; print("waiting fixture", flush=True); time.sleep(20);       
+print("finished fixture", flush=True)'                                                                                  
+                                                                                                                        
+• Ran python3 -c 'import time; print("waiting fixture", flush=True); time.sleep(20); print("finished fixture",          
+  │ flush=True)'                                                                                                        
+  └ finished fixture                                                                                                    
+                                                                                                                        
+■ Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the 
+issue.                                                                                                                  
+                                                                                                                        
+                                                                                                                        
+› After this finishes, reply only: queued fixture.                                                                      
+                                                                                                                        
+  Ready · gpt-5.6-terra low · Context 97% left · weekly 73% left · 01a07675-7e01-7483-953c-b4f5feee8e7d                 
+                                                                                                                        
+                                                                                                                        

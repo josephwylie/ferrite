@@ -1,0 +1,44 @@
+/ T R A N S C R I P T / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / 
+› Read only sample.txt and sample.py in this synthetic fixture directory. Do not modify files, inspect anything outside 
+  this directory, use network tools, or delegate. Briefly announce the task before reading. After reading, give a short 
+  response with a heading, bold text, inline code, two bullets, and a fenced Python example. Preserve the double and    
+  triple spaces in the fixture when quoting it.                                                                         
+                                                                                                                        
+                                                                                                                        
+• You have 2 usage limit resets available. Run /usage to use one.                                                       
+                                                                                                                        
+• I’ll read only the two specified fixture files, without changes.                                                      
+                                                                                                                        
+$ sed -n '1,240p' sample.txt && sed -n '1,240p' sample.py                                                               
+# Terminal transcript fixture                                                                                           
+                                                                                                                        
+Alpha beta gamma.                                                                                                       
+one  two   three    four                                                                                                
+    Tabbed input                                                                                                        
+Unicode: café naïve → ✓ 界 é                                                                                            
+Long line: word word word word word word word word word word word word word word word word word word word word word word
+word word word word word word word word word word word word word word word word word word word word END                 
+def greet(name):                                                                                                        
+    return f'Hello, {name}!'                                                                                            
+                                                                                                                        
+print(greet('world'))                                                                                                   
+✓ • 0ms                                                                                                                 
+                                                                                                                        
+• Confirming heading and formatting requirements                                                                        
+                                                                                                                        
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                                                                                                                        
+• ## Fixture read                                                                                                       
+                                                                                                                        
+  Read successfully: sample.txt and sample.py.                                                                          
+                                                                                                                        
+  - Text quote: one  two   three    four                                                                                
+  - Python defines greet.                                                                                               
+                                                                                                                        
+  print(greet("world"))                                                                                                 
+                                                                                                                        
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────── 100% ─
+ ↑/↓ to scroll   pgup/pgdn to page   home/end to jump                                                                   
+ q to quit   esc to edit prev                                                                                           
+                                                                                                                        

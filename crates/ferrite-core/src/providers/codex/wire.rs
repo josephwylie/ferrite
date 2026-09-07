@@ -748,7 +748,7 @@ fn parse_turn_completed(params: &Value) -> Option<SessionEvent> {
 /// interface?}`. Only enabled skills are offered — the menu is what can be
 /// invoked — and an entry missing its name or path could never become the
 /// typed `{"type":"skill"}` item an invocation needs, so it is skipped.
-pub(super) fn parse_skills(result: &Value) -> Vec<SessionCommand> {
+pub(in crate::providers) fn parse_skills(result: &Value) -> Vec<SessionCommand> {
     let mut commands = Vec::new();
     let Some(data) = result.get("data").and_then(Value::as_array) else {
         return commands;
@@ -887,7 +887,7 @@ pub(super) fn input_items(text: &str, skills: &[SessionCommand], cwd: Option<&Pa
 /// spawn with the server's own words, not a timeout. Server requests use a
 /// separate ID space: a matching ID never makes a method-bearing frame a
 /// response to one of our requests.
-pub(super) fn parse_response(line: &str, id: u64) -> Option<Result<Value, String>> {
+pub(in crate::providers) fn parse_response(line: &str, id: u64) -> Option<Result<Value, String>> {
     let value: Value = serde_json::from_str(line).ok()?;
     if value.get("method").is_some() || value.get("id")?.as_u64()? != id {
         return None;
@@ -1142,6 +1142,7 @@ mod tests {
             SessionEvent::ContextUsage { .. } | SessionEvent::UsageDetails { .. } => return None,
             // Raw reasoning is scoped by the activity router; these legacy
             // captures only contain reasoning summaries.
+            SessionEvent::Queue(_) => return None,
             SessionEvent::ThinkingDelta { .. } => return None,
             // Not a wire line at all: the reader thread synthesises Closed
             // when the process exits, so no capture can contain it. Proved by

@@ -11,6 +11,7 @@ use crate::{ControlKind, DecisionAnswer, PermissionModeChoice, SessionControl, S
 
 mod claude;
 mod codex;
+pub mod commands;
 pub mod discover;
 mod elicitation;
 pub mod limits;
@@ -94,6 +95,18 @@ pub trait Session {
     /// The bounded event stream. The pump drains this per frame.
     fn events(&self) -> &Receiver<SessionEvent>;
     fn send(&mut self, text: &str) -> io::Result<()>;
+    fn enqueue(&mut self, _client_id: &str, _text: &str) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "native queuing is unavailable in this Session",
+        ))
+    }
+    fn cancel_queued(&mut self, _id: &str) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "native queue cancellation is unavailable",
+        ))
+    }
     /// Change effort for the next turn without replacing this Session or
     /// its conversation. `None` restores the provider's configured default.
     fn set_effort(&mut self, _effort: Option<&str>) -> io::Result<()> {
@@ -162,6 +175,12 @@ impl Session for ClaudeSession {
     fn control(&mut self, action: SessionControl) -> io::Result<()> {
         ClaudeSession::control(self, action)
     }
+    fn enqueue(&mut self, client_id: &str, text: &str) -> io::Result<()> {
+        ClaudeSession::enqueue(self, client_id, text)
+    }
+    fn cancel_queued(&mut self, id: &str) -> io::Result<()> {
+        ClaudeSession::cancel_queued(self, id)
+    }
     fn set_suggestions_enabled(&mut self, enabled: bool) -> io::Result<()> {
         ClaudeSession::set_suggestions_enabled(self, enabled)
     }
@@ -219,6 +238,12 @@ impl Session for CodexSession {
     }
     fn control(&mut self, action: SessionControl) -> io::Result<()> {
         CodexSession::control(self, action)
+    }
+    fn enqueue(&mut self, client_id: &str, text: &str) -> io::Result<()> {
+        CodexSession::enqueue(self, client_id, text)
+    }
+    fn cancel_queued(&mut self, id: &str) -> io::Result<()> {
+        CodexSession::cancel_queued(self, id)
     }
     fn set_effort(&mut self, effort: Option<&str>) -> io::Result<()> {
         CodexSession::set_effort(self, effort)

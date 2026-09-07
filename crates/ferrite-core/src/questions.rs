@@ -202,8 +202,8 @@ pub fn selected_values(question: &Question, answer: &Answer) -> Result<Vec<Strin
         .iter()
         .map(|&pick| question.options[pick].label.clone())
         .collect();
-    if let Some(other) = answer.other.as_deref().map(str::trim) {
-        if !other.is_empty() {
+    if let Some(other) = answer.other.as_deref() {
+        if !other.trim().is_empty() {
             parts.push(other.to_string());
         }
     }
@@ -383,7 +383,7 @@ mod tests {
         assert_eq!(
             updated["answers"],
             json!({
-                "Which approach should we take for the retry logic?": "Jittered backoff",
+                "Which approach should we take for the retry logic?": "  Jittered backoff  ",
                 "Which libraries may I add?": "tokio-retry, reqwest-retry"
             })
         );

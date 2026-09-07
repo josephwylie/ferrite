@@ -34,3 +34,18 @@ base64 document blocks. Inline images and PDFs are limited to 5 MiB each and
 receives WAV, MP3, M4A, WebM and OGG attachments as native local audio input.
 Other formats retain the existing reference/mention behavior. Both adapters use
 the same attachment cards and persisted path representation.
+## Transcript file links (2026-09-06)
+
+Agent-authored local Markdown links use the same Attachment slots in a compact
+inline row: filename, source location, file-type label, and icon or thumbnail.
+The native text parser keeps the original Markdown; a GPUI Base link-renderer
+extension preserves paragraph, list, table, wrapping, and selection behavior.
+Each card has its own interaction identity and native button activation.
+
+One file-link resolver handles absolute paths, file URLs, home-relative paths,
+and paths relative to the Thread's checkout. It removes source-line annotations
+and encodes a proper file URL before calling the OS opener. Raw paths previously
+went unchanged to macOS's URL API, including source-line suffixes. Missing files
+produce an in-app error message. Images use the Pane's existing preview; other files
+(including sent-prompt attachments) open in the system's associated application.
+Web links retain the native link presentation and destination.

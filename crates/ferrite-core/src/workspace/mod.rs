@@ -12,6 +12,7 @@
 //! until `git worktree prune` (which `ensure_worktree` runs before creating,
 //! so Ferrite's own paths self-heal). Documented, not built for.
 
+use crate::spawn::NoConsoleWindow;
 use std::collections::HashMap;
 use std::fs;
 use std::io;
@@ -469,6 +470,7 @@ fn pull_request(cwd: &Path) -> Option<PullRequest> {
             "number,state,isDraft,statusCheckRollup",
         ])
         .current_dir(cwd)
+        .no_console_window()
         .output()
         .ok()?;
     if !output.status.success() {
@@ -618,6 +620,7 @@ fn git(repo: &Path, args: &[&str]) -> Result<String, GitError> {
         .arg("-C")
         .arg(repo)
         .args(args)
+        .no_console_window()
         .output()
         .map_err(GitError::Io)?;
     if !output.status.success() {

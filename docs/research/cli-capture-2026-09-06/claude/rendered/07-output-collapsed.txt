@@ -1,0 +1,44 @@
+                                                                                                                        
+  sample.txt is a terminal transcript fixture with mixed whitespace and Unicode. sample.py defines greet and prints its 
+  result.                                                                                                               
+                                                                                                                        
+  - Spacing line quoted verbatim: one  two   three    four (double, triple, quadruple spaces), plus a tab-indented line 
+    and Unicode café naïve → ✓ 界 é.                                                                                    
+  - The Python file is two statements: a function returning an f-string, then a print call.                             
+                                                                                                                        
+  def greet(name):                                                                                                      
+      return f'Hello, {name}!'                                                                                          
+                                                                                                                        
+  print(greet('world'))  # Hello, world!                                                                                
+                                                                                                                        
+✻ Worked for 7s · done 8:53 pm                                                                                          
+                                                                                                                        
+❯ Run this harmless shell command once to demonstrate streamed stdout, stderr, and a nonzero exit. Do not fix or retry  
+  it. Do not modify any file or use any external tool. Command: python3 -c 'import time,sys; print("first  second       
+  third", flush=True); time.sleep(8); print("fixture stderr", file=sys.stderr, flush=True); sys.exit(7)'. Explain the   
+  outcome in one sentence.                                                                                              
+                                                                                                                        
+⏺ Running the command once.                                                                                             
+                                                                                                                        
+  Ran 1 shell command                                                                                                   
+                                                                                                                        
+⏺ The command printed first  second   third to stdout, slept 8 seconds, printed fixture stderr to stderr, and exited    
+  with code 7 as designed, not retried.                                                                                 
+                                                                                                                        
+✻ Crunched for 14s · done 8:58 pm                                                                                       
+                                                                                                                        
+❯ For a harmless long-output display test, run exactly once: python3 -c 'for i in range(1,41): print(f"row {i:02d}      
+  alpha   beta    gamma")'. Do not write files or inspect anything else. Then respond with only 'Output complete.'      
+                                                                                                                        
+⏺ Running the 40-row output command once.                                                                               
+                                                                                                                        
+  Ran 1 shell command                                                                                                   
+                                                                                                                        
+⏺ Output complete.                                                                                                      
+                                                                                                                        
+✻ Cooked for 5s · done 8:59 pm                                                                                          
+                          Approve tool calls from your phone · https://claude.ai/code/session_017sJ6fNEaPcmNKBGurn6N8b  
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ Now run it with stderr output too.                                                                                    
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on · ? for shortcuts                                                                               /rc  

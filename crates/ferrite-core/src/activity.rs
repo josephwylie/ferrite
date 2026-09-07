@@ -118,6 +118,11 @@ pub enum ActivityEvent {
         outcome: TurnOutcome,
         cost_usd: Option<f64>,
     },
+    CompletionObservation {
+        subject: Subject,
+        elapsed_ms: u64,
+        completed_at: String,
+    },
     /// None retains a visible connection-owned request with unresolved owner.
     Decision {
         subject: Option<Subject>,
@@ -352,6 +357,9 @@ struct SubjectState {
     busy: bool,
     coverage: TranscriptCoverage,
     last_outcome: Option<TurnOutcome>,
+    timings_revision: u64,
+    /// History-rebuild generation. It is intentionally distinct from the
+    /// transcript and timing presentation revisions.
     revision: u64,
     retained: bool,
     truncated: bool,
@@ -375,6 +383,7 @@ impl SubjectState {
             busy: false,
             coverage: TranscriptCoverage::Unavailable,
             last_outcome: None,
+            timings_revision: 0,
             revision: 0,
             retained: true,
             truncated: false,
@@ -878,12 +887,18 @@ impl Activity {
             ActivityInput::RestoreTimings { subject, timings } => {
                 let connected = self.connected;
                 if let Some(state) = self.state_mut(&subject) {
+                    let mut timings_changed = false;
                     for (id, elapsed) in timings {
                         if (!connected || !state.timings.contains_key(&id))
                             && !matches!(state.timings.get(&id), Some(ToolTiming::Running(_)))
+                            && !matches!(state.timings.get(&id), Some(ToolTiming::Done(total)) if *total == elapsed)
                         {
                             state.timings.insert(id, ToolTiming::Done(elapsed));
+                            timings_changed = true;
                         }
+                    }
+                    if timings_changed {
+                        state.timings_revision = state.timings_revision.saturating_add(1);
                     }
                     ActivityUpdate {
                         changed: vec![subject],
@@ -910,9 +925,13 @@ impl Activity {
             ActivityEvent::Content { key, .. }
             | ActivityEvent::HistoryContent { key, .. }
             | ActivityEvent::Status { key, .. } => Some(Subject::Subagent(self.resolve(key))),
-            ActivityEvent::MainContent { .. } | ActivityEvent::BackgroundTurnEnded { .. } => {
-                Some(Subject::Main)
-            }
+            ActivityEvent::MainContent { .. }
+            | ActivityEvent::BackgroundTurnEnded { .. }
+            | ActivityEvent::CompletionObservation {
+                subject: Subject::Main,
+                ..
+            } => Some(Subject::Main),
+            ActivityEvent::CompletionObservation { subject, .. } => Some(subject.clone()),
             _ => None,
         };
         let previous = if self.connected {
@@ -1305,6 +1324,36 @@ impl Activity {
                     update.main_settled = false;
                 }
                 update.attention_changed = false;
+            }
+            ActivityEvent::CompletionObservation {
+                subject,
+                elapsed_ms,
+                completed_at,
+            } => {
+                let subject = self.resolve_subject(subject);
+                if let Subject::Subagent(key) = &subject {
+                    self.ensure_agent(key.clone());
+                }
+                let sequence = self.sequence;
+                let limits = self.limits;
+                let Some(state) = self.state_mut(&subject) else {
+                    update.rejected = true;
+                    return update;
+                };
+                let blocks = state.append(
+                    Input::CompletionObservation {
+                        elapsed_ms: *elapsed_ms,
+                        completed_at: completed_at.clone(),
+                    },
+                    None,
+                    None,
+                    sequence,
+                    at,
+                    live,
+                    limits,
+                );
+                update.changed.push(subject.clone());
+                update.blocks.push((subject, blocks));
             }
             ActivityEvent::Decision { subject, decision } => {
                 if !live {
@@ -1915,6 +1964,14 @@ impl<'a> SubjectView<'a> {
     }
     pub fn revision(self) -> u64 {
         self.state.revision
+    }
+    /// Presentation revisions for the transcript body and restored tool timings.
+    /// This excludes `revision()`, which only tracks history rebuilds.
+    pub fn presentation_revision(self) -> (u64, u64) {
+        (
+            self.state.transcript.revision(),
+            self.state.timings_revision,
+        )
     }
     pub fn retained(self) -> bool {
         self.state.retained

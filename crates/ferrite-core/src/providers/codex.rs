@@ -1,8 +1,8 @@
 //! Codex provider: the pinned `codex` CLI's app-server spoken over stdio
 //! JSON-RPC.
 //!
-//! Spawn checks the CLI version pin, then holds a two-request handshake —
-//! initialize, then thread/start (or thread/resume) — before any Session
+//! Spawn checks the CLI version pin, then completes initialize, skills/list,
+//! and thread/start (or thread/resume) before any Session
 //! exists: a Codex Session without a thread id cannot say anything, so unlike
 //! Claude a failed handshake is a typed spawn error, not a half-alive
 //! Session. A reader thread parses stdout lines into SessionEvents on a
@@ -17,9 +17,11 @@ pub(super) mod discovery;
 mod file_search;
 mod live_catalogs;
 mod questions;
+mod queue;
 mod requests;
-mod wire;
+pub(super) mod wire;
 
+use crate::spawn::NoConsoleWindow;
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
@@ -64,9 +66,8 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 /// Bound those candidates; overflow stays non-interruptible until new evidence.
 const EARLY_TURN_THREAD_LIMIT: usize = 64;
 
-/// The request id spawn numbers its skills/list with — always the request
-/// after the two handshake steps, which is what lets the reader correlate
-/// the answer without a shared table (#23).
+/// The skill catalog request id. Sent after initialize and completed before
+/// thread/start, retaining the existing protocol ids for response routing.
 const SKILLS_REQUEST_ID: u64 = 3;
 
 /// And the one after it: the model/list the picker's rows come from. Sent
@@ -83,6 +84,8 @@ pub struct CodexConfig {
     /// Working directory for the thread (the Thread's workspace binding),
     /// passed in thread/start rather than inherited from the process.
     pub cwd: Option<PathBuf>,
+    /// Project roots added to workspace-write turns without changing `cwd`.
+    pub additional_directories: Vec<PathBuf>,
     /// Model override passed through in thread/start.
     pub model: Option<String>,
     /// Reasoning effort (`"low"` … `"xhigh"`, `"max"`, `"ultra"` where the
@@ -109,6 +112,7 @@ impl Default for CodexConfig {
         Self {
             program: "codex".into(),
             cwd: None,
+            additional_directories: Vec::new(),
             model: None,
             effort: None,
             approval_policy: None,
@@ -234,10 +238,13 @@ pub struct CodexSession {
     skills: Arc<Mutex<Vec<crate::SessionCommand>>>,
     /// The thread's cwd, kept for resolving `@path` mention tokens.
     cwd: Option<PathBuf>,
+    additional_directories: Vec<PathBuf>,
+    sandbox: Option<String>,
     next_request_id: u64,
     question_replies: Arc<Mutex<questions::Replies>>,
     native_questions: Arc<Mutex<questions::NativeRequests>>,
     file_search: Arc<Mutex<file_search::Requests>>,
+    queue: Arc<Mutex<queue::Queue>>,
 }
 
 impl CodexSession {
@@ -251,7 +258,7 @@ impl CodexSession {
         check_version(&program)?;
 
         let mut command = Command::new(&program);
-        command.arg("app-server");
+        command.arg("app-server").no_console_window();
         if let Some(cwd) = &config.cwd {
             // The thread's cwd travels in thread/start; the process gets the
             // same one so anything the server resolves against itself agrees.
@@ -290,6 +297,8 @@ impl CodexSession {
         let question_replies = Arc::new(Mutex::new(questions::Replies::default()));
         let native_questions = Arc::new(Mutex::new(questions::NativeRequests::default()));
         let file_search = Arc::new(Mutex::new(file_search::Requests::default()));
+        let (skills_sender, skills_ready) = sync_channel(1);
+        let queue = Arc::new(Mutex::new(queue::Queue::default()));
         let handshake = read_stdout(
             stdout,
             Arc::downgrade(&stdin),
@@ -299,10 +308,12 @@ impl CodexSession {
             Arc::clone(&requests),
             Arc::clone(&controls),
             Arc::clone(&skills),
+            skills_sender,
             Arc::clone(&models),
             Arc::clone(&question_replies),
             Arc::clone(&native_questions),
             Arc::clone(&file_search),
+            queue.clone(),
             config.cwd.clone(),
         );
 
@@ -322,46 +333,37 @@ impl CodexSession {
             controls,
             skills,
             cwd: config.cwd.clone(),
+            additional_directories: config.additional_directories.clone(),
+            sandbox: config.sandbox.clone(),
             next_request_id: 1,
             question_replies,
             native_questions,
             file_search,
+            queue,
         };
 
         // The handshake, in the server's required order. A failed one must
         // not leak a live process: kill it and fold whatever it said on
         // stderr into the explanation.
-        session.handshake(&config, &handshake).map_err(|detail| {
-            let mut child = lock(&session.child);
-            let _ = child.kill();
-            let _ = child.wait();
-            let stderr = settled_stderr(&stderr_tail);
-            CodexSpawnError::HandshakeFailed {
-                detail: if stderr.is_empty() {
-                    detail
-                } else {
-                    format!("{detail}\nstderr: {}", stderr.join("\n"))
-                },
-            }
-        })?;
+        session
+            .handshake(&config, &handshake, &skills_ready)
+            .map_err(|detail| {
+                let mut child = lock(&session.child);
+                let _ = child.kill();
+                let _ = child.wait();
+                let stderr = settled_stderr(&stderr_tail);
+                CodexSpawnError::HandshakeFailed {
+                    detail: if stderr.is_empty() {
+                        detail
+                    } else {
+                        format!("{detail}\nstderr: {}", stderr.join("\n"))
+                    },
+                }
+            })?;
+        // Request 3 was completed during startup, before thread creation.
+        let skills_id = session.take_request_id();
+        debug_assert_eq!(skills_id, SKILLS_REQUEST_ID);
         lock(&session.file_search).configure(&session.thread_id);
-        // Ask for the `/` menu (#23) — after the handshake, before the
-        // operator can speak. The answer arrives on the reader's own thread
-        // and is announced as `SessionEvent::Commands`; a write failure here
-        // is a server already dying, which the reader is turning into a
-        // Closed event, so the Session is still handed back.
-        let id = session.take_request_id();
-        debug_assert_eq!(id, SKILLS_REQUEST_ID);
-        let mut params = serde_json::json!({});
-        if let Some(cwd) = &session.cwd {
-            params["cwds"] = serde_json::json!([cwd.display().to_string()]);
-        }
-        let _ = session.write_line(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "method": "skills/list",
-            "params": params,
-        }));
         // And the model menu (#25), answered the same way and announced as
         // `SessionEvent::Models`; a server without the method, or one that
         // never answers, just leaves the picker on the fallback catalog.
@@ -373,6 +375,8 @@ impl CodexSession {
             "method": "model/list",
             "params": {},
         }));
+        let request = lock(&session.queue).initialize(&session.thread_id);
+        let _ = session.write_line(&request);
         Ok(session)
     }
 
@@ -380,6 +384,7 @@ impl CodexSession {
         &mut self,
         config: &CodexConfig,
         steps: &Receiver<Result<HandshakeStep, String>>,
+        skills_ready: &Receiver<Result<(), String>>,
     ) -> Result<(), String> {
         // Ids 1 and 2 by construction — the reader correlates exactly these,
         // and the committed captures use the same sequence so replayed
@@ -390,11 +395,7 @@ impl CodexSession {
             "jsonrpc": "2.0",
             "id": id,
             "method": "initialize",
-            "params": {
-                "clientInfo": {"name": "ferrite", "version": env!("CARGO_PKG_VERSION")},
-                "capabilities": {"experimentalApi":true,"requestAttestation":false,
-                    "extensions":{"openai/form":{}}}
-            },
+            "params": {"capabilities":{"experimentalApi":true}, "clientInfo": {"name": "ferrite", "version": env!("CARGO_PKG_VERSION")}},
         }))
         .map_err(|e| format!("could not write initialize: {e}"))?;
         match await_step(steps, "initialize")? {
@@ -406,6 +407,22 @@ impl CodexSession {
         // acknowledgement before any thread traffic.
         self.write_line(&serde_json::json!({"jsonrpc": "2.0", "method": "initialized"}))
             .map_err(|e| format!("could not write initialized: {e}"))?;
+
+        // Skills are invocation metadata, not an optional decoration. Resolve
+        // them before thread/start so resumed history cannot block discovery
+        // behind the bounded event stream, and first send is always ready.
+        let mut params = serde_json::json!({});
+        if let Some(cwd) = &config.cwd {
+            params["cwds"] = serde_json::json!([cwd]);
+        }
+        self.write_line(&serde_json::json!({
+            "jsonrpc": "2.0", "id": SKILLS_REQUEST_ID,
+            "method": "skills/list", "params": params,
+        }))
+        .map_err(|error| format!("could not request skills: {error}"))?;
+        skills_ready
+            .recv_timeout(HANDSHAKE_TIMEOUT)
+            .map_err(|error| format!("skills/list did not complete: {error}"))??;
 
         let id = self.take_request_id();
         let (method, mut params) = match &config.resume {
@@ -488,6 +505,26 @@ impl CodexSession {
     /// `@path` tokens naming real files ride as `{"type":"mention"}` items —
     /// the server never intercepts slash text, so this seam is where the
     /// Composer's picks become real.
+    pub fn enqueue(&mut self, client_id: &str, text: &str) -> io::Result<()> {
+        let input = wire::input_items(text, &lock(&self.skills), self.cwd.as_deref());
+        let request = {
+            let mut queue = lock(&self.queue);
+            if !queue.supported {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "Codex has not confirmed native queue support",
+                ));
+            }
+            queue.add(client_id, serde_json::json!(input))
+        };
+        self.write_line(&request)
+    }
+
+    pub fn cancel_queued(&mut self, id: &str) -> io::Result<()> {
+        let request = lock(&self.queue).delete(id);
+        self.write_line(&request)
+    }
+
     pub fn send(&mut self, text: &str) -> io::Result<()> {
         let input = wire::input_items(text, &lock(&self.skills), self.cwd.as_deref());
         // The Pane makes its own compact preview; request the detailed
@@ -500,6 +537,7 @@ impl CodexSession {
         if let Some(model) = &self.model_override {
             params["model"] = serde_json::json!(model);
         }
+        self.apply_project_roots(&mut params);
         let id = self.take_request_id();
         lock(&self.requests).start(id)?;
         let result = self.write_line(&serde_json::json!({
@@ -650,6 +688,7 @@ impl CodexSession {
                 if let Some(model) = &self.model_override {
                     request["params"]["model"] = model.clone().into();
                 }
+                self.apply_project_roots(&mut request["params"]);
             }
             let result = self.write_line(&request);
             if result.is_err() {
@@ -705,6 +744,17 @@ impl CodexSession {
         let id = self.next_request_id;
         self.next_request_id += 1;
         id
+    }
+
+    fn apply_project_roots(&self, params: &mut serde_json::Value) {
+        if self.sandbox.as_deref() == Some("workspace-write")
+            && !self.additional_directories.is_empty()
+        {
+            params["sandboxPolicy"] = serde_json::json!({
+                "type": "workspaceWrite",
+                "writableRoots": self.additional_directories,
+            });
+        }
     }
 
     fn write_line(&mut self, value: &serde_json::Value) -> io::Result<()> {
@@ -772,10 +822,12 @@ fn read_stdout(
     requests: Arc<Mutex<requests::Requests>>,
     controls: Arc<Mutex<controls::Controls>>,
     skills: Arc<Mutex<Vec<crate::SessionCommand>>>,
+    skills_ready: SyncSender<Result<(), String>>,
     model_catalog: Arc<Mutex<Vec<crate::ModelInfo>>>,
     question_replies: Arc<Mutex<questions::Replies>>,
     native_questions: Arc<Mutex<questions::NativeRequests>>,
     file_search: Arc<Mutex<file_search::Requests>>,
+    queue: Arc<Mutex<queue::Queue>>,
     cwd: Option<PathBuf>,
 ) -> Receiver<Result<HandshakeStep, String>> {
     let (step_sender, steps) = sync_channel(2);
@@ -791,7 +843,11 @@ fn read_stdout(
         // Which handshake response is awaited: request 1, then request 2,
         // then none.
         let mut handshake = Some((step_sender, 1u64));
-        let mut catalogs = live_catalogs::Catalogs::new(cwd.as_deref());
+        // Skill discovery belongs to startup; model discovery stays optional.
+        // Skills are requested before thread/start so history backpressure
+        // cannot block readiness.
+        let mut menu_pending = true;
+        let mut catalogs = live_catalogs::Catalogs::after_startup(cwd.as_deref());
         loop {
             line.clear();
             match reader.read_until(b'\n', &mut line) {
@@ -812,6 +868,7 @@ fn read_stdout(
                     Some(Ok(result)) => match wire::parse_thread_response(&result) {
                         Some(thread) => {
                             turns.identify_main(&thread.thread_id);
+                            let queue_events = lock(&queue).identify(&result["thread"]);
                             // The Session announces itself the way every
                             // provider does; the values are the wire's, only
                             // the correlation is Ferrite's.
@@ -824,6 +881,11 @@ fn read_stdout(
                             // large resumed tree into the bounded event stream.
                             // Main's interrupt owner is already authoritative.
                             let _ = step_sender.send(Ok(HandshakeStep::Thread(Box::new(thread))));
+                            for event in queue_events {
+                                if sender.send(event).is_err() {
+                                    return;
+                                }
+                            }
                             if !publish_activity(update, &mut activity, &sender, &stdin) {
                                 return;
                             }
@@ -846,37 +908,39 @@ fn read_stdout(
                     None => handshake = Some((step_sender, pending)),
                 }
             }
+            if menu_pending {
+                if let Some(response) = wire::parse_response(text, SKILLS_REQUEST_ID) {
+                    menu_pending = false;
+                    let result = match response {
+                        Ok(result) => result,
+                        Err(error) => {
+                            let _ = skills_ready.send(Err(error));
+                            continue;
+                        }
+                    };
+                    if !result["data"].is_array() {
+                        let _ = skills_ready.send(Err("skills/list carried no data".into()));
+                        continue;
+                    }
+                    {
+                        let commands = wire::parse_skills(&result);
+                        *lock(&skills) = commands.clone();
+                        let _ = skills_ready.send(Ok(()));
+                        // Announce the menu on the event stream so the
+                        // cockpit can fold it (#23); a server listing no
+                        // skills announces nothing.
+                        if !commands.is_empty()
+                            && sender.send(SessionEvent::Commands { commands }).is_err()
+                        {
+                            return;
+                        }
+                    }
+                    continue;
+                }
+            }
             turns.observe(text);
             if let Ok(frame) = serde_json::from_str(text) {
                 if lock(&file_search).observe(&frame) {
-                    continue;
-                }
-                let control = turns
-                    .main_thread_id
-                    .as_deref()
-                    .and_then(|thread| lock(&controls).observe(&frame, thread));
-                if let Some(update) = control {
-                    for event in update.events {
-                        if sender.send(event).is_err() {
-                            return;
-                        }
-                    }
-                    if let Some(request) = update.request {
-                        let Some(stdin) = stdin.upgrade() else {
-                            return;
-                        };
-                        if let Err(error) = write_request(&stdin, &request) {
-                            lock(&controls).discard(&request);
-                            if sender
-                                .send(requests::notice(format!(
-                                    "Could not send Codex control: {error}"
-                                )))
-                                .is_err()
-                            {
-                                return;
-                            }
-                        }
-                    }
                     continue;
                 }
                 if let Some(update) = catalogs.observe(&frame) {
@@ -908,6 +972,45 @@ fn read_stdout(
                         }
                     }
                     continue;
+                }
+                let control = turns
+                    .main_thread_id
+                    .as_deref()
+                    .and_then(|thread| lock(&controls).observe(&frame, thread));
+                if let Some(update) = control {
+                    for event in update.events {
+                        if sender.send(event).is_err() {
+                            return;
+                        }
+                    }
+                    if let Some(request) = update.request {
+                        let Some(stdin) = stdin.upgrade() else {
+                            return;
+                        };
+                        if let Err(error) = write_request(&stdin, &request) {
+                            lock(&controls).discard(&request);
+                            if sender
+                                .send(requests::notice(format!(
+                                    "Could not send Codex control: {error}"
+                                )))
+                                .is_err()
+                            {
+                                return;
+                            }
+                        }
+                    }
+                    continue;
+                }
+                let (events, queue_requests) = lock(&queue).observe(&frame);
+                for event in events {
+                    if sender.send(event).is_err() {
+                        return;
+                    }
+                }
+                for request in queue_requests {
+                    if let Some(stdin) = stdin.upgrade() {
+                        let _ = write_request(&stdin, &request);
+                    }
                 }
                 let (response, interrupt) = {
                     let mut requests = lock(&requests);
@@ -1134,6 +1237,7 @@ fn spawn_error(program: &str, e: io::Error) -> CodexSpawnError {
 fn check_version(program: &str) -> Result<(), CodexSpawnError> {
     let output = Command::new(program)
         .arg("--version")
+        .no_console_window()
         .output()
         .map_err(|e| spawn_error(program, e))?;
     if !output.status.success() {

@@ -58,9 +58,22 @@ impl Control {
     }
 }
 
-struct Scripted(mpsc::Receiver<SessionEvent>);
+struct Scripted(mpsc::Receiver<SessionEvent>, mpsc::Sender<SessionEvent>);
 
 impl Session for Scripted {
+    fn enqueue(&mut self, id: &str, text: &str) -> io::Result<()> {
+        self.1
+            .send(SessionEvent::Queue(ferrite_core::QueueEvent::Accepted(
+                ferrite_core::QueuedPrompt {
+                    id: id.into(),
+                    client_id: id.into(),
+                    text: text.into(),
+                },
+            )))
+            .unwrap();
+        Ok(())
+    }
+
     fn events(&self) -> &mpsc::Receiver<SessionEvent> {
         &self.0
     }
@@ -85,8 +98,8 @@ impl Spawner for Control {
                 model: request.model.unwrap_or("model").to_owned(),
             })
             .unwrap();
-        sessions.push(sender);
-        Ok(Box::new(Scripted(events)))
+        sessions.push(sender.clone());
+        Ok(Box::new(Scripted(events, sender)))
     }
 }
 
@@ -291,7 +304,7 @@ fn notifications_discard_a_parked_deferral_but_keep_existing_notices() {
 }
 
 #[test]
-fn a_held_prompt_going_out_at_turn_end_is_not_a_finish() {
+fn a_native_pending_prompt_suppresses_finish_until_provider_consumption() {
     let mut h = Harness::new("held", 2);
     let second = h.threads[1];
     h.cockpit.send(second, "first".into());
@@ -308,8 +321,12 @@ fn a_held_prompt_going_out_at_turn_end_is_not_a_finish() {
     );
     assert_eq!(
         h.cockpit.thread(second).unwrap().queued(),
-        None,
-        "the held prompt went out"
+        Some("and then this")
+    );
+    // An authoritative snapshot says the provider consumed its pending entry.
+    h.control.emit(
+        1,
+        SessionEvent::Queue(ferrite_core::QueueEvent::Snapshot(Vec::new())),
     );
 
     h.control
@@ -530,6 +547,7 @@ impl Replay {
             &program,
             format!(
                 "#!/bin/sh\ncase \"$1\" in --version) echo 'codex-cli 0.153.4'; exit 0;; esac\n\
+             echo '{{\"id\":3,\"result\":{{\"data\":[]}}}}'\n\
              echo '{{\"id\":1,\"result\":{{\"userAgent\":\"stub\"}}}}'\n\
              cat {}\nprintf '%s\\n' '{}'\nexec cat > /dev/null\n",
                 quoted(&fixture),
@@ -567,8 +585,7 @@ impl Spawner for Replay {
                     model: "model".into(),
                 })
                 .unwrap();
-            std::mem::forget(sender);
-            return Ok(Box::new(Scripted(events)));
+            return Ok(Box::new(Scripted(events, sender)));
         }
         let program = self.program.display().to_string();
         let inner: Box<dyn Session> = match self.provider {

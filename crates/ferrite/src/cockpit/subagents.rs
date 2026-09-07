@@ -816,6 +816,19 @@ impl CockpitView {
                 theme::TEXT_MUTED,
             ));
         }
+        if let Some(input) = pane::approval_input(
+            &request.decision,
+            &self.panes[index].rich,
+            format!(
+                "approval-input-request-{}-{}-{}",
+                thread.get(),
+                handle.generation,
+                handle.serial
+            )
+            .into(),
+        ) {
+            card = card.child(input);
+        }
         if let Some((failed, error)) = &self.panes[index].request_error {
             if failed == &handle {
                 card = card.child(components::label(
@@ -882,6 +895,7 @@ impl CockpitView {
                         let handle = handle.clone();
                         section = section.child(
                             Checkbox::new(("question-checkbox", qi * 256 + oi))
+                                .debug_selector(move || format!("question-choice-{qi}-{oi}"))
                                 .checked(checked)
                                 .disabled(request.submitting)
                                 .accessibility_label(option.label.clone())
@@ -1110,6 +1124,7 @@ impl CockpitView {
                             .child(crate::components::composer_join(
                                 radius,
                                 rgb(theme::RAISED).into(),
+                                gpui::rgba(theme::COMPOSER_EDGE).into(),
                             ))
                             .child(
                                 GroupBox::new()
@@ -1639,23 +1654,6 @@ impl CockpitView {
             .0
             .borrow_mut()
             .retain(|handle, _| pending.iter().any(|request| &request.handle == handle));
-    }
-
-    pub(super) fn toggle_subject_tool(
-        &mut self,
-        thread: ThreadId,
-        subject: &Subject,
-        call: &pane::DisclosureId,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(index) = self.pane_for(thread) else {
-            return;
-        };
-        if &self.panes[index].selected != subject {
-            return;
-        }
-        self.toggle_tool(thread, call, window, cx);
     }
 
     pub(super) fn answer_subject(&mut self, answer: Answer, cx: &mut Context<Self>) {

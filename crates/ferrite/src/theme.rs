@@ -354,9 +354,9 @@ pub const ROW_TEXT_W: f32 = NAV_WIDTH - 2.0 * NAV_TREE_PAD - 2.0 * ROW_PAD_X;
 /// 43px — a Group parent row: 6 + 16.25 + 1 + 13.75 + 6.
 #[allow(dead_code)]
 pub const GROUP_ROW_H: f32 = 43.0;
-/// 56.5px — a Thread row: 6 + 15 + 1 + 13.75 + 1 + 13.75 + 6.
+/// 41.75px — a Thread row: 6 + 15 + 1 + 13.75 + 6.
 #[allow(dead_code)]
-pub const THREAD_ROW_H: f32 = 56.5;
+pub const THREAD_ROW_H: f32 = 41.75;
 /// 16px between Group blocks; 6px between a Group row and its members;
 /// 2px between sibling rows; 24px above the solo section.
 #[allow(dead_code)]
@@ -415,6 +415,19 @@ pub const STATUS_HALO_INSET: f32 = 4.0;
 /// 1.4s — one full breath of a working Thread's dot. Slow enough to read
 /// as breathing rather than blinking.
 pub const STATUS_PULSE_MS: u64 = 1_400;
+
+/// The Ferrite progress mark follows the timing and geometry of the supplied
+/// animated logo. These are artwork tokens rather than general motion tokens:
+/// the SVG's 1254-unit viewBox is the coordinate system behind both offsets.
+pub const FERRITE_SNAP_MS: u64 = 3_000;
+pub const FERRITE_SHARD_X: f32 = 38.0 / 1254.0;
+pub const FERRITE_SHARD_Y: f32 = 46.0 / 1254.0;
+pub const FERRITE_PULL_START: f32 = 0.12;
+pub const FERRITE_PULL_END: f32 = 0.34;
+pub const FERRITE_HOLD_END: f32 = 0.54;
+pub const FERRITE_SNAP_END: f32 = 0.615;
+pub const FERRITE_PULL_EASING: [f32; 4] = [0.4, 0.0, 0.2, 1.0];
+pub const FERRITE_SNAP_EASING: [f32; 4] = [0.16, 1.0, 0.3, 1.0];
 /// The dimmest the halo goes: never all the way out, so the dot keeps a
 /// ring at the bottom of the breath instead of flickering off.
 pub const PULSE_MIN: f32 = 0.15;
@@ -516,6 +529,10 @@ pub const COMPOSER_PAD_B: f32 = 8.0;
 pub const COMPOSER_ROW_H: f32 = 20.0;
 #[allow(dead_code)]
 pub const COMPOSER_GAP: f32 = 3.0;
+
+/// Clearance between the floating attachment island and the prompt's
+/// top edge, so the island reads as its own surface.
+pub const ATTACHMENT_ISLAND_GAP: f32 = 6.0;
 pub const CARET_W: f32 = 2.0;
 #[allow(dead_code)]
 pub const CARET_H: f32 = 14.0;

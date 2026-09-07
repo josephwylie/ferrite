@@ -354,13 +354,24 @@ fn ast_to_node(source: &str, value: mdast::Node, cx: &mut NodeContext) -> BlockN
             }
         }
         Node::List(list) => {
+            // mdast records blank-separated sibling items on the list. Carry
+            // that presentation fact to its items, which are what the native
+            // node renderer spaces.
+            let list_is_loose = list.spread;
             let children = list
                 .children
                 .into_iter()
-                .map(|c| ast_to_node(source, c, cx))
+                .map(|c| {
+                    let mut child = ast_to_node(source, c, cx);
+                    if let BlockNode::ListItem { spread, .. } = &mut child {
+                        *spread |= list_is_loose;
+                    }
+                    child
+                })
                 .collect();
             BlockNode::List {
                 ordered: list.ordered,
+                start: list.start.unwrap_or(1),
                 children,
                 span: new_span(list.position, cx),
             }

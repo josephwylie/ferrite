@@ -32,6 +32,7 @@ fn live_config() -> CodexConfig {
     CodexConfig {
         program: std::env::var("FERRITE_CODEX_BIN").unwrap_or_else(|_| "codex".into()),
         cwd: Some(std::env::temp_dir()),
+        additional_directories: Vec::new(),
         model: Some("gpt-5.4-mini".into()),
         effort: None,
         approval_policy: Some("never".into()),

@@ -1,0 +1,44 @@
+  ┌───────┬───────┬─────────────────────┐                                                                               
+  │ Name  │ Count │        Note         │                                                                               
+  ├───────┼───────┼─────────────────────┤                                                                               
+  │ Alpha │     2 │ two  spaces         │                                                                               
+  ├───────┼───────┼─────────────────────┤                                                                               
+  │ Beta  │    12 │ a longer table cell │                                                                               
+  └───────┴───────┴─────────────────────┘                                                                               
+                                                                                                                        
+  ---                                                                                                                   
+                                                                                                                        
+  one two                                                                                                               
+  one  two   three    four                                                                                              
+      four leading spaces                                                                                               
+        actual tab character                                                                                            
+  trailing two spaces:                                                                                                  
+                                                                                                                        
+  Unicode: café naïve → ✓ 界 é                                                                                          
+  0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrst
+  uvwxyz                                                                                                                
+                                                                                                                        
+✻ Baked for 10s · done 9:02 pm                                                                                          
+                                                                                                                        
+❯ /model                                                                                                                
+  ⎿  Kept model as Fable 5.1                                                                                            
+                                                                                                                        
+❯ Run only this harmless waiting command once: python3 -c 'import time; print("waiting fixture", flush=True);           
+  time.sleep(20); print("finished fixture", flush=True)'. Do not write files or use external tools. I will test the     
+  queue and interrupt controls while it waits.                                                                          
+                                                                                                                        
+⏺ Running the 20-second waiting command once.                                                                           
+                                                                                                                        
+  Print, wait 20 seconds, print again · 22s                                                                             
+  ⎿  $ python3 -c 'import time; print("waiting fixture", flush=True); time.sleep(20); print("finished fixture",         
+     flush=True)'                                                                                                       
+                                                                                                                        
+✶ Calculating… (4s · ↓ 63 tokens)                                                                                       
+  ⎿  Tip: Run tasks in the cloud while you keep coding locally · clau.de/web                                            
+                                                                                                                        
+  ❯ After this finishes, reply only: queued fixture.                                                                    
+                                                                                                      ● high · /effort  
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ Press up to edit queued messages                                                                                      
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on · esc to interrupt                                                                              /rc  

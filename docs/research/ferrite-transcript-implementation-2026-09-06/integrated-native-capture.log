@@ -1,0 +1,107 @@
+   Compiling ferrite v0.1.0 (/Users/josephwylie/Desktop/Projects/ferrite/crates/ferrite)
+warning: constant `FERRITE_UPPER` is never used
+  --> crates/ferrite/src/icons.rs:87:7
+   |
+87 | const FERRITE_UPPER: &str = "icons/ferrite-upper.svg";
+   |       ^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: constant `FERRITE_LOWER` is never used
+  --> crates/ferrite/src/icons.rs:88:7
+   |
+88 | const FERRITE_LOWER: &str = "icons/ferrite-lower.svg";
+   |       ^^^^^^^^^^^^^
+
+warning: function `animated_ferrite_icon` is never used
+   --> crates/ferrite/src/icons.rs:144:8
+    |
+144 | pub fn animated_ferrite_icon(size: f32, id: impl Into<ElementId>) -> AnyElement {
+    |        ^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `ferrite_snap` is never used
+   --> crates/ferrite/src/icons.rs:191:4
+    |
+191 | fn ferrite_snap(phase: f32) -> f32 {
+    |    ^^^^^^^^^^^^
+
+warning: function `cubic_bezier` is never used
+   --> crates/ferrite/src/icons.rs:222:4
+    |
+222 | fn cubic_bezier(x: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
+    |    ^^^^^^^^^^^^
+
+warning: method `ordered_solos` is never used
+   --> crates/ferrite/src/nav.rs:136:12
+    |
+121 | impl NavState {
+    | ------------- method in this implementation
+...
+136 |     pub fn ordered_solos(&self) -> Vec<&ThreadRow> {
+    |            ^^^^^^^^^^^^^
+
+warning: function `model_label` is never used
+    --> crates/ferrite/src/pane.rs:2257:8
+     |
+2257 | pub fn model_label(model: &str) -> SharedString {
+     |        ^^^^^^^^^^^
+
+warning: constant `FERRITE_SNAP_MS` is never used
+   --> crates/ferrite/src/theme.rs:422:11
+    |
+422 | pub const FERRITE_SNAP_MS: u64 = 3_000;
+    |           ^^^^^^^^^^^^^^^
+
+warning: constant `FERRITE_SHARD_X` is never used
+   --> crates/ferrite/src/theme.rs:423:11
+    |
+423 | pub const FERRITE_SHARD_X: f32 = 38.0 / 1254.0;
+    |           ^^^^^^^^^^^^^^^
+
+warning: constant `FERRITE_SHARD_Y` is never used
+   --> crates/ferrite/src/theme.rs:424:11
+    |
+424 | pub const FERRITE_SHARD_Y: f32 = 46.0 / 1254.0;
+    |           ^^^^^^^^^^^^^^^
+
+warning: constant `FERRITE_PULL_START` is never used
+   --> crates/ferrite/src/theme.rs:425:11
+    |
+425 | pub const FERRITE_PULL_START: f32 = 0.12;
+    |           ^^^^^^^^^^^^^^^^^^
+
+warning: constant `FERRITE_PULL_END` is never used
+   --> crates/ferrite/src/theme.rs:426:11
+    |
+426 | pub const FERRITE_PULL_END: f32 = 0.34;
+    |           ^^^^^^^^^^^^^^^^
+
+warning: constant `FERRITE_HOLD_END` is never used
+   --> crates/ferrite/src/theme.rs:427:11
+    |
+427 | pub const FERRITE_HOLD_END: f32 = 0.54;
+    |           ^^^^^^^^^^^^^^^^
+
+warning: constant `FERRITE_SNAP_END` is never used
+   --> crates/ferrite/src/theme.rs:428:11
+    |
+428 | pub const FERRITE_SNAP_END: f32 = 0.615;
+    |           ^^^^^^^^^^^^^^^^
+
+warning: constant `FERRITE_PULL_EASING` is never used
+   --> crates/ferrite/src/theme.rs:429:11
+    |
+429 | pub const FERRITE_PULL_EASING: [f32; 4] = [0.4, 0.0, 0.2, 1.0];
+    |           ^^^^^^^^^^^^^^^^^^^
+
+warning: constant `FERRITE_SNAP_EASING` is never used
+   --> crates/ferrite/src/theme.rs:430:11
+    |
+430 | pub const FERRITE_SNAP_EASING: [f32; 4] = [0.16, 1.0, 0.3, 1.0];
+    |           ^^^^^^^^^^^^^^^^^^^
+
+warning: `ferrite` (bin "ferrite") generated 16 warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.91s
+warning: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running `/Users/josephwylie/.cache/codingos-target/debug/ferrite --visual-reference /tmp/ferrite-transcript-integrated-captures`

@@ -1,0 +1,44 @@
+⏺ The command printed first  second   third to stdout, slept 8 seconds, printed fixture stderr to stderr, and exited    
+  with code 7 as designed, not retried.                                                                                 
+                                                                                                                        
+✻ Crunched for 14s · done 8:58 pm                                                                                       
+                                                                                                                        
+❯ For a harmless long-output display test, run exactly once: python3 -c 'for i in range(1,41): print(f"row {i:02d}      
+  alpha   beta    gamma")'. Do not write files or inspect anything else. Then respond with only 'Output complete.'      
+                                                                                                                        
+⏺ Running the 40-row output command once.                                                                               
+                                                                                                                        
+  Ran 1 shell command                                                                                                   
+                                                                                                                        
+⏺ Output complete.                                                                                                      
+                                                                                                                        
+✻ Cooked for 5s · done 8:59 pm                                                                                          
+                                                                                                                        
+❯ Use AskUserQuestion to show a single-choice question titled Display with two options Compact and Detailed, each with  
+  a short description. This is only a disposable UI capture; do not change any setting or file. After I answer,         
+  acknowledge my selection in one sentence.                                                                             
+                                                                                                                        
+⏺ Showing the Display question.                                                                                         
+                                                                                                                        
+⏺ User answered Claude's questions:                                                                                     
+  ⎿  · Which display mode do you prefer? → Detailed                                                                     
+                                                                                                                        
+⏺ You selected Detailed, and no setting or file was changed.                                                            
+                                                                                                                        
+✻ Crunched for 7s · done 9:01 pm                                                                                        
+                                                                                                                        
+❯ Read formatting.md in this synthetic directory. Reply with its exact complete contents as Markdown, preserving all    
+  whitespace. Do not wrap the whole response in an extra code fence. No preface or suffix. Do not write or change files 
+  or use external tools.                                                                                                
+                                                                                                                        
+⏺ Reading formatting.md.                                                                                                
+                                                                                                                        
+⏺ Reading 1 file…                                                                                                       
+                                                                                                                        
+· Propagating… (3s · ↓ 11 tokens)                                                                                       
+  ⎿  Tip: Paste images into Claude Code using control+v (not cmd+v!)                                                    
+                                                                                                                        
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯                                                                                                                       
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on · esc to interrupt                                                                              /rc  

@@ -1,0 +1,44 @@
+/ T R A N S C R I P T / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / 
+row 09  alpha   beta    gamma                                                                                           
+row 10  alpha   beta    gamma                                                                                           
+row 11  alpha   beta    gamma                                                                                           
+row 12  alpha   beta    gamma                                                                                           
+row 13  alpha   beta    gamma                                                                                           
+row 14  alpha   beta    gamma                                                                                           
+row 15  alpha   beta    gamma                                                                                           
+row 16  alpha   beta    gamma                                                                                           
+row 17  alpha   beta    gamma                                                                                           
+row 18  alpha   beta    gamma                                                                                           
+row 19  alpha   beta    gamma                                                                                           
+row 20  alpha   beta    gamma                                                                                           
+row 21  alpha   beta    gamma                                                                                           
+row 22  alpha   beta    gamma                                                                                           
+row 23  alpha   beta    gamma                                                                                           
+row 24  alpha   beta    gamma                                                                                           
+row 25  alpha   beta    gamma                                                                                           
+row 26  alpha   beta    gamma                                                                                           
+row 27  alpha   beta    gamma                                                                                           
+row 28  alpha   beta    gamma                                                                                           
+row 29  alpha   beta    gamma                                                                                           
+row 30  alpha   beta    gamma                                                                                           
+row 31  alpha   beta    gamma                                                                                           
+row 32  alpha   beta    gamma                                                                                           
+row 33  alpha   beta    gamma                                                                                           
+row 34  alpha   beta    gamma                                                                                           
+row 35  alpha   beta    gamma                                                                                           
+row 36  alpha   beta    gamma                                                                                           
+row 37  alpha   beta    gamma                                                                                           
+row 38  alpha   beta    gamma                                                                                           
+row 39  alpha   beta    gamma                                                                                           
+row 40  alpha   beta    gamma                                                                                           
+✓ • 0ms                                                                                                                 
+                                                                                                                        
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                                                                                                                        
+• Output complete.                                                                                                      
+                                                                                                                        
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────── 100% ─
+ ↑/↓ to scroll   pgup/pgdn to page   home/end to jump                                                                   
+ q to quit   esc to edit prev                                                                                           
+                                                                                                                        

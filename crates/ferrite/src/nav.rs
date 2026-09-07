@@ -10,11 +10,9 @@
 //! `cockpit.rs`, the same split `pane_cell` uses.
 //!
 //! What the nav deliberately does **not** draw, per the approved prototype:
-//! no status dot, no state word, no state colour, no counts, no badges, no
-//! provider text tag, no section headers, no dividers, and no border on the
-//! column itself. A running Thread and a blocked Thread are pixel-identical
-//! here — state lives in the Pane, position lives in the nav. The only ink
-//! that ever moves is the selected fill, and it lands on the **Group**.
+//! no state word, no badges, no provider text tag, no section headers, no
+//! dividers, and no border on the column itself. Thread state stays in its
+//! compact dot; the selected fill lands on the **Group** and focused Thread.
 //!
 //! Every colour and metric is a `theme` token; this file holds no literal
 //! of its own. Everything outside a Pane is the system UI face, which —
@@ -28,6 +26,7 @@ use ferrite_core::ThreadId;
 use std::time::Duration;
 
 use gpui::component::button::Button;
+use gpui::component::tooltip::Tooltip;
 use gpui::prelude::*;
 use gpui::{
     div, point, pulsating_between, px, radians, relative, rgb, rgba, Animation, AnimationExt,
@@ -185,8 +184,8 @@ pub struct GroupBlock {
 }
 
 /// One Thread's row — identical whether it is a Group member or a solo; only
-/// the container differs. Title, Project, checkout, and the provider mark in
-/// the top-right corner. No status dot, no state label, no counts.
+/// the container differs. Title, Project, and the provider mark in
+/// the top-right corner, plus a subagent count when the Thread has children.
 pub struct ThreadRow {
     pub thread: ThreadId,
     pub name: SharedString,
@@ -195,8 +194,6 @@ pub struct ThreadRow {
     pub status: RowStatus,
     /// `None` → line 2 draws neither icon nor label, and keeps its height.
     pub project: Option<SharedString>,
-    /// `None` → line 3 draws neither icon nor label, and keeps its height.
-    pub branch: Option<SharedString>,
     /// `None` → no logomark. Never a `cl`/`cx` string.
     pub provider: Option<Provider>,
     /// This is the focused Pane's Thread: it carries the selected fill and
@@ -204,8 +201,11 @@ pub struct ThreadRow {
     /// pair reads as one selection.
     pub current: bool,
     /// How long since the Thread was last used — `40m`, `2h`, `3d` — at the
-    /// tail of the checkout line. `None` says nothing at all.
+    /// tail of the Project line. `None` says nothing at all.
     pub last_used: Option<SharedString>,
+    /// Subagents known for this Thread. Zero draws nothing; a positive
+    /// count is named on line 2 so the number is meaningful without a legend.
+    pub subagents: usize,
 }
 
 /// A Thread row's state, for its dot. The nav's original no-dot ruling
@@ -507,6 +507,20 @@ pub fn filter_option(index: usize, option: &FilterOption) -> Stateful<Div> {
         )
 }
 
+/// The visible door to Project management: the pencil beside the filter
+/// trigger. It is drawn only while the filter names a Project — `All
+/// Projects` is a filter state, not a Project, and has nothing to edit.
+pub fn project_edit_button() -> gpui::component::button::Button {
+    components::button("project-edit")
+        .tab_stop(true)
+        .debug_selector(|| "project-edit".into())
+        .w(px(ICON_BUTTON))
+        .h(px(ICON_BUTTON))
+        .p_0()
+        .tooltip("Edit Project")
+        .child(icon(icons::PENCIL, ROW_ICON, TEXT_MUTED))
+}
+
 /// The filter menu's last row: a verb, not an option — `Add Project…`
 /// with a `+` mark, in the muted ink until hovered. The caller wires the
 /// press to the folder picker.
@@ -692,8 +706,8 @@ pub fn members(rows: Vec<AnyElement>) -> Div {
         .children(rows)
 }
 
-/// The 56.5px Thread row: title and provider mark on line 1, the Project on
-/// line 2, the checkout on line 3. The prototype's grid is
+/// The 41.75px Thread row: title and provider mark on line 1, the Project
+/// on line 2. The prototype's grid is
 /// `minmax(0, 1fr) 14px` with an 8px column gap; gpui's grid has uniform
 /// tracks only, so line 1 is flex — a `flex_1().min_w_0()` title beside a
 /// fixed 14px mark is the same two columns, and the mark's box is drawn even
@@ -745,30 +759,73 @@ pub fn thread_row_with_title(row: &ThreadRow, title: impl IntoElement) -> Statef
                     .child(provider_mark(row.provider, PROVIDER_MARK)),
             ),
     )
-    .child(meta_line(icons::FOLDER, row.project.clone(), TEXT_2))
     .child(
-        meta_line(icons::BRANCH, row.branch.clone(), TEXT_MUTED)
-            .child(since_tail(row.thread, row.last_used.clone())),
+        meta_line(icons::FOLDER, row.project.clone(), TEXT_2).child(meta_tail(
+            row.thread,
+            row.subagents,
+            row.last_used.clone(),
+        )),
     )
+}
+
+/// The compact facts at the right edge of line 2. They stay one group so
+/// free space separates them from the Project, not from each other.
+fn meta_tail(thread: ThreadId, subagents: usize, since: Option<SharedString>) -> Div {
+    let separated = subagents > 0 && since.is_some();
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .ml_auto()
+        .pl(px(ROW_ICON_GAP))
+        .gap(px(ROW_ICON_GAP))
+        .child(subagent_tail(thread, subagents))
+        .children(separated.then(|| meta_text().flex_shrink_0().child("·")))
+        .child(since_tail(thread, since))
+}
+
+/// The number of subagents attached to a Thread. The noun keeps a
+/// bare number from competing with recency, and singular/plural copy keeps
+/// the compact line natural. Threads without children spend no space here.
+fn subagent_tail(thread: ThreadId, count: usize) -> Div {
+    let cell = meta_text()
+        .flex_shrink_0()
+        .debug_selector(move || format!("nav-subagents-{}", thread.get()));
+    let Some(label) = subagent_label(count) else {
+        return cell;
+    };
+    cell.child(label)
+}
+
+fn subagent_label(count: usize) -> Option<SharedString> {
+    (count > 0).then(|| {
+        SharedString::from(if count == 1 {
+            "1 subagent".to_owned()
+        } else {
+            format!("{count} subagents")
+        })
+    })
 }
 
 /// The age at the tail of a row's last line — `40m`, `2h`, `3d`. It is
 /// pushed right by its own auto margin rather than by a spacer, so a line
-/// whose branch is unknown still puts the age where every other row's age
+/// whose Project is unknown still puts the age where every other row's age
 /// is. Never a date: the nav says how long ago, and the Pane says when.
 fn since_tail(thread: ThreadId, label: Option<SharedString>) -> Div {
-    let cell = div()
+    let cell = meta_text()
         .flex_shrink_0()
-        .ml_auto()
-        .pl(px(ROW_ICON_GAP))
         .debug_selector(move || format!("nav-since-{}", thread.get()));
     let Some(label) = label else {
         return cell;
     };
-    cell.text_size(px(FS_SM))
+    cell.child(label)
+}
+
+fn meta_text() -> Div {
+    div()
+        .text_size(px(FS_SM))
         .line_height(relative(LINE_TIGHT))
         .text_color(rgb(TEXT_MUTED))
-        .child(label)
 }
 
 /// One run of solo Threads — those no Group claims — at root indent with
@@ -925,8 +982,10 @@ pub fn rail_items() -> Div {
 /// the Group's, not the Thread's — the same fill, carried by the same
 /// selection, at the same strength as the expanded tree.
 pub fn rail_item(row: &ThreadRow, current: bool) -> Stateful<Div> {
+    let title = row.name.clone();
     let cell = div()
         .id(("nav-rail-item", row.thread.get() as usize))
+        .tooltip(move |window, cx| Tooltip::new(title.clone()).build(window, cx))
         .flex()
         .flex_shrink_0()
         .items_center()
@@ -1028,10 +1087,10 @@ mod tests {
             status: RowStatus::Idle,
             name: "thread-08".into(),
             project: Some("ferrite".into()),
-            branch: Some("codex/prototype-32".into()),
             provider,
             current,
             last_used: Some("2h".into()),
+            subagents: 2,
         }
     }
 
@@ -1101,10 +1160,10 @@ mod tests {
             status: RowStatus::Idle,
             name: "thread-09".into(),
             project: None,
-            branch: None,
             provider: None,
             current: false,
             last_used: None,
+            subagents: 0,
         };
         let height = |mut drawn: Stateful<Div>| drawn.style().size.height;
         assert_eq!(height(thread_row(&bare)), height(thread_row(&thread(None))));
@@ -1140,6 +1199,13 @@ mod tests {
             height(thread_row(&thread(Some(Provider::Claude))))
         );
         assert_eq!(height(thread_row(&working)), Some(px(THREAD_ROW_H).into()));
+    }
+
+    #[test]
+    fn subagent_count_is_hidden_at_zero_and_uses_natural_copy() {
+        assert_eq!(subagent_label(0), None);
+        assert_eq!(subagent_label(1).as_deref(), Some("1 subagent"));
+        assert_eq!(subagent_label(3).as_deref(), Some("3 subagents"));
     }
 
     /// The nav column draws no border on any edge: Soft separates the

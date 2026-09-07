@@ -117,7 +117,7 @@ impl<'a> ToolActivity<'a> {
             .iter()
             .take_while(|block| matches!(&block.body, Body::Tool(_)))
             .count();
-        if len < 2 {
+        if len == 0 {
             return None;
         }
         let blocks = &blocks[..len];
@@ -128,6 +128,9 @@ impl<'a> ToolActivity<'a> {
             )
             .count();
         let failed = blocks.iter().filter(|block| matches!(&block.body, Body::Tool(tool) if matches!(tool.state, ToolState::Failed(_)))).count();
+        if len == 1 && running > 0 {
+            return None;
+        }
         Some(Self {
             blocks,
             running,
@@ -318,6 +321,12 @@ pub enum Input {
         block: BlockId,
         tokens: Vec<Token>,
     },
+    /// A completion fact observed while the turn was live. Replay must use
+    /// these stored values, never a fresh clock or wall time.
+    CompletionObservation {
+        elapsed_ms: u64,
+        completed_at: String,
+    },
 }
 
 /// What one apply changed.
@@ -378,6 +387,8 @@ pub enum Boundary {
 pub struct Transcript {
     blocks: Vec<Block>,
     last_id: u64,
+    /// Monotonic presentation version for cached transcript renderers.
+    revision: u64,
     /// The Block still growing, and the raw markdown it was folded from.
     open: Option<BlockId>,
     source: String,
@@ -495,6 +506,7 @@ impl Transcript {
         Self {
             blocks: Vec::new(),
             last_id: 0,
+            revision: 0,
             open: None,
             source: String::new(),
             highlighter,
@@ -527,6 +539,11 @@ impl Transcript {
         self.status
     }
 
+    /// Advances whenever transcript-owned presentation state may have changed.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
     pub(crate) fn set_attention(&mut self, pending: bool, busy: bool) {
         if pending {
             self.status = Status::Blocked;
@@ -537,6 +554,7 @@ impl Transcript {
                 Status::Idle
             };
         }
+        self.advance_revision();
     }
 
     pub(crate) fn clear_activity(&mut self) -> Update {
@@ -545,10 +563,12 @@ impl Transcript {
         }
         self.turn_started = None;
         self.progress.disconnected();
-        Update {
+        let update = Update {
             dirty: self.retire_tools(),
             ..Update::default()
-        }
+        };
+        self.advance_revision();
+        update
     }
 
     pub(crate) fn runtime(&self) -> Runtime {
@@ -612,6 +632,7 @@ impl Transcript {
         self.mcp_servers = runtime.mcp_servers;
         self.mcp_authorizations = runtime.mcp_authorizations;
         self.rate_limits = runtime.rate_limits;
+        self.advance_revision();
     }
 
     pub fn model(&self) -> Option<&str> {
@@ -738,6 +759,7 @@ impl Transcript {
             Status::Idle => self.turn_started = None,
             _ => {}
         }
+        self.advance_revision();
         update
     }
 
@@ -758,6 +780,19 @@ impl Transcript {
     /// of a superset event model — a wildcard would silently render nothing.
     fn fold(&mut self, input: Input) -> Update {
         match input {
+            Input::CompletionObservation {
+                elapsed_ms,
+                completed_at,
+            } => {
+                let elapsed = elapsed_ms as f64 / 1_000.0;
+                let id = self.push(Body::Meta(format!(
+                    "Completed · {elapsed:.1}s elapsed · {completed_at}"
+                )));
+                Update {
+                    dirty: vec![id],
+                    ..Update::default()
+                }
+            }
             Input::Event(SessionEvent::ReasoningSummaryPart {
                 item_id,
                 summary_index,
@@ -1213,7 +1248,7 @@ impl Transcript {
             // Block, nothing dirty.
             Input::Event(SessionEvent::Commands { .. }) => Update::default(),
             Input::Event(SessionEvent::PermissionMode { .. }) => Update::default(),
-            Input::Event(SessionEvent::Models { .. }) => Update::default(),
+            Input::Event(SessionEvent::Models { .. } | SessionEvent::Queue(_)) => Update::default(),
             Input::Event(SessionEvent::McpServers { servers }) => {
                 self.mcp_servers = servers;
                 Update::default()
@@ -1448,6 +1483,10 @@ impl Transcript {
     fn mint(&mut self) -> BlockId {
         self.last_id += 1;
         BlockId(self.last_id)
+    }
+
+    fn advance_revision(&mut self) {
+        self.revision = self.revision.saturating_add(1);
     }
 }
 
@@ -1723,6 +1762,38 @@ mod tests {
     use crate::Decision;
 
     #[test]
+    fn completed_single_tool_has_a_compact_summary_without_crossing_commentary() {
+        let mut transcript = Transcript::default();
+        transcript.apply(started(
+            "first",
+            "Read",
+            serde_json::json!({"file_path": "one.txt"}),
+        ));
+        transcript.apply(completed("first", "contents", false));
+        transcript.apply(text("Now checking another file."));
+        transcript.apply(started(
+            "second",
+            "Read",
+            serde_json::json!({"file_path": "two.txt"}),
+        ));
+
+        let first = ToolActivity::at_start(transcript.blocks())
+            .expect("one completed read has a compact activity summary");
+        assert_eq!(first.summary(), "Read 1 file");
+        assert_eq!(first.blocks.len(), 1, "commentary ends the activity group");
+        assert_eq!(first.leader().call, "first");
+        assert!(ToolActivity::at_start(&transcript.blocks()[1..]).is_none());
+        assert!(
+            ToolActivity::at_start(&transcript.blocks()[2..]).is_none(),
+            "a lone running call retains its live command presentation"
+        );
+        transcript.apply(completed("second", "contents", false));
+        let second = ToolActivity::at_start(&transcript.blocks()[2..]).unwrap();
+        assert_eq!(second.summary(), "Read 1 file");
+        assert_eq!(second.leader().call, "second");
+    }
+
+    #[test]
     fn mixed_tools_group_between_visible_reasoning_and_commentary() {
         let mut transcript = Transcript::default();
         transcript.apply(text("Checking the files."));
@@ -1814,6 +1885,30 @@ mod tests {
         assert_eq!(first.dirty.len(), 1);
         assert_eq!(first.dirty, second.dirty); // the same block grew
         assert_eq!(body_text(&transcript.blocks()[0]), "Reading the composer.");
+    }
+
+    #[test]
+    fn presentation_revision_tracks_changes_without_reminting_blocks() {
+        let mut transcript = Transcript::default();
+        assert_eq!(transcript.revision(), 0);
+        let _ = (transcript.blocks(), transcript.status(), transcript.usage());
+        assert_eq!(transcript.revision(), 0);
+
+        transcript.apply(text("Reading"));
+        let id = transcript.blocks()[0].id;
+        assert_eq!(transcript.revision(), 1);
+
+        transcript.apply(Input::Event(SessionEvent::TokenUsage {
+            total_tokens: 12,
+            input_tokens: 8,
+            cached_input_tokens: 0,
+            output_tokens: 4,
+            reasoning_output_tokens: 0,
+            context_window: Some(128),
+        }));
+
+        assert_eq!(transcript.revision(), 2);
+        assert_eq!(transcript.blocks()[0].id, id);
     }
 
     #[test]

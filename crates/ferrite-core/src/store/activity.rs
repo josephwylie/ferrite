@@ -53,6 +53,11 @@ pub(super) enum PersistedActivity {
         outcome: Outcome,
         cost_usd: Option<f64>,
     },
+    CompletionObservation {
+        subject: PersistedSubject,
+        elapsed_ms: u64,
+        completed_at: String,
+    },
     Alias {
         from: String,
         to: String,
@@ -556,6 +561,15 @@ impl PersistedActivity {
                 outcome: Outcome::from_live(outcome),
                 cost_usd: *cost_usd,
             },
+            ActivityEvent::CompletionObservation {
+                subject,
+                elapsed_ms,
+                completed_at,
+            } => Self::CompletionObservation {
+                subject: PersistedSubject::from_live(subject),
+                elapsed_ms: *elapsed_ms,
+                completed_at: completed_at.clone(),
+            },
             ActivityEvent::Alias { from, to } => Self::Alias {
                 from: from.as_str().into(),
                 to: to.as_str().into(),
@@ -615,6 +629,15 @@ impl PersistedActivity {
                 outcome: outcome.live(),
                 cost_usd: *cost_usd,
             },
+            Self::CompletionObservation {
+                subject,
+                elapsed_ms,
+                completed_at,
+            } => ActivityEvent::CompletionObservation {
+                subject: subject.live(),
+                elapsed_ms: *elapsed_ms,
+                completed_at: completed_at.clone(),
+            },
             Self::Alias { from, to } => ActivityEvent::Alias {
                 from: AgentKey::from_stored(from.clone()),
                 to: AgentKey::from_stored(to.clone()),
@@ -641,6 +664,7 @@ impl PersistedActivity {
                 event: Execution::TurnEnded { .. },
                 ..
             } | Self::BackgroundTurnEnded { .. }
+                | Self::CompletionObservation { .. }
         )
     }
     pub(super) fn tool_duration(&self) -> Option<(Subject, String, Duration)> {
@@ -874,6 +898,10 @@ fn project_agent<R: std::borrow::Borrow<super::Record>>(
             | PersistedActivity::Status { key, .. }
             | PersistedActivity::Coverage { key, .. }
             | PersistedActivity::Detached { key } => key,
+            PersistedActivity::CompletionObservation {
+                subject: PersistedSubject::Subagent { key },
+                ..
+            } => key,
             _ => continue,
         };
         if aliases.resolve(observed_key) != canonical {
@@ -934,14 +962,13 @@ fn project_agent<R: std::borrow::Borrow<super::Record>>(
                         _ => None,
                     }
                 };
-                outcome.map(|outcome| {
-                    (
-                        None,
-                        ExecutionEvent::TurnEnded {
-                            outcome,
-                            cost_usd: None,
-                        },
-                    )
+                outcome.map(|outcome| ActivityEvent::HistoryContent {
+                    key: key.clone(),
+                    id: None,
+                    event: ExecutionEvent::TurnEnded {
+                        outcome,
+                        cost_usd: None,
+                    },
                 })
             }
             PersistedActivity::Content { id, event, .. }
@@ -978,11 +1005,16 @@ fn project_agent<R: std::borrow::Borrow<super::Record>>(
                     omitted = true;
                     continue;
                 }
-                Some((id.clone(), event.live()))
+                Some(ActivityEvent::HistoryContent {
+                    key: key.clone(),
+                    id: id.clone(),
+                    event: event.live(),
+                })
             }
+            PersistedActivity::CompletionObservation { .. } => Some(observation.live()),
             _ => None,
         };
-        let Some((id, event)) = historical_content else {
+        let Some(event) = historical_content else {
             continue;
         };
         // Serialization cost is a conservative proxy for retained strings/JSON.
@@ -994,15 +1026,7 @@ fn project_agent<R: std::borrow::Borrow<super::Record>>(
         let timing = observation
             .tool_duration()
             .map(|(_, id, duration)| (id, duration));
-        content.push_back((
-            ActivityEvent::HistoryContent {
-                key: key.clone(),
-                id,
-                event,
-            },
-            size,
-            timing,
-        ));
+        content.push_back((event, size, timing));
         bytes = bytes.saturating_add(size);
         while bytes > limits.content_bytes_per_subject
             || content.len() > limits.blocks_per_subject.saturating_mul(8).max(1)

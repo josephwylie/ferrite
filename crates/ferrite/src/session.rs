@@ -108,6 +108,28 @@ impl Spawner for Spawn {
         ferrite_core::suggest::spawn(request, replies);
     }
 
+    fn discover_commands(
+        &mut self,
+        provider: Provider,
+        cwd: &std::path::Path,
+    ) -> Option<ferrite_core::providers::commands::Discovery> {
+        let (tx, rx) = mpsc::channel();
+        let failures = tx.clone();
+        let cwd = cwd.to_path_buf();
+        if let Err(error) = std::thread::Builder::new()
+            .name("ferrite-command-discovery".into())
+            .spawn(move || {
+                let program = ferrite_core::providers::discover::program(provider);
+                let _ = tx.send(ferrite_core::providers::commands::list(
+                    &program, provider, &cwd,
+                ));
+            })
+        {
+            let _ = failures.send(Err(error));
+        }
+        Some(rx)
+    }
+
     fn discover_models(
         &mut self,
     ) -> Option<std::sync::mpsc::Receiver<(Provider, Vec<ferrite_core::ModelInfo>)>> {
@@ -186,6 +208,12 @@ impl Session for SessionWithDefaults {
     ) -> io::Result<Receiver<io::Result<Vec<ferrite_core::providers::FileSuggestion>>>> {
         self.inner.search_files(query)
     }
+    fn enqueue(&mut self, client_id: &str, text: &str) -> io::Result<()> {
+        self.inner.enqueue(client_id, text)
+    }
+    fn cancel_queued(&mut self, id: &str) -> io::Result<()> {
+        self.inner.cancel_queued(id)
+    }
 
     fn set_suggestions_enabled(&mut self, enabled: bool) -> io::Result<()> {
         self.inner.set_suggestions_enabled(enabled)
@@ -246,6 +274,7 @@ impl Spawn {
         let model = request.model.map(|model| model.to_string());
         let resume = request.resume.map(|target| target.to_string());
         let name = request.name.map(|name| name.to_string());
+        let additional_directories = request.additional_directories;
         let defaults = self
             .defaults
             .lock()
@@ -270,6 +299,7 @@ impl Spawn {
                 permission_mode: defaults.claude_permission_mode,
                 prompt_suggestions: defaults.placeholder_suggestions,
                 resume,
+                additional_directories,
                 ..Default::default()
             }),
             Provider::Codex => SessionConfig::Codex(CodexConfig {
@@ -282,6 +312,7 @@ impl Spawn {
                     .or_else(|| Some("on-request".into())),
                 sandbox: defaults.codex_sandbox,
                 resume,
+                additional_directories,
                 ..Default::default()
             }),
         }
