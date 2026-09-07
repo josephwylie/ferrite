@@ -1150,10 +1150,13 @@ impl Element for LineElement {
         cx: &mut App,
     ) -> Self::PrepaintState {
         let line_height = window.line_height();
-        // The blink cycle runs only while this line holds focus. Prepaint is
-        // the seam that sees the window's focus every drawn frame, so a click
-        // that lands anywhere else retires the cycle on that same frame.
-        let focused = self.composer.read(cx).focus_handle.is_focused(window);
+        // The blink cycle runs only while this line holds focus *and* the
+        // window is active. Prepaint is the seam that sees both every drawn
+        // frame, so a click that lands anywhere else — or on another app —
+        // retires the cycle on that same frame. A background window shows no
+        // caret: nothing typed would land here until it comes forward.
+        let focused = self.composer.read(cx).focus_handle.is_focused(window)
+            && window.is_window_active();
         let caret_visible = self.composer.update(cx, |composer, cx| {
             composer.sync_caret_blink(focused, cx);
             composer.caret_visible
@@ -1301,7 +1304,7 @@ impl Element for LineElement {
                 )
                 .unwrap();
             }
-            if focus_handle.is_focused(window) {
+            if focus_handle.is_focused(window) && window.is_window_active() {
                 if let Some(cursor) = prepaint.cursor.take() {
                     window.paint_quad(cursor);
                 }

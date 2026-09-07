@@ -505,15 +505,18 @@ impl Render for TranscriptView {
                     selection.begin_row();
                     view.render_row(&row, &selection, Some(cx.entity()), cx)
                 });
-                if index + 1 == row_count {
-                    row
-                } else {
-                    div()
-                        .w_full()
-                        .pb(px(theme::BLOCK_GAP))
-                        .child(row)
-                        .into_any_element()
-                }
+                // Every row is wrapped, last one included: a list item is
+                // laid out as its own root, where a bare row's `w_full`
+                // has no parent width to resolve against and shrinks to
+                // its text. Only the gap below differs — the last row
+                // carries none, so the stack ends on the body padding.
+                div()
+                    .w_full()
+                    .when(index + 1 < row_count, |row| {
+                        row.pb(px(theme::BLOCK_GAP))
+                    })
+                    .child(row)
+                    .into_any_element()
             },
         )
         .size_full()
