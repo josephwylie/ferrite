@@ -61,6 +61,18 @@ const STDERR_TAIL_LINES: usize = 20;
 /// against `codex` 0.149.1, which answers both well under a second from a
 /// cold start; the budget is generous because overrunning it fails the spawn.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long a resume keeps retrying past the thread's previous writer, and
+/// how often. A quitting Ferrite's app-server exits within a fraction of a
+/// second of losing its stdin; the budget covers a slow one.
+const WRITER_CONFLICT_BUDGET: Duration = Duration::from_secs(10);
+const WRITER_CONFLICT_RETRY: Duration = Duration::from_millis(500);
+
+/// The app-server's thread-store refusal: another process holds the
+/// thread's writer lock (`~/.codex/thread-writer-locks`), which it
+/// releases only by exiting.
+fn is_writer_conflict(detail: &str) -> bool {
+    detail.contains("already has an active writer")
+}
 
 /// A resume can emit turn notifications before its response identifies Main.
 /// Bound those candidates; overflow stays non-interruptible until new evidence.
@@ -257,7 +269,27 @@ impl CodexSession {
         let program = super::spawnable_program(&config.program);
         check_version(&program)?;
 
-        let mut command = Command::new(&program);
+        // A resume can meet the thread's previous writer still alive: the
+        // app-server of a Ferrite that is quitting, whose lock leaves with
+        // it a moment later. The server refuses ("already has an active
+        // writer") rather than waits, so the wait is here — a fresh server
+        // per try, since a refused resume does not leave one worth keeping.
+        let mut waited = Duration::ZERO;
+        loop {
+            match Self::spawn_once(&program, &config) {
+                Err(CodexSpawnError::HandshakeFailed { detail })
+                    if is_writer_conflict(&detail) && waited < WRITER_CONFLICT_BUDGET =>
+                {
+                    thread::sleep(WRITER_CONFLICT_RETRY);
+                    waited += WRITER_CONFLICT_RETRY;
+                }
+                result => return result,
+            }
+        }
+    }
+
+    fn spawn_once(program: &str, config: &CodexConfig) -> Result<Self, CodexSpawnError> {
+        let mut command = Command::new(program);
         command.arg("app-server").no_console_window();
         if let Some(cwd) = &config.cwd {
             // The thread's cwd travels in thread/start; the process gets the
@@ -269,7 +301,7 @@ impl CodexSession {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|e| spawn_error(&program, e))?;
+            .map_err(|e| spawn_error(program, e))?;
 
         // Into the job as CreateProcess returns — in practice before a
         // `.cmd` shim's cmd.exe has executed a line, though nothing suspends
@@ -315,6 +347,7 @@ impl CodexSession {
             Arc::clone(&file_search),
             queue.clone(),
             config.cwd.clone(),
+            config.resume.is_some(),
         );
 
         let mut session = Self {
@@ -346,7 +379,7 @@ impl CodexSession {
         // not leak a live process: kill it and fold whatever it said on
         // stderr into the explanation.
         session
-            .handshake(&config, &handshake, &skills_ready)
+            .handshake(config, &handshake, &skills_ready)
             .map_err(|detail| {
                 let mut child = lock(&session.child);
                 let _ = child.kill();
@@ -425,8 +458,15 @@ impl CodexSession {
             .map_err(|error| format!("skills/list did not complete: {error}"))??;
 
         let id = self.take_request_id();
+        // A resume asks for metadata and live state only: full-history
+        // hydration is deprecated (0.153 answers it with a
+        // `deprecationNotice`), and the Thread's transcript is the store's
+        // to replay. Main's history is paged afterwards, for discovery.
         let (method, mut params) = match &config.resume {
-            Some(thread_id) => ("thread/resume", serde_json::json!({"threadId": thread_id})),
+            Some(thread_id) => (
+                "thread/resume",
+                serde_json::json!({"threadId": thread_id, "excludeTurns": true}),
+            ),
             None => ("thread/start", serde_json::json!({})),
         };
         if let Some(cwd) = &config.cwd {
@@ -829,6 +869,7 @@ fn read_stdout(
     file_search: Arc<Mutex<file_search::Requests>>,
     queue: Arc<Mutex<queue::Queue>>,
     cwd: Option<PathBuf>,
+    resumed: bool,
 ) -> Receiver<Result<HandshakeStep, String>> {
     let (step_sender, steps) = sync_channel(2);
     thread::spawn(move || {
@@ -898,7 +939,20 @@ fn read_stdout(
                             if !publish_activity(update, &mut activity, &sender, &stdin) {
                                 return;
                             }
-                            let update = activity.root_history(&result["thread"]);
+                            // A resumed Main may have spawned children
+                            // before: a server that hydrated regardless has
+                            // said it all; otherwise its history is paged. A
+                            // fresh thread has none to page.
+                            let hydrated = result["thread"]["turns"]
+                                .as_array()
+                                .is_some_and(|turns| !turns.is_empty());
+                            let update = if hydrated {
+                                activity.root_history(&result["thread"])
+                            } else if resumed {
+                                activity.request_root_history()
+                            } else {
+                                activity::Update::default()
+                            };
                             if !publish_activity(update, &mut activity, &sender, &stdin) {
                                 return;
                             }

@@ -1143,17 +1143,26 @@ fn a_resumed_session_passes_effort_on_its_next_turn() {
     })
     .unwrap();
     session.send("next").unwrap();
-    let recorded = read_lines(&log, 6);
+    let recorded = read_lines(&log, 7);
     drop(session);
     let resume: Value = serde_json::from_str(&recorded[3]).unwrap();
     assert_eq!(resume["method"], "thread/resume");
+    // Metadata and live state only: full-history hydration is deprecated,
+    // and the Thread's transcript is the store's to replay.
     assert_eq!(
         resume["params"],
         serde_json::json!({
             "threadId": "stub-thread",
+            "excludeTurns": true,
         })
     );
-    let turn: Value = serde_json::from_str(&recorded[5]).unwrap();
+    // The resumed Main's history is paged for subagent discovery, oldest
+    // first, before the turn goes out.
+    let history: Value = serde_json::from_str(&recorded[5]).unwrap();
+    assert_eq!(history["method"], "thread/turns/list");
+    assert_eq!(history["params"]["threadId"], "stub-thread");
+    assert_eq!(history["params"]["sortDirection"], "asc");
+    let turn: Value = serde_json::from_str(&recorded[6]).unwrap();
     assert_eq!(turn["method"], "turn/start");
     assert_eq!(turn["params"]["threadId"], "stub-thread");
     assert_eq!(turn["params"]["effort"], "xhigh");
