@@ -2687,12 +2687,13 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
     if let Some(setup) = setup_controls {
         controls = controls.child(setup);
     }
-    // The chip is the *running* Session's edit mode, so it rides only a
-    // Pane that is running and unblocked: a Decision owns the keyboard until
-    // it is answered, and a closed Session has no mode to be in. The
-    // prototype draws it on its two running Panes and omits it from the
-    // Decision and the blocked one.
-    if let Some(mode) = mode.filter(|_| running && !blocking) {
+    // The chip is the live Session's permission mode, so it rides every
+    // Pane whose Session has announced one and is not blocked: a Decision
+    // owns the keyboard until it is answered, and a closed Session has no
+    // mode to be in (its chip is None). It is not tied to a turn in
+    // flight — the mode is exactly what an operator changes *between*
+    // prompts.
+    if let Some(mode) = mode.filter(|_| !blocking) {
         controls = controls.child(match mode_picker {
             Some(picker) => div().flex_shrink_0().child(picker),
             None => mode_chip(mode),

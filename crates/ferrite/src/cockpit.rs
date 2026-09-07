@@ -6880,6 +6880,7 @@ impl CockpitView {
             crate::components::ChoiceMenu {
                 id: format!("mode-picker-{}", thread.get()).into(),
                 trigger: crate::components::button(("mode-picker", thread.get() as usize))
+                    .debug_selector(move || format!("mode-picker-{}", thread.get()))
                     .p_0()
                     .h_auto()
                     .tooltip("Permission mode")
