@@ -9543,15 +9543,19 @@ mod tests {
         cx.run_until_parked();
 
         let age_id: &'static str = format!("nav-since-{}", thread.get()).leak();
-        assert!(
-            cx.debug_bounds(age_id).is_some(),
-            "grouped Project rows retain the Thread's recency"
-        );
+        let age = cx
+            .debug_bounds(age_id)
+            .expect("grouped Project rows retain the Thread's recency");
         let subagents_id: &'static str = format!("nav-subagents-{}", thread.get()).leak();
-        assert!(
-            cx.debug_bounds(subagents_id).is_some(),
-            "grouped Project rows retain the subagent metadata slot"
-        );
+        let subagents = cx
+            .debug_bounds(subagents_id)
+            .expect("grouped Project rows retain the subagent count");
+        let mark_id: &'static str = format!("nav-mark-{}", thread.get()).leak();
+        let provider = cx
+            .debug_bounds(mark_id)
+            .expect("grouped Project rows retain the provider indicator");
+        assert!(subagents.right() <= age.origin.x);
+        assert!(age.right() <= provider.origin.x);
 
         view.read_with(cx, |view, _| {
             assert_eq!(

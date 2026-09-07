@@ -887,8 +887,16 @@ pub fn project_thread_row_with_title(row: &ThreadRow, title: impl IntoElement) -
             .text_color(rgb(if row.current { TEXT_STRONG } else { TEXT }))
             .child(title),
     )
-    .child(provider_mark(row.provider, PROVIDER_MARK))
     .child(meta_tail(row.thread, row.subagents, row.last_used.clone()))
+    .child(
+        div()
+            .flex_shrink_0()
+            .debug_selector({
+                let thread = row.thread;
+                move || format!("nav-mark-{}", thread.get())
+            })
+            .child(provider_mark(row.provider, PROVIDER_MARK)),
+    )
 }
 
 /// The compact facts at the right edge of line 2. They stay one group so
