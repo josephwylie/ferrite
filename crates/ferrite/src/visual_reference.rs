@@ -130,15 +130,41 @@ pub fn capture(output: String) {
                         .unwrap();
                 }
                 "approval" => {
-                    sender.send(SessionEvent::DecisionRequested {decision:ferrite_core::Decision {
-                delivery:Default::default(),id:"fixture-approval".into(),tool_use_id:"approval".into(),tool_name:"Bash".into(),description:"Inspect the fixture without modifying files.".into(), suggestions:vec![],input:serde_json::json!({"command":"printf 'one  two\\n'\ncat formatting.md"})
-            }}).unwrap();
+                    sender
+                        .send(SessionEvent::DecisionRequested {
+                            decision: ferrite_core::Decision {
+                                delivery: Default::default(),
+                                kind: ferrite_core::DecisionKind::Approval,
+                                policy: Default::default(),
+                                id: "fixture-approval".into(),
+                                tool_use_id: "approval".into(),
+                                tool_name: "Bash".into(),
+                                description: "Inspect the fixture without modifying files.".into(),
+                                suggestions: vec![],
+                                input: serde_json::json!({"command":"printf 'one  two\\n'\ncat formatting.md"}),
+                            },
+                        })
+                        .unwrap();
                 }
                 "decision" => {
-                    sender.send(SessionEvent::DecisionRequested {decision:ferrite_core::Decision {
-                delivery:Default::default(), id:"fixture-question".into(), tool_use_id:"question".into(), tool_name:"AskUserQuestion".into(), description:String::new(), suggestions:vec![],
-                input:serde_json::json!({"questions":[{"question":"Which details should remain visible?", "multiSelect":true,"options":[{"label":"Keep the existing implementation and its meaningful suffix (Recommended)","description":"Preserve existing controls and all the spacing in their wrapped descriptions."},{"label":"Include detailed output", "description":"Keep disclosure available for inspection."}]}]})
-            }}).unwrap();
+                    let input = serde_json::json!({"questions":[{"question":"Which details should remain visible?", "multiSelect":true,"options":[{"label":"Keep the existing implementation and its meaningful suffix (Recommended)","description":"Preserve existing controls and all the spacing in their wrapped descriptions."},{"label":"Include detailed output", "description":"Keep disclosure available for inspection."}]}]});
+                    sender
+                        .send(SessionEvent::DecisionRequested {
+                            decision: ferrite_core::Decision {
+                                delivery: Default::default(),
+                                kind: ferrite_core::DecisionKind::Questions(
+                                    ferrite_core::questions::parse(&input).expect("fixture questions"),
+                                ),
+                                policy: Default::default(),
+                                id: "fixture-question".into(),
+                                tool_use_id: "question".into(),
+                                tool_name: "AskUserQuestion".into(),
+                                description: String::new(),
+                                suggestions: vec![],
+                                input,
+                            },
+                        })
+                        .unwrap();
                 }
                 "interrupted" => {
                     sender
