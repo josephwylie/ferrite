@@ -58,6 +58,7 @@ icons![
     "ferrite-lower",
     "plus",
     "gear",
+    "list-filter",
     "window-minimize",
     "window-maximize",
     "window-restore",
@@ -90,6 +91,8 @@ const FERRITE_LOWER: &str = "icons/ferrite-lower.svg";
 pub const PLUS: &str = "icons/plus.svg";
 /// The settings gear.
 pub const GEAR: &str = "icons/gear.svg";
+/// Sort and grouping choices for the Thread list.
+pub const LIST_FILTER: &str = "icons/list-filter.svg";
 /// The four caption marks the Windows titlebar draws (`titlebar.rs`). They
 /// are 10px chrome, not 16px UI: on a 10-unit viewBox the line family's 1.5
 /// stroke would render a blob, so these carry the 1px hairline Windows' own
@@ -293,6 +296,7 @@ mod tests {
             FERRITE_UPPER,
             FERRITE_LOWER,
             GEAR,
+            LIST_FILTER,
             WINDOW_MINIMIZE,
             WINDOW_MAXIMIZE,
             WINDOW_RESTORE,
@@ -308,7 +312,7 @@ mod tests {
         }
         assert_eq!(
             ICONS.len(),
-            19,
+            20,
             "the prototype and app controls, including disclosure and close,              and the four Windows caption glyphs"
         );
     }
@@ -327,6 +331,7 @@ mod tests {
             PENCIL,
             CHECK,
             GEAR,
+            LIST_FILTER,
         ] {
             let bytes = Assets.load(key).unwrap().unwrap();
             let svg = std::str::from_utf8(&bytes).unwrap();
@@ -355,7 +360,7 @@ mod tests {
     #[test]
     fn an_unknown_key_is_absent_rather_than_an_error() {
         assert!(Assets.load("icons/nope.svg").unwrap().is_none());
-        assert_eq!(Assets.list("icons/").unwrap().len(), 19);
+        assert_eq!(Assets.list("icons/").unwrap().len(), 20);
     }
 
     #[test]

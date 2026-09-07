@@ -20,6 +20,7 @@
 //! `.font_weight(..)` is correct here.
 
 use ferrite_core::groups::GroupId;
+use ferrite_core::settings::ThreadListOrder;
 use ferrite_core::store::Provider;
 use ferrite_core::workspace::registry::ProjectId;
 use ferrite_core::ThreadId;
@@ -83,6 +84,7 @@ const COLLAPSE_GROUP: &str = "nav-collapse";
 const RAIL_FILTER_GROUP: &str = "nav-rail-filter";
 const FILTER_GROUP: &str = "nav-filter";
 const FILTER_OPTION_GROUP: &str = "nav-filter-option";
+const ORDER_GROUP: &str = "nav-order";
 
 // The handful of nav metrics `theme.rs` does not name, kept here rather
 // than written inline so each one is said once and explained once.
@@ -115,7 +117,19 @@ pub struct NavState {
     /// interleaved, most recently used first. The two lists above are the
     /// membership; this is the sequence.
     pub order: Vec<NavItem>,
+    pub project_sections: Vec<ProjectSection>,
+    pub thread_list_order: ThreadListOrder,
+    pub order_open: bool,
     pub collapsed: bool,
+}
+
+/// A flat newest-first run of Threads under one Project heading. Group
+/// membership still exists and is restored when a row is opened; this view
+/// simply makes Project the visible hierarchy.
+pub struct ProjectSection {
+    pub project: Option<ProjectId>,
+    pub label: SharedString,
+    pub rows: Vec<ThreadRow>,
 }
 
 impl NavState {
@@ -186,6 +200,7 @@ pub struct GroupBlock {
 /// One Thread's row — identical whether it is a Group member or a solo; only
 /// the container differs. Title, Project, and the provider mark in
 /// the top-right corner, plus a subagent count when the Thread has children.
+#[derive(Clone)]
 pub struct ThreadRow {
     pub thread: ThreadId,
     pub name: SharedString,
@@ -383,6 +398,80 @@ pub fn add_thread_button() -> Button {
         .p_0()
         .tooltip("New Thread")
         .child(icon(icons::PLUS, ICON_BUTTON_GLYPH, TEXT_MUTED))
+}
+
+/// Easy-access ordering control beside New Thread. Its selected state is
+/// visible even while the menu is closed.
+pub fn order_button(active: bool) -> Button {
+    components::button("thread-list-order")
+        .tab_stop(true)
+        .debug_selector(|| "thread-list-order".into())
+        .group(ORDER_GROUP)
+        .w(px(ICON_BUTTON))
+        .h(px(ICON_BUTTON))
+        .p_0()
+        .when(active, |button| button.bg(rgb(FILL)))
+        .tooltip(if active {
+            "Threads grouped by Project"
+        } else {
+            "Thread list order"
+        })
+        .child(
+            icon(
+                icons::LIST_FILTER,
+                ICON_BUTTON_GLYPH,
+                if active { TEXT } else { TEXT_MUTED },
+            )
+            .group_hover(ORDER_GROUP, |style| style.text_color(rgb(TEXT))),
+        )
+}
+
+/// Ordering menu anchored to the compact button rather than occupying the
+/// full Project-filter width.
+pub fn order_menu() -> Div {
+    filter_menu().left_auto().w(px(190.))
+}
+
+pub fn order_option(index: usize, label: &'static str, selected: bool) -> Button {
+    components::button(("thread-list-order-option", index))
+        .tab_stop(true)
+        .debug_selector(move || format!("thread-list-order-option-{index}"))
+        .group(FILTER_OPTION_GROUP)
+        .w_full()
+        .min_h(px(MENU_ROW_H))
+        .px(px(ROW_PAD_X))
+        .justify_between()
+        .gap(px(ROW_PAD_X))
+        .rounded(px(R_CONTROL))
+        .when(selected, |on| {
+            on.text_color(rgb(TEXT_STRONG))
+                .font_weight(FontWeight::MEDIUM)
+        })
+        .when(!selected, |off| off.text_color(rgb(TEXT_2)))
+        .child(div().min_w_0().truncate().child(label))
+        .children(selected.then(|| icon(icons::CHECK, ICON_CHEVRON_LG, TEXT_MUTED)))
+}
+
+/// A quiet Project label separates grouped runs without turning each one
+/// into a card. The count helps scan long lists and costs no extra row.
+pub fn project_section(label: SharedString, count: usize, first: bool) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .h(px(30.))
+        .when(!first, |section| section.mt(px(SOLOS_TOP)))
+        .px(px(ROW_PAD_X))
+        .gap(px(ROW_ICON_GAP))
+        .text_size(px(FS_SM))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(rgb(TEXT_2))
+        .child(div().flex_1().min_w_0().truncate().child(label))
+        .child(
+            div()
+                .font_weight(FontWeight::NORMAL)
+                .text_color(rgb(TEXT_MUTED))
+                .child(count.to_string()),
+        )
 }
 
 /// The Project filter trigger — the one dropdown navigation has. The
@@ -768,6 +857,38 @@ pub fn thread_row_with_title(row: &ThreadRow, title: impl IntoElement) -> Statef
     )
 }
 
+/// The grouped view has already named the Project, so its Thread rows keep
+/// only the useful title, state and provider mark. This is the screenshot's
+/// compact section rhythm, expressed in Ferrite's existing row grammar.
+pub fn project_thread_row_with_title(row: &ThreadRow, title: impl IntoElement) -> Stateful<Div> {
+    row_frame(
+        ("nav-thread", row.thread.get() as usize),
+        ICON_BUTTON,
+        row.current,
+    )
+    .debug_selector({
+        let thread = row.thread;
+        move || format!("nav-thread-{}", thread.get())
+    })
+    .flex()
+    .flex_row()
+    .items_center()
+    .gap(px(ROW_PAD_X))
+    .child(status_dot(row.thread, row.status))
+    .child(
+        div()
+            .flex_1()
+            .min_w_0()
+            .truncate()
+            .text_size(px(FS_MD))
+            .font_weight(FontWeight::MEDIUM)
+            .line_height(relative(LINE_TIGHT))
+            .text_color(rgb(if row.current { TEXT_STRONG } else { TEXT }))
+            .child(title),
+    )
+    .child(provider_mark(row.provider, PROVIDER_MARK))
+}
+
 /// The compact facts at the right edge of line 2. They stay one group so
 /// free space separates them from the Project, not from each other.
 fn meta_tail(thread: ThreadId, subagents: usize, since: Option<SharedString>) -> Div {
@@ -1148,6 +1269,13 @@ mod tests {
             Some(CursorStyle::PointingHand),
             "a rail item is a jump, not a drag handle"
         );
+    }
+
+    #[test]
+    fn the_order_button_shows_when_project_grouping_is_active() {
+        let background = |mut button: Button| button.style().background.clone();
+        assert_eq!(background(order_button(false)), None);
+        assert_eq!(background(order_button(true)), Some(rgb(FILL).into()));
     }
 
     /// A row whose Project or checkout has not resolved keeps its full

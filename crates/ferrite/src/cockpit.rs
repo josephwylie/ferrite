@@ -19,6 +19,7 @@ use ferrite_core::followup;
 use ferrite_core::groups::{Drag, DropTarget, GroupChange, GroupId, Groups, Plan};
 use ferrite_core::layout::{self, Edge, SeamId, Tree, Zone};
 use ferrite_core::roster::{PaneIdentity, View};
+use ferrite_core::settings::ThreadListOrder;
 use ferrite_core::settings::UsageMeterStyle;
 use ferrite_core::store::Provider;
 use ferrite_core::workspace::registry::ProjectId;
@@ -139,6 +140,8 @@ pub struct CockpitView {
     /// Whether the filter's menu is down. Any press the menu did not
     /// swallow closes it, like every other popover here.
     nav_filter_open: bool,
+    /// The easy-access Thread ordering popover in the main nav head.
+    nav_order_open: bool,
     /// The nav tree's scroll, shared with the hand-drawn scrollbar beside
     /// it — gpui 0.2.2 paints none of its own.
     nav_scroll: ScrollHandle,
@@ -687,6 +690,7 @@ impl CockpitView {
             native_copy: None,
             nav_filter: None,
             nav_filter_open: false,
+            nav_order_open: false,
             nav_scroll: ScrollHandle::new(),
             popover: None,
             menu_muted: false,
@@ -1287,6 +1291,7 @@ impl CockpitView {
         self.settings_open
             || self.project_editor.is_some()
             || self.nav_filter_open
+            || self.nav_order_open
             || self.popover.is_some()
             || self.context_checks.is_some()
             || self.context_menu.is_some()
@@ -5226,11 +5231,50 @@ impl CockpitView {
         order.sort_by_key(|(recency, _)| std::cmp::Reverse(*recency));
         let order = order.into_iter().map(|(_, item)| item).collect();
 
+        // Project sections are a second projection of the same rows, not a
+        // second source of truth. Rows remain newest-first inside each
+        // section; sections follow the registry's alphabetic project list,
+        // with unreadable legacy bindings gathered honestly under Other.
+        let mut rows: Vec<nav::ThreadRow> = groups
+            .iter()
+            .flat_map(|group| group.members.iter().cloned())
+            .chain(solos.iter().cloned())
+            .collect();
+        rows.sort_by_key(|row| std::cmp::Reverse(self.last_used(row.thread)));
+        rows.dedup_by_key(|row| row.thread);
+        let mut project_sections: Vec<nav::ProjectSection> = Vec::new();
+        for row in rows {
+            let project = self.facts.get(row.thread).and_then(|facts| facts.project);
+            let label = row
+                .project
+                .clone()
+                .unwrap_or_else(|| SharedString::from("Other"));
+            if let Some(section) = project_sections
+                .iter_mut()
+                .find(|section| section.project == project)
+            {
+                section.rows.push(row);
+            } else {
+                project_sections.push(nav::ProjectSection {
+                    project,
+                    label,
+                    rows: vec![row],
+                });
+            }
+        }
+        project_sections.sort_by(|left, right| {
+            (left.project.is_none(), left.label.to_lowercase())
+                .cmp(&(right.project.is_none(), right.label.to_lowercase()))
+        });
+
         nav::NavState {
             filter,
             groups,
             solos,
             order,
+            project_sections,
+            thread_list_order: self.prefs.settings.thread_list_order,
+            order_open: self.nav_order_open,
             collapsed: self.nav_collapsed,
         }
     }
@@ -6255,6 +6299,10 @@ impl Render for CockpitView {
                     }
                     if view.nav_filter_open {
                         view.nav_filter_open = false;
+                        dismissed = true;
+                    }
+                    if view.nav_order_open {
+                        view.nav_order_open = false;
                         dismissed = true;
                     }
                     if view.context_menu.take().is_some() {
@@ -7728,6 +7776,7 @@ impl CockpitView {
             self.popover = None;
             self.context_menu = None;
             self.nav_filter_open = false;
+            self.nav_order_open = false;
         }
         cx.notify();
     }
@@ -7959,6 +8008,7 @@ impl CockpitView {
             cx.listener(|view, _: &MouseDownEvent, _, cx| {
                 cx.stop_propagation();
                 view.nav_filter_open = !view.nav_filter_open;
+                view.nav_order_open = false;
                 cx.notify();
             }),
         ));
@@ -7968,6 +8018,16 @@ impl CockpitView {
                 view.open_draft(DraftTarget::Main, cx);
             },
         )));
+        let head = head.child(
+            nav::order_button(state.thread_list_order == ThreadListOrder::ByProject).on_click(
+                cx.listener(|view, _: &ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    view.nav_filter_open = false;
+                    view.nav_order_open = !view.nav_order_open;
+                    cx.notify();
+                }),
+            ),
+        );
         // The pencil belongs to the chosen Project, so it lives beside the
         // dropdown that names it — not inside the menu, which is shut for
         // most of the Project's life. `All Projects` is a filter state, not
@@ -7981,6 +8041,27 @@ impl CockpitView {
             ))),
             None => head,
         };
+        if state.order_open {
+            let mut menu = nav::order_menu();
+            for (index, (label, value)) in [
+                ("Recent activity", ThreadListOrder::Recent),
+                ("Group by Project", ThreadListOrder::ByProject),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                menu = menu.child(
+                    nav::order_option(index, label, state.thread_list_order == value).on_click(
+                        cx.listener(move |view, _: &ClickEvent, _, cx| {
+                            cx.stop_propagation();
+                            view.nav_order_open = false;
+                            view.change_settings(|settings| settings.thread_list_order = value, cx);
+                        }),
+                    ),
+                );
+            }
+            return head.child(deferred(menu));
+        }
         if !state.filter.open {
             return head;
         }
@@ -8033,6 +8114,22 @@ impl CockpitView {
                     .bg(rgba(crate::theme::ATTENTION_WASH))
                     .child(error.clone()),
             );
+        }
+        if state.thread_list_order == ThreadListOrder::ByProject {
+            for (index, section) in state.project_sections.iter().enumerate() {
+                tree = tree.child(nav::project_section(
+                    section.label.clone(),
+                    section.rows.len(),
+                    index == 0,
+                ));
+                for row in &section.rows {
+                    tree = tree.child(self.project_thread_element(row, cx));
+                }
+            }
+            if state.project_sections.is_empty() {
+                tree = tree.child(nav::empty_filter(&state.filter.label));
+            }
+            return tree;
         }
         // Solo rows the order puts next to each other are drawn as one run,
         // so the 2px between siblings stays a container's gap rather than a
@@ -8243,6 +8340,26 @@ impl CockpitView {
         group: Option<GroupId>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        self.thread_element_with_style(row, group, false, cx)
+    }
+
+    fn project_thread_element(&self, row: &nav::ThreadRow, cx: &mut Context<Self>) -> AnyElement {
+        let group = self
+            .cockpit
+            .groups()
+            .iter()
+            .find(|group| group.members.contains(&row.thread))
+            .map(|group| group.id);
+        self.thread_element_with_style(row, group, true, cx)
+    }
+
+    fn thread_element_with_style(
+        &self,
+        row: &nav::ThreadRow,
+        group: Option<GroupId>,
+        compact: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let thread = row.thread;
         // A Project filter hides rows, not members. Drop positions always
         // address the durable order, including the hidden members.
@@ -8257,10 +8374,12 @@ impl CockpitView {
             group,
             index,
         };
-        let head = nav::thread_row_with_title(
-            row,
-            self.editable_thread_title(thread, row.name.clone(), cx),
-        );
+        let title = self.editable_thread_title(thread, row.name.clone(), cx);
+        let head = if compact {
+            nav::project_thread_row_with_title(row, title)
+        } else {
+            nav::thread_row_with_title(row, title)
+        };
         let badge = self.facts.name(thread);
         drop_feedback(head, self.cockpit.groups().clone(), target)
             .on_drag(
@@ -9070,6 +9189,15 @@ mod tests {
                 Some("2 projects".to_string())
             );
             assert_eq!(nav.groups[0].members.len(), 3);
+            assert_eq!(nav.project_sections.len(), 2);
+            assert_eq!(
+                nav.project_sections
+                    .iter()
+                    .map(|section| section.rows.len())
+                    .sum::<usize>(),
+                3,
+                "grouping by Project keeps every Thread, including a cross-Project Group"
+            );
             view.nav_filter = Some(second_project);
             let nav = view.nav_state();
             assert_eq!(
@@ -9385,6 +9513,34 @@ mod tests {
         let mark = cx.debug_bounds(mark_id).expect("the row draws a logomark");
         let age = cx.debug_bounds(age_id).expect("the row draws its age");
         assert_eq!(mark.right(), age.right(), "one right edge, not two");
+    }
+
+    #[gpui::test]
+    fn thread_order_is_changed_from_the_main_nav_menu(cx: &mut TestAppContext) {
+        let (core, _) = cockpit("nav-thread-order", 1);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        tick(cx);
+
+        let button = cx
+            .debug_bounds("thread-list-order")
+            .expect("the ordering control is in the main Thread list");
+        cx.simulate_click(button.center(), gpui::Modifiers::none());
+        cx.run_until_parked();
+        let grouped = cx
+            .debug_bounds("thread-list-order-option-1")
+            .expect("the grouped option is available from the control");
+        cx.simulate_click(grouped.center(), gpui::Modifiers::none());
+        cx.run_until_parked();
+
+        view.read_with(cx, |view, _| {
+            assert_eq!(
+                view.prefs.settings.thread_list_order,
+                ThreadListOrder::ByProject
+            );
+            assert!(!view.nav_order_open, "choosing an order closes its menu");
+            assert_eq!(view.nav_state().project_sections.len(), 1);
+        });
     }
 
     /// The tree draws one list, not a Groups shelf above a Threads shelf:

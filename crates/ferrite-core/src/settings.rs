@@ -47,6 +47,9 @@ pub struct Settings {
     pub codex_sandbox: Option<String>,
     /// Whether the navigation rail is collapsed. Default: false.
     pub nav_collapsed: bool,
+    /// How the main navigation orders Threads. This is changed from the
+    /// navigation itself, where its effect is immediately visible.
+    pub thread_list_order: ThreadListOrder,
     /// Whether deleting a Thread asks first. Default: true.
     pub confirm_delete: bool,
     /// Whether an untitled Thread is named from its first prompt.
@@ -73,6 +76,16 @@ pub enum UsageMeterStyle {
     Rings,
 }
 
+/// The two useful readings of the Thread list: one activity stream, or
+/// separate Project sections whose rows remain newest-first.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ThreadListOrder {
+    #[default]
+    Recent,
+    ByProject,
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Settings {
@@ -85,6 +98,7 @@ impl Default for Settings {
             codex_approval_policy: "on-request".to_string(),
             codex_sandbox: None,
             nav_collapsed: false,
+            thread_list_order: ThreadListOrder::Recent,
             confirm_delete: true,
             auto_title: true,
             placeholder_suggestions: true,
@@ -184,6 +198,7 @@ mod tests {
             codex_approval_policy: "never".to_string(),
             codex_sandbox: Some("workspace-write".to_string()),
             nav_collapsed: true,
+            thread_list_order: ThreadListOrder::ByProject,
             confirm_delete: false,
             auto_title: false,
             placeholder_suggestions: false,
@@ -230,6 +245,7 @@ mod tests {
         assert_eq!(settings.codex_approval_policy, "on-request");
         assert_eq!(settings.codex_sandbox, None);
         assert!(!settings.nav_collapsed);
+        assert_eq!(settings.thread_list_order, ThreadListOrder::Recent);
         assert!(settings.confirm_delete);
         assert!(settings.auto_title);
         assert!(settings.placeholder_suggestions);
