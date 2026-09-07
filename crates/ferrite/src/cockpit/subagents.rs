@@ -81,6 +81,66 @@ fn native_keys<E: gpui::InteractiveElement>(element: E) -> E {
         })
 }
 
+/// The one shell every pending request wears — approvals, questions, forms,
+/// external links and the unreadable fallback alike: the raised island that
+/// joins the Composer below, outlined 1px in the attention colour so the
+/// operator reads "this needs an answer" before reading the words. The
+/// outline runs down the join's shoulders too, so it is one unbroken line
+/// from the Composer's edge up and around the island.
+fn request_island(
+    handle: &DecisionHandle,
+    body: impl IntoElement,
+    cx: &mut gpui::App,
+) -> AnyElement {
+    let radius = gpui::component::Theme::global(cx).radius_2xl();
+    let surface = div()
+        .bg(rgb(theme::RAISED))
+        .border_1()
+        .border_b_0()
+        .border_color(rgb(theme::ATTENTION))
+        .rounded_tl(radius)
+        .rounded_tr(radius)
+        .rounded_bl(px(0.))
+        .rounded_br(px(0.))
+        .p(px(16.))
+        .w_full()
+        .min_w_0()
+        .style()
+        .clone();
+    native_keys(
+        div()
+            .w_full()
+            .min_w_0()
+            .flex()
+            .justify_center()
+            .px(px(theme::PANE_PAD_X + 12.))
+            .child(
+                div()
+                    .id(("question-island", handle.serial as usize))
+                    .debug_selector(|| "question-island".into())
+                    .relative()
+                    .w_full()
+                    .max_w(px(680.))
+                    .min_w_0()
+                    .font_family(theme::FONT_UI)
+                    .child(crate::components::composer_join(
+                        radius,
+                        rgb(theme::RAISED).into(),
+                        rgb(theme::ATTENTION).into(),
+                    ))
+                    .child(
+                        GroupBox::new()
+                            .id("question-surface")
+                            .fill()
+                            .min_w_0()
+                            .content_style(surface)
+                            .child(body),
+                    ),
+            ),
+    )
+    .into_any_element()
+}
+
 pub(crate) fn transcript_status(status: AgentStatus, fresh: bool) -> Status {
     if !fresh {
         return Status::Idle;
@@ -797,23 +857,25 @@ impl CockpitView {
                 handle.generation,
                 handle.serial
             )))
-            .p(px(8.))
-            .rounded(px(theme::R_CONTROL))
-            .bg(rgb(theme::ATTENTION_WASH))
+            .w_full()
+            .min_w_0()
             .flex()
             .flex_col()
-            .gap(px(6.))
-            .child(components::label(
-                format!(
-                    "{} · {}",
-                    request.decision.tool_name, request.decision.description
-                ),
-                theme::TEXT_STRONG,
-            ));
+            .gap(px(12.))
+            .child(
+                div()
+                    .text_size(px(theme::FS_MD))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(rgb(theme::TEXT))
+                    .child(format!(
+                        "{} · {}",
+                        request.decision.tool_name, request.decision.description
+                    )),
+            );
         if request.subject.is_none() {
             card = card.child(components::label(
                 "Agent identity unavailable",
-                theme::TEXT_MUTED,
+                theme::TEXT_2,
             ));
         }
         if let Some(input) = pane::approval_input(
@@ -1093,50 +1155,7 @@ impl CockpitView {
                             })),
                     ),
             );
-            let radius = gpui::component::Theme::global(cx).radius_2xl();
-            let surface = div()
-                .bg(rgb(theme::RAISED))
-                .rounded_tl(radius)
-                .rounded_tr(radius)
-                .rounded_bl(px(0.))
-                .rounded_br(px(0.))
-                .p(px(16.))
-                .w_full()
-                .min_w_0()
-                .style()
-                .clone();
-            return native_keys(
-                div()
-                    .w_full()
-                    .min_w_0()
-                    .flex()
-                    .justify_center()
-                    .px(px(theme::PANE_PAD_X + 12.))
-                    .child(
-                        div()
-                            .id(("question-island", handle.serial as usize))
-                            .debug_selector(|| "question-island".into())
-                            .relative()
-                            .w_full()
-                            .max_w(px(680.))
-                            .min_w_0()
-                            .font_family(theme::FONT_UI)
-                            .child(crate::components::composer_join(
-                                radius,
-                                rgb(theme::RAISED).into(),
-                                gpui::rgba(theme::COMPOSER_EDGE).into(),
-                            ))
-                            .child(
-                                GroupBox::new()
-                                    .id("question-surface")
-                                    .fill()
-                                    .min_w_0()
-                                    .content_style(surface)
-                                    .child(body),
-                            ),
-                    ),
-            )
-            .into_any_element();
+            return request_island(&handle, body, cx);
         } else if let ferrite_core::DecisionKind::Form { fields } = &request.decision.kind {
             let fields = fields.clone();
             let forms = self.panes[index].request_forms.clone();
@@ -1322,8 +1341,9 @@ impl CockpitView {
                 }
             }
             let cancel_handle = handle.clone();
-            return card
-                .child(
+            return request_island(
+                &handle,
+                card.child(
                     div()
                         .max_h(px(
                             (f32::from(window.viewport_size().height) * 0.45).min(360.)
@@ -1437,14 +1457,16 @@ impl CockpitView {
                                     );
                                 })),
                         ),
-                )
-                .into_any_element();
+                ),
+                cx,
+            );
         } else if let ferrite_core::DecisionKind::External { url } = &request.decision.kind {
             let url = url.clone();
             let complete_handle = handle.clone();
             let cancel_handle = handle.clone();
-            return card
-                .child(
+            return request_island(
+                &handle,
+                card.child(
                     div()
                         .flex()
                         .flex_col()
@@ -1501,12 +1523,14 @@ impl CockpitView {
                                         })),
                                 ),
                         ),
-                )
-                .into_any_element();
+                ),
+                cx,
+            );
         } else if let ferrite_core::DecisionKind::Unsupported { reason } = &request.decision.kind {
             let cancel_handle = handle.clone();
-            return card
-                .child(
+            return request_island(
+                &handle,
+                card.child(
                     div()
                         .flex()
                         .flex_col()
@@ -1526,8 +1550,9 @@ impl CockpitView {
                                     )
                                 })),
                         ),
-                )
-                .into_any_element();
+                ),
+                cx,
+            );
         } else {
             let accepted = request.decision.input.clone();
             let allow_handle = handle.clone();
@@ -1569,15 +1594,18 @@ impl CockpitView {
                         .tab_stop(true)
                         .label("Deny")
                         .disabled(!request.decision.policy.deny || request.submitting)
-                        .on_click(cx.listener(move |view, _, _, cx| {
-                            view.respond_exact(
-                                thread,
-                                &handle,
-                                DecisionAnswer::Deny {
-                                    message: "The operator denied this tool.".into(),
-                                },
-                                cx,
-                            )
+                        .on_click(cx.listener({
+                            let handle = handle.clone();
+                            move |view, _, _, cx| {
+                                view.respond_exact(
+                                    thread,
+                                    &handle,
+                                    DecisionAnswer::Deny {
+                                        message: "The operator denied this tool.".into(),
+                                    },
+                                    cx,
+                                )
+                            }
                         })),
                     ),
             );
@@ -1607,7 +1635,7 @@ impl CockpitView {
                 );
             }
         }
-        card.into_any_element()
+        request_island(&handle, card, cx)
     }
 
     fn reload_subject_history(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
