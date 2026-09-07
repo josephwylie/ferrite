@@ -655,6 +655,16 @@ impl CockpitView {
             }
         })
         .detach();
+        // Quitting (Cmd-Q, the Dock, a logout) ends the process without
+        // dropping this view, so the Sessions' processes are ended here,
+        // inside the platform's shutdown budget. Otherwise a Codex
+        // app-server outlives Ferrite for a moment holding its thread's
+        // writer lock, and the relaunch's resume is refused.
+        cx.on_app_quit(|view, _cx| {
+            view.cockpit.halt_sessions();
+            async {}
+        })
+        .detach();
 
         let repo = here();
 

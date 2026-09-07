@@ -493,3 +493,40 @@ fn effort_waits_for_handover_then_tunes_in_place_without_consuming_context() {
         Some("high")
     );
 }
+
+/// Quitting ends every Session's process, whether ready, still starting, or
+/// a pending replacement: a provider process that outlives Ferrite keeps its
+/// thread's writer lock, and the next launch's resume meets it.
+#[test]
+fn halting_sessions_drops_ready_and_starting_sessions_alike() {
+    let (ready_plan, ready) = planned(false);
+    let (starting_plan, starting) = planned(true);
+    let mut cockpit = cockpit("halt", vec![ready_plan, starting_plan]);
+    let live = cockpit
+        .open(Provider::Codex, workspace())
+        .expect("a ready Session opens");
+    let draft = cockpit.open_draft();
+    assert!(cockpit
+        .bootstrap_draft(draft, choice(Provider::Codex), workspace(), "first", None)
+        .unwrap()
+        .is_none());
+    let pending = cockpit
+        .threads()
+        .into_iter()
+        .find(|thread| *thread != live)
+        .expect("the bootstrap's provisional Thread");
+    assert!(cockpit.thread(pending).unwrap().starting());
+    assert_eq!(ready.dropped.load(Ordering::SeqCst), 0);
+
+    cockpit.halt_sessions();
+
+    assert_eq!(ready.dropped.load(Ordering::SeqCst), 1);
+    assert!(!cockpit.thread(live).unwrap().starting());
+    assert!(cockpit.threads[&live].session.is_none());
+    // A startup still in flight is abandoned: its worker drops the late
+    // process on its own, and nothing waits for it.
+    assert!(!cockpit.thread(pending).unwrap().starting());
+    drop(starting);
+    // The logs are untouched: the halted Threads are still on disk.
+    assert!(cockpit.peek(live).is_ok());
+}

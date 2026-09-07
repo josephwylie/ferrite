@@ -15,6 +15,10 @@ use crate::{SessionEvent, TurnOutcome};
 use super::wire;
 
 const MAX_CONCURRENT_READS: usize = 128;
+/// Turns per `thread/turns/list` page when a history read pages a thread.
+const HISTORY_PAGE_TURNS: u32 = 50;
+/// The most pages one history read follows; past this the read is Partial.
+const MAX_HISTORY_PAGES: usize = 40;
 const MAX_PENDING_FRAMES: usize = 256;
 const MAX_PENDING_BYTES: usize = 2 * 1024 * 1024;
 const MAX_ITEM_REVISIONS: usize = 8192;
@@ -41,9 +45,21 @@ struct Child {
     read_queued: bool,
 }
 
+/// One in-flight history read. Full-history hydration is deprecated on the
+/// app-server (0.153, one `deprecationNotice` per call): a read is a
+/// metadata-only `thread/read`, then `thread/turns/list` pages (oldest
+/// first, full items) until the cursor runs out, and only then is the
+/// assembled thread judged. The read keeps its slot in `reads` across every
+/// step, re-keyed by the outstanding request id.
 struct Read {
     child: String,
     revision: u64,
+    /// The `thread/read` answer once it has arrived; the paged turns are
+    /// assembled onto it. A root read starts here: Main's metadata is not
+    /// what that read is for.
+    thread: Option<Value>,
+    turns: Vec<Value>,
+    pages: usize,
 }
 
 #[derive(Default)]
@@ -83,6 +99,24 @@ impl Router {
     /// A resumed Main may be the first evidence of previously spawned children.
     /// Inspect its stored collaboration items for discovery only, never replay
     /// Main's history into the already-restored transcript.
+    /// Page Main's own history for discovery, the paginated way: the resume
+    /// answered with `excludeTurns`, so the turns come from
+    /// `thread/turns/list`. The assembled thread reaches `root_history`.
+    pub(super) fn request_root_history(&mut self) -> Update {
+        let mut update = Update::default();
+        if let Some(root) = self.root.clone() {
+            let read = Read {
+                child: root.clone(),
+                revision: self.revision,
+                thread: Some(json!({"id": root})),
+                turns: Vec::new(),
+                pages: 0,
+            };
+            self.request_page(read, None, &mut update);
+        }
+        update
+    }
+
     pub(super) fn root_history(&mut self, thread: &Value) -> Update {
         let mut update = Update::default();
         if let (Some(root), Some(turns)) = (self.root.clone(), thread["turns"].as_array()) {
@@ -196,7 +230,7 @@ impl Router {
             }
             if let Some(id) = frame["id"].as_str() {
                 if let Some(read) = self.reads.remove(id) {
-                    self.read_result(read, &frame, update);
+                    self.read_step(read, &frame, update);
                 }
             }
             return;
@@ -615,12 +649,79 @@ impl Router {
             Read {
                 child: id.to_owned(),
                 revision: self.revision,
+                thread: None,
+                turns: Vec::new(),
+                pages: 0,
             },
         );
+        // Metadata only: `includeTurns` is the deprecated full hydration, and
+        // the server says so on every call. The turns are paged next.
         update.requests.push(
             json!({"jsonrpc":"2.0", "id":request, "method":"thread/read",
-            "params":{"threadId":id,"includeTurns":true}}),
+            "params":{"threadId":id}}),
         );
+    }
+
+    fn request_page(&mut self, read: Read, cursor: Option<&str>, update: &mut Update) {
+        self.next_request += 1;
+        let request = format!("ferrite-agent-turns-{}", self.next_request);
+        let mut params = json!({
+            "threadId": read.child,
+            "itemsView": "full",
+            "sortDirection": "asc",
+            "limit": HISTORY_PAGE_TURNS,
+        });
+        if let Some(cursor) = cursor {
+            params["cursor"] = json!(cursor);
+        }
+        self.reads.insert(request.clone(), read);
+        update.requests.push(json!({
+            "jsonrpc": "2.0", "id": request, "method": "thread/turns/list", "params": params,
+        }));
+    }
+
+    /// One answer to whichever request the read has outstanding.
+    fn read_step(&mut self, mut read: Read, frame: &Value, update: &mut Update) {
+        let failed = frame.get("error").is_some();
+        let Some(thread) = read.thread.take() else {
+            // The metadata step. A server that hydrated anyway (an older
+            // CLI, or a capture of one) has already said everything.
+            let thread = frame["result"]["thread"].clone();
+            let hydrated = thread["turns"].as_array().is_some_and(|turns| !turns.is_empty());
+            if failed || hydrated {
+                self.read_result(read, &thread, failed, false, update);
+                return;
+            }
+            read.thread = Some(thread);
+            self.request_page(read, None, update);
+            return;
+        };
+        let is_root = self.root.as_deref() == Some(read.child.as_str());
+        if failed {
+            if !is_root {
+                self.read_result(read, &thread, true, false, update);
+            }
+            return;
+        }
+        if let Some(turns) = frame["result"]["data"].as_array() {
+            read.turns.extend(turns.iter().cloned());
+        }
+        read.pages += 1;
+        let next = frame["result"]["nextCursor"].as_str().map(str::to_owned);
+        if let Some(cursor) = next.as_deref().filter(|_| read.pages < MAX_HISTORY_PAGES) {
+            read.thread = Some(thread);
+            self.request_page(read, Some(cursor), update);
+            return;
+        }
+        let mut thread = thread;
+        thread["turns"] = Value::Array(std::mem::take(&mut read.turns));
+        if is_root {
+            let root = self.root_history(&thread);
+            update.events.extend(root.events);
+            update.requests.extend(root.requests);
+        } else {
+            self.read_result(read, &thread, false, next.is_some(), update);
+        }
     }
 
     fn start_queued_reads(&mut self, update: &mut Update) {
@@ -632,8 +733,16 @@ impl Router {
         }
     }
 
-    fn read_result(&mut self, read: Read, frame: &Value, update: &mut Update) {
-        let thread = &frame["result"]["thread"];
+    /// Judge one child's assembled history: `failed` when a step of the read
+    /// was refused, `truncated` when the pages ran past the budget.
+    fn read_result(
+        &mut self,
+        read: Read,
+        thread: &Value,
+        failed: bool,
+        truncated: bool,
+        update: &mut Update,
+    ) {
         let expected_parent = self
             .children
             .get(&read.child)
@@ -644,13 +753,13 @@ impl Router {
             return;
         };
         child.reading = false;
-        if !valid || frame.get("error").is_some() {
+        if !valid || failed {
             child.info.coverage = TranscriptCoverage::Unavailable;
             update.activity(ActivityEvent::Coverage {
                 key: child.info.key.clone(),
                 coverage: TranscriptCoverage::Unavailable,
             });
-            if frame.get("error").is_none() {
+            if !failed {
                 self.unrelated.insert(read.child.clone());
                 self.conflicts.insert(read.child.clone());
                 update.activity(ActivityEvent::Detached {
@@ -665,7 +774,7 @@ impl Router {
         if let Some(role) = nonempty(thread, "agentRole") {
             child.info.kind = Some(role.to_owned());
         }
-        let mut complete = !self.discarded && !self.revisions_full;
+        let mut complete = !self.discarded && !self.revisions_full && !truncated;
         let has_live_items = self
             .item_revisions
             .keys()
@@ -1651,6 +1760,181 @@ mod tests {
             event,
             SessionEvent::Activity(ActivityEvent::Decision { .. })
         )));
+    }
+
+    /// The outstanding request id of the one read on `child`.
+    fn read_id(router: &Router, child: &str) -> Value {
+        let (id, _) = router
+            .reads
+            .iter()
+            .find(|(_, read)| read.child == child)
+            .expect("one read outstanding");
+        json!(id)
+    }
+
+    fn metadata(id: Value, child: &str, parent: &str) -> Value {
+        json!({"id":id,"result":{"thread":{"id":child,"parentThreadId":parent,
+            "agentNickname":"Plato","status":{"type":"notLoaded"},"turns":[]}}})
+    }
+
+    fn page(id: Value, turns: Vec<Value>, next: Option<&str>) -> Value {
+        json!({"id":id,"result":{"data":turns,"nextCursor":next}})
+    }
+
+    fn message_turn(turn: &str, text: &str) -> Value {
+        json!({"id":turn,"status":"completed","itemsView":"full",
+            "items":[{"type":"agentMessage","id":"message","text":text}]})
+    }
+
+    /// Full-history hydration is deprecated: a child's read asks for
+    /// metadata only, then pages its turns oldest-first with full items,
+    /// following the cursor until it runs out, and is Complete only then.
+    #[test]
+    fn a_child_read_pages_its_turns_after_metadata() {
+        let mut router = Router::default();
+        router.identify_main("main");
+        let discovered = router.observe(spawn("main", "child"));
+        assert_eq!(discovered.requests.len(), 1);
+        assert_eq!(discovered.requests[0]["method"], "thread/read");
+        assert!(discovered.requests[0]["params"].get("includeTurns").is_none());
+
+        let paged = router.observe(metadata(read_id(&router, "child"), "child", "main"));
+        assert_eq!(paged.requests.len(), 1);
+        let params = &paged.requests[0]["params"];
+        assert_eq!(paged.requests[0]["method"], "thread/turns/list");
+        assert_eq!(params["threadId"], "child");
+        assert_eq!(params["itemsView"], "full");
+        assert_eq!(params["sortDirection"], "asc");
+        assert!(params.get("cursor").is_none());
+        assert_eq!(
+            router.children["child"].info.coverage,
+            TranscriptCoverage::Partial
+        );
+
+        let second = router.observe(page(
+            read_id(&router, "child"),
+            vec![message_turn("turn-1", "first")],
+            Some("after-1"),
+        ));
+        assert_eq!(second.requests.len(), 1);
+        assert_eq!(second.requests[0]["params"]["cursor"], "after-1");
+        assert!(second.events.is_empty(), "nothing is judged mid-read");
+
+        let done = router.observe(page(
+            read_id(&router, "child"),
+            vec![message_turn("turn-2", "second")],
+            None,
+        ));
+        assert!(done.requests.is_empty());
+        assert!(router.reads.is_empty());
+        let texts: Vec<&str> = done
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                SessionEvent::Activity(ActivityEvent::HistoryContent {
+                    event: ExecutionEvent::TextSnapshot { text },
+                    ..
+                }) => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts, ["first", "second"]);
+        assert_eq!(
+            router.children["child"].info.coverage,
+            TranscriptCoverage::Complete
+        );
+        assert_eq!(
+            router.children["child"].info.name.as_deref(),
+            Some("Plato")
+        );
+    }
+
+    /// A read that outruns its page budget stops asking and stays Partial,
+    /// never claiming a history it did not finish reading.
+    #[test]
+    fn a_read_past_the_page_budget_stops_and_stays_partial() {
+        let mut router = Router::default();
+        router.identify_main("main");
+        router.observe(spawn("main", "child"));
+        router.observe(metadata(read_id(&router, "child"), "child", "main"));
+        for n in 0..MAX_HISTORY_PAGES - 1 {
+            let update = router.observe(page(
+                read_id(&router, "child"),
+                vec![message_turn(&format!("turn-{n}"), "text")],
+                Some("more"),
+            ));
+            assert_eq!(update.requests.len(), 1);
+        }
+        let last = router.observe(page(
+            read_id(&router, "child"),
+            vec![message_turn("turn-last", "text")],
+            Some("more"),
+        ));
+        assert!(last.requests.is_empty());
+        assert!(router.reads.is_empty());
+        assert_eq!(
+            router.children["child"].info.coverage,
+            TranscriptCoverage::Partial
+        );
+    }
+
+    /// Main's resume no longer carries its turns; its history is paged the
+    /// same way, and only for discovery — a child it names gets its own read,
+    /// and Main's own items are never replayed as content.
+    #[test]
+    fn main_s_history_is_paged_for_discovery_only() {
+        let mut router = Router::default();
+        router.identify_main("main");
+        let started = router.request_root_history();
+        assert_eq!(started.requests.len(), 1);
+        assert_eq!(started.requests[0]["method"], "thread/turns/list");
+        assert_eq!(started.requests[0]["params"]["threadId"], "main");
+
+        let first = router.observe(page(
+            read_id(&router, "main"),
+            vec![message_turn("main-turn", "MAIN_TEXT")],
+            Some("after-1"),
+        ));
+        assert_eq!(first.requests[0]["params"]["cursor"], "after-1");
+
+        let spawned = spawn("main", "child")["params"]["item"].clone();
+        let done = router.observe(page(
+            read_id(&router, "main"),
+            vec![json!({"id":"main-turn-2","status":"completed","itemsView":"full",
+                "items":[spawned]})],
+            None,
+        ));
+        assert!(router.children.contains_key("child"));
+        assert_eq!(done.requests.len(), 1);
+        assert_eq!(done.requests[0]["method"], "thread/read");
+        assert_eq!(done.requests[0]["params"]["threadId"], "child");
+        assert!(!done.events.iter().any(|event| matches!(
+            event,
+            SessionEvent::Activity(ActivityEvent::MainContent { .. })
+                | SessionEvent::TextDelta { .. }
+        )));
+        assert!(router.reads.values().all(|read| read.child == "child"));
+    }
+
+    /// A server that hydrates anyway (an older CLI, or a capture of one)
+    /// has said everything in the metadata answer: no pages are asked for.
+    #[test]
+    fn a_hydrated_metadata_answer_needs_no_pages() {
+        let mut router = Router::default();
+        router.identify_main("main");
+        let discovered = router.observe(spawn("main", "child"));
+        let done = router.observe(history(
+            discovered.requests[0]["id"].clone(),
+            "child",
+            "main",
+            "past answer",
+        ));
+        assert!(done.requests.is_empty());
+        assert!(router.reads.is_empty());
+        assert_eq!(
+            router.children["child"].info.coverage,
+            TranscriptCoverage::Complete
+        );
     }
 
     #[test]

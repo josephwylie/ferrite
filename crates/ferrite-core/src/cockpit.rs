@@ -1785,6 +1785,20 @@ impl Cockpit {
         self.threads.keys().copied().collect()
     }
 
+    /// The process is quitting: end every Session now, replacements and
+    /// pending startups included, so no provider process outlives Ferrite.
+    /// A Codex app-server left running holds its thread's writer lock until
+    /// it notices its stdin is gone; the next launch's resume would meet it.
+    /// Threads stay as they are — their logs are durable — and the Cockpit
+    /// is not used again.
+    pub fn halt_sessions(&mut self) {
+        self.bootstraps.clear();
+        for state in self.threads.values_mut() {
+            state.replacement = None;
+            state.session = None;
+        }
+    }
+
     /// The durable operator title, whether this Thread is live or parked.
     pub fn thread_title(&self, thread: ThreadId) -> Result<Option<String>, LoadError> {
         if let Some(state) = self.threads.get(&thread) {

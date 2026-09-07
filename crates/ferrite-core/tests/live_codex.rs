@@ -297,3 +297,55 @@ fn a_parked_thread_resumes_across_processes() {
         "the resumed thread forgot: {text:?}"
     );
 }
+
+/// Resume an existing thread on the real server and only listen: no turn,
+/// no model call. The handshake must not hydrate history (the server
+/// answers that with a deprecation notice, which reached the transcript as
+/// a Notice on every prompt) and Main's history must be paged for
+/// discovery instead. Names the thread through
+/// FERRITE_CODEX_RESUME_THREAD; skips without one.
+#[test]
+#[ignore = "spawns the real codex CLI"]
+fn a_resume_pages_history_without_deprecated_hydration() {
+    let Ok(thread) = std::env::var("FERRITE_CODEX_RESUME_THREAD") else {
+        eprintln!("FERRITE_CODEX_RESUME_THREAD unset; nothing to resume");
+        return;
+    };
+    let session = CodexSession::spawn(CodexConfig {
+        resume: Some(thread.clone()),
+        model: None,
+        approval_policy: None,
+        sandbox: None,
+        ..live_config()
+    })
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(8);
+    let mut init = None;
+    let mut notices = Vec::new();
+    let mut discovered = 0;
+    while let Ok(event) = session
+        .events()
+        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+    {
+        use ferrite_core::activity::{ActivityEvent, ExecutionEvent};
+        match event {
+            SessionEvent::Init { session_id, .. } => init = Some(session_id),
+            SessionEvent::Activity(ActivityEvent::MainContent {
+                event: ExecutionEvent::Notice { text },
+                ..
+            }) => notices.push(text),
+            SessionEvent::Activity(ActivityEvent::Discovered(info)) => {
+                discovered += 1;
+                println!("discovered {:?} ({:?})", info.name, info.coverage);
+            }
+            SessionEvent::Closed { reason } => panic!("closed: {reason}"),
+            _ => {}
+        }
+    }
+    assert_eq!(init.as_deref(), Some(thread.as_str()));
+    assert!(
+        !notices.iter().any(|text| text.contains("hydration is deprecated")),
+        "deprecated hydration was requested: {notices:?}"
+    );
+    println!("{discovered} subagents discovered from paged history");
+}
