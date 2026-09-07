@@ -847,7 +847,7 @@ fn read_stdout(
         // Skills are requested before thread/start so history backpressure
         // cannot block readiness.
         let mut menu_pending = true;
-        let mut catalogs = live_catalogs::Catalogs::after_startup(cwd.as_deref());
+        let mut catalogs = live_catalogs::Catalogs::new(cwd.as_deref());
         loop {
             line.clear();
             match reader.read_until(b'\n', &mut line) {
@@ -908,9 +908,11 @@ fn read_stdout(
                     None => handshake = Some((step_sender, pending)),
                 }
             }
+            let mut startup_skills = false;
             if menu_pending {
                 if let Some(response) = wire::parse_response(text, SKILLS_REQUEST_ID) {
                     menu_pending = false;
+                    startup_skills = true;
                     let result = match response {
                         Ok(result) => result,
                         Err(error) => {
@@ -922,20 +924,10 @@ fn read_stdout(
                         let _ = skills_ready.send(Err("skills/list carried no data".into()));
                         continue;
                     }
-                    {
-                        let commands = wire::parse_skills(&result);
-                        *lock(&skills) = commands.clone();
-                        let _ = skills_ready.send(Ok(()));
-                        // Announce the menu on the event stream so the
-                        // cockpit can fold it (#23); a server listing no
-                        // skills announces nothing.
-                        if !commands.is_empty()
-                            && sender.send(SessionEvent::Commands { commands }).is_err()
-                        {
-                            return;
-                        }
-                    }
-                    continue;
+                    *lock(&skills) = wire::parse_skills(&result);
+                    let _ = skills_ready.send(Ok(()));
+                    // Let the catalog owner finish the pending startup read
+                    // and refresh any invalidations received while it ran.
                 }
             }
             turns.observe(text);
@@ -948,6 +940,11 @@ fn read_stdout(
                         match &event {
                             SessionEvent::Commands { commands } => {
                                 *lock(&skills) = commands.clone();
+                                // Startup's empty menu is quiet; a later empty
+                                // refresh must still clear removed commands.
+                                if startup_skills && commands.is_empty() {
+                                    continue;
+                                }
                             }
                             SessionEvent::Models { models } => {
                                 *lock(&model_catalog) = models.clone();
