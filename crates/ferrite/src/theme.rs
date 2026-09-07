@@ -578,11 +578,13 @@ pub const ANSWER_MARK_TOP: f32 = 2.6;
 /// the tool rows use: an answer's prose is indented off the mark rather than
 /// held on the tool rows' text edge, and the gap clears the mark's overhang.
 pub const ANSWER_GAP: f32 = 14.0;
-/// 6px — the answer row's own block padding, on top of the transcript
+/// 12px — the answer row's own block padding, on top of the transcript
 /// stack's 10px `BLOCK_GAP`: the model's prose gets more air than the
 /// events around it, so an answer reads as its own passage. It pads rather
 /// than margins so the mark, laid out inside the row, moves with the prose.
-pub const ANSWER_PAD_Y: f32 = 6.0;
+/// Doubled from 6px: at 6 the passage still read as one more event in the
+/// run, and the answer is what the operator is looking for.
+pub const ANSWER_PAD_Y: f32 = 12.0;
 #[allow(dead_code)]
 pub const EVENT_GAP: f32 = 8.0;
 pub const INDENT: f32 = 17.0;
