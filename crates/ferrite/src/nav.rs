@@ -40,14 +40,14 @@ use crate::icons::{self, icon};
 use crate::pointer::{Pointer, PointerPressed};
 use crate::theme::{
     ATTENTION, BLOCKED, FILL, FONT_UI, FS_LG, FS_MD, FS_SM, GROUP_GAP, GROUP_RAIL, GROUP_ROW_H,
-    HOVER, ICON_BUTTON, ICON_BUTTON_GLYPH, ICON_CHEVRON_LG, IDLE, LINE_TIGHT, MEMBERS_TOP,
-    MEMBER_GAP, MEMBER_INDENT, MENU, MENU_PAD, MENU_ROW_H, MENU_TOP, NAV, NAV_HEAD_H, NAV_TREE_PAD,
+    ICON_BUTTON, ICON_BUTTON_GLYPH, ICON_CHEVRON_LG, IDLE, LINE_TIGHT, MEMBERS_TOP, MEMBER_GAP,
+    MEMBER_INDENT, MENU, MENU_PAD, MENU_ROW_H, MENU_TOP, NAV, NAV_HEAD_H, NAV_TREE_PAD,
     NAV_TREE_PAD_B, PROVIDER_CLAUDE, PROVIDER_CODEX, PROVIDER_MARK, PULSE_MIN, RAIL_INSET,
-    RAIL_OFFSET, ROW_GAP, ROW_ICON, ROW_ICON_GAP, ROW_PAD_X, ROW_PAD_Y, ROW_TEXT_W, RUNNING,
-    RUNNING_HALO, R_CONTROL, R_MENU, R_TIGHT, SEP, SHADOW_FAR, SHADOW_FAR_BLUR, SHADOW_FAR_SPREAD,
-    SHADOW_FAR_Y, SHADOW_NEAR, SHADOW_NEAR_BLUR, SHADOW_NEAR_Y, SOLOS_TOP, STATUS_DOT,
-    STATUS_HALO_INSET, STATUS_PULSE_MS, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG, THREAD_ROW_H,
-    TRAFFIC_RESERVE, WIN_CHROME_H,
+    RAIL_OFFSET, RAISED, ROW_GAP, ROW_ICON, ROW_ICON_GAP, ROW_PAD_X, ROW_PAD_Y, ROW_TEXT_W,
+    RUNNING, RUNNING_HALO, R_CONTROL, R_MENU, R_TIGHT, SEP, SHADOW_FAR, SHADOW_FAR_BLUR,
+    SHADOW_FAR_SPREAD, SHADOW_FAR_Y, SHADOW_NEAR, SHADOW_NEAR_BLUR, SHADOW_NEAR_Y, SOLOS_TOP,
+    STATUS_DOT, STATUS_HALO_INSET, STATUS_PULSE_MS, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG,
+    THREAD_ROW_H, TRAFFIC_RESERVE, WIN_CHROME_H,
 };
 
 /// The nav's two widths — 286px, and the 56px rail cmd-b folds it to.
@@ -89,9 +89,9 @@ const ORDER_GROUP: &str = "nav-order";
 // The handful of nav metrics `theme.rs` does not name, kept here rather
 // than written inline so each one is said once and explained once.
 //
-/// 4px — the gap between the filter trigger's label and its chevron. The
-/// chevron belongs to the word, not to the control's right edge.
-const TRIGGER_GAP: f32 = 4.0;
+/// 7px — enough separation for the leading folder, label, and trailing
+/// chevron to remain legible as one compact field.
+const TRIGGER_GAP: f32 = 7.0;
 /// 9px — a filter option's leading inset. One more than a row's, so the
 /// option's label hangs under the trigger's label rather than under its box.
 const MENU_ROW_PAD_L: f32 = 9.0;
@@ -402,7 +402,7 @@ pub fn add_thread_button() -> Button {
 
 /// Easy-access ordering control beside New Thread. Its selected state is
 /// visible even while the menu is closed.
-pub fn order_button(active: bool) -> Button {
+pub fn order_button(active: bool, open: bool) -> Button {
     components::button("thread-list-order")
         .tab_stop(true)
         .debug_selector(|| "thread-list-order".into())
@@ -410,8 +410,10 @@ pub fn order_button(active: bool) -> Button {
         .w(px(ICON_BUTTON))
         .h(px(ICON_BUTTON))
         .p_0()
-        .when(active, |button| button.bg(rgb(FILL)))
-        .tooltip(if active {
+        .when(open, |button| button.bg(rgb(FILL)))
+        .tooltip(if open {
+            "Close thread order menu"
+        } else if active {
             "Threads grouped by Project"
         } else {
             "Thread list order"
@@ -420,7 +422,7 @@ pub fn order_button(active: bool) -> Button {
             icon(
                 icons::LIST_FILTER,
                 ICON_BUTTON_GLYPH,
-                if active { TEXT } else { TEXT_MUTED },
+                if active || open { TEXT } else { TEXT_MUTED },
             )
             .group_hover(ORDER_GROUP, |style| style.text_color(rgb(TEXT))),
         )
@@ -429,7 +431,17 @@ pub fn order_button(active: bool) -> Button {
 /// Ordering menu anchored to the compact button rather than occupying the
 /// full Project-filter width.
 pub fn order_menu() -> Div {
-    filter_menu().left_auto().w(px(190.))
+    filter_menu().left_auto().w(px(218.)).child(
+        div()
+            .h(px(24.))
+            .px(px(ROW_PAD_X))
+            .flex()
+            .items_center()
+            .text_size(px(FS_SM))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(rgb(TEXT_MUTED))
+            .child("Order threads by"),
+    )
 }
 
 pub fn order_option(index: usize, label: &'static str, selected: bool) -> Button {
@@ -444,12 +456,13 @@ pub fn order_option(index: usize, label: &'static str, selected: bool) -> Button
         .gap(px(ROW_PAD_X))
         .rounded(px(R_CONTROL))
         .when(selected, |on| {
-            on.text_color(rgb(TEXT_STRONG))
+            on.bg(rgb(FILL))
+                .text_color(rgb(TEXT_STRONG))
                 .font_weight(FontWeight::MEDIUM)
         })
         .when(!selected, |off| off.text_color(rgb(TEXT_2)))
         .child(div().min_w_0().truncate().child(label))
-        .children(selected.then(|| icon(icons::CHECK, ICON_CHEVRON_LG, TEXT_MUTED)))
+        .children(selected.then(|| icon(icons::CHECK, ICON_CHEVRON_LG, TEXT)))
 }
 
 /// A quiet Project label separates grouped runs without turning each one
@@ -474,9 +487,9 @@ pub fn project_section(label: SharedString, count: usize, first: bool) -> Div {
         )
 }
 
-/// The Project filter trigger — the one dropdown navigation has. The
-/// chevron sits **immediately after the label**, never pushed to the right
-/// edge: the control is a word with a mark, not a full-width select.
+/// The Project filter trigger keeps a quiet inset ground at rest, distinguishing
+/// the primary scope selector from its transparent neighboring icon actions.
+/// Its folder and edge-aligned chevron frame the current Project name.
 pub fn filter_trigger(state: &FilterState) -> Stateful<Div> {
     let chevron = icon(icons::CHEVRON_DOWN, ICON_CHEVRON_LG, TEXT_MUTED);
     let chevron = if state.open {
@@ -496,6 +509,7 @@ pub fn filter_trigger(state: &FilterState) -> Stateful<Div> {
         .pr(px(R_CONTROL))
         .gap(px(TRIGGER_GAP))
         .rounded(px(R_CONTROL))
+        .bg(rgb(RAISED))
         .text_size(px(FS_LG))
         .font_weight(FontWeight::SEMIBOLD)
         // NOT `relative(LINE_UI)`: 13 x 1.45 = 18.85 leaves the line box at
@@ -507,13 +521,18 @@ pub fn filter_trigger(state: &FilterState) -> Stateful<Div> {
         // An open trigger wears its hover face: the menu is the hover made
         // permanent, so the control does not blink when the pointer leaves.
         .when(state.open, |open| {
-            open.bg(rgb(HOVER)).text_color(rgb(TEXT_STRONG))
+            open.bg(rgb(FILL)).text_color(rgb(TEXT_STRONG))
         })
         .when(!state.open, |shut| shut.text_color(rgb(TEXT)))
         .hover_control()
         .press_control()
         .child(
+            icon(icons::FOLDER, ROW_ICON, TEXT_MUTED)
+                .group_hover(FILTER_GROUP, |style| style.text_color(rgb(TEXT))),
+        )
+        .child(
             div()
+                .flex_1()
                 .min_w_0()
                 .truncate()
                 .group_hover(FILTER_GROUP, |style| style.text_color(rgb(TEXT_STRONG)))
@@ -557,8 +576,9 @@ pub fn filter_menu() -> Div {
         ])
 }
 
-/// One filter row. The selected Project is named in white at weight 500 and
-/// carries a trailing check — the only tick the nav draws.
+/// One filter row. The selected Project carries a restrained fill as well as
+/// white medium-weight type and a trailing check, so the current scope is
+/// apparent before the operator starts scanning labels.
 pub fn filter_option(index: usize, option: &FilterOption) -> Stateful<Div> {
     div()
         .id(("nav-filter-option", index))
@@ -574,7 +594,8 @@ pub fn filter_option(index: usize, option: &FilterOption) -> Stateful<Div> {
         .rounded(px(R_CONTROL))
         .text_size(px(FS_MD))
         .when(option.selected, |on| {
-            on.text_color(rgb(TEXT_STRONG))
+            on.bg(rgb(FILL))
+                .text_color(rgb(TEXT_STRONG))
                 .font_weight(FontWeight::MEDIUM)
         })
         .when(!option.selected, |off| off.text_color(rgb(TEXT_2)))
@@ -592,7 +613,7 @@ pub fn filter_option(index: usize, option: &FilterOption) -> Stateful<Div> {
         .children(
             option
                 .selected
-                .then(|| icon(icons::CHECK, ICON_CHEVRON_LG, TEXT_MUTED)),
+                .then(|| icon(icons::CHECK, ICON_CHEVRON_LG, TEXT)),
         )
 }
 
@@ -1287,10 +1308,14 @@ mod tests {
     }
 
     #[test]
-    fn the_order_button_shows_when_project_grouping_is_active() {
+    fn the_order_button_is_clear_at_rest_and_filled_while_open() {
         let background = |mut button: Button| button.style().background.clone();
-        assert_eq!(background(order_button(false)), None);
-        assert_eq!(background(order_button(true)), Some(rgb(FILL).into()));
+        assert_eq!(background(order_button(false, false)), None);
+        assert_eq!(background(order_button(true, false)), None);
+        assert_eq!(
+            background(order_button(false, true)),
+            Some(rgb(FILL).into())
+        );
     }
 
     /// A row whose Project or checkout has not resolved keeps its full

@@ -8018,7 +8018,11 @@ impl CockpitView {
             },
         )));
         let head = head.child(
-            nav::order_button(state.thread_list_order == ThreadListOrder::ByProject).on_click(
+            nav::order_button(
+                state.thread_list_order == ThreadListOrder::ByProject,
+                state.order_open,
+            )
+            .on_click(
                 cx.listener(|view, _: &ClickEvent, _, cx| {
                     cx.stop_propagation();
                     view.nav_filter_open = false;
