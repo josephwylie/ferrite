@@ -45,15 +45,6 @@ impl Catalogs {
         }
     }
 
-    /// Startup owns the first skills/list exchange because Session creation
-    /// waits for it. Later skill invalidations and all model pages remain in
-    /// this reader-owned catalog lifecycle.
-    pub fn after_startup(cwd: Option<&Path>) -> Self {
-        let mut catalogs = Self::new(cwd);
-        catalogs.skills_pending = None;
-        catalogs
-    }
-
     fn next_id(&mut self) -> Result<Value, String> {
         self.serial = self
             .serial

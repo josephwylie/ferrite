@@ -1522,6 +1522,51 @@ cat >> '{log}'"#,
 }
 
 #[test]
+fn skill_invalidation_before_startup_reply_waits_for_initial_catalog() {
+    let program = stub(
+        "codex-skill-startup-invalidation",
+        &format!(
+            r#"{VERSION_CASE}
+IFS= read -r line
+# Deliver the invalidation before releasing initialize, fixing the ordering
+# that otherwise depends on the reader and handshake threads' scheduling.
+echo '{{"method":"skills/changed","params":{{}}}}'
+echo '{{"id":1,"result":{{}}}}'
+initial=0
+while IFS= read -r line; do
+case "$line" in
+*'"method":"skills/list"'*)
+request=$(printf '%s' "$line" | sed -n 's/.*"id":\([^,}}]*\).*/\1/p')
+if [ "$initial" -eq 0 ]; then
+    # A refresh must not overtake the required startup request.
+    [ "$request" = 3 ] || exit 1
+    initial=1
+    printf '{{"id":%s,"result":{{"data":[{{"skills":[{{"name":"review","path":"/workspace/review/SKILL.md","enabled":true}}]}}]}}}}\n' "$request"
+else
+    printf '{{"id":%s,"result":{{"data":[]}}}}\n' "$request"
+fi;;
+*'"method":"thread/start"'*)
+echo '{{"id":2,"result":{{"thread":{{"id":"stub-thread"}},"model":"stub-model"}}}}';;
+esac
+done"#,
+        ),
+    );
+    let session = CodexSession::spawn(config(program)).unwrap();
+    let mut menus = Vec::new();
+    while menus.len() < 2 {
+        if let SessionEvent::Commands { commands } = session
+            .events()
+            .recv_timeout(Duration::from_secs(3))
+            .expect("startup invalidation must refresh the catalog")
+        {
+            menus.push(commands);
+        }
+    }
+    assert_eq!(menus[0][0].name, "review");
+    assert!(menus[1].is_empty(), "refresh must clear removed skills");
+}
+
+#[test]
 fn refused_skill_discovery_fails_startup_instead_of_sending_plain_text() {
     let program = stub("codex-skill-refused", &format!("{VERSION_CASE}\necho '{{\"id\":1,\"result\":{{}}}}'\necho '{{\"id\":3,\"error\":{{\"message\":\"skill discovery refused\"}}}}'\nexec cat > /dev/null"));
     let error = match CodexSession::spawn(config(program)) {
