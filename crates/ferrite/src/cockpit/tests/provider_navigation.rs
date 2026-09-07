@@ -1,6 +1,63 @@
 use super::*;
 
 #[gpui::test]
+fn contract_native_file_menu_excludes_git_metadata_and_duplicate_paths(cx: &mut TestAppContext) {
+    let (core, fake, _checkout) = bound_cockpit("native-file-filter", Provider::Codex);
+    *fake.native_files.borrow_mut() = true;
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    tick(cx);
+    cx.simulate_input("@c");
+    cx.run_until_parked();
+    tick(cx);
+    let reply = fake.file_searches.borrow().last().unwrap().1.clone();
+    let file = |path: &str| ferrite_core::providers::FileSuggestion {
+        path: path.into(),
+        is_directory: false,
+        matched: vec![],
+    };
+    // A live Codex response put more than one menu's worth of .git backup
+    // paths before the working files. Filtering must happen before the cap.
+    let mut files: Vec<_> = (0..12)
+        .map(|n| file(&format!(".git/backup-{n}/cockpit.rs")))
+        .collect();
+    files.extend([
+        file("src/cockpit.rs"),
+        file("src/cockpit.rs"),
+        file("other/cockpit.rs"),
+        file("nested/.git/config"),
+        file(".gitignore"),
+        file(".github/CODEOWNERS"),
+        file("/external/cockpit.rs"),
+    ]);
+    reply.send(Ok(files)).unwrap();
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert_eq!(
+            view.popover
+                .as_ref()
+                .unwrap()
+                .rows
+                .iter()
+                .map(|row| row.insert.as_ref())
+                .collect::<Vec<_>>(),
+            [
+                "src/cockpit.rs",
+                "other/cockpit.rs",
+                ".gitignore",
+                ".github/CODEOWNERS",
+                "/external/cockpit.rs"
+            ]
+        );
+    });
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(composer_text(&view, cx), "@src/cockpit.rs ");
+    assert!(fake.sent.borrow().is_empty());
+}
+
+#[gpui::test]
 fn contract_native_files_keep_provider_order_and_ignore_old_queries(cx: &mut TestAppContext) {
     let (core, fake, _checkout) = bound_cockpit("native-file-menu", Provider::Codex);
     *fake.native_files.borrow_mut() = true;

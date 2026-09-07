@@ -32,6 +32,141 @@ fn scratch(name: &str) -> Store {
 const CLAUDE_SESSION_ID: &str = "e7699e43-9435-449e-b952-7df6cc3d0386";
 
 #[test]
+fn claude_local_command_bookkeeping_is_not_a_conversation_turn() {
+    use ferrite_core::activity::Activity;
+    use ferrite_core::transcript::Body;
+    use serde_json::json;
+
+    // These ancestry/metadata shapes come from a native /compact and /rename capture.
+    // The same XML without that provenance remains an ordinary user prompt.
+    for unfinished in [false, true] {
+        let store = scratch(if unfinished {
+            "local-command-unfinished"
+        } else {
+            "local-command"
+        });
+        let mut lines = vec![
+            json!({"type":"user","uuid":"u","message":{"content":"Real question"}}),
+            json!({"type":"assistant","uuid":"a","message":{"model":"fixture","content":
+                if unfinished { json!([{"type":"tool_use","id":"read","name":"Read","input":{}}]) }
+                else { json!([{"type":"text","text":"Real answer"}]) }}}),
+            json!({"type":"system","uuid":"boundary","subtype":"compact_boundary"}),
+            json!({"type":"user","uuid":"summary","parentUuid":"boundary","promptId":"p","isCompactSummary":true,"isVisibleInTranscriptOnly":true,"message":{"content":"Injected summary"}}),
+            json!({"type":"user","uuid":"caveat","parentUuid":"a","promptId":"p","isMeta":true,"message":{"content":"<local-command-caveat>CLI bookkeeping</local-command-caveat>"}}),
+            json!({"type":"user","uuid":"command","parentUuid":"caveat","promptId":"p","message":{"content":"<command-name>/compact</command-name>\n<command-message>compact</command-message>\n<command-args></command-args>"}}),
+            json!({"type":"user","uuid":"stdout","parentUuid":"command","promptId":"p","message":{"content":"<local-command-stdout>Compacted </local-command-stdout>"}}),
+            json!({"type":"system","uuid":"rename-output","subtype":"local_command","content":"<local-command-stdout>Renamed session</local-command-stdout>"}),
+            json!({"type":"user","uuid":"u2","parentUuid":"stdout","message":{"content":"After compact"}}),
+            json!({"type":"assistant","message":{"content":[{"type":"text","text":"Still here"}]}}),
+        ];
+        let path = store.dir().join("local-command.jsonl");
+        let mut data = String::new();
+        for line in &mut lines {
+            line["sessionId"] = json!("import-local-command");
+            line["cwd"] = json!("/workspace");
+            data.push_str(&line.to_string());
+            data.push('\n');
+        }
+        fs::write(&path, data).unwrap();
+        let thread = import(&store, &path).unwrap();
+        let inputs = store.load(thread).unwrap().inputs();
+        let prompts: Vec<_> = inputs
+            .iter()
+            .filter_map(|input| match input {
+                Input::Prompt(text) => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(prompts, ["Real question", "After compact"]);
+        let outcomes: Vec<_> = inputs
+            .iter()
+            .filter_map(|input| match input {
+                Input::Event(SessionEvent::TurnEnded { outcome, .. }) => Some(outcome.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            outcomes,
+            [
+                if unfinished {
+                    TurnOutcome::Interrupted
+                } else {
+                    TurnOutcome::Completed
+                },
+                TurnOutcome::Completed
+            ]
+        );
+        let mut activity = Activity::default();
+        for input in store.load(thread).unwrap().activity_inputs() {
+            activity.apply(input);
+        }
+        let notices: Vec<_> = activity
+            .view()
+            .main()
+            .transcript()
+            .blocks()
+            .iter()
+            .filter_map(|block| match &block.body {
+                Body::Notice(text) => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(notices, ["Compacted ", "Renamed session"]);
+    }
+}
+
+#[test]
+fn claude_local_command_detection_preserves_literal_user_content() {
+    use serde_json::json;
+    let store = scratch("local-command-literals");
+    let literal = "<local-command-stdout>I typed this</local-command-stdout>";
+    let command = "<command-name>/compact</command-name>\n<command-message>compact</command-message>\n<command-args></command-args>";
+    let records = [
+        json!({"type":"user","uuid":"literal","message":{"content":literal}}),
+        json!({"type":"user","uuid":"visible","isVisibleInTranscriptOnly":true,"message":{"content":"Visible operator prompt"}}),
+        json!({"type":"user","uuid":"caveat","promptId":"p","isMeta":true,"message":{"content":"<local-command-caveat>CLI bookkeeping</local-command-caveat>"}}),
+        json!({"type":"user","uuid":"wrong-parent","parentUuid":"unrelated","promptId":"p","message":{"content":command}}),
+        json!({"type":"user","uuid":"wrong-prompt","parentUuid":"caveat","promptId":"other","message":{"content":command}}),
+        json!({"type":"user","uuid":"plain","parentUuid":"caveat","promptId":"p","message":{"content":"An ordinary prompt"}}),
+        json!({"type":"user","uuid":"actual-command","parentUuid":"caveat","promptId":"p","message":{"content":command}}),
+        json!({"type":"user","uuid":"wrong-output","parentUuid":"wrong-parent","promptId":"p","message":{"content":literal}}),
+        json!({"type":"user","uuid":"wrong-output-prompt","parentUuid":"actual-command","promptId":"other","message":{"content":literal}}),
+        json!({"type":"assistant","message":{"model":"fixture","content":[{"type":"text","text":"Answer"}]}}),
+    ];
+    let path = store.dir().join("literal.jsonl");
+    let data: String = records
+        .into_iter()
+        .map(|mut value| {
+            value["sessionId"] = json!("import-literal");
+            value["cwd"] = json!("/workspace");
+            format!("{value}\n")
+        })
+        .collect();
+    fs::write(&path, data).unwrap();
+    let thread = import(&store, &path).unwrap();
+    let inputs = store.load(thread).unwrap().inputs();
+    let prompts: Vec<_> = inputs
+        .iter()
+        .filter_map(|input| match input {
+            Input::Prompt(text) => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        prompts,
+        [
+            literal,
+            "Visible operator prompt",
+            command,
+            command,
+            "An ordinary prompt",
+            literal,
+            literal
+        ]
+    );
+}
+
+#[test]
 fn a_claude_session_file_imports_into_a_thread_that_can_resume_it() {
     let store = scratch("claude-resume");
     let thread = import(&store, &fixture("import-claude-session-2.1.241.jsonl")).unwrap();

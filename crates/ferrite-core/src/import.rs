@@ -17,6 +17,7 @@
 //! for the operator: import exists to continue a conversation, and a Thread
 //! that could not would be a lie.
 
+use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -269,6 +270,8 @@ fn parse_claude(bytes: &[u8]) -> Result<ParsedSession, ImportError> {
     let mut cwd = None;
     let mut entries = Vec::new();
     let mut turn_open = false;
+    let mut command_caveats = HashMap::new();
+    let mut local_commands = HashMap::new();
 
     for line in bytes.split(|byte| *byte == b'\n') {
         let Ok(value) = serde_json::from_slice::<Value>(line) else {
@@ -280,11 +283,6 @@ fn parse_claude(bytes: &[u8]) -> Result<ParsedSession, ImportError> {
                 .and_then(Value::as_str)
                 .map(str::to_string);
         }
-        // The CLI marks its own injected lines (caveats, command echoes) as
-        // meta; they were never the operator speaking.
-        if value.get("isMeta").and_then(Value::as_bool) == Some(true) {
-            continue;
-        }
         // Sidechain lines are a subagent's conversation, not this Thread's.
         // On 2.1.241 they live in their own `subagents/` transcript files —
         // stamped with the parent's session id, so a subagent file offered
@@ -294,6 +292,66 @@ fn parse_claude(bytes: &[u8]) -> Result<ParsedSession, ImportError> {
             continue;
         }
         let message = value.get("message");
+        let text = message
+            .and_then(|m| m.get("content"))
+            .and_then(Value::as_str);
+        let uuid = value["uuid"].as_str().filter(|id| !id.is_empty());
+        let prompt_id = value["promptId"].as_str().filter(|id| !id.is_empty());
+        let parent = value["parentUuid"].as_str();
+        // Command echoes are not individually marked meta. Only the native
+        // caveat -> command -> output ancestry distinguishes them from literal
+        // XML an operator might type.
+        if value["isMeta"].as_bool() == Some(true) {
+            if value["type"] == "user"
+                && text.is_some_and(|text| {
+                    text.strip_prefix("<local-command-caveat>")
+                        .and_then(|text| text.strip_suffix("</local-command-caveat>"))
+                        .is_some()
+                })
+            {
+                if let (Some(uuid), Some(prompt_id)) = (uuid, prompt_id) {
+                    command_caveats.insert(uuid.to_string(), prompt_id.to_string());
+                }
+            }
+            continue;
+        }
+        if value["isCompactSummary"].as_bool() == Some(true) {
+            continue;
+        }
+        if value["type"] == "user"
+            && prompt_id.is_some()
+            && parent.and_then(|id| command_caveats.get(id).map(String::as_str)) == prompt_id
+            && text.is_some_and(is_local_command_echo)
+        {
+            close_turn(&mut entries, &mut turn_open);
+            if let (Some(uuid), Some(prompt_id)) = (uuid, prompt_id) {
+                local_commands.insert(uuid.to_string(), prompt_id.to_string());
+            }
+            continue;
+        }
+        let output = if value["type"] == "system" && value["subtype"] == "local_command" {
+            value["content"].as_str()
+        } else if value["type"] == "user"
+            && prompt_id.is_some()
+            && parent.and_then(|id| local_commands.get(id).map(String::as_str)) == prompt_id
+        {
+            text
+        } else {
+            None
+        };
+        if let Some(text) = output
+            .and_then(|text| text.strip_prefix("<local-command-stdout>"))
+            .and_then(|text| text.strip_suffix("</local-command-stdout>"))
+        {
+            close_turn(&mut entries, &mut turn_open);
+            entries.push(Entry::Event(SessionEvent::Activity(
+                crate::activity::ActivityEvent::MainContent {
+                    id: uuid.map(str::to_string),
+                    event: crate::activity::ExecutionEvent::Notice { text: text.into() },
+                },
+            )));
+            continue;
+        }
         match value.get("type").and_then(Value::as_str) {
             Some("user") => {
                 if cwd.is_none() {
@@ -412,6 +470,30 @@ fn parse_claude(bytes: &[u8]) -> Result<ParsedSession, ImportError> {
         cwd,
         entries,
     })
+}
+
+// The CLI's complete command envelope, not an arbitrary XML-looking prompt.
+fn is_local_command_echo(text: &str) -> bool {
+    let Some((name, rest)) = text
+        .strip_prefix("<command-name>")
+        .and_then(|text| text.split_once("</command-name>"))
+    else {
+        return false;
+    };
+    let Some((message, rest)) = rest
+        .trim_start()
+        .strip_prefix("<command-message>")
+        .and_then(|text| text.split_once("</command-message>"))
+    else {
+        return false;
+    };
+    name.strip_prefix('/')
+        .is_some_and(|name| !name.is_empty() && name == message)
+        && rest
+            .trim_start()
+            .strip_prefix("<command-args>")
+            .and_then(|text| text.strip_suffix("</command-args>"))
+            .is_some()
 }
 
 /// End an open turn the way the file's silence implies. Claude session files
