@@ -647,6 +647,7 @@ impl Render for TextViewState {
                     size_changed,
                     selection_involves_view,
                     has_selection_snapshot,
+                    has_document_range,
                     is_selecting,
                     compatible_layout_update,
                 ) = {
@@ -655,6 +656,7 @@ impl Render for TextViewState {
                         state.bounds().size != bounds.size,
                         state.selection_adapter.is_part_of_window_selection(cx),
                         state.selection_adapter.has_selection_snapshot(cx),
+                        state.selection_adapter.document_range(cx).is_some(),
                         state.is_selecting,
                         state.compatible_layout_update,
                     )
@@ -667,7 +669,10 @@ impl Render for TextViewState {
                     state.update_bounds(bounds, cx);
                     state.compatible_layout_update = false;
                 });
+                // Logical documents own source-version invalidation. Their
+                // byte ranges remain valid when native layout reflows.
                 if !is_selecting
+                    && !has_document_range
                     && ((size_changed && selection_involves_view && !compatible_layout_update)
                         || (revision_changed && has_selection_snapshot))
                 {

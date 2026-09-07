@@ -198,6 +198,9 @@ pub struct CockpitView {
     /// The bell: whether its panel is down, and which Notices have had
     /// their toast. The Notices themselves are core's.
     bell: Bell,
+    /// Transcript events are detached subscriptions, registered once per
+    /// retained Subject entity rather than once per render.
+    transcript_entities: std::collections::HashSet<gpui::EntityId>,
 }
 
 /// What an inline rename is aimed at. Both are titles the operator owns:
@@ -637,7 +640,14 @@ impl CockpitView {
             cli_versions: None,
             group_error: None,
             bell: Bell::new(),
+            transcript_entities: Default::default(),
         };
+        // A Cockpit notification is the earliest common point after core
+        // state changes and before GPUI draws cached transcript children.
+        // The render path repeats this cheap key comparison for initial mount
+        // and derived display state that did not notify the Cockpit.
+        cx.observe_self(|view, cx| view.sync_visible_transcripts(cx))
+            .detach();
         // Every Thread the launch opened is on the roster already, and
         // every Thread it did not open is a parked row from the first
         // frame — a launch that opens nothing has no change to notice.
@@ -678,12 +688,149 @@ impl CockpitView {
         }
         self.panes
             .sort_by_key(|pane| wanted.iter().position(|shown| *shown == pane.identity));
+        let retained_transcript_entities: std::collections::HashSet<_> = self
+            .panes
+            .iter()
+            .flat_map(|pane| pane.transcripts.values())
+            .map(|transcript| transcript.entity_id())
+            .collect();
+        self.transcript_entities
+            .retain(|id| retained_transcript_entities.contains(id));
         // A Thread that came or went moved between the grid and the nav's
         // parked rows.
         if opened || self.panes.len() != before {
             self.facts.parked_changed(&self.cockpit);
         }
         self.refresh_names();
+    }
+
+    /// Compare a visible Subject's key every root render, and only then copy
+    /// its bounded blocks and timings into its retained entity.
+    fn sync_transcript(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some((thread, subject, namespace, focused, selection_scope, disclosure_revision)) =
+            self.panes.get(index).and_then(|pane| {
+                pane.thread().map(|thread| {
+                    (
+                        thread,
+                        pane.selected.clone(),
+                        pane.text_namespace(),
+                        index == self.focused(),
+                        pane.selection_scope,
+                        pane.disclosure_revision(),
+                    )
+                })
+            })
+        else {
+            return;
+        };
+        let Some(subject_view) = self
+            .cockpit
+            .thread(thread)
+            .and_then(|open| open.activity().subject(&subject))
+        else {
+            return;
+        };
+        let transcript = subject_view.transcript();
+        let revision = subject_view.presentation_revision();
+        let status = subagents::transcript_status(subject_view.status(), subject_view.fresh());
+        let entity = self.panes[index]
+            .ensure_transcript(cx)
+            .expect("thread Pane has a transcript entity");
+        if self.transcript_entities.insert(entity.entity_id()) {
+            cx.subscribe(&entity, Self::transcript_event).detach();
+        }
+        if entity.read(cx).matches_key(
+            namespace.as_ref(),
+            revision,
+            disclosure_revision,
+            focused,
+            Some(status),
+        ) {
+            return;
+        }
+        let pane = &self.panes[index];
+        let preview = pane.preview.clone();
+        let disclosure = pane.transcript_disclosure_snapshot();
+        let input = crate::transcript::TranscriptInput {
+            thread,
+            namespace,
+            content_revision: revision,
+            display_revision: disclosure_revision,
+            blocks: pane::rendered_window(transcript.blocks(), Level::Transcript).to_vec(),
+            signal_status: Some(status),
+            timings: subject_view.timings().clone(),
+            focused,
+            selection_scope,
+            preview,
+            expanded: disclosure.0,
+            target: disclosure.1,
+            disclosure_focus: disclosure.2,
+            #[cfg(test)]
+            disclosure_bounds: pane.tool_bounds_sink(),
+        };
+        let selection = self.selection.clone();
+        entity.update(cx, |transcript, cx| transcript.sync(input, selection, cx));
+    }
+
+    fn sync_visible_transcripts(&mut self, cx: &mut Context<Self>) {
+        for index in self.visible_indices() {
+            self.sync_transcript(index, cx);
+        }
+    }
+
+    /// Core's child-retention budget evicted these Subjects. Release only
+    /// their retained row trees; normal tab switches retain scroll state.
+    fn release_evicted_transcripts(
+        &mut self,
+        index: usize,
+        changed: &[ferrite_core::cockpit::SubjectUpdate],
+    ) {
+        let Some(thread) = self.panes[index].thread() else {
+            return;
+        };
+        let Some(activity) = self.cockpit.thread(thread).map(|thread| thread.activity()) else {
+            return;
+        };
+        for change in changed {
+            let subject = activity.canonical_subject(&change.subject);
+            if !activity
+                .subject(&subject)
+                .is_some_and(|subject| !subject.retained())
+            {
+                continue;
+            }
+            if let Some(transcript) = self.panes[index].release_transcript(&subject) {
+                self.transcript_entities.remove(&transcript.entity_id());
+            }
+        }
+    }
+
+    fn scroll_transcript_to_bottom(&mut self, index: usize, cx: &mut Context<Self>) {
+        if let Some(transcript) = self.panes[index].transcript() {
+            transcript.update(cx, |transcript, cx| transcript.scroll_to_bottom(cx));
+        }
+    }
+
+    fn transcript_event(
+        &mut self,
+        entity: Entity<crate::transcript::TranscriptView>,
+        event: &crate::transcript::TranscriptEvent,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = self.panes.iter().position(|pane| {
+            pane.transcripts
+                .values()
+                .any(|transcript| transcript == &entity)
+        }) else {
+            return;
+        };
+        match event {
+            crate::transcript::TranscriptEvent::ToggleDisclosure(call) => {
+                self.focus_pane(index);
+                self.panes[index].toggle_tool(call);
+                cx.notify();
+            }
+        }
     }
 
     /// Every open Pane's name, from the cache — the head, the L2 and L3
@@ -869,6 +1016,7 @@ impl CockpitView {
                 for (from, to) in &update.redirects {
                     self.panes[index].redirect_subject(from, to);
                 }
+                self.release_evicted_transcripts(index, &update.subjects);
                 let selected = self.panes[index].selected.clone();
                 let generation = self
                     .cockpit
@@ -882,9 +1030,6 @@ impl CockpitView {
                     .iter()
                     .any(|change| change.subject == selected && change.content_changed)
                     || (self.panes[index].is_main() && !update.dirty.is_empty());
-                if content_changed && self.panes[index].follow_tail.get() {
-                    self.panes[index].scroll.scroll_to_bottom();
-                }
                 if update.activity_changed || content_changed || !update.evicted.is_empty() {
                     self.prune_tool_disclosures(update.thread);
                 }
@@ -2373,8 +2518,7 @@ impl CockpitView {
             }
         } else {
             self.cockpit.send(thread, text.clone());
-            self.panes[self.focused()].follow_tail.set(true);
-            self.panes[self.focused()].scroll.scroll_to_bottom();
+            self.scroll_transcript_to_bottom(self.focused(), cx);
         }
         self.facts.acted(&self.cockpit, thread);
         // A first prompt names an untitled Thread.
@@ -4051,8 +4195,7 @@ impl CockpitView {
                 self.facts.opened(&self.cockpit, done.thread);
                 self.refresh_names();
                 self.start_titling(done.thread, text.to_string(), cx);
-                self.panes[index].follow_tail.set(true);
-                self.panes[index].scroll.scroll_to_bottom();
+                self.scroll_transcript_to_bottom(index, cx);
             }
             Ok(None) => {
                 if let Some(draft) = self.panes[index].draft_mut() {
@@ -4664,9 +4807,8 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// Exactly the highlighted text to the clipboard. With nothing visibly
-    /// selected — cleared, or every selected row gone from the rendered
-    /// window — the clipboard is left alone.
+    /// Copy the active native selection. Its retained document keeps logical
+    /// transcript fragments available even while their rows are offscreen.
     fn copy_selection(&mut self, _: &CopySelection, window: &mut Window, cx: &mut Context<Self>) {
         let text = gpui::base::TextSelection::selected_text(window, cx)
             .trim_end_matches('\n')
@@ -4944,12 +5086,6 @@ impl Render for CockpitView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.measure();
         self.present_notices(window, cx);
-        if self.context_menu.is_none() {
-            let copied = gpui::base::TextSelection::selected_text(window, cx)
-                .trim_end_matches('\n')
-                .to_string();
-            self.native_copy = (!copied.is_empty()).then_some(copied);
-        }
         self.maximized = window.is_maximized();
         // The fullscreened Pane, if the roster still shows it: a Pane gone
         // by any path is the roster's to notice, and it falls back to the
@@ -4995,6 +5131,11 @@ impl Render for CockpitView {
                 pane.clear_tool_target();
             }
         }
+
+        // This is intentionally cheap on ordinary frames: `sync_transcript`
+        // compares scalar keys first, so Composer edits repaint Cockpit chrome
+        // without cloning or notifying any retained transcript entity.
+        self.sync_visible_transcripts(cx);
 
         // The card belongs to the mark that opened it: leaving that Pane,
         // zooming below L1, or the refresh that drops the PR out of the
@@ -5584,22 +5725,25 @@ impl CockpitView {
             ));
         };
         let open = self.cockpit.thread(thread);
-        // The frame's selection seam for this Pane (#27), resolved against
-        // exactly the rows the body will draw — the shared rendered window,
-        // because copy is what you see.
-        let selection = {
-            let blocks = open
-                .and_then(|open| open.activity().subject(&pane.selected))
-                .map(|subject| subject.transcript().blocks())
-                .unwrap_or(&[]);
-            self.selection.overlay_scoped(
-                thread,
-                pane.text_namespace(),
-                pane::rendered_window(blocks, level),
-                pane.rich.clone(),
-            )
-        };
         let cached = self.facts.get(thread);
+        let retained_transcript = if level == Level::Transcript {
+            pane.transcript().map(|transcript| {
+                let document = transcript.read(cx).selection_document();
+                gpui::base::TextSelectionDocumentOwner::new(document)
+                    .child(
+                        transcript.cached(
+                            gpui::StyleRefinement::default()
+                                .flex_1()
+                                .min_h_0()
+                                .min_w_0()
+                                .w_full(),
+                        ),
+                    )
+                    .into_any_element()
+            })
+        } else {
+            None
+        };
         let facts = pane::PaneFacts {
             thread: open,
             // The cached checkout label (#29) — display-only.
@@ -5610,12 +5754,12 @@ impl CockpitView {
             focused,
             attention: !focused && self.cockpit.notifications().attention(thread),
             wall: cached.and_then(|facts| facts.wall_for(&pane.selected)),
-            selection,
         };
         // Only L1 draws a Composer to hang a popover over (#23), a model
         // picker (#25) or usage meter; the wall answers with keys alone.
         let l1 = level == Level::Transcript;
         let wiring = pane::PaneWiring {
+            transcript: retained_transcript,
             attachments: Composer::attachments(&pane.composer, &pane.preview, cx),
             menu: l1.then(|| self.popover_element(index, cx)).flatten(),
             model_picker: l1.then(|| self.model_picker(index, cx)).flatten(),
@@ -5623,7 +5767,6 @@ impl CockpitView {
             decide: (level != Level::Wall)
                 .then(|| self.decide_keycaps(index, level, cx))
                 .flatten(),
-            tool_controls: self.tool_disclosures(index, thread, level, cx),
             // The title is the Pane's handle at every size: a drag moves a
             // grouped Pane, a double-click renames it — an L2 cell with no
             // handle could not be rearranged at all.
@@ -5637,61 +5780,6 @@ impl CockpitView {
             child_footer: self.child_footer(index, cx),
         };
         cell.child(pane::render_pane(pane, facts, wiring, level))
-    }
-
-    fn tool_disclosures(
-        &self,
-        index: usize,
-        thread: ThreadId,
-        level: Level,
-        cx: &mut Context<Self>,
-    ) -> std::collections::HashMap<pane::DisclosureId, AnyElement> {
-        if level != Level::Transcript {
-            return std::collections::HashMap::new();
-        }
-        let pane = &self.panes[index];
-        let Some(open) = self.cockpit.thread(thread) else {
-            return std::collections::HashMap::new();
-        };
-        let Some(subject_view) = open.activity().subject(&pane.selected) else {
-            return Default::default();
-        };
-        let transcript = subject_view.transcript();
-        let mut controls = std::collections::HashMap::new();
-        for call in pane::rendered_disclosures(pane, transcript.blocks(), level) {
-            let subject = pane.selected.clone();
-            let wired = pane::tool_disclosure_control(
-                &call,
-                pane.tool_state(&call) == pane::DisclosureState::Expanded,
-                pane.tool_targeted(&call),
-                &pane.tool_focus(),
-            )
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener({
-                    let call = call.clone();
-                    let subject = subject.clone();
-                    move |view, _: &MouseDownEvent, window, cx| {
-                        cx.stop_propagation();
-                        view.toggle_subject_tool(thread, &subject, &call, window, cx);
-                    }
-                }),
-            );
-            #[cfg(test)]
-            let wired = {
-                let sink = pane.tool_bounds_sink();
-                let measured = call.clone();
-                div()
-                    .child(wired)
-                    .on_children_prepainted(move |bounds, _, _| {
-                        if let Some(bounds) = bounds.first() {
-                            sink.borrow_mut().insert(measured.clone(), *bounds);
-                        }
-                    })
-            };
-            controls.insert(call, wired.into_any_element());
-        }
-        controls
     }
 
     fn toggle_tool(
@@ -7024,6 +7112,7 @@ fn transcript_text(blocks: &[ferrite_core::transcript::Block]) -> String {
 
 #[cfg(test)]
 mod tests {
+    mod render_performance;
     mod subagents;
     use super::*;
     use std::cell::RefCell;
@@ -7470,6 +7559,8 @@ mod tests {
         });
     }
 
+    // macOS caption buttons belong to AppKit, outside GPUI geometry.
+    #[cfg(target_os = "windows")]
     #[gpui::test]
     fn titlebar_add_sits_before_the_caption_controls(cx: &mut TestAppContext) {
         let (mut core, _fake) = cockpit("titlebar-add-placement", 2);
@@ -9464,8 +9555,9 @@ mod tests {
             say(line);
         }
         tick(cx);
-        let (offset, max) = view.read_with(cx, |view, _| {
-            let scroll = &view.panes[0].scroll;
+        let (offset, max) = view.read_with(cx, |view, cx| {
+            let transcript = view.panes[0].transcript().unwrap();
+            let scroll = transcript.read(cx).scroll();
             (scroll.offset().y, scroll.max_offset().y)
         });
         assert!(max > px(0.), "the transcript must overflow for this test");
@@ -9484,16 +9576,30 @@ mod tests {
             });
         };
         wheel(cx, 120.);
-        let held = view.read_with(cx, |view, _| view.panes[0].scroll.offset().y);
+        let held = view.read_with(cx, |view, cx| {
+            view.panes[0]
+                .transcript()
+                .unwrap()
+                .read(cx)
+                .scroll()
+                .offset()
+                .y
+        });
         assert!(held > offset, "wheel up must move the view: {held:?}");
 
         for line in 80..100 {
             say(line);
         }
         tick(cx);
-        view.read_with(cx, |view, _| {
+        view.read_with(cx, |view, cx| {
             assert_eq!(
-                view.panes[0].scroll.offset().y,
+                view.panes[0]
+                    .transcript()
+                    .unwrap()
+                    .read(cx)
+                    .scroll()
+                    .offset()
+                    .y,
                 held,
                 "new Blocks must not yank a reader down"
             );
@@ -9505,8 +9611,9 @@ mod tests {
             say(line);
         }
         tick(cx);
-        view.read_with(cx, |view, _| {
-            let scroll = &view.panes[0].scroll;
+        view.read_with(cx, |view, cx| {
+            let transcript = view.panes[0].transcript().unwrap();
+            let scroll = transcript.read(cx).scroll();
             let gap = scroll.max_offset().y + scroll.offset().y;
             assert!(
                 gap <= TAIL_SLACK,
@@ -9568,13 +9675,14 @@ mod tests {
         cx.simulate_keystrokes("cmd-o");
         tick(cx);
         let gap = |cx: &mut gpui::VisualTestContext| {
-            view.read_with(cx, |view, _| {
+            view.read_with(cx, |view, cx| {
                 let pane = view
                     .panes
                     .iter()
                     .find(|pane| pane.thread() == Some(closed))
                     .expect("the reopened Pane");
-                let scroll = &pane.scroll;
+                let transcript = pane.transcript().unwrap();
+                let scroll = transcript.read(cx).scroll();
                 (
                     scroll.max_offset().y,
                     scroll.max_offset().y + scroll.offset().y,
@@ -9686,15 +9794,25 @@ mod tests {
 
         let clicked = view.update(cx, |view, cx| {
             let pane = &mut view.panes[0];
-            pane.follow_tail.set(false);
-            let offset = gpui::point(px(0.), -pane.scroll.max_offset().y / 2.);
-            pane.scroll.set_offset(offset);
+            let transcript = pane.transcript().unwrap();
+            transcript.update(cx, |transcript, _| {
+                transcript.scroll().pause_following_tail();
+                let offset = gpui::point(px(0.), -transcript.scroll().max_offset().y / 2.);
+                transcript.scroll().set_offset(offset);
+            });
             cx.notify();
-            let bounds = pane.scroll.bounds();
+            let bounds = transcript.read(cx).scroll().bounds();
             gpui::point(bounds.center().x, bounds.bottom() - px(2.))
         });
         cx.run_until_parked();
-        let before = view.read_with(cx, |view, _| view.panes[0].scroll.offset());
+        let before = view.read_with(cx, |view, cx| {
+            view.panes[0]
+                .transcript()
+                .unwrap()
+                .read(cx)
+                .scroll()
+                .offset()
+        });
 
         let titlebar = gpui::point(px(500.), px(crate::theme::WIN_CHROME_H / 2.));
         cx.simulate_mouse_down(titlebar, MouseButton::Left, gpui::Modifiers::none());
@@ -9703,8 +9821,16 @@ mod tests {
         cx.simulate_mouse_move(clicked, MouseButton::Left, gpui::Modifiers::none());
         cx.run_until_parked();
 
-        view.read_with(cx, |view, _| {
-            assert_eq!(view.panes[0].scroll.offset(), before);
+        view.read_with(cx, |view, cx| {
+            assert_eq!(
+                view.panes[0]
+                    .transcript()
+                    .unwrap()
+                    .read(cx)
+                    .scroll()
+                    .offset(),
+                before
+            );
         });
     }
 
@@ -9847,7 +9973,14 @@ mod tests {
             })
             .unwrap();
         tick(cx);
-        let body = view.read_with(cx, |view, _| view.panes[0].scroll.bounds());
+        let body = view.read_with(cx, |view, cx| {
+            view.panes[0]
+                .transcript()
+                .unwrap()
+                .read(cx)
+                .scroll()
+                .bounds()
+        });
 
         // A double-click below the body — the Composer region — must not
         // light up a word in the nearest transcript row.
@@ -10087,7 +10220,7 @@ mod tests {
             tick(cx);
             view.read_with(cx, |view, cx| {
                 let pane = &view.panes[0];
-                let viewport = pane.scroll.bounds();
+                let viewport = pane.transcript().unwrap().read(cx).scroll().bounds();
                 let transcript = view
                     .cockpit
                     .thread(pane.thread().unwrap())
@@ -10546,8 +10679,13 @@ mod tests {
         // Expanding long output can scroll the header out of view while
         // following the tail. Bring it back before clicking its disclosure.
         view.update(cx, |view, cx| {
-            view.panes[0].follow_tail.set(false);
-            view.panes[0].scroll.set_offset(gpui::point(px(0.), px(0.)));
+            view.panes[0]
+                .transcript()
+                .unwrap()
+                .update(cx, |transcript, _| {
+                    transcript.scroll().pause_following_tail();
+                    transcript.scroll().set_offset(gpui::point(px(0.), px(0.)));
+                });
             cx.notify();
         });
         cx.run_until_parked();
@@ -10566,8 +10704,13 @@ mod tests {
                 .any(|(_, _, _, text)| text == "first line"));
         });
 
-        let composer = view.read_with(cx, |view, _| {
-            let body = view.panes[0].scroll.bounds();
+        let composer = view.read_with(cx, |view, cx| {
+            let body = view.panes[0]
+                .transcript()
+                .unwrap()
+                .read(cx)
+                .scroll()
+                .bounds();
             gpui::point(body.center().x, body.bottom() + px(20.))
         });
         cx.simulate_click(composer, gpui::Modifiers::none());
@@ -10703,8 +10846,13 @@ mod tests {
             .debug_bounds("progress-caption-Checking fold call sites")
             .expect("native heading is pinned above the composer");
         view.update(cx, |view, cx| {
-            view.panes[0].follow_tail.set(false);
-            view.panes[0].scroll.set_offset(gpui::point(px(0.), px(0.)));
+            view.panes[0]
+                .transcript()
+                .unwrap()
+                .update(cx, |transcript, _| {
+                    transcript.scroll().pause_following_tail();
+                    transcript.scroll().set_offset(gpui::point(px(0.), px(0.)));
+                });
             cx.notify();
         });
         cx.run_until_parked();
@@ -10942,7 +11090,14 @@ mod tests {
         cx.run_until_parked();
         // The first row fully inside the viewport — nonzero, or the wheel
         // did not actually scroll anything back.
-        let viewport = view.read_with(cx, |view, _| view.panes[0].scroll.bounds());
+        let viewport = view.read_with(cx, |view, cx| {
+            view.panes[0]
+                .transcript()
+                .unwrap()
+                .read(cx)
+                .scroll()
+                .bounds()
+        });
         let row = (0..58)
             .find(|row| caret(&view, cx, *row, 0).y > viewport.top() + px(20.))
             .expect("a paragraph in the viewport");
@@ -11092,7 +11247,16 @@ mod tests {
         });
         // One Pane rendered, spanning the whole area right of the nav —
         // a 2-column cell would be under 300px here.
-        let width = view.read_with(cx, |view, _| view.panes[0].scroll.bounds().size.width);
+        let width = view.read_with(cx, |view, cx| {
+            view.panes[0]
+                .transcript()
+                .unwrap()
+                .read(cx)
+                .scroll()
+                .bounds()
+                .size
+                .width
+        });
         assert!(
             width > px(500.),
             "the fullscreened Pane takes the whole cockpit: {width:?}"
@@ -11652,12 +11816,7 @@ mod tests {
         state
             .ordered_rows()
             .into_iter()
-            .map(|row| {
-                format!(
-                    "{}|{:?}|{:?}",
-                    row.name, row.project, row.provider
-                )
-            })
+            .map(|row| format!("{}|{:?}|{:?}", row.name, row.project, row.provider))
             .collect()
     }
 

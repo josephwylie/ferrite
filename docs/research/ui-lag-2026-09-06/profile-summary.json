@@ -1,0 +1,158 @@
+[
+  {
+    "file": "sample-initial.txt",
+    "main_samples": 4414,
+    "hotspots": {
+      "draw": {
+        "samples": 4247,
+        "pct": 96.22
+      },
+      "layout": {
+        "samples": 1366,
+        "pct": 30.95
+      },
+      "register": {
+        "samples": 991,
+        "pct": 22.45
+      },
+      "publish": {
+        "samples": 698,
+        "pct": 15.81
+      },
+      "metal_submission": {
+        "samples": 17,
+        "pct": 0.39
+      }
+    }
+  },
+  {
+    "file": "sample-second.txt",
+    "main_samples": 4009,
+    "hotspots": {
+      "draw": {
+        "samples": 3879,
+        "pct": 96.76
+      },
+      "layout": {
+        "samples": 1140,
+        "pct": 28.44
+      },
+      "register": {
+        "samples": 921,
+        "pct": 22.97
+      },
+      "publish": {
+        "samples": 674,
+        "pct": 16.81
+      },
+      "metal_submission": {
+        "samples": 14,
+        "pct": 0.35
+      }
+    }
+  },
+  {
+    "file": "sample-third.txt",
+    "main_samples": 2308,
+    "hotspots": {
+      "draw": {
+        "samples": 2223,
+        "pct": 96.32
+      },
+      "layout": {
+        "samples": 639,
+        "pct": 27.69
+      },
+      "register": {
+        "samples": 644,
+        "pct": 27.9
+      },
+      "publish": {
+        "samples": 486,
+        "pct": 21.06
+      },
+      "metal_submission": {
+        "samples": 8,
+        "pct": 0.35
+      }
+    }
+  },
+  {
+    "file": "sample-final.txt",
+    "main_samples": 1979,
+    "hotspots": {
+      "draw": {
+        "samples": 1911,
+        "pct": 96.56
+      },
+      "layout": {
+        "samples": 493,
+        "pct": 24.91
+      },
+      "register": {
+        "samples": 633,
+        "pct": 31.99
+      },
+      "publish": {
+        "samples": 447,
+        "pct": 22.59
+      },
+      "metal_submission": {
+        "samples": 1,
+        "pct": 0.05
+      }
+    }
+  },
+  {
+    "file": "sample-after-fullscreen-note.txt",
+    "main_samples": 2425,
+    "hotspots": {
+      "draw": {
+        "samples": 2166,
+        "pct": 89.32
+      },
+      "layout": {
+        "samples": 571,
+        "pct": 23.55
+      },
+      "register": {
+        "samples": 713,
+        "pct": 29.4
+      },
+      "publish": {
+        "samples": 530,
+        "pct": 21.86
+      },
+      "metal_submission": {
+        "samples": 4,
+        "pct": 0.16
+      }
+    }
+  },
+  {
+    "file": "sample-fullscreen-confirmed.txt",
+    "main_samples": 2314,
+    "hotspots": {
+      "draw": {
+        "samples": 1175,
+        "pct": 50.78
+      },
+      "layout": {
+        "samples": 476,
+        "pct": 20.57
+      },
+      "register": {
+        "samples": 71,
+        "pct": 3.07
+      },
+      "publish": {
+        "samples": 56,
+        "pct": 2.42
+      },
+      "metal_submission": {
+        "samples": 23,
+        "pct": 0.99
+      }
+    }
+  }
+]

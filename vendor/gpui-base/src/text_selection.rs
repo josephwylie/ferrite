@@ -1,4 +1,5 @@
 use std::{
+    cell::Cell,
     collections::HashMap,
     ops::Range,
     rc::Rc,
@@ -6,11 +7,11 @@ use std::{
 };
 
 use gpui::{
-    App, AppContext as _, Bounds, Context, Element, ElementId, Entity, EntityId, EventEmitter,
-    Global, GlobalElementId, Half, Hitbox, InputEvent as _, InspectorElementId, IntoElement,
-    LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
-    ScrollDelta, ScrollWheelEvent, SharedString, Style, Subscription, TextLayout, WeakEntity,
-    Window, point, px,
+    AnyEntity, AnyWeakEntity, App, AppContext as _, Bounds, Context, Element, ElementId, Entity,
+    EntityId, EventEmitter, Global, GlobalElementId, Half, Hitbox, InputEvent as _,
+    InspectorElementId, IntoElement, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, Pixels, Point, ScrollDelta, ScrollWheelEvent, SharedString, Style, Subscription,
+    TextLayout, WeakEntity, Window, point, px,
 };
 
 use crate::text_boundary::{line_range_at, word_range_at};
@@ -41,6 +42,589 @@ impl TextSelectionScopeId {
     }
 }
 
+/// One logical text fragment in a [`TextSelectionDocument`].
+///
+/// The key is owned by the host and must remain stable while the fragment is
+/// retained by the document. Its callback is evaluated only when selection is
+/// copied; registering or painting a viewport never materializes its text.
+#[derive(Clone)]
+pub struct TextSelectionDocumentMember {
+    key: SharedString,
+    copy: CopyCallback,
+    content_version: Option<SharedString>,
+}
+
+impl TextSelectionDocumentMember {
+    /// Creates a member with its stable host key and plain-text copy callback.
+    pub fn new(key: impl Into<SharedString>, copy: impl Fn(&mut App) -> String + 'static) -> Self {
+        Self {
+            key: key.into(),
+            copy: Rc::new(copy),
+            content_version: None,
+        }
+    }
+
+    /// Marks this member's exact logical source version.
+    ///
+    /// Reusing a key with a different version invalidates selections anchored
+    /// in the old source while unchanged keys retain their endpoint state.
+    pub fn with_content_version(mut self, version: impl Into<SharedString>) -> Self {
+        self.content_version = Some(version.into());
+        self
+    }
+
+    /// Returns the stable host key.
+    pub fn key(&self) -> &SharedString {
+        &self.key
+    }
+}
+
+#[derive(Clone)]
+struct DocumentMemberBinding {
+    document: WeakEntity<TextSelectionDocumentState>,
+    key: SharedString,
+    live: Rc<Cell<bool>>,
+    order: Rc<Cell<u64>>,
+}
+
+impl DocumentMemberBinding {
+    fn is_live(&self) -> bool {
+        self.live.get() && self.document.upgrade().is_some()
+    }
+
+    fn pin_native_state(&self, cx: &App) -> Option<AnyEntity> {
+        let document = self.document.upgrade()?;
+        let state = document.read(cx);
+        let index = *state.member_indices.get(&self.key)?;
+        state.members.get(index)?.1.native_state.as_ref()?.upgrade()
+    }
+}
+
+struct DocumentMember {
+    copy: CopyCallback,
+    content_version: Option<SharedString>,
+    live: Rc<Cell<bool>>,
+    order: Rc<Cell<u64>>,
+    participant: Option<WeakEntity<SelectableTextState>>,
+    /// Current cache-owned native state. This is deliberately weak: active
+    /// endpoints promote it to their private pin, while ordinary visited rows
+    /// remain subject to the host's LRU policy.
+    native_state: Option<AnyWeakEntity>,
+}
+
+struct TextSelectionDocumentState {
+    scope: TextSelectionScopeId,
+    members: Vec<(SharedString, DocumentMember)>,
+    member_indices: HashMap<SharedString, usize>,
+    /// Geometry from the last real viewport paint. The owner replays this on
+    /// cache hits; a host calls `begin_viewport_update` before a real virtual
+    /// viewport update to make absent rows disappear from this list.
+    visible: HashMap<EntityId, (TextSelectionHandle, TextSelectionRegistration)>,
+}
+
+impl Default for TextSelectionDocumentState {
+    fn default() -> Self {
+        Self {
+            scope: TextSelectionScopeId::default(),
+            members: Vec::new(),
+            member_indices: HashMap::new(),
+            visible: HashMap::new(),
+        }
+    }
+}
+
+/// Retained logical membership for a virtualized native text document.
+///
+/// A document owns ordered copy sources independently of the rows currently
+/// mounted in a viewport. It deliberately does not own text layout: each
+/// visible native view continues to register its real hitbox and text runs.
+#[derive(Clone)]
+pub struct TextSelectionDocument(Entity<TextSelectionDocumentState>);
+
+impl TextSelectionDocument {
+    /// Creates a document in `scope`. Keep it for the Subject lifetime.
+    pub fn new(scope: TextSelectionScopeId, cx: &mut App) -> Self {
+        Self(cx.new(move |_| TextSelectionDocumentState {
+            scope,
+            ..Default::default()
+        }))
+    }
+
+    /// Changes the document's active-pane scope.
+    pub fn set_scope(&self, scope: TextSelectionScopeId, cx: &mut App) {
+        if self.0.read(cx).scope == scope {
+            return;
+        }
+        self.0.update(cx, |state, _| {
+            state.scope = scope;
+            for (_, registration) in state.visible.values_mut() {
+                *registration = registration.clone().with_scope(scope);
+            }
+        });
+        self.refresh_scope(scope, cx);
+    }
+
+    /// Replaces the ordered logical membership after a content revision.
+    ///
+    /// Removing a key, or changing its explicit content version, invalidates
+    /// endpoints anchored in its old source. Existing bindings observe that
+    /// invalidation through their shared liveness cell.
+    pub fn sync_members(&self, members: Vec<TextSelectionDocumentMember>, cx: &mut App) {
+        let removed_participants = self.0.update(cx, |state, cx| {
+            let mut old = std::mem::take(&mut state.members)
+                .into_iter()
+                .collect::<HashMap<_, _>>();
+            let mut removed_participants = Vec::new();
+            let mut next = Vec::with_capacity(members.len());
+            for TextSelectionDocumentMember {
+                key,
+                copy,
+                content_version,
+            } in members
+            {
+                let prior = old.remove(&key);
+                let unchanged = prior
+                    .as_ref()
+                    .filter(|member| member.content_version == content_version);
+                if let Some(replaced) = prior.as_ref().filter(|_| unchanged.is_none()) {
+                    replaced.live.set(false);
+                    if let Some(participant) = replaced.participant.clone() {
+                        removed_participants.push(participant);
+                    }
+                }
+                let live = unchanged
+                    .map(|member| member.live.clone())
+                    .unwrap_or_else(|| Rc::new(Cell::new(true)));
+                let order = unchanged
+                    .map(|member| member.order.clone())
+                    .unwrap_or_else(|| Rc::new(Cell::new(0)));
+                live.set(true);
+                order.set(next.len() as u64);
+                let participant = unchanged.and_then(|member| member.participant.clone());
+                next.push((
+                    key,
+                    DocumentMember {
+                        copy,
+                        content_version,
+                        live,
+                        order,
+                        participant,
+                        native_state: unchanged.and_then(|member| member.native_state.clone()),
+                    },
+                ));
+            }
+            removed_participants.extend(
+                old.values()
+                    .filter_map(|removed| removed.participant.clone()),
+            );
+            for (_, removed) in old {
+                removed.live.set(false);
+            }
+            state.member_indices = next
+                .iter()
+                .enumerate()
+                .map(|(index, (key, _))| (key.clone(), index))
+                .collect();
+            state.members = next;
+            state.visible.retain(|_, (selection, _)| {
+                selection
+                    .0
+                    .read(cx)
+                    .document_member
+                    .as_ref()
+                    .is_some_and(DocumentMemberBinding::is_live)
+            });
+            removed_participants
+        });
+        let mut handlers = removed_participants
+            .into_iter()
+            .filter_map(|participant| participant.upgrade())
+            .filter_map(|participant| participant.update(cx, |state, cx| state.clear_state(cx)))
+            .collect::<Vec<_>>();
+        if cx.has_global::<SelectionStateRegistry>() {
+            let states = cx
+                .global::<SelectionStateRegistry>()
+                .0
+                .values()
+                .filter_map(WeakEntity::upgrade)
+                .collect::<Vec<_>>();
+            let document_id = self.0.entity_id();
+            for selection in states {
+                let selection_handlers = selection.update(cx, |state, cx| {
+                    let invalid = [state.anchor.as_ref(), state.cursor.as_ref()]
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|endpoint| endpoint.document_member.as_ref())
+                        .any(|member| {
+                            member.document.entity_id() == document_id && !member.is_live()
+                        });
+                    invalid.then(|| state.clear_state(cx)).unwrap_or_default()
+                });
+                handlers.extend(selection_handlers);
+            }
+        }
+        dispatch_clear_handlers(handlers, cx);
+    }
+
+    /// Marks that this frame will supply a fresh virtual viewport. Call this
+    /// immediately before rendering a non-cached virtual row set.
+    pub fn begin_viewport_update(&self, cx: &mut App) {
+        self.0.update(cx, |state, _| state.visible.clear());
+    }
+
+    pub(crate) fn bind(
+        &self,
+        key: SharedString,
+        selection: &TextSelectionHandle,
+        keepalive: Option<AnyEntity>,
+        cx: &mut App,
+    ) {
+        let document = self.0.downgrade();
+        let binding = self.0.update(cx, |state, _| {
+            let member = state
+                .member_indices
+                .get(&key)
+                .and_then(|index| state.members.get(*index));
+            let live = member
+                .map(|(_, member)| member.live.clone())
+                .unwrap_or_else(|| Rc::new(Cell::new(false)));
+            let order = member
+                .map(|(_, member)| member.order.clone())
+                .unwrap_or_else(|| Rc::new(Cell::new(0)));
+            DocumentMemberBinding {
+                document,
+                key: key.clone(),
+                live,
+                order,
+            }
+        });
+        selection
+            .0
+            .update(cx, |state, _| state.document_member = Some(binding));
+        self.0.update(cx, |state, _| {
+            if let Some(index) = state.member_indices.get(&key)
+                && let Some((_, member)) = state.members.get_mut(*index)
+            {
+                member.participant = Some(selection.downgrade());
+                member.native_state = keepalive.as_ref().map(AnyEntity::downgrade);
+            }
+        });
+    }
+
+    pub(crate) fn register_visible(
+        &self,
+        selection: TextSelectionHandle,
+        registration: TextSelectionRegistration,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let id = selection.entity_id();
+        let binding = selection.0.read(cx).document_member.clone();
+        let registration = self.0.update(cx, |state, _| {
+            let registration = binding
+                .as_ref()
+                .map(|member| {
+                    registration
+                        .clone()
+                        .with_scope(state.scope)
+                        .with_document_order(member.order.get())
+                })
+                .unwrap_or_else(|| registration.clone().with_scope(state.scope));
+            state
+                .visible
+                .insert(id, (selection.clone(), registration.clone()));
+            registration
+        });
+        selection.register(registration, window, cx);
+    }
+
+    fn mark_owner_mounted(&self, window: &Window, cx: &mut App) {
+        WindowSelectionState::mark_document_owner(self.0.entity_id(), window, cx);
+    }
+
+    fn replay_visible(&self, window: &mut Window, cx: &mut App) {
+        let visible = self
+            .0
+            .read(cx)
+            .visible
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        for (selection, registration) in visible {
+            selection.register(registration, window, cx);
+        }
+    }
+
+    fn copy_between(
+        &self,
+        anchor: &SelectionEndpoint,
+        cursor: &SelectionEndpoint,
+        cx: &mut App,
+    ) -> String {
+        let Some(anchor_binding) = anchor.document_member.as_ref() else {
+            return String::new();
+        };
+        let Some(cursor_binding) = cursor.document_member.as_ref() else {
+            return String::new();
+        };
+        let copies = {
+            let state = self.0.read(cx);
+            let Some(&anchor_ix) = state.member_indices.get(&anchor_binding.key) else {
+                return String::new();
+            };
+            let Some(&cursor_ix) = state.member_indices.get(&cursor_binding.key) else {
+                return String::new();
+            };
+            let start = anchor_ix.min(cursor_ix);
+            let end = anchor_ix.max(cursor_ix);
+            state.members[start..=end]
+                .iter()
+                .enumerate()
+                .map(|(offset, (_, member))| {
+                    let index = start + offset;
+                    let endpoint = (index == anchor_ix)
+                        .then_some(anchor)
+                        .or_else(|| (index == cursor_ix).then_some(cursor));
+                    let partial = endpoint.and_then(|endpoint| {
+                        let registration = endpoint.registration.as_ref()?;
+                        let endpoint_point = endpoint.point
+                            + registration.scroll_offset
+                            + registration.bounds.origin;
+                        let coverage = if anchor_ix == cursor_ix {
+                            TextSelectionCoverage::Bounded
+                        } else if index == anchor_ix {
+                            (anchor_ix < cursor_ix)
+                                .then_some(TextSelectionCoverage::ToEnd)
+                                .unwrap_or(TextSelectionCoverage::FromStart)
+                        } else {
+                            (anchor_ix < cursor_ix)
+                                .then_some(TextSelectionCoverage::FromStart)
+                                .unwrap_or(TextSelectionCoverage::ToEnd)
+                        };
+                        let margin = px(1.);
+                        let before = point(
+                            registration.bounds.left() - margin,
+                            registration.bounds.top() - margin,
+                        );
+                        let after = point(
+                            registration.bounds.right() + margin,
+                            registration.bounds.bottom() + margin,
+                        );
+                        let points = match coverage {
+                            TextSelectionCoverage::Bounded => TextSelectionWindowPoints {
+                                anchor: anchor.point
+                                    + registration.scroll_offset
+                                    + registration.bounds.origin,
+                                cursor: cursor.point
+                                    + registration.scroll_offset
+                                    + registration.bounds.origin,
+                            },
+                            TextSelectionCoverage::FromStart => TextSelectionWindowPoints {
+                                anchor: before,
+                                cursor: endpoint_point,
+                            },
+                            TextSelectionCoverage::ToEnd => TextSelectionWindowPoints {
+                                anchor: endpoint_point,
+                                cursor: after,
+                            },
+                            TextSelectionCoverage::Full => TextSelectionWindowPoints {
+                                anchor: before,
+                                cursor: after,
+                            },
+                        };
+                        let document_range = match coverage {
+                            TextSelectionCoverage::Bounded => {
+                                match (anchor.document_position, cursor.document_position) {
+                                    (Some(anchor), Some(cursor)) => Some(
+                                        TextSelectionDocumentRange::new(Some(anchor), Some(cursor)),
+                                    ),
+                                    _ => None,
+                                }
+                            }
+                            TextSelectionCoverage::FromStart => {
+                                endpoint.document_position.map(|position| {
+                                    TextSelectionDocumentRange::new(None, Some(position))
+                                })
+                            }
+                            TextSelectionCoverage::ToEnd => {
+                                endpoint.document_position.map(|position| {
+                                    TextSelectionDocumentRange::new(Some(position), None)
+                                })
+                            }
+                            TextSelectionCoverage::Full => {
+                                Some(TextSelectionDocumentRange::new(None, None))
+                            }
+                        };
+                        endpoint.participant_for_copy().map(|participant| {
+                            (
+                                TextSelectionHandle(participant),
+                                coverage,
+                                points,
+                                document_range,
+                            )
+                        })
+                    });
+                    (partial, member.copy.clone())
+                })
+                .collect::<Vec<_>>()
+        };
+        copies
+            .into_iter()
+            .map(|(partial, full)| {
+                partial
+                    .and_then(|(participant, coverage, points, document_range)| {
+                        participant.document_copy(coverage, points, document_range, cx)
+                    })
+                    .unwrap_or_else(|| full(cx))
+            })
+            .filter(|text| !text.trim().is_empty())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn refresh_scope(&self, scope: TextSelectionScopeId, cx: &mut App) {
+        let Some(registry) = cx.try_global::<SelectionStateRegistry>() else {
+            return;
+        };
+        let states = registry
+            .0
+            .values()
+            .filter_map(WeakEntity::upgrade)
+            .collect::<Vec<_>>();
+        let document_id = self.0.entity_id();
+        for window_state in states {
+            let handlers = window_state.update(cx, |state, cx| {
+                for registration in state.participants.values_mut() {
+                    if registration
+                        .document_member
+                        .as_ref()
+                        .is_some_and(|member| member.document.entity_id() == document_id)
+                    {
+                        registration.registration =
+                            Rc::new((*registration.registration).clone().with_scope(scope));
+                    }
+                }
+                let selected_here = [state.anchor.as_ref(), state.cursor.as_ref()]
+                    .into_iter()
+                    .flatten()
+                    .any(|endpoint| {
+                        endpoint
+                            .document_member
+                            .as_ref()
+                            .is_some_and(|member| member.document.entity_id() == document_id)
+                    });
+                if selected_here && state.active_scope != scope {
+                    state.clear_state(cx)
+                } else {
+                    state.publish_snapshots(cx);
+                    Vec::new()
+                }
+            });
+            dispatch_clear_handlers(handlers, cx);
+        }
+    }
+}
+
+/// An uncached lifecycle wrapper for a cached virtual document subtree.
+///
+/// Mount this outside the cached transcript view. It re-registers only the
+/// last visible rows before the cached child replays its paint commands.
+pub struct TextSelectionDocumentOwner<E> {
+    document: TextSelectionDocument,
+    child: E,
+}
+
+impl TextSelectionDocumentOwner<()> {
+    /// Creates an owner. Finish with [`Self::child`].
+    pub fn new(document: TextSelectionDocument) -> Self {
+        Self {
+            document,
+            child: (),
+        }
+    }
+}
+
+impl TextSelectionDocumentOwner<()> {
+    /// Wraps a transcript subtree.
+    pub fn child<E: IntoElement>(self, child: E) -> TextSelectionDocumentOwner<E::Element> {
+        TextSelectionDocumentOwner {
+            document: self.document,
+            child: child.into_element(),
+        }
+    }
+}
+
+impl<E: Element> IntoElement for TextSelectionDocumentOwner<E> {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl<E: Element> Element for TextSelectionDocumentOwner<E> {
+    type RequestLayoutState = E::RequestLayoutState;
+    type PrepaintState = E::PrepaintState;
+
+    fn id(&self) -> Option<ElementId> {
+        self.child.id()
+    }
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        self.child.source_location()
+    }
+
+    fn request_layout(
+        &mut self,
+        id: Option<&GlobalElementId>,
+        inspector_id: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        self.child.request_layout(id, inspector_id, window, cx)
+    }
+
+    fn prepaint(
+        &mut self,
+        id: Option<&GlobalElementId>,
+        inspector_id: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        request_layout: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self::PrepaintState {
+        self.document.mark_owner_mounted(window, cx);
+        let prepaint = self
+            .child
+            .prepaint(id, inspector_id, bounds, request_layout, window, cx);
+        // A cached child may discover a miss while it prepaints and call the
+        // host's `begin_viewport_update`. Replay only after that decision so
+        // old viewport geometry never survives a real row repaint.
+        self.document.replay_visible(window, cx);
+        prepaint
+    }
+
+    fn paint(
+        &mut self,
+        id: Option<&GlobalElementId>,
+        inspector_id: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        request_layout: &mut Self::RequestLayoutState,
+        prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.child.paint(
+            id,
+            inspector_id,
+            bounds,
+            request_layout,
+            prepaint,
+            window,
+            cx,
+        )
+    }
+}
+
 /// Stable participant-defined identity for virtualized participant content.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TextSelectionContentKey(u64);
@@ -63,6 +647,7 @@ pub struct TextSelectionEndpoint {
     entity_id: Option<EntityId>,
     point: Point<Pixels>,
     content_key: Option<TextSelectionContentKey>,
+    document_position: Option<TextSelectionContentKey>,
 }
 
 impl TextSelectionEndpoint {
@@ -72,12 +657,21 @@ impl TextSelectionEndpoint {
             entity_id,
             point,
             content_key: None,
+            document_position: None,
         }
     }
 
     /// Sets participant-defined endpoint metadata.
     pub(crate) const fn with_content_key(mut self, content_key: TextSelectionContentKey) -> Self {
         self.content_key = Some(content_key);
+        self
+    }
+
+    pub(crate) const fn with_document_position(
+        mut self,
+        document_position: TextSelectionContentKey,
+    ) -> Self {
+        self.document_position = Some(document_position);
         self
     }
 
@@ -94,6 +688,41 @@ impl TextSelectionEndpoint {
     /// Returns participant-defined endpoint metadata captured when it hit a participant.
     pub const fn content_key(&self) -> Option<TextSelectionContentKey> {
         self.content_key
+    }
+}
+
+/// A normalized logical byte range for one native document participant.
+///
+/// `None` at either edge represents the participant's start or end. Positions
+/// are opaque participant-defined keys, ordered by their numeric value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TextSelectionDocumentRange {
+    start: Option<TextSelectionContentKey>,
+    end: Option<TextSelectionContentKey>,
+}
+
+impl TextSelectionDocumentRange {
+    pub(crate) const fn new(
+        start: Option<TextSelectionContentKey>,
+        end: Option<TextSelectionContentKey>,
+    ) -> Self {
+        if let (Some(start), Some(end)) = (start, end) {
+            if start.value() > end.value() {
+                return Self {
+                    start: Some(end),
+                    end: Some(start),
+                };
+            }
+        }
+        Self { start, end }
+    }
+
+    pub(crate) const fn start(self) -> Option<TextSelectionContentKey> {
+        self.start
+    }
+
+    pub(crate) const fn end(self) -> Option<TextSelectionContentKey> {
+        self.end
     }
 }
 
@@ -124,6 +753,7 @@ pub struct TextSelectionSnapshot {
     is_selecting: bool,
     window_points: Option<TextSelectionWindowPoints>,
     coverage: TextSelectionCoverage,
+    document_range: Option<TextSelectionDocumentRange>,
 }
 
 /// How much of one participant participates in a window selection.
@@ -149,6 +779,7 @@ impl TextSelectionSnapshot {
             is_selecting: false,
             window_points: None,
             coverage: TextSelectionCoverage::Bounded,
+            document_range: None,
         }
     }
 
@@ -168,9 +799,16 @@ impl TextSelectionSnapshot {
     }
 
     /// Sets the portion of the receiving participant covered by this selection.
-    #[cfg(test)]
     pub(crate) const fn with_coverage(mut self, coverage: TextSelectionCoverage) -> Self {
         self.coverage = coverage;
+        self
+    }
+
+    pub(crate) const fn with_document_range(
+        mut self,
+        document_range: Option<TextSelectionDocumentRange>,
+    ) -> Self {
+        self.document_range = document_range;
         self
     }
 
@@ -198,9 +836,14 @@ impl TextSelectionSnapshot {
     pub const fn coverage(&self) -> TextSelectionCoverage {
         self.coverage
     }
+
+    pub(crate) const fn document_range(&self) -> Option<TextSelectionDocumentRange> {
+        self.document_range
+    }
 }
 
 /// Per-frame geometry reported by a [`TextSelectionHandle`] participant.
+#[derive(Clone)]
 pub struct TextSelectionRegistration {
     hitbox: Hitbox,
     bounds: Bounds<Pixels>,
@@ -481,6 +1124,14 @@ fn point_in_selection_band(
 type FocusCallback = Rc<dyn Fn(&mut Window, &mut App)>;
 type ClearHandler = Rc<dyn Fn(&mut App)>;
 type CopyCallback = Rc<dyn Fn(&mut App) -> String>;
+type DocumentCopyCallback = Rc<
+    dyn Fn(
+        TextSelectionCoverage,
+        TextSelectionWindowPoints,
+        Option<TextSelectionDocumentRange>,
+        &mut App,
+    ) -> String,
+>;
 type ContentKeyResolver = Rc<dyn Fn(Point<Pixels>, &App) -> Option<TextSelectionContentKey>>;
 
 /// Notifications emitted by a text-selection participant.
@@ -529,7 +1180,10 @@ struct SelectableTextState {
     on_focus: Option<FocusCallback>,
     clear: Option<ClearHandler>,
     copy: Option<CopyCallback>,
+    document_copy: Option<DocumentCopyCallback>,
     content_key_resolver: Option<ContentKeyResolver>,
+    document_position_resolver: Option<ContentKeyResolver>,
+    document_member: Option<DocumentMemberBinding>,
 }
 
 impl EventEmitter<TextSelectionEvent> for SelectableTextState {}
@@ -545,7 +1199,10 @@ impl SelectableTextState {
             on_focus: None,
             clear: None,
             copy: None,
+            document_copy: None,
             content_key_resolver: None,
+            document_position_resolver: None,
+            document_member: None,
         }
     }
 
@@ -616,6 +1273,13 @@ impl SelectableTextState {
         callback: impl Fn(Point<Pixels>, &App) -> Option<TextSelectionContentKey> + 'static,
     ) {
         self.content_key_resolver = Some(Rc::new(callback));
+    }
+
+    fn resolve_document_position_with(
+        &mut self,
+        callback: impl Fn(Point<Pixels>, &App) -> Option<TextSelectionContentKey> + 'static,
+    ) {
+        self.document_position_resolver = Some(Rc::new(callback));
     }
 
     fn set_snapshot(&mut self, snapshot: Option<TextSelectionSnapshot>, cx: &mut Context<Self>) {
@@ -757,6 +1421,35 @@ impl TextSelectionHandle {
         self.0.update(cx, |state, _| state.copy_with(callback));
     }
 
+    pub(crate) fn document_copy_with(
+        &self,
+        callback: impl Fn(
+            TextSelectionCoverage,
+            TextSelectionWindowPoints,
+            Option<TextSelectionDocumentRange>,
+            &mut App,
+        ) -> String
+        + 'static,
+        cx: &mut App,
+    ) {
+        self.0
+            .update(cx, |state, _| state.document_copy = Some(Rc::new(callback)));
+    }
+
+    fn document_copy(
+        &self,
+        coverage: TextSelectionCoverage,
+        points: TextSelectionWindowPoints,
+        document_range: Option<TextSelectionDocumentRange>,
+        cx: &mut App,
+    ) -> Option<String> {
+        self.0
+            .read(cx)
+            .document_copy
+            .clone()
+            .map(|copy| copy(coverage, points, document_range, cx))
+    }
+
     /// Sets a participant-specific lookup for stable virtualized content keys.
     pub fn resolve_content_key_with(
         &self,
@@ -767,33 +1460,59 @@ impl TextSelectionHandle {
             .update(cx, |state, _| state.resolve_content_key_with(callback));
     }
 
+    /// Sets a native-document lookup for a stable inline/byte position.
+    ///
+    /// This is separate from [`Self::resolve_content_key_with`], whose keys
+    /// identify ordinary virtual blocks and retain their existing behavior.
+    pub(crate) fn resolve_document_position_with(
+        &self,
+        callback: impl Fn(Point<Pixels>, &App) -> Option<TextSelectionContentKey> + 'static,
+        cx: &mut App,
+    ) {
+        self.0.update(cx, |state, _| {
+            state.resolve_document_position_with(callback)
+        });
+    }
+
     fn downgrade(&self) -> WeakEntity<SelectableTextState> {
         self.0.downgrade()
     }
 }
 
-#[derive(Clone)]
 struct ParticipantRegistration {
     participant: WeakEntity<SelectableTextState>,
     registration: Rc<TextSelectionRegistration>,
     generation: u64,
+    document_member: Option<DocumentMemberBinding>,
 }
 
 #[derive(Clone)]
 struct SelectionEndpoint {
     participant: Option<WeakEntity<SelectableTextState>>,
+    /// Strong only while this endpoint is active. It keeps the native adapter
+    /// and its laid-out projection alive across an LRU cache eviction.
+    native_pin: Option<AnyEntity>,
+    registration: Option<TextSelectionRegistration>,
     point: Point<Pixels>,
     inside: bool,
     inside_text: bool,
     content_key: Option<TextSelectionContentKey>,
     content_key_resolver: Option<(ContentKeyResolver, Point<Pixels>)>,
+    document_position: Option<TextSelectionContentKey>,
+    document_position_resolver: Option<(ContentKeyResolver, Point<Pixels>)>,
+    document_member: Option<DocumentMemberBinding>,
 }
 
 impl SelectionEndpoint {
     fn snapshot(&self) -> TextSelectionEndpoint {
         let snapshot = TextSelectionEndpoint::new(self.entity_id(), self.point);
-        if let Some(content_key) = self.content_key {
+        let snapshot = if let Some(content_key) = self.content_key {
             snapshot.with_content_key(content_key)
+        } else {
+            snapshot
+        };
+        if let Some(position) = self.document_position {
+            snapshot.with_document_position(position)
         } else {
             snapshot
         }
@@ -813,6 +1532,28 @@ impl SelectionEndpoint {
         )
     }
 
+    fn participant_for_copy(&self) -> Option<Entity<SelectableTextState>> {
+        // `native_pin` owns TextViewState, which owns its adapter handle, so
+        // upgrading this weak participant remains valid for a pinned endpoint.
+        if self.document_member.is_some() && self.native_pin.is_none() {
+            return None;
+        }
+        self.participant.as_ref()?.upgrade()
+    }
+
+    fn matches_member(&self, member: Option<&DocumentMemberBinding>) -> bool {
+        let (Some(endpoint), Some(member)) = (&self.document_member, member) else {
+            return false;
+        };
+        endpoint.document.entity_id() == member.document.entity_id() && endpoint.key == member.key
+    }
+
+    fn is_live(&self) -> bool {
+        self.document_member
+            .as_ref()
+            .is_none_or(DocumentMemberBinding::is_live)
+    }
+
     fn entity_id(&self) -> Option<EntityId> {
         self.participant
             .as_ref()
@@ -825,6 +1566,7 @@ impl SelectionEndpoint {
 struct WindowSelectionState {
     participants: HashMap<EntityId, ParticipantRegistration>,
     active_scope: TextSelectionScopeId,
+    mounted_documents: HashMap<EntityId, u64>,
     anchor: Option<SelectionEndpoint>,
     cursor: Option<SelectionEndpoint>,
     pending_extension_anchor: Option<SelectionEndpoint>,
@@ -840,26 +1582,51 @@ impl WindowSelectionState {
     fn resolve_content_keys(state: &Entity<Self>, cx: &mut App) {
         let pending = state.update(cx, |state, _| {
             [
-                state
-                    .anchor
-                    .as_ref()
-                    .and_then(|endpoint| endpoint.content_key_resolver.clone()),
-                state
-                    .cursor
-                    .as_ref()
-                    .and_then(|endpoint| endpoint.content_key_resolver.clone()),
+                state.anchor.as_ref().map(|endpoint| {
+                    (
+                        endpoint.content_key_resolver.clone(),
+                        endpoint.document_position_resolver.clone(),
+                    )
+                }),
+                state.cursor.as_ref().map(|endpoint| {
+                    (
+                        endpoint.content_key_resolver.clone(),
+                        endpoint.document_position_resolver.clone(),
+                    )
+                }),
             ]
         });
-        let resolved =
-            pending.map(|pending| pending.and_then(|(callback, point)| callback(point, cx)));
+        let resolved = pending.map(|pending| {
+            pending.map(|(content, document)| {
+                let content = content.and_then(|(callback, point)| callback(point, cx));
+                let document = document.and_then(|(callback, point)| callback(point, cx));
+                (content, document)
+            })
+        });
         state.update(cx, |state, cx| {
-            if let (Some(endpoint), Some(key)) = (state.anchor.as_mut(), resolved[0]) {
-                endpoint.content_key = Some(key);
-                endpoint.content_key_resolver = None;
+            if let (Some(endpoint), Some((content, document))) =
+                (state.anchor.as_mut(), resolved[0])
+            {
+                if let Some(key) = content {
+                    endpoint.content_key = Some(key);
+                    endpoint.content_key_resolver = None;
+                }
+                if let Some(position) = document {
+                    endpoint.document_position = Some(position);
+                    endpoint.document_position_resolver = None;
+                }
             }
-            if let (Some(endpoint), Some(key)) = (state.cursor.as_mut(), resolved[1]) {
-                endpoint.content_key = Some(key);
-                endpoint.content_key_resolver = None;
+            if let (Some(endpoint), Some((content, document))) =
+                (state.cursor.as_mut(), resolved[1])
+            {
+                if let Some(key) = content {
+                    endpoint.content_key = Some(key);
+                    endpoint.content_key_resolver = None;
+                }
+                if let Some(position) = document {
+                    endpoint.document_position = Some(position);
+                    endpoint.document_position_resolver = None;
+                }
             }
             state.publish_snapshots(cx);
         });
@@ -958,18 +1725,29 @@ impl WindowSelectionState {
     /// whether a participant or the lifecycle element paints first.
     pub fn finish_frame(&mut self, cx: &mut App) -> Vec<ClearHandler> {
         self.finish_frame_scheduled = false;
+        let mut handlers = if self.selected_document_owner_is_absent() {
+            self.clear_state(cx)
+        } else {
+            Vec::new()
+        };
         let stale = self
             .participants
             .iter()
             .filter_map(|(id, registration)| {
-                (registration.generation != self.frame_generation)
-                    .then(|| (*id, registration.participant.clone()))
+                (registration.generation != self.frame_generation).then(|| {
+                    (
+                        *id,
+                        registration.participant.clone(),
+                        registration.document_member.clone(),
+                    )
+                })
             })
             .collect::<Vec<_>>();
-        let mut handlers = Vec::new();
-        for (id, participant) in stale {
+        for (id, participant, document_member) in stale {
             self.participants.remove(&id);
-            if let Some(participant) = participant.upgrade() {
+            if document_member.is_none()
+                && let Some(participant) = participant.upgrade()
+            {
                 if let Some(handler) = participant.update(cx, |state, cx| state.clear_state(cx)) {
                     handlers.push(handler);
                 }
@@ -988,6 +1766,26 @@ impl WindowSelectionState {
         true
     }
 
+    fn mark_document_owner(document: EntityId, window: &Window, cx: &mut App) {
+        let Some(state) = Self::existing(window, cx) else {
+            return;
+        };
+        state.update(cx, |state, _| {
+            state
+                .mounted_documents
+                .insert(document, state.frame_generation);
+        });
+    }
+
+    fn selected_document_owner_is_absent(&self) -> bool {
+        [self.anchor.as_ref(), self.cursor.as_ref()]
+            .into_iter()
+            .flatten()
+            .filter_map(|endpoint| endpoint.document_member.as_ref())
+            .map(|member| member.document.entity_id())
+            .any(|document| self.mounted_documents.get(&document) != Some(&self.frame_generation))
+    }
+
     /// Registers this frame's geometry for a participant.
     pub fn register_participant(
         &mut self,
@@ -995,16 +1793,29 @@ impl WindowSelectionState {
         registration: TextSelectionRegistration,
         cx: &mut App,
     ) {
-        self.prune_dead_participants();
+        let selection_id = selection.entity_id();
+        let document_member = selection.0.read(cx).document_member.clone();
         self.participants.insert(
-            selection.entity_id(),
+            selection_id,
             ParticipantRegistration {
                 participant: selection.downgrade(),
-                registration: Rc::new(registration),
+                registration: Rc::new(registration.clone()),
                 generation: self.frame_generation,
+                document_member,
             },
         );
-        self.publish_snapshots(cx);
+        // An endpoint's adapter retains its own last paint projection. Refresh
+        // that endpoint's coordinate transform only when this exact native
+        // participant paints; a same-key cache recreation must not overwrite
+        // the pinned original transform.
+        for endpoint in [self.anchor.as_mut(), self.cursor.as_mut()]
+            .into_iter()
+            .flatten()
+        {
+            if endpoint.entity_id() == Some(selection_id) {
+                endpoint.registration = Some(registration.clone());
+            }
+        }
     }
 
     /// Starts a selection gesture using bounds hit testing (useful to adapters/tests).
@@ -1041,6 +1852,11 @@ impl WindowSelectionState {
     }
 
     fn clear_state(&mut self, cx: &mut App) -> Vec<ClearHandler> {
+        let pinned_participants = [self.anchor.as_ref(), self.cursor.as_ref()]
+            .into_iter()
+            .flatten()
+            .filter_map(SelectionEndpoint::participant_for_copy)
+            .collect::<Vec<_>>();
         self.stop_anchor_auto_scroll(cx);
         self.anchor = None;
         self.cursor = None;
@@ -1051,11 +1867,39 @@ impl WindowSelectionState {
         self.participants
             .values()
             .filter_map(|registration| registration.participant.upgrade())
+            .chain(pinned_participants)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .fold(HashMap::new(), |mut unique, participant| {
+                unique.insert(participant.entity_id(), participant);
+                unique
+            })
+            .into_values()
             .filter_map(|participant| participant.update(cx, |state, cx| state.clear_state(cx)))
             .collect()
     }
 
     fn copy_items(&self, cx: &App) -> Vec<CopyItem> {
+        if let (Some(anchor), Some(cursor)) = (self.anchor.as_ref(), self.cursor.as_ref())
+            && let (Some(anchor_member), Some(cursor_member)) =
+                (&anchor.document_member, &cursor.document_member)
+            && anchor_member.is_live()
+            && cursor_member.is_live()
+            && anchor_member.document.entity_id() == cursor_member.document.entity_id()
+            && self.snapshot().is_some()
+            && let Some(document) = anchor_member.document.upgrade()
+        {
+            let document = TextSelectionDocument(document);
+            let anchor = anchor.clone();
+            let cursor = cursor.clone();
+            return vec![CopyItem {
+                document_order: 0,
+                callback: Some(Rc::new(move |cx| {
+                    document.copy_between(&anchor, &cursor, cx)
+                })),
+                fallback: String::new(),
+            }];
+        }
         self.participants
             .values()
             .filter_map(|registration| {
@@ -1090,12 +1934,30 @@ impl WindowSelectionState {
         }
         let anchor_endpoint = self.anchor.as_ref()?;
         let cursor_endpoint = self.cursor.as_ref()?;
-        let anchor = anchor_endpoint.resolve(&self.participants)?;
-        let cursor = cursor_endpoint.resolve(&self.participants)?;
-        (anchor != cursor).then(|| {
+        if !anchor_endpoint.is_live() || !cursor_endpoint.is_live() {
+            return None;
+        }
+        let anchor = anchor_endpoint.resolve(&self.participants);
+        let cursor = cursor_endpoint.resolve(&self.participants);
+        let document_selection =
+            anchor_endpoint.document_member.is_some() || cursor_endpoint.document_member.is_some();
+        if !document_selection && (anchor.is_none() || cursor.is_none()) {
+            return None;
+        }
+        let distinct = anchor_endpoint.snapshot() != cursor_endpoint.snapshot();
+        (if document_selection {
+            distinct
+        } else {
+            anchor != cursor
+        })
+        .then(|| {
             TextSelectionSnapshot::new(anchor_endpoint.snapshot(), cursor_endpoint.snapshot())
                 .with_selecting(self.is_selecting)
-                .with_window_points(Some(TextSelectionWindowPoints { anchor, cursor }))
+                .with_window_points(
+                    anchor
+                        .zip(cursor)
+                        .map(|(anchor, cursor)| TextSelectionWindowPoints { anchor, cursor }),
+                )
         })
     }
 
@@ -1178,12 +2040,20 @@ impl WindowSelectionState {
             return;
         };
         let content_key_resolver = participant.read(cx).content_key_resolver.clone();
+        let document_position_resolver = participant.read(cx).document_position_resolver.clone();
+        let document_member = participant.read(cx).document_member.clone();
+        let native_pin = document_member
+            .as_ref()
+            .and_then(|member| member.pin_native_state(cx));
+        let endpoint_registration = (*registration.registration).clone();
         let to_endpoint = |point: Point<Pixels>| {
             let content_point = point
                 - registration.registration.bounds.origin
                 - registration.registration.scroll_offset;
             SelectionEndpoint {
                 participant: Some(participant.downgrade()),
+                native_pin: native_pin.clone(),
+                registration: Some(endpoint_registration.clone()),
                 point: content_point,
                 inside: true,
                 inside_text: true,
@@ -1191,6 +2061,11 @@ impl WindowSelectionState {
                 content_key_resolver: content_key_resolver
                     .clone()
                     .map(|resolver| (resolver, content_point)),
+                document_position: None,
+                document_position_resolver: document_position_resolver
+                    .clone()
+                    .map(|resolver| (resolver, content_point)),
+                document_member: document_member.clone(),
             }
         };
         self.anchor = Some(to_endpoint(anchor));
@@ -1234,7 +2109,11 @@ impl WindowSelectionState {
                     .or_else(|| self.anchor.clone())
             })
             .flatten()
-            .filter(|anchor| anchor.resolve(&self.participants).is_some());
+            .filter(|anchor| {
+                anchor.is_live()
+                    && (anchor.resolve(&self.participants).is_some()
+                        || anchor.document_member.is_some())
+            });
         if !extend && !already_prepared {
             self.clear(cx);
         }
@@ -1357,9 +2236,24 @@ impl WindowSelectionState {
                         .clone()
                         .map(|callback| (callback, point))
                 });
+                let document_position_resolver = participant.upgrade().and_then(|participant| {
+                    participant
+                        .read(cx)
+                        .document_position_resolver
+                        .clone()
+                        .map(|callback| (callback, point))
+                });
+                let document_member = participant
+                    .upgrade()
+                    .and_then(|participant| participant.read(cx).document_member.clone());
+                let native_pin = document_member
+                    .as_ref()
+                    .and_then(|member| member.pin_native_state(cx));
                 SelectionEndpoint {
                     point,
                     participant: Some(participant),
+                    native_pin,
+                    registration: Some((*registration).clone()),
                     inside,
                     inside_text: inside
                         && registration
@@ -1368,15 +2262,23 @@ impl WindowSelectionState {
                             .any(|bounds| bounds.contains(&position)),
                     content_key: None,
                     content_key_resolver,
+                    document_position: None,
+                    document_position_resolver,
+                    document_member,
                 }
             }
             None => SelectionEndpoint {
                 participant: None,
+                native_pin: None,
+                registration: None,
                 point: position,
                 inside: false,
                 inside_text: false,
                 content_key: None,
                 content_key_resolver: None,
+                document_position: None,
+                document_position_resolver: None,
+                document_member: None,
             },
         }
     }
@@ -1394,38 +2296,177 @@ impl WindowSelectionState {
                 && single_participant.is_none_or(|single| single == *id))
             .then_some(snapshot)
             .flatten()
-            .map(|mut snapshot| {
-                snapshot.coverage = self.coverage_for(*id);
-                snapshot
-            });
+            .map(|snapshot| self.snapshot_for_participant(*id, registration, snapshot));
             participant.update(cx, |state, cx| state.set_snapshot(participant_snapshot, cx));
         }
     }
 
-    fn coverage_for(&self, id: EntityId) -> TextSelectionCoverage {
-        let Some(anchor) = self.anchor.as_ref().and_then(SelectionEndpoint::entity_id) else {
+    fn snapshot_for_participant(
+        &self,
+        id: EntityId,
+        registration: &ParticipantRegistration,
+        snapshot: TextSelectionSnapshot,
+    ) -> TextSelectionSnapshot {
+        let coverage = self.coverage_for(id, registration);
+        let document_selection = self
+            .anchor
+            .as_ref()
+            .is_some_and(|endpoint| endpoint.document_member.is_some())
+            && self
+                .cursor
+                .as_ref()
+                .is_some_and(|endpoint| endpoint.document_member.is_some());
+        if !document_selection {
+            return snapshot.with_coverage(coverage);
+        }
+        let anchor = self.anchor.as_ref().expect("selection snapshot has anchor");
+        let cursor = self.cursor.as_ref().expect("selection snapshot has cursor");
+        let point_for = |endpoint: &SelectionEndpoint| {
+            endpoint.point
+                + registration.registration.scroll_offset
+                + registration.registration.bounds.origin
+        };
+        let margin = px(1.);
+        let before = point(
+            registration.registration.bounds.left() - margin,
+            registration.registration.bounds.top() - margin,
+        );
+        let after = point(
+            registration.registration.bounds.right() + margin,
+            registration.registration.bounds.bottom() + margin,
+        );
+        let window_points = match coverage {
+            TextSelectionCoverage::Bounded => Some(TextSelectionWindowPoints {
+                anchor: point_for(anchor),
+                cursor: point_for(cursor),
+            }),
+            TextSelectionCoverage::FromStart => {
+                let endpoint = self
+                    .endpoint_matches_participant(anchor, id, registration)
+                    .then(|| point_for(anchor))
+                    .unwrap_or_else(|| point_for(cursor));
+                Some(TextSelectionWindowPoints {
+                    anchor: before,
+                    cursor: endpoint,
+                })
+            }
+            TextSelectionCoverage::ToEnd => {
+                let endpoint = self
+                    .endpoint_matches_participant(anchor, id, registration)
+                    .then(|| point_for(anchor))
+                    .unwrap_or_else(|| point_for(cursor));
+                Some(TextSelectionWindowPoints {
+                    anchor: endpoint,
+                    cursor: after,
+                })
+            }
+            TextSelectionCoverage::Full => Some(TextSelectionWindowPoints {
+                anchor: before,
+                cursor: after,
+            }),
+        };
+        snapshot
+            .with_coverage(coverage)
+            .with_window_points(window_points)
+            .with_document_range(self.document_range_for_participant(id, registration, coverage))
+    }
+
+    fn document_range_for_participant(
+        &self,
+        id: EntityId,
+        registration: &ParticipantRegistration,
+        coverage: TextSelectionCoverage,
+    ) -> Option<TextSelectionDocumentRange> {
+        let anchor = self.anchor.as_ref()?;
+        let cursor = self.cursor.as_ref()?;
+        if anchor.document_member.is_none() || cursor.document_member.is_none() {
+            return None;
+        }
+        let range = match coverage {
+            TextSelectionCoverage::Bounded => {
+                let (anchor, cursor) = (anchor.document_position?, cursor.document_position?);
+                TextSelectionDocumentRange::new(Some(anchor), Some(cursor))
+            }
+            TextSelectionCoverage::FromStart => {
+                let endpoint = self
+                    .endpoint_matches_participant(anchor, id, registration)
+                    .then_some(anchor)
+                    .unwrap_or(cursor);
+                TextSelectionDocumentRange::new(None, Some(endpoint.document_position?))
+            }
+            TextSelectionCoverage::ToEnd => {
+                let endpoint = self
+                    .endpoint_matches_participant(anchor, id, registration)
+                    .then_some(anchor)
+                    .unwrap_or(cursor);
+                TextSelectionDocumentRange::new(Some(endpoint.document_position?), None)
+            }
+            TextSelectionCoverage::Full => TextSelectionDocumentRange::new(None, None),
+        };
+        Some(range)
+    }
+
+    fn coverage_for(
+        &self,
+        id: EntityId,
+        registration: &ParticipantRegistration,
+    ) -> TextSelectionCoverage {
+        let Some(anchor) = self.anchor.as_ref() else {
             return TextSelectionCoverage::Bounded;
         };
-        let Some(cursor) = self.cursor.as_ref().and_then(SelectionEndpoint::entity_id) else {
+        let Some(cursor) = self.cursor.as_ref() else {
             return TextSelectionCoverage::Bounded;
         };
-        if anchor == cursor {
+        let anchor_matches = self.endpoint_matches_participant(anchor, id, registration);
+        let cursor_matches = self.endpoint_matches_participant(cursor, id, registration);
+        if anchor_matches && cursor_matches {
             return TextSelectionCoverage::Bounded;
         }
-        let anchor_order = self.participants[&anchor].registration.document_order;
-        let cursor_order = self.participants[&cursor].registration.document_order;
-        if id != anchor && id != cursor {
+        let anchor_order = self.endpoint_order(anchor).unwrap_or_default();
+        let cursor_order = self.endpoint_order(cursor).unwrap_or_default();
+        if !anchor_matches && !cursor_matches {
             TextSelectionCoverage::Full
-        } else if (id == anchor) == (anchor_order < cursor_order) {
+        } else if anchor_matches == (anchor_order < cursor_order) {
             TextSelectionCoverage::ToEnd
         } else {
             TextSelectionCoverage::FromStart
         }
     }
 
+    fn endpoint_matches_participant(
+        &self,
+        endpoint: &SelectionEndpoint,
+        id: EntityId,
+        registration: &ParticipantRegistration,
+    ) -> bool {
+        endpoint.entity_id() == Some(id)
+            || endpoint.matches_member(registration.document_member.as_ref())
+    }
+
+    fn endpoint_order(&self, endpoint: &SelectionEndpoint) -> Option<u64> {
+        endpoint
+            .entity_id()
+            .and_then(|id| {
+                self.participants
+                    .get(&id)
+                    .map(|entry| entry.registration.document_order)
+            })
+            .or_else(|| {
+                endpoint
+                    .document_member
+                    .as_ref()
+                    .map(|member| member.order.get())
+            })
+    }
+
     fn single_participant(&self) -> Option<EntityId> {
-        let anchor = self.anchor.as_ref()?.entity_id()?;
-        let cursor = self.cursor.as_ref()?.entity_id()?;
+        let anchor_endpoint = self.anchor.as_ref()?;
+        let cursor_endpoint = self.cursor.as_ref()?;
+        if anchor_endpoint.matches_member(cursor_endpoint.document_member.as_ref()) {
+            return None;
+        }
+        let anchor = anchor_endpoint.entity_id()?;
+        let cursor = cursor_endpoint.entity_id()?;
         (anchor == cursor).then_some(anchor)
     }
 
@@ -1436,20 +2477,13 @@ impl WindowSelectionState {
         let Some(cursor) = self.cursor.as_ref().and_then(SelectionEndpoint::entity_id) else {
             return false;
         };
-        let Some(anchor_registration) = self.participants.get(&anchor) else {
+        let Some(start) = self.endpoint_order(self.anchor.as_ref().unwrap()) else {
             return false;
         };
-        let Some(cursor_registration) = self.participants.get(&cursor) else {
+        let Some(end) = self.endpoint_order(self.cursor.as_ref().unwrap()) else {
             return false;
         };
-        let start = anchor_registration
-            .registration
-            .document_order
-            .min(cursor_registration.registration.document_order);
-        let end = anchor_registration
-            .registration
-            .document_order
-            .max(cursor_registration.registration.document_order);
+        let (start, end) = (start.min(end), start.max(end));
         (start..=end).contains(&registration.registration.document_order)
             || id == anchor
             || id == cursor
@@ -2005,6 +3039,10 @@ mod tests {
         selection: TextSelectionHandle,
     }
 
+    struct PinnedNative {
+        selection: TextSelectionHandle,
+    }
+
     struct WindowSelectionView {
         selection: TextSelectionHandle,
     }
@@ -2208,6 +3246,434 @@ mod tests {
             TextSelectionEndpoint::new(None, cursor),
         )
         .with_window_points(Some(TextSelectionWindowPoints { anchor, cursor }))
+    }
+
+    #[gpui::test]
+    fn retained_document_keeps_offscreen_endpoints_and_copy(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let document = TextSelectionDocument::new(TextSelectionScopeId::default(), cx);
+            document.sync_members(
+                vec![
+                    TextSelectionDocumentMember::new("first", |_| "first".to_string()),
+                    TextSelectionDocumentMember::new("second", |_| "second".to_string()),
+                ],
+                cx,
+            );
+            let first = FakeParticipant::new("first", cx);
+            let second = FakeParticipant::new("second", cx);
+            document.bind("first".into(), &first.selection, None, cx);
+            document.bind("second".into(), &second.selection, None, cx);
+
+            let mut state = WindowSelectionState::default();
+            first.register(&mut state, 0., TextSelectionScopeId::default(), 0, cx);
+            second.register(&mut state, 20., TextSelectionScopeId::default(), 1, cx);
+            state.begin(point(px(5.), px(5.)), false, cx);
+            state.update(point(px(5.), px(25.)), cx);
+            state.end(cx);
+            assert_eq!(state.selected_text(cx), "first\nsecond");
+
+            // Two sweeps remove both transient registrations, while retained
+            // document endpoints and their copy callbacks remain valid.
+            state
+                .mounted_documents
+                .insert(document.0.entity_id(), state.frame_generation);
+            assert!(!state.selected_document_owner_is_absent());
+            state.finish_frame(cx);
+            state
+                .mounted_documents
+                .insert(document.0.entity_id(), state.frame_generation);
+            assert!(!state.selected_document_owner_is_absent());
+            state.finish_frame(cx);
+            assert!(state.snapshot().is_some());
+            assert_eq!(state.selected_text(cx), "first\nsecond");
+        });
+    }
+
+    #[gpui::test]
+    fn document_member_eviction_invalidates_retained_endpoints(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let document = TextSelectionDocument::new(TextSelectionScopeId::default(), cx);
+            document.sync_members(
+                vec![
+                    TextSelectionDocumentMember::new("first", |_| "first".to_string()),
+                    TextSelectionDocumentMember::new("second", |_| "second".to_string()),
+                ],
+                cx,
+            );
+            let first = FakeParticipant::new("first", cx);
+            let second = FakeParticipant::new("second", cx);
+            document.bind("first".into(), &first.selection, None, cx);
+            document.bind("second".into(), &second.selection, None, cx);
+            let mut state = WindowSelectionState::default();
+            first.register(&mut state, 0., TextSelectionScopeId::default(), 0, cx);
+            second.register(&mut state, 20., TextSelectionScopeId::default(), 1, cx);
+            state.begin(point(px(5.), px(5.)), false, cx);
+            state.update(point(px(5.), px(25.)), cx);
+            state.end(cx);
+
+            document.sync_members(
+                vec![TextSelectionDocumentMember::new("second", |_| {
+                    "second".to_string()
+                })],
+                cx,
+            );
+            state.publish_snapshots(cx);
+            assert!(state.snapshot().is_none());
+            assert!(first.selection.snapshot(cx).is_none());
+        });
+    }
+
+    #[gpui::test]
+    fn document_empty_click_does_not_select_or_copy(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let document = TextSelectionDocument::new(TextSelectionScopeId::default(), cx);
+            document.sync_members(
+                vec![TextSelectionDocumentMember::new("only", |_| {
+                    "only".to_string()
+                })],
+                cx,
+            );
+            let only = FakeParticipant::new("only", cx);
+            document.bind("only".into(), &only.selection, None, cx);
+            let mut state = WindowSelectionState::default();
+            only.register(&mut state, 0., TextSelectionScopeId::default(), 0, cx);
+            state.begin(point(px(5.), px(5.)), false, cx);
+            state.end(cx);
+            assert!(state.snapshot().is_none());
+            assert!(!state.has_selection(cx));
+            assert!(state.selected_text(cx).is_empty());
+        });
+    }
+
+    #[gpui::test]
+    fn absent_document_owner_clears_retained_selection(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let document = TextSelectionDocument::new(TextSelectionScopeId::default(), cx);
+            document.sync_members(
+                vec![TextSelectionDocumentMember::new("only", |_| {
+                    "only".to_string()
+                })],
+                cx,
+            );
+            let only = FakeParticipant::new("only", cx);
+            document.bind("only".into(), &only.selection, None, cx);
+            let mut state = WindowSelectionState::default();
+            only.register(&mut state, 0., TextSelectionScopeId::default(), 0, cx);
+            state.begin(point(px(2.), px(2.)), false, cx);
+            state.update(point(px(8.), px(2.)), cx);
+            state.end(cx);
+            assert!(state.snapshot().is_some());
+
+            // No owner stamp this frame models the pane/subject subtree being
+            // absent. Remounting later cannot revive its previous snapshot.
+            state.finish_frame(cx);
+            assert!(state.snapshot().is_none());
+            assert!(only.selection.snapshot(cx).is_none());
+        });
+    }
+
+    #[gpui::test]
+    fn viewport_update_discards_cached_geometry_before_replay(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let document = TextSelectionDocument::new(TextSelectionScopeId::default(), cx);
+            let selection = TextSelectionHandle::new("row", cx);
+            let bounds = Bounds::new(point(px(0.), px(0.)), size(px(100.), px(10.)));
+            let registration = TextSelectionRegistration::new(
+                Hitbox {
+                    id: HitboxId::placeholder(),
+                    bounds,
+                    content_mask: ContentMask { bounds },
+                    behavior: HitboxBehavior::Normal,
+                },
+                bounds,
+            );
+            document.0.update(cx, |state, _| {
+                state
+                    .visible
+                    .insert(selection.entity_id(), (selection.clone(), registration));
+            });
+            document.begin_viewport_update(cx);
+            assert!(document.0.read(cx).visible.is_empty());
+        });
+    }
+
+    #[gpui::test]
+    fn document_recreated_endpoint_keeps_partial_projection_and_copy(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let document = TextSelectionDocument::new(TextSelectionScopeId::default(), cx);
+            document.sync_members(
+                vec![TextSelectionDocumentMember::new("row", |_| {
+                    "full row".to_string()
+                })],
+                cx,
+            );
+            let old = cx.new(|cx| PinnedNative {
+                selection: TextSelectionHandle::new("old", cx),
+            });
+            let old_handle = old.read(cx).selection.clone();
+            old_handle.document_copy_with(|coverage, _, _, _| format!("old {coverage:?}"), cx);
+            document.bind("row".into(), &old_handle, Some(old.clone().into_any()), cx);
+
+            let mut state = WindowSelectionState::default();
+            let bounds = Bounds::new(point(px(0.), px(0.)), size(px(100.), px(10.)));
+            let old_registration = TextSelectionRegistration::new(
+                Hitbox {
+                    id: HitboxId::placeholder(),
+                    bounds,
+                    content_mask: ContentMask { bounds },
+                    behavior: HitboxBehavior::Normal,
+                },
+                bounds,
+            )
+            .with_text_bounds(vec![bounds]);
+            state.register_participant(old_handle.clone(), old_registration, cx);
+            state.begin(point(px(5.), px(5.)), false, cx);
+            state.update(point(px(20.), px(5.)), cx);
+            state.end(cx);
+
+            // The cache drops its owner, then recreates the same logical row
+            // with a fresh native selection handle. The endpoint pin keeps the
+            // old adapter authoritative for partial copy.
+            let old_selection = state.anchor.as_ref().unwrap().entity_id().unwrap();
+            drop(old_handle);
+            drop(old);
+            let recreated = cx.new(|cx| PinnedNative {
+                selection: TextSelectionHandle::new("recreated", cx),
+            });
+            let recreated_handle = recreated.read(cx).selection.clone();
+            recreated_handle
+                .document_copy_with(|coverage, _, _, _| format!("recreated {coverage:?}"), cx);
+            document.bind(
+                "row".into(),
+                &recreated_handle,
+                Some(recreated.clone().into_any()),
+                cx,
+            );
+            let recreated_registration = TextSelectionRegistration::new(
+                Hitbox {
+                    id: HitboxId::placeholder(),
+                    bounds,
+                    content_mask: ContentMask { bounds },
+                    behavior: HitboxBehavior::Normal,
+                },
+                bounds,
+            )
+            .with_text_bounds(vec![bounds]);
+            state.register_participant(recreated_handle.clone(), recreated_registration, cx);
+            state.publish_snapshots(cx);
+
+            let recreated_snapshot = recreated_handle.snapshot(cx).unwrap();
+            assert_eq!(
+                recreated_snapshot.coverage(),
+                TextSelectionCoverage::Bounded
+            );
+            assert_eq!(
+                state.anchor.as_ref().unwrap().entity_id(),
+                Some(old_selection)
+            );
+            assert_eq!(state.selected_text(cx), "old Bounded");
+        });
+    }
+
+    #[gpui::test]
+    fn document_recreated_member_uses_logical_byte_range_for_partial_copy(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let document = TextSelectionDocument::new(TextSelectionScopeId::default(), cx);
+            document.sync_members(
+                vec![TextSelectionDocumentMember::new("row", |_| {
+                    "full row".to_string()
+                })],
+                cx,
+            );
+            let old = cx.new(|cx| PinnedNative {
+                selection: TextSelectionHandle::new("old", cx),
+            });
+            let old_handle = old.read(cx).selection.clone();
+            old_handle
+                .resolve_document_position_with(|_, _| Some(TextSelectionContentKey::new(2)), cx);
+            let copied_range = Rc::new(RefCell::new(None));
+            let copied_range_for_callback = copied_range.clone();
+            old_handle.document_copy_with(
+                move |_, _, range, _| {
+                    *copied_range_for_callback.borrow_mut() = range;
+                    "old partial".to_string()
+                },
+                cx,
+            );
+            document.bind("row".into(), &old_handle, Some(old.clone().into_any()), cx);
+
+            let mut state = WindowSelectionState::default();
+            let registration = |bounds| {
+                TextSelectionRegistration::new(
+                    Hitbox {
+                        id: HitboxId::placeholder(),
+                        bounds,
+                        content_mask: ContentMask { bounds },
+                        behavior: HitboxBehavior::Normal,
+                    },
+                    bounds,
+                )
+                .with_text_bounds(vec![bounds])
+            };
+            let old_bounds = Bounds::new(point(px(0.), px(0.)), size(px(100.), px(10.)));
+            state.register_participant(old_handle.clone(), registration(old_bounds), cx);
+            state.begin(point(px(5.), px(5.)), false, cx);
+            state.anchor.as_mut().unwrap().document_position =
+                Some(TextSelectionContentKey::new(2));
+            state.cursor.as_mut().unwrap().document_position =
+                Some(TextSelectionContentKey::new(2));
+
+            let recreated = cx.new(|cx| PinnedNative {
+                selection: TextSelectionHandle::new("recreated", cx),
+            });
+            let recreated_handle = recreated.read(cx).selection.clone();
+            document.bind(
+                "row".into(),
+                &recreated_handle,
+                Some(recreated.clone().into_any()),
+                cx,
+            );
+            let recreated_bounds = Bounds::new(point(px(110.), px(40.)), size(px(100.), px(10.)));
+            state.register_participant(recreated_handle, registration(recreated_bounds), cx);
+            state.update(point(px(125.), px(45.)), cx);
+            state.cursor.as_mut().unwrap().document_position =
+                Some(TextSelectionContentKey::new(7));
+            state.end(cx);
+
+            assert_eq!(state.selected_text(cx), "old partial");
+            assert_eq!(
+                *copied_range.borrow(),
+                Some(TextSelectionDocumentRange::new(
+                    Some(TextSelectionContentKey::new(2)),
+                    Some(TextSelectionContentKey::new(7)),
+                )),
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn document_content_version_invalidates_only_changed_member(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let document = TextSelectionDocument::new(TextSelectionScopeId::default(), cx);
+            let member = |key: &str, version: &str| {
+                let copy = key.to_string();
+                TextSelectionDocumentMember::new(key, move |_| copy.clone())
+                    .with_content_version(version)
+            };
+            document.sync_members(vec![member("changed", "v1"), member("same", "v1")], cx);
+
+            let changed = FakeParticipant::new("changed", cx);
+            let same = FakeParticipant::new("same", cx);
+            document.bind("changed".into(), &changed.selection, None, cx);
+            document.bind("same".into(), &same.selection, None, cx);
+            let mut state = WindowSelectionState::default();
+            changed.register(&mut state, 0., TextSelectionScopeId::default(), 0, cx);
+            same.register(&mut state, 20., TextSelectionScopeId::default(), 1, cx);
+
+            state.begin(point(px(5.), px(22.)), false, cx);
+            state.update(point(px(10.), px(22.)), cx);
+            state.end(cx);
+            document.sync_members(vec![member("changed", "v2"), member("same", "v1")], cx);
+            assert!(state.snapshot().is_some());
+
+            document.bind("changed".into(), &changed.selection, None, cx);
+            state.begin(point(px(5.), px(2.)), false, cx);
+            state.update(point(px(10.), px(2.)), cx);
+            state.end(cx);
+            document.sync_members(vec![member("changed", "v3"), member("same", "v1")], cx);
+            assert!(state.snapshot().is_none());
+        });
+    }
+
+    #[gpui::test]
+    fn document_endpoint_copy_tracks_its_original_views_latest_geometry(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let document = TextSelectionDocument::new(TextSelectionScopeId::default(), cx);
+            document.sync_members(
+                vec![TextSelectionDocumentMember::new("row", |_| {
+                    "full row".to_string()
+                })],
+                cx,
+            );
+            let native = cx.new(|cx| PinnedNative {
+                selection: TextSelectionHandle::new("row", cx),
+            });
+            let native_handle = native.read(cx).selection.clone();
+            let copied_points = Rc::new(RefCell::new(None));
+            let copied_points_for_callback = copied_points.clone();
+            native_handle.document_copy_with(
+                move |_, points, _, _| {
+                    *copied_points_for_callback.borrow_mut() = Some(points);
+                    "partial".to_string()
+                },
+                cx,
+            );
+            document.bind(
+                "row".into(),
+                &native_handle,
+                Some(native.clone().into_any()),
+                cx,
+            );
+
+            let mut state = WindowSelectionState::default();
+            let initial_bounds = Bounds::new(point(px(0.), px(0.)), size(px(100.), px(10.)));
+            let registration = |bounds| {
+                TextSelectionRegistration::new(
+                    Hitbox {
+                        id: HitboxId::placeholder(),
+                        bounds,
+                        content_mask: ContentMask { bounds },
+                        behavior: HitboxBehavior::Normal,
+                    },
+                    bounds,
+                )
+                .with_text_bounds(vec![bounds])
+            };
+            state.register_participant(native_handle.clone(), registration(initial_bounds), cx);
+            state.begin(point(px(5.), px(5.)), false, cx);
+            state.update(point(px(20.), px(5.)), cx);
+            state.end(cx);
+
+            // The original native view repaints after scrolling/reflow. Its
+            // refreshed registration must drive the retained adapter's copy
+            // projection, even if another same-key view appears elsewhere.
+            let latest_bounds = Bounds::new(point(px(30.), px(40.)), size(px(100.), px(10.)));
+            state.register_participant(native_handle.clone(), registration(latest_bounds), cx);
+            assert_eq!(state.selected_text(cx), "partial");
+            let points = copied_points.borrow().expect("native copy callback ran");
+            assert_eq!(points.anchor(), point(px(35.), px(45.)));
+            assert_eq!(points.cursor(), point(px(50.), px(45.)));
+        });
+    }
+
+    #[gpui::test]
+    fn document_does_not_retain_unselected_native_views(cx: &mut TestAppContext) {
+        let (_document, _native_handle, weak_native) = cx.update(|cx| {
+            let document = TextSelectionDocument::new(TextSelectionScopeId::default(), cx);
+            document.sync_members(
+                vec![TextSelectionDocumentMember::new("row", |_| {
+                    "row".to_string()
+                })],
+                cx,
+            );
+            let native = cx.new(|cx| PinnedNative {
+                selection: TextSelectionHandle::new("row", cx),
+            });
+            let native_handle = native.read(cx).selection.clone();
+            let weak_native = native.downgrade();
+            document.bind(
+                "row".into(),
+                &native_handle,
+                Some(native.clone().into_any()),
+                cx,
+            );
+            drop(native);
+            (document, native_handle, weak_native)
+        });
+        // Entity creation queues effects that temporarily retain the entity.
+        // Keep the document and selection alive while those effects drain.
+        cx.run_until_parked();
+        assert!(weak_native.upgrade().is_none());
     }
 
     #[gpui::test]

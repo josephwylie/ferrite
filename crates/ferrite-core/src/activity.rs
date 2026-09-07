@@ -330,6 +330,9 @@ struct SubjectState {
     busy: bool,
     coverage: TranscriptCoverage,
     last_outcome: Option<TurnOutcome>,
+    timings_revision: u64,
+    /// History-rebuild generation. It is intentionally distinct from the
+    /// transcript and timing presentation revisions.
     revision: u64,
     retained: bool,
     truncated: bool,
@@ -351,6 +354,7 @@ impl SubjectState {
             busy: false,
             coverage: TranscriptCoverage::Unavailable,
             last_outcome: None,
+            timings_revision: 0,
             revision: 0,
             retained: true,
             truncated: false,
@@ -799,12 +803,18 @@ impl Activity {
             ActivityInput::RestoreTimings { subject, timings } => {
                 let connected = self.connected;
                 if let Some(state) = self.state_mut(&subject) {
+                    let mut timings_changed = false;
                     for (id, elapsed) in timings {
                         if (!connected || !state.timings.contains_key(&id))
                             && !matches!(state.timings.get(&id), Some(ToolTiming::Running(_)))
+                            && !matches!(state.timings.get(&id), Some(ToolTiming::Done(total)) if *total == elapsed)
                         {
                             state.timings.insert(id, ToolTiming::Done(elapsed));
+                            timings_changed = true;
                         }
+                    }
+                    if timings_changed {
+                        state.timings_revision = state.timings_revision.saturating_add(1);
                     }
                     ActivityUpdate {
                         changed: vec![subject],
@@ -1771,6 +1781,14 @@ impl<'a> SubjectView<'a> {
     }
     pub fn revision(self) -> u64 {
         self.state.revision
+    }
+    /// Presentation revisions for the transcript body and restored tool timings.
+    /// This excludes `revision()`, which only tracks history rebuilds.
+    pub fn presentation_revision(self) -> (u64, u64) {
+        (
+            self.state.transcript.revision(),
+            self.state.timings_revision,
+        )
     }
     pub fn retained(self) -> bool {
         self.state.retained

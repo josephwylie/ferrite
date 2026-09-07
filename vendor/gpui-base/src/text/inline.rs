@@ -2,7 +2,7 @@ use gpui::Corners;
 use std::{
     ops::Range,
     rc::Rc,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, Weak},
 };
 
 use gpui::{
@@ -20,6 +20,7 @@ use crate::{
     text::selection::word_range_at,
     text::state::LineSpan,
     text::text_view::{LinkClickHandlerFn, handle_link_click},
+    text_selection::TextSelectionDocumentRange,
 };
 
 /// A inline element used to render a inline text and support selectable.
@@ -45,6 +46,13 @@ pub(crate) struct InlineState {
     pub(super) selection: Option<Selection>,
     // Wrapped/custom inline fragments retain offsets into the original run.
     pub(super) fragments: Vec<(Range<usize>, Arc<Mutex<InlineState>>)>,
+    source: Option<InlineSource>,
+}
+
+#[derive(Clone, Debug)]
+struct InlineSource {
+    root: Weak<Mutex<InlineState>>,
+    offset: usize,
 }
 
 impl PartialEq for InlineState {
@@ -56,6 +64,35 @@ impl PartialEq for InlineState {
 }
 
 impl InlineState {
+    pub(super) fn source_metadata(state: &Arc<Mutex<Self>>) -> (Weak<Mutex<Self>>, usize) {
+        state
+            .lock()
+            .ok()
+            .and_then(|state| state.source.clone())
+            .map(|source| (source.root, source.offset))
+            .unwrap_or_else(|| (Arc::downgrade(state), 0))
+    }
+
+    pub(super) fn fragment(
+        parent: &Arc<Mutex<Self>>,
+        range: Range<usize>,
+        text: SharedString,
+    ) -> Arc<Mutex<Self>> {
+        let (root, offset) = Self::source_metadata(parent);
+        let child = Arc::new(Mutex::new(Self {
+            text,
+            source: Some(InlineSource {
+                root,
+                offset: offset + range.start,
+            }),
+            ..Default::default()
+        }));
+        if let Ok(mut parent) = parent.lock() {
+            parent.fragments.push((range, child.clone()));
+        }
+        child
+    }
+
     pub(super) fn selected_range(&self) -> Option<Range<usize>> {
         if self.fragments.is_empty() {
             return self.selection.as_ref().map(|s| s.start..s.end);
@@ -82,6 +119,169 @@ impl InlineState {
     pub(crate) fn set_text(&mut self, text: SharedString) {
         self.text = text;
     }
+}
+
+/// Retains an inline's laid-out glyph geometry for selection updates after the
+/// inline has left the painted viewport.
+#[derive(Clone)]
+pub(super) struct InlineSelectionProjection {
+    state: Arc<Mutex<InlineState>>,
+    text: SharedString,
+    geometry: InlineProjectionGeometry,
+    bounds: Bounds<Pixels>,
+    source_root: usize,
+    source_offset: usize,
+    document_ordinal: usize,
+}
+
+#[derive(Clone)]
+enum InlineProjectionGeometry {
+    Text {
+        text_layout: TextLayout,
+        line_height: Pixels,
+    },
+    Atomic,
+}
+
+impl InlineSelectionProjection {
+    pub(super) fn new(
+        state: Arc<Mutex<InlineState>>,
+        text: SharedString,
+        text_layout: TextLayout,
+        line_height: Pixels,
+        bounds: Bounds<Pixels>,
+    ) -> Self {
+        let (root, source_offset) = InlineState::source_metadata(&state);
+        Self {
+            state,
+            text,
+            geometry: InlineProjectionGeometry::Text {
+                text_layout,
+                line_height,
+            },
+            bounds,
+            source_root: root.as_ptr() as usize,
+            source_offset,
+            document_ordinal: 0,
+        }
+    }
+
+    pub(super) fn atomic(state: Arc<Mutex<InlineState>>, bounds: Bounds<Pixels>) -> Self {
+        let (root, source_offset) = InlineState::source_metadata(&state);
+        let text = state
+            .lock()
+            .map(|state| state.text.clone())
+            .unwrap_or_default();
+        Self {
+            state,
+            text,
+            geometry: InlineProjectionGeometry::Atomic,
+            bounds,
+            source_root: root.as_ptr() as usize,
+            source_offset,
+            document_ordinal: 0,
+        }
+    }
+
+    pub(super) fn source_root(&self) -> usize {
+        self.source_root
+    }
+
+    pub(super) fn set_document_ordinal(&mut self, ordinal: usize) {
+        self.document_ordinal = ordinal;
+    }
+
+    pub(super) fn document_ordinal(&self) -> usize {
+        self.document_ordinal
+    }
+
+    pub(super) fn project(&self, anchor: Point<Pixels>, cursor: Point<Pixels>) {
+        let selection = match &self.geometry {
+            InlineProjectionGeometry::Text {
+                text_layout,
+                line_height,
+            } => selection_for_points(&self.text, text_layout, anchor, cursor, *line_height),
+            InlineProjectionGeometry::Atomic => {
+                let center = self.bounds.center();
+                let after = |point: Point<Pixels>| {
+                    self.bounds.top() > point.y
+                        || (self.bounds.bottom() > point.y && center.x >= point.x)
+                };
+                (after(anchor) != after(cursor)).then(|| (0..self.text.len()).into())
+            }
+        };
+        if let Ok(mut state) = self.state.lock() {
+            state.selection = selection;
+        }
+    }
+
+    /// Returns this inline's UTF-8 position for a window point.
+    pub(super) fn document_position_at(&self, point: Point<Pixels>) -> Option<usize> {
+        self.bounds.contains(&point).then_some(())?;
+        let offset = match &self.geometry {
+            InlineProjectionGeometry::Text { text_layout, .. } => text_layout
+                .index_for_position(point)
+                .unwrap_or_else(|offset| offset),
+            InlineProjectionGeometry::Atomic => {
+                if point.x < self.bounds.center().x {
+                    0
+                } else {
+                    self.text.len()
+                }
+            }
+        };
+        Some(self.source_offset + offset.min(self.text.len()))
+    }
+
+    /// Applies a logical inline/byte range without depending on the layout
+    /// that existed when the endpoints were first hit.
+    pub(super) fn project_document_range(&self, ordinal: usize, range: TextSelectionDocumentRange) {
+        let selection =
+            selection_for_document_range(&self.text, ordinal, self.source_offset, range);
+        if let Ok(mut state) = self.state.lock() {
+            state.selection = selection;
+        }
+    }
+}
+
+fn selection_for_document_range(
+    text: &str,
+    ordinal: usize,
+    source_offset: usize,
+    range: TextSelectionDocumentRange,
+) -> Option<Selection> {
+    const OFFSET_MASK: u64 = u32::MAX as u64;
+    let decode = |key: crate::TextSelectionContentKey| {
+        (
+            (key.value() >> 32) as usize,
+            (key.value() & OFFSET_MASK) as usize,
+        )
+    };
+    let start = range.start().map(decode);
+    let end = range.end().map(decode);
+    let start_ordinal = start.map(|(ordinal, _)| ordinal).unwrap_or(0);
+    let end_ordinal = end.map(|(ordinal, _)| ordinal).unwrap_or(usize::MAX);
+    if !(start_ordinal..=end_ordinal).contains(&ordinal) {
+        return None;
+    }
+    let start = start
+        .filter(|(position_ordinal, _)| *position_ordinal == ordinal)
+        .map(|(_, offset)| offset.saturating_sub(source_offset))
+        .unwrap_or(0);
+    let end = end
+        .filter(|(position_ordinal, _)| *position_ordinal == ordinal)
+        .map(|(_, offset)| offset.saturating_sub(source_offset))
+        .unwrap_or(text.len());
+    let start = utf8_boundary_before(text, start.min(text.len()));
+    let end = utf8_boundary_before(text, end.min(text.len()));
+    (start < end).then(|| (start..end).into())
+}
+
+fn utf8_boundary_before(text: &str, mut offset: usize) -> usize {
+    while offset > 0 && !text.is_char_boundary(offset) {
+        offset -= 1;
+    }
+    offset
 }
 
 impl Inline {
@@ -141,6 +341,9 @@ impl Inline {
         &self,
         text_layout: &TextLayout,
         bounds: &Bounds<Pixels>,
+        document_range: Option<TextSelectionDocumentRange>,
+        ordinal: usize,
+        source_offset: usize,
         window: &mut Window,
         cx: &mut App,
     ) -> (bool, bool, Option<Selection>) {
@@ -173,65 +376,30 @@ impl Inline {
             );
         }
 
+        if let Some(document_range) = document_range {
+            return (
+                is_selectable,
+                true,
+                selection_for_document_range(&self.text, ordinal, source_offset, document_range),
+            );
+        }
+
         let Some((selection_start, selection_end)) = text_view_state.selection_points(cx) else {
             return (is_selectable, false, None);
         };
         let line_height = window.line_height();
 
-        // Use for debug selection bounds
-        // self.paint_selected_bounds(Bounds::from_corners(selection_start, selection_end), window, cx);
-
-        // NOTE: the selection is computed purely from the geometric band
-        // (`selection_start`..`selection_end`), NOT from what is currently
-        // visible. Every glyph of a *painted* element is laid out (its
-        // `position_for_index` is valid) even when it is scrolled out of, or
-        // clipped by, an ancestor's viewport — the content mask only clips the
-        // painted pixels. Because the copied text is derived from
-        // `InlineState.selection`, gating the selection on `content_mask` here
-        // used to drop scrolled-out-but-selected glyphs, so a selection taller
-        // than the viewport (e.g. a long chat message, or a drag with
-        // auto-scroll) copied only the portion that happened to be on screen.
-        //
-        // This does not resurrect the #2156 clipped-hit-testing behavior: a
-        // selection can only START on visible text (window selection resolves
-        // endpoints with hitbox hover testing against visible Inline bounds),
-        // so the band's endpoints are always anchored to on-screen text.
-        // Content that is merely `overflow_hidden`
-        // (not scrolled) lies outside that band and is still excluded, while
-        // the highlight quads painted for off-screen glyphs are clipped away by
-        // GPUI's content mask as before.
-        let mut selection: Option<Selection> = None;
-        let mut offset = 0;
-        let mut chars = self.text.chars().peekable();
-        while let Some(c) = chars.next() {
-            let Some(pos) = text_layout.position_for_index(offset) else {
-                offset += c.len_utf8();
-                continue;
-            };
-
-            let next_offset = offset + c.len_utf8();
-            let mut char_width = line_height.half();
-            if let Some(next_pos) = text_layout.position_for_index(next_offset) {
-                if next_pos.y == pos.y {
-                    char_width = next_pos.x - pos.x;
-                }
-            }
-
-            if point_in_text_selection(pos, char_width, selection_start, selection_end, line_height)
-            {
-                if selection.is_none() {
-                    selection = Some((offset..offset).into());
-                }
-
-                if let Some(selection) = selection.as_mut() {
-                    selection.end = next_offset;
-                }
-            }
-
-            offset = next_offset;
-        }
-
-        (true, true, selection)
+        (
+            true,
+            true,
+            selection_for_points(
+                &self.text,
+                text_layout,
+                selection_start,
+                selection_end,
+                line_height,
+            ),
+        )
     }
 
     fn text_line_bounds(
@@ -462,6 +630,7 @@ impl Element for Inline {
     ) {
         let current_view = window.current_view();
         let hitbox = prepaint;
+        let (source_root, source_offset) = InlineState::source_metadata(&self.state);
         let Ok(mut state) = self.state.lock() else {
             return;
         };
@@ -470,9 +639,30 @@ impl Element for Inline {
         self.styled_text
             .paint(global_id, None, bounds, &mut (), &mut (), window, cx);
 
+        let (document_range, ordinal, source_offset) = GlobalState::global(cx)
+            .text_view_state()
+            .map(|state| {
+                let state = state.read(cx);
+                (
+                    state.selection_adapter.document_range(cx),
+                    state
+                        .selection_adapter
+                        .document_ordinal_for_source(source_root.as_ptr() as usize),
+                    source_offset,
+                )
+            })
+            .unwrap_or((None, 0, 0));
+
         // layout selections
-        let (is_selectable, is_selection, selection) =
-            self.layout_selections(&text_layout, &bounds, window, cx);
+        let (is_selectable, is_selection, selection) = self.layout_selections(
+            &text_layout,
+            &bounds,
+            document_range,
+            ordinal,
+            source_offset,
+            window,
+            cx,
+        );
 
         state.selection = selection;
 
@@ -494,6 +684,11 @@ impl Element for Inline {
             Self::paint_selection(selection, &text_layout, &bounds, window, color);
         }
 
+        // Projection construction reads the same state for its logical source
+        // metadata, so release the paint-time guard first.
+        let hovered_index = state.hovered_index;
+        drop(state);
+
         if is_selectable {
             if let Some(text_view_state) = GlobalState::global(cx).text_view_state().cloned() {
                 let text_bounds = self.text_line_bounds(
@@ -501,8 +696,16 @@ impl Element for Inline {
                     text_layout.line_height(),
                     window.content_mask().bounds,
                 );
+                let projection = InlineSelectionProjection::new(
+                    self.state.clone(),
+                    self.text.clone(),
+                    text_layout.clone(),
+                    window.line_height(),
+                    bounds,
+                );
                 text_view_state.update(cx, |state, _| {
                     state.selection_adapter.register_inline(text_bounds);
+                    state.selection_adapter.register_projection(projection);
                 });
             }
 
@@ -564,7 +767,7 @@ impl Element for Inline {
         window.on_mouse_event({
             let hitbox = hitbox.clone();
             let text_layout = text_layout.clone();
-            let mut hovered_index = state.hovered_index;
+            let mut hovered_index = hovered_index;
             move |event: &MouseMoveEvent, phase, window, cx| {
                 if !phase.bubble() || !hitbox.is_hovered(window) {
                     return;
@@ -621,6 +824,51 @@ impl Element for Inline {
             });
         }
     }
+}
+
+/// Computes selection from the complete laid-out glyph band, regardless of
+/// which portion of the inline was visible while it was painted.
+fn selection_for_points(
+    text: &str,
+    text_layout: &TextLayout,
+    selection_start: Point<Pixels>,
+    selection_end: Point<Pixels>,
+    line_height: Pixels,
+) -> Option<Selection> {
+    // Every glyph in a painted element has a valid position even when an
+    // ancestor clips it. Copy derives from InlineState.selection, so clipping
+    // this walk would drop selected, scrolled-out text.
+    let mut selection: Option<Selection> = None;
+    let mut offset = 0;
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        let Some(pos) = text_layout.position_for_index(offset) else {
+            offset += c.len_utf8();
+            continue;
+        };
+
+        let next_offset = offset + c.len_utf8();
+        let mut char_width = line_height.half();
+        if let Some(next_pos) = text_layout.position_for_index(next_offset) {
+            if next_pos.y == pos.y {
+                char_width = next_pos.x - pos.x;
+            }
+        }
+
+        if point_in_text_selection(pos, char_width, selection_start, selection_end, line_height) {
+            if selection.is_none() {
+                selection = Some((offset..offset).into());
+            }
+
+            if let Some(selection) = selection.as_mut() {
+                selection.end = next_offset;
+            }
+        }
+
+        offset = next_offset;
+    }
+
+    selection
 }
 
 fn selection_for_multi_click(
@@ -690,8 +938,73 @@ fn point_in_text_selection(
 
 #[cfg(test)]
 mod tests {
-    use super::point_in_text_selection;
-    use gpui::{point, px};
+    use super::{
+        InlineSelectionProjection, InlineState, point_in_text_selection,
+        selection_for_document_range,
+    };
+    use crate::{TextSelectionContentKey, text_selection::TextSelectionDocumentRange};
+    use gpui::{Bounds, point, px};
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn document_range_preserves_utf8_bytes_across_reflow() {
+        let range = TextSelectionDocumentRange::new(
+            Some(TextSelectionContentKey::new(1)),
+            Some(TextSelectionContentKey::new(5)),
+        );
+
+        // The range is logical byte offsets, so a replacement TextLayout does
+        // not affect the selected UTF-8 span.
+        let selection = selection_for_document_range("aébc", 0, 0, range).unwrap();
+        assert_eq!(selection.start, 1);
+        assert_eq!(selection.end, 5);
+        assert!(selection_for_document_range("aébc", 1, 0, range).is_none());
+    }
+
+    #[test]
+    fn document_range_uses_original_source_offsets_for_wrapped_fragments() {
+        let range = TextSelectionDocumentRange::new(
+            Some(TextSelectionContentKey::new(1)),
+            Some(TextSelectionContentKey::new(4)),
+        );
+
+        // Reflow splits `aébc` after `é`. Each visual fragment keeps its
+        // original byte offset, so both receive their respective selection.
+        let first = selection_for_document_range("aé", 0, 0, range).unwrap();
+        assert_eq!(first.start, 1);
+        assert_eq!(first.end, 3);
+        let second = selection_for_document_range("bc", 0, 3, range).unwrap();
+        assert_eq!(second.start, 0);
+        assert_eq!(second.end, 1);
+    }
+
+    #[test]
+    fn atomic_projection_uses_its_original_source_offset() {
+        let root = Arc::new(Mutex::new(InlineState {
+            text: "before link after".into(),
+            ..Default::default()
+        }));
+        let card = InlineState::fragment(&root, 7..11, "link".into());
+        let projection = InlineSelectionProjection::atomic(
+            card.clone(),
+            Bounds::from_corners(point(px(0.), px(0.)), point(px(100.), px(20.))),
+        );
+        let range = TextSelectionDocumentRange::new(
+            Some(TextSelectionContentKey::new(8)),
+            Some(TextSelectionContentKey::new(10)),
+        );
+
+        projection.project_document_range(0, range);
+        assert_eq!(card.lock().unwrap().selected_range(), Some(1..3));
+    }
+
+    #[test]
+    fn unbounded_document_range_covers_later_source_fragments() {
+        let range = TextSelectionDocumentRange::new(None, None);
+        let selection = selection_for_document_range("later", 3, 64, range).unwrap();
+
+        assert_eq!(selection.start..selection.end, 0..5);
+    }
 
     #[test]
     fn test_point_in_text_selection() {

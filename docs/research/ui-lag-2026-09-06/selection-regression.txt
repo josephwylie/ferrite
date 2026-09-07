@@ -1,0 +1,13 @@
+
+running 1 test
+test selection_registration_scaling ... selection_probe participants=0 median_ms=0.074 min_ms=0.066 max_ms=2.096
+selection_probe participants=64 median_ms=55.598 min_ms=27.275 max_ms=146.717
+selection_probe participants=128 median_ms=127.298 min_ms=112.776 max_ms=591.283
+selection_probe participants=256 median_ms=404.378 min_ms=343.183 max_ms=447.631
+selection_probe participants=512 median_ms=1717.675 min_ms=1621.261 max_ms=1936.193
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 31.03s
+
+4x participants: 7.27x cost; linear budget: 6.00x
+FAIL: selection registration exceeds the linear scaling budget

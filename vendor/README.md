@@ -31,8 +31,19 @@ table cell padding remain independent. The Markdown parser also preserves hard
 line breaks instead of dropping them. Ferrite's native geometry tests in
 `rich.rs` cover block pairs, nesting, zero-gap overrides and hard breaks.
 
+Native selection registration updates one participant at a time, then sweeps
+and publishes once after the frame. `TextSelectionDocument` separates retained
+logical text membership from viewport geometry; its owner wrapper replays the
+visible registrations when a cached view reuses its scene. Viewport unmounting
+preserves selection, while logical eviction, source replacement, scope changes
+and owner unmounting clear it. Only active endpoints pin native text states
+beyond the host cache. Logical inline/UTF-8 positions preserve partial ranges
+through reflow; paint and copy share their projection. Copy callbacks supply
+never-mounted intermediate text. See
+[ADR 0006](../docs/adr/0006-retained-transcript-rendering.md).
+
 Cargo applies this through the root `[patch.crates-io]`. Remove the patch when
-an upstream release includes equivalent clipping. Registry cache markers and
+an upstream release includes equivalent behavior. Registry cache markers and
 the dependency's own lockfile are omitted. Source fixtures and the small test
 and benchmark targets named by its unchanged manifest are retained.
 
