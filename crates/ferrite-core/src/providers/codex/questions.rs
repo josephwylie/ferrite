@@ -1,8 +1,8 @@
 //! Codex's asynchronous questions are structured agent messages. Native
 //! request_user_input calls block on their JSON-RPC response instead.
 use crate::{
-    activity::ActivityEvent, validate_form, Decision, DecisionAnswer, DecisionKind, DecisionPolicy,
-    FormField, SessionEvent,
+    activity::ActivityEvent, validate_form, Decision, DecisionAnswer, DecisionChoice, DecisionKind,
+    DecisionPolicy, FormField, SessionEvent,
 };
 use serde_json::{json, Value};
 use std::{collections::HashMap, io};
@@ -66,25 +66,31 @@ pub(super) fn decode_elicitation(params: &Value, id: String) -> Option<Decision>
     if message.is_empty() {
         return None;
     }
-    let kind = match params.get("mode").and_then(Value::as_str) {
-        Some("form" | "openai/form" | "openaiForm") => {
-            match crate::providers::elicitation::fields(
-                params.get("requestedSchema").unwrap_or(&Value::Null),
-            ) {
-                Ok(fields) => DecisionKind::Form { fields },
-                Err(reason) => DecisionKind::Unsupported { reason },
+    let approval = mcp_approval_choices(params);
+    let kind = if approval.is_some() {
+        DecisionKind::Approval
+    } else {
+        match params.get("mode").and_then(Value::as_str) {
+            Some("form" | "openai/form" | "openaiForm") => {
+                match crate::providers::elicitation::fields(
+                    params.get("requestedSchema").unwrap_or(&Value::Null),
+                ) {
+                    Ok(fields) => DecisionKind::Form { fields },
+                    Err(reason) => DecisionKind::Unsupported { reason },
+                }
             }
-        }
-        Some("url" | "openai/url" | "openaiUrl") => match params.get("url").and_then(Value::as_str)
-        {
-            Some(url) if !url.is_empty() => DecisionKind::External { url: url.into() },
+            Some("url" | "openai/url" | "openaiUrl") => {
+                match params.get("url").and_then(Value::as_str) {
+                    Some(url) if !url.is_empty() => DecisionKind::External { url: url.into() },
+                    _ => DecisionKind::Unsupported {
+                        reason: "elicitation has no URL".into(),
+                    },
+                }
+            }
             _ => DecisionKind::Unsupported {
-                reason: "elicitation has no URL".into(),
+                reason: "unsupported elicitation mode".into(),
             },
-        },
-        _ => DecisionKind::Unsupported {
-            reason: "unsupported elicitation mode".into(),
-        },
+        }
     };
     let allow = !matches!(&kind, DecisionKind::Unsupported { .. });
     Some(Decision {
@@ -92,6 +98,7 @@ pub(super) fn decode_elicitation(params: &Value, id: String) -> Option<Decision>
         kind,
         policy: DecisionPolicy {
             allow,
+            deny: approval.is_none(),
             ..Default::default()
         },
         id,
@@ -103,8 +110,50 @@ pub(super) fn decode_elicitation(params: &Value, id: String) -> Option<Decision>
         tool_name: "mcp_elicitation".into(),
         description: message.into(),
         input: Value::Null,
-        suggestions: vec![],
+        suggestions: approval.unwrap_or_default(),
     })
+}
+
+/// MCP tool approvals use the elicitation envelope, but carry no form input.
+/// Only advertise persistence explicitly offered by this native request.
+fn mcp_approval_choices(params: &Value) -> Option<Vec<DecisionChoice>> {
+    let meta = &params["_meta"];
+    let schema = &params["requestedSchema"];
+    if !matches!(
+        params["mode"].as_str(),
+        Some("form" | "openai/form" | "openaiForm")
+    ) || meta["codex_approval_kind"] != "mcp_tool_call"
+        || !(schema.is_null()
+            || (schema["type"] == "object"
+                && schema["properties"]
+                    .as_object()
+                    .is_some_and(|fields| fields.is_empty())))
+    {
+        return None;
+    }
+    let mut choices = Vec::new();
+    for (mode, label) in [
+        ("session", "Allow for this session"),
+        ("always", "Always allow"),
+    ] {
+        let offered = meta["persist"] == mode
+            || meta["persist"]
+                .as_array()
+                .is_some_and(|modes| modes.iter().any(|value| value == mode));
+        if offered {
+            choices.push(DecisionChoice {
+                label: label.into(),
+                value: json!({"action":"accept","content":null,"_meta":{"persist":mode}}),
+                standing: true,
+            });
+        }
+    }
+    choices.push(DecisionChoice {
+        label: "Cancel".into(),
+        value: json!({"action":"cancel","content":null,"_meta":null}),
+        standing: false,
+    });
+    Some(choices)
 }
 
 pub(super) fn decode_permissions(params: &Value, id: String) -> Option<Decision> {
@@ -135,6 +184,7 @@ pub(super) struct NativeRequests {
 }
 
 enum NativeRequest {
+    McpApproval(Vec<Value>),
     Questions(Vec<crate::questions::Question>),
     Form(Vec<FormField>),
     External,
@@ -172,6 +222,13 @@ impl NativeRequests {
                 decode_elicitation(&frame["params"], id.clone()).and_then(|decision| match decision
                     .kind
                 {
+                    DecisionKind::Approval => Some(NativeRequest::McpApproval(
+                        decision
+                            .suggestions
+                            .into_iter()
+                            .map(|choice| choice.value)
+                            .collect(),
+                    )),
                     DecisionKind::Form { fields } => Some(NativeRequest::Form(fields)),
                     DecisionKind::External { .. } => Some(NativeRequest::External),
                     DecisionKind::Unsupported { .. } => Some(NativeRequest::Unsupported),
@@ -206,6 +263,7 @@ impl NativeRequests {
     pub fn response(&self, id: &str, answer: &DecisionAnswer) -> Option<io::Result<Value>> {
         let request = self.pending.get(id)?;
         Some(match request {
+            NativeRequest::McpApproval(choices) => mcp_approval_response(choices, answer),
             NativeRequest::Questions(questions) => question_response(questions, answer),
             NativeRequest::Form(fields) => elicitation_response(Some(fields), answer),
             NativeRequest::External => elicitation_response(None, answer),
@@ -295,6 +353,23 @@ fn question_response(
         DecisionAnswer::Form { .. } | DecisionAnswer::Choose { .. } => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "question requires question answers",
+        )),
+    }
+}
+
+fn mcp_approval_response(choices: &[Value], answer: &DecisionAnswer) -> io::Result<Value> {
+    match answer {
+        DecisionAnswer::Allow { .. } => Ok(json!({"action":"accept","content":null,"_meta":null})),
+        DecisionAnswer::Cancel => Ok(json!({"action":"cancel","content":null,"_meta":null})),
+        DecisionAnswer::Choose { value } if choices.contains(value) => Ok(value.clone()),
+        DecisionAnswer::AllowAlways { suggestion, .. }
+            if suggestion["action"] == "accept" && choices.contains(suggestion) =>
+        {
+            Ok(suggestion.clone())
+        }
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "answer is unavailable for this MCP approval",
         )),
     }
 }
