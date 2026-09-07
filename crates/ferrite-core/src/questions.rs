@@ -9,6 +9,8 @@ const TOOL_NAME: &str = "AskUserQuestion";
 
 /// Normalized nonblocking question delivery; the provider owns reply transport.
 pub const ASYNC_TOOL_NAME: &str = "request_user_input_async";
+/// Normalized blocking question delivery; the provider owns reply transport.
+pub const NATIVE_TOOL_NAME: &str = "request_user_input";
 pub fn is_async(tool_name: &str) -> bool {
     tool_name == ASYNC_TOOL_NAME
 }
@@ -16,6 +18,10 @@ pub fn is_async(tool_name: &str) -> bool {
 /// One question the model put to the operator.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Question {
+    /// A provider-stable answer key. When present, answers use the native
+    /// `{id: {answers: [...]}}` form instead of keying by visible question
+    /// text, which may be repeated.
+    pub id: Option<String>,
     /// The full question text; also the key of its answer in `updatedInput`.
     pub question: String,
     /// The model's short label for the question ("Approach", "Library").
@@ -23,6 +29,10 @@ pub struct Question {
     pub options: Vec<Choice>,
     /// Whether the operator may pick more than one option.
     pub multi_select: bool,
+    /// Whether the answer must be obscured while it is entered and displayed.
+    pub secret: bool,
+    /// Whether the operator can supply text outside the listed choices.
+    pub allow_other: bool,
 }
 
 /// One option of a [`Question`].
@@ -50,7 +60,7 @@ pub struct Answer {
 
 /// Whether a Decision's tool is the question tool.
 pub fn is_question_tool(tool_name: &str) -> bool {
-    tool_name == TOOL_NAME || is_async(tool_name)
+    tool_name == TOOL_NAME || is_async(tool_name) || tool_name == NATIVE_TOOL_NAME
 }
 
 /// The questions in an `AskUserQuestion` input, or None if the input is not
@@ -77,16 +87,24 @@ fn parse_question(value: &Value, asynchronous: bool) -> Option<Question> {
     if question.is_empty() {
         return None;
     }
+    let id = value
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string);
     let options = value
-        .get("options")?
-        .as_array()?
+        .get("options")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
         .iter()
         .map(parse_choice)
         .collect::<Option<Vec<_>>>()?;
-    if !asynchronous && options.len() < 2 {
+    if !asynchronous && id.is_none() && options.len() < 2 {
         return None;
     }
     Some(Question {
+        id,
         question: question.to_string(),
         header: string_or_empty(value.get("header")),
         options,
@@ -94,6 +112,14 @@ fn parse_question(value: &Value, asynchronous: bool) -> Option<Question> {
             .get("multiSelect")
             .and_then(Value::as_bool)
             .unwrap_or(false),
+        secret: value
+            .get("secret")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        allow_other: value
+            .get("allowOther")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
     })
 }
 
@@ -134,31 +160,54 @@ pub fn answered_input(input: &Value, answers: &[Answer], questions: &[Question])
     };
     let mut answered = Map::new();
     for (question, answer) in questions.iter().zip(answers) {
-        if let Some(text) = answer_text(question, answer) {
-            answered.insert(question.question.clone(), Value::String(text));
+        if let Some(values) = answer_values(question, answer) {
+            let (key, value) = match &question.id {
+                Some(id) => (id.clone(), serde_json::json!({"answers": values})),
+                None => (question.question.clone(), Value::String(values.join(", "))),
+            };
+            answered.insert(key, value);
         }
     }
     map.insert("answers".to_string(), Value::Object(answered));
     Value::Object(map)
 }
 
-fn answer_text(question: &Question, answer: &Answer) -> Option<String> {
-    let mut parts: Vec<&str> = answer
+fn answer_values(question: &Question, answer: &Answer) -> Option<Vec<String>> {
+    let parts = selected_values(question, answer).ok()?;
+    (!parts.is_empty()).then_some(parts)
+}
+
+/// The selected labels and free text in their original boundaries. Adapters
+/// choose whether their provider needs strings joined or a JSON array.
+pub fn selected_values(question: &Question, answer: &Answer) -> Result<Vec<String>, String> {
+    if answer.picks.len() > question.options.len()
+        || (!question.multi_select && answer.picks.len() > 1)
+        || answer
+            .picks
+            .iter()
+            .any(|pick| *pick >= question.options.len())
+    {
+        return Err("question has an invalid selection".into());
+    }
+    if answer
+        .other
+        .as_deref()
+        .is_some_and(|other| !other.trim().is_empty())
+        && !question.allow_other
+    {
+        return Err("question does not allow another answer".into());
+    }
+    let mut parts: Vec<String> = answer
         .picks
         .iter()
-        .filter_map(|&pick| question.options.get(pick))
-        .map(|choice| choice.label.as_str())
+        .map(|&pick| question.options[pick].label.clone())
         .collect();
     if let Some(other) = answer.other.as_deref() {
         if !other.trim().is_empty() {
-            parts.push(other);
+            parts.push(other.to_string());
         }
     }
-    if parts.is_empty() {
-        None
-    } else {
-        Some(parts.join(", "))
-    }
+    Ok(parts)
 }
 
 /// One line for a cell too small to show the questions: the count and the
@@ -357,7 +406,7 @@ mod tests {
     }
 
     #[test]
-    fn out_of_range_picks_are_ignored() {
+    fn out_of_range_picks_do_not_silently_change_the_answer() {
         let input = realistic();
         let questions = parse(&input).unwrap();
         let answers = [Answer {
@@ -365,10 +414,7 @@ mod tests {
             other: None,
         }];
         let updated = answered_input(&input, &answers, &questions);
-        assert_eq!(
-            updated["answers"]["Which approach should we take for the retry logic?"],
-            "Fixed delay"
-        );
+        assert_eq!(updated["answers"], json!({}));
     }
 
     #[test]

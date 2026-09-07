@@ -18,7 +18,8 @@ use serde_json::Value;
 use super::CodexCapabilities;
 use crate::progress::{Phase, PlanStep, ProgressEvent, StepStatus};
 use crate::{
-    Decision, ModelInfo, RateLimitWindow, SessionCommand, SessionEvent, ToolResult, TurnOutcome,
+    Decision, DecisionChoice, DecisionPolicy, FileEdit, Hunk, ModelInfo, RateLimitWindow,
+    SessionCommand, SessionEvent, ToolResult, TurnOutcome, UsageDetails, UsageScope,
 };
 
 /// The item types Ferrite reads as tool runs. Everything else the server
@@ -61,21 +62,68 @@ pub(super) fn parse_line(line: &str) -> Option<SessionEvent> {
             text: params.get("delta")?.as_str()?.to_string(),
             summary_index: params.get("summaryIndex")?.as_u64()?,
         }),
+        "item/reasoning/textDelta" => Some(SessionEvent::ThinkingDelta {
+            text: params.get("delta")?.as_str()?.to_string(),
+        }),
         "item/started" => parse_item(params, false),
         "item/completed" => parse_item(params, true),
+        "item/fileChange/patchUpdated" => Some(SessionEvent::FileChanges {
+            id: params.get("itemId")?.as_str()?.into(),
+            edits: params
+                .get("changes")?
+                .as_array()?
+                .iter()
+                .filter_map(|change| {
+                    Some(FileEdit {
+                        path: change.get("path")?.as_str()?.into(),
+                        hunks: parse_file_change(change),
+                    })
+                })
+                .collect(),
+        }),
+        "turn/diff/updated" => Some(SessionEvent::TurnDiff {
+            turn_id: params.get("turnId")?.as_str()?.into(),
+            diff: params.get("diff")?.as_str()?.into(),
+        }),
         "item/commandExecution/requestApproval" => {
             parse_approval_request(&value, params, "commandExecution")
         }
         "item/fileChange/requestApproval" => parse_approval_request(&value, params, "fileChange"),
+        "item/tool/requestUserInput" => {
+            super::questions::decode_native(params, rpc_id_string(value.get("id")?)?)
+                .map(|decision| SessionEvent::DecisionRequested { decision })
+        }
+        "mcpServer/elicitation/request" => {
+            super::questions::decode_elicitation(params, rpc_id_string(value.get("id")?)?)
+                .map(|decision| SessionEvent::DecisionRequested { decision })
+        }
+        "item/permissions/requestApproval" => {
+            super::questions::decode_permissions(params, rpc_id_string(value.get("id")?)?)
+                .map(|decision| SessionEvent::DecisionRequested { decision })
+        }
         "thread/tokenUsage/updated" => parse_token_usage(params),
         "account/rateLimits/updated" => parse_rate_limits(params),
+        "model/rerouted" => {
+            params
+                .get("toModel")
+                .and_then(Value::as_str)
+                .map(|model| SessionEvent::ModelChanged {
+                    model: model.into(),
+                })
+        }
+        "thread/settings/updated" => params["threadSettings"]
+            .get("model")
+            .and_then(Value::as_str)
+            .map(|model| SessionEvent::ModelChanged {
+                model: model.into(),
+            }),
         "turn/completed" => parse_turn_completed(params),
         _ => None,
     }
 }
 
-/// Content state is per native thread, so interleaved child observations
-/// cannot split Main's heading or discard its snapshot deduplication state.
+/// Request delivery state is per native thread. Content identity remains on
+/// the Activity events, where snapshots reconcile the matching item.
 #[derive(Default)]
 pub(super) struct Decoder {
     threads: std::collections::BTreeMap<String, ContentDecoder>,
@@ -101,13 +149,29 @@ impl Decoder {
     }
 }
 
-/// Only answer/plan text needs duplicate-detection state. Reasoning sections
-/// keep their native identity all the way to the transcript and store.
+/// Async question delivery repeats on started and completed frames. Keep that
+/// bounded delivery state without retaining a second accumulated text copy.
 #[derive(Default)]
 struct ContentDecoder {
-    texts: std::collections::BTreeMap<String, Option<String>>,
+    decisions: std::collections::BTreeSet<String>,
+    decision_order: std::collections::VecDeque<String>,
+    tools: std::collections::BTreeSet<String>,
+    tool_order: std::collections::VecDeque<String>,
 }
 impl ContentDecoder {
+    fn remember_tool(&mut self, id: &str) -> bool {
+        if !self.tools.insert(id.into()) {
+            return false;
+        }
+        self.tool_order.push_back(id.into());
+        if self.tool_order.len() > 128 {
+            if let Some(old) = self.tool_order.pop_front() {
+                self.tools.remove(&old);
+            }
+        }
+        true
+    }
+
     fn parse(&mut self, line: &str) -> Vec<SessionEvent> {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             return vec![];
@@ -122,11 +186,14 @@ impl ContentDecoder {
         // suppress its prose fallback, and keep final_answer from ending a turn.
         if matches!(method, "item/started" | "item/completed") {
             if let Some(decision) = super::questions::decode(p) {
-                if self.texts.contains_key(id) {
+                if !self.decisions.insert(id.into()) {
                     return vec![];
                 }
-                if self.texts.len() < 128 {
-                    self.texts.insert(id.into(), None);
+                self.decision_order.push_back(id.into());
+                if self.decision_order.len() > 128 {
+                    if let Some(old) = self.decision_order.pop_front() {
+                        self.decisions.remove(&old);
+                    }
                 }
                 return vec![
                     SessionEvent::ContentBoundary,
@@ -134,47 +201,17 @@ impl ContentDecoder {
                 ];
             }
         }
-        let mut before = vec![];
-        if matches!(method, "item/agentMessage/delta" | "item/plan/delta") {
-            if let Some(delta) = p["delta"].as_str() {
-                if self.texts.len() < 128 || self.texts.contains_key(id) {
-                    let seen = self
-                        .texts
-                        .entry(id.into())
-                        .or_insert_with(|| Some(String::new()));
-                    if let Some(text) = seen {
-                        if text.len().saturating_add(delta.len()) <= 256 * 1024 {
-                            text.push_str(delta);
-                        } else {
-                            *seen = None;
-                        } // Streamed in full; never repeat a truncated prefix.
-                    }
-                }
+        let synthetic_start = if method == "item/completed" && self.remember_tool(id) {
+            parse_item(p, false)
+        } else {
+            if method == "item/started" {
+                self.remember_tool(id);
             }
-        } else if method == "item/completed"
-            && matches!(p["item"]["type"].as_str(), Some("agentMessage" | "plan"))
-        {
-            if self.texts.len() < 128 || self.texts.contains_key(id) {
-                let seen = self
-                    .texts
-                    .entry(id.into())
-                    .or_insert_with(|| Some(String::new()));
-                if let (Some(seen), Some(text)) = (seen.as_mut(), p["item"]["text"].as_str()) {
-                    if let Some(rest) = text
-                        .strip_prefix(seen.as_str())
-                        .filter(|rest| !rest.is_empty())
-                    {
-                        before.push(SessionEvent::TextDelta { text: rest.into() });
-                        *seen = text.into();
-                    }
-                }
-                if seen.as_ref().is_some_and(|text| text.len() > 256 * 1024) {
-                    *seen = None;
-                }
-            }
-        }
-        before.extend(parse_events(line));
-        before
+            None
+        };
+        let mut events = synthetic_start.into_iter().collect::<Vec<_>>();
+        events.extend(parse_events(line));
+        events
     }
 }
 
@@ -214,6 +251,16 @@ pub(super) fn parse_events(line: &str) -> Vec<SessionEvent> {
                     snapshot: true,
                 })
             }));
+        }
+    }
+    if method == "thread/settings/updated" {
+        if let Some(mode) = params["threadSettings"]["approvalPolicy"].as_str() {
+            events.push(SessionEvent::PermissionMode { mode: mode.into() });
+        }
+    }
+    if method == "thread/tokenUsage/updated" {
+        if let Some(event) = parse_usage_details(params) {
+            events.push(event);
         }
     }
     let phase = |phase, detail| SessionEvent::Progress {
@@ -375,23 +422,67 @@ pub(super) fn parse_item(params: &Value, completed: bool) -> Option<SessionEvent
             input: item.clone(),
         });
     }
+    // What the run produced: an execution reports its merged output stream;
+    // a patch has no prose, so its changes stand in as compact JSON.
+    let output = match item.get("aggregatedOutput") {
+        Some(Value::String(text)) => text.clone(),
+        _ => ["error", "result", "contentItems", "results", "changes"]
+            .iter()
+            .find_map(|key| item.get(*key).filter(|v| !v.is_null()))
+            .map(|v| {
+                v.as_str()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| v.to_string())
+            })
+            .unwrap_or_default(),
+    };
+    let result = if kind == "commandExecution" {
+        // Codex supplies one combined stream, so preserve it as the
+        // primary output instead of pretending it supplied stderr.
+        ToolResult::Command {
+            stdout: output.clone(),
+            stderr: String::new(),
+            exit_code: item.get("exitCode").and_then(Value::as_i64),
+            duration_ms: item.get("durationMs").and_then(Value::as_u64),
+        }
+    } else if kind == "fileChange" {
+        item.get("changes")
+            .and_then(Value::as_array)
+            .map(|changes| ToolResult::FileEdits {
+                edits: changes
+                    .iter()
+                    .filter_map(|change| {
+                        Some(FileEdit {
+                            path: change.get("path")?.as_str()?.to_string(),
+                            hunks: parse_file_change(change),
+                        })
+                    })
+                    .collect(),
+            })
+            .unwrap_or(ToolResult::Opaque)
+    } else if kind == "mcpToolCall" {
+        item.get("result")
+            .filter(|result| !result.is_null())
+            .or_else(|| item.get("error").filter(|error| !error.is_null()))
+            .map(|value| ToolResult::Structured {
+                value: value.clone(),
+                duration_ms: item.get("durationMs").and_then(Value::as_u64),
+            })
+            .unwrap_or(ToolResult::Opaque)
+    } else if kind == "dynamicToolCall" {
+        item.get("contentItems")
+            .filter(|items| !items.is_null())
+            .map(|value| ToolResult::Structured {
+                value: value.clone(),
+                duration_ms: item.get("durationMs").and_then(Value::as_u64),
+            })
+            .unwrap_or(ToolResult::Opaque)
+    } else {
+        ToolResult::Opaque
+    };
     Some(SessionEvent::ToolCompleted {
         id,
-        // What the run produced: an execution reports its merged output
-        // stream; a patch has no prose, so its changes stand in as compact
-        // JSON.
-        output: match item.get("aggregatedOutput") {
-            Some(Value::String(text)) => text.clone(),
-            _ => ["error", "result", "contentItems", "results", "changes"]
-                .iter()
-                .find_map(|key| item.get(*key).filter(|v| !v.is_null()))
-                .map(|v| {
-                    v.as_str()
-                        .map(str::to_string)
-                        .unwrap_or_else(|| v.to_string())
-                })
-                .unwrap_or_default(),
-        },
+        output,
         // "completed" is the only success; "failed" and "declined" both mean
         // the tool did not do its work (a declined tool fails without failing
         // the turn — see the approval-deny fixture).
@@ -399,14 +490,88 @@ pub(super) fn parse_item(params: &Value, completed: bool) -> Option<SessionEvent
             item["status"].as_str(),
             Some("failed" | "declined" | "error")
         ) || item["success"].as_bool() == Some(false)
-            || !item.get("error").unwrap_or(&Value::Null).is_null(),
-        // Opaque by decision, not omission: Codex merges stdout and stderr
-        // into one aggregate (not the two streams `ToolResult::Command`
-        // promises), and its patches arrive as per-file diff *text*, not the
-        // structured hunks `FileEdit` is built from. The committed fixtures
-        // carry both shapes for whoever builds Codex diff cards.
-        result: ToolResult::Opaque,
+            || !item.get("error").unwrap_or(&Value::Null).is_null()
+            || item
+                .get("exitCode")
+                .and_then(Value::as_i64)
+                .is_some_and(|code| code != 0),
+        result,
     })
+}
+
+/// Decode Codex's per-file unified diff without assigning a tool identity or
+/// inferring files absent from the native `changes` list.
+fn parse_file_change(change: &Value) -> Vec<Hunk> {
+    let diff = change
+        .get("diff")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    match change
+        .get("kind")
+        .and_then(|kind| kind.get("type"))
+        .and_then(Value::as_str)
+    {
+        Some("add") => raw_file_hunk(diff, '+'),
+        Some("delete") => raw_file_hunk(diff, '-'),
+        Some("update") => parse_unified_diff(diff),
+        _ => Vec::new(),
+    }
+}
+
+fn raw_file_hunk(content: &str, marker: char) -> Vec<Hunk> {
+    let lines: Vec<_> = content
+        .lines()
+        .map(|line| format!("{marker}{line}"))
+        .collect();
+    if lines.is_empty() {
+        return Vec::new();
+    }
+    let count = lines.len() as u32;
+    vec![Hunk {
+        old_start: if marker == '-' { 1 } else { 0 },
+        old_lines: if marker == '-' { count } else { 0 },
+        new_start: if marker == '+' { 1 } else { 0 },
+        new_lines: if marker == '+' { count } else { 0 },
+        lines,
+    }]
+}
+
+fn parse_unified_diff(diff: &str) -> Vec<Hunk> {
+    let mut hunks = Vec::new();
+    let mut current: Option<Hunk> = None;
+    for line in diff.lines() {
+        if let Some((old_start, old_lines, new_start, new_lines)) = parse_hunk_header(line) {
+            if let Some(hunk) = current.take() {
+                hunks.push(hunk);
+            }
+            current = Some(Hunk {
+                old_start,
+                old_lines,
+                new_start,
+                new_lines,
+                lines: Vec::new(),
+            });
+        } else if current.is_some() && matches!(line.as_bytes().first(), Some(b' ' | b'+' | b'-')) {
+            current.as_mut().unwrap().lines.push(line.to_string());
+        }
+    }
+    if let Some(hunk) = current {
+        hunks.push(hunk);
+    }
+    hunks
+}
+
+fn parse_hunk_header(line: &str) -> Option<(u32, u32, u32, u32)> {
+    let middle = line.strip_prefix("@@ -")?.split_once(" +")?;
+    let (old, rest) = middle;
+    let (new, _) = rest.split_once(" @@")?;
+    fn range(range: &str) -> Option<(u32, u32)> {
+        let (start, count) = range.split_once(',').unwrap_or((range, "1"));
+        Some((start.parse().ok()?, count.parse().ok()?))
+    }
+    let (old_start, old_lines) = range(old)?;
+    let (new_start, new_lines) = range(new)?;
+    Some((old_start, old_lines, new_start, new_lines))
 }
 
 /// The server blocks the turn on a Decision: a JSON-RPC request whose answer
@@ -418,6 +583,8 @@ fn parse_approval_request(value: &Value, params: &Value, tool_name: &str) -> Opt
     Some(SessionEvent::DecisionRequested {
         decision: Decision {
             delivery: Default::default(),
+            kind: Default::default(),
+            policy: approval_policy(params),
             id: rpc_id_string(value.get("id")?)?,
             tool_use_id: params.get("itemId")?.as_str()?.to_string(),
             tool_name: tool_name.to_string(),
@@ -430,14 +597,73 @@ fn parse_approval_request(value: &Value, params: &Value, tool_name: &str) -> Opt
                 .unwrap_or_default()
                 .to_string(),
             input: params.clone(),
-            // The standing answers Codex offers ("acceptForSession", execpolicy
-            // amendments), raw and in its own words.
+            // Every documented native choice stays selectable; only entries
+            // marked standing feed the compact always shortcut.
             suggestions: params
                 .get("availableDecisions")
                 .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default(),
+                .into_iter()
+                .flatten()
+                .filter_map(codex_choice)
+                .collect(),
         },
+    })
+}
+
+/// Available decisions are wire details, so normalize their actionable shape
+/// before handing the shared card its policy.
+fn approval_policy(params: &Value) -> DecisionPolicy {
+    let Some(choices) = params.get("availableDecisions").and_then(Value::as_array) else {
+        return DecisionPolicy::default();
+    };
+    DecisionPolicy {
+        allow: choices.iter().any(|choice| choice == "accept"),
+        deny: choices.iter().any(|choice| choice == "decline"),
+        ..DecisionPolicy::default()
+    }
+}
+
+fn codex_choice(value: &Value) -> Option<DecisionChoice> {
+    let (label, standing) = match value {
+        Value::String(choice) => match choice.as_str() {
+            "accept" | "decline" => return None,
+            "cancel" => ("Cancel turn".into(), false),
+            "acceptForSession" => ("Allow for this session".into(), true),
+            _ => return None,
+        },
+        Value::Object(object) if object.len() == 1 => {
+            if let Some(amendment) = object.get("acceptWithExecpolicyAmendment") {
+                let parts = amendment["execpolicy_amendment"].as_array()?;
+                if parts.is_empty() {
+                    return None;
+                }
+                let command = parts
+                    .iter()
+                    .map(Value::as_str)
+                    .collect::<Option<Vec<_>>>()?
+                    .join(" ");
+                (format!("Always allow {command}"), true)
+            } else if let Some(amendment) = object.get("applyNetworkPolicyAmendment") {
+                let policy = &amendment["network_policy_amendment"];
+                let host = policy["host"].as_str()?.trim();
+                if host.is_empty() {
+                    return None;
+                }
+                match policy["action"].as_str()? {
+                    "allow" => (format!("Allow {host}"), true),
+                    "deny" => (format!("Block {host}"), false),
+                    _ => return None,
+                }
+            } else {
+                return None;
+            }
+        }
+        _ => return None,
+    };
+    Some(DecisionChoice {
+        label,
+        value: value.clone(),
+        standing,
     })
 }
 
@@ -477,6 +703,20 @@ fn parse_token_usage(params: &Value) -> Option<SessionEvent> {
         output_tokens: count("outputTokens"),
         reasoning_output_tokens: count("reasoningOutputTokens"),
         context_window: usage.get("modelContextWindow").and_then(Value::as_u64),
+    })
+}
+
+fn parse_usage_details(params: &Value) -> Option<SessionEvent> {
+    let total = params["tokenUsage"].get("total")?;
+    let count = |key| total.get(key).and_then(Value::as_u64).unwrap_or(0);
+    Some(SessionEvent::UsageDetails {
+        details: UsageDetails {
+            scope: UsageScope::Session,
+            input_tokens: count("inputTokens"),
+            cached_input_tokens: count("cachedInputTokens"),
+            output_tokens: count("outputTokens"),
+            reasoning_output_tokens: count("reasoningOutputTokens"),
+        },
     })
 }
 
@@ -626,6 +866,8 @@ pub(super) fn input_items(text: &str, skills: &[SessionCommand], cwd: Option<&Pa
         }
         if crate::prompt_files::image_type(&path).is_some() {
             items.push(serde_json::json!({"type": "localImage", "path": path}));
+        } else if crate::prompt_files::audio_type(&path).is_some() {
+            items.push(serde_json::json!({"type": "localAudio", "path": path}));
         } else {
             items.push(serde_json::json!({
                 "type": "mention",
@@ -872,6 +1114,9 @@ mod tests {
             // its real child captures are covered in activity::tests.
             SessionEvent::Activity(_) => return None,
             SessionEvent::Init { .. } => "Init",
+            SessionEvent::ModelChanged { .. }
+            | SessionEvent::ConversationReset { .. }
+            | SessionEvent::RunState { .. } => return None,
             SessionEvent::TextDelta { .. } => "TextDelta",
             SessionEvent::ReasoningSummaryDelta { .. } => "ReasoningSummaryDelta",
             SessionEvent::ToolStarted { .. } => "ToolStarted",
@@ -890,10 +1135,14 @@ mod tests {
             SessionEvent::PermissionMode { .. } => return None,
             // Claude's concept too (#25): Codex announces only its serving
             // model, never a list, so its picker offers no model rows.
-            SessionEvent::Models { .. } | SessionEvent::Queue(_) => return None,
-            // Claude's concept: Codex never streams raw chain-of-thought, only
-            // summaries of it, so no codex line may ever produce this — that
-            // is the capability difference, stated rather than papered over.
+            SessionEvent::Models { .. } => return None,
+            SessionEvent::ContextDetails { .. } => return None,
+            SessionEvent::FileChanges { .. } | SessionEvent::TurnDiff { .. } => return None,
+            SessionEvent::McpServers { .. } | SessionEvent::McpAuthorization { .. } => return None,
+            SessionEvent::ContextUsage { .. } | SessionEvent::UsageDetails { .. } => return None,
+            // Raw reasoning is scoped by the activity router; these legacy
+            // captures only contain reasoning summaries.
+            SessionEvent::Queue(_) => return None,
             SessionEvent::ThinkingDelta { .. } => return None,
             // Not a wire line at all: the reader thread synthesises Closed
             // when the process exits, so no capture can contain it. Proved by
@@ -1074,7 +1323,7 @@ mod tests {
                 // was accepted, so the repeat ran unasked.
                 ("approval-always", 75, 48),
                 // The same gate for a patch instead of a command.
-                ("approval-patch", 52, 22),
+                ("approval-patch", 52, 25),
                 ("interrupt", 25, 4),
                 ("resume", 32, 10),
                 // Ten retry errors and a warning, all ignored: only the failed
@@ -1103,7 +1352,12 @@ mod tests {
             id: id.clone(),
             output: "ferrite-tool-ok\n".into(),
             is_error: false,
-            result: ToolResult::Opaque,
+            result: ToolResult::Command {
+                stdout: "ferrite-tool-ok\n".into(),
+                stderr: String::new(),
+                exit_code: Some(0),
+                duration_ms: Some(0)
+            },
         }));
     }
 
@@ -1142,10 +1396,13 @@ mod tests {
             "/bin/zsh -lc \"printf 'ok' > ferrite-perm.txt\""
         );
         assert_eq!(input["cwd"], "/workspace");
-        // The standing answers 0.149.1 offers: accept, accept with an
-        // execpolicy amendment, decline.
-        assert_eq!(suggestions.len(), 3);
-        assert!(suggestions.contains(&serde_json::json!("accept")));
+        // Plain Allow is the policy button; additional native choices are
+        // an execpolicy amendment and cancellation.
+        assert_eq!(suggestions.len(), 2);
+        assert!(suggestions.iter().any(|choice| choice.standing));
+        assert!(suggestions
+            .iter()
+            .any(|choice| choice.value == serde_json::json!("cancel")));
 
         // The Decision names the tool card it blocks, so a Pane can render it
         // in place instead of as a free-floating prompt.
@@ -1240,7 +1497,7 @@ mod tests {
         };
         assert_eq!(tool_name, "fileChange");
         assert_eq!(description, "");
-        assert_eq!(suggestions, &Vec::<Value>::new());
+        assert!(suggestions.is_empty());
 
         let SessionEvent::ToolStarted { input, .. } = events
             .iter()

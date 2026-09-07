@@ -45,6 +45,7 @@ use crate::composer::Composer;
 use crate::icons::{self, icon};
 use crate::pointer::{Pointer, PointerPressed};
 use crate::select::TextRuns;
+use gpui::component::scroll::ScrollableElement;
 // Every color and metric here is a Soft token (crate::theme) — no literal
 // survives in render code, which is #22's grep-able law.
 use crate::theme;
@@ -108,6 +109,7 @@ pub(crate) enum DisclosureId {
     Tool(String),
     Group(String),
     Reasoning(BlockId),
+    TurnDiff(String),
 }
 impl From<&str> for DisclosureId {
     fn from(call: &str) -> Self {
@@ -634,6 +636,7 @@ pub struct PaneWiring {
     pub model_picker: Option<AnyElement>,
     /// Context and account usage lines beside the model control.
     pub usage_meter: Option<AnyElement>,
+    pub session_controls: Option<AnyElement>,
     /// The pending Decision's keycaps, wired to the exact decide verbs the
     /// keys run (#26) — laid into the L1 card or the L2 body. None while
     /// nothing pends, and at the wall, which draws no keycaps.
@@ -796,6 +799,7 @@ pub fn render_pane(
         menu,
         model_picker,
         usage_meter,
+        session_controls,
         mut decide,
         title,
         agents,
@@ -813,7 +817,11 @@ pub fn render_pane(
     };
     let queued = thread.and_then(|thread| thread.queued());
     let workspace = thread.and_then(|thread| thread.workspace());
-    let permission_mode = thread.and_then(|thread| thread.permission_mode());
+    let permission_mode = thread.and_then(|thread| {
+        thread
+            .permission_mode()
+            .map(|mode| permission_mode_label(mode, &thread.permission_modes()))
+    });
     let suggestion = thread.and_then(|thread| thread.suggestion());
     let timings = subject.as_ref().map(|subject| subject.timings());
     let status = subject.as_ref().map(|subject| {
@@ -882,9 +890,10 @@ pub fn render_pane(
                     attachments,
                     history_available,
                     menu: None,
-                    mode: permission_mode,
+                    mode: permission_mode.as_deref(),
                     model_picker: None,
                     usage_meter: None,
+                    session_controls: None,
                     setup_controls: None,
                     draft_error: None,
                     suggestion,
@@ -943,11 +952,7 @@ pub fn render_pane(
                         .debug_selector(|| "transcript-progress".into())
                         .px(px(theme::PANE_PAD_X))
                         .py(px(theme::KEYS_GAP))
-                        .child(working_line(
-                            transcript,
-                            false,
-                            received_reasoning_visible,
-                        )),
+                        .child(working_line(transcript, false, received_reasoning_visible)),
                 );
             }
             // The Decision card is a **sibling of the body**, not a child
@@ -996,9 +1001,10 @@ pub fn render_pane(
                         attachments,
                         history_available,
                         menu,
-                        mode: permission_mode,
+                        mode: permission_mode.as_deref(),
                         model_picker,
                         usage_meter,
+                        session_controls,
                         setup_controls: None,
                         draft_error: None,
                         suggestion,
@@ -1177,6 +1183,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
                     mode: None,
                     model_picker: Some(picker),
                     usage_meter,
+                    session_controls: None,
                     setup_controls: Some(band),
                     draft_error: error.cloned(),
                     // A draft has no conversation yet, so nothing to predict.
@@ -2320,7 +2327,7 @@ pub fn rendered_window(blocks: &[Block], level: Level) -> &[Block] {
 /// cycling, focus validation, and controls all consume this one eligibility
 /// rule so an invisible row can never remain keyboard-addressable.
 pub fn tool_has_details(tool: &ToolBlock) -> bool {
-    tool.output.is_some() || !tool.summary.is_empty()
+    tool.output.is_some() || tool.structured_result.is_some() || !tool.summary.is_empty()
 }
 
 /// One visibility rule for rendering controls, keyboard cycling and focus.
@@ -2357,6 +2364,14 @@ pub fn rendered_disclosures(view: &PaneView, blocks: &[Block], level: Level) -> 
         remaining = &remaining[1..];
     }
     controls
+}
+
+/// The turn-wide change summary has its own disclosure, not a fabricated tool.
+pub fn turn_diff_disclosure(transcript: &Transcript, level: Level) -> Option<DisclosureId> {
+    (level == Level::Transcript)
+        .then(|| transcript.turn_diff())
+        .flatten()
+        .map(|diff| DisclosureId::TurnDiff(diff.turn_id.clone()))
 }
 
 /// The provider's live caption, followed by a quieter metadata line.
@@ -2490,6 +2505,7 @@ struct ComposerStack<'a> {
     model_picker: Option<AnyElement>,
     /// Live usage sits immediately beside the model picker.
     usage_meter: Option<AnyElement>,
+    session_controls: Option<AnyElement>,
     setup_controls: Option<AnyElement>,
     draft_error: Option<SharedString>,
     /// The follow-up predicted for this Thread's last response, if one has
@@ -2528,6 +2544,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         mode,
         model_picker,
         usage_meter,
+        session_controls,
         setup_controls,
         draft_error,
         suggestion,
@@ -2706,11 +2723,14 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
     // `margin-inline-start: auto` on the picker. It renders in every Pane,
     // before and after the first-prompt lock — there is no plain-label
     // fallback and no second model surface anywhere.
-    if model_picker.is_some() || usage_meter.is_some() {
+    if model_picker.is_some() || usage_meter.is_some() || session_controls.is_some() {
         controls = controls.child(div().flex_1().min_w_0());
     }
     if let Some(meter) = usage_meter {
         controls = controls.child(div().flex_shrink_0().child(meter));
+    }
+    if let Some(session_controls) = session_controls {
+        controls = controls.child(div().flex_shrink_0().child(session_controls));
     }
     if let Some(picker) = model_picker {
         controls = controls.child(div().flex_shrink_0().child(picker));
@@ -2748,7 +2768,7 @@ fn mode_chip(mode: &str) -> Div {
         .bg(rgb(HOVER))
         .text_color(rgb(TEXT_2))
         .child(icon(icons::PENCIL, theme::ICON_PENCIL, TEXT_MUTED))
-        .child(mode_chip_label(mode))
+        .child(mode.to_owned())
         .hover_raised()
 }
 
@@ -2793,15 +2813,17 @@ pub fn offers_import(transcript: Option<&Transcript>) -> bool {
     transcript.is_some_and(Transcript::offers_import)
 }
 
-/// The meta row's mode chip text: the comp's own name for acceptEdits
-/// ("⏵ auto-edit"); every other mode wears the provider's word verbatim
-/// rather than a guessed translation.
-fn mode_chip_label(mode: &str) -> SharedString {
-    let label = match mode {
-        "acceptEdits" => "auto-edit",
-        other => other,
-    };
-    SharedString::from(label.to_string())
+/// Display the adapter's label for its native mode; unknown values stay visible.
+fn permission_mode_label(
+    mode: &str,
+    choices: &[ferrite_core::PermissionModeChoice],
+) -> SharedString {
+    choices
+        .iter()
+        .find(|choice| choice.value == mode)
+        .map(|choice| choice.label.clone())
+        .unwrap_or_else(|| mode.to_owned())
+        .into()
 }
 
 /// One row of the `/` or `@` popover, ready to draw: what a pick inserts,
@@ -3151,11 +3173,13 @@ pub fn decide_row(level: Level) -> Div {
 
 // -------------------------------------------------------------- questions
 
-/// The questions a Decision carries, when it is Claude's question tool.
+/// The normalized questions a Decision carries. Providers classify the wire
+/// request before it reaches the shared renderer.
 pub fn question_of(decision: &Decision) -> Option<Vec<ferrite_core::questions::Question>> {
-    ferrite_core::questions::is_question_tool(&decision.tool_name)
-        .then(|| ferrite_core::questions::parse(&decision.input))
-        .flatten()
+    match &decision.kind {
+        ferrite_core::DecisionKind::Questions(questions) => Some(questions.clone()),
+        _ => None,
+    }
 }
 
 // ------------------------------------------------------------ shared bits
@@ -3300,7 +3324,10 @@ fn reset_label(resets_at: Option<u64>, span: Duration, now: SystemTime) -> Share
 pub fn context_usage(
     usage: ferrite_core::transcript::Usage,
     limits: ferrite_core::transcript::RateLimits,
-) -> Div {
+    details: Option<&ferrite_core::ContextDetails>,
+    usage_details: Option<&ferrite_core::UsageDetails>,
+    last_cost: Option<f64>,
+) -> impl IntoElement {
     fn count_label(count: u64) -> String {
         let digits = count.to_string();
         let mut label = String::new();
@@ -3427,7 +3454,7 @@ pub fn context_usage(
         .child("/")
         .child(count_value("maximum", maximum))
         .child("tokens");
-    div()
+    let mut card = div()
         .flex()
         .flex_col()
         .w(px(theme::USAGE_CARD_W))
@@ -3460,7 +3487,79 @@ pub fn context_usage(
                 limits.weekly.and_then(|limit| limit.resets_at),
                 Duration::from_secs(7 * 86_400),
             )),
-        ))
+        ));
+    if let Some(details) = details {
+        if let Some(usable) = details.usable_window {
+            card = card.child(
+                div()
+                    .id(SharedString::from(format!("context-usable-{usable}")))
+                    .debug_selector(move || format!("context-usable-{usable}"))
+                    .child(format!("Usable {usable}")),
+            );
+        }
+        if let Some(threshold) = details.auto_compact_threshold {
+            card = card.child(
+                div()
+                    .id(SharedString::from(format!(
+                        "context-compaction-{threshold}"
+                    )))
+                    .debug_selector(move || format!("context-compaction-{threshold}"))
+                    .child(match details.is_auto_compact_enabled {
+                        Some(true) => format!("Compacts at {threshold}"),
+                        Some(false) => format!("Compaction disabled · threshold {threshold}"),
+                        None => format!("Compaction threshold {threshold}"),
+                    }),
+            );
+        }
+        for (index, category) in details.categories.iter().enumerate() {
+            let tokens = category.tokens;
+            card = card.child(
+                div()
+                    .id(SharedString::from(format!(
+                        "context-category-{index}-{tokens}"
+                    )))
+                    .debug_selector(move || format!("context-category-{index}-{tokens}"))
+                    .child(format!("{} {tokens}", category.name)),
+            );
+        }
+    }
+    if let Some(details) = usage_details {
+        let scope = match details.scope {
+            ferrite_core::UsageScope::Message => ("message", "This message"),
+            ferrite_core::UsageScope::Turn => ("turn", "This turn"),
+            ferrite_core::UsageScope::Session => ("session", "This session"),
+        };
+        card = card.child(
+            div()
+                .debug_selector(move || format!("usage-scope-{}", scope.0))
+                .text_color(rgb(TEXT_MUTED))
+                .child(scope.1),
+        );
+        for (key, label, count) in [
+            ("input", "Input", details.input_tokens),
+            ("cached-input", "Cached input", details.cached_input_tokens),
+            ("output", "Output", details.output_tokens),
+            (
+                "reasoning-output",
+                "Reasoning output",
+                details.reasoning_output_tokens,
+            ),
+        ] {
+            card = card.child(
+                div()
+                    .debug_selector(move || format!("usage-{key}-{count}"))
+                    .child(format!("{label} {}", count_label(count))),
+            );
+        }
+    }
+    if let Some(cost) = last_cost {
+        card = card.child(
+            div()
+                .debug_selector(move || format!("usage-cost-{cost}"))
+                .child(format!("Last cost US${cost:.4}")),
+        );
+    }
+    card.max_h(px(440.)).overflow_y_scrollbar()
 }
 
 /// A usage bar's ink: the Pane's own status inks, so a budget reads like
@@ -4296,6 +4395,29 @@ fn render_tool(
                 )));
             }
         }
+        if let Some(details_output) = tool.structured_output() {
+            details = details.child(
+                div()
+                    .ml(px(theme::INDENT))
+                    .mt(px(theme::EVENT_GAP))
+                    .text_color(rgb(TEXT_MUTED))
+                    .child("Details"),
+            );
+            details = details.child(output_block(
+                block,
+                "details",
+                &details_output.text,
+                TEXT_MUTED,
+                selection,
+            ));
+            if details_output.omitted_bytes > 0 {
+                details =
+                    details.child(result_line(TEXT_MUTED).child(div().min_w_0().child(format!(
+                        "… {} bytes omitted from inline view",
+                        details_output.omitted_bytes
+                    ))));
+            }
+        }
         card = card.content(details);
     } else if !redundant_test_result && (!in_group || matches!(tool.state, ToolState::Failed(_))) {
         // A failed call's compact result reads in the blocked ink. Raw
@@ -4332,7 +4454,7 @@ fn render_tool(
         }
     }
     if expanded || !in_group {
-        if let Some(diff) = &tool.diff {
+        for diff in &tool.diffs {
             card = card.child(render_diff(block, diff, selection));
         }
     }
@@ -4543,7 +4665,13 @@ fn result_ink(state: &ToolState) -> u32 {
 /// hard line stretched to the column under it, each wrapping at the
 /// column's width. Blank lines keep their height so the shape of the
 /// output survives.
-fn output_block(block: BlockId, part: &str, text: &str, ink: u32, selection: &TextRuns) -> Div {
+pub(crate) fn output_block(
+    block: BlockId,
+    part: &str,
+    text: &str,
+    ink: u32,
+    selection: &TextRuns,
+) -> Div {
     let rows = div()
         .flex()
         .flex_col()
@@ -4603,7 +4731,7 @@ fn output_block(block: BlockId, part: &str, text: &str, ink: u32, selection: &Te
 /// — with the `└` elbow in `--sep`. The 17px inset is exactly the event's
 /// glyph column plus its gap, so the elbow lands under the verb's first
 /// character.
-fn result_line(ink: u32) -> Div {
+pub(crate) fn result_line(ink: u32) -> Div {
     div()
         .flex()
         .min_w_0()
@@ -4631,8 +4759,11 @@ enum ToolVerdict {
 
 fn tool_verdicts(tool: &ToolBlock) -> Vec<ToolVerdict> {
     let mut verdicts = Vec::with_capacity(2);
-    if let Some(diff) = &tool.diff {
-        verdicts.push(ToolVerdict::Diff(diff.added, diff.removed));
+    if !tool.diffs.is_empty() {
+        verdicts.push(ToolVerdict::Diff(
+            tool.diffs.iter().map(|diff| diff.added).sum(),
+            tool.diffs.iter().map(|diff| diff.removed).sum(),
+        ));
     }
     if matches!(tool.state, ToolState::Failed(_)) {
         verdicts.push(ToolVerdict::Failed);
@@ -4657,6 +4788,8 @@ pub fn tool_disclosure_control(
             (DisclosureId::Reasoning(_), true) => "Hide reasoning",
             (DisclosureId::Group(_), false) => "Show tool calls",
             (DisclosureId::Group(_), true) => "Hide tool calls",
+            (DisclosureId::TurnDiff(_), false) => "Show turn changes",
+            (DisclosureId::TurnDiff(_), true) => "Hide turn changes",
             (_, false) => "Show tool details",
             (_, true) => "Hide tool details",
         })
@@ -5217,6 +5350,7 @@ mod tests {
                 content_revision: (0, 0),
                 display_revision: self.display_revision,
                 blocks: self.blocks.clone(),
+                turn_diff: None,
                 signal_status: Some(Status::Idle),
                 timings: HashMap::new(),
                 focused: true,
@@ -5246,6 +5380,7 @@ mod tests {
                     content_revision: (0, 0),
                     display_revision: 0,
                     blocks: blocks.clone(),
+                    turn_diff: None,
                     signal_status: Some(Status::Idle),
                     timings: HashMap::new(),
                     focused: true,
@@ -5440,8 +5575,8 @@ mod tests {
                 Body::Heading { .. } => "heading",
                 Body::Bullet { .. } => "bullet",
                 Body::Code { .. } => "code",
-                Body::Tool(tool) => match (&tool.state, &tool.diff) {
-                    (_, Some(_)) => "diff",
+                Body::Tool(tool) => match (&tool.state, tool.diffs.is_empty()) {
+                    (_, false) => "diff",
                     (ToolState::Failed(_), _) => "tool-failed",
                     _ => "tool",
                 },
@@ -5476,6 +5611,73 @@ mod tests {
 
         cx.update(|_, cx| crate::rich::testing::select_all(cx));
         cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn contract_structured_tool_result_is_visible_in_shared_disclosure(cx: &mut TestAppContext) {
+        let mut transcript = Transcript::default();
+        transcript.apply(Input::Event(SessionEvent::ToolStarted {
+            id: "structured".into(),
+            name: "Tool".into(),
+            input: serde_json::json!({}),
+        }));
+        transcript.apply(Input::Event(SessionEvent::ToolCompleted {
+            id: "structured".into(),
+            output: String::new(),
+            is_error: false,
+            result: ToolResult::Structured {
+                value: serde_json::json!({"detail":"visible-provider-detail"}),
+                duration_ms: None,
+            },
+        }));
+        let (view, cx) = cx.add_window_view(|_, cx| {
+            gpui::component::init(cx);
+            let mut view = shows_blocks(transcript.blocks().to_vec(), cx);
+            view.expanded.insert("structured".into());
+            view
+        });
+        cx.simulate_resize(size(px(900.), px(600.)));
+        cx.run_until_parked();
+        let runs = view.read_with(cx, |view, _| view.selection.registered(ThreadId::new(1)));
+        assert!(
+            runs.iter()
+                .any(|(_, _, _, text)| text.contains("visible-provider-detail")),
+            "preserved provider data must be inspectable even without model-facing output"
+        );
+    }
+
+    #[test]
+    fn contract_multi_file_tool_verdict_counts_all_native_hunks() {
+        let mut transcript = Transcript::default();
+        transcript.apply(Input::Event(SessionEvent::ToolStarted {
+            id: "edit".into(),
+            name: "Edit".into(),
+            input: serde_json::json!({}),
+        }));
+        transcript.apply(Input::Event(SessionEvent::ToolCompleted {
+            id: "edit".into(),
+            output: String::new(),
+            is_error: false,
+            result: ToolResult::FileEdits {
+                edits: ["a.txt", "b.txt"]
+                    .into_iter()
+                    .map(|path| ferrite_core::FileEdit {
+                        path: path.into(),
+                        hunks: vec![Hunk {
+                            old_start: 1,
+                            old_lines: 1,
+                            new_start: 1,
+                            new_lines: 1,
+                            lines: vec!["-old".into(), "+new".into()],
+                        }],
+                    })
+                    .collect(),
+            },
+        }));
+        let Body::Tool(tool) = &transcript.blocks()[0].body else {
+            panic!("expected tool")
+        };
+        assert_eq!(tool_verdicts(tool), [ToolVerdict::Diff(2, 2)]);
     }
 
     /// AC2's copy half, relocated from `block_text` (#27): every Block kind
@@ -5696,18 +5898,24 @@ mod tests {
         assert!(empty.meter.is_empty());
 
         let mut transcript = Transcript::default();
-        for subject in ["a", "b", "c", "d"] {
-            transcript.apply(Input::Event(SessionEvent::ToolStarted {
-                id: format!("t{subject}"),
-                name: "TaskCreate".into(),
-                input: serde_json::json!({ "subject": subject }),
+        for (id, subject) in [("1", "a"), ("2", "b"), ("3", "c"), ("4", "d")] {
+            transcript.apply(Input::Event(SessionEvent::Progress {
+                event: ferrite_core::progress::ProgressEvent::Task {
+                    id: id.into(),
+                    subject: subject.into(),
+                    status: Some(ferrite_core::progress::StepStatus::Pending),
+                    deleted: false,
+                },
             }));
         }
         for task in ["1", "2", "3"] {
-            transcript.apply(Input::Event(SessionEvent::ToolStarted {
-                id: format!("u{task}"),
-                name: "TaskUpdate".into(),
-                input: serde_json::json!({ "taskId": task, "status": "completed" }),
+            transcript.apply(Input::Event(SessionEvent::Progress {
+                event: ferrite_core::progress::ProgressEvent::Task {
+                    id: task.into(),
+                    subject: String::new(),
+                    status: Some(ferrite_core::progress::StepStatus::Completed),
+                    deleted: false,
+                },
             }));
         }
         assert_eq!(transcript.todos(), Some(Todos { done: 3, total: 4 }));
@@ -5736,6 +5944,8 @@ mod tests {
         // tool prefix every Decision surface shares (#22 C7).
         let decision = Decision {
             delivery: Default::default(),
+            kind: Default::default(),
+            policy: Default::default(),
             id: "perm".into(),
             tool_use_id: "toolu".into(),
             tool_name: "Bash".into(),
@@ -5769,6 +5979,8 @@ mod tests {
     fn every_decision_surface_shares_one_subject_derivation() {
         let decision = |tool: &str, description: &str| Decision {
             delivery: Default::default(),
+            kind: Default::default(),
+            policy: Default::default(),
             id: "perm".into(),
             tool_use_id: "toolu".into(),
             tool_name: tool.into(),
@@ -5827,18 +6039,20 @@ mod tests {
         );
     }
 
-    /// #23: the mode chip speaks the prototype's name for acceptEdits and
-    /// the provider's own word for everything else — never an invented
-    /// label, and no `⏵` prefix: the pencil icon is the whole mark.
     #[test]
-    fn the_mode_chip_labels_accept_edits_the_prototypes_way_and_the_rest_verbatim() {
-        assert_eq!(mode_chip_label("acceptEdits").as_ref(), "auto-edit");
+    fn the_mode_chip_uses_provider_supplied_labels() {
+        let choices = vec![ferrite_core::PermissionModeChoice {
+            value: "opaque-mode".into(),
+            label: "Ask for changes".into(),
+        }];
         assert_eq!(
-            mode_chip_label("bypassPermissions").as_ref(),
-            "bypassPermissions"
+            permission_mode_label("opaque-mode", &choices).as_ref(),
+            "Ask for changes"
         );
-        assert_eq!(mode_chip_label("plan").as_ref(), "plan");
-        assert_eq!(mode_chip_label("default").as_ref(), "default");
+        assert_eq!(
+            permission_mode_label("unknown", &choices).as_ref(),
+            "unknown"
+        );
     }
 
     /// #22 amendment: durations read in the comps' grammar at every scale.

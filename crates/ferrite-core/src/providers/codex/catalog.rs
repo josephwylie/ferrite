@@ -2,7 +2,7 @@
 
 use crate::spawn::NoConsoleWindow;
 use std::io::{self, BufRead, BufReader, Write};
-use std::process::{Command, Stdio};
+use std::process::{ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -17,6 +17,15 @@ pub fn list(program: &str) -> io::Result<Vec<ModelInfo>> {
 }
 
 fn list_with_timeout(program: &str, timeout: Duration) -> io::Result<Vec<ModelInfo>> {
+    request_only(program, timeout, query)
+}
+
+/// Run a bounded request-only exchange and reap the app-server on every exit.
+pub(super) fn request_only<T: Send + 'static>(
+    program: &str,
+    timeout: Duration,
+    query: impl FnOnce(ChildStdin, BufReader<ChildStdout>) -> io::Result<T> + Send + 'static,
+) -> io::Result<T> {
     let program = super::super::spawnable_program(program);
     super::check_version(&program).map_err(io::Error::other)?;
     let mut child = Command::new(program)
@@ -32,7 +41,7 @@ fn list_with_timeout(program: &str, timeout: Duration) -> io::Result<Vec<ModelIn
     let stdout = child.stdout.take().expect("stdout was piped");
     let (tx, rx) = mpsc::sync_channel(1);
     let worker = std::thread::Builder::new()
-        .name("ferrite-model-list".into())
+        .name("ferrite-codex-discovery".into())
         .spawn(move || {
             let _ = tx.send(query(stdin, BufReader::new(stdout)));
         });
@@ -46,7 +55,7 @@ fn list_with_timeout(program: &str, timeout: Duration) -> io::Result<Vec<ModelIn
                     } else {
                         io::ErrorKind::UnexpectedEof
                     },
-                    format!("Codex model discovery did not complete: {error}"),
+                    format!("Codex discovery did not complete: {error}"),
                 )
             })
             .and_then(|result| result),
@@ -61,19 +70,19 @@ fn list_with_timeout(program: &str, timeout: Duration) -> io::Result<Vec<ModelIn
     result
 }
 
-fn write(writer: &mut impl Write, message: Value) -> io::Result<()> {
+pub(super) fn write(writer: &mut impl Write, message: Value) -> io::Result<()> {
     writeln!(writer, "{message}")?;
     writer.flush()
 }
 
-fn response(reader: &mut impl BufRead, id: u64) -> io::Result<Value> {
+pub(super) fn response(reader: &mut impl BufRead, id: u64) -> io::Result<Value> {
     let mut line = String::new();
     loop {
         line.clear();
         if reader.read_line(&mut line)? == 0 {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
-                "Codex closed during model discovery",
+                "Codex closed during discovery",
             ));
         }
         if let Some(result) = super::wire::parse_response(&line, id) {
@@ -82,16 +91,20 @@ fn response(reader: &mut impl BufRead, id: u64) -> io::Result<Value> {
     }
 }
 
-fn query(mut writer: impl Write, mut reader: impl BufRead) -> io::Result<Vec<ModelInfo>> {
+pub(super) fn initialize(writer: &mut impl Write, reader: &mut impl BufRead) -> io::Result<()> {
     write(
-        &mut writer,
+        writer,
         json!({
             "id": 1, "method": "initialize",
             "params": {"clientInfo": {"name": "ferrite", "version": env!("CARGO_PKG_VERSION")}}
         }),
     )?;
-    response(&mut reader, 1)?;
-    write(&mut writer, json!({"method": "initialized"}))?;
+    response(reader, 1)?;
+    write(writer, json!({"method": "initialized"}))
+}
+
+fn query(mut writer: impl Write, mut reader: impl BufRead) -> io::Result<Vec<ModelInfo>> {
+    initialize(&mut writer, &mut reader)?;
     let mut cursor = None;
     let mut cursors = std::collections::HashSet::new();
     let mut data = Vec::new();

@@ -12,8 +12,13 @@
 
 mod activity;
 pub(super) mod catalog;
+mod controls;
+pub(super) mod discovery;
+mod file_search;
+mod live_catalogs;
 mod questions;
 mod queue;
+mod requests;
 pub(super) mod wire;
 
 use crate::spawn::NoConsoleWindow;
@@ -26,7 +31,9 @@ use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::{DecisionAnswer, SessionEvent};
+use crate::{ControlKind, DecisionAnswer, PermissionModeChoice, SessionControl, SessionEvent};
+
+use super::FileSuggestion;
 
 use wire::ThreadHandshake;
 
@@ -218,11 +225,13 @@ pub struct CodexSession {
     capabilities: CodexCapabilities,
     thread_id: String,
     model: String,
+    model_override: Option<String>,
     effort: Option<String>,
     models: Arc<Mutex<Vec<crate::ModelInfo>>>,
-    /// Main's running turn, tracked by the reader from scoped lifecycle:
-    /// child turns must never become this Session's interrupt target.
-    current_turn: Arc<Mutex<Option<String>>>,
+    /// Ordinary host requests and Main's native interrupt target. Child turns
+    /// must never become this Session's interrupt target.
+    requests: Arc<Mutex<requests::Requests>>,
+    controls: Arc<Mutex<controls::Controls>>,
     /// The server's skills, filled by the reader from the skills/list answer
     /// (#23). `send` translates a leading `/name` against this list into the
     /// typed skill item — slash text is never intercepted server-side.
@@ -233,6 +242,8 @@ pub struct CodexSession {
     sandbox: Option<String>,
     next_request_id: u64,
     question_replies: Arc<Mutex<questions::Replies>>,
+    native_questions: Arc<Mutex<questions::NativeRequests>>,
+    file_search: Arc<Mutex<file_search::Requests>>,
     queue: Arc<Mutex<queue::Queue>>,
 }
 
@@ -279,10 +290,13 @@ impl CodexSession {
 
         let (sender, events) = sync_channel(EVENT_CHANNEL_CAPACITY);
         let child = Arc::new(Mutex::new(child));
-        let current_turn = Arc::new(Mutex::new(None));
+        let requests = Arc::new(Mutex::new(requests::Requests::default()));
+        let controls = Arc::new(Mutex::new(controls::Controls::default()));
         let skills = Arc::new(Mutex::new(Vec::new()));
         let models = Arc::new(Mutex::new(Vec::new()));
         let question_replies = Arc::new(Mutex::new(questions::Replies::default()));
+        let native_questions = Arc::new(Mutex::new(questions::NativeRequests::default()));
+        let file_search = Arc::new(Mutex::new(file_search::Requests::default()));
         let (skills_sender, skills_ready) = sync_channel(1);
         let queue = Arc::new(Mutex::new(queue::Queue::default()));
         let handshake = read_stdout(
@@ -291,12 +305,16 @@ impl CodexSession {
             sender,
             Arc::clone(&child),
             Arc::clone(&stderr_tail),
-            Arc::clone(&current_turn),
+            Arc::clone(&requests),
+            Arc::clone(&controls),
             Arc::clone(&skills),
             skills_sender,
             Arc::clone(&models),
             Arc::clone(&question_replies),
+            Arc::clone(&native_questions),
+            Arc::clone(&file_search),
             queue.clone(),
+            config.cwd.clone(),
         );
 
         let mut session = Self {
@@ -308,15 +326,19 @@ impl CodexSession {
             capabilities: CodexCapabilities::default(),
             thread_id: String::new(),
             model: String::new(),
+            model_override: None,
             effort: config.effort.clone(),
             models,
-            current_turn,
+            requests,
+            controls,
             skills,
             cwd: config.cwd.clone(),
             additional_directories: config.additional_directories.clone(),
             sandbox: config.sandbox.clone(),
             next_request_id: 1,
             question_replies,
+            native_questions,
+            file_search,
             queue,
         };
 
@@ -341,6 +363,7 @@ impl CodexSession {
         // Request 3 was completed during startup, before thread creation.
         let skills_id = session.take_request_id();
         debug_assert_eq!(skills_id, SKILLS_REQUEST_ID);
+        lock(&session.file_search).configure(&session.thread_id);
         // And the model menu (#25), answered the same way and announced as
         // `SessionEvent::Models`; a server without the method, or one that
         // never answers, just leaves the picker on the fallback catalog.
@@ -451,14 +474,27 @@ impl CodexSession {
                     lock(&self.models)
                         .iter()
                         .find(|row| {
-                            row.value == self.model
-                                || row.resolved.as_deref() == Some(self.model.as_str())
+                            let model = self.model_override.as_deref().unwrap_or(&self.model);
+                            row.value == model || row.resolved.as_deref() == Some(model)
                         })
                         .and_then(|row| row.default_effort.clone())
                 })
                 .ok_or_else(|| io::Error::other("Codex has not reported its default effort"))?,
         };
         self.effort = Some(effort);
+        Ok(())
+    }
+
+    /// Select a model for the next turn on this thread. The app-server keeps
+    /// the process and thread alive; the choice travels on `turn/start`.
+    pub fn set_model(&mut self, model: Option<&str>) -> io::Result<()> {
+        let Some(model) = model else {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "Codex cannot restore an unknown default model",
+            ));
+        };
+        self.model_override = Some(model.to_string());
         Ok(())
     }
 
@@ -498,31 +534,71 @@ impl CodexSession {
         if let Some(effort) = &self.effort {
             params["effort"] = serde_json::json!(effort);
         }
+        if let Some(model) = &self.model_override {
+            params["model"] = serde_json::json!(model);
+        }
         self.apply_project_roots(&mut params);
         let id = self.take_request_id();
-        self.write_line(&serde_json::json!({
+        lock(&self.requests).start(id)?;
+        let result = self.write_line(&serde_json::json!({
             "jsonrpc": "2.0",
             "id": id,
             "method": "turn/start",
             "params": params,
-        }))
+        }));
+        if result.is_err() {
+            lock(&self.requests).discard(id);
+        }
+        result
     }
 
-    /// Interrupt the running turn. Codex addresses interrupts to a turn id,
-    /// so before the first turn/started has arrived there is nothing to name
-    /// and this is a no-op — the same harmless outcome as interrupting an
-    /// idle Claude Session.
-    pub fn interrupt(&mut self) -> io::Result<()> {
-        let Some(turn_id) = lock(&self.current_turn).clone() else {
-            return Ok(());
+    /// Ask the app-server for its ranked fuzzy matches. Its one cancellation
+    /// token is stable for the Session, so each native query supersedes the
+    /// prior search while normal requests retain their own IDs.
+    pub fn search_files(
+        &mut self,
+        query: &str,
+    ) -> io::Result<Receiver<io::Result<Vec<FileSuggestion>>>> {
+        let root = match &self.cwd {
+            Some(cwd) => cwd.clone(),
+            None => std::env::current_dir()?,
         };
         let id = self.take_request_id();
-        self.write_line(&serde_json::json!({
+        let (reply, receiver) = sync_channel(1);
+        let token = {
+            let mut searches = lock(&self.file_search);
+            searches.begin(id, reply);
+            searches.token().to_owned()
+        };
+        if let Err(error) = self.write_line(&serde_json::json!({
             "jsonrpc": "2.0",
             "id": id,
-            "method": "turn/interrupt",
-            "params": {"threadId": self.thread_id, "turnId": turn_id},
-        }))
+            "method": "fuzzyFileSearch",
+            "params": {
+                "query": query,
+                "roots": [root.display().to_string()],
+                "cancellationToken": token,
+            },
+        })) {
+            lock(&self.file_search).discard(id);
+            return Err(error);
+        }
+        Ok(receiver)
+    }
+
+    /// Interrupt Main. When a sent start has not yet named its turn, retain
+    /// one interruption until its acknowledgement or turn/started supplies it.
+    pub fn interrupt(&mut self) -> io::Result<()> {
+        let id = self.take_request_id();
+        let request = lock(&self.requests).interrupt(id, &self.thread_id)?;
+        let Some(request) = request else {
+            return Ok(());
+        };
+        let result = self.write_line(&request);
+        if result.is_err() {
+            lock(&self.requests).discard(id);
+        }
+        result
     }
 
     /// What the thread/start response said this install can do, answered at
@@ -531,17 +607,59 @@ impl CodexSession {
         &self.capabilities
     }
 
+    pub fn permission_modes(&self) -> Vec<PermissionModeChoice> {
+        [
+            ("untrusted", "Ask for untrusted commands"),
+            ("on-request", "Ask as needed"),
+            ("never", "Never ask"),
+        ]
+        .into_iter()
+        .map(|(value, label)| PermissionModeChoice {
+            value: value.into(),
+            label: label.into(),
+        })
+        .collect()
+    }
+
+    pub fn supports_control(&self, kind: ControlKind) -> bool {
+        matches!(
+            kind,
+            ControlKind::RefreshMcp
+                | ControlKind::LoginMcp
+                | ControlKind::ReloadMcp
+                | ControlKind::SetPermissionMode
+        )
+    }
+
+    pub fn control(&mut self, action: SessionControl) -> io::Result<()> {
+        let id = serde_json::json!(self.take_request_id());
+        let request = lock(&self.controls).begin(id, action, &self.thread_id)?;
+        let Some(request) = request else {
+            return Ok(());
+        };
+        let result = self.write_line(&request);
+        if result.is_err() {
+            lock(&self.controls).discard(&request);
+        }
+        result
+    }
+
     /// Rename the thread server-side (`thread/name/set`), so the server's
-    /// own thread list carries the Thread's title. The acknowledgement is
-    /// an empty result nothing waits on.
+    /// own thread list carries the Thread's title. A refusal is reported as
+    /// a Main notice without ending its turn.
     pub fn set_name(&mut self, name: &str) -> io::Result<()> {
         let id = self.take_request_id();
-        self.write_line(&serde_json::json!({
+        lock(&self.requests).rename(id)?;
+        let result = self.write_line(&serde_json::json!({
             "jsonrpc": "2.0",
             "id": id,
             "method": "thread/name/set",
             "params": {"threadId": self.thread_id, "name": name},
-        }))
+        }));
+        if result.is_err() {
+            lock(&self.requests).discard(id);
+        }
+        result
     }
 
     /// Answer a `DecisionRequested`, quoting the id it arrived with.
@@ -554,7 +672,7 @@ impl CodexSession {
     /// only that the tool was rejected).
     pub fn respond_to_decision(&mut self, id: &str, answer: DecisionAnswer) -> io::Result<()> {
         let rpc = self.take_request_id();
-        let turn = lock(&self.current_turn).clone();
+        let turn = lock(&self.requests).current_turn.clone();
         let request = lock(&self.question_replies).prepare(
             id,
             &answer,
@@ -567,6 +685,9 @@ impl CodexSession {
                 if let Some(effort) = &self.effort {
                     request["params"]["effort"] = effort.clone().into();
                 }
+                if let Some(model) = &self.model_override {
+                    request["params"]["model"] = model.clone().into();
+                }
                 self.apply_project_roots(&mut request["params"]);
             }
             let result = self.write_line(&request);
@@ -576,20 +697,24 @@ impl CodexSession {
             return result;
         }
 
-        let decision = match &answer {
-            DecisionAnswer::Allow { .. } => serde_json::json!("accept"),
-            DecisionAnswer::Deny { .. } => serde_json::json!("decline"),
-            // The standing answer is one of the request's own
-            // `availableDecisions`, echoed back whole: the server takes the
-            // object exactly as it offered it.
-            DecisionAnswer::AllowAlways { suggestion, .. } => suggestion.clone(),
-        };
-        let id = wire::decision_request_id(id)?;
-        self.write_line(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "result": {"decision": decision},
-        }))
+        let native = { lock(&self.native_questions).response(id, &answer) };
+        if let Some(result) = native {
+            let handle = id.to_owned();
+            let id = wire::decision_request_id(&handle)?;
+            let result = result?;
+            self.write_line(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": result,
+            }))?;
+            lock(&self.native_questions).resolved(&handle);
+            return Ok(());
+        }
+
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Decision is not pending",
+        ))
     }
 
     /// The process this Session runs, for a watchdog counting its memory.
@@ -694,12 +819,16 @@ fn read_stdout(
     sender: SyncSender<SessionEvent>,
     child: Arc<Mutex<Child>>,
     stderr_tail: Arc<Mutex<StderrTail>>,
-    current_turn: Arc<Mutex<Option<String>>>,
+    requests: Arc<Mutex<requests::Requests>>,
+    controls: Arc<Mutex<controls::Controls>>,
     skills: Arc<Mutex<Vec<crate::SessionCommand>>>,
     skills_ready: SyncSender<Result<(), String>>,
     model_catalog: Arc<Mutex<Vec<crate::ModelInfo>>>,
     question_replies: Arc<Mutex<questions::Replies>>,
+    native_questions: Arc<Mutex<questions::NativeRequests>>,
+    file_search: Arc<Mutex<file_search::Requests>>,
     queue: Arc<Mutex<queue::Queue>>,
+    cwd: Option<PathBuf>,
 ) -> Receiver<Result<HandshakeStep, String>> {
     let (step_sender, steps) = sync_channel(2);
     thread::spawn(move || {
@@ -709,7 +838,7 @@ fn read_stdout(
         let mut turns = MainTurnTracker {
             main_thread_id: None,
             early_turns: HashMap::new(),
-            current_turn,
+            requests: requests.clone(),
         };
         // Which handshake response is awaited: request 1, then request 2,
         // then none.
@@ -718,7 +847,7 @@ fn read_stdout(
         // Skills are requested before thread/start so history backpressure
         // cannot block readiness.
         let mut menu_pending = true;
-        let mut models_pending = false;
+        let mut catalogs = live_catalogs::Catalogs::after_startup(cwd.as_deref());
         loop {
             line.clear();
             match reader.read_until(b'\n', &mut line) {
@@ -757,7 +886,6 @@ fn read_stdout(
                                     return;
                                 }
                             }
-                            models_pending = true;
                             if !publish_activity(update, &mut activity, &sender, &stdin) {
                                 return;
                             }
@@ -810,35 +938,116 @@ fn read_stdout(
                     continue;
                 }
             }
-            if models_pending {
-                if let Some(response) = wire::parse_response(text, MODELS_REQUEST_ID) {
-                    models_pending = false;
-                    if let Ok(result) = response {
-                        let models = wire::parse_models(&result);
-                        *lock(&model_catalog) = models.clone();
-                        // The picker's rows (#25); a server listing none
-                        // announces nothing and the fallback catalog stands.
-                        if !models.is_empty()
-                            && sender.send(SessionEvent::Models { models }).is_err()
-                        {
+            turns.observe(text);
+            if let Ok(frame) = serde_json::from_str(text) {
+                if lock(&file_search).observe(&frame) {
+                    continue;
+                }
+                if let Some(update) = catalogs.observe(&frame) {
+                    for event in update.events {
+                        match &event {
+                            SessionEvent::Commands { commands } => {
+                                *lock(&skills) = commands.clone();
+                            }
+                            SessionEvent::Models { models } => {
+                                *lock(&model_catalog) = models.clone();
+                            }
+                            _ => {}
+                        }
+                        if sender.send(event).is_err() {
                             return;
+                        }
+                    }
+                    if let Some(request) = update.request {
+                        let Some(stdin) = stdin.upgrade() else {
+                            return;
+                        };
+                        if let Err(error) = write_request(&stdin, &request) {
+                            if sender
+                                .send(catalogs.write_failed(&request, &error))
+                                .is_err()
+                            {
+                                return;
+                            }
                         }
                     }
                     continue;
                 }
-            }
-            turns.observe(text);
-            if let Ok(frame) = serde_json::from_str(text) {
-                let (events, requests) = lock(&queue).observe(&frame);
+                let control = turns
+                    .main_thread_id
+                    .as_deref()
+                    .and_then(|thread| lock(&controls).observe(&frame, thread));
+                if let Some(update) = control {
+                    for event in update.events {
+                        if sender.send(event).is_err() {
+                            return;
+                        }
+                    }
+                    if let Some(request) = update.request {
+                        let Some(stdin) = stdin.upgrade() else {
+                            return;
+                        };
+                        if let Err(error) = write_request(&stdin, &request) {
+                            lock(&controls).discard(&request);
+                            if sender
+                                .send(requests::notice(format!(
+                                    "Could not send Codex control: {error}"
+                                )))
+                                .is_err()
+                            {
+                                return;
+                            }
+                        }
+                    }
+                    continue;
+                }
+                let (events, queue_requests) = lock(&queue).observe(&frame);
                 for event in events {
                     if sender.send(event).is_err() {
                         return;
                     }
                 }
-                for request in requests {
+                for request in queue_requests {
                     if let Some(stdin) = stdin.upgrade() {
                         let _ = write_request(&stdin, &request);
                     }
+                }
+                let (response, interrupt) = {
+                    let mut requests = lock(&requests);
+                    let response = requests.response(&frame);
+                    let interrupt = turns
+                        .main_thread_id
+                        .as_deref()
+                        .and_then(|thread| requests.take_interrupt(thread));
+                    (response, interrupt)
+                };
+                if let Some(interrupt) = interrupt {
+                    let Some(stdin) = stdin.upgrade() else {
+                        return;
+                    };
+                    if let Err(error) = write_request(&stdin, &interrupt) {
+                        lock(&requests).discard(interrupt["id"].as_u64().expect("host request ID"));
+                        if sender
+                            .send(requests::notice(format!(
+                                "Could not interrupt Codex: {error}"
+                            )))
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                }
+                if let Some(events) = response {
+                    for event in events {
+                        if sender.send(event).is_err() {
+                            return;
+                        }
+                    }
+                    continue;
+                }
+                lock(&native_questions).observe(&frame);
+                if let Some(decision) = questions::decode(&frame["params"]) {
+                    lock(&question_replies).register(&decision);
                 }
                 let reply = lock(&question_replies).observe(&frame);
                 if let Some(reply) = reply {
@@ -856,6 +1065,9 @@ fn read_stdout(
         if let Some((step_sender, _)) = handshake {
             let _ = step_sender.send(Err("server closed stdout before answering".into()));
         }
+        *lock(&requests) = requests::Requests::default();
+        *lock(&controls) = controls::Controls::default();
+        lock(&file_search).disconnect();
         let _ = sender.send(closed_event(&child, &stderr_tail));
     });
     steps
@@ -893,12 +1105,12 @@ fn publish_activity(
 struct MainTurnTracker {
     main_thread_id: Option<String>,
     early_turns: HashMap<String, String>,
-    current_turn: Arc<Mutex<Option<String>>>,
+    requests: Arc<Mutex<requests::Requests>>,
 }
 
 impl MainTurnTracker {
     fn identify_main(&mut self, thread_id: &str) {
-        *lock(&self.current_turn) = self.early_turns.remove(thread_id);
+        lock(&self.requests).current_turn = self.early_turns.remove(thread_id);
         self.early_turns.clear();
         self.main_thread_id = Some(thread_id.to_owned());
     }
@@ -922,11 +1134,11 @@ impl MainTurnTracker {
             if thread_id != main_thread_id {
                 return;
             }
-            let mut current_turn = lock(&self.current_turn);
+            let mut requests = lock(&self.requests);
             if started {
-                *current_turn = Some(turn_id.to_owned());
-            } else if current_turn.as_deref() == Some(turn_id) {
-                *current_turn = None;
+                requests.started(turn_id);
+            } else {
+                requests.completed(turn_id);
             }
         } else if started {
             if self.early_turns.len() < EARLY_TURN_THREAD_LIMIT

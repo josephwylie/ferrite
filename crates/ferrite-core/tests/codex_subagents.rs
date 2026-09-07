@@ -115,7 +115,11 @@ fn collect_until(session: &dyn Session, events: &mut Vec<SessionEvent>, checkpoi
         // Transport barriers after completion must remain metadata: late prose
         // for a completed turn is correctly rejected by the production Router.
         let done = match &event {
-            SessionEvent::TextDelta { text } => text == checkpoint,
+            SessionEvent::TextDelta { text }
+            | SessionEvent::Activity(ActivityEvent::MainContent {
+                event: ferrite_core::activity::ExecutionEvent::TextDelta { text },
+                ..
+            }) => text == checkpoint,
             SessionEvent::TokenUsage { total_tokens, .. } => matches!(
                 (checkpoint, *total_tokens),
                 ("FINISHED", 3331) | ("FLUSHED", 3332)
@@ -204,7 +208,11 @@ fn descendants_read_history_on_parent_connection_and_answer_the_exact_child_requ
     let main: String = events
         .iter()
         .filter_map(|event| match event {
-            SessionEvent::TextDelta { text } => Some(text.as_str()),
+            SessionEvent::TextDelta { text }
+            | SessionEvent::Activity(ActivityEvent::MainContent {
+                event: ferrite_core::activity::ExecutionEvent::TextDelta { text },
+                ..
+            }) => Some(text.as_str()),
             _ => None,
         })
         .collect();

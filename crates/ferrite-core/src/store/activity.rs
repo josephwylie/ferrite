@@ -100,6 +100,14 @@ pub(super) enum Status {
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(super) enum Execution {
+    FileChanges {
+        id: String,
+        edits: Vec<StoredFileEdit>,
+    },
+    TurnDiff {
+        turn_id: String,
+        diff: String,
+    },
     Progress {
         event: PersistedProgress,
     },
@@ -136,6 +144,9 @@ pub(super) enum Execution {
     ThinkingSnapshot {
         text: String,
     },
+    Retract {
+        ids: Vec<String>,
+    },
     Prompt {
         text: String,
     },
@@ -165,6 +176,27 @@ pub(super) enum Execution {
         reasoning_output_tokens: u64,
         context_window: Option<u64>,
     },
+    ContextUsage {
+        total_tokens: u64,
+        context_window: Option<u64>,
+    },
+    UsageDetails {
+        details: crate::UsageDetails,
+    },
+}
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct StoredFileEdit {
+    path: String,
+    hunks: Vec<StoredHunk>,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+pub(super) struct StoredHunk {
+    old_start: u32,
+    old_lines: u32,
+    new_start: u32,
+    new_lines: u32,
+    lines: Vec<String>,
 }
 
 impl PersistedSubject {
@@ -258,6 +290,30 @@ impl Outcome {
 impl Execution {
     fn from_live(event: &ExecutionEvent) -> Self {
         match event {
+            ExecutionEvent::FileChanges { id, edits } => Self::FileChanges {
+                id: id.clone(),
+                edits: edits
+                    .iter()
+                    .map(|e| StoredFileEdit {
+                        path: e.path.clone(),
+                        hunks: e
+                            .hunks
+                            .iter()
+                            .map(|h| StoredHunk {
+                                old_start: h.old_start,
+                                old_lines: h.old_lines,
+                                new_start: h.new_start,
+                                new_lines: h.new_lines,
+                                lines: h.lines.clone(),
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            },
+            ExecutionEvent::TurnDiff { turn_id, diff } => Self::TurnDiff {
+                turn_id: turn_id.clone(),
+                diff: diff.clone(),
+            },
             ExecutionEvent::Progress { event } => Self::Progress {
                 event: PersistedProgress::from_live(event),
             },
@@ -292,6 +348,7 @@ impl Execution {
             ExecutionEvent::ThinkingSnapshot { text } => {
                 Self::ThinkingSnapshot { text: text.clone() }
             }
+            ExecutionEvent::Retract { ids } => Self::Retract { ids: ids.clone() },
             ExecutionEvent::Prompt { text } => Self::Prompt { text: text.clone() },
             ExecutionEvent::Notice { text } => Self::Notice { text: text.clone() },
             ExecutionEvent::ToolStarted { id, name, input } => Self::ToolStarted {
@@ -329,10 +386,44 @@ impl Execution {
                 reasoning_output_tokens: *reasoning_output_tokens,
                 context_window: *context_window,
             },
+            ExecutionEvent::ContextUsage {
+                total_tokens,
+                context_window,
+            } => Self::ContextUsage {
+                total_tokens: *total_tokens,
+                context_window: *context_window,
+            },
+            ExecutionEvent::UsageDetails { details } => Self::UsageDetails {
+                details: details.clone(),
+            },
         }
     }
     pub(super) fn live(&self) -> ExecutionEvent {
         match self {
+            Self::FileChanges { id, edits } => ExecutionEvent::FileChanges {
+                id: id.clone(),
+                edits: edits
+                    .iter()
+                    .map(|e| crate::FileEdit {
+                        path: e.path.clone(),
+                        hunks: e
+                            .hunks
+                            .iter()
+                            .map(|h| crate::Hunk {
+                                old_start: h.old_start,
+                                old_lines: h.old_lines,
+                                new_start: h.new_start,
+                                new_lines: h.new_lines,
+                                lines: h.lines.clone(),
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            },
+            Self::TurnDiff { turn_id, diff } => ExecutionEvent::TurnDiff {
+                turn_id: turn_id.clone(),
+                diff: diff.clone(),
+            },
             Self::Progress { event } => ExecutionEvent::Progress {
                 event: event.live(),
             },
@@ -367,6 +458,7 @@ impl Execution {
             Self::ThinkingSnapshot { text } => {
                 ExecutionEvent::ThinkingSnapshot { text: text.clone() }
             }
+            Self::Retract { ids } => ExecutionEvent::Retract { ids: ids.clone() },
             Self::Prompt { text } => ExecutionEvent::Prompt { text: text.clone() },
             Self::Notice { text } => ExecutionEvent::Notice { text: text.clone() },
             Self::ToolStarted { id, name, input } => ExecutionEvent::ToolStarted {
@@ -403,6 +495,16 @@ impl Execution {
                 output_tokens: *output_tokens,
                 reasoning_output_tokens: *reasoning_output_tokens,
                 context_window: *context_window,
+            },
+            Self::ContextUsage {
+                total_tokens,
+                context_window,
+            } => ExecutionEvent::ContextUsage {
+                total_tokens: *total_tokens,
+                context_window: *context_window,
+            },
+            Self::UsageDetails { details } => ExecutionEvent::UsageDetails {
+                details: details.clone(),
             },
         }
     }

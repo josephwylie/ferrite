@@ -12,7 +12,7 @@ use std::{cell::RefCell, rc::Rc};
 
 use ferrite_core::{
     cockpit::ToolTiming,
-    transcript::{Block, Body, Status, ToolActivity},
+    transcript::{Block, BlockId, Body, Status, ToolActivity, TurnDiff},
     ThreadId,
 };
 use gpui::{
@@ -41,6 +41,8 @@ pub(crate) struct TranscriptInput {
     pub content_revision: (u64, u64),
     pub display_revision: u64,
     pub blocks: Vec<Block>,
+    /// The turn-wide native change summary, separate from provider tool calls.
+    pub turn_diff: Option<TurnDiff>,
     pub signal_status: Option<Status>,
     pub timings: HashMap<String, ToolTiming>,
     pub focused: bool,
@@ -54,8 +56,12 @@ pub(crate) struct TranscriptInput {
 }
 
 impl TranscriptInput {
-    fn content_key(&self) -> (&SharedString, (u64, u64)) {
-        (&self.namespace, self.content_revision)
+    fn content_key(&self) -> (&SharedString, (u64, u64), Option<&TurnDiff>) {
+        (
+            &self.namespace,
+            self.content_revision,
+            self.turn_diff.as_ref(),
+        )
     }
 
     fn display_key(&self) -> (u64, bool, gpui::base::TextSelectionScopeId, Option<Status>) {
@@ -101,6 +107,7 @@ impl TranscriptView {
                 content_revision: (0, 0),
                 display_revision: 0,
                 blocks: Vec::new(),
+                turn_diff: None,
                 signal_status: None,
                 timings: HashMap::new(),
                 focused: false,
@@ -124,7 +131,7 @@ impl TranscriptView {
         selection_source: TranscriptText,
         cx: &mut Context<Self>,
     ) -> Self {
-        let rows = TranscriptRows::new(&input.blocks);
+        let rows = TranscriptRows::new(&input.blocks, input.turn_diff.as_ref());
         let scroll = TranscriptScroll::new(rows.len());
         scroll.scroll_to_bottom();
         let scope = if input.focused {
@@ -159,7 +166,9 @@ impl TranscriptView {
         self.input = input;
         self.selection_source = selection_source;
         if content_changed {
-            let delta = self.rows.reconcile(&self.input.blocks);
+            let delta = self
+                .rows
+                .reconcile(&self.input.blocks, self.input.turn_diff.as_ref());
             self.scroll.reconcile(&delta);
         }
         if content_changed || display_changed {
@@ -279,6 +288,9 @@ impl TranscriptView {
         view: Option<Entity<Self>>,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        if let Some(diff) = row.turn_diff() {
+            return self.render_turn_diff(diff, selection, view, cx);
+        }
         let blocks = row.blocks();
         if let Some(source) = row.source() {
             let first = blocks
@@ -359,6 +371,65 @@ impl TranscriptView {
         )
     }
 
+    fn render_turn_diff(
+        &self,
+        diff: &TurnDiff,
+        selection: &TextRuns,
+        view: Option<Entity<Self>>,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let call = DisclosureId::TurnDiff(diff.turn_id.clone());
+        let expanded = self.tool_state(&call) == DisclosureState::Expanded;
+        let disclosure = view
+            .as_ref()
+            .map(|view| self.control(&call, view.clone(), cx));
+        let gutter = div()
+            .relative()
+            .flex_shrink_0()
+            .w(px(theme::GUTTER_W))
+            .children(disclosure);
+        let header = div()
+            .flex()
+            .items_baseline()
+            .min_w_0()
+            .gap(px(theme::EVENT_GAP))
+            .py(px(theme::EVENT_PAD_Y))
+            .text_size(px(theme::FS_MD))
+            .line_height(relative(theme::LINE_BODY))
+            .text_color(gpui::rgb(theme::TEXT_MUTED))
+            .child(gutter)
+            .child(selection.line(BlockId::TURN_DIFF, "Turn changes", Vec::new()));
+        let mut card = gpui::component::collapsible::Collapsible::new()
+            .w_full()
+            .open(expanded)
+            .child(header);
+        if expanded {
+            let mut details = div().flex().flex_col().min_w_0().child(pane::output_block(
+                BlockId::TURN_DIFF,
+                "turn-diff",
+                &diff.diff,
+                theme::TEXT_MUTED,
+                selection,
+            ));
+            if diff.omitted_bytes > 0 {
+                details = details.child(pane::result_line(theme::TEXT_MUTED).child(
+                    div().min_w_0().child(format!(
+                        "… {} bytes omitted from inline view",
+                        diff.omitted_bytes
+                    )),
+                ));
+            }
+            card = card.content(details);
+        }
+        div()
+            .id(SharedString::from(format!("turn-diff-{}", diff.turn_id)))
+            .debug_selector(|| "turn-diff".into())
+            .flex_shrink_0()
+            .w_full()
+            .child(card)
+            .into_any_element()
+    }
+
     fn control(
         &self,
         call: &DisclosureId,
@@ -366,12 +437,25 @@ impl TranscriptView {
         _cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let call = call.clone();
+        let clicked = call.clone();
         let control = pane::tool_disclosure_control(
             &call,
             self.tool_state(&call) == DisclosureState::Expanded,
             self.tool_targeted(&call),
             &self.input.disclosure_focus,
-        );
+        )
+        // The disclosure itself is absolutely positioned in the row gutter.
+        // Keep its handler on that sized element: a measurement wrapper has
+        // no layout box and cannot receive the operator's click.
+        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+            cx.stop_propagation();
+            gpui::base::TextSelection::clear(window, cx);
+            view.update(cx, |view, cx| {
+                view.clear_output_selection(cx);
+                cx.emit(TranscriptEvent::ToggleDisclosure(clicked.clone()));
+            });
+            window.focus(&view.read(cx).tool_focus(), cx);
+        });
         #[cfg(test)]
         let control = {
             let sink = self.input.disclosure_bounds.clone();
@@ -382,17 +466,6 @@ impl TranscriptView {
                 }
             })
         };
-        let control = control
-            .id(SharedString::from(format!("tool-disclosure-{call}")))
-            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                cx.stop_propagation();
-                gpui::base::TextSelection::clear(window, cx);
-                view.update(cx, |view, cx| {
-                    view.clear_output_selection(cx);
-                    cx.emit(TranscriptEvent::ToggleDisclosure(call.clone()));
-                });
-                window.focus(&view.read(cx).tool_focus(), cx);
-            });
         control.into_any_element()
     }
 }

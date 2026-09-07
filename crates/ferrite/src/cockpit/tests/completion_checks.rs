@@ -86,6 +86,24 @@ fn wrapped_question_retains_exact_picks_and_note_through_rejection_and_ack(
     decision.input = serde_json::json!({"questions":[{"question":"Which approach?", "multiSelect":true,
         "options":[{"label":label,"description":"Preserve existing controls and all the spacing in their wrapped descriptions."},
         {"label":"B","description":"Also keep this option"}]}]});
+    let ferrite_core::DecisionKind::Questions(questions) = &mut decision.kind else {
+        unreachable!()
+    };
+    questions[0].multi_select = true;
+    questions[0].options = vec![
+        ferrite_core::questions::Choice {
+            label: label.into(),
+            description:
+                "Preserve existing controls and all the spacing in their wrapped descriptions."
+                    .into(),
+            preview: None,
+        },
+        ferrite_core::questions::Choice {
+            label: "B".into(),
+            description: "Also keep this option".into(),
+            preview: None,
+        },
+    ];
     fake.streams.borrow()[0]
         .send(SessionEvent::Activity(ActivityEvent::Decision {
             subject: Some(Subject::Main),
@@ -129,13 +147,13 @@ fn wrapped_question_retains_exact_picks_and_note_through_rejection_and_ack(
         cx.debug_bounds("question-island").is_some(),
         "keep the submitting form until acknowledgement"
     );
-    let expected = format!("{label}, B, {note}");
     let assert_answer = || {
         let answered = fake.answered.borrow();
-        let (_, DecisionAnswer::Allow { input }) = answered.last().unwrap() else {
+        let (_, DecisionAnswer::Questions { answers }) = answered.last().unwrap() else {
             panic!("form answer")
         };
-        assert_eq!(input["answers"]["Which approach?"], expected);
+        assert_eq!(answers[0].picks, [0, 1]);
+        assert_eq!(answers[0].other.as_deref(), Some(note));
     };
     assert_answer();
     fake.streams.borrow()[0]
@@ -194,7 +212,14 @@ fn reading_anchor_survives_streaming_disclosure_and_narrower_window(cx: &mut Tes
         })
         .unwrap();
     tick(cx);
-    let viewport = view.read_with(cx, |view, cx| view.panes[0].transcript().unwrap().read(cx).scroll().bounds());
+    let viewport = view.read_with(cx, |view, cx| {
+        view.panes[0]
+            .transcript()
+            .unwrap()
+            .read(cx)
+            .scroll()
+            .bounds()
+    });
     // The retained list mounts only its viewport. Scroll the existing tool
     // into view before measuring the reading anchor, as a reader would.
     for _ in 0..30 {
@@ -219,7 +244,11 @@ fn reading_anchor_survives_streaming_disclosure_and_narrower_window(cx: &mut Tes
     });
     tick(cx);
     let held = cx.debug_bounds("tool-group-anchor-tool").unwrap().top();
-    assert!(!view.read_with(cx, |view, cx| view.panes[0].transcript().unwrap().read(cx).is_following_tail()));
+    assert!(!view.read_with(cx, |view, cx| view.panes[0]
+        .transcript()
+        .unwrap()
+        .read(cx)
+        .is_following_tail()));
     fake.streams.borrow()[0]
         .send(SessionEvent::TextDelta {
             text: "New streamed material.\n\n".repeat(5),
@@ -245,7 +274,11 @@ fn reading_anchor_survives_streaming_disclosure_and_narrower_window(cx: &mut Tes
     );
     assert!(view.read_with(cx, |view, _| view.panes[0]
         .tool_expanded(pane::DisclosureId::Group("anchor-tool".into()))));
-    assert!(!view.read_with(cx, |view, cx| view.panes[0].transcript().unwrap().read(cx).is_following_tail()));
+    assert!(!view.read_with(cx, |view, cx| view.panes[0]
+        .transcript()
+        .unwrap()
+        .read(cx)
+        .is_following_tail()));
 }
 
 #[gpui::test]
@@ -335,7 +368,14 @@ fn reading_anchor_survives_expanding_earlier_tool_details(cx: &mut TestAppContex
             .unwrap();
     }
     tick(cx);
-    let viewport = view.read_with(cx, |view, cx| view.panes[0].transcript().unwrap().read(cx).scroll().bounds());
+    let viewport = view.read_with(cx, |view, cx| {
+        view.panes[0]
+            .transcript()
+            .unwrap()
+            .read(cx)
+            .scroll()
+            .bounds()
+    });
     let initial = cx.debug_bounds("tool-group-visible").unwrap();
     cx.simulate_event(gpui::ScrollWheelEvent {
         position: viewport.center(),
@@ -483,6 +523,8 @@ fn pending_approval_exposes_exact_selectable_command_before_answering(cx: &mut T
             .send(SessionEvent::Activity(ActivityEvent::Decision {
                 subject: Some(subject),
                 decision: Decision {
+                    kind: Default::default(),
+                    policy: Default::default(),
                     delivery: Default::default(),
                     id: id.into(),
                     tool_use_id: id.into(),

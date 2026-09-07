@@ -67,6 +67,9 @@ pub(super) struct Router {
     requests: HashMap<String, String>,
     unrelated: HashSet<String>,
     conflicts: HashSet<String>,
+    usage_totals: HashMap<String, u64>,
+    usage_baselines: HashMap<(String, String), u64>,
+    usage_order: VecDeque<(String, String)>,
 }
 
 impl Router {
@@ -249,6 +252,15 @@ impl Router {
         {
             return;
         }
+        if matches!(method, "warning" | "configWarning" | "deprecationNotice") && scope.is_none() {
+            if let Some(text) = diagnostic(&frame["params"]) {
+                update.activity(ActivityEvent::MainContent {
+                    id: None,
+                    event: ExecutionEvent::Notice { text },
+                });
+            }
+            return;
+        }
         if method == "serverRequest/resolved" {
             let raw = &frame["params"]["requestId"];
             if raw.is_string() || raw.is_number() {
@@ -294,9 +306,29 @@ impl Router {
         }
         let scope = scope.expect("known scope");
         let params = &frame["params"];
+        if matches!(method, "warning" | "configWarning" | "deprecationNotice") {
+            if let Some(text) = diagnostic(params) {
+                let event = ExecutionEvent::Notice { text };
+                if self.root.as_deref() == Some(scope.as_str()) {
+                    update.activity(ActivityEvent::MainContent { id: None, event });
+                } else {
+                    update.activity(ActivityEvent::Content {
+                        key: self.key(&scope),
+                        id: None,
+                        event,
+                    });
+                }
+            }
+            return;
+        }
         let turn = params["turnId"]
             .as_str()
             .or_else(|| params["turn"]["id"].as_str());
+        if method == "turn/completed" {
+            if let Some(turn) = turn {
+                self.usage_baselines.remove(&(scope.clone(), turn.into()));
+            }
+        }
         if let Some(turn) = turn {
             let identity = (scope.clone(), turn.to_owned());
             if self.completed_turns.contains(&identity) && method != "turn/completed" {
@@ -326,7 +358,11 @@ impl Router {
             self.discover_from_item(&scope, &params["item"], true, update);
         }
         if self.root.as_deref() == Some(scope.as_str()) {
+            let item_id = params["itemId"].as_str().or(params["item"]["id"].as_str());
+            let content_id = turn.zip(item_id).map(|(turn, item)| item_key(turn, item));
+            let question = super::questions::decode(params).is_some();
             for event in self.content.parse(&frame.to_string()) {
+                let event = self.normalize_usage(&scope, turn, event);
                 if let SessionEvent::DecisionRequested { decision } = &event {
                     if self.requests.len() < MAX_PENDING_FRAMES
                         || self.requests.contains_key(&decision.id)
@@ -334,7 +370,94 @@ impl Router {
                         self.requests.insert(decision.id.clone(), scope.clone());
                     }
                 }
-                update.events.push(event);
+                match event {
+                    SessionEvent::TextDelta { text }
+                        if matches!(method, "item/agentMessage/delta" | "item/plan/delta") =>
+                    {
+                        if let Some(id) = content_id.clone() {
+                            update.activity(ActivityEvent::MainContent {
+                                id: Some(id),
+                                event: ExecutionEvent::TextDelta { text },
+                            });
+                        } else {
+                            update.events.push(SessionEvent::TextDelta { text });
+                        }
+                    }
+                    SessionEvent::ThinkingDelta { text }
+                        if method == "item/reasoning/textDelta" =>
+                    {
+                        if let (Some(turn), Some(item), Some(index)) = (
+                            turn,
+                            params["itemId"].as_str(),
+                            params["contentIndex"].as_u64(),
+                        ) {
+                            update.activity(ActivityEvent::MainContent {
+                                id: Some(reasoning_raw_key(turn, item, index)),
+                                event: ExecutionEvent::ThinkingDelta { text },
+                            });
+                        } else {
+                            update.events.push(SessionEvent::ThinkingDelta { text });
+                        }
+                    }
+                    SessionEvent::ReasoningSummaryPart {
+                        item_id,
+                        summary_index,
+                        text,
+                        snapshot,
+                    } => {
+                        if let Some(turn) = turn {
+                            update.activity(ActivityEvent::MainContent {
+                                id: Some(reasoning_summary_key(turn, &item_id, summary_index)),
+                                event: ExecutionEvent::ReasoningSummaryPart {
+                                    item_id: item_key(turn, &item_id),
+                                    summary_index,
+                                    text,
+                                    snapshot,
+                                },
+                            });
+                        } else {
+                            update.events.push(SessionEvent::ReasoningSummaryPart {
+                                item_id,
+                                summary_index,
+                                text,
+                                snapshot,
+                            });
+                        }
+                    }
+                    event => update.events.push(event),
+                }
+            }
+            if method == "item/completed" && params["item"]["type"] == "reasoning" {
+                if let (Some(turn), Some(item), Some(parts)) = (
+                    turn,
+                    params["item"]["id"].as_str(),
+                    params["item"]["content"].as_array(),
+                ) {
+                    for (index, part) in parts.iter().enumerate() {
+                        if let Some(text) = part.as_str() {
+                            update.activity(ActivityEvent::MainContent {
+                                id: Some(reasoning_raw_key(turn, item, index as u64)),
+                                event: ExecutionEvent::ThinkingSnapshot { text: text.into() },
+                            });
+                        }
+                    }
+                }
+            }
+            if method == "item/completed"
+                && !question
+                && matches!(
+                    params["item"]["type"].as_str(),
+                    Some("agentMessage" | "plan")
+                )
+            {
+                if let (Some(id), Some(text)) = (content_id, params["item"]["text"].as_str()) {
+                    update.activity(ActivityEvent::MainContent {
+                        id: Some(id),
+                        event: ExecutionEvent::TextSnapshot {
+                            text: text.to_owned(),
+                        },
+                    });
+                }
             }
             return;
         }
@@ -774,7 +897,7 @@ impl Router {
             }
             "thread/name/updated" => {
                 if let (Some(name), Some(child)) =
-                    (params["name"].as_str(), self.children.get_mut(scope))
+                    (params["threadName"].as_str(), self.children.get_mut(scope))
                 {
                     child.info.name = Some(name.to_owned());
                     update.activity(ActivityEvent::Discovered(child.info.clone()));
@@ -782,7 +905,42 @@ impl Router {
             }
             _ => {
                 for event in wire::parse_events(&frame.to_string()) {
+                    let event = self.normalize_usage(scope, turn, event);
                     match event {
+                        SessionEvent::ThinkingDelta { text }
+                            if method == "item/reasoning/textDelta" =>
+                        {
+                            if let (Some(turn), Some(item), Some(index)) = (
+                                turn,
+                                params["itemId"].as_str(),
+                                params["contentIndex"].as_u64(),
+                            ) {
+                                update.activity(ActivityEvent::Content {
+                                    key: key.clone(),
+                                    id: Some(reasoning_raw_key(turn, item, index)),
+                                    event: ExecutionEvent::ThinkingDelta { text },
+                                });
+                            }
+                        }
+                        SessionEvent::ReasoningSummaryPart {
+                            item_id,
+                            summary_index,
+                            text,
+                            snapshot,
+                        } => {
+                            if let Some(turn) = turn {
+                                update.activity(ActivityEvent::Content {
+                                    key: key.clone(),
+                                    id: Some(reasoning_summary_key(turn, &item_id, summary_index)),
+                                    event: ExecutionEvent::ReasoningSummaryPart {
+                                        item_id: item_key(turn, &item_id),
+                                        summary_index,
+                                        text,
+                                        snapshot,
+                                    },
+                                });
+                            }
+                        }
                         SessionEvent::DecisionRequested { mut decision } => {
                             if let Some(turn) = turn {
                                 decision.tool_use_id = item_key(turn, &decision.tool_use_id);
@@ -806,6 +964,7 @@ impl Router {
                                         event,
                                         ExecutionEvent::TokenUsage { .. }
                                             | ExecutionEvent::Progress { .. }
+                                            | ExecutionEvent::TurnDiff { .. }
                                             | ExecutionEvent::ContentBoundary
                                     )
                                 {
@@ -823,6 +982,51 @@ impl Router {
         }
     }
 
+    fn normalize_usage(
+        &mut self,
+        scope: &str,
+        turn: Option<&str>,
+        event: SessionEvent,
+    ) -> SessionEvent {
+        let Some(turn) = turn else {
+            return event;
+        };
+        let SessionEvent::TokenUsage {
+            total_tokens,
+            input_tokens,
+            cached_input_tokens,
+            output_tokens,
+            reasoning_output_tokens,
+            context_window,
+        } = event
+        else {
+            return event;
+        };
+        let key = (scope.into(), turn.into());
+        let baseline = if let Some(baseline) = self.usage_baselines.get(&key) {
+            *baseline
+        } else {
+            let baseline = self.usage_totals.get(scope).copied().unwrap_or(0);
+            self.usage_baselines.insert(key.clone(), baseline);
+            self.usage_order.push_back(key.clone());
+            if self.usage_order.len() > MAX_ITEM_REVISIONS {
+                if let Some(old) = self.usage_order.pop_front() {
+                    self.usage_baselines.remove(&old);
+                }
+            }
+            baseline
+        };
+        self.usage_totals.insert(scope.into(), output_tokens);
+        SessionEvent::TokenUsage {
+            total_tokens,
+            input_tokens,
+            cached_input_tokens,
+            output_tokens: output_tokens.saturating_sub(baseline),
+            reasoning_output_tokens,
+            context_window,
+        }
+    }
+
     fn item(
         &mut self,
         scope: &str,
@@ -837,17 +1041,17 @@ impl Router {
         };
         let id = item_key(turn, native_id);
         let key = self.key(scope);
-        let emit = |event, update: &mut Update| {
+        let emit = |id, event, update: &mut Update| {
             update.activity(if historical {
                 ActivityEvent::HistoryContent {
                     key: key.clone(),
-                    id: Some(id.clone()),
+                    id: Some(id),
                     event,
                 }
             } else {
                 ActivityEvent::Content {
                     key: key.clone(),
-                    id: Some(id.clone()),
+                    id: Some(id),
                     event,
                 }
             })
@@ -856,6 +1060,7 @@ impl Router {
             "agentMessage" | "plan" if completed => {
                 if let Some(text) = item["text"].as_str() {
                     emit(
+                        id.clone(),
                         ExecutionEvent::TextSnapshot {
                             text: text.to_owned(),
                         },
@@ -868,6 +1073,7 @@ impl Router {
                     for (index, part) in parts.iter().enumerate() {
                         if let Some(text) = part.as_str() {
                             emit(
+                                reasoning_summary_key(turn, native_id, index as u64),
                                 ExecutionEvent::ReasoningSummaryPart {
                                     item_id: id.clone(),
                                     summary_index: index as u64,
@@ -879,7 +1085,18 @@ impl Router {
                         }
                     }
                 }
-                emit(ExecutionEvent::ContentBoundary, update);
+                if let Some(parts) = item["content"].as_array() {
+                    for (index, part) in parts.iter().enumerate() {
+                        if let Some(text) = part.as_str() {
+                            emit(
+                                reasoning_raw_key(turn, native_id, index as u64),
+                                ExecutionEvent::ThinkingSnapshot { text: text.into() },
+                                update,
+                            );
+                        }
+                    }
+                }
+                emit(id.clone(), ExecutionEvent::ContentBoundary, update);
             }
             "userMessage" if completed => {
                 let text = item["content"].as_array().map(|parts| {
@@ -890,7 +1107,7 @@ impl Router {
                         .join("\n")
                 });
                 if let Some(text) = text {
-                    emit(ExecutionEvent::Prompt { text }, update);
+                    emit(id.clone(), ExecutionEvent::Prompt { text }, update);
                 }
             }
             "agentMessage" | "plan" | "reasoning" | "userMessage" => {}
@@ -907,11 +1124,11 @@ impl Router {
             | "subAgentActivity" => {
                 let params = json!({"item":item});
                 if let Some(event) = wire::parse_item(&params, false).and_then(execution) {
-                    emit(scoped_execution(event, Some(turn)), update);
+                    emit(id.clone(), scoped_execution(event, Some(turn)), update);
                 }
                 if completed {
                     if let Some(event) = wire::parse_item(&params, true).and_then(execution) {
-                        emit(scoped_execution(event, Some(turn)), update);
+                        emit(id.clone(), scoped_execution(event, Some(turn)), update);
                     }
                 }
             }
@@ -919,6 +1136,7 @@ impl Router {
             _ if completed => {
                 if let Some(text) = item["text"].as_str() {
                     emit(
+                        id.clone(),
                         ExecutionEvent::Notice {
                             text: text.to_owned(),
                         },
@@ -929,6 +1147,16 @@ impl Router {
             _ => {}
         }
     }
+}
+
+fn diagnostic(params: &Value) -> Option<String> {
+    let text = ["message", "summary", "details", "path"]
+        .into_iter()
+        .filter_map(|key| params[key].as_str())
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    (!text.is_empty()).then_some(text)
 }
 
 pub(super) fn frame_scope(value: &Value) -> Option<&str> {
@@ -979,6 +1207,14 @@ fn item_key(turn: &str, item: &str) -> String {
     serde_json::to_string(&(turn, item)).expect("string tuple serializes")
 }
 
+fn reasoning_raw_key(turn: &str, item: &str, index: u64) -> String {
+    serde_json::to_string(&(turn, "raw", item, index)).expect("reasoning identity serializes")
+}
+
+fn reasoning_summary_key(turn: &str, item: &str, index: u64) -> String {
+    serde_json::to_string(&(turn, "summary", item, index)).expect("reasoning identity serializes")
+}
+
 fn execution(event: SessionEvent) -> Option<ExecutionEvent> {
     ExecutionEvent::from_session(&event)
 }
@@ -988,7 +1224,8 @@ fn scoped_execution(mut event: ExecutionEvent, turn: Option<&str>) -> ExecutionE
         match &mut event {
             ExecutionEvent::ToolStarted { id, .. }
             | ExecutionEvent::ToolCompleted { id, .. }
-            | ExecutionEvent::ToolOutputDelta { id, .. } => *id = item_key(turn, id),
+            | ExecutionEvent::ToolOutputDelta { id, .. }
+            | ExecutionEvent::FileChanges { id, .. } => *id = item_key(turn, id),
             ExecutionEvent::ReasoningSummaryPart { item_id, .. } => {
                 *item_id = item_key(turn, item_id)
             }
@@ -1063,7 +1300,11 @@ mod tests {
         let text: String = events
             .iter()
             .filter_map(|event| match event {
-                SessionEvent::TextDelta { text } => Some(text.as_str()),
+                SessionEvent::TextDelta { text }
+                | SessionEvent::Activity(ActivityEvent::MainContent {
+                    event: ExecutionEvent::TextDelta { text },
+                    ..
+                }) => Some(text.as_str()),
                 _ => None,
             })
             .collect();

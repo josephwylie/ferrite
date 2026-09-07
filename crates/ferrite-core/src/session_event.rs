@@ -13,11 +13,27 @@ pub enum SessionEvent {
     Activity(crate::activity::ActivityEvent),
     /// The provider session is live. `session_id` is the provider-native id
     /// later used for resume.
-    Init { session_id: String, model: String },
+    Init {
+        session_id: String,
+        model: String,
+    },
+    /// The provider rerouted the live Session to a different effective model.
+    /// The Session identity and the Thread's chosen model do not change.
+    ModelChanged {
+        model: String,
+    },
+    /// The provider replaced its native conversation while this Session stays live.
+    ConversationReset {
+        session_id: String,
+    },
     /// Assistant text streamed in.
-    TextDelta { text: String },
+    TextDelta {
+        text: String,
+    },
     /// Extended thinking streamed in (Claude).
-    ThinkingDelta { text: String },
+    ThinkingDelta {
+        text: String,
+    },
     /// A tool call the provider has settled and is about to run. `input` is
     /// the tool's own schema, so it stays a `Value`: inventing a Ferrite type
     /// per tool would be a guess that goes stale on the vendor's next release.
@@ -45,7 +61,9 @@ pub enum SessionEvent {
     /// Operator input is requested. `Decision::blocks_execution` distinguishes
     /// tool approvals from questions delivered while execution continues. Answer
     /// with the provider's respond-to-Decision call, quoting the Decision's `id`.
-    DecisionRequested { decision: Decision },
+    DecisionRequested {
+        decision: Decision,
+    },
     /// One native reasoning-summary section. Identity survives deltas and
     /// authoritative snapshots, so a completion can correct an earlier part.
     ReasoningSummaryPart {
@@ -59,7 +77,18 @@ pub enum SessionEvent {
         event: crate::progress::ProgressEvent,
     },
     /// Incremental output for an existing tool, before it completes.
-    ToolOutputDelta { id: String, text: String },
+    ToolOutputDelta {
+        id: String,
+        text: String,
+    },
+    FileChanges {
+        id: String,
+        edits: Vec<FileEdit>,
+    },
+    TurnDiff {
+        turn_id: String,
+        diff: String,
+    },
     /// The provider closed a content item. The next item must not merge
     /// with its predecessor merely because no tool separated their text.
     ContentBoundary,
@@ -67,6 +96,11 @@ pub enum SessionEvent {
     TurnEnded {
         outcome: TurnOutcome,
         cost_usd: Option<f64>,
+    },
+    /// The provider's current Main runtime state. This is a snapshot, never
+    /// evidence that a turn finished.
+    RunState {
+        state: RunState,
     },
     /// A slice of a reasoning summary streamed in (Codex). Not a thinking
     /// delta: Codex never streams raw chain-of-thought over app-server —
@@ -91,6 +125,15 @@ pub enum SessionEvent {
         /// The model's context window, when the provider states it.
         context_window: Option<u64>,
     },
+    /// Provider-reported occupancy without accounting counters.
+    ContextUsage {
+        total_tokens: u64,
+        context_window: Option<u64>,
+    },
+    /// Native accounting counters, with the scope the provider assigned them.
+    UsageDetails {
+        details: UsageDetails,
+    },
     /// Provider-reported subscription usage. Windows are named by duration,
     /// rather than by the provider's primary/secondary ordering, because that
     /// ordering is not stable across plans.
@@ -103,21 +146,114 @@ pub enum SessionEvent {
     /// handshake's `commands[]`; Codex answers a `skills/list` request. Session
     /// state like a Decision, not durable history: a replacement Session
     /// announces its own.
-    Commands { commands: Vec<SessionCommand> },
+    Commands {
+        commands: Vec<SessionCommand>,
+    },
     /// The permission mode the Session started in, in the provider's own
     /// word (`"acceptEdits"`, `"bypassPermissions"`, …) — the Composer's
     /// meta-row mode chip (#23). Claude lifts it from the same initialize
     /// handshake; display-only, and Session state like the menu above.
-    PermissionMode { mode: String },
+    PermissionMode {
+        mode: String,
+    },
     /// The models this install offers, each with the name the provider's
     /// own menu shows — the model picker's rows (#25). Claude lifts the
     /// list from the same initialize handshake; Codex asks `model/list`
     /// once its thread is up. Until either speaks the picker falls back
     /// to the catalog in `providers::models`. Session state exactly like
     /// the command menu: gone with the Session.
-    Models { models: Vec<ModelInfo> },
+    Models {
+        models: Vec<ModelInfo>,
+    },
+    /// A native context refresh with provider-neutral detail.
+    ContextDetails {
+        details: ContextDetails,
+    },
+    /// Current MCP server state for this Session.
+    McpServers {
+        servers: Vec<McpServer>,
+    },
+    /// Live authorization link; never persisted or opened automatically.
+    McpAuthorization {
+        server: String,
+        url: Option<String>,
+    },
     /// The session process exited; no further events will arrive.
-    Closed { reason: String },
+    Closed {
+        reason: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UsageScope {
+    Message,
+    Turn,
+    Session,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct UsageDetails {
+    pub scope: UsageScope,
+    pub input_tokens: u64,
+    pub cached_input_tokens: u64,
+    pub output_tokens: u64,
+    pub reasoning_output_tokens: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControlKind {
+    RefreshContext,
+    RefreshMcp,
+    ReconnectMcp,
+    LoginMcp,
+    ReloadMcp,
+    StopTask,
+    BackgroundTasks,
+    SetPermissionMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionControl {
+    RefreshContext,
+    RefreshMcp,
+    ReconnectMcp { server: String },
+    LoginMcp { server: String },
+    ReloadMcp,
+    StopTask { id: String },
+    BackgroundTasks,
+    SetPermissionMode { mode: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ContextDetails {
+    pub usable_window: Option<u64>,
+    pub auto_compact_threshold: Option<u64>,
+    pub is_auto_compact_enabled: Option<bool>,
+    pub categories: Vec<ContextCategory>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ContextCategory {
+    pub name: String,
+    pub tokens: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpServer {
+    pub name: String,
+    pub status: McpStatus,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpStatus {
+    Connected,
+    Connecting,
+    NeedsAuth,
+    Failed,
+    Disabled,
+    Unknown,
 }
 
 /// One rolling subscription limit, normalized to a fraction for the UI while
@@ -126,6 +262,13 @@ pub enum SessionEvent {
 pub struct RateLimitWindow {
     pub used_fraction: f32,
     pub resets_at: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunState {
+    Running,
+    RequiresAction,
+    Idle,
 }
 
 /// One model a provider offers: the value its CLI accepts, and the name a
@@ -206,10 +349,41 @@ pub enum ToolResult {
     #[default]
     Opaque,
     /// A command ran and wrote to the usual two streams.
-    Command { stdout: String, stderr: String },
+    Command {
+        stdout: String,
+        stderr: String,
+        exit_code: Option<i64>,
+        duration_ms: Option<u64>,
+    },
+    /// A provider payload Ferrite preserves without claiming a narrower shape.
+    Structured {
+        value: serde_json::Value,
+        duration_ms: Option<u64>,
+    },
     /// A file was written. `hunks` is empty when the file was created, which
     /// has nothing to diff against.
     FileEdit { path: String, hunks: Vec<Hunk> },
+    /// One call changed several files.
+    FileEdits { edits: Vec<FileEdit> },
+}
+
+impl ToolResult {
+    /// Native execution time when the provider supplied one.
+    pub fn duration_ms(&self) -> Option<u64> {
+        match self {
+            Self::Command { duration_ms, .. } | Self::Structured { duration_ms, .. } => {
+                *duration_ms
+            }
+            _ => None,
+        }
+    }
+}
+
+/// One file in a multi-file tool result.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FileEdit {
+    pub path: String,
+    pub hunks: Vec<Hunk>,
 }
 
 /// One changed region of a file, in the provider's own unified-diff form.
@@ -231,10 +405,228 @@ pub enum DecisionDelivery {
     Async,
 }
 
+/// The one provider-neutral interaction a Decision asks the operator to make.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum DecisionKind {
+    /// Permit or reject an action without collecting extra input.
+    #[default]
+    Approval,
+    /// A sequence of choices and optional free-text answers.
+    Questions(Vec<crate::questions::Question>),
+    /// A typed, flat set of MCP fields.
+    Form { fields: Vec<FormField> },
+    /// A URL the operator may complete outside Ferrite. Ferrite never opens it.
+    External { url: String },
+    /// A native request Ferrite can safely dismiss but cannot render yet.
+    Unsupported { reason: String },
+}
+
+/// Provider-normalized controls for an approval card.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DecisionPolicy {
+    pub allow: bool,
+    pub deny: bool,
+    pub prefer_deny: bool,
+    pub interaction_required: bool,
+}
+
+/// One provider-normalized label paired with its opaque reply token.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DecisionChoice {
+    pub label: String,
+    pub value: serde_json::Value,
+    pub standing: bool,
+}
+
+impl Default for DecisionPolicy {
+    fn default() -> Self {
+        Self {
+            allow: true,
+            deny: true,
+            prefer_deny: false,
+            interaction_required: false,
+        }
+    }
+}
+
+/// One provider-neutral field in an MCP elicitation form.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FormField {
+    pub id: String,
+    pub label: String,
+    pub description: String,
+    pub required: bool,
+    pub kind: FormFieldKind,
+}
+
+/// One rendered label and the wire value it represents.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FormChoice {
+    pub value: String,
+    pub label: String,
+}
+
+/// A provider-native permission mode offered by the shared picker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PermissionModeChoice {
+    pub value: String,
+    pub label: String,
+}
+
+/// Constraints and defaults for the MCP flat primitive subset.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FormFieldKind {
+    String {
+        min_length: Option<usize>,
+        max_length: Option<usize>,
+        default: Option<String>,
+    },
+    Number {
+        minimum: Option<f64>,
+        maximum: Option<f64>,
+        default: Option<f64>,
+    },
+    Integer {
+        minimum: Option<i64>,
+        maximum: Option<i64>,
+        default: Option<i64>,
+    },
+    Boolean {
+        default: Option<bool>,
+    },
+    Enum {
+        options: Vec<FormChoice>,
+        multi_select: bool,
+        min_items: Option<usize>,
+        max_items: Option<usize>,
+        default: Option<serde_json::Value>,
+    },
+}
+
+impl FormField {
+    /// Validate one operator-provided JSON value before its adapter writes an
+    /// MCP response. Schema decoding is deliberately outside this module.
+    pub fn validate(&self, value: &serde_json::Value) -> Result<(), String> {
+        match &self.kind {
+            FormFieldKind::String {
+                min_length,
+                max_length,
+                ..
+            } => {
+                let Some(text) = value.as_str() else {
+                    return Err(format!("{} must be a string", self.label));
+                };
+                let length = text.chars().count();
+                if min_length.is_some_and(|min| length < min)
+                    || max_length.is_some_and(|max| length > max)
+                {
+                    return Err(format!("{} is outside its allowed length", self.label));
+                }
+            }
+            FormFieldKind::Number {
+                minimum, maximum, ..
+            } => {
+                let Some(number) = value.as_f64() else {
+                    return Err(format!("{} must be a number", self.label));
+                };
+                if minimum.is_some_and(|min| number < min)
+                    || maximum.is_some_and(|max| number > max)
+                {
+                    return Err(format!("{} is outside its allowed range", self.label));
+                }
+            }
+            FormFieldKind::Integer {
+                minimum, maximum, ..
+            } => {
+                let Some(number) = value.as_i64() else {
+                    return Err(format!("{} must be an integer", self.label));
+                };
+                if minimum.is_some_and(|min| number < min)
+                    || maximum.is_some_and(|max| number > max)
+                {
+                    return Err(format!("{} is outside its allowed range", self.label));
+                }
+            }
+            FormFieldKind::Boolean { .. } if !value.is_boolean() => {
+                return Err(format!("{} must be true or false", self.label));
+            }
+            FormFieldKind::Boolean { .. } => {}
+            FormFieldKind::Enum {
+                options,
+                multi_select,
+                min_items,
+                max_items,
+                ..
+            } => {
+                let values: Vec<&str> = if *multi_select {
+                    value
+                        .as_array()
+                        .ok_or_else(|| format!("{} must be a list", self.label))?
+                        .iter()
+                        .map(|value| {
+                            value
+                                .as_str()
+                                .ok_or_else(|| format!("{} has an invalid choice", self.label))
+                        })
+                        .collect::<Result<_, _>>()?
+                } else {
+                    vec![value
+                        .as_str()
+                        .ok_or_else(|| format!("{} has an invalid choice", self.label))?]
+                };
+                if values
+                    .iter()
+                    .any(|value| !options.iter().any(|option| option.value == *value))
+                {
+                    return Err(format!("{} has an unavailable choice", self.label));
+                }
+                if *multi_select
+                    && values
+                        .iter()
+                        .enumerate()
+                        .any(|(i, value)| values[..i].contains(value))
+                {
+                    return Err(format!("{} contains duplicate choices", self.label));
+                }
+                if *multi_select
+                    && (min_items.is_some_and(|min| values.len() < min)
+                        || max_items.is_some_and(|max| values.len() > max))
+                {
+                    return Err(format!("{} has an invalid number of choices", self.label));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Validate the values for a normalized Form before encoding a provider reply.
+pub fn validate_form(fields: &[FormField], values: &serde_json::Value) -> Result<(), String> {
+    let values = values
+        .as_object()
+        .ok_or_else(|| "form values must be an object".to_string())?;
+    for field in fields {
+        match values.get(&field.id) {
+            Some(value) if !value.is_null() => field.validate(value)?,
+            _ if field.required => return Err(format!("{} is required", field.label)),
+            _ => {}
+        }
+    }
+    if values
+        .keys()
+        .any(|id| !fields.iter().any(|field| field.id == *id))
+    {
+        return Err("form contains an unsupported field".into());
+    }
+    Ok(())
+}
+
 /// A provider request for operator input.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Decision {
     pub delivery: DecisionDelivery,
+    pub kind: DecisionKind,
+    pub policy: DecisionPolicy,
     /// Opaque provider handle for this Decision. Echo it unchanged when
     /// answering; its spelling need not match the provider's raw wire ID.
     pub id: String,
@@ -246,10 +638,8 @@ pub struct Decision {
     /// `input` (the wall answers Decisions without focusing).
     pub description: String,
     pub input: serde_json::Value,
-    /// Standing answers this request offers ("allow edits for this session"),
-    /// verbatim. Empty means this request has none to offer — Codex's
-    /// file-change approvals carry none — and the card offers no "always".
-    pub suggestions: Vec<serde_json::Value>,
+    /// Provider-labelled choices. Their raw values remain opaque to the UI.
+    pub suggestions: Vec<DecisionChoice>,
 }
 
 impl Decision {
@@ -259,12 +649,12 @@ impl Decision {
         self.delivery == DecisionDelivery::Blocking
     }
 
-    /// The standing answer this request offers, if it offers one. Both
-    /// providers put structured choices among plainer ones — Codex lists
-    /// `"accept"` and `"cancel"` beside its amendment object — so the
-    /// structured entry is the one that means "and don't ask again".
+    /// An opaque standing choice already validated by the provider adapter.
     pub fn standing_answer(&self) -> Option<&serde_json::Value> {
-        self.suggestions.iter().find(|offered| offered.is_object())
+        self.suggestions
+            .iter()
+            .find(|choice| choice.standing)
+            .map(|choice| &choice.value)
     }
 }
 
@@ -272,9 +662,11 @@ impl Decision {
 mod tests {
     use super::*;
 
-    fn decision(suggestions: Vec<serde_json::Value>) -> Decision {
+    fn decision(suggestions: Vec<DecisionChoice>) -> Decision {
         Decision {
             delivery: Default::default(),
+            kind: Default::default(),
+            policy: Default::default(),
             id: "1".into(),
             tool_use_id: "toolu_1".into(),
             tool_name: "Write".into(),
@@ -284,28 +676,25 @@ mod tests {
         }
     }
 
-    /// Both shapes as the captures carry them.
     #[test]
-    fn the_standing_answer_is_the_structured_one_each_provider_offers() {
-        let claude = decision(vec![serde_json::json!({
-            "type": "setMode", "mode": "acceptEdits", "destination": "session"
-        })]);
-        assert_eq!(claude.standing_answer(), claude.suggestions.first());
-
-        let codex = decision(vec![
-            serde_json::json!("accept"),
-            serde_json::json!({"acceptWithExecpolicyAmendment": {"execpolicy_amendment": ["x"]}}),
-            serde_json::json!("cancel"),
+    fn standing_choices_are_provider_validated_and_opaque_here() {
+        let offered = decision(vec![
+            DecisionChoice {
+                label: "first".into(),
+                value: serde_json::json!({"opaque_choice": "first"}),
+                standing: true,
+            },
+            DecisionChoice {
+                label: "second".into(),
+                value: serde_json::json!("second"),
+                standing: false,
+            },
         ]);
-        assert_eq!(codex.standing_answer(), codex.suggestions.get(1));
-
-        // A file-change approval offers none at all, and the card must not
-        // pretend otherwise.
-        assert_eq!(decision(vec![]).standing_answer(), None);
         assert_eq!(
-            decision(vec![serde_json::json!("accept")]).standing_answer(),
-            None
+            offered.standing_answer(),
+            Some(&offered.suggestions[0].value)
         );
+        assert_eq!(decision(vec![]).standing_answer(), None);
     }
 }
 
@@ -326,6 +715,17 @@ pub enum DecisionAnswer {
         input: serde_json::Value,
         suggestion: serde_json::Value,
     },
+    /// Choose one opaque, provider-offered choice.
+    Choose { value: serde_json::Value },
+    /// Answers a normalized question form. The provider adapter maps its
+    /// stable IDs and native payload independently of the renderer.
+    Questions {
+        answers: Vec<crate::questions::Answer>,
+    },
+    /// Values for a normalized MCP form.
+    Form { values: serde_json::Value },
+    /// Cancel an elicitation without treating it as a tool denial.
+    Cancel,
 }
 
 /// How a turn ended.

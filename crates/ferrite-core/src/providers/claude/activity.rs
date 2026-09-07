@@ -23,6 +23,19 @@ enum Alias {
     Agent(String),
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MainStreamKind {
+    Text,
+    Thinking,
+}
+
+struct MainStreamBlock {
+    message: String,
+    index: u64,
+    kind: MainStreamKind,
+    delivery: Option<String>,
+}
+
 #[derive(Default)]
 pub(super) struct Decoder {
     root: String,
@@ -36,6 +49,76 @@ pub(super) struct Decoder {
     requests: HashMap<String, (Option<Subject>, String)>,
     seen_child_frames: HashSet<String>,
     frame_order: VecDeque<String>,
+    excluded_tasks: HashSet<String>,
+    main_stream_message: Option<String>,
+    main_stream_blocks: HashMap<(String, u64), MainStreamBlock>,
+    main_stream_order: VecDeque<(String, u64)>,
+    seen_main_frames: HashSet<String>,
+    main_frame_order: VecDeque<String>,
+    deliveries: HashMap<(Subject, String), Vec<String>>,
+    delivery_order: VecDeque<(Subject, String)>,
+    pending_retractions: HashSet<(Subject, String)>,
+    /// Main's last provider-reported occupancy. Result aggregates account for
+    /// a turn but do not always carry a new occupancy snapshot.
+    usage: Usage,
+    rate_limits: (
+        Option<crate::RateLimitWindow>,
+        Option<crate::RateLimitWindow>,
+    ),
+}
+
+#[derive(Default)]
+struct Usage {
+    occupancy: Option<u64>,
+    context_window: Option<u64>,
+    message_outputs: HashMap<Subject, HashMap<String, u64>>,
+    retired_outputs: HashMap<Subject, u64>,
+    message_order: VecDeque<(Subject, String)>,
+}
+
+impl Usage {
+    fn message_output(&mut self, subject: Subject, message: String, output: u64) -> u64 {
+        if !self
+            .message_outputs
+            .get(&subject)
+            .is_some_and(|outputs| outputs.contains_key(&message))
+        {
+            self.message_order
+                .push_back((subject.clone(), message.clone()));
+            if self.message_order.len() > 8192 {
+                if let Some((old_subject, old_message)) = self.message_order.pop_front() {
+                    let mut empty = false;
+                    if let Some(outputs) = self.message_outputs.get_mut(&old_subject) {
+                        if let Some(old_output) = outputs.remove(&old_message) {
+                            let retired =
+                                self.retired_outputs.entry(old_subject.clone()).or_default();
+                            *retired = retired.saturating_add(old_output);
+                        }
+                        empty = outputs.is_empty();
+                    }
+                    if empty {
+                        self.message_outputs.remove(&old_subject);
+                    }
+                }
+            }
+        }
+        let outputs = self.message_outputs.entry(subject.clone()).or_default();
+        outputs.insert(message, output);
+        let live = outputs
+            .values()
+            .fold(0u64, |total, output| total.saturating_add(*output));
+        self.retired_outputs
+            .get(&subject)
+            .copied()
+            .unwrap_or_default()
+            .saturating_add(live)
+    }
+
+    fn clear_message_outputs(&mut self, subject: &Subject) {
+        self.message_outputs.remove(subject);
+        self.retired_outputs.remove(subject);
+        self.message_order.retain(|(owner, _)| owner != subject);
+    }
 }
 
 impl Decoder {
@@ -60,6 +143,9 @@ impl Decoder {
             && value["subtype"] == "init"
             && !self.root.is_empty()
             && string(&value, "session_id") == Some(self.root.as_str());
+        if turn_head {
+            self.usage.clear_message_outputs(&Subject::Main);
+        }
         if let Some(root) = string(&value, "session_id") {
             if value["type"] == "system"
                 && value["subtype"] == "init"
@@ -91,18 +177,105 @@ impl Decoder {
                 self.root = root.to_owned();
             }
         }
-        if let Some(limits) = wire::parse_rate_limits(line) {
-            events.push(limits);
+        if let Some(SessionEvent::RateLimits { five_hour, weekly }) = wire::parse_rate_limits(line)
+        {
+            if value["rate_limit_info"]["unifiedWindows"].is_object() {
+                self.rate_limits = (five_hour, weekly);
+            } else {
+                if five_hour.is_some() {
+                    self.rate_limits.0 = five_hour;
+                }
+                if weekly.is_some() {
+                    self.rate_limits.1 = weekly;
+                }
+            }
+            events.push(SessionEvent::RateLimits {
+                five_hour: self.rate_limits.0,
+                weekly: self.rate_limits.1,
+            });
         }
         match string(&value, "type") {
+            Some("system") if string(&value, "subtype") == Some("init") => {
+                if let Some(mode) = string(&value, "permissionMode") {
+                    events.push(SessionEvent::PermissionMode { mode: mode.into() });
+                }
+                if let Some(event) = wire::parse_value(&value) {
+                    events.push(event);
+                }
+                if turn_head {
+                    events.push(SessionEvent::Progress {
+                        event: crate::progress::ProgressEvent::Phase {
+                            phase: crate::progress::Phase::Working,
+                            detail: String::new(),
+                        },
+                    });
+                }
+            }
             Some("system") if string(&value, "subtype") != Some("init") => {
+                if string(&value, "subtype") == Some("informational") {
+                    self.notice(&value, string(&value, "content"), &mut events);
+                }
+                if string(&value, "subtype") == Some("model_refusal_fallback") {
+                    let subject = self.scope(&value, &mut events).unwrap_or(Subject::Main);
+                    self.retract_uuids(
+                        &subject,
+                        value["retracted_message_uuids"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(Value::as_str),
+                        &mut events,
+                    );
+                }
+                if string(&value, "subtype") == Some("local_command_output")
+                    && !self.seen_main_frame(&value)
+                {
+                    if let Some(text) = string(&value, "content") {
+                        self.main_content(
+                            &value,
+                            delivery_id(&value, "0"),
+                            ExecutionEvent::Text {
+                                text: text.to_owned(),
+                            },
+                            &mut events,
+                        );
+                    }
+                }
                 self.task(&value, &mut events);
+                if let Some(event) = wire::parse_value(&value) {
+                    events.push(event);
+                }
                 if !matches!(
                     string(&value, "subtype"),
                     Some("task_started" | "task_progress" | "task_updated" | "task_notification")
                 ) {
                     self.progress(&value, &mut events);
                 }
+            }
+            Some("conversation_reset") => {
+                if let Some(next) = string(&value, "new_conversation_id") {
+                    *self = Self::default();
+                    self.root = next.into();
+                    events.push(SessionEvent::ConversationReset {
+                        session_id: next.into(),
+                    });
+                }
+            }
+            Some("auth_status") => {
+                let output = value["output"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let error = value["error"].as_str().unwrap_or("");
+                let text = [output.as_str(), error]
+                    .into_iter()
+                    .filter(|text| !text.is_empty())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                self.notice(&value, (!text.is_empty()).then_some(&text), &mut events);
             }
             Some("control_request") => self.decision(&value, &mut events),
             Some("control_cancel_request") => {
@@ -123,7 +296,7 @@ impl Decoder {
                 // Only the null/absent Main stream is part of Claude's current
                 // contract. An unexpected child stream must never become Main.
                 if matches!(value.get("parent_tool_use_id"), None | Some(Value::Null)) {
-                    events.extend(wire::parse_events_value(&value));
+                    self.main_stream(&value, &mut events);
                 }
             }
             Some("result") => {
@@ -132,8 +305,11 @@ impl Decoder {
                 if !matches!(value.get("parent_tool_use_id"), None | Some(Value::Null)) {
                     return events;
                 }
-                if let Some(usage) = wire::parse_usage_value(&value) {
+                if let Some(usage) = self.main_usage(&value) {
                     events.push(usage);
+                }
+                if let Some(details) = wire::parse_usage_details_value(&value) {
+                    events.push(details);
                 }
                 if let Some(event) = wire::parse_value(&value) {
                     // The published SDK names only `human` as operator
@@ -372,6 +548,20 @@ impl Decoder {
         );
     }
 
+    fn content_message(
+        &mut self,
+        key: &AgentKey,
+        value: &Value,
+        id: Option<String>,
+        event: ExecutionEvent,
+        events: &mut Vec<SessionEvent>,
+    ) {
+        if let Some(id) = &id {
+            self.record_delivery(&Subject::Subagent(key.clone()), value, id, events);
+        }
+        self.content(key, id, event, events);
+    }
+
     fn seen(&mut self, value: &Value) -> bool {
         let Some(uuid) = string(value, "uuid") else {
             return false;
@@ -396,6 +586,10 @@ impl Decoder {
         let Some(subject) = self.scope(value, events) else {
             return;
         };
+        if subject == Subject::Main && self.seen_main_frame(value) {
+            return;
+        }
+        self.retract_subject(&subject, value, events);
         self.progress(value, events);
         let child = match &subject {
             Subject::Main => None,
@@ -405,18 +599,40 @@ impl Decoder {
         if let Some(usage) = wire::parse_usage_value(value) {
             match &child {
                 Some(key) => {
+                    let usage = self.record_usage(&Subject::Subagent(key.clone()), value, usage);
                     if let Some(event) = ExecutionEvent::from_session(&usage) {
-                        self.content(key, delivery_id(value, "usage"), event, events);
+                        self.content_message(
+                            key,
+                            value,
+                            delivery_id(value, "usage"),
+                            event,
+                            events,
+                        );
                     }
                 }
-                None => events.push(usage),
+                None => events.push(self.record_main_usage(value, usage)),
             }
         }
-        if let (Some(key), Some(text)) = (&child, value["message"]["content"].as_str()) {
-            let mut info = self.info(key);
-            info.coverage = TranscriptCoverage::Live;
-            self.discover(info, events);
-            self.working(key, events);
+        if let Some(details) = wire::parse_usage_details_value(value) {
+            match &child {
+                Some(key) => {
+                    if let Some(event) = ExecutionEvent::from_session(&details) {
+                        self.content_message(
+                            key,
+                            value,
+                            delivery_id(value, "usage-details"),
+                            event,
+                            events,
+                        );
+                    }
+                }
+                None => events.push(details),
+            }
+        }
+        if let Some(text) = value["message"]["content"].as_str() {
+            if child.is_none() && !assistant {
+                return;
+            }
             let event = if assistant {
                 ExecutionEvent::Text {
                     text: text.to_owned(),
@@ -426,7 +642,15 @@ impl Decoder {
                     text: text.to_owned(),
                 }
             };
-            self.content(key, delivery_id(value, "0"), event, events);
+            if let Some(key) = &child {
+                let mut info = self.info(key);
+                info.coverage = TranscriptCoverage::Live;
+                self.discover(info, events);
+                self.working(key, events);
+                self.content_message(key, value, delivery_id(value, "0"), event, events);
+            } else {
+                self.main_content(value, delivery_id(value, "0"), event, events);
+            }
             return;
         }
         let Some(blocks) = value["message"]["content"].as_array() else {
@@ -438,10 +662,23 @@ impl Decoder {
             .then(|| value.get("tool_use_result"))
             .flatten();
         for (ordinal, block) in blocks.iter().enumerate() {
-            let id = delivery_id(value, &ordinal.to_string());
+            let kind = match string(block, "type") {
+                Some("text") => Some(MainStreamKind::Text),
+                Some("thinking") => Some(MainStreamKind::Thinking),
+                _ => None,
+            };
+            let streamed = child
+                .is_none()
+                .then(|| kind.and_then(|kind| self.bind_main_stream_block(value, kind)))
+                .flatten();
+            let id = streamed
+                .clone()
+                .or_else(|| delivery_id(value, &ordinal.to_string()));
             match string(block, "type") {
-                Some("text" | "thinking") if child.is_some() => {
-                    let key = child.as_ref().expect("guarded");
+                Some("text" | "thinking") => {
+                    if child.is_none() && !assistant {
+                        continue;
+                    }
                     let thinking = block["type"] == "thinking";
                     let Some(text) = block
                         .get(if thinking { "thinking" } else { "text" })
@@ -454,19 +691,33 @@ impl Decoder {
                             text: text.to_owned(),
                         }
                     } else if thinking {
-                        ExecutionEvent::Thinking {
-                            text: text.to_owned(),
+                        match streamed {
+                            Some(_) => ExecutionEvent::ThinkingSnapshot {
+                                text: text.to_owned(),
+                            },
+                            None => ExecutionEvent::Thinking {
+                                text: text.to_owned(),
+                            },
                         }
                     } else {
-                        ExecutionEvent::Text {
-                            text: text.to_owned(),
+                        match streamed {
+                            Some(_) => ExecutionEvent::TextSnapshot {
+                                text: text.to_owned(),
+                            },
+                            None => ExecutionEvent::Text {
+                                text: text.to_owned(),
+                            },
                         }
                     };
-                    let mut info = self.info(key);
-                    info.coverage = TranscriptCoverage::Live;
-                    self.discover(info, events);
-                    self.working(key, events);
-                    self.content(key, id, event, events);
+                    if let Some(key) = &child {
+                        let mut info = self.info(key);
+                        info.coverage = TranscriptCoverage::Live;
+                        self.discover(info, events);
+                        self.working(key, events);
+                        self.content_message(key, value, id, event, events);
+                    } else {
+                        self.main_content(value, id, event, events);
+                    }
                 }
                 Some("tool_use") if assistant => {
                     let (Some(tool_id), Some(name)) = (string(block, "id"), string(block, "name"))
@@ -480,8 +731,9 @@ impl Decoder {
                     let input = block.get("input").cloned().unwrap_or(Value::Null);
                     if let Some(key) = &child {
                         self.working(key, events);
-                        self.content(
+                        self.content_message(
                             key,
+                            value,
                             id,
                             ExecutionEvent::ToolStarted {
                                 id: tool_id.to_owned(),
@@ -491,11 +743,16 @@ impl Decoder {
                             events,
                         );
                     } else {
-                        events.push(SessionEvent::ToolStarted {
-                            id: tool_id.to_owned(),
-                            name: name.to_owned(),
-                            input: input.clone(),
-                        });
+                        self.main_content(
+                            value,
+                            id,
+                            ExecutionEvent::ToolStarted {
+                                id: tool_id.to_owned(),
+                                name: name.to_owned(),
+                                input: input.clone(),
+                            },
+                            events,
+                        );
                     }
                     self.invocation(tool_id, name, &input, &subject, events);
                 }
@@ -516,8 +773,9 @@ impl Decoder {
                     });
                     if let Some(key) = &child {
                         self.working(key, events);
-                        self.content(
+                        self.content_message(
                             key,
+                            value,
                             id,
                             ExecutionEvent::ToolCompleted {
                                 id: tool_id.to_owned(),
@@ -528,12 +786,17 @@ impl Decoder {
                             events,
                         );
                     } else {
-                        events.push(SessionEvent::ToolCompleted {
-                            id: tool_id.to_owned(),
-                            output,
-                            is_error,
-                            result,
-                        });
+                        self.main_content(
+                            value,
+                            id,
+                            ExecutionEvent::ToolCompleted {
+                                id: tool_id.to_owned(),
+                                output,
+                                is_error,
+                                result,
+                            },
+                            events,
+                        );
                     }
                     self.completed_invocation(tool_id, structured, is_error, events);
                     if let Some(owners) = self.tools.get_mut(tool_id) {
@@ -546,6 +809,306 @@ impl Decoder {
                 _ => {}
             }
         }
+    }
+
+    fn main_usage(&mut self, value: &Value) -> Option<SessionEvent> {
+        wire::parse_usage_value(value).map(|usage| self.record_main_usage(value, usage))
+    }
+
+    fn record_main_usage(&mut self, value: &Value, usage: SessionEvent) -> SessionEvent {
+        self.record_usage(&Subject::Main, value, usage)
+    }
+
+    fn record_usage(
+        &mut self,
+        subject: &Subject,
+        value: &Value,
+        usage: SessionEvent,
+    ) -> SessionEvent {
+        let SessionEvent::TokenUsage {
+            mut total_tokens,
+            input_tokens,
+            cached_input_tokens,
+            output_tokens,
+            reasoning_output_tokens,
+            context_window,
+        } = usage
+        else {
+            return usage;
+        };
+        let main = *subject == Subject::Main;
+        if main {
+            let has_occupancy = value["type"] == "assistant"
+                || value["usage"]["iterations"]
+                    .as_array()
+                    .is_some_and(|iterations| !iterations.is_empty());
+            if has_occupancy {
+                self.usage.occupancy = Some(total_tokens);
+            } else if let Some(occupancy) = self.usage.occupancy {
+                total_tokens = occupancy;
+            }
+            if let Some(window) = context_window {
+                self.usage.context_window = Some(window);
+            }
+        }
+        let output_tokens = if value["type"] == "assistant" {
+            string(&value["message"], "id")
+                .map(|message| {
+                    self.usage
+                        .message_output(subject.clone(), message.into(), output_tokens)
+                })
+                .unwrap_or(output_tokens)
+        } else {
+            self.usage.clear_message_outputs(subject);
+            output_tokens
+        };
+        SessionEvent::TokenUsage {
+            total_tokens,
+            input_tokens,
+            cached_input_tokens,
+            output_tokens,
+            reasoning_output_tokens,
+            context_window: if main {
+                self.usage.context_window
+            } else {
+                context_window
+            },
+        }
+    }
+
+    /// Claude stream frames name a message once, then each delta carries only
+    /// its native block index. Retain that proven pair so the later completed
+    /// block can replace the live stream. A full frame with no observed stream
+    /// still keeps its outer delivery UUID.
+    fn main_stream(&mut self, value: &Value, events: &mut Vec<SessionEvent>) {
+        match value["event"]["type"].as_str() {
+            Some("message_start") => {
+                self.main_stream_message = value["event"]["message"]["id"]
+                    .as_str()
+                    .filter(|id| !id.is_empty())
+                    .map(str::to_owned);
+            }
+            Some("content_block_start") => {
+                let Some((id, kind)) = self.register_main_stream_block(value) else {
+                    events.extend(wire::parse_events_value(value));
+                    return;
+                };
+                let block = &value["event"]["content_block"];
+                let text = match kind {
+                    MainStreamKind::Text => block["text"].as_str(),
+                    MainStreamKind::Thinking => block["thinking"].as_str(),
+                };
+                if let Some(text) = text.filter(|text| !text.is_empty()) {
+                    push(
+                        events,
+                        ActivityEvent::MainContent {
+                            id: Some(id),
+                            event: match kind {
+                                MainStreamKind::Text => {
+                                    ExecutionEvent::TextDelta { text: text.into() }
+                                }
+                                MainStreamKind::Thinking => {
+                                    ExecutionEvent::ThinkingDelta { text: text.into() }
+                                }
+                            },
+                        },
+                    );
+                }
+            }
+            Some("content_block_stop") => {}
+            Some("message_stop") => self.main_stream_message = None,
+            Some("content_block_delta") => {
+                let Some(id) = self.main_stream_block_id(value) else {
+                    events.extend(wire::parse_events_value(value));
+                    return;
+                };
+                for event in wire::parse_events_value(value) {
+                    match event {
+                        SessionEvent::TextDelta { text } => push(
+                            events,
+                            ActivityEvent::MainContent {
+                                id: Some(id.clone()),
+                                event: ExecutionEvent::TextDelta { text },
+                            },
+                        ),
+                        SessionEvent::ThinkingDelta { text } => push(
+                            events,
+                            ActivityEvent::MainContent {
+                                id: Some(id.clone()),
+                                event: ExecutionEvent::ThinkingDelta { text },
+                            },
+                        ),
+                        event => events.push(event),
+                    }
+                }
+                return;
+            }
+            _ => {}
+        }
+        events.extend(wire::parse_events_value(value));
+    }
+
+    fn main_content(
+        &mut self,
+        value: &Value,
+        id: Option<String>,
+        event: ExecutionEvent,
+        events: &mut Vec<SessionEvent>,
+    ) {
+        if let Some(id) = &id {
+            self.record_delivery(&Subject::Main, value, id, events);
+        }
+        push(events, ActivityEvent::MainContent { id, event });
+    }
+
+    fn retract_subject(
+        &mut self,
+        subject: &Subject,
+        value: &Value,
+        events: &mut Vec<SessionEvent>,
+    ) {
+        let retracted = value["supersedes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str);
+        self.retract_uuids(subject, retracted, events);
+    }
+
+    fn retract_uuids<'a>(
+        &mut self,
+        subject: &Subject,
+        retracted: impl Iterator<Item = &'a str>,
+        events: &mut Vec<SessionEvent>,
+    ) {
+        let mut ids = Vec::new();
+        for uuid in retracted {
+            let delivery = (subject.clone(), uuid.into());
+            if let Some(known) = self.deliveries.get(&delivery) {
+                ids.extend(known.iter().cloned());
+            } else if self.pending_retractions.len() < 8192 {
+                self.pending_retractions.insert(delivery);
+            }
+        }
+        if !ids.is_empty() {
+            self.retract_content(subject, ids, events);
+        }
+    }
+
+    fn record_delivery(
+        &mut self,
+        subject: &Subject,
+        value: &Value,
+        id: &str,
+        events: &mut Vec<SessionEvent>,
+    ) {
+        let Some(uuid) = string(value, "uuid") else {
+            return;
+        };
+        let key = (subject.clone(), uuid.into());
+        let delivery = self.deliveries.entry(key.clone()).or_default();
+        if !delivery.iter().any(|known| known == id) {
+            delivery.push(id.into());
+        }
+        if delivery.len() == 1 {
+            self.delivery_order.push_back(key.clone());
+            if self.delivery_order.len() > 8192 {
+                if let Some(old) = self.delivery_order.pop_front() {
+                    self.deliveries.remove(&old);
+                }
+            }
+        }
+        if self.pending_retractions.contains(&key) {
+            self.retract_content(subject, vec![id.into()], events);
+        }
+    }
+
+    fn retract_content(&self, subject: &Subject, ids: Vec<String>, events: &mut Vec<SessionEvent>) {
+        let event = ExecutionEvent::Retract { ids };
+        match subject {
+            Subject::Main => push(events, ActivityEvent::MainContent { id: None, event }),
+            Subject::Subagent(key) => push(
+                events,
+                ActivityEvent::Content {
+                    key: key.clone(),
+                    id: None,
+                    event,
+                },
+            ),
+        }
+    }
+
+    fn register_main_stream_block(&mut self, value: &Value) -> Option<(String, MainStreamKind)> {
+        let message = self.main_stream_message.as_deref()?;
+        let index = value["event"]["index"].as_u64()?;
+        let kind = match value["event"]["content_block"]["type"].as_str()? {
+            "text" => MainStreamKind::Text,
+            "thinking" => MainStreamKind::Thinking,
+            _ => return None,
+        };
+        let key = (message.to_owned(), index);
+        if !self.main_stream_blocks.contains_key(&key) {
+            self.main_stream_blocks.insert(
+                key.clone(),
+                MainStreamBlock {
+                    message: message.into(),
+                    index,
+                    kind,
+                    delivery: None,
+                },
+            );
+            self.main_stream_order.push_back(key);
+            if self.main_stream_order.len() > 8192 {
+                if let Some(old) = self.main_stream_order.pop_front() {
+                    self.main_stream_blocks.remove(&old);
+                }
+            }
+        }
+        Some((main_block_id(message, index), kind))
+    }
+
+    fn main_stream_block_id(&self, value: &Value) -> Option<String> {
+        let message = self.main_stream_message.as_deref()?;
+        let index = value["event"]["index"].as_u64()?;
+        self.main_stream_blocks
+            .contains_key(&(message.to_owned(), index))
+            .then(|| main_block_id(message, index))
+    }
+
+    fn bind_main_stream_block(&mut self, value: &Value, kind: MainStreamKind) -> Option<String> {
+        let message = value["message"]["id"]
+            .as_str()
+            .filter(|id| !id.is_empty())?;
+        let candidates: Vec<_> = self
+            .main_stream_blocks
+            .values()
+            .filter(|block| {
+                block.message == message && block.kind == kind && block.delivery.is_none()
+            })
+            .map(|block| (block.message.clone(), block.index))
+            .collect();
+        let [key] = candidates.as_slice() else {
+            return None;
+        };
+        let block = self.main_stream_blocks.get_mut(key)?;
+        block.delivery = string(value, "uuid").map(str::to_owned);
+        Some(main_block_id(&block.message, block.index))
+    }
+
+    fn seen_main_frame(&mut self, value: &Value) -> bool {
+        let Some(uuid) = string(value, "uuid") else {
+            return false;
+        };
+        if !self.seen_main_frames.insert(uuid.into()) {
+            return true;
+        }
+        self.main_frame_order.push_back(uuid.into());
+        if self.main_frame_order.len() > 8192 {
+            if let Some(old) = self.main_frame_order.pop_front() {
+                self.seen_main_frames.remove(&old);
+            }
+        }
+        false
     }
 
     fn invocation(
@@ -651,6 +1214,28 @@ impl Decoder {
         }
     }
 
+    fn notice(&mut self, value: &Value, text: Option<&str>, events: &mut Vec<SessionEvent>) {
+        let Some(text) = text.filter(|text| !text.is_empty()) else {
+            return;
+        };
+        match self.scope(value, events) {
+            Some(Subject::Main) => push(
+                events,
+                ActivityEvent::MainContent {
+                    id: delivery_id(value, "notice"),
+                    event: ExecutionEvent::Notice { text: text.into() },
+                },
+            ),
+            Some(Subject::Subagent(key)) => self.content(
+                &key,
+                delivery_id(value, "notice"),
+                ExecutionEvent::Notice { text: text.into() },
+                events,
+            ),
+            None => {}
+        }
+    }
+
     fn task(&mut self, value: &Value, events: &mut Vec<SessionEvent>) {
         let subtype = string(value, "subtype").unwrap_or("");
         if !matches!(
@@ -665,6 +1250,13 @@ impl Decoder {
         let Some(task_id) = string(value, "task_id") else {
             return;
         };
+        if value["ambient"] == true || value["skip_transcript"] == true {
+            self.excluded_tasks.insert(task_id.into());
+            return;
+        }
+        if self.excluded_tasks.contains(task_id) {
+            return;
+        }
         // Bash jobs have task IDs too. Classification or an existing agent
         // alias is necessary; owned_by_subagent means a child tool, not a child.
         if string(value, "task_type").is_some_and(|kind| kind != "local_agent") {
@@ -696,6 +1288,8 @@ impl Decoder {
         // Progress descriptions describe the current tool; they must not rename
         // the tab's durable task description on every tool call.
         if subtype == "task_started" {
+            self.usage
+                .clear_message_outputs(&Subject::Subagent(key.clone()));
             info.description = string(value, "description")
                 .map(str::to_owned)
                 .or(info.description);
@@ -796,6 +1390,10 @@ fn delivery_id(value: &Value, part: &str) -> Option<String> {
     string(value, "uuid").map(|uuid| format!("{uuid}:{part}"))
 }
 
+fn main_block_id(message: &str, index: u64) -> String {
+    format!("stream:{message}:{index}")
+}
+
 fn push(events: &mut Vec<SessionEvent>, event: ActivityEvent) {
     events.push(SessionEvent::Activity(event));
 }
@@ -857,18 +1455,58 @@ mod tests {
                 })
                 .collect();
             let (_, new) = replay(fixture);
-            // Added native metadata does not change the existing prose,
-            // tool, usage, approval, or turn-result projection.
-            let old_projection: Vec<_> = new
-                .into_iter()
-                .filter(|event| {
-                    !matches!(
-                        event,
-                        SessionEvent::Progress { .. } | SessionEvent::ContentBoundary
-                    )
-                })
-                .collect();
-            assert_eq!(old_projection, old);
+            let fold = |events: Vec<SessionEvent>| {
+                let mut activity = Activity::default();
+                activity.apply(ActivityInput::Connect { generation: 1 });
+                for event in events {
+                    activity.apply(match event {
+                        SessionEvent::Activity(event) => ActivityInput::Observe {
+                            generation: 1,
+                            event,
+                            at: Instant::now(),
+                        },
+                        event => ActivityInput::Main {
+                            input: crate::transcript::Input::Event(event),
+                            at: Instant::now(),
+                        },
+                    });
+                }
+                activity
+            };
+            let old = fold(old);
+            let new = fold(new);
+            let projection = |activity: &Activity| {
+                let mut prose = String::new();
+                let mut thinking = String::new();
+                let mut tools = Vec::new();
+                for block in activity.view().main().transcript().blocks() {
+                    use crate::transcript::Body;
+                    match &block.body {
+                        Body::Paragraph { spans }
+                        | Body::Heading { spans, .. }
+                        | Body::Bullet { spans, .. } => {
+                            for span in spans {
+                                prose.push_str(&span.text);
+                            }
+                        }
+                        Body::Thinking(text) => thinking.push_str(text),
+                        Body::Tool(tool) => {
+                            tools.push((tool.call.clone(), tool.name.clone(), tool.output.clone()))
+                        }
+                        _ => {}
+                    }
+                }
+                (prose, thinking, tools)
+            };
+            assert_eq!(projection(&new), projection(&old));
+            assert_eq!(
+                new.view().main().transcript().turn_completed(),
+                old.view().main().transcript().turn_completed()
+            );
+            assert_eq!(
+                new.view().main().transcript().usage(),
+                old.view().main().transcript().usage()
+            );
         }
     }
 

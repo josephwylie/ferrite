@@ -39,6 +39,14 @@ pub struct PlanStep {
     pub status: StepStatus,
 }
 
+/// One authoritative provider task, with a stable native identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanTask {
+    pub id: String,
+    pub text: String,
+    pub status: StepStatus,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskStatus {
     Working,
@@ -69,11 +77,20 @@ pub enum ProgressEvent {
         status: Option<StepStatus>,
         deleted: bool,
     },
+    /// The provider's authoritative task list. It replaces the current plan.
+    TasksSnapshot {
+        tasks: Vec<PlanTask>,
+    },
     Background {
         id: String,
         label: String,
         status: TaskStatus,
         detail: String,
+    },
+    /// One authoritative provider snapshot. It replaces the visible
+    /// background set without inventing lifecycle events for its entries.
+    BackgroundSnapshot {
+        tasks: Vec<BackgroundTask>,
     },
 }
 
@@ -178,6 +195,22 @@ impl Progress {
                     });
                 }
             }
+            ProgressEvent::TasksSnapshot { tasks } => {
+                self.has_plan = true;
+                self.task_ids = tasks
+                    .iter()
+                    .take(MAX_ENTRIES)
+                    .map(|task| task.id.clone())
+                    .collect();
+                self.plan = tasks
+                    .iter()
+                    .take(MAX_ENTRIES)
+                    .map(|task| PlanStep {
+                        text: one_line(&task.text, MAX_TEXT),
+                        status: task.status,
+                    })
+                    .collect();
+            }
             ProgressEvent::Background {
                 id,
                 label,
@@ -213,6 +246,18 @@ impl Progress {
                         detail: one_line(detail, MAX_TEXT),
                     });
                 }
+            }
+            ProgressEvent::BackgroundSnapshot { tasks } => {
+                self.tasks = tasks
+                    .iter()
+                    .take(MAX_ENTRIES)
+                    .map(|task| BackgroundTask {
+                        id: task.id.clone(),
+                        label: one_line(&task.label, MAX_TEXT),
+                        status: task.status,
+                        detail: one_line(&task.detail, MAX_TEXT),
+                    })
+                    .collect();
             }
         }
     }
@@ -382,9 +427,17 @@ impl ProgressEvent {
                 explanation.len() + steps.iter().map(|step| step.text.len() + 16).sum::<usize>()
             }
             Self::Task { id, subject, .. } => id.len() + subject.len(),
+            Self::TasksSnapshot { tasks } => tasks
+                .iter()
+                .map(|task| task.id.len() + task.text.len() + 16)
+                .sum(),
             Self::Background {
                 id, label, detail, ..
             } => id.len() + label.len() + detail.len(),
+            Self::BackgroundSnapshot { tasks } => tasks
+                .iter()
+                .map(|task| task.id.len() + task.label.len() + task.detail.len() + 16)
+                .sum(),
         }
         .saturating_add(64)
     }

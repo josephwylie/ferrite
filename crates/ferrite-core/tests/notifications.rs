@@ -232,6 +232,8 @@ fn notifications_wait_for_a_child_permission_before_finishing() {
             subject: Some(Subject::Subagent(child.clone())),
             decision: ferrite_core::Decision {
                 delivery: Default::default(),
+                kind: Default::default(),
+                policy: Default::default(),
                 id: "approval".into(),
                 tool_use_id: "tool".into(),
                 tool_name: "Write".into(),
@@ -759,4 +761,163 @@ fn the_codex_nested_capture_finishes_once() {
         ),
     );
     assert_eq!(outcomes, vec![TurnOutcome::Completed]);
+}
+
+#[test]
+fn a_pending_question_requests_attention_and_cancellation_clears_it() {
+    let mut h = Harness::new("question-attention", 2);
+    let first = h.threads[0];
+    let second = h.threads[1];
+    h.cockpit.focus_thread(first);
+    h.control.activity(1,ActivityEvent::Decision{subject:Some(Subject::Main),decision:ferrite_core::Decision{kind:ferrite_core::DecisionKind::Questions(vec![]),policy:Default::default(),delivery:Default::default(),id:"question".into(),tool_use_id:"ask".into(),tool_name:"AskUserQuestion".into(),description:"Choose a target".into(),input:serde_json::json!({"questions":[{"question":"Where?","header":"Target","options":[],"multiSelect":false}]}),suggestions:vec![]}});
+    h.cockpit.pump();
+    assert!(
+        h.cockpit.notifications().attention(second),
+        "pending question needs attention before the turn ends"
+    );
+    assert_eq!(h.unread(), 1);
+    h.cockpit.pump();
+    assert_eq!(
+        h.unread(),
+        1,
+        "one native request must not repeatedly notify"
+    );
+    h.control.activity(
+        1,
+        ActivityEvent::DecisionCancelled {
+            id: "question".into(),
+        },
+    );
+    h.cockpit.pump();
+    assert!(!h.cockpit.notifications().attention(second));
+    assert_eq!(h.unread(), 0);
+}
+
+#[test]
+fn contract_only_the_visible_subjects_requests_are_acknowledged() {
+    let mut h = Harness::new("visible-subject-attention", 1);
+    let thread = h.threads[0];
+    let child = h.child(0, "visible-child");
+    h.cockpit.pump();
+    h.cockpit
+        .set_visible_subject(thread, Subject::Subagent(child.clone()));
+    h.cockpit.focus_thread(thread);
+    for (id, subject) in [("main", Subject::Main), ("child", Subject::Subagent(child))] {
+        h.control.activity(
+            0,
+            ActivityEvent::Decision {
+                subject: Some(subject),
+                decision: ferrite_core::Decision {
+                    kind: Default::default(),
+                    policy: Default::default(),
+                    delivery: Default::default(),
+                    id: id.into(),
+                    tool_use_id: id.into(),
+                    tool_name: "Bash".into(),
+                    description: "Approve".into(),
+                    input: serde_json::json!({}),
+                    suggestions: vec![],
+                },
+            },
+        );
+    }
+    h.cockpit.pump();
+    let notices: Vec<_> = h.cockpit.notifications().decisions().collect();
+    assert!(
+        notices
+            .iter()
+            .find(|n| n.subject == Some(Subject::Main))
+            .is_some_and(|n| !n.read),
+        "a hidden Main request must remain unread while its child is selected"
+    );
+    assert!(notices
+        .iter()
+        .find(|n| n.subject != Some(Subject::Main))
+        .is_some_and(|n| n.read));
+    assert_eq!(h.unread(), 1);
+    h.cockpit.set_visible_subject(thread, Subject::Main);
+    assert_eq!(h.unread(), 0);
+}
+
+#[test]
+fn clearing_attention_dismisses_live_requests_until_they_are_replaced() {
+    let mut h = Harness::new("clear-requests", 2);
+    h.cockpit.focus_thread(h.threads[0]);
+    let request = ActivityEvent::Decision {
+        subject: Some(Subject::Main),
+        decision: ferrite_core::Decision {
+            delivery: Default::default(),
+            kind: Default::default(),
+            policy: Default::default(),
+            id: "approval".into(),
+            tool_use_id: "tool".into(),
+            tool_name: "Bash".into(),
+            description: "Run tests".into(),
+            input: serde_json::Value::Null,
+            suggestions: vec![],
+        },
+    };
+    h.control.activity(1, request.clone());
+    h.cockpit.pump();
+    assert_eq!(h.unread(), 1);
+    h.cockpit.clear_notices();
+    h.cockpit.pump();
+    assert_eq!(h.unread(), 0);
+    assert_eq!(h.cockpit.notifications().decisions().count(), 0);
+    h.control.activity(
+        1,
+        ActivityEvent::DecisionCancelled {
+            id: "approval".into(),
+        },
+    );
+    h.cockpit.pump();
+    h.control.activity(1, request);
+    h.cockpit.pump();
+    assert_eq!(
+        h.unread(),
+        1,
+        "a new handle deserves attention even when the raw request id is reused"
+    );
+}
+#[test]
+fn decision_attention_tracks_resolved_subagent_aliases() {
+    let mut h = Harness::new("request-alias", 2);
+    h.cockpit.focus_thread(h.threads[0]);
+    let old = h.child(1, "old");
+    let new = h.child(1, "new");
+    h.control.activity(
+        1,
+        ActivityEvent::Decision {
+            subject: Some(Subject::Subagent(old.clone())),
+            decision: ferrite_core::Decision {
+                delivery: Default::default(),
+                kind: Default::default(),
+                policy: Default::default(),
+                id: "approval".into(),
+                tool_use_id: "tool".into(),
+                tool_name: "Bash".into(),
+                description: "Run tests".into(),
+                input: serde_json::Value::Null,
+                suggestions: vec![],
+            },
+        },
+    );
+    h.cockpit.pump();
+    h.control.activity(
+        1,
+        ActivityEvent::Alias {
+            from: old,
+            to: new.clone(),
+        },
+    );
+    h.cockpit.pump();
+    assert_eq!(
+        h.cockpit
+            .notifications()
+            .decisions()
+            .next()
+            .unwrap()
+            .subject,
+        Some(Subject::Subagent(new))
+    );
 }

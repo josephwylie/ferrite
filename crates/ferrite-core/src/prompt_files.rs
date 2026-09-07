@@ -105,6 +105,27 @@ pub(crate) fn image_type(path: &Path) -> Option<&'static str> {
     }
 }
 
+/// Claude's stream-json input accepts PDF documents as a distinct native
+/// content block.
+pub(crate) fn pdf_type(path: &Path) -> Option<&'static str> {
+    path.extension()?
+        .to_str()?
+        .eq_ignore_ascii_case("pdf")
+        .then_some("application/pdf")
+}
+
+/// Formats Codex snapshots into local audio input items.
+pub(crate) fn audio_type(path: &Path) -> Option<&'static str> {
+    match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+        "wav" => Some("audio/wav"),
+        "mp3" => Some("audio/mpeg"),
+        "m4a" => Some("audio/mp4"),
+        "webm" => Some("audio/webm"),
+        "ogg" => Some("audio/ogg"),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

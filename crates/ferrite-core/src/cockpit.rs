@@ -18,7 +18,7 @@ use crate::activity::{
     Subject,
 };
 use crate::groups::{Applied, ApplyError, Drag, DropTarget, GroupChange, GroupId, Groups, Plan};
-use crate::notifications::{Frame, NoticeId, Notifications};
+use crate::notifications::{DecisionNoticeId, Frame, NoticeId, Notifications};
 pub use crate::prompt_history::HistoryDirection;
 use crate::prompt_history::PromptHistory;
 use crate::providers::Session;
@@ -79,6 +79,14 @@ fn project_additional_directories(
 /// How a Session is started. Injected so the cockpit can be driven with
 /// scripted Sessions in tests — nothing below this line spawns a process.
 pub trait Spawner {
+    fn discover_sessions(
+        &mut self,
+        _roots: Vec<(Provider, PathBuf)>,
+        _cap: usize,
+    ) -> Option<Receiver<io::Result<Vec<crate::import::Candidate>>>> {
+        None
+    }
+
     /// Metadata only: discover the selected workspace's effective commands.
     fn discover_commands(
         &mut self,
@@ -542,6 +550,9 @@ pub struct Cockpit {
     /// What every Thread has to tell the operator once they look away:
     /// the Notices, and the per-Thread deferrals behind them.
     notifications: Notifications,
+    /// The Subject the window has actually selected in each open Thread.
+    /// Main is implicit until the renderer records a child selection.
+    visible_subjects: BTreeMap<ThreadId, Subject>,
     sampler: Option<Box<dyn RssSampler>>,
     /// Bytes one Session may hold before the watchdog replaces it.
     limit: u64,
@@ -577,6 +588,7 @@ impl Cockpit {
             bootstrap_results: Vec::new(),
             history_loader: None,
             notifications: Notifications::default(),
+            visible_subjects: BTreeMap::new(),
             sampler: None,
             limit: u64::MAX,
             suggestions: channel(),
@@ -721,6 +733,7 @@ impl Cockpit {
 
         let mut restarts = Vec::new();
         for (id, rss) in over {
+            self.visible_subjects.remove(&id);
             let project = self.project_id(id);
             let Some(thread) = self.threads.get_mut(&id) else {
                 continue;
@@ -1021,6 +1034,7 @@ impl Cockpit {
         thread: ThreadId,
         root: Option<PathBuf>,
     ) -> Result<(), LoadError> {
+        self.visible_subjects.remove(&thread);
         match self.threads.get_mut(&thread) {
             Some(state) => {
                 state.session = None;
@@ -1190,6 +1204,7 @@ impl Cockpit {
         thread: ThreadId,
         replacement: Replacement,
     ) -> Result<(), ProvisionError> {
+        self.visible_subjects.remove(&thread);
         let Replacement {
             session,
             provider,
@@ -1308,6 +1323,7 @@ impl Cockpit {
                     .map_err(DeleteError::Io)?;
             }
             self.threads.remove(&thread);
+            self.visible_subjects.remove(&thread);
             self.roster.remove_thread(thread);
             self.notifications.forget(thread);
             self.store.delete(thread).map_err(DeleteError::Io)
@@ -1353,6 +1369,7 @@ impl Cockpit {
         }
         let mut state = self.threads.remove(&thread).expect("checked");
         self.notifications.disconnect(thread);
+        self.visible_subjects.remove(&thread);
         self.roster.remove_thread(thread);
         state.session = None;
         state.replacement = None;
@@ -1487,6 +1504,13 @@ impl Cockpit {
         if self.bootstraps.contains_key(&thread) {
             return;
         }
+        if self
+            .threads
+            .get(&thread)
+            .is_some_and(|state| state.session.is_none())
+        {
+            self.visible_subjects.remove(&thread);
+        }
         let project = self.project_id(thread);
         let Some(state) = self.threads.get_mut(&thread) else {
             return;
@@ -1548,6 +1572,14 @@ impl Cockpit {
         if self.bootstraps.contains_key(&thread) {
             let _ = self.park(thread);
             return;
+        }
+        if self.threads.get(&thread).is_some_and(|state| {
+            state
+                .session
+                .as_ref()
+                .is_some_and(SessionLifecycle::is_starting)
+        }) {
+            self.visible_subjects.remove(&thread);
         }
         let Some(state) = self.threads.get_mut(&thread) else {
             return;
@@ -1659,6 +1691,53 @@ impl Cockpit {
     /// borrows the Cockpit, not the handle.
     pub fn thread(&self, thread: ThreadId) -> Option<ThreadView<'_>> {
         self.threads.get(&thread).map(|state| ThreadView { state })
+    }
+
+    pub fn discover_sessions(
+        &mut self,
+        roots: Vec<(Provider, PathBuf)>,
+        cap: usize,
+    ) -> Option<Receiver<io::Result<Vec<crate::import::Candidate>>>> {
+        self.spawner.discover_sessions(roots, cap)
+    }
+
+    pub fn search_files(
+        &mut self,
+        thread: ThreadId,
+        query: &str,
+    ) -> io::Result<Receiver<io::Result<Vec<crate::providers::FileSuggestion>>>> {
+        self.threads
+            .get_mut(&thread)
+            .and_then(|state| state.session.as_mut())
+            .and_then(SessionLifecycle::session_mut)
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::Unsupported, "Thread has no live Session")
+            })?
+            .search_files(query)
+    }
+
+    /// Route a provider-native control to the live Session for this Thread.
+    /// Controls never create or replace a Session and never alter Activity.
+    pub fn control(&mut self, thread: ThreadId, action: crate::SessionControl) -> io::Result<()> {
+        let state = self
+            .threads
+            .get_mut(&thread)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Thread is not open"))?;
+        let session = state
+            .session
+            .as_mut()
+            .and_then(SessionLifecycle::session_mut)
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::Unsupported, "Thread has no live Session")
+            })?;
+        let kind = control_kind(&action);
+        if !session.supports_control(kind) {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "Session does not support that control",
+            ));
+        }
+        session.control(action)
     }
 
     /// Threads the store holds that no Pane is showing — what a restart finds,
@@ -2147,6 +2226,7 @@ impl Cockpit {
                 thread.session = None;
                 thread.history.clear();
                 thread.activity.apply(ActivityInput::Disconnect);
+                self.visible_subjects.remove(id);
                 update.activity_changed = true;
             }
             // Every frame, every Thread: the deferral's grace is a clock
@@ -2522,19 +2602,71 @@ impl Cockpit {
         crate::providers::models::catalog(provider, &self.announced_models(provider))
     }
 
-    /// Re-aim one Thread's model, whenever (#25). Before the first prompt
-    /// this is `set_provider`'s own eager swap. After it the running
-    /// Session is replaced by one resuming the same conversation under the
-    /// new model — the transcript and history stay, the header on disk
-    /// changes, and the provider is fixed. Mid-turn the change is refused
-    /// rather than cutting the turn.
+    /// Change an idle Thread's model through its live native Session control.
+    /// Unsupported controls fall back to resuming the same conversation;
+    /// provider refusals preserve the current Session and durable choice.
     pub fn set_model(
         &mut self,
         thread: ThreadId,
         model: Option<String>,
     ) -> Result<(), ProvisionError> {
         let effort = self.tuning(thread)?.1;
-        self.retune(thread, model, effort)
+        let Some(state) = self.threads.get_mut(&thread) else {
+            let meta = self.store.peek(thread).map_err(ProvisionError::Store)?;
+            return self
+                .store
+                .set_provider(thread, meta.provider, model, effort, None)
+                .map_err(ProvisionError::Store);
+        };
+        if state.busy()
+            || state.replacement.is_some()
+            || state
+                .session
+                .as_ref()
+                .is_some_and(SessionLifecycle::is_starting)
+        {
+            return Err(ProvisionError::Busy);
+        }
+        if state.model == model && model.is_some() {
+            return Ok(());
+        }
+        let previous = state.model.clone();
+        let native = state
+            .session
+            .as_mut()
+            .and_then(SessionLifecycle::session_mut)
+            .map(|session| session.set_model(model.as_deref()));
+        match native {
+            Some(Ok(())) => {}
+            Some(Err(error)) if error.kind() != io::ErrorKind::Unsupported => {
+                return Err(ProvisionError::Tune(error));
+            }
+            None | Some(Err(_)) => {
+                return self.retune(thread, model, effort);
+            }
+        }
+        state.history.clear();
+        if let Err(error) = self.store.set_provider(
+            thread,
+            state.provider,
+            model.clone(),
+            effort,
+            Some(&mut state.writer),
+        ) {
+            if let Some(session) = state
+                .session
+                .as_mut()
+                .and_then(SessionLifecycle::session_mut)
+            {
+                let _ = session.set_model(previous.as_deref());
+            }
+            return Err(ProvisionError::Store(error));
+        }
+        let label =
+            crate::providers::models::label(model.as_deref().unwrap_or("default"), &state.models);
+        state.apply(Input::Notice(format!("model changed to {label}")));
+        state.model = model;
+        Ok(())
     }
 
     /// Change the next turn's effort on the existing Session. A turn or
@@ -2699,13 +2831,54 @@ impl Cockpit {
         self.notifications.dismiss(id)
     }
 
+    /// Open one live Decision attention record. Its handle remains resolved
+    /// through Activity, so opening it cannot complete a turn or release a
+    /// queued prompt.
+    pub fn open_decision_notice(&mut self, id: &DecisionNoticeId) -> Option<ThreadId> {
+        let subject = self
+            .notifications
+            .decision(id)?
+            .subject
+            .clone()
+            .unwrap_or(Subject::Main);
+        let thread = self.notifications.open_decision(id)?;
+        self.set_visible_subject(thread, subject);
+        if !self.focus_thread(thread) {
+            self.reopen(thread).ok()?;
+        }
+        self.acknowledge_focus();
+        Some(thread)
+    }
+
+    pub fn dismiss_decision_notice(&mut self, id: &DecisionNoticeId) -> bool {
+        self.notifications.dismiss_decision(id)
+    }
+
     pub fn clear_notices(&mut self) {
         self.notifications.clear();
     }
 
     fn acknowledge_focus(&mut self) {
         if let Some(thread) = self.roster.focused_thread() {
-            self.notifications.acknowledge(thread);
+            let subject = self
+                .visible_subjects
+                .get(&thread)
+                .map(|subject| {
+                    self.threads
+                        .get(&thread)
+                        .map(|state| state.activity.view().canonical_subject(subject))
+                        .unwrap_or(Subject::Main)
+                })
+                .filter(|subject| {
+                    self.threads
+                        .get(&thread)
+                        .is_some_and(|state| state.activity.view().subject(subject).is_some())
+                })
+                .unwrap_or(Subject::Main);
+            if subject == Subject::Main {
+                self.visible_subjects.remove(&thread);
+            }
+            self.notifications.acknowledge_subject(thread, &subject);
         }
     }
 }
@@ -2719,6 +2892,26 @@ pub struct ThreadView<'a> {
 }
 
 impl<'a> ThreadView<'a> {
+    /// Changes whenever this Thread receives a replacement Session.
+    pub fn generation(&self) -> u64 {
+        self.state.generation
+    }
+
+    pub fn supports_control(&self, kind: crate::ControlKind) -> bool {
+        self.state
+            .session
+            .as_ref()
+            .and_then(SessionLifecycle::session)
+            .is_some_and(|session| session.supports_control(kind))
+    }
+
+    pub fn permission_modes(&self) -> Vec<crate::PermissionModeChoice> {
+        self.state
+            .session
+            .as_ref()
+            .and_then(SessionLifecycle::session)
+            .map_or_else(Vec::new, Session::permission_modes)
+    }
     pub fn activity(&self) -> ActivityView<'a> {
         self.state.activity.view()
     }
@@ -2941,6 +3134,28 @@ impl Cockpit {
         let landed = self.roster.focus(identity);
         self.acknowledge_focus();
         landed
+    }
+
+    /// Record the Subject the renderer is actually showing. Invalid or stale
+    /// children fall back to Main, so a replacement Session cannot suppress a
+    /// later Main request with an old selection.
+    pub fn set_visible_subject(&mut self, thread: ThreadId, subject: Subject) {
+        let subject = self
+            .threads
+            .get(&thread)
+            .map(|state| state.activity.view().canonical_subject(&subject))
+            .filter(|subject| {
+                self.threads
+                    .get(&thread)
+                    .is_some_and(|state| state.activity.view().subject(subject).is_some())
+            })
+            .unwrap_or(Subject::Main);
+        if subject == Subject::Main {
+            self.visible_subjects.remove(&thread);
+        } else {
+            self.visible_subjects.insert(thread, subject);
+        }
+        self.acknowledge_focus();
     }
 
     /// cmd-] / cmd-[: walk the visible Panes, wrapping.
@@ -3548,8 +3763,24 @@ fn event_changes_content(event: &SessionEvent) -> bool {
         | SessionEvent::TokenUsage { .. }
         | SessionEvent::Commands { .. }
         | SessionEvent::Models { .. }
-        | SessionEvent::PermissionMode { .. } => false,
+        | SessionEvent::PermissionMode { .. }
+        | SessionEvent::ContextDetails { .. }
+        | SessionEvent::McpServers { .. }
+        | SessionEvent::McpAuthorization { .. } => false,
         _ => true,
+    }
+}
+
+fn control_kind(action: &crate::SessionControl) -> crate::ControlKind {
+    match action {
+        crate::SessionControl::RefreshContext => crate::ControlKind::RefreshContext,
+        crate::SessionControl::RefreshMcp => crate::ControlKind::RefreshMcp,
+        crate::SessionControl::ReconnectMcp { .. } => crate::ControlKind::ReconnectMcp,
+        crate::SessionControl::LoginMcp { .. } => crate::ControlKind::LoginMcp,
+        crate::SessionControl::ReloadMcp => crate::ControlKind::ReloadMcp,
+        crate::SessionControl::StopTask { .. } => crate::ControlKind::StopTask,
+        crate::SessionControl::BackgroundTasks => crate::ControlKind::BackgroundTasks,
+        crate::SessionControl::SetPermissionMode { .. } => crate::ControlKind::SetPermissionMode,
     }
 }
 
@@ -3616,6 +3847,14 @@ fn fold(state: &mut Thread, event: &SessionEvent) {
         SessionEvent::Models { models } => state.models = models.clone(),
         SessionEvent::PermissionMode { mode } => state.permission_mode = Some(mode.clone()),
         SessionEvent::Init { session_id, .. } => state.resume = Some(session_id.clone()),
+        SessionEvent::ConversationReset { session_id } => {
+            state.resume = Some(session_id.clone());
+            state.history.clear();
+            state.history_errors.clear();
+            state.carry = None;
+            state.prompt_history = PromptHistory::new(Vec::new());
+            state.invalidate_suggestion();
+        }
         _ => {}
     }
 }
@@ -5045,24 +5284,40 @@ mod tests {
             "a prefix reload must merge the completion observed after its checkpoint"
         );
         let completion = |cockpit: &Cockpit| {
-            cockpit.thread(thread).unwrap().activity().subject(&subject).unwrap()
-                .transcript().blocks().iter().filter_map(|block| match &block.body {
+            cockpit
+                .thread(thread)
+                .unwrap()
+                .activity()
+                .subject(&subject)
+                .unwrap()
+                .transcript()
+                .blocks()
+                .iter()
+                .filter_map(|block| match &block.body {
                     Body::Meta(text) if text.starts_with("Completed") => Some(text.clone()),
                     _ => None,
-                }).collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
         };
         let observed = completion(&cockpit);
         // A later ordinary reload must use the same persisted observation,
         // after the in-flight buffer that supplied it above has been consumed.
-        cockpit.threads.get_mut(&thread).unwrap().activity
+        cockpit
+            .threads
+            .get_mut(&thread)
+            .unwrap()
+            .activity
             .apply(ActivityInput::Evict(subject.clone()));
         let (loader, finish) = history::gated_loader();
         cockpit.history_loader = Some(loader);
         assert!(cockpit.ensure_subject_history(thread, &subject).unwrap());
         finish(&cockpit.store);
         cockpit.pump();
-        assert_eq!(completion(&cockpit), observed,
-            "ordinary disk reload must preserve the exact child completion observation");
+        assert_eq!(
+            completion(&cockpit),
+            observed,
+            "ordinary disk reload must preserve the exact child completion observation"
+        );
     }
 
     #[test]
@@ -5132,6 +5387,8 @@ mod tests {
         SessionEvent::DecisionRequested {
             decision: Decision {
                 delivery: Default::default(),
+                kind: Default::default(),
+                policy: Default::default(),
                 id: id.into(),
                 tool_use_id: format!("toolu_{id}"),
                 tool_name: tool.into(),

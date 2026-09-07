@@ -7,11 +7,14 @@
 //! dropped.
 
 mod activity;
+pub(super) mod discovery;
+mod file_search;
 mod queue;
 mod suggestions;
 pub(super) mod wire;
 
 use crate::spawn::NoConsoleWindow;
+use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
@@ -20,7 +23,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::{DecisionAnswer, SessionEvent};
+use crate::{ControlKind, DecisionAnswer, PermissionModeChoice, SessionControl, SessionEvent};
+
+use super::FileSuggestion;
 
 /// Minimum `claude` CLI version for stable stream-json + stdio control
 /// protocol. Vendor releases below this break loudly at spawn, not weirdly
@@ -72,9 +77,8 @@ pub struct ClaudeConfig {
     /// Native generation is configured at process start.
     pub prompt_suggestions: bool,
     /// The Thread's title, handed to the CLI as the session's display name
-    /// (`--name`) so its own session list reads like Ferrite's. Spawn-time
-    /// only: the CLI takes no rename over the wire, so a later title waits
-    /// for the next Session.
+    /// (`--name`) so its own session list reads like Ferrite's. Later title
+    /// changes use the native rename control request.
     pub name: Option<String>,
     /// Permission posture for this Thread (`"default"`, `"acceptEdits"`,
     /// `"plan"`, …). `None` leaves the CLI's own configuration alone — which
@@ -186,7 +190,8 @@ pub struct ClaudeCapabilities {
     pub commands: Vec<crate::SessionCommand>,
 }
 
-type EffortReply = Arc<Mutex<Option<(String, SyncSender<io::Result<()>>)>>>;
+type SettingReply = Arc<Mutex<Option<(String, SyncSender<io::Result<()>>)>>>;
+type ControlReplies = Arc<Mutex<HashMap<String, SessionControl>>>;
 
 /// A live Claude Session: one CLI process serving one Thread.
 pub struct ClaudeSession {
@@ -198,15 +203,18 @@ pub struct ClaudeSession {
     job: super::job::SessionJob,
     /// Held open for the life of the Session: closing it ends the Session,
     /// so multi-turn depends on this staying alive.
-    stdin: ChildStdin,
+    stdin: Arc<Mutex<ChildStdin>>,
     cwd: Option<PathBuf>,
     events: Receiver<SessionEvent>,
     capabilities: ClaudeCapabilities,
-    effort_reply: EffortReply,
+    setting_reply: SettingReply,
+    control_replies: ControlReplies,
     decoder: Arc<Mutex<activity::Decoder>>,
+    requests: Arc<Mutex<wire::Requests>>,
     queue: Arc<Mutex<queue::Queue>>,
     next_request_id: u64,
     suggestions: Arc<Mutex<suggestions::Inbox>>,
+    file_search: Arc<Mutex<file_search::Requests>>,
 }
 
 impl ClaudeSession {
@@ -291,7 +299,7 @@ impl ClaudeSession {
         let job =
             super::job::SessionJob::assign_or_reap(&mut child).map_err(ClaudeSpawnError::Io)?;
 
-        let stdin = child.stdin.take().expect("stdin was piped");
+        let stdin = Arc::new(Mutex::new(child.stdin.take().expect("stdin was piped")));
         let stdout = child.stdout.take().expect("stdout was piped");
         let stderr = child.stderr.take().expect("stderr was piped");
 
@@ -300,21 +308,28 @@ impl ClaudeSession {
 
         let (sender, events) = sync_channel(EVENT_CHANNEL_CAPACITY);
         let child = Arc::new(Mutex::new(child));
-        let effort_reply = Arc::new(Mutex::new(None));
+        let setting_reply = Arc::new(Mutex::new(None));
+        let control_replies = Arc::new(Mutex::new(HashMap::new()));
         let decoder = Arc::new(Mutex::new(activity::Decoder::default()));
+        let requests = Arc::new(Mutex::new(wire::Requests::default()));
         let queue = Arc::new(Mutex::new(queue::Queue::default()));
         let mut inbox = suggestions::Inbox::default();
         inbox.configure(config.prompt_suggestions);
         let suggestions = Arc::new(Mutex::new(inbox));
+        let file_search = Arc::new(Mutex::new(file_search::Requests::default()));
         let capabilities = read_stdout(
             stdout,
             sender,
             Arc::clone(&child),
             stderr_tail,
-            effort_reply.clone(),
+            setting_reply.clone(),
+            control_replies.clone(),
+            Arc::clone(&stdin),
             decoder.clone(),
+            requests.clone(),
             queue.clone(),
             suggestions.clone(),
+            file_search.clone(),
         );
 
         let mut session = Self {
@@ -325,11 +340,14 @@ impl ClaudeSession {
             cwd: config.cwd.clone(),
             events,
             capabilities: ClaudeCapabilities::default(),
-            effort_reply,
+            setting_reply,
+            control_replies,
             decoder,
+            requests,
             queue,
             next_request_id: 1,
             suggestions,
+            file_search,
         };
         // Before the operator is offered anything: ask the CLI what it can do.
         // A write failure here is a CLI that died on startup, which the reader
@@ -358,22 +376,134 @@ impl ClaudeSession {
     /// The SDK's applyFlagSettings control, effective from the next turn.
     /// Wait for acceptance so a rejected setting cannot look successful.
     pub fn set_effort(&mut self, effort: Option<&str>) -> io::Result<()> {
+        self.set_setting(
+            serde_json::json!({
+                "subtype": "apply_flag_settings",
+                "settings": {"effortLevel": effort},
+            }),
+            "effort change was not acknowledged",
+        )
+    }
+
+    /// Select a model through Claude's native control protocol and wait for
+    /// its acknowledgement before reporting success.
+    pub fn set_model(&mut self, model: Option<&str>) -> io::Result<()> {
+        self.set_setting(
+            serde_json::json!({"subtype": "set_model", "model": model}),
+            "model change was not acknowledged",
+        )
+    }
+
+    pub fn permission_modes(&self) -> Vec<PermissionModeChoice> {
+        [
+            ("default", "Default"),
+            ("acceptEdits", "Accept edits"),
+            ("plan", "Plan"),
+            ("dontAsk", "Don't ask"),
+            ("bypassPermissions", "Bypass permissions"),
+            ("auto", "Auto"),
+        ]
+        .into_iter()
+        .map(|(value, label)| PermissionModeChoice {
+            value: value.into(),
+            label: label.into(),
+        })
+        .collect()
+    }
+
+    pub fn supports_control(&self, kind: ControlKind) -> bool {
+        matches!(
+            kind,
+            ControlKind::RefreshContext
+                | ControlKind::RefreshMcp
+                | ControlKind::ReconnectMcp
+                | ControlKind::StopTask
+                | ControlKind::BackgroundTasks
+                | ControlKind::SetPermissionMode
+        )
+    }
+
+    pub fn control(&mut self, action: SessionControl) -> io::Result<()> {
+        let (request, pending) = match action {
+            SessionControl::LoginMcp { .. } | SessionControl::ReloadMcp => {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "Claude does not support this control",
+                ));
+            }
+            SessionControl::RefreshContext => (
+                serde_json::json!({"subtype": "get_context_usage", "detail": "summary"}),
+                SessionControl::RefreshContext,
+            ),
+            SessionControl::RefreshMcp => (
+                serde_json::json!({"subtype": "mcp_status"}),
+                SessionControl::RefreshMcp,
+            ),
+            SessionControl::ReconnectMcp { server } => (
+                serde_json::json!({"subtype": "mcp_reconnect", "serverName": server}),
+                SessionControl::ReconnectMcp { server },
+            ),
+            SessionControl::StopTask { id } => (
+                serde_json::json!({"subtype": "stop_task", "task_id": id}),
+                SessionControl::StopTask { id },
+            ),
+            SessionControl::BackgroundTasks => (
+                serde_json::json!({"subtype": "background_tasks"}),
+                SessionControl::BackgroundTasks,
+            ),
+            SessionControl::SetPermissionMode { mode } => (
+                serde_json::json!({"subtype": "set_permission_mode", "mode": mode}),
+                SessionControl::SetPermissionMode { mode },
+            ),
+        };
+        let id = self.take_request_id();
+        let mut replies = lock(&self.control_replies);
+        if replies.len() >= 128 {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "too many native controls are pending",
+            ));
+        }
+        replies.insert(id.clone(), pending);
+        drop(replies);
+        if let Err(error) = self.write_line(&serde_json::json!({
+            "type": "control_request",
+            "request_id": id.clone(),
+            "request": request,
+        })) {
+            lock(&self.control_replies).remove(&id);
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn set_setting(&mut self, request: serde_json::Value, timeout_message: &str) -> io::Result<()> {
         let request_id = self.take_request_id();
         let (tx, rx) = sync_channel(1);
-        *lock(&self.effort_reply) = Some((request_id.clone(), tx));
+        *lock(&self.setting_reply) = Some((request_id.clone(), tx));
         let result = self
             .write_line(&serde_json::json!({
                 "type": "control_request",
                 "request_id": request_id,
-                "request": {"subtype": "apply_flag_settings", "settings": {"effortLevel": effort}},
+                "request": request,
             }))
             .and_then(|()| {
-                rx.recv_timeout(HANDSHAKE_TIMEOUT).map_err(|e| {
-                    io::Error::other(format!("effort change was not acknowledged: {e}"))
-                })?
+                rx.recv_timeout(HANDSHAKE_TIMEOUT)
+                    .map_err(|e| io::Error::other(format!("{timeout_message}: {e}")))?
             });
-        *lock(&self.effort_reply) = None;
+        *lock(&self.setting_reply) = None;
         result
+    }
+
+    /// Rename the live native session so the CLI's own session list carries
+    /// the Thread's title.
+    pub fn set_name(&mut self, name: &str) -> io::Result<()> {
+        let request_id = self.take_request_id();
+        self.write_line(&serde_json::json!({
+            "type": "control_request",
+            "request_id": request_id,
+            "request": {"subtype": "rename_session", "title": name},
+        }))
     }
 
     /// Visibility changes immediately. The CLI's generation opt-in is
@@ -388,6 +518,26 @@ impl ClaudeSession {
 
     pub fn take_suggestion(&mut self) -> Option<String> {
         lock(&self.suggestions).take()
+    }
+
+    /// Ask the live CLI for ranked paths. A newer query cancels the previous
+    /// receiver locally; the control response is consumed by the reader.
+    pub fn search_files(
+        &mut self,
+        query: &str,
+    ) -> io::Result<Receiver<io::Result<Vec<FileSuggestion>>>> {
+        let id = self.take_request_id();
+        let (reply, receiver) = sync_channel(1);
+        lock(&self.file_search).begin(id.clone(), reply);
+        if let Err(error) = self.write_line(&serde_json::json!({
+            "type": "control_request",
+            "request_id": id.clone(),
+            "request": {"subtype": "file_suggestions", "query": query},
+        })) {
+            lock(&self.file_search).discard(&id);
+            return Err(error);
+        }
+        Ok(receiver)
     }
 
     /// Send one user prompt; the CLI starts (or queues) a turn.
@@ -454,22 +604,9 @@ impl ClaudeSession {
     /// on. Unlike `interrupt`, the request id is the CLI's, not Ferrite's —
     /// this is a response to its question, so it must not be renumbered.
     pub fn respond_to_decision(&mut self, id: &str, answer: DecisionAnswer) -> io::Result<()> {
-        let body = match answer {
-            DecisionAnswer::Allow { input } => {
-                serde_json::json!({"behavior": "allow", "updatedInput": input})
-            }
-            DecisionAnswer::Deny { message } => {
-                serde_json::json!({"behavior": "deny", "message": message})
-            }
-            // `updatedPermissions` carries the CLI's own suggestion back to
-            // it; the permission-always capture proves a second call in the
-            // same turn is then not gated at all.
-            DecisionAnswer::AllowAlways { input, suggestion } => serde_json::json!({
-                "behavior": "allow",
-                "updatedInput": input,
-                "updatedPermissions": [suggestion],
-            }),
-        };
+        let body = lock(&self.requests).response(id, &answer).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "Decision is not pending")
+        })??;
         // Serialize response bookkeeping with stdout decoding: a progress or
         // cancellation frame can arrive as soon as this write reaches the CLI.
         let decoder = self.decoder.clone();
@@ -482,6 +619,7 @@ impl ClaudeSession {
                 "response": body,
             },
         }))?;
+        lock(&self.requests).resolved(id);
         decoder.decision_resolved(id);
         Ok(())
     }
@@ -516,10 +654,7 @@ impl ClaudeSession {
     }
 
     fn write_line(&mut self, value: &serde_json::Value) -> io::Result<()> {
-        let mut line = serde_json::to_string(value).map_err(io::Error::other)?;
-        line.push('\n');
-        self.stdin.write_all(line.as_bytes())?;
-        self.stdin.flush()
+        write_stdin_line(&self.stdin, value)
     }
 }
 
@@ -543,10 +678,14 @@ fn read_stdout(
     sender: SyncSender<SessionEvent>,
     child: Arc<Mutex<Child>>,
     stderr_tail: Arc<Mutex<StderrTail>>,
-    effort_reply: EffortReply,
+    setting_reply: SettingReply,
+    control_replies: ControlReplies,
+    stdin: Arc<Mutex<ChildStdin>>,
     decoder: Arc<Mutex<activity::Decoder>>,
+    requests: Arc<Mutex<wire::Requests>>,
     queue: Arc<Mutex<queue::Queue>>,
     suggestions: Arc<Mutex<suggestions::Inbox>>,
+    file_search: Arc<Mutex<file_search::Requests>>,
 ) -> Receiver<ClaudeCapabilities> {
     let (handshake, capabilities) = sync_channel(1);
     thread::spawn(move || {
@@ -564,6 +703,9 @@ fn read_stdout(
             let text = String::from_utf8_lossy(&line);
             let text = text.trim_end();
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(text) {
+                if lock(&file_search).observe(&value) {
+                    continue;
+                }
                 let queue_events = lock(&queue).observe(&value);
                 for event in queue_events {
                     if sender.send(event).is_err() {
@@ -571,8 +713,9 @@ fn read_stdout(
                     }
                 }
                 lock(&suggestions).observe(&value);
+                lock(&requests).observe(&value);
                 let response = &value["response"];
-                let mut pending = lock(&effort_reply);
+                let mut pending = lock(&setting_reply);
                 if value["type"] == "control_response"
                     && pending
                         .as_ref()
@@ -585,10 +728,61 @@ fn read_stdout(
                         Err(io::Error::other(
                             response["error"]
                                 .as_str()
-                                .unwrap_or("effort change refused"),
+                                .unwrap_or("setting change refused"),
                         ))
                     };
                     let _ = reply.send(result);
+                    continue;
+                }
+                let control = lock(&control_replies)
+                    .remove(response["request_id"].as_str().unwrap_or_default());
+                if let Some(action) = control {
+                    if response["subtype"] != "success" {
+                        let message = response["error"].as_str().unwrap_or("control refused");
+                        if sender
+                            .send(SessionEvent::Activity(
+                                crate::activity::ActivityEvent::MainContent {
+                                    id: None,
+                                    event: crate::activity::ExecutionEvent::Notice {
+                                        text: format!("control failed: {message}"),
+                                    },
+                                },
+                            ))
+                            .is_err()
+                        {
+                            return;
+                        }
+                        continue;
+                    }
+                    if matches!(action, SessionControl::ReconnectMcp { .. }) {
+                        let id = format!(
+                            "{}_mcp",
+                            response["request_id"].as_str().unwrap_or("req_unknown")
+                        );
+                        lock(&control_replies).insert(id.clone(), SessionControl::RefreshMcp);
+                        let request = serde_json::json!({
+                            "type": "control_request",
+                            "request_id": id,
+                            "request": {"subtype": "mcp_status"},
+                        });
+                        if let Err(error) = write_stdin_line(&stdin, &request) {
+                            lock(&control_replies)
+                                .remove(request["request_id"].as_str().unwrap_or_default());
+                            let _ = sender.send(SessionEvent::Activity(
+                                crate::activity::ActivityEvent::MainContent {
+                                    id: None,
+                                    event: crate::activity::ExecutionEvent::Notice {
+                                        text: format!("control failed: {error}"),
+                                    },
+                                },
+                            ));
+                        }
+                    }
+                    for event in control_events(&action, &response["response"]) {
+                        if sender.send(event).is_err() {
+                            return;
+                        }
+                    }
                     continue;
                 }
             }
@@ -643,9 +837,82 @@ fn read_stdout(
                 }
             }
         }
+        lock(&file_search).disconnect();
+        lock(&control_replies).clear();
         let _ = sender.send(closed_event(&child, &stderr_tail));
     });
     capabilities
+}
+
+fn control_events(action: &SessionControl, response: &serde_json::Value) -> Vec<SessionEvent> {
+    match action {
+        SessionControl::RefreshContext => {
+            let total = response["totalTokens"].as_u64().unwrap_or(0);
+            let raw_max = response["rawMaxTokens"].as_u64();
+            let max = response["maxTokens"].as_u64();
+            let details = crate::ContextDetails {
+                usable_window: max,
+                auto_compact_threshold: response["autoCompactThreshold"].as_u64(),
+                is_auto_compact_enabled: response["isAutoCompactEnabled"].as_bool(),
+                categories: response["categories"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|category| {
+                        Some(crate::ContextCategory {
+                            name: category["name"].as_str()?.to_owned(),
+                            tokens: category["tokens"].as_u64().unwrap_or(0),
+                        })
+                    })
+                    .collect(),
+            };
+            vec![
+                SessionEvent::ContextUsage {
+                    total_tokens: total,
+                    context_window: raw_max,
+                },
+                SessionEvent::ContextDetails { details },
+            ]
+        }
+        SessionControl::RefreshMcp => vec![SessionEvent::McpServers {
+            servers: response["mcpServers"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|server| {
+                    let name = server["name"].as_str()?.to_owned();
+                    Some(crate::McpServer {
+                        name,
+                        status: match server["status"].as_str() {
+                            Some("connected") => crate::McpStatus::Connected,
+                            Some("connecting" | "pending") => crate::McpStatus::Connecting,
+                            Some("needs-auth") => crate::McpStatus::NeedsAuth,
+                            Some("failed") => crate::McpStatus::Failed,
+                            Some("disabled") => crate::McpStatus::Disabled,
+                            _ => crate::McpStatus::Unknown,
+                        },
+                        error: server["error"].as_str().map(str::to_owned),
+                    })
+                })
+                .collect(),
+        }],
+        SessionControl::SetPermissionMode { mode } => {
+            vec![SessionEvent::PermissionMode { mode: mode.clone() }]
+        }
+        SessionControl::ReconnectMcp { .. }
+        | SessionControl::LoginMcp { .. }
+        | SessionControl::ReloadMcp
+        | SessionControl::StopTask { .. }
+        | SessionControl::BackgroundTasks => Vec::new(),
+    }
+}
+
+fn write_stdin_line(stdin: &Arc<Mutex<ChildStdin>>, value: &serde_json::Value) -> io::Result<()> {
+    let mut line = serde_json::to_string(value).map_err(io::Error::other)?;
+    line.push('\n');
+    let mut stdin = lock(stdin);
+    stdin.write_all(line.as_bytes())?;
+    stdin.flush()
 }
 
 /// The last of the CLI's stderr, and whether there is any more coming.

@@ -31,7 +31,10 @@ pub mod workspace;
 mod session_event;
 mod thread;
 pub use session_event::{
-    Decision, DecisionAnswer, DecisionDelivery, Hunk, ModelInfo, QueueEvent, QueuedPrompt,
-    RateLimitWindow, SessionCommand, SessionEvent, ToolResult, TurnOutcome,
+    validate_form, ContextCategory, ContextDetails, ControlKind, Decision, DecisionAnswer,
+    DecisionChoice, DecisionDelivery, DecisionKind, DecisionPolicy, FileEdit, FormChoice,
+    FormField, FormFieldKind, Hunk, McpServer, McpStatus, ModelInfo, PermissionModeChoice,
+    QueueEvent, QueuedPrompt, RateLimitWindow, RunState, SessionCommand, SessionControl,
+    SessionEvent, ToolResult, TurnOutcome, UsageDetails, UsageScope,
 };
 pub use thread::ThreadId;

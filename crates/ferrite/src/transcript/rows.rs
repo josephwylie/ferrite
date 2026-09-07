@@ -6,7 +6,7 @@
 
 use std::{collections::HashMap, ops::Range, rc::Rc};
 
-use ferrite_core::transcript::{Block, BlockId, Body, ToolActivity};
+use ferrite_core::transcript::{Block, BlockId, Body, ToolActivity, TurnDiff};
 
 /// A stable semantic-row identity.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -17,6 +17,8 @@ pub(crate) enum RowId {
     ToolActivity(String),
     /// One non-grouped transcript block.
     Block(BlockId),
+    /// The native turn-wide change summary.
+    TurnDiff(String),
 }
 
 /// One renderable transcript unit. Its blocks are owned so a list callback
@@ -26,6 +28,7 @@ pub(crate) struct TranscriptRow {
     id: RowId,
     blocks: Rc<[Block]>,
     source: Option<Rc<str>>,
+    turn_diff: Option<TurnDiff>,
 }
 
 impl TranscriptRow {
@@ -44,6 +47,10 @@ impl TranscriptRow {
     pub(crate) fn source(&self) -> Option<&str> {
         self.source.as_deref()
     }
+
+    pub(crate) fn turn_diff(&self) -> Option<&TurnDiff> {
+        self.turn_diff.as_ref()
+    }
 }
 
 /// The owned row snapshot a virtual-list callback reads.
@@ -54,8 +61,8 @@ pub(crate) struct TranscriptRows {
 
 impl TranscriptRows {
     /// Project the caller-owned retained window into semantic rows.
-    pub(crate) fn new(blocks: &[Block]) -> Self {
-        let rows = project(blocks);
+    pub(crate) fn new(blocks: &[Block], turn_diff: Option<&TurnDiff>) -> Self {
+        let rows = project(blocks, turn_diff);
         Self { rows: rows.into() }
     }
 
@@ -81,9 +88,9 @@ impl TranscriptRows {
     /// The returned splices are applied in order to the old list. Existing
     /// rows whose content changed are named in their final indices for lazy
     /// height invalidation.
-    pub(crate) fn reconcile(&mut self, blocks: &[Block]) -> RowDelta {
+    pub(crate) fn reconcile(&mut self, blocks: &[Block], turn_diff: Option<&TurnDiff>) -> RowDelta {
         let previous = self.rows.clone();
-        let projected = project(blocks);
+        let projected = project(blocks, turn_diff);
         let old_by_id: HashMap<_, _> = previous
             .iter()
             .map(|row| (row.id.clone(), row.clone()))
@@ -188,7 +195,7 @@ impl RowDelta {
     }
 }
 
-fn project(blocks: &[Block]) -> Vec<Rc<TranscriptRow>> {
+fn project(blocks: &[Block], turn_diff: Option<&TurnDiff>) -> Vec<Rc<TranscriptRow>> {
     let mut rows = Vec::new();
     let mut index = 0;
     while index < blocks.len() {
@@ -205,6 +212,7 @@ fn project(blocks: &[Block]) -> Vec<Rc<TranscriptRow>> {
                 id: RowId::Markdown(first),
                 blocks: blocks[start..index].to_vec().into(),
                 source: Some(source.into()),
+                turn_diff: None,
             }));
             continue;
         }
@@ -214,6 +222,7 @@ fn project(blocks: &[Block]) -> Vec<Rc<TranscriptRow>> {
                 id: RowId::ToolActivity(activity.leader().call.clone()),
                 blocks: blocks[index..index + len].to_vec().into(),
                 source: None,
+                turn_diff: None,
             }));
             index += len;
             continue;
@@ -223,9 +232,18 @@ fn project(blocks: &[Block]) -> Vec<Rc<TranscriptRow>> {
                 id: RowId::Block(block.id),
                 blocks: vec![block.clone()].into(),
                 source: None,
+                turn_diff: None,
             }));
         }
         index += 1;
+    }
+    if let Some(turn_diff) = turn_diff {
+        rows.push(Rc::new(TranscriptRow {
+            id: RowId::TurnDiff(turn_diff.turn_id.clone()),
+            blocks: Vec::new().into(),
+            source: None,
+            turn_diff: Some(turn_diff.clone()),
+        }));
     }
     rows
 }
@@ -288,7 +306,7 @@ mod tests {
         transcript.apply(Input::Event(SessionEvent::ContentBoundary));
         text(&mut transcript, "second");
 
-        let rows = TranscriptRows::new(transcript.blocks());
+        let rows = TranscriptRows::new(transcript.blocks(), None);
         assert_eq!(rows.len(), 1);
         assert!(matches!(rows.get(0).unwrap().id(), RowId::Markdown(_)));
         assert_eq!(rows.get(0).unwrap().blocks().len(), 2);
@@ -300,11 +318,11 @@ mod tests {
         let mut transcript = Transcript::default();
         text(&mut transcript, "first");
         prompt(&mut transcript, "next");
-        let mut rows = TranscriptRows::new(transcript.blocks());
+        let mut rows = TranscriptRows::new(transcript.blocks(), None);
         let first = rows.get(0).unwrap().clone();
 
         text(&mut transcript, "second");
-        let delta = rows.reconcile(transcript.blocks());
+        let delta = rows.reconcile(transcript.blocks(), None);
         assert!(Rc::ptr_eq(&first, rows.get(0).unwrap()));
         assert_eq!(
             delta.splices,
@@ -322,12 +340,12 @@ mod tests {
             prompt(&mut transcript, text_part);
             text(&mut transcript, text_part);
         }
-        let mut rows = TranscriptRows::new(transcript.blocks());
+        let mut rows = TranscriptRows::new(transcript.blocks(), None);
         let old = rows.rows().to_vec();
 
         prompt(&mut transcript, "d");
         text(&mut transcript, "d");
-        let delta = rows.reconcile(&transcript.blocks()[2..]);
+        let delta = rows.reconcile(&transcript.blocks()[2..], None);
         assert_eq!(
             delta.splices,
             vec![
@@ -352,9 +370,9 @@ mod tests {
         prompt(&mut transcript, "b");
         text(&mut transcript, "b");
 
-        let mut rows = TranscriptRows::new(&transcript.blocks()[2..]);
+        let mut rows = TranscriptRows::new(&transcript.blocks()[2..], None);
         let old = rows.get(0).unwrap().clone();
-        let delta = rows.reconcile(transcript.blocks());
+        let delta = rows.reconcile(transcript.blocks(), None);
         assert_eq!(
             delta.splices,
             vec![RowSplice {
@@ -369,11 +387,11 @@ mod tests {
     fn adjacent_tools_merge_into_the_leaders_stable_activity_row() {
         let mut transcript = Transcript::default();
         tool(&mut transcript, "first");
-        let mut rows = TranscriptRows::new(transcript.blocks());
+        let mut rows = TranscriptRows::new(transcript.blocks(), None);
         assert!(matches!(rows.get(0).unwrap().id(), RowId::Block(_)));
 
         tool(&mut transcript, "second");
-        let delta = rows.reconcile(transcript.blocks());
+        let delta = rows.reconcile(transcript.blocks(), None);
         assert!(matches!(
             rows.get(0).unwrap().id(),
             RowId::ToolActivity(call) if call == "first"
@@ -393,6 +411,6 @@ mod tests {
         transcript.apply(Input::Event(SessionEvent::ThinkingDelta {
             text: "   ".into(),
         }));
-        assert!(TranscriptRows::new(transcript.blocks()).is_empty());
+        assert!(TranscriptRows::new(transcript.blocks(), None).is_empty());
     }
 }

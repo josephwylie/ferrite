@@ -162,7 +162,11 @@ impl DemoSession {
             // The demo's agent cannot tell "allow once" from "allow always":
             // the standing answer changes what the provider asks next time,
             // which a script has no next time to show.
-            DecisionAnswer::Allow { .. } | DecisionAnswer::AllowAlways { .. } => {
+            DecisionAnswer::Allow { .. }
+            | DecisionAnswer::AllowAlways { .. }
+            | DecisionAnswer::Questions { .. }
+            | DecisionAnswer::Form { .. }
+            | DecisionAnswer::Choose { .. } => {
                 let mut steps = vec![Step::new(
                     60,
                     SessionEvent::ToolCompleted {
@@ -187,7 +191,7 @@ impl DemoSession {
                 steps.extend(turn(&[], ALLOWED, 0.0124));
                 steps
             }
-            DecisionAnswer::Deny { .. } => turn(&[], DENIED, 0.0018),
+            DecisionAnswer::Deny { .. } | DecisionAnswer::Cancel => turn(&[], DENIED, 0.0018),
         };
         if let Some(first) = steps.first_mut() {
             first.after = Duration::from_millis(120);
@@ -707,6 +711,8 @@ fn seed_decision() -> Vec<Step> {
         SessionEvent::DecisionRequested {
             decision: Decision {
                 delivery: Default::default(),
+                kind: Default::default(),
+                policy: Default::default(),
                 id: "perm_close".into(),
                 tool_use_id: "t_close".into(),
                 tool_name: "Bash".into(),
@@ -791,16 +797,17 @@ pub fn script() -> Vec<Step> {
         SessionEvent::DecisionRequested {
             decision: Decision {
                 delivery: Default::default(),
+                kind: Default::default(),
+                policy: Default::default(),
                 id: "perm_demo".into(),
                 tool_use_id: "toolu_demo".into(),
                 tool_name: "Write".into(),
                 description: "ferrite-perm.txt".into(),
                 input: serde_json::json!({ "file_path": "ferrite-perm.txt", "content": "ok" }),
-                suggestions: vec![serde_json::json!({
-                    "type": "setMode",
-                    "mode": "acceptEdits",
-                    "destination": "session",
-                })],
+                suggestions: vec![ferrite_core::DecisionChoice {
+                    label: "Accept edits for this session".into(), standing: true,
+                    value: serde_json::json!({"type":"setMode","mode":"acceptEdits","destination":"session"}),
+                }],
             },
         },
     ));

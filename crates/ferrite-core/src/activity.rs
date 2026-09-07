@@ -160,6 +160,14 @@ pub enum ExecutionEvent {
         id: String,
         text: String,
     },
+    FileChanges {
+        id: String,
+        edits: Vec<crate::FileEdit>,
+    },
+    TurnDiff {
+        turn_id: String,
+        diff: String,
+    },
     TextDelta {
         text: String,
     },
@@ -183,6 +191,10 @@ pub enum ExecutionEvent {
     },
     ThinkingSnapshot {
         text: String,
+    },
+    /// Removes previously attributed content by its provider-owned identity.
+    Retract {
+        ids: Vec<String>,
     },
     Prompt {
         text: String,
@@ -212,6 +224,13 @@ pub enum ExecutionEvent {
         output_tokens: u64,
         reasoning_output_tokens: u64,
         context_window: Option<u64>,
+    },
+    ContextUsage {
+        total_tokens: u64,
+        context_window: Option<u64>,
+    },
+    UsageDetails {
+        details: crate::UsageDetails,
     },
 }
 
@@ -318,6 +337,7 @@ pub struct ActivityUpdate {
 struct Record {
     sequence: u64,
     stream: Option<(String, bool)>, // item identity, thinking versus answer
+    content_id: Option<String>,
     input: Input,
     bytes: usize,
 }
@@ -329,6 +349,8 @@ struct SubjectState {
     bytes: usize,
     seen: BTreeSet<String>,
     seen_order: VecDeque<String>,
+    retracted: BTreeSet<String>,
+    retracted_order: VecDeque<String>,
     timings: HashMap<String, ToolTiming>,
     status: AgentStatus,
     fresh: bool,
@@ -353,6 +375,8 @@ impl SubjectState {
             bytes: 0,
             seen: BTreeSet::new(),
             seen_order: VecDeque::new(),
+            retracted: BTreeSet::new(),
+            retracted_order: VecDeque::new(),
             timings: HashMap::new(),
             status: AgentStatus::Unknown,
             fresh: false,
@@ -417,8 +441,10 @@ impl SubjectState {
                     }
                 }
             }
-            Input::Event(SessionEvent::ToolCompleted { id, .. }) => {
-                if let Some(ToolTiming::Running(since)) = self.timings.get(id) {
+            Input::Event(SessionEvent::ToolCompleted { id, result, .. }) => {
+                if let Some(duration_ms) = result.duration_ms() {
+                    self.timings.insert(id.clone(), ToolTiming::Done(Duration::from_millis(duration_ms)));
+                } else if let Some(ToolTiming::Running(since)) = self.timings.get(id) {
                     self.timings.insert(
                         id.clone(),
                         ToolTiming::Done(at.saturating_duration_since(*since)),
@@ -434,6 +460,14 @@ impl SubjectState {
                 self.last_outcome = Some(outcome.clone());
                 self.busy = false;
                 self.stop_timings(at);
+            }
+            Input::Event(SessionEvent::RunState { state }) => {
+                self.status = match state {
+                    crate::RunState::Running => AgentStatus::Working,
+                    crate::RunState::RequiresAction => AgentStatus::Waiting,
+                    crate::RunState::Idle => AgentStatus::Idle,
+                };
+                self.busy = live && !matches!(state, crate::RunState::Idle);
             }
             Input::Event(SessionEvent::DecisionRequested { decision }) => {
                 if live && decision.blocks_execution() {
@@ -476,11 +510,29 @@ impl SubjectState {
         &mut self,
         input: Input,
         stream: Option<(String, bool)>,
+        content_id: Option<String>,
         sequence: u64,
         at: Instant,
         live: bool,
         limits: ActivityLimits,
     ) -> transcript::Update {
+        let separates_item = stream.as_ref().is_some_and(|stream| {
+            self.records
+                .back()
+                .and_then(|record| record.stream.as_ref())
+                .is_some_and(|previous| previous != stream)
+        });
+        if separates_item {
+            self.append(
+                Input::Event(SessionEvent::ContentBoundary),
+                None,
+                None,
+                sequence,
+                at,
+                live,
+                limits,
+            );
+        }
         self.bookkeeping(&input, at, live);
         if !self.retained {
             return transcript::Update::default();
@@ -497,7 +549,7 @@ impl SubjectState {
         let merged = self
             .records
             .back_mut()
-            .filter(|last| last.stream == stream)
+            .filter(|last| last.stream == stream && last.content_id == content_id)
             .is_some_and(|last| {
                 if append_delta(&mut last.input, &input) {
                     last.bytes += bytes;
@@ -510,6 +562,7 @@ impl SubjectState {
             self.records.push_back(Record {
                 sequence,
                 stream,
+                content_id,
                 input,
                 bytes,
             });
@@ -520,6 +573,31 @@ impl SubjectState {
         }
         self.prune_timings(limits);
         update
+    }
+
+    fn retract(&mut self, ids: &[String], limits: ActivityLimits) -> transcript::Update {
+        for id in ids {
+            if self.retracted.insert(id.clone()) {
+                self.retracted_order.push_back(id.clone());
+            }
+        }
+        while self.retracted_order.len() > limits.dedup_ids_per_subject.max(1) {
+            if let Some(old) = self.retracted_order.pop_front() {
+                self.retracted.remove(&old);
+            }
+        }
+        let before = self.records.len();
+        self.records.retain(|record| {
+            !record
+                .content_id
+                .as_ref()
+                .is_some_and(|id| self.retracted.contains(id))
+        });
+        if self.records.len() == before {
+            return transcript::Update::default();
+        }
+        self.bytes = self.records.iter().map(|record| record.bytes).sum();
+        self.rebuild(limits)
     }
 
     fn trim(&mut self, limits: ActivityLimits) -> bool {
@@ -606,7 +684,7 @@ impl SubjectState {
             self.bookkeeping(&input, at, live);
             return transcript::Update::default();
         }
-        let stream = id.map(|id| (id, thinking));
+        let stream = id.clone().map(|id| (id, thinking));
         if let Some(identity) = stream.as_ref() {
             if let Some(first) = self
                 .records
@@ -632,6 +710,7 @@ impl SubjectState {
                         kept.push_back(Record {
                             sequence: old_sequence,
                             stream: stream.clone(),
+                            content_id: id.clone(),
                             input: input.clone(),
                             bytes,
                         });
@@ -649,7 +728,7 @@ impl SubjectState {
         } else {
             self.coverage = TranscriptCoverage::Partial;
         }
-        self.append(input, stream, sequence, at, live, limits)
+        self.append(input, stream, id, sequence, at, live, limits)
     }
 
     fn coverage(&self) -> TranscriptCoverage {
@@ -965,6 +1044,9 @@ impl Activity {
     }
 
     fn main_input(&mut self, input: Input, at: Instant, live: bool) -> ActivityUpdate {
+        if let Input::Event(SessionEvent::ConversationReset { session_id }) = input {
+            return self.conversation_reset(session_id, at, live);
+        }
         if let Input::Event(SessionEvent::DecisionRequested { decision }) = input {
             return self.event(
                 ActivityEvent::Decision {
@@ -1004,12 +1086,55 @@ impl Activity {
         }
         let blocks = self
             .main
-            .append(input, None, self.sequence, at, live, self.limits);
+            .append(input, None, None, self.sequence, at, live, self.limits);
         if prompt {
             self.main.busy = previous_busy;
         }
         update.blocks.push((Subject::Main, blocks));
         update
+    }
+
+    fn conversation_reset(
+        &mut self,
+        session_id: String,
+        at: Instant,
+        live: bool,
+    ) -> ActivityUpdate {
+        let mut changed = vec![Subject::Main];
+        let mut evicted: Vec<_> = self
+            .main
+            .transcript
+            .blocks()
+            .iter()
+            .map(|block| block.id)
+            .collect();
+        for key in self.agents.keys() {
+            changed.push(Subject::Subagent(key.clone()));
+        }
+        let model = self.main.transcript.model().unwrap_or_default().to_owned();
+        self.main = SubjectState::new(self.limits);
+        let blocks = self.main.append(
+            Input::Event(SessionEvent::Init { session_id, model }),
+            None,
+            None,
+            self.sequence,
+            at,
+            live,
+            self.limits,
+        );
+        evicted.extend(blocks.evicted);
+        self.agents.clear();
+        self.aliases.clear();
+        self.order.clear();
+        self.pending.clear();
+        self.limited = false;
+        self.main_operator_turn = false;
+        ActivityUpdate {
+            changed,
+            blocks: vec![(Subject::Main, transcript::Update { evicted, ..blocks })],
+            attention_changed: true,
+            ..ActivityUpdate::default()
+        }
     }
 
     fn event(&mut self, event: ActivityEvent, at: Instant, live: bool) -> ActivityUpdate {
@@ -1086,6 +1211,7 @@ impl Activity {
                                 outcome,
                                 cost_usd: None,
                             }),
+                            None,
                             None,
                             self.sequence,
                             at,
@@ -1220,6 +1346,7 @@ impl Activity {
                         completed_at: completed_at.clone(),
                     },
                     None,
+                    None,
                     sequence,
                     at,
                     live,
@@ -1288,6 +1415,7 @@ impl Activity {
                             Input::Event(SessionEvent::DecisionRequested {
                                 decision: decision.clone(),
                             }),
+                            None,
                             None,
                             sequence,
                             at,
@@ -1381,6 +1509,20 @@ impl Activity {
                 ..ActivityUpdate::default()
             };
         };
+        if let ExecutionEvent::Retract { ids } = &event {
+            let blocks = state.retract(ids, limits);
+            return ActivityUpdate {
+                changed: vec![subject.clone()],
+                blocks: vec![(subject, blocks)],
+                ..ActivityUpdate::default()
+            };
+        }
+        if id.as_ref().is_some_and(|id| state.retracted.contains(id)) {
+            return ActivityUpdate {
+                rejected: true,
+                ..ActivityUpdate::default()
+            };
+        }
         if let Some(delivery) = delivery_id(&event, id.as_deref()) {
             if !state.remember(delivery, limits.dedup_ids_per_subject) {
                 return ActivityUpdate {
@@ -1401,12 +1543,14 @@ impl Activity {
             }
             event => {
                 let stream = match &event {
-                    ExecutionEvent::TextDelta { .. } => id.map(|id| (id, false)),
+                    ExecutionEvent::TextDelta { .. } => id.clone().map(|id| (id, false)),
                     ExecutionEvent::ThinkingDelta { .. }
-                    | ExecutionEvent::ReasoningSummaryDelta { .. } => id.map(|id| (id, true)),
+                    | ExecutionEvent::ReasoningSummaryDelta { .. } => {
+                        id.clone().map(|id| (id, true))
+                    }
                     _ => None,
                 };
-                state.append(event.into_input(), stream, sequence, at, live, limits)
+                state.append(event.into_input(), stream, id, sequence, at, live, limits)
             }
         };
         let mut update = ActivityUpdate {
@@ -1499,6 +1643,7 @@ impl Activity {
                     } else {
                         Input::Notice("Answer delivered".into())
                     },
+                    None,
                     None,
                     sequence,
                     at,
@@ -1895,6 +2040,14 @@ impl ExecutionEvent {
                 id: id.clone(),
                 text: text.clone(),
             },
+            SessionEvent::FileChanges { id, edits } => Self::FileChanges {
+                id: id.clone(),
+                edits: edits.clone(),
+            },
+            SessionEvent::TurnDiff { turn_id, diff } => Self::TurnDiff {
+                turn_id: turn_id.clone(),
+                diff: diff.clone(),
+            },
             SessionEvent::TextDelta { text } => Self::TextDelta { text: text.clone() },
             SessionEvent::ThinkingDelta { text } => Self::ThinkingDelta { text: text.clone() },
             SessionEvent::ReasoningSummaryDelta {
@@ -1939,6 +2092,16 @@ impl ExecutionEvent {
                 reasoning_output_tokens: *reasoning_output_tokens,
                 context_window: *context_window,
             },
+            SessionEvent::ContextUsage {
+                total_tokens,
+                context_window,
+            } => Self::ContextUsage {
+                total_tokens: *total_tokens,
+                context_window: *context_window,
+            },
+            SessionEvent::UsageDetails { details } => Self::UsageDetails {
+                details: details.clone(),
+            },
             _ => return None,
         })
     }
@@ -1959,6 +2122,8 @@ impl ExecutionEvent {
                 snapshot,
             },
             Self::ToolOutputDelta { id, text } => SessionEvent::ToolOutputDelta { id, text },
+            Self::FileChanges { id, edits } => SessionEvent::FileChanges { id, edits },
+            Self::TurnDiff { turn_id, diff } => SessionEvent::TurnDiff { turn_id, diff },
             Self::TextDelta { text } | Self::TextSnapshot { text } => {
                 SessionEvent::TextDelta { text }
             }
@@ -1968,6 +2133,7 @@ impl ExecutionEvent {
             Self::ThinkingDelta { text }
             | Self::Thinking { text }
             | Self::ThinkingSnapshot { text } => SessionEvent::ThinkingDelta { text },
+            Self::Retract { .. } => unreachable!("retractions are folded before transcript input"),
             Self::ReasoningSummaryDelta {
                 text,
                 summary_index,
@@ -2005,6 +2171,14 @@ impl ExecutionEvent {
                 reasoning_output_tokens,
                 context_window,
             },
+            Self::ContextUsage {
+                total_tokens,
+                context_window,
+            } => SessionEvent::ContextUsage {
+                total_tokens,
+                context_window,
+            },
+            Self::UsageDetails { details } => SessionEvent::UsageDetails { details },
         })
     }
 }
@@ -2086,7 +2260,8 @@ fn input_bytes(input: &Input) -> usize {
                 id.len()
                     + output.len()
                     + match result {
-                        ToolResult::Command { stdout, stderr } => stdout.len() + stderr.len(),
+                        ToolResult::Command { stdout, stderr, .. } => stdout.len() + stderr.len(),
+                        ToolResult::Structured { value, .. } => value.to_string().len(),
                         ToolResult::FileEdit { path, hunks } => {
                             path.len()
                                 + hunks
@@ -2095,6 +2270,18 @@ fn input_bytes(input: &Input) -> usize {
                                     .map(String::len)
                                     .sum::<usize>()
                         }
+                        ToolResult::FileEdits { edits } => edits
+                            .iter()
+                            .map(|edit| {
+                                edit.path.len()
+                                    + edit
+                                        .hunks
+                                        .iter()
+                                        .flat_map(|hunk| &hunk.lines)
+                                        .map(String::len)
+                                        .sum::<usize>()
+                            })
+                            .sum(),
                         ToolResult::Opaque => 0,
                     }
             }

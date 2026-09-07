@@ -16,6 +16,12 @@ pub use highlight::{tokens as highlight_tokens, Lexer};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct BlockId(u64);
 
+impl BlockId {
+    /// Render-only selection identity for transcript metadata that is not a
+    /// transcript Block. A Transcript holds at most one current turn diff.
+    pub const TURN_DIFF: Self = Self(u64::MAX);
+}
+
 /// One rendered unit of the transcript.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Block {
@@ -73,9 +79,10 @@ pub struct ToolBlock {
     /// One line naming what the call touched, for a row that never wraps.
     pub summary: String,
     pub state: ToolState,
-    /// The patch this call applied, when it was a file edit. A row with one
-    /// draws as a diff card; a row without stays a single line.
-    pub diff: Option<Diff>,
+    /// Every file this call changed.
+    pub diffs: Vec<Diff>,
+    /// An unmodelled provider result, retained for disclosure.
+    pub structured_result: Option<serde_json::Value>,
     /// The first line of the tool's output, trimmed to a row — what the
     /// Pane's `⎿` continuation shows (DirectionDense). Errors carry their
     /// message in `state` instead; disclosure reads `output`.
@@ -83,6 +90,17 @@ pub struct ToolBlock {
     /// Exact provider output retained for inline disclosure, bounded so one
     /// noisy call cannot dominate a many-Pane cockpit.
     pub output: Option<ToolOutput>,
+}
+
+impl ToolBlock {
+    /// A bounded, selectable JSON preview for an otherwise unmodelled result.
+    /// The original value remains on this block for persistence and replay.
+    pub fn structured_output(&self) -> Option<ToolOutput> {
+        self.structured_result
+            .as_ref()
+            .and_then(|value| serde_json::to_string_pretty(value).ok())
+            .and_then(|text| retained_output(&text))
+    }
 }
 
 /// A compact display run, never an assertion that calls executed in parallel.
@@ -180,6 +198,12 @@ impl<'a> ToolActivity<'a> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolOutput {
     pub text: String,
+    pub omitted_bytes: usize,
+}
+#[derive(Debug, Clone, PartialEq)]
+pub struct TurnDiff {
+    pub turn_id: String,
+    pub diff: String,
     pub omitted_bytes: usize,
 }
 
@@ -378,14 +402,19 @@ pub struct Transcript {
     /// The current turn's result, cleared when another turn starts. Cost
     /// cannot stand in for this: Codex completes without reporting dollars.
     turn_outcome: Option<TurnOutcome>,
+    turn_diff: Option<TurnDiff>,
     usage: Option<Usage>,
+    usage_details: Option<crate::UsageDetails>,
+    context_details: Option<crate::ContextDetails>,
+    mcp_servers: Vec<crate::McpServer>,
+    mcp_authorizations: std::collections::BTreeMap<String, String>,
     rate_limits: RateLimits,
     /// When the running turn began — the operator's prompt went out — for
     /// the working line's clock. None between turns.
     turn_started: Option<std::time::Instant>,
     /// Output tokens the running turn has produced, summed across the
-    /// messages it streams (Claude reports each message's own count and
-    /// Codex a running total; `last_report` tells the two apart).
+    /// messages it streams. Adapters normalize current reports to a per-turn
+    /// total; the smaller-report fallback supports older stored events.
     turn_output_tokens: u64,
     last_report: u64,
     /// Which reasoning summary part the tail Block belongs to.
@@ -395,11 +424,6 @@ pub struct Transcript {
     thinking_open: bool,
     latest_reasoning_part: Option<BlockId>,
     reasoning_parts: std::collections::BTreeMap<(String, u64), BlockId>,
-    /// The Thread's plan: every step's subject in creation order, and which
-    /// steps it has finished. Ids in a set rather than a count, because a
-    /// step can be completed twice.
-    subjects: Vec<String>,
-    completed: std::collections::BTreeSet<String>,
 }
 
 /// Keep the latest output line even after the disclosed prefix reaches its
@@ -451,6 +475,12 @@ pub(crate) struct Runtime {
     turn_started: Option<std::time::Instant>,
     turn_output_tokens: u64,
     last_report: u64,
+    turn_diff: Option<TurnDiff>,
+    usage_details: Option<crate::UsageDetails>,
+    context_details: Option<crate::ContextDetails>,
+    mcp_servers: Vec<crate::McpServer>,
+    mcp_authorizations: std::collections::BTreeMap<String, String>,
+    rate_limits: RateLimits,
 }
 
 /// Blocks a long-running Thread keeps in memory. Generous enough that a Pane
@@ -465,6 +495,9 @@ impl Default for Transcript {
 }
 
 impl Transcript {
+    pub fn turn_diff(&self) -> Option<&TurnDiff> {
+        self.turn_diff.as_ref()
+    }
     pub fn new(highlighter: Arc<dyn Highlighter>) -> Self {
         Self::with_capacity(highlighter, DEFAULT_CAPACITY)
     }
@@ -483,7 +516,12 @@ impl Transcript {
             session_id: None,
             last_cost: None,
             turn_outcome: None,
+            turn_diff: None,
             usage: None,
+            usage_details: None,
+            context_details: None,
+            mcp_servers: Vec::new(),
+            mcp_authorizations: std::collections::BTreeMap::new(),
             rate_limits: RateLimits::default(),
             turn_started: None,
             turn_output_tokens: 0,
@@ -494,8 +532,6 @@ impl Transcript {
             thinking_open: false,
             latest_reasoning_part: None,
             reasoning_parts: Default::default(),
-            subjects: Vec::new(),
-            completed: std::collections::BTreeSet::new(),
         }
     }
 
@@ -556,6 +592,12 @@ impl Transcript {
             turn_started: self.turn_started,
             turn_output_tokens: self.turn_output_tokens,
             last_report: self.last_report,
+            turn_diff: self.turn_diff.clone(),
+            usage_details: self.usage_details.clone(),
+            context_details: self.context_details.clone(),
+            mcp_servers: self.mcp_servers.clone(),
+            mcp_authorizations: self.mcp_authorizations.clone(),
+            rate_limits: self.rate_limits,
         }
     }
 
@@ -584,6 +626,12 @@ impl Transcript {
         self.turn_started = runtime.turn_started;
         self.turn_output_tokens = runtime.turn_output_tokens;
         self.last_report = runtime.last_report;
+        self.turn_diff = runtime.turn_diff;
+        self.usage_details = runtime.usage_details;
+        self.context_details = runtime.context_details;
+        self.mcp_servers = runtime.mcp_servers;
+        self.mcp_authorizations = runtime.mcp_authorizations;
+        self.rate_limits = runtime.rate_limits;
         self.advance_revision();
     }
 
@@ -613,6 +661,22 @@ impl Transcript {
 
     pub fn usage(&self) -> Option<Usage> {
         self.usage
+    }
+
+    pub fn usage_details(&self) -> Option<&crate::UsageDetails> {
+        self.usage_details.as_ref()
+    }
+
+    pub fn context_details(&self) -> Option<&crate::ContextDetails> {
+        self.context_details.as_ref()
+    }
+
+    pub fn mcp_servers(&self) -> &[crate::McpServer] {
+        &self.mcp_servers
+    }
+
+    pub fn mcp_authorizations(&self) -> &std::collections::BTreeMap<String, String> {
+        &self.mcp_authorizations
     }
 
     pub fn rate_limits(&self) -> RateLimits {
@@ -646,13 +710,7 @@ impl Transcript {
                 total: self.progress.plan.len(),
             });
         }
-        (!self.subjects.is_empty()).then_some(Todos {
-            // The CLI assigns task ids and TaskCreate never echoes them, so a
-            // completion cannot be matched to the step it finished. Clamping
-            // is the honest bound: a Pane may under-report, never overshoot.
-            done: self.completed.len().min(self.subjects.len()),
-            total: self.subjects.len(),
-        })
+        None
     }
 
     /// The step the Thread works now, by the tasks strip's reading: the
@@ -664,11 +722,7 @@ impl Transcript {
         if self.progress.has_plan {
             return self.progress.current_step();
         }
-        let done = self.completed.len().min(self.subjects.len());
-        self.subjects
-            .get(done)
-            .map(String::as_str)
-            .filter(|subject| !subject.is_empty())
+        None
     }
 
     /// #11: whether this Thread still offers adopting a CLI session — no
@@ -880,6 +934,34 @@ impl Transcript {
                     ..Update::default()
                 }
             }
+            Input::Event(SessionEvent::FileChanges { id, edits }) => {
+                let Some(block) = self
+                    .blocks
+                    .iter_mut()
+                    .find(|block| matches!(&block.body, Body::Tool(tool) if tool.call == id))
+                else {
+                    return Update::default();
+                };
+                let Body::Tool(tool) = &mut block.body else {
+                    unreachable!()
+                };
+                tool.diffs = edits
+                    .into_iter()
+                    .map(|edit| Diff::new(edit.path, edit.hunks))
+                    .collect();
+                Update {
+                    dirty: vec![block.id],
+                    ..Update::default()
+                }
+            }
+            Input::Event(SessionEvent::TurnDiff { turn_id, diff }) => {
+                self.turn_diff = retained_output(&diff).map(|output| TurnDiff {
+                    turn_id,
+                    diff: output.text,
+                    omitted_bytes: output.omitted_bytes,
+                });
+                Update::default()
+            }
             // Activity owns attribution and feeds each subject's execution
             // into its own Transcript. Legacy callers cannot fold children
             // into Main by accidentally replaying an attributed observation.
@@ -951,8 +1033,26 @@ impl Transcript {
                 self.last_report = output_tokens;
                 Update::default()
             }
+            Input::Event(SessionEvent::ContextUsage {
+                total_tokens,
+                context_window,
+            }) => {
+                self.usage = Some(Usage {
+                    total_tokens,
+                    context_window,
+                });
+                Update::default()
+            }
+            Input::Event(SessionEvent::UsageDetails { details }) => {
+                self.usage_details = Some(details);
+                Update::default()
+            }
             Input::Event(SessionEvent::RateLimits { five_hour, weekly }) => {
                 self.rate_limits = RateLimits { five_hour, weekly };
+                Update::default()
+            }
+            Input::Event(SessionEvent::ContextDetails { details }) => {
+                self.context_details = Some(details);
                 Update::default()
             }
             Input::Answered { allowed, tool_name } => {
@@ -964,7 +1064,10 @@ impl Transcript {
                 }
             }
             Input::Revived => {
+                self.mcp_servers.clear();
+                self.mcp_authorizations.clear();
                 self.progress.disconnected();
+                self.mcp_servers.clear();
                 if matches!(self.status, Status::Streaming | Status::Blocked) {
                     self.status = Status::Idle;
                 }
@@ -983,6 +1086,7 @@ impl Transcript {
                 ..Update::default()
             },
             Input::Prompt(line) => {
+                self.turn_diff = None;
                 self.turn_outcome = None;
                 self.progress.end_turn();
                 self.latest_reasoning_part = None;
@@ -1012,9 +1116,17 @@ impl Transcript {
                 } else {
                     ToolState::Ok
                 };
-                let diff = match result {
-                    ToolResult::FileEdit { path, hunks } => Some(Diff::new(path, hunks)),
-                    _ => None,
+                let (diffs, structured_result) = match result {
+                    ToolResult::FileEdit { path, hunks } => (vec![Diff::new(path, hunks)], None),
+                    ToolResult::FileEdits { edits } => (
+                        edits
+                            .into_iter()
+                            .map(|edit| Diff::new(edit.path, edit.hunks))
+                            .collect(),
+                        None,
+                    ),
+                    ToolResult::Structured { value, .. } => (Vec::new(), Some(value)),
+                    _ => (Vec::new(), None),
                 };
                 // A failure already carries its message in the state; a
                 // success keeps its first output line for the `⎿` row.
@@ -1023,7 +1135,7 @@ impl Transcript {
                 let output = retained_output(&output);
                 Update {
                     dirty: self
-                        .settle_tool(&id, state, diff, result_line, output)
+                        .settle_tool(&id, state, diffs, structured_result, result_line, output)
                         .into_iter()
                         .collect(),
                     ..Update::default()
@@ -1041,7 +1153,6 @@ impl Transcript {
                 }
                 self.status = Status::Streaming;
                 self.progress.phase(Phase::Working);
-                self.plan(&name, &input);
                 let block = self.push(Body::Tool(ToolBlock {
                     call: id,
                     summary: tool_summary(&input),
@@ -1057,7 +1168,8 @@ impl Transcript {
                         .map(str::to_owned),
                     name,
                     state: ToolState::Running,
-                    diff: None,
+                    diffs: Vec::new(),
+                    structured_result: None,
                     result_line: None,
                     output: None,
                 }));
@@ -1075,6 +1187,11 @@ impl Transcript {
                 self.model = Some(model);
                 Update::default()
             }
+            Input::Event(SessionEvent::ModelChanged { model }) => {
+                self.model = Some(model);
+                Update::default()
+            }
+            Input::Event(SessionEvent::ConversationReset { .. }) => Update::default(),
             Input::Event(SessionEvent::TurnEnded { outcome, cost_usd }) => {
                 self.progress.end_turn();
                 self.latest_reasoning_part = None;
@@ -1101,6 +1218,14 @@ impl Transcript {
                     ..Update::default()
                 }
             }
+            Input::Event(SessionEvent::RunState { state }) => {
+                self.status = match state {
+                    crate::RunState::Running => Status::Streaming,
+                    crate::RunState::RequiresAction => Status::Blocked,
+                    crate::RunState::Idle => Status::Idle,
+                };
+                Update::default()
+            }
             Input::Event(SessionEvent::DecisionRequested { decision }) => {
                 if decision.blocks_execution() {
                     self.status = Status::Blocked;
@@ -1124,8 +1249,23 @@ impl Transcript {
             Input::Event(SessionEvent::Commands { .. }) => Update::default(),
             Input::Event(SessionEvent::PermissionMode { .. }) => Update::default(),
             Input::Event(SessionEvent::Models { .. } | SessionEvent::Queue(_)) => Update::default(),
+            Input::Event(SessionEvent::McpServers { servers }) => {
+                self.mcp_servers = servers;
+                Update::default()
+            }
+            Input::Event(SessionEvent::McpAuthorization { server, url }) => {
+                if let Some(url) = url {
+                    self.mcp_authorizations.insert(server, url);
+                } else {
+                    self.mcp_authorizations.remove(&server);
+                }
+                Update::default()
+            }
             Input::Event(SessionEvent::Closed { reason }) => {
+                self.mcp_servers.clear();
+                self.mcp_authorizations.clear();
                 self.progress.disconnected();
+                self.mcp_servers.clear();
                 self.latest_reasoning_part = None;
                 self.status = Status::Closed;
                 let mut dirty = self.retire_tools();
@@ -1173,26 +1313,6 @@ impl Transcript {
             dirty.extend(self.write_open(body, &source));
         }
         dirty
-    }
-
-    /// Watch the Thread plan and tick its own work off. Nothing is stored but
-    /// the counts: the plan's prose is already in the tool rows.
-    fn plan(&mut self, name: &str, input: &serde_json::Value) {
-        match name {
-            "TaskCreate" => self.subjects.push(
-                input
-                    .get("subject")
-                    .and_then(|subject| subject.as_str())
-                    .unwrap_or_default()
-                    .to_string(),
-            ),
-            "TaskUpdate" if input.get("status").and_then(|s| s.as_str()) == Some("completed") => {
-                if let Some(task) = input.get("taskId").and_then(|id| id.as_str()) {
-                    self.completed.insert(task.to_string());
-                }
-            }
-            _ => {}
-        }
     }
 
     fn retire_tools(&mut self) -> Vec<BlockId> {
@@ -1312,7 +1432,8 @@ impl Transcript {
         &mut self,
         call: &str,
         state: ToolState,
-        diff: Option<Diff>,
+        diffs: Vec<Diff>,
+        structured_result: Option<serde_json::Value>,
         result_line: Option<String>,
         output: Option<ToolOutput>,
     ) -> Option<BlockId> {
@@ -1324,7 +1445,8 @@ impl Transcript {
             return None;
         };
         if tool.state == state
-            && tool.diff == diff
+            && tool.diffs == diffs
+            && tool.structured_result == structured_result
             && tool.result_line == result_line
             && tool.output == output
         {
@@ -1332,7 +1454,8 @@ impl Transcript {
         }
         let was_running = tool.state == ToolState::Running;
         tool.state = state;
-        tool.diff = diff;
+        tool.diffs = diffs;
+        tool.structured_result = structured_result;
         if result_line.is_some() || !was_running {
             tool.result_line = result_line;
         }
@@ -2158,6 +2281,8 @@ mod tests {
             Input::Event(SessionEvent::DecisionRequested {
                 decision: Decision {
                     delivery: Default::default(),
+                    kind: Default::default(),
+                    policy: Default::default(),
                     id: "perm_01".into(),
                     tool_use_id: "toolu_01".into(),
                     tool_name: "AskUserQuestion".into(),
@@ -2212,6 +2337,8 @@ mod tests {
         transcript.apply(Input::Event(SessionEvent::DecisionRequested {
             decision: Decision {
                 delivery: Default::default(),
+                kind: Default::default(),
+                policy: Default::default(),
                 id: "perm_01".into(),
                 tool_use_id: "toolu_01".into(),
                 tool_name: "Write".into(),
@@ -2270,6 +2397,8 @@ mod tests {
         transcript.apply(Input::Event(SessionEvent::DecisionRequested {
             decision: Decision {
                 delivery: Default::default(),
+                kind: Default::default(),
+                policy: Default::default(),
                 id: "perm_01".into(),
                 tool_use_id: "toolu_01".into(),
                 tool_name: "Write".into(),
@@ -2328,105 +2457,62 @@ mod tests {
         );
     }
 
-    /// The shapes are the committed `todo` capture's, not remembered ones:
-    /// 2.1.243 has no TodoWrite — it plans with TaskCreate/TaskUpdate.
+    fn native_task(id: &str, subject: &str, status: crate::progress::StepStatus) -> Input {
+        Input::Event(SessionEvent::Progress {
+            event: crate::progress::ProgressEvent::Task {
+                id: id.into(),
+                subject: subject.into(),
+                status: Some(status),
+                deleted: false,
+            },
+        })
+    }
+
     #[test]
     fn a_planned_todo_list_is_counted_as_it_is_worked() {
+        use crate::progress::StepStatus::*;
         let mut transcript = Transcript::default();
-        assert_eq!(transcript.todos(), None, "a Thread with no plan has none");
-
-        for subject in ["init git", "add docs", "make dirs"] {
-            transcript.apply(started(
-                &format!("t{subject}"),
-                "TaskCreate",
-                serde_json::json!({ "subject": subject, "activeForm": subject }),
-            ));
+        assert_eq!(transcript.todos(), None);
+        for (id, subject) in [("1", "init git"), ("2", "add docs"), ("3", "make dirs")] {
+            transcript.apply(native_task(id, subject, Pending));
         }
-        transcript.apply(started(
-            "u1",
-            "TaskUpdate",
-            serde_json::json!({ "taskId": "1", "status": "completed" }),
-        ));
-
+        transcript.apply(native_task("1", "", Completed));
         assert_eq!(transcript.todos(), Some(Todos { done: 1, total: 3 }));
-
-        // A status that is not completion moves nothing.
-        transcript.apply(started(
-            "u2",
-            "TaskUpdate",
-            serde_json::json!({ "taskId": "2", "status": "in_progress" }),
-        ));
+        transcript.apply(native_task("2", "", InProgress));
         assert_eq!(transcript.todos(), Some(Todos { done: 1, total: 3 }));
-
-        // And completing the same task twice is still one task done.
-        transcript.apply(started(
-            "u3",
-            "TaskUpdate",
-            serde_json::json!({ "taskId": "1", "status": "completed" }),
-        ));
+        transcript.apply(native_task("1", "", Completed));
         assert_eq!(transcript.todos(), Some(Todos { done: 1, total: 3 }));
     }
 
-    /// #22: the tasks strip names the step being worked — the first
-    /// unfinished subject in creation order, the same stand-in `todos()`
-    /// documents. A finished plan names nothing, and neither does a step
-    /// created without a subject.
     #[test]
     fn the_current_task_is_the_first_unfinished_subject() {
+        use crate::progress::StepStatus::*;
         let mut transcript = Transcript::default();
-        assert_eq!(transcript.current_task(), None, "no plan, no task");
-
-        for subject in ["read the recipe", "run the suite", "land the diff"] {
-            transcript.apply(started(
-                &format!("t{subject}"),
-                "TaskCreate",
-                serde_json::json!({ "subject": subject }),
-            ));
+        assert_eq!(transcript.current_task(), None);
+        for (id, subject) in [
+            ("1", "read the recipe"),
+            ("2", "run the suite"),
+            ("3", "land the diff"),
+        ] {
+            transcript.apply(native_task(id, subject, Pending));
         }
         assert_eq!(transcript.current_task(), Some("read the recipe"));
-
-        transcript.apply(started(
-            "u1",
-            "TaskUpdate",
-            serde_json::json!({ "taskId": "1", "status": "completed" }),
-        ));
+        transcript.apply(native_task("1", "", Completed));
         assert_eq!(transcript.current_task(), Some("run the suite"));
-
-        for task in ["2", "3"] {
-            transcript.apply(started(
-                &format!("u{task}"),
-                "TaskUpdate",
-                serde_json::json!({ "taskId": task, "status": "completed" }),
-            ));
+        for id in ["2", "3"] {
+            transcript.apply(native_task(id, "", Completed));
         }
-        assert_eq!(transcript.current_task(), None, "a finished plan is quiet");
-
-        // A subjectless step names nothing rather than an empty strip line.
-        let mut bare = Transcript::default();
-        bare.apply(started("b1", "TaskCreate", serde_json::json!({})));
-        assert_eq!(bare.todos(), Some(Todos { done: 0, total: 1 }));
-        assert_eq!(bare.current_task(), None);
+        assert_eq!(transcript.current_task(), None);
     }
 
-    /// The CLI assigns task ids and never echoes them back on TaskCreate, so
-    /// a completion cannot be matched to a creation. What can be promised is
-    /// that the count never overshoots: "2/1 done" is nonsense on a Pane.
     #[test]
     fn finished_work_never_outruns_the_plan() {
+        use crate::progress::StepStatus::*;
         let mut transcript = Transcript::default();
-        transcript.apply(started(
-            "c1",
-            "TaskCreate",
-            serde_json::json!({ "subject": "the only step" }),
-        ));
-        for task in ["1", "2", "3"] {
-            transcript.apply(started(
-                &format!("u{task}"),
-                "TaskUpdate",
-                serde_json::json!({ "taskId": task, "status": "completed" }),
-            ));
+        transcript.apply(native_task("1", "the only step", Pending));
+        for id in ["1", "2", "3"] {
+            transcript.apply(native_task(id, "", Completed));
         }
-
         assert_eq!(transcript.todos(), Some(Todos { done: 1, total: 1 }));
     }
 
@@ -2700,7 +2786,7 @@ mod tests {
         assert_eq!(update.dirty, vec![row]);
         match &transcript.blocks()[0].body {
             Body::Tool(tool) => {
-                let diff = tool.diff.as_ref().expect("an edit carries a diff card");
+                let diff = tool.diffs.first().expect("an edit carries a diff card");
                 assert_eq!(diff.path, "/workspace/x.txt");
                 assert_eq!((diff.added, diff.removed), (1, 1));
                 assert_eq!(diff.hunks.len(), 1);
@@ -2743,7 +2829,7 @@ mod tests {
         assert_eq!(retained.text.as_bytes(), &output.as_bytes()[..65_535]);
         assert!(retained.text.is_char_boundary(retained.text.len()));
         assert_eq!(retained.omitted_bytes, output.len() - retained.text.len());
-        let diff = tool.diff.as_ref().expect("structured diff stays folded");
+        let diff = tool.diffs.first().expect("structured diff stays folded");
         assert_eq!((diff.added, diff.removed), (1, 1));
 
         let failure = transcript.apply(completed("toolu_1", "line one\nline two", true));
@@ -2881,6 +2967,8 @@ mod tests {
         blocked.apply(Input::Event(SessionEvent::DecisionRequested {
             decision: Decision {
                 delivery: Default::default(),
+                kind: Default::default(),
+                policy: Default::default(),
                 id: "perm_01".into(),
                 tool_use_id: "toolu_01".into(),
                 tool_name: "Write".into(),

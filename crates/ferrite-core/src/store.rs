@@ -221,6 +221,14 @@ enum Record {
         id: String,
         text: String,
     },
+    FileChanges {
+        id: String,
+        edits: Vec<PersistedFileEdit>,
+    },
+    TurnDiff {
+        turn_id: String,
+        diff: String,
+    },
     ContentBoundary,
     /// Schema 9: a durable attributed fact, never a pending request handle.
     Activity {
@@ -229,6 +237,12 @@ enum Record {
     Init {
         session_id: String,
         model: String,
+    },
+    ModelChanged {
+        model: String,
+    },
+    ConversationReset {
+        session_id: String,
     },
     /// A line the operator sent (schema 2+).
     Prompt {
@@ -251,6 +265,16 @@ enum Record {
         output_tokens: u64,
         reasoning_output_tokens: u64,
         context_window: Option<u64>,
+    },
+    ContextUsage {
+        total_tokens: u64,
+        context_window: Option<u64>,
+    },
+    UsageDetails {
+        details: crate::UsageDetails,
+    },
+    ContextDetails {
+        details: crate::ContextDetails,
     },
     ToolStarted {
         id: String,
@@ -275,6 +299,9 @@ enum Record {
     TurnEnded {
         outcome: Outcome,
         cost_usd: Option<f64>,
+    },
+    RunState {
+        state: StoredRunState,
     },
     CompletionObservation {
         elapsed_ms: u64,
@@ -312,6 +339,30 @@ enum Outcome {
     Error(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum StoredRunState {
+    Running,
+    RequiresAction,
+    Idle,
+}
+impl StoredRunState {
+    fn from_live(state: crate::RunState) -> Self {
+        match state {
+            crate::RunState::Running => Self::Running,
+            crate::RunState::RequiresAction => Self::RequiresAction,
+            crate::RunState::Idle => Self::Idle,
+        }
+    }
+    fn live(self) -> crate::RunState {
+        match self {
+            Self::Running => crate::RunState::Running,
+            Self::RequiresAction => crate::RunState::RequiresAction,
+            Self::Idle => crate::RunState::Idle,
+        }
+    }
+}
+
 /// The structured half of a persisted tool result, mirroring
 /// `crate::ToolResult` shape for shape — but its own type, so the live model
 /// can change without rewriting anyone's history.
@@ -323,11 +374,27 @@ enum PersistedToolResult {
     Command {
         stdout: String,
         stderr: String,
+        exit_code: Option<i64>,
+        duration_ms: Option<u64>,
+    },
+    Structured {
+        value: serde_json::Value,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duration_ms: Option<u64>,
     },
     FileEdit {
         path: String,
         hunks: Vec<PersistedHunk>,
     },
+    FileEdits {
+        edits: Vec<PersistedFileEdit>,
+    },
+}
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+struct PersistedFileEdit {
+    path: String,
+    hunks: Vec<PersistedHunk>,
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
@@ -343,10 +410,23 @@ impl PersistedToolResult {
     fn from_live(result: &crate::ToolResult) -> Self {
         match result {
             crate::ToolResult::Opaque => PersistedToolResult::Opaque,
-            crate::ToolResult::Command { stdout, stderr } => PersistedToolResult::Command {
+            crate::ToolResult::Command {
+                stdout,
+                stderr,
+                exit_code,
+                duration_ms,
+            } => PersistedToolResult::Command {
                 stdout: stdout.clone(),
                 stderr: stderr.clone(),
+                exit_code: *exit_code,
+                duration_ms: *duration_ms,
             },
+            crate::ToolResult::Structured { value, duration_ms } => {
+                PersistedToolResult::Structured {
+                    value: value.clone(),
+                    duration_ms: *duration_ms,
+                }
+            }
             crate::ToolResult::FileEdit { path, hunks } => PersistedToolResult::FileEdit {
                 path: path.clone(),
                 hunks: hunks
@@ -360,16 +440,48 @@ impl PersistedToolResult {
                     })
                     .collect(),
             },
+            crate::ToolResult::FileEdits { edits } => PersistedToolResult::FileEdits {
+                edits: edits
+                    .iter()
+                    .map(|edit| PersistedFileEdit {
+                        path: edit.path.clone(),
+                        hunks: edit
+                            .hunks
+                            .iter()
+                            .map(|hunk| PersistedHunk {
+                                old_start: hunk.old_start,
+                                old_lines: hunk.old_lines,
+                                new_start: hunk.new_start,
+                                new_lines: hunk.new_lines,
+                                lines: hunk.lines.clone(),
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            },
         }
     }
 
     fn live(&self) -> crate::ToolResult {
         match self {
             PersistedToolResult::Opaque => crate::ToolResult::Opaque,
-            PersistedToolResult::Command { stdout, stderr } => crate::ToolResult::Command {
+            PersistedToolResult::Command {
+                stdout,
+                stderr,
+                exit_code,
+                duration_ms,
+            } => crate::ToolResult::Command {
                 stdout: stdout.clone(),
                 stderr: stderr.clone(),
+                exit_code: *exit_code,
+                duration_ms: *duration_ms,
             },
+            PersistedToolResult::Structured { value, duration_ms } => {
+                crate::ToolResult::Structured {
+                    value: value.clone(),
+                    duration_ms: *duration_ms,
+                }
+            }
             PersistedToolResult::FileEdit { path, hunks } => crate::ToolResult::FileEdit {
                 path: path.clone(),
                 hunks: hunks
@@ -380,6 +492,25 @@ impl PersistedToolResult {
                         new_start: hunk.new_start,
                         new_lines: hunk.new_lines,
                         lines: hunk.lines.clone(),
+                    })
+                    .collect(),
+            },
+            PersistedToolResult::FileEdits { edits } => crate::ToolResult::FileEdits {
+                edits: edits
+                    .iter()
+                    .map(|edit| crate::FileEdit {
+                        path: edit.path.clone(),
+                        hunks: edit
+                            .hunks
+                            .iter()
+                            .map(|hunk| crate::Hunk {
+                                old_start: hunk.old_start,
+                                old_lines: hunk.old_lines,
+                                new_start: hunk.new_start,
+                                new_lines: hunk.new_lines,
+                                lines: hunk.lines.clone(),
+                            })
+                            .collect(),
                     })
                     .collect(),
             },
@@ -409,15 +540,34 @@ enum PersistedProgress {
         status: Option<StoredStepStatus>,
         deleted: bool,
     },
+    TasksSnapshot {
+        tasks: Vec<StoredPlanTask>,
+    },
     Background {
         id: String,
         label: String,
         status: StoredTaskStatus,
         detail: String,
     },
+    BackgroundSnapshot {
+        tasks: Vec<StoredBackgroundTask>,
+    },
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct StoredBackgroundTask {
+    id: String,
+    label: String,
+    status: StoredTaskStatus,
+    detail: String,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct StoredStep {
+    text: String,
+    status: StoredStepStatus,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct StoredPlanTask {
+    id: String,
     text: String,
     status: StoredStepStatus,
 }
@@ -568,6 +718,16 @@ impl PersistedProgress {
                 status: status.map(StoredStepStatus::from_live),
                 deleted: *deleted,
             },
+            E::TasksSnapshot { tasks } => Self::TasksSnapshot {
+                tasks: tasks
+                    .iter()
+                    .map(|task| StoredPlanTask {
+                        id: task.id.clone(),
+                        text: task.text.clone(),
+                        status: StoredStepStatus::from_live(task.status),
+                    })
+                    .collect(),
+            },
             E::Background {
                 id,
                 label,
@@ -578,6 +738,17 @@ impl PersistedProgress {
                 label: label.clone(),
                 status: StoredTaskStatus::from_live(*status),
                 detail: detail.clone(),
+            },
+            E::BackgroundSnapshot { tasks } => Self::BackgroundSnapshot {
+                tasks: tasks
+                    .iter()
+                    .map(|task| StoredBackgroundTask {
+                        id: task.id.clone(),
+                        label: task.label.clone(),
+                        status: StoredTaskStatus::from_live(task.status),
+                        detail: task.detail.clone(),
+                    })
+                    .collect(),
             },
         }
     }
@@ -618,6 +789,16 @@ impl PersistedProgress {
                 status: status.map(StoredStepStatus::live),
                 deleted: *deleted,
             },
+            Self::TasksSnapshot { tasks } => E::TasksSnapshot {
+                tasks: tasks
+                    .iter()
+                    .map(|task| crate::progress::PlanTask {
+                        id: task.id.clone(),
+                        text: task.text.clone(),
+                        status: task.status.live(),
+                    })
+                    .collect(),
+            },
             Self::Background {
                 id,
                 label,
@@ -628,6 +809,17 @@ impl PersistedProgress {
                 label: label.clone(),
                 status: status.live(),
                 detail: detail.clone(),
+            },
+            Self::BackgroundSnapshot { tasks } => E::BackgroundSnapshot {
+                tasks: tasks
+                    .iter()
+                    .map(|task| crate::progress::BackgroundTask {
+                        id: task.id.clone(),
+                        label: task.label.clone(),
+                        status: task.status.live(),
+                        detail: task.detail.clone(),
+                    })
+                    .collect(),
             },
         }
     }
@@ -659,6 +851,30 @@ impl Record {
                 id: id.clone(),
                 text: text.clone(),
             },
+            SessionEvent::FileChanges { id, edits } => Record::FileChanges {
+                id: id.clone(),
+                edits: edits
+                    .iter()
+                    .map(|edit| PersistedFileEdit {
+                        path: edit.path.clone(),
+                        hunks: edit
+                            .hunks
+                            .iter()
+                            .map(|hunk| PersistedHunk {
+                                old_start: hunk.old_start,
+                                old_lines: hunk.old_lines,
+                                new_start: hunk.new_start,
+                                new_lines: hunk.new_lines,
+                                lines: hunk.lines.clone(),
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            },
+            SessionEvent::TurnDiff { turn_id, diff } => Record::TurnDiff {
+                turn_id: turn_id.clone(),
+                diff: diff.clone(),
+            },
             SessionEvent::ContentBoundary => Record::ContentBoundary,
             SessionEvent::Activity(observation) => Record::Activity {
                 observation: PersistedActivity::from_live(observation, duration)?,
@@ -666,6 +882,12 @@ impl Record {
             SessionEvent::Init { session_id, model } => Record::Init {
                 session_id: session_id.clone(),
                 model: model.clone(),
+            },
+            SessionEvent::ModelChanged { model } => Record::ModelChanged {
+                model: model.clone(),
+            },
+            SessionEvent::ConversationReset { session_id } => Record::ConversationReset {
+                session_id: session_id.clone(),
             },
             SessionEvent::TextDelta { text } => Record::Text { text: text.clone() },
             SessionEvent::ThinkingDelta { text } => Record::Thinking { text: text.clone() },
@@ -694,6 +916,9 @@ impl Record {
                 },
                 cost_usd: *cost_usd,
             },
+            SessionEvent::RunState { state } => Record::RunState {
+                state: StoredRunState::from_live(*state),
+            },
             SessionEvent::Closed { reason } => Record::Closed {
                 reason: reason.clone(),
             },
@@ -719,6 +944,19 @@ impl Record {
                 reasoning_output_tokens: *reasoning_output_tokens,
                 context_window: *context_window,
             },
+            SessionEvent::ContextUsage {
+                total_tokens,
+                context_window,
+            } => Record::ContextUsage {
+                total_tokens: *total_tokens,
+                context_window: *context_window,
+            },
+            SessionEvent::UsageDetails { details } => Record::UsageDetails {
+                details: details.clone(),
+            },
+            SessionEvent::ContextDetails { details } => Record::ContextDetails {
+                details: details.clone(),
+            },
             SessionEvent::DecisionRequested { .. } => return None,
             // The command menu, the permission mode and the model menu are
             // the live Session's, like a Decision: a replay has no Session
@@ -727,6 +965,8 @@ impl Record {
             SessionEvent::PermissionMode { .. } => return None,
             SessionEvent::Models { .. } | SessionEvent::Queue(_) => return None,
             SessionEvent::RateLimits { .. } => return None,
+            SessionEvent::McpServers { .. } => return None,
+            SessionEvent::McpAuthorization { .. } => return None,
         })
     }
 
@@ -751,6 +991,30 @@ impl Record {
                 id: id.clone(),
                 text: text.clone(),
             }),
+            Record::FileChanges { id, edits } => Input::Event(SessionEvent::FileChanges {
+                id: id.clone(),
+                edits: edits
+                    .iter()
+                    .map(|edit| crate::FileEdit {
+                        path: edit.path.clone(),
+                        hunks: edit
+                            .hunks
+                            .iter()
+                            .map(|hunk| crate::Hunk {
+                                old_start: hunk.old_start,
+                                old_lines: hunk.old_lines,
+                                new_start: hunk.new_start,
+                                new_lines: hunk.new_lines,
+                                lines: hunk.lines.clone(),
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            }),
+            Record::TurnDiff { turn_id, diff } => Input::Event(SessionEvent::TurnDiff {
+                turn_id: turn_id.clone(),
+                diff: diff.clone(),
+            }),
             Record::ContentBoundary => Input::Event(SessionEvent::ContentBoundary),
             Record::Activity { observation } => {
                 Input::Event(SessionEvent::Activity(observation.live()))
@@ -759,6 +1023,14 @@ impl Record {
                 session_id: session_id.clone(),
                 model: model.clone(),
             }),
+            Record::ModelChanged { model } => Input::Event(SessionEvent::ModelChanged {
+                model: model.clone(),
+            }),
+            Record::ConversationReset { session_id } => {
+                Input::Event(SessionEvent::ConversationReset {
+                    session_id: session_id.clone(),
+                })
+            }
             Record::Prompt { text } => Input::Prompt(text.clone()),
             Record::Text { text } => Input::Event(SessionEvent::TextDelta { text: text.clone() }),
             Record::Thinking { text } => {
@@ -791,6 +1063,9 @@ impl Record {
                 },
                 cost_usd: *cost_usd,
             }),
+            Record::RunState { state } => Input::Event(SessionEvent::RunState {
+                state: state.live(),
+            }),
             Record::CompletionObservation {
                 elapsed_ms,
                 completed_at,
@@ -819,6 +1094,19 @@ impl Record {
                 output_tokens: *output_tokens,
                 reasoning_output_tokens: *reasoning_output_tokens,
                 context_window: *context_window,
+            }),
+            Record::ContextUsage {
+                total_tokens,
+                context_window,
+            } => Input::Event(SessionEvent::ContextUsage {
+                total_tokens: *total_tokens,
+                context_window: *context_window,
+            }),
+            Record::UsageDetails { details } => Input::Event(SessionEvent::UsageDetails {
+                details: details.clone(),
+            }),
+            Record::ContextDetails { details } => Input::Event(SessionEvent::ContextDetails {
+                details: details.clone(),
             }),
             Record::Closed { reason } => Input::Event(SessionEvent::Closed {
                 reason: reason.clone(),
@@ -1457,10 +1745,20 @@ struct AnswerText {
     parts: Vec<String>,
     ids: std::collections::HashMap<String, usize>,
     settled: std::collections::HashSet<String>,
+    retracted: std::collections::HashSet<String>,
 }
 
 impl AnswerText {
     fn observe(&mut self, id: Option<&str>, event: &PersistedExecution) {
+        if let PersistedExecution::Retract { ids } = event {
+            for id in ids {
+                self.retracted.insert(id.clone());
+                if let Some(index) = self.ids.get(id) {
+                    self.parts[*index].clear();
+                }
+            }
+            return;
+        }
         let (text, complete) = match event {
             PersistedExecution::TextDelta { text } => (text, false),
             PersistedExecution::Text { text } | PersistedExecution::TextSnapshot { text } => {
@@ -1472,6 +1770,9 @@ impl AnswerText {
             self.parts.push(text.clone());
             return;
         };
+        if self.retracted.contains(id) {
+            return;
+        }
         if matches!(event, PersistedExecution::Text { .. }) && self.settled.contains(id) {
             return;
         }
@@ -1545,6 +1846,7 @@ impl ThreadSnapshot {
         }
         self.records.iter().rev().find_map(|record| match record {
             Record::Init { session_id, .. } => Some(Some(session_id.as_str())),
+            Record::ConversationReset { session_id } => Some(Some(session_id.as_str())),
             Record::Handover { .. } => Some(None),
             _ => None,
         })?
@@ -1559,11 +1861,22 @@ impl ThreadSnapshot {
             .records
             .iter()
             .rposition(|record| matches!(record, Record::Handover { .. }))?;
+        if self.records[at + 1..]
+            .iter()
+            .any(|record| matches!(record, Record::ConversationReset { .. }))
+        {
+            return None;
+        }
         let Record::Handover { from, .. } = &self.records[at] else {
             unreachable!("rposition matched a handover");
         };
         let mut exchanges: Vec<(String, AnswerText)> = Vec::new();
-        for record in &self.records[..at] {
+        let after_reset = self.records[..at]
+            .iter()
+            .rposition(|record| matches!(record, Record::ConversationReset { .. }))
+            .map(|index| index + 1)
+            .unwrap_or(0);
+        for record in &self.records[after_reset..at] {
             match record {
                 Record::Prompt { text } => exchanges.push((text.clone(), AnswerText::default())),
                 Record::Text { text } => {
@@ -1574,7 +1887,11 @@ impl ThreadSnapshot {
                 Record::Activity {
                     observation: PersistedActivity::MainContent { id, event, .. },
                 } => {
-                    if let Some((_, answer)) = exchanges.last_mut() {
+                    if matches!(event, PersistedExecution::Retract { .. }) {
+                        for (_, answer) in &mut exchanges {
+                            answer.observe(id.as_deref(), event);
+                        }
+                    } else if let Some((_, answer)) = exchanges.last_mut() {
                         answer.observe(id.as_deref(), event);
                     }
                 }
@@ -1680,7 +1997,13 @@ impl ThreadSnapshot {
     }
 
     pub(crate) fn prompt_texts(&self) -> Vec<String> {
-        self.records
+        let after_reset = self
+            .records
+            .iter()
+            .rposition(|record| matches!(record, Record::ConversationReset { .. }))
+            .map(|index| index + 1)
+            .unwrap_or(0);
+        self.records[after_reset..]
             .iter()
             .filter_map(|record| match record {
                 Record::Prompt { text } => Some(text.clone()),
@@ -2309,6 +2632,49 @@ mod tests {
     /// the old provider's Init from the resume target until the new one
     /// speaks, and it carries the conversation before it as exchanges —
     /// marked delivered once a prompt follows it.
+    #[test]
+    fn contract_late_retraction_is_excluded_from_all_handover_exchanges() {
+        let dir = scratch("late-retraction-carry");
+        let store = Store::open(&dir).unwrap();
+        let (id, mut writer) = store.create(Provider::Claude, None, main_choice()).unwrap();
+        writer.record_prompt("first").unwrap();
+        writer
+            .record_event(
+                &SessionEvent::Activity(crate::activity::ActivityEvent::MainContent {
+                    id: Some("old".into()),
+                    event: crate::activity::ExecutionEvent::Text {
+                        text: "Must not carry".into(),
+                    },
+                }),
+                None,
+            )
+            .unwrap();
+        writer.record_prompt("second").unwrap();
+        writer
+            .record_event(
+                &SessionEvent::Activity(crate::activity::ActivityEvent::MainContent {
+                    id: None,
+                    event: crate::activity::ExecutionEvent::Retract {
+                        ids: vec!["old".into()],
+                    },
+                }),
+                None,
+            )
+            .unwrap();
+        writer
+            .record_handover(Provider::Claude, Provider::Codex, None)
+            .unwrap();
+        writer.flush().unwrap();
+        let handover = store.load(id).unwrap().last_handover().unwrap();
+        assert_eq!(
+            handover.exchanges,
+            [
+                ("first".into(), String::new()),
+                ("second".into(), String::new())
+            ]
+        );
+    }
+
     #[test]
     fn a_handover_is_replayed_and_shadows_the_old_providers_init() {
         let dir = scratch("handover");

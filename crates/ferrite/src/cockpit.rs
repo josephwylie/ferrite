@@ -5,6 +5,7 @@
 
 pub(crate) mod subagents;
 
+use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(feature = "visual-reference")]
 #[path = "visual_reference.rs"]
 pub(crate) mod visual_reference;
@@ -159,6 +160,9 @@ pub struct CockpitView {
     /// to the real homes and aimed at scratch directories by tests. Read
     /// once per picker open, never per frame.
     session_file_roots: Vec<(Provider, std::path::PathBuf)>,
+    discovery_request: u64,
+    pending_files: Option<PendingFileSearch>,
+    pending_discovery: Option<PendingDiscovery>,
     /// The launch directory's registered project (#29) — every draft's
     /// starting choice.
     launch_project: ProjectId,
@@ -175,6 +179,8 @@ pub struct CockpitView {
     /// windows are real before the first prompt — so this is a
     /// `PaneIdentity`, not a Thread.
     context_usage: Option<(PaneIdentity, gpui::Point<gpui::Pixels>)>,
+    session_controls: Option<(ThreadId, u64, gpui::Point<gpui::Pixels>)>,
+    session_control_error: Option<(ThreadId, u64, String)>,
     /// The header `ci` mark's checks card, tied to its Thread and click
     /// position (#29). The runs it lists are read from the same cached
     /// `BranchStatus` the mark was drawn from, so the card can never
@@ -427,6 +433,8 @@ enum Kind {
     Files {
         files: std::rc::Rc<Vec<String>>,
         token_start: usize,
+        query: String,
+        request_id: u64,
     },
     /// #11: adopt a CLI session file into a still-blank Thread.
     ImportFile,
@@ -441,6 +449,27 @@ enum Kind {
     /// which re-derives from the Composer line per edit.
     Band(pane::BandChip),
 }
+
+struct PendingFileSearch {
+    pane: PaneIdentity,
+    thread: ThreadId,
+    generation: u64,
+    request_id: u64,
+    query: String,
+    token_start: usize,
+    root: std::path::PathBuf,
+    started: std::time::Instant,
+    reply: std::sync::mpsc::Receiver<std::io::Result<Vec<ferrite_core::providers::FileSuggestion>>>,
+    fallback: Option<std::sync::mpsc::Receiver<Vec<pane::MenuRow>>>,
+}
+struct PendingDiscovery {
+    pane: PaneIdentity,
+    request_id: u64,
+    started: std::time::Instant,
+    reply: std::sync::mpsc::Receiver<std::io::Result<Vec<ferrite_core::import::Candidate>>>,
+}
+
+static NEXT_FILE_SEARCH: AtomicU64 = AtomicU64::new(1);
 
 impl Kind {
     fn picker_slot(&self) -> Option<(bool, bool)> {
@@ -652,10 +681,15 @@ impl CockpitView {
             draft_commands: None,
             suppress_recall_menu_once: false,
             session_file_roots: ferrite_core::import::default_roots(),
+            discovery_request: 0,
+            pending_files: None,
+            pending_discovery: None,
             launch_project,
             rename: None,
             context_menu: None,
             context_usage: None,
+            session_controls: None,
+            session_control_error: None,
             context_checks: None,
             nav_collapsed: prefs.settings.nav_collapsed,
             nav_has_toggled: false,
@@ -788,6 +822,7 @@ impl CockpitView {
             content_revision: revision,
             display_revision: disclosure_revision,
             blocks: pane::rendered_window(transcript.blocks(), Level::Transcript).to_vec(),
+            turn_diff: transcript.turn_diff().cloned(),
             signal_status: Some(status),
             timings: subject_view.timings().clone(),
             focused,
@@ -964,6 +999,7 @@ impl CockpitView {
     /// One frame for the whole cockpit. Only Panes the pump reports as
     /// changed are worth a repaint; a frame where nothing moved costs nothing.
     fn pump(&mut self, cx: &mut Context<Self>) {
+        self.poll_navigation(cx);
         let commands_changed = self
             .draft_commands
             .as_mut()
@@ -1140,24 +1176,29 @@ impl CockpitView {
         let Some(index) = self.pane_for(thread) else {
             return;
         };
-        let valid = self
+        let mut valid = std::collections::HashSet::new();
+        if let Some(transcript) = self
             .cockpit
             .thread(thread)
             .and_then(|open| open.activity().subject(&self.panes[index].selected))
             .map(|subject| subject.transcript())
-            .into_iter()
-            .flat_map(|transcript| transcript.blocks())
-            .flat_map(|block| match &block.body {
-                ferrite_core::transcript::Body::Tool(tool) => vec![
-                    pane::DisclosureId::Tool(tool.call.clone()),
-                    pane::DisclosureId::Group(tool.call.clone()),
-                ],
-                ferrite_core::transcript::Body::Thinking(_) => {
-                    vec![pane::DisclosureId::Reasoning(block.id)]
+        {
+            for block in transcript.blocks() {
+                match &block.body {
+                    ferrite_core::transcript::Body::Tool(tool) => {
+                        valid.insert(pane::DisclosureId::Tool(tool.call.clone()));
+                        valid.insert(pane::DisclosureId::Group(tool.call.clone()));
+                    }
+                    ferrite_core::transcript::Body::Thinking(_) => {
+                        valid.insert(pane::DisclosureId::Reasoning(block.id));
+                    }
+                    _ => {}
                 }
-                _ => vec![],
-            })
-            .collect();
+            }
+            if let Some(call) = pane::turn_diff_disclosure(transcript, Level::Transcript) {
+                valid.insert(call);
+            }
+        }
         self.panes[index].prune_tools(&valid);
     }
 
@@ -2921,6 +2962,10 @@ impl CockpitView {
             cx.notify();
             return;
         }
+        if self.session_controls.take().is_some() {
+            cx.notify();
+            return;
+        }
         if self.context_menu.take().is_some() {
             cx.notify();
             return;
@@ -3119,14 +3164,24 @@ impl CockpitView {
         let Some(thread) = self.panes[index].thread() else {
             return Vec::new();
         };
-        self.cockpit
+        let mut calls = self
+            .cockpit
             .thread(thread)
             .and_then(|open| open.activity().subject(&self.panes[index].selected))
             .into_iter()
             .flat_map(|subject| {
                 pane::rendered_disclosures(&self.panes[index], subject.transcript().blocks(), level)
             })
-            .collect()
+            .collect::<Vec<_>>();
+        if let Some(call) = self
+            .cockpit
+            .thread(thread)
+            .and_then(|open| open.activity().subject(&self.panes[index].selected))
+            .and_then(|subject| pane::turn_diff_disclosure(subject.transcript(), level))
+        {
+            calls.push(call);
+        }
+        calls
     }
 
     fn allow(&mut self, _: &Allow, window: &mut Window, cx: &mut Context<Self>) {
@@ -3205,9 +3260,26 @@ impl CockpitView {
         else {
             return;
         };
+        if matches!(answer, Answer::Allow | Answer::Always) && !decision.policy.allow {
+            return;
+        }
+        if answer == Answer::Deny && !decision.policy.deny {
+            return;
+        }
+        if decision.policy.interaction_required && answer != Answer::Deny {
+            return;
+        }
         // A question is answered by its form, never by a bare "allow" —
         // allowing an unanswered question would send the model nothing.
-        if pane::question_of(&decision).is_some() && answer != Answer::Deny {
+        if (pane::question_of(&decision).is_some()
+            || matches!(
+                decision.kind,
+                ferrite_core::DecisionKind::Form { .. }
+                    | ferrite_core::DecisionKind::External { .. }
+                    | ferrite_core::DecisionKind::Unsupported { .. }
+            ))
+            && answer != Answer::Deny
+        {
             cx.notify();
             return;
         }
@@ -3495,6 +3567,46 @@ impl CockpitView {
                 .to_path_buf(),
             _ => return None,
         };
+        if let Some(thread) = thread {
+            if let Ok(receiver) = self.cockpit.search_files(thread, filter) {
+                let request_id = NEXT_FILE_SEARCH.fetch_add(1, Ordering::Relaxed);
+                let generation = self.cockpit.thread(thread)?.generation();
+                self.pending_files = Some(PendingFileSearch {
+                    pane: pane.identity,
+                    thread,
+                    generation,
+                    request_id,
+                    query: filter.to_string(),
+                    token_start,
+                    root: root.clone(),
+                    started: std::time::Instant::now(),
+                    reply: receiver,
+                    fallback: None,
+                });
+                return Some(Popover {
+                    pane: pane.identity,
+                    kind: Kind::Files {
+                        files: std::rc::Rc::new(Vec::new()),
+                        token_start,
+                        query: filter.to_string(),
+                        request_id,
+                    },
+                    rows: vec![Row {
+                        row: pane::MenuRow {
+                            insert: SharedString::default(),
+                            name: "Searching files…".into(),
+                            matched: Vec::new(),
+                            detail: SharedString::default(),
+                            prose_detail: true,
+                            inert: true,
+                        },
+                        active: false,
+                        consequence: Consequence::Inert,
+                    }],
+                    selected: 0,
+                });
+            }
+        }
         // The walk runs once per open menu; keystrokes only re-filter it.
         let walked = match &self.popover {
             Some(open) if open.pane == pane.identity => match &open.kind {
@@ -3522,7 +3634,12 @@ impl CockpitView {
         }
         Some(Popover {
             pane: pane.identity,
-            kind: Kind::Files { files, token_start },
+            kind: Kind::Files {
+                files,
+                token_start,
+                query: filter.to_string(),
+                request_id: 0,
+            },
             rows,
             selected: 0,
         })
@@ -3729,12 +3846,191 @@ impl CockpitView {
         cx.notify();
     }
 
+    fn poll_navigation(&mut self, cx: &mut Context<Self>) {
+        use std::sync::mpsc::TryRecvError;
+        if let Some(mut pending) = self.pending_files.take() {
+            let current = self.panes.get(self.focused()).is_some_and(|pane| pane.identity == pending.pane)
+                && self.cockpit.thread(pending.thread).is_some_and(|live| live.generation() == pending.generation)
+                && self.popover.as_ref().is_some_and(|open| open.pane == pending.pane && matches!(&open.kind, Kind::Files { request_id, query, token_start, .. } if *request_id == pending.request_id && query == &pending.query && *token_start == pending.token_start));
+            if current {
+                let rows = if let Some(fallback) = &pending.fallback {
+                    match fallback.try_recv() {
+                        Ok(rows) => Some(rows),
+                        Err(TryRecvError::Empty) => None,
+                        Err(TryRecvError::Disconnected) => Some(Vec::new()),
+                    }
+                } else {
+                    match pending.reply.try_recv() {
+                        Ok(Ok(files)) => Some(native_mention_rows(&files)),
+                        Err(TryRecvError::Empty)
+                            if pending.started.elapsed() < Duration::from_secs(5) =>
+                        {
+                            None
+                        }
+                        _ => {
+                            let root = pending.root.clone();
+                            let query = pending.query.clone();
+                            let (tx, rx) = std::sync::mpsc::channel();
+                            if std::thread::Builder::new()
+                                .name("ferrite-file-fallback".into())
+                                .spawn(move || {
+                                    let paths = ferrite_core::workspace::mention_files(
+                                        &root,
+                                        MENTION_FILE_CAP,
+                                    );
+                                    let _ = tx.send(mention_rows(&paths, &query));
+                                })
+                                .is_ok()
+                            {
+                                pending.fallback = Some(rx);
+                                None
+                            } else {
+                                Some(Vec::new())
+                            }
+                        }
+                    }
+                };
+                if let Some(rows) = rows {
+                    if let Some(open) = &mut self.popover {
+                        open.rows = rows
+                            .into_iter()
+                            .map(|row| Row {
+                                consequence: Consequence::Mention(row.insert.clone()),
+                                row,
+                                active: false,
+                            })
+                            .collect();
+                        open.selected = 0;
+                    }
+                    cx.notify();
+                } else {
+                    self.pending_files = Some(pending);
+                }
+            }
+        }
+        if let Some(pending) = self.pending_discovery.take() {
+            let current = self.index_of(pending.pane).is_some()
+                && self.discovery_request == pending.request_id
+                && self.popover.as_ref().is_some_and(|open| {
+                    open.pane == pending.pane && matches!(open.kind, Kind::ImportFile)
+                });
+            if current {
+                let result = match pending.reply.try_recv() {
+                    Ok(result) => Some(result.map_err(|error| error.to_string())),
+                    Err(TryRecvError::Empty)
+                        if pending.started.elapsed() < Duration::from_secs(15) =>
+                    {
+                        None
+                    }
+                    Err(error) => Some(Err(error.to_string())),
+                };
+                if let Some(result) = result {
+                    let now = std::time::SystemTime::now();
+                    let rows = match result {
+                        Ok(candidates) if !candidates.is_empty() => candidates
+                            .into_iter()
+                            .map(|candidate| {
+                                let title = candidate.title.unwrap_or_else(|| {
+                                    candidate
+                                        .path
+                                        .file_name()
+                                        .map(|name| name.to_string_lossy().into_owned())
+                                        .unwrap_or_default()
+                                });
+                                let cwd = candidate
+                                    .cwd
+                                    .as_deref()
+                                    .map(|path| path.display().to_string())
+                                    .unwrap_or_default();
+                                Row {
+                                    row: pane::MenuRow {
+                                        insert: SharedString::default(),
+                                        name: title.into(),
+                                        matched: Vec::new(),
+                                        detail: format!(
+                                            "{} · {} · {}",
+                                            provider_label(candidate.provider),
+                                            cwd,
+                                            age_label(candidate.modified, now)
+                                        )
+                                        .into(),
+                                        prose_detail: false,
+                                        inert: false,
+                                    },
+                                    active: false,
+                                    consequence: Consequence::Adopt(candidate.path),
+                                }
+                            })
+                            .collect(),
+                        other => {
+                            let message = match other {
+                                Ok(_) => "No sessions found".to_string(),
+                                Err(error) => format!("Could not find sessions: {error}"),
+                            };
+                            vec![Row {
+                                row: pane::MenuRow {
+                                    insert: SharedString::default(),
+                                    name: message.into(),
+                                    matched: Vec::new(),
+                                    detail: SharedString::default(),
+                                    prose_detail: true,
+                                    inert: true,
+                                },
+                                active: false,
+                                consequence: Consequence::Inert,
+                            }]
+                        }
+                    };
+                    if let Some(open) = &mut self.popover {
+                        open.rows = rows;
+                        open.selected = 0;
+                    }
+                    cx.notify();
+                } else {
+                    self.pending_discovery = Some(pending);
+                }
+            }
+        }
+    }
+
     /// #11: discovery and the file-pick popover, run once per open — never
     /// per frame. With nothing to list it says so in the transcript instead
     /// of opening an empty popover; the Notice is Ferrite's own out-of-band
     /// line, so the Thread keeps offering import. On a draft the words land
     /// where the band is.
     fn open_import_picker(&mut self, from: PaneIdentity, cx: &mut Context<Self>) {
+        self.discovery_request = self.discovery_request.wrapping_add(1);
+        let request_id = self.discovery_request;
+        if let Some(receiver) = self
+            .cockpit
+            .discover_sessions(self.session_file_roots.clone(), IMPORT_ROWS_MAX)
+        {
+            self.popover = Some(Popover {
+                pane: from,
+                kind: Kind::ImportFile,
+                rows: vec![Row {
+                    row: pane::MenuRow {
+                        insert: SharedString::default(),
+                        name: "Searching sessions…".into(),
+                        matched: Vec::new(),
+                        detail: SharedString::default(),
+                        prose_detail: true,
+                        inert: true,
+                    },
+                    active: false,
+                    consequence: Consequence::Inert,
+                }],
+                selected: 0,
+            });
+            self.pending_discovery = Some(PendingDiscovery {
+                pane: from,
+                request_id,
+                started: std::time::Instant::now(),
+                reply: receiver,
+            });
+            cx.notify();
+            return;
+        }
         let candidates =
             ferrite_core::import::candidates(&self.session_file_roots, IMPORT_ROWS_MAX);
         if candidates.is_empty() {
@@ -5310,6 +5606,47 @@ fn mention_rows(files: &[String], filter: &str) -> Vec<pane::MenuRow> {
         .collect()
 }
 
+/// Provider results are already ordered and matched; only translate their
+/// relative paths into the menu's basename/detail representation.
+fn native_mention_rows(files: &[ferrite_core::providers::FileSuggestion]) -> Vec<pane::MenuRow> {
+    files
+        .iter()
+        .take(MENU_ROWS_MAX)
+        .map(|file| {
+            let mut path = file.path.clone();
+            if file.is_directory && !path.ends_with('/') {
+                path.push('/');
+            }
+            let stem = path.strip_suffix('/').unwrap_or(&path);
+            let split = stem.rfind('/').map(|at| at + 1).unwrap_or(0);
+            let chars: Vec<_> = path.char_indices().collect();
+            let matched = file
+                .matched
+                .iter()
+                .filter_map(|index| {
+                    let (start, character) = *chars.get(*index)?;
+                    (start >= split).then_some(
+                        start.saturating_sub(split)
+                            ..start.saturating_sub(split) + character.len_utf8(),
+                    )
+                })
+                .collect();
+            pane::MenuRow {
+                insert: path.clone().into(),
+                name: path[split..].to_string().into(),
+                matched,
+                detail: if split == 0 {
+                    "".into()
+                } else {
+                    path[..split - 1].to_string().into()
+                },
+                prose_detail: false,
+                inert: false,
+            }
+        })
+        .collect()
+}
+
 /// How many session files the import picker lists (#11) — the same dense
 /// keyboard-menu bound as the Composer menus. Newest first is how the
 /// operator finds the session they just left.
@@ -5459,12 +5796,15 @@ impl Render for CockpitView {
                                 .map(|subject| subject.transcript())
                         })
                         .is_some_and(|transcript| {
-                            pane::rendered_disclosures(
+                            let mut calls = pane::rendered_disclosures(
                                 &self.panes[index],
                                 transcript.blocks(),
                                 level,
-                            )
-                            .contains(target)
+                            );
+                            if let Some(call) = pane::turn_diff_disclosure(transcript, level) {
+                                calls.push(call);
+                            }
+                            calls.contains(target)
                         })
                 });
                 if !target_is_rendered {
@@ -5501,6 +5841,21 @@ impl Render for CockpitView {
                     .is_none_or(|pr| pr.checks.is_none())
         }) {
             self.context_checks = None;
+        }
+
+        if self
+            .session_controls
+            .is_some_and(|(thread, generation, _)| {
+                level != Level::Transcript
+                    || self.settings_open
+                    || self.focused_thread() != Some(thread)
+                    || self
+                        .cockpit
+                        .thread(thread)
+                        .is_none_or(|open| open.generation() != generation)
+            })
+        {
+            self.session_controls = None;
         }
 
         if self.context_usage.is_some_and(|(identity, _)| {
@@ -5931,6 +6286,7 @@ impl Render for CockpitView {
             })
             .children(self.context_menu_element(cx))
             .children(self.context_usage_element(cx))
+            .children(self.session_controls_element(cx))
             .children(self.context_checks_element(cx))
             .children(self.settings_element(cx))
             .children(self.project_editor_element(cx))
@@ -6127,6 +6483,9 @@ impl CockpitView {
             menu: l1.then(|| self.popover_element(index, cx)).flatten(),
             model_picker: l1.then(|| self.model_picker(index, cx)).flatten(),
             usage_meter: l1.then(|| self.usage_meter(index, cx)).flatten(),
+            session_controls: l1
+                .then(|| self.session_controls_button(index, cx))
+                .flatten(),
             decide: (level != Level::Wall)
                 .then(|| self.decide_keycaps(index, level, cx))
                 .flatten(),
@@ -6372,7 +6731,7 @@ impl CockpitView {
     /// No reading is invented when the provider has not reported usage.
     fn usage_meter(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
         let identity = self.panes[index].identity;
-        let (fraction, provider, key) = match identity {
+        let (fraction, provider, key, can_refresh) = match identity {
             PaneIdentity::Thread(thread) => {
                 let open = self.cockpit.thread(thread)?;
                 let usage = open.transcript().usage()?;
@@ -6380,7 +6739,12 @@ impl CockpitView {
                     .context_window
                     .filter(|window| *window > 0)
                     .map_or(0., |window| usage.total_tokens as f32 / window as f32);
-                (fraction, open.provider(), thread.get().to_string())
+                (
+                    fraction,
+                    open.provider(),
+                    thread.get().to_string(),
+                    open.supports_control(ferrite_core::ControlKind::RefreshContext),
+                )
             }
             // A draft has spent no context yet, and that empty window is
             // half of what the operator came to check before writing a
@@ -6389,6 +6753,7 @@ impl CockpitView {
                 0.,
                 self.panes[index].draft()?.binding.provider().provider,
                 format!("draft-{}", draft.get()),
+                false,
             ),
         };
         // Account-wide and remembered across launches, so the meter is
@@ -6417,8 +6782,21 @@ impl CockpitView {
                     cx.listener(move |view, event: &MouseDownEvent, _, cx| {
                         cx.stop_propagation();
                         view.focus_pane(index);
+                        if !was_open && can_refresh {
+                            let PaneIdentity::Thread(thread) = identity else {
+                                return;
+                            };
+                            if let Some(open) = view.cockpit.thread(thread) {
+                                view.run_session_control(
+                                    thread,
+                                    open.generation(),
+                                    ferrite_core::SessionControl::RefreshContext,
+                                );
+                            }
+                        }
                         view.popover = None;
                         view.context_menu = None;
+                        view.session_controls = None;
                         // Outside-click dismissal runs in capture phase, before this
                         // toggle. Use the state of the meter that received the press.
                         view.context_usage = (!was_open)
@@ -6427,6 +6805,347 @@ impl CockpitView {
                     }),
                 )
                 .into_any_element(),
+        )
+    }
+
+    fn run_session_control(
+        &mut self,
+        thread: ThreadId,
+        generation: u64,
+        action: ferrite_core::SessionControl,
+    ) {
+        let current = self
+            .cockpit
+            .thread(thread)
+            .is_some_and(|open| open.generation() == generation);
+        if !current {
+            return;
+        }
+        self.session_control_error = self
+            .cockpit
+            .control(thread, action)
+            .err()
+            .map(|error| (thread, generation, error.to_string()));
+    }
+
+    fn session_controls_button(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let thread = self.panes[index].thread()?;
+        let open = self.cockpit.thread(thread)?;
+        let generation = open.generation();
+        let capable = [
+            ferrite_core::ControlKind::RefreshMcp,
+            ferrite_core::ControlKind::ReconnectMcp,
+            ferrite_core::ControlKind::StopTask,
+            ferrite_core::ControlKind::BackgroundTasks,
+        ]
+        .into_iter()
+        .any(|kind| open.supports_control(kind));
+        if !capable || !self.panes[index].is_main() {
+            return None;
+        }
+        let was_open = self
+            .session_controls
+            .is_some_and(|(shown, shown_generation, _)| {
+                shown == thread && shown_generation == generation
+            });
+        Some(
+            crate::components::button(SharedString::from(format!(
+                "session-controls-{}",
+                thread.get()
+            )))
+            .debug_selector(move || format!("session-controls-{}", thread.get()))
+            .tooltip("Session controls")
+            .child("•••")
+            .on_click(cx.listener(move |view, event: &ClickEvent, window, cx| {
+                cx.stop_propagation();
+                view.focus_pane(index);
+                if !was_open
+                    && view.cockpit.thread(thread).is_some_and(|open| {
+                        open.generation() == generation
+                            && open.supports_control(ferrite_core::ControlKind::RefreshMcp)
+                    })
+                {
+                    view.run_session_control(
+                        thread,
+                        generation,
+                        ferrite_core::SessionControl::RefreshMcp,
+                    );
+                }
+                view.popover = None;
+                view.context_menu = None;
+                view.context_usage = None;
+                view.context_checks = None;
+                view.session_controls = (!was_open).then_some((
+                    thread,
+                    generation,
+                    match event {
+                        ClickEvent::Mouse(event) => event.up.position,
+                        _ => window.mouse_position(),
+                    },
+                ));
+                cx.notify();
+            }))
+            .into_any_element(),
+        )
+    }
+
+    fn session_controls_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (thread, generation, at) = self.session_controls?;
+        let open = self.cockpit.thread(thread)?;
+        if open.generation() != generation {
+            return None;
+        }
+        let transcript = open.transcript();
+        let mut card = menu::shell()
+            .id("session-controls-card")
+            .debug_selector(|| "session-controls-card".into())
+            .max_h(px(420.))
+            .overflow_y_scroll()
+            .p(px(8.))
+            .gap(px(6.))
+            .flex()
+            .flex_col();
+        if let Some((_, _, error)) =
+            self.session_control_error
+                .as_ref()
+                .filter(|(shown, shown_generation, _)| {
+                    *shown == thread && *shown_generation == generation
+                })
+        {
+            card = card.child(
+                div()
+                    .id("session-control-error")
+                    .text_color(rgb(crate::theme::ATTENTION))
+                    .child(error.clone()),
+            );
+        }
+        for (index, mode) in open.permission_modes().into_iter().enumerate() {
+            let value = mode.value;
+            card = card.child(
+                crate::components::button(SharedString::from(format!("permission-mode-{index}")))
+                    .debug_selector(move || format!("permission-mode-{index}"))
+                    .tab_stop(true)
+                    .accessibility_label(mode.label.clone())
+                    .child(mode.label)
+                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                        view.run_session_control(
+                            thread,
+                            generation,
+                            ferrite_core::SessionControl::SetPermissionMode {
+                                mode: value.clone(),
+                            },
+                        );
+                        cx.notify();
+                    })),
+            );
+        }
+        if open.supports_control(ferrite_core::ControlKind::ReloadMcp) {
+            card = card.child(
+                crate::components::button("mcp-reload")
+                    .debug_selector(|| "mcp-reload".into())
+                    .tab_stop(true)
+                    .child("Reload MCP")
+                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                        view.run_session_control(
+                            thread,
+                            generation,
+                            ferrite_core::SessionControl::ReloadMcp,
+                        );
+                        cx.notify();
+                    })),
+            );
+        }
+        if transcript.mcp_servers().is_empty() {
+            card = card.child(
+                div()
+                    .text_color(rgb(crate::theme::TEXT_MUTED))
+                    .child("No MCP servers reported"),
+            );
+        }
+        for (index, server) in transcript.mcp_servers().iter().enumerate() {
+            let name = server.name.clone();
+            let status = match server.status {
+                ferrite_core::McpStatus::Connected => "connected",
+                ferrite_core::McpStatus::Connecting => "connecting",
+                ferrite_core::McpStatus::NeedsAuth => "needs-auth",
+                ferrite_core::McpStatus::Failed => "failed",
+                ferrite_core::McpStatus::Disabled => "disabled",
+                ferrite_core::McpStatus::Unknown => "unknown",
+            };
+            let mut row = div()
+                .flex()
+                .flex_col()
+                .w_full()
+                .min_w_0()
+                .items_start()
+                .gap(px(6.))
+                .child(server.name.clone())
+                .child(
+                    div()
+                        .debug_selector(move || format!("mcp-status-{index}-{status}"))
+                        .text_color(rgb(crate::theme::TEXT_MUTED))
+                        .child(status),
+                );
+            if let Some(error) = server.error.as_ref() {
+                row = row.child(
+                    div()
+                        .text_color(rgb(crate::theme::ATTENTION))
+                        .child(error.clone()),
+                );
+            }
+            if server.status == ferrite_core::McpStatus::NeedsAuth
+                && open.supports_control(ferrite_core::ControlKind::LoginMcp)
+            {
+                let login_name = server.name.clone();
+                row = row.child(
+                    crate::components::button(SharedString::from(format!("mcp-login-{index}")))
+                        .debug_selector(move || format!("mcp-login-{index}"))
+                        .tab_stop(true)
+                        .child("Sign in")
+                        .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                            let exists = view.cockpit.thread(thread).is_some_and(|open| {
+                                open.generation() == generation
+                                    && open
+                                        .transcript()
+                                        .mcp_servers()
+                                        .iter()
+                                        .any(|server| server.name == login_name)
+                            });
+                            if exists {
+                                view.run_session_control(
+                                    thread,
+                                    generation,
+                                    ferrite_core::SessionControl::LoginMcp {
+                                        server: login_name.clone(),
+                                    },
+                                );
+                            }
+                            cx.notify();
+                        })),
+                );
+            }
+            if let Some(url) = transcript
+                .mcp_authorizations()
+                .get(&server.name)
+                .filter(|url| url.starts_with("https://") || url.starts_with("http://"))
+            {
+                let url = url.clone();
+                row = row.child(
+                    crate::components::button(SharedString::from(format!("mcp-authorize-{index}")))
+                        .debug_selector(move || format!("mcp-authorize-{index}"))
+                        .tab_stop(true)
+                        .child("Open sign-in")
+                        .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| cx.open_url(&url))),
+                );
+            }
+            if open.supports_control(ferrite_core::ControlKind::ReconnectMcp) {
+                row = row.child(
+                    crate::components::button(SharedString::from(format!("mcp-reconnect-{index}")))
+                        .debug_selector(move || format!("mcp-reconnect-{index}"))
+                        .child("Reconnect")
+                        .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                            let exists = view.cockpit.thread(thread).is_some_and(|open| {
+                                open.generation() == generation
+                                    && open
+                                        .transcript()
+                                        .mcp_servers()
+                                        .iter()
+                                        .any(|server| server.name == name)
+                            });
+                            if exists {
+                                view.run_session_control(
+                                    thread,
+                                    generation,
+                                    ferrite_core::SessionControl::ReconnectMcp {
+                                        server: name.clone(),
+                                    },
+                                );
+                            }
+                            cx.notify();
+                        })),
+                );
+            }
+            card = card.child(row);
+        }
+        for (index, task) in transcript.progress().background().iter().enumerate() {
+            let mut row = div()
+                .flex()
+                .flex_col()
+                .w_full()
+                .min_w_0()
+                .items_start()
+                .gap(px(6.))
+                .child(task.label.clone());
+            if task.status == ferrite_core::progress::TaskStatus::Working
+                && open.supports_control(ferrite_core::ControlKind::StopTask)
+            {
+                let id = task.id.clone();
+                row = row.child(
+                    crate::components::button(SharedString::from(format!(
+                        "background-stop-{index}"
+                    )))
+                    .debug_selector(move || format!("background-stop-{index}"))
+                    .child("Stop")
+                    .on_click(cx.listener(
+                        move |view, _: &ClickEvent, _, cx| {
+                            let exists = view.cockpit.thread(thread).is_some_and(|open| {
+                                open.generation() == generation
+                                    && open.transcript().progress().background().iter().any(
+                                        |task| {
+                                            task.id == id
+                                                && task.status
+                                                    == ferrite_core::progress::TaskStatus::Working
+                                        },
+                                    )
+                            });
+                            if exists {
+                                view.run_session_control(
+                                    thread,
+                                    generation,
+                                    ferrite_core::SessionControl::StopTask { id: id.clone() },
+                                );
+                            }
+                            cx.notify();
+                        },
+                    )),
+                );
+            }
+            card = card.child(row);
+        }
+        if open.supports_control(ferrite_core::ControlKind::BackgroundTasks) {
+            card = card.child(
+                crate::components::button("background-all")
+                    .child("Run tasks in background")
+                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                        view.run_session_control(
+                            thread,
+                            generation,
+                            ferrite_core::SessionControl::BackgroundTasks,
+                        );
+                        cx.notify();
+                    })),
+            );
+        }
+        let card = card
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
+            )
+            .on_mouse_down_out(cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                if view.session_controls.take().is_some() {
+                    cx.notify();
+                }
+            }));
+        Some(
+            deferred(
+                anchored()
+                    .position(at)
+                    .snap_to_window_with_margin(px(crate::theme::GRID_PAD))
+                    .child(card)
+                    .into_any_element(),
+            )
+            .with_priority(2)
+            .into_any_element(),
         )
     }
 
@@ -6530,10 +7249,16 @@ impl CockpitView {
 
     fn context_usage_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let (identity, at) = self.context_usage?;
-        let (usage, provider) = match identity {
+        let (usage, provider, details, usage_details, last_cost) = match identity {
             PaneIdentity::Thread(thread) => {
                 let open = self.cockpit.thread(thread)?;
-                (open.transcript().usage()?, open.provider())
+                (
+                    open.transcript().usage()?,
+                    open.provider(),
+                    open.transcript().context_details(),
+                    open.transcript().usage_details(),
+                    open.transcript().last_cost(),
+                )
             }
             // Nothing spent, and no window to divide by until the Provider
             // reports one: the card says the context is not reported
@@ -6551,6 +7276,9 @@ impl CockpitView {
                     .binding
                     .provider()
                     .provider,
+                None,
+                None,
+                None,
             ),
         };
         let card = menu::shell()
@@ -6559,7 +7287,31 @@ impl CockpitView {
             .child(pane::context_usage(
                 usage,
                 self.cockpit.account_limits(provider),
+                details,
+                usage_details,
+                last_cost,
             ))
+            .when_some(
+                match identity {
+                    PaneIdentity::Thread(thread) => self.cockpit.thread(thread).and_then(|open| {
+                        self.session_control_error
+                            .as_ref()
+                            .filter(|(shown, generation, _)| {
+                                *shown == thread && *generation == open.generation()
+                            })
+                            .map(|(_, _, error)| error.clone())
+                    }),
+                    PaneIdentity::Draft(_) => None,
+                },
+                |card, error| {
+                    card.child(
+                        div()
+                            .id("session-control-error")
+                            .text_color(rgb(crate::theme::ATTENTION))
+                            .child(error),
+                    )
+                },
+            )
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
@@ -6841,6 +7593,22 @@ impl CockpitView {
             Verb::Dismiss(id) => {
                 self.cockpit.dismiss_notice(id);
             }
+            Verb::OpenDecision(id) => {
+                let subject = self
+                    .cockpit
+                    .notifications()
+                    .decision(&id)
+                    .and_then(|notice| notice.subject.clone())
+                    .unwrap_or(ferrite_core::activity::Subject::Main);
+                if let Some(thread) = self.cockpit.open_decision_notice(&id) {
+                    self.sync_panes(cx);
+                    self.select_subject_from_notice(thread, subject, cx);
+                }
+                self.bell.open = false;
+            }
+            Verb::DismissDecision(id) => {
+                self.cockpit.dismiss_decision_notice(&id);
+            }
             Verb::Clear => {
                 self.cockpit.clear_notices();
                 self.bell.open = false;
@@ -6857,7 +7625,7 @@ impl CockpitView {
         })
     }
 
-    /// One Notice with the window's words on it: the Thread's cached name
+    /// One completion Notice with the window's words on it: the Thread's cached name
     /// and Project, and how long ago.
     fn notice_row(
         &self,
@@ -6874,7 +7642,7 @@ impl CockpitView {
         )
     }
 
-    /// Toast what finished since the last frame. Render is the one place
+    /// Toast what arrived since the last frame. Render is the one place
     /// with a Window in hand every frame; the pump has none.
     fn present_notices(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let now = std::time::SystemTime::now();
@@ -6884,22 +7652,50 @@ impl CockpitView {
             .since(self.bell.presented())
             .map(|notice| self.notice_row(notice, now))
             .collect();
-        if rows.is_empty() {
-            return;
-        }
         let handle = self.notice_handle(cx);
-        self.bell.present(rows, &handle, window, cx);
+        if !rows.is_empty() {
+            self.bell.present(rows, &handle, window, cx);
+        }
+        let decisions: Vec<NoticeRow> = self
+            .cockpit
+            .notifications()
+            .decisions()
+            .map(|notice| {
+                NoticeRow::decision(
+                    notice,
+                    self.facts.name(notice.id.thread),
+                    self.facts
+                        .get(notice.id.thread)
+                        .and_then(|facts| facts.project_label.clone()),
+                )
+            })
+            .collect();
+        self.bell.present_requests(decisions, &handle, window, cx);
     }
 
     /// The bell in the nav's chrome band, its badge, and its panel.
     fn bell_element(&self, cx: &mut Context<Self>) -> AnyElement {
         let now = std::time::SystemTime::now();
         let notifications = self.cockpit.notifications();
-        let rows: Vec<NoticeRow> = notifications
-            .notices()
+        let mut rows: Vec<NoticeRow> = notifications
+            .decisions()
             .take(50)
-            .map(|notice| self.notice_row(notice, now))
+            .map(|notice| {
+                NoticeRow::decision(
+                    notice,
+                    self.facts.name(notice.id.thread),
+                    self.facts
+                        .get(notice.id.thread)
+                        .and_then(|facts| facts.project_label.clone()),
+                )
+            })
             .collect();
+        rows.extend(
+            notifications
+                .notices()
+                .take(50)
+                .map(|notice| self.notice_row(notice, now)),
+        );
         let handle = self.notice_handle(cx);
         let view = cx.entity().downgrade();
         self.bell
@@ -7474,6 +8270,9 @@ fn transcript_text(blocks: &[ferrite_core::transcript::Block]) -> String {
 #[cfg(test)]
 mod tests {
     mod completion_checks;
+    mod provider_controls;
+    mod provider_forms;
+    mod provider_navigation;
     mod render_performance;
     mod subagents;
     use super::*;
@@ -7496,9 +8295,50 @@ mod tests {
         fail_send: Rc<RefCell<bool>>,
         sent: Rc<RefCell<Vec<String>>>,
         answered: Rc<RefCell<Vec<(String, DecisionAnswer)>>>,
+        controls: Rc<RefCell<Vec<ferrite_core::SessionControl>>>,
+        native_controls: Rc<RefCell<bool>>,
+        file_searches: Rc<
+            RefCell<
+                Vec<(
+                    String,
+                    Sender<std::io::Result<Vec<ferrite_core::providers::FileSuggestion>>>,
+                )>,
+            >,
+        >,
+        native_files: Rc<RefCell<bool>>,
     }
 
     impl Session for Scripted {
+        fn search_files(
+            &mut self,
+            query: &str,
+        ) -> std::io::Result<Receiver<std::io::Result<Vec<ferrite_core::providers::FileSuggestion>>>>
+        {
+            if !*self.native_files.borrow() {
+                return Err(std::io::ErrorKind::Unsupported.into());
+            }
+            let (tx, rx) = mpsc::channel();
+            self.file_searches.borrow_mut().push((query.into(), tx));
+            Ok(rx)
+        }
+
+        fn permission_modes(&self) -> Vec<ferrite_core::PermissionModeChoice> {
+            if *self.native_controls.borrow() {
+                vec![ferrite_core::PermissionModeChoice {
+                    value: "native-mode".into(),
+                    label: "Ask for changes".into(),
+                }]
+            } else {
+                vec![]
+            }
+        }
+        fn supports_control(&self, _: ferrite_core::ControlKind) -> bool {
+            *self.native_controls.borrow()
+        }
+        fn control(&mut self, action: ferrite_core::SessionControl) -> std::io::Result<()> {
+            self.controls.borrow_mut().push(action);
+            Ok(())
+        }
         fn enqueue(&mut self, id: &str, text: &str) -> std::io::Result<()> {
             self.tx
                 .send(SessionEvent::Queue(ferrite_core::QueueEvent::Accepted(
@@ -7549,6 +8389,8 @@ mod tests {
     struct Fake {
         interrupts: Rc<RefCell<usize>>,
         model_discovery: Rc<RefCell<Option<Receiver<(Provider, Vec<ferrite_core::ModelInfo>)>>>>,
+        session_discovery:
+            Rc<RefCell<Option<Receiver<std::io::Result<Vec<ferrite_core::import::Candidate>>>>>>,
         command_discovery: Rc<RefCell<Option<ferrite_core::providers::commands::Discovery>>>,
         command_requests: Rc<RefCell<Vec<(Provider, std::path::PathBuf)>>>,
         streams: Rc<RefCell<Vec<Sender<SessionEvent>>>>,
@@ -7561,9 +8403,27 @@ mod tests {
         sent: Rc<RefCell<Vec<String>>>,
         /// Every Decision answer that went out, with the Decision's id.
         answered: Rc<RefCell<Vec<(String, DecisionAnswer)>>>,
+        controls: Rc<RefCell<Vec<ferrite_core::SessionControl>>>,
+        native_controls: Rc<RefCell<bool>>,
+        file_searches: Rc<
+            RefCell<
+                Vec<(
+                    String,
+                    Sender<std::io::Result<Vec<ferrite_core::providers::FileSuggestion>>>,
+                )>,
+            >,
+        >,
+        native_files: Rc<RefCell<bool>>,
     }
 
     impl Spawner for Fake {
+        fn discover_sessions(
+            &mut self,
+            _: Vec<(Provider, std::path::PathBuf)>,
+            _: usize,
+        ) -> Option<Receiver<std::io::Result<Vec<ferrite_core::import::Candidate>>>> {
+            self.session_discovery.borrow_mut().take()
+        }
         fn discover_commands(
             &mut self,
             provider: Provider,
@@ -7601,6 +8461,10 @@ mod tests {
                 fail_send: self.fail_send.clone(),
                 sent: self.sent.clone(),
                 answered: self.answered.clone(),
+                controls: self.controls.clone(),
+                native_controls: self.native_controls.clone(),
+                file_searches: self.file_searches.clone(),
+                native_files: self.native_files.clone(),
             }))
         }
     }
@@ -8498,6 +9362,8 @@ mod tests {
         SessionEvent::DecisionRequested {
             decision: Decision {
                 delivery: Default::default(),
+                kind: Default::default(),
+                policy: Default::default(),
                 id: id.into(),
                 tool_use_id: "toolu_1".into(),
                 tool_name: "Write".into(),
@@ -8834,6 +9700,29 @@ mod tests {
         SessionEvent::DecisionRequested {
             decision: Decision {
                 delivery: Default::default(),
+                kind: ferrite_core::DecisionKind::Questions(vec![
+                    ferrite_core::questions::Question {
+                        id: None,
+                        question: "Which approach?".into(),
+                        header: "Approach".into(),
+                        multi_select: false,
+                        secret: false,
+                        allow_other: true,
+                        options: vec![
+                            ferrite_core::questions::Choice {
+                                label: "Rewrite".into(),
+                                description: "Start over".into(),
+                                preview: None,
+                            },
+                            ferrite_core::questions::Choice {
+                                label: "Patch".into(),
+                                description: "Smallest change".into(),
+                                preview: None,
+                            },
+                        ],
+                    },
+                ]),
+                policy: Default::default(),
                 id: id.into(),
                 tool_use_id: "toolu_q".into(),
                 tool_name: "AskUserQuestion".into(),
@@ -8895,12 +9784,12 @@ mod tests {
             "form submission preserves the chat draft"
         );
         let answered = fake.answered.borrow();
-        let (id, DecisionAnswer::Allow { input }) = answered.last().unwrap() else {
+        let (id, DecisionAnswer::Questions { answers }) = answered.last().unwrap() else {
             panic!("answered question");
         };
         assert_eq!(id, "q_01");
-        assert_eq!(input["answers"]["Which approach?"], "Patch");
-        assert!(input["questions"].is_array());
+        assert_eq!(answers[0].picks, vec![1]);
+        assert_eq!(answers[0].other, None);
         assert!(cx.debug_bounds("question-island").is_none());
     }
 
@@ -8939,10 +9828,10 @@ mod tests {
         cx.simulate_click(submit.center(), gpui::Modifiers::none());
         cx.run_until_parked();
         let answered = fake.answered.borrow();
-        let DecisionAnswer::Allow { input } = &answered.last().unwrap().1 else {
+        let DecisionAnswer::Questions { answers } = &answered.last().unwrap().1 else {
             panic!("answer");
         };
-        assert_eq!(input["answers"]["Which approach?"], "neither, wait 2 days");
+        assert_eq!(answers[0].other.as_deref(), Some("neither, wait 2 days"));
         assert!(fake.sent.borrow().is_empty());
     }
 
@@ -16043,6 +16932,126 @@ mod tests {
         view.update(cx, |view, cx| view.notice_verb(Verb::Dismiss(id), cx));
         view.read_with(cx, |view, _| {
             assert_eq!(view.cockpit.notifications().notices().count(), 0);
+        });
+    }
+
+    #[gpui::test]
+    fn contract_request_attention_toasts_once_and_cancellation_removes_it(cx: &mut TestAppContext) {
+        use ferrite_core::activity::ActivityEvent;
+        use gpui::component::WindowExt as _;
+        let (mut core, fake) = cockpit("request-toast-contract", 2);
+        let group = group_all(&mut core);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, cx| view.enter_group(group, cx));
+        for name in ["AskUserQuestion", "Bash"] {
+            fake.streams.borrow()[1]
+                .send(SessionEvent::DecisionRequested {
+                    decision: ferrite_core::Decision {
+                        delivery: Default::default(),
+                        kind: Default::default(),
+                        policy: Default::default(),
+                        id: name.into(),
+                        tool_use_id: name.into(),
+                        tool_name: name.into(),
+                        description: "Needs your input".into(),
+                        input: serde_json::json!({}),
+                        suggestions: vec![],
+                    },
+                })
+                .unwrap();
+        }
+        tick(cx);
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.cockpit.notifications().unread(), 2)
+        });
+        cx.update(|window, cx| {
+            assert_eq!(
+                window.notifications(cx).len(),
+                2,
+                "each pending request must be visible before the turn ends"
+            )
+        });
+        tick(cx);
+        cx.update(|window, cx| {
+            assert_eq!(
+                window.notifications(cx).len(),
+                2,
+                "pumping must not duplicate request toasts"
+            )
+        });
+        for name in ["AskUserQuestion", "Bash"] {
+            fake.streams.borrow()[1]
+                .send(SessionEvent::Activity(ActivityEvent::DecisionCancelled {
+                    id: name.into(),
+                }))
+                .unwrap();
+        }
+        tick(cx);
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.cockpit.notifications().unread(), 0)
+        });
+        // GPUI removes a dismissed toast after its exit animation.
+        cx.executor().advance_clock(Duration::from_millis(300));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(
+                window.notifications(cx).is_empty(),
+                "cancelled requests must not leave stale toast actions"
+            )
+        });
+    }
+
+    #[gpui::test]
+    fn contract_request_notice_opens_its_owning_child(cx: &mut TestAppContext) {
+        use ferrite_core::activity::{ActivityEvent, AgentInfo, AgentKey, Subject};
+        let (mut core, fake) = cockpit("request-child-contract", 2);
+        let group = group_all(&mut core);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, cx| view.enter_group(group, cx));
+        let key = AgentKey::new(Provider::Claude, "native", "child");
+        let mut info = AgentInfo::new(key.clone());
+        info.parent = Some(Subject::Main);
+        fake.streams.borrow()[1]
+            .send(SessionEvent::Activity(ActivityEvent::Discovered(info)))
+            .unwrap();
+        fake.streams.borrow()[1]
+            .send(SessionEvent::Activity(ActivityEvent::Decision {
+                subject: Some(Subject::Subagent(key.clone())),
+                decision: ferrite_core::Decision {
+                    delivery: Default::default(),
+                    kind: Default::default(),
+                    policy: Default::default(),
+                    id: "child-request".into(),
+                    tool_use_id: "tool".into(),
+                    tool_name: "Bash".into(),
+                    description: "Allow command".into(),
+                    input: serde_json::json!({}),
+                    suggestions: vec![],
+                },
+            }))
+            .unwrap();
+        tick(cx);
+        let id = view.read_with(cx, |view, _| {
+            view.cockpit
+                .notifications()
+                .decisions()
+                .next()
+                .unwrap()
+                .id
+                .clone()
+        });
+        view.update(cx, |view, cx| {
+            view.notice_verb(Verb::OpenDecision(id.clone()), cx)
+        });
+        tick(cx);
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.focused(), 1);
+            assert_eq!(
+                view.panes[view.focused()].selected,
+                Subject::Subagent(key.clone())
+            );
+            assert!(view.cockpit.notifications().decision(&id).unwrap().read);
+            assert!(!view.bell.open);
         });
     }
 }

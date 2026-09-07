@@ -15,8 +15,11 @@ use std::time::{Duration, Instant};
 
 use ferrite_core::providers::{ClaudeConfig, ClaudeSession};
 use ferrite_core::store::{Provider, Store};
-use ferrite_core::transcript::{Input, Transcript};
 use ferrite_core::workspace::WorkspaceBinding;
+use ferrite_core::{
+    activity::{Activity, ActivityInput},
+    transcript::{Body, Input},
+};
 use ferrite_core::{SessionEvent, ToolResult, TurnOutcome};
 
 /// The session id the committed resume capture announces — the conversation
@@ -105,6 +108,8 @@ fn first_turn() -> Vec<SessionEvent> {
             result: ToolResult::Command {
                 stdout: "saved".into(),
                 stderr: String::new(),
+                exit_code: None,
+                duration_ms: None,
             },
         },
         SessionEvent::TextDelta {
@@ -117,6 +122,42 @@ fn first_turn() -> Vec<SessionEvent> {
     ]
 }
 
+fn live(activity: &mut Activity, event: SessionEvent) {
+    let at = Instant::now();
+    activity.apply(match event {
+        SessionEvent::Activity(event) => ActivityInput::Observe {
+            generation: 1,
+            event,
+            at,
+        },
+        event => ActivityInput::Main {
+            input: Input::Event(event),
+            at,
+        },
+    });
+}
+
+fn prose(activity: &Activity) -> String {
+    activity
+        .view()
+        .main()
+        .transcript()
+        .blocks()
+        .iter()
+        .filter_map(|block| match &block.body {
+            Body::Paragraph { spans } | Body::Heading { spans, .. } | Body::Bullet { spans } => {
+                Some(
+                    spans
+                        .iter()
+                        .map(|span| span.text.as_str())
+                        .collect::<String>(),
+                )
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 #[test]
 fn a_restart_restores_the_thread_and_the_next_prompt_continues_the_session() {
     let dir = scratch("restart");
@@ -124,7 +165,8 @@ fn a_restart_restores_the_thread_and_the_next_prompt_continues_the_session() {
     // A Thread lives: one prompt, one turn, then the operator quits Ferrite.
     // `operator_saw` is what the Pane showed — the restored Pane must show
     // the same thing.
-    let mut operator_saw = Transcript::default();
+    let mut operator_saw = Activity::default();
+    operator_saw.apply(ActivityInput::Connect { generation: 1 });
     let thread_id = {
         let store = Store::open(&dir).unwrap();
         let (id, mut writer) = store
@@ -139,12 +181,13 @@ fn a_restart_restores_the_thread_and_the_next_prompt_continues_the_session() {
         writer
             .record_prompt("Remember the codeword: ferrite-resume-ok")
             .unwrap();
-        operator_saw.apply(Input::Prompt(
-            "Remember the codeword: ferrite-resume-ok".into(),
-        ));
+        operator_saw.apply(ActivityInput::Main {
+            input: Input::Prompt("Remember the codeword: ferrite-resume-ok".into()),
+            at: Instant::now(),
+        });
         for event in first_turn() {
             writer.record_event(&event, None).unwrap();
-            operator_saw.apply(Input::Event(event));
+            live(&mut operator_saw, event);
         }
         id
         // Store and writer drop here: the app is gone.
@@ -158,13 +201,22 @@ fn a_restart_restores_the_thread_and_the_next_prompt_continues_the_session() {
     assert_eq!(thread.provider(), Provider::Claude);
     assert_eq!(thread.resume_target(), Some(CAPTURED_SESSION));
 
-    let mut restored = Transcript::default();
-    for input in thread.inputs() {
+    let mut restored = Activity::default();
+    for input in thread.activity_inputs() {
         restored.apply(input);
     }
-    assert_eq!(restored.blocks(), operator_saw.blocks());
-    assert_eq!(restored.session_id(), operator_saw.session_id());
-    assert_eq!(restored.model(), operator_saw.model());
+    assert_eq!(
+        restored.view().main().transcript().blocks(),
+        operator_saw.view().main().transcript().blocks()
+    );
+    assert_eq!(
+        restored.view().main().transcript().session_id(),
+        operator_saw.view().main().transcript().session_id()
+    );
+    assert_eq!(
+        restored.view().main().transcript().model(),
+        operator_saw.view().main().transcript().model()
+    );
 
     // The next prompt continues the same provider session: the resume target
     // the store kept is what the new Session is spawned with, and the stub
@@ -204,33 +256,33 @@ fn a_restart_restores_the_thread_and_the_next_prompt_continues_the_session() {
     writer
         .record_prompt("What is the codeword? Reply with the codeword only.")
         .unwrap();
-    operator_saw.apply(Input::Prompt(
-        "What is the codeword? Reply with the codeword only.".into(),
-    ));
+    operator_saw.apply(ActivityInput::Main {
+        input: Input::Prompt("What is the codeword? Reply with the codeword only.".into()),
+        at: Instant::now(),
+    });
     let continued = drain(session.events());
     for event in &continued {
         writer.record_event(event, None).unwrap();
-        operator_saw.apply(Input::Event(event.clone()));
+        live(&mut operator_saw, event.clone());
     }
     drop(writer);
 
     // The capture answered from history this process never had, and its
     // init re-announced the same session id — the resume target is stable.
-    let text: String = continued
-        .iter()
-        .filter_map(|e| match e {
-            SessionEvent::TextDelta { text } => Some(text.as_str()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(text, "ferrite-resume-ok");
+    assert_eq!(
+        prose(&operator_saw),
+        "Saving the codeword.savedferrite-resume-ok"
+    );
 
     // A second restart shows the whole life of the Thread, both turns.
     let thread = Store::open(&dir).unwrap().load(thread_id).unwrap();
     assert_eq!(thread.resume_target(), Some(CAPTURED_SESSION));
-    let mut restored = Transcript::default();
-    for input in thread.inputs() {
+    let mut restored = Activity::default();
+    for input in thread.activity_inputs() {
         restored.apply(input);
     }
-    assert_eq!(restored.blocks(), operator_saw.blocks());
+    assert_eq!(
+        restored.view().main().transcript().blocks(),
+        operator_saw.view().main().transcript().blocks()
+    );
 }

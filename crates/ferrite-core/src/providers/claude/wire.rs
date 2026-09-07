@@ -7,16 +7,23 @@
 //! `Value` and anything unrecognised — new event types, changed field types,
 //! outright junk — is silently nothing rather than an error.
 
-/// Stream-json accepts native image blocks. Keep every path in the text too:
-/// unreadable, oversized and other formats remain available to Claude's tools.
-/// The read is bounded; dropping an archive never loads it into the UI process.
+/// Stream-json accepts native image and PDF blocks. Keep every path in the text
+/// too: unreadable, oversized and other formats remain available to Claude's
+/// tools. The reads are bounded, including across one prompt.
 pub(super) fn input_content(text: &str, cwd: Option<&std::path::Path>) -> Vec<serde_json::Value> {
     use base64::Engine;
     use std::io::Read;
-    const IMAGE_LIMIT: u64 = 5 * 1024 * 1024;
+    const ATTACHMENT_LIMIT: u64 = 5 * 1024 * 1024;
+    const INLINE_ATTACHMENT_LIMIT: u64 = 20 * 1024 * 1024;
     let mut content = vec![serde_json::json!({"type": "text", "text": text})];
+    let mut inline_bytes = 0;
     for path in crate::prompt_files::paths(text, cwd) {
-        let Some(media_type) = crate::prompt_files::image_type(&path) else {
+        let Some((block, media_type)) = crate::prompt_files::image_type(&path)
+            .map(|media_type| ("image", media_type))
+            .or_else(|| {
+                crate::prompt_files::pdf_type(&path).map(|media_type| ("document", media_type))
+            })
+        else {
             continue;
         };
         let Ok(file) = std::fs::File::open(&path) else {
@@ -24,19 +31,24 @@ pub(super) fn input_content(text: &str, cwd: Option<&std::path::Path>) -> Vec<se
         };
         if !file
             .metadata()
-            .is_ok_and(|meta| meta.is_file() && meta.len() <= IMAGE_LIMIT)
+            .is_ok_and(|meta| meta.is_file() && meta.len() <= ATTACHMENT_LIMIT)
         {
             continue;
         }
         let mut bytes = Vec::new();
-        if file.take(IMAGE_LIMIT + 1).read_to_end(&mut bytes).is_err()
+        if file
+            .take(ATTACHMENT_LIMIT + 1)
+            .read_to_end(&mut bytes)
+            .is_err()
             || bytes.is_empty()
-            || bytes.len() as u64 > IMAGE_LIMIT
+            || bytes.len() as u64 > ATTACHMENT_LIMIT
+            || inline_bytes + bytes.len() as u64 > INLINE_ATTACHMENT_LIMIT
         {
             continue;
         }
+        inline_bytes += bytes.len() as u64;
         content.push(serde_json::json!({
-            "type": "image",
+            "type": block,
             "source": {"type": "base64", "media_type": media_type,
                 "data": base64::engine::general_purpose::STANDARD.encode(bytes)},
         }));
@@ -47,8 +59,11 @@ pub(super) fn input_content(text: &str, cwd: Option<&std::path::Path>) -> Vec<se
 use serde_json::Value;
 
 use super::ClaudeCapabilities;
-use crate::progress::{Phase, ProgressEvent, StepStatus, TaskStatus};
-use crate::{Decision, Hunk, RateLimitWindow, SessionEvent, ToolResult, TurnOutcome};
+use crate::progress::{Phase, PlanTask, ProgressEvent, StepStatus, TaskStatus};
+use crate::{
+    validate_form, Decision, DecisionChoice, DecisionKind, DecisionPolicy, FormField, Hunk,
+    RateLimitWindow, SessionEvent, ToolResult, TurnOutcome, UsageDetails, UsageScope,
+};
 
 /// The answer to spawn's initialize control request, if this line is it.
 ///
@@ -247,14 +262,16 @@ pub(super) fn parse_events_value(value: &Value) -> Vec<SessionEvent> {
                     format!("{error} · attempt {attempt}/{max}{delay}"),
                 ))
             }
-            Some("status") => Some(phase(
-                if value["status"] == "compacting" {
-                    Phase::Compacting
-                } else {
-                    Phase::Working
-                },
-                string("message"),
-            )),
+            Some("status") => value["status"].as_str().map(|status| {
+                phase(
+                    if status == "compacting" {
+                        Phase::Compacting
+                    } else {
+                        Phase::Working
+                    },
+                    string("message"),
+                )
+            }),
             Some("compact_boundary") => Some(phase(Phase::Working, "Context compacted".into())),
             Some("thinking_tokens") => Some(phase(Phase::Thinking, String::new())),
             Some("task_started" | "task_progress" | "task_notification" | "task_updated") => {
@@ -286,21 +303,44 @@ pub(super) fn parse_events_value(value: &Value) -> Vec<SessionEvent> {
                     },
                 })
             }
+            Some("background_tasks_changed") => {
+                value["tasks"]
+                    .as_array()
+                    .map(|tasks| SessionEvent::Progress {
+                        event: ProgressEvent::BackgroundSnapshot {
+                            tasks: tasks
+                                .iter()
+                                .filter(|task| task["ambient"] != true)
+                                .filter_map(|task| {
+                                    Some(crate::progress::BackgroundTask {
+                                        id: task.get("task_id")?.as_str()?.into(),
+                                        label: task["description"].as_str().unwrap_or("").into(),
+                                        status: TaskStatus::Working,
+                                        detail: task["task_type"].as_str().unwrap_or("").into(),
+                                    })
+                                })
+                                .collect(),
+                        },
+                    })
+            }
             _ => None,
         },
         _ => None,
     };
     events.extend(extra);
-    // The successful tool receipt supplies the actual task id. Starts alone
-    // cannot establish a plan step or mark one complete.
-    if kind == "user" && value["tool_use_result"]["success"] != false {
+    // Only native success receipts carry task identities and authoritative
+    // lists. Proposed tool input never changes the shared plan.
+    if kind == "user" && successful_receipt(value) {
         let result = &value["tool_use_result"];
         if let Some(id) = result["task"]["id"].as_str() {
             events.push(SessionEvent::Progress {
                 event: ProgressEvent::Task {
                     id: id.into(),
                     subject: result["task"]["subject"].as_str().unwrap_or("").into(),
-                    status: Some(StepStatus::Pending),
+                    status: match result["task"].get("status") {
+                        Some(Value::String(status)) => task_status(Some(status)),
+                        _ => Some(StepStatus::Pending),
+                    },
                     deleted: false,
                 },
             });
@@ -319,19 +359,76 @@ pub(super) fn parse_events_value(value: &Value) -> Vec<SessionEvent> {
                     },
                 },
             });
+        } else if let Some(tasks) = result["tasks"].as_array() {
+            events.push(SessionEvent::Progress {
+                event: ProgressEvent::TasksSnapshot {
+                    tasks: tasks.iter().filter_map(native_task).collect(),
+                },
+            });
+        } else if let Some(todos) = result["newTodos"].as_array() {
+            events.push(SessionEvent::Progress {
+                event: ProgressEvent::TasksSnapshot {
+                    tasks: todos
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, todo)| {
+                            let text = todo["content"].as_str()?.trim();
+                            (!text.is_empty()).then_some(PlanTask {
+                                id: todo["id"]
+                                    .as_str()
+                                    .map(str::to_string)
+                                    .unwrap_or_else(|| format!("todo:{index}")),
+                                text: text.into(),
+                                status: task_status(todo["status"].as_str())
+                                    .unwrap_or(StepStatus::Pending),
+                            })
+                        })
+                        .collect(),
+                },
+            });
         }
     }
     events
 }
 
-/// The token count a line carries beside its event, if any: every
-/// `assistant` message reports its own `usage` (the prompt it was given —
-/// input plus cache reads and writes — is the context in use at that
-/// point), and the `result` line reports the turn's totals with the
-/// model's `contextWindow`. Between results the window is read off the
-/// model id: Claude's 1M models carry `[1m]` (or `-1m`), the rest are 200k.
-/// The decoder sends scoped usage before content, so a turn's ring moves
-/// with every message and lands exactly at the result.
+fn successful_receipt(value: &Value) -> bool {
+    value["tool_use_result"]["success"] != false
+        && !value["message"]["content"]
+            .as_array()
+            .is_some_and(|blocks| {
+                blocks
+                    .iter()
+                    .any(|block| block["type"] == "tool_result" && block["is_error"] == true)
+            })
+}
+
+fn native_task(task: &Value) -> Option<PlanTask> {
+    let id = task["id"].as_str()?.trim();
+    let text = task["subject"].as_str()?.trim();
+    if id.is_empty() || text.is_empty() {
+        return None;
+    }
+    Some(PlanTask {
+        id: id.into(),
+        text: text.into(),
+        status: task_status(task["status"].as_str()).unwrap_or(StepStatus::Pending),
+    })
+}
+
+fn task_status(status: Option<&str>) -> Option<StepStatus> {
+    match status {
+        Some("pending") => Some(StepStatus::Pending),
+        Some("in_progress") => Some(StepStatus::InProgress),
+        Some("completed") => Some(StepStatus::Completed),
+        _ => None,
+    }
+}
+
+/// The token count a line carries beside its event, if any. An assistant's
+/// native `context_usage` is the authoritative occupancy report. Otherwise
+/// its message usage is the best available occupancy; it never supplies a
+/// guessed model window. A result's final iteration supplies occupancy while
+/// its top-level usage remains output accounting.
 #[cfg(test)]
 pub(super) fn parse_usage(line: &str) -> Option<SessionEvent> {
     let value: Value = serde_json::from_str(line).ok()?;
@@ -343,19 +440,38 @@ pub(super) fn parse_usage_value(value: &Value) -> Option<SessionEvent> {
     match value.get("type")?.as_str()? {
         "assistant" => {
             let message = value.get("message")?;
-            let usage = message.get("usage")?;
+            let context = value.get("context_usage");
+            let usage = message.get("usage").unwrap_or(&Value::Null);
+            if usage.is_null() && context.is_none() {
+                return None;
+            }
+            if usage.is_null() {
+                return context
+                    .and_then(|context| context.get("total_tokens"))
+                    .and_then(Value::as_u64)
+                    .map(|total_tokens| SessionEvent::ContextUsage {
+                        total_tokens,
+                        context_window: context
+                            .and_then(|context| context.get("raw_max_tokens"))
+                            .and_then(Value::as_u64),
+                    });
+            }
             let input = count(usage, "input_tokens");
             let cached = count(usage, "cache_read_input_tokens");
             let created = count(usage, "cache_creation_input_tokens");
             let output = count(usage, "output_tokens");
-            let model = message.get("model").and_then(Value::as_str).unwrap_or("");
             Some(SessionEvent::TokenUsage {
-                total_tokens: input + cached + created + output,
+                total_tokens: context
+                    .and_then(|context| context.get("total_tokens"))
+                    .and_then(Value::as_u64)
+                    .unwrap_or(input + cached + created + output),
                 input_tokens: input,
                 cached_input_tokens: cached,
                 output_tokens: output,
                 reasoning_output_tokens: 0,
-                context_window: Some(window_of_model(model)),
+                context_window: context
+                    .and_then(|context| context.get("raw_max_tokens"))
+                    .and_then(Value::as_u64),
             })
         }
         "result" => {
@@ -365,22 +481,38 @@ pub(super) fn parse_usage_value(value: &Value) -> Option<SessionEvent> {
             let last = usage
                 .get("iterations")
                 .and_then(Value::as_array)
-                .and_then(|iterations| iterations.last())
-                .unwrap_or(usage);
-            let input = count(last, "input_tokens");
-            let cached = count(last, "cache_read_input_tokens");
-            let created = count(last, "cache_creation_input_tokens");
-            let output = count(last, "output_tokens");
+                .and_then(|iterations| iterations.last());
+            // A turn aggregate is accounting, not a context snapshot. The
+            // stateful decoder retains the prior occupancy when this native
+            // final iteration is absent.
+            let occupancy = last.map(|last| {
+                count(last, "input_tokens")
+                    + count(last, "cache_read_input_tokens")
+                    + count(last, "cache_creation_input_tokens")
+                    + count(last, "output_tokens")
+            });
+            let input = count(usage, "input_tokens");
+            let cached = count(usage, "cache_read_input_tokens");
+            let active_model = value
+                .get("model")
+                .and_then(Value::as_str)
+                .or_else(|| usage.get("model").and_then(Value::as_str));
             let window = value
                 .get("modelUsage")
                 .and_then(Value::as_object)
                 .and_then(|models| {
-                    models
-                        .values()
-                        .find_map(|model| model.get("contextWindow").and_then(Value::as_u64))
+                    active_model
+                        .and_then(|model| models.get(model))
+                        .or_else(|| {
+                            (models.len() == 1)
+                                .then(|| models.values().next())
+                                .flatten()
+                        })
+                        .and_then(|model| model.get("contextWindow"))
+                        .and_then(Value::as_u64)
                 });
             Some(SessionEvent::TokenUsage {
-                total_tokens: input + cached + created + output,
+                total_tokens: occupancy.unwrap_or(0),
                 input_tokens: input,
                 cached_input_tokens: cached,
                 output_tokens: count(usage, "output_tokens"),
@@ -395,6 +527,34 @@ pub(super) fn parse_usage_value(value: &Value) -> Option<SessionEvent> {
     }
 }
 
+pub(super) fn parse_usage_details_value(value: &Value) -> Option<SessionEvent> {
+    let usage = match value.get("type")?.as_str()? {
+        "assistant" => value["message"].get("usage")?,
+        "result" => value.get("usage")?,
+        _ => return None,
+    };
+    if !usage.is_object() {
+        return None;
+    }
+    let count = |key| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
+    Some(SessionEvent::UsageDetails {
+        details: UsageDetails {
+            scope: if value["type"] == "assistant" {
+                UsageScope::Message
+            } else {
+                UsageScope::Turn
+            },
+            input_tokens: count("input_tokens"),
+            cached_input_tokens: count("cache_read_input_tokens"),
+            output_tokens: count("output_tokens"),
+            reasoning_output_tokens: usage["output_tokens_details"]
+                .get("thinking_tokens")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+        },
+    })
+}
+
 /// Subscription windows arrive as their own line, independently of token
 /// usage. Keep their provider reset instants, but normalize utilization so
 /// both providers feed the same compact meter.
@@ -403,27 +563,35 @@ pub(super) fn parse_rate_limits(line: &str) -> Option<SessionEvent> {
     if value.get("type")?.as_str()? != "rate_limit_event" {
         return None;
     }
-    let windows = value.get("rate_limit_info")?.get("unifiedWindows")?;
+    let info = value.get("rate_limit_info")?;
+    let windows = info.get("unifiedWindows");
     let window = |key: &str| {
-        let value = windows.get(key)?;
+        let value = windows?.get(key)?;
         Some(RateLimitWindow {
             used_fraction: value.get("utilization")?.as_f64()? as f32,
             resets_at: value.get("resetsAt").and_then(Value::as_u64),
         })
     };
-    Some(SessionEvent::RateLimits {
-        five_hour: window("five_hour"),
-        weekly: window("seven_day"),
-    })
-}
-
-/// The context window a Claude model id implies, until a result says.
-fn window_of_model(model: &str) -> u64 {
-    let lower = model.to_ascii_lowercase();
-    if lower.contains("[1m]") || lower.ends_with("-1m") {
-        1_000_000
-    } else {
-        200_000
+    if windows.is_some() {
+        return Some(SessionEvent::RateLimits {
+            five_hour: window("five_hour"),
+            weekly: window("seven_day"),
+        });
+    }
+    let flat = RateLimitWindow {
+        used_fraction: info.get("utilization")?.as_f64()? as f32,
+        resets_at: info.get("resetsAt").and_then(Value::as_u64),
+    };
+    match info.get("rateLimitType").and_then(Value::as_str) {
+        Some("five_hour") => Some(SessionEvent::RateLimits {
+            five_hour: Some(flat),
+            weekly: None,
+        }),
+        Some("seven_day") => Some(SessionEvent::RateLimits {
+            five_hour: None,
+            weekly: Some(flat),
+        }),
+        _ => None,
     }
 }
 
@@ -499,9 +667,14 @@ pub(super) fn parse_tool_result(value: Option<&Value>) -> ToolResult {
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string(),
+            exit_code: None,
+            duration_ms: None,
         };
     }
-    ToolResult::Opaque
+    ToolResult::Structured {
+        value: value.clone(),
+        duration_ms: None,
+    }
 }
 
 /// Whether the result describes a file the tool wrote where there was
@@ -558,24 +731,423 @@ fn parse_hunk(value: &Value) -> Option<Hunk> {
 /// answer to send, and a card promising otherwise would be a lie.
 fn parse_control_request(value: &Value) -> Option<SessionEvent> {
     let request = value.get("request")?;
-    if request.get("subtype")?.as_str()? != "can_use_tool" {
-        return None;
+    match request.get("subtype")?.as_str()? {
+        "can_use_tool" => parse_tool_request(value, request),
+        "elicitation" => parse_elicitation_request(value, request),
+        _ => None,
     }
+}
+
+fn parse_tool_request(value: &Value, request: &Value) -> Option<SessionEvent> {
+    let input = request.get("input").cloned().unwrap_or(Value::Null);
+    let tool_name = text(request, "tool_name");
+    let kind = if tool_name == "AskUserQuestion" {
+        DecisionKind::Questions(crate::questions::parse(&input)?)
+    } else {
+        DecisionKind::Approval
+    };
     Some(SessionEvent::DecisionRequested {
         decision: Decision {
             delivery: Default::default(),
+            kind,
+            policy: DecisionPolicy {
+                prefer_deny: request["default_to_no"].as_bool().unwrap_or(false),
+                interaction_required: request["requires_user_interaction"]
+                    .as_bool()
+                    .unwrap_or(false),
+                ..DecisionPolicy::default()
+            },
             id: value.get("request_id")?.as_str()?.to_string(),
             tool_use_id: text(request, "tool_use_id"),
-            tool_name: text(request, "tool_name"),
-            description: text(request, "description"),
-            input: request.get("input").cloned().unwrap_or(Value::Null),
+            tool_name,
+            description: request_description(request),
+            input,
             suggestions: request
                 .get("permission_suggestions")
                 .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default(),
+                .into_iter()
+                .flatten()
+                .filter_map(claude_choice)
+                .filter(|choice| request["suppress_always_allow_rule"] != true || !choice.standing)
+                .collect(),
         },
     })
+}
+
+fn parse_elicitation_request(value: &Value, request: &Value) -> Option<SessionEvent> {
+    let message = text(request, "message");
+    if message.is_empty() {
+        return None;
+    }
+    let kind = match request
+        .get("mode")
+        .and_then(Value::as_str)
+        .unwrap_or("form")
+    {
+        "form" | "openai/form" | "openaiForm" => {
+            match crate::providers::elicitation::fields(
+                request.get("requested_schema").unwrap_or(&Value::Null),
+            ) {
+                Ok(fields) => DecisionKind::Form { fields },
+                Err(reason) => DecisionKind::Unsupported { reason },
+            }
+        }
+        "url" | "openai/url" | "openaiUrl" => match request.get("url").and_then(Value::as_str) {
+            Some(url) if !url.is_empty() => DecisionKind::External { url: url.into() },
+            _ => DecisionKind::Unsupported {
+                reason: "elicitation has no URL".into(),
+            },
+        },
+        _ => DecisionKind::Unsupported {
+            reason: "unsupported elicitation mode".into(),
+        },
+    };
+    let allow = !matches!(&kind, DecisionKind::Unsupported { .. });
+    Some(SessionEvent::DecisionRequested {
+        decision: Decision {
+            delivery: Default::default(),
+            kind,
+            policy: DecisionPolicy {
+                allow,
+                ..Default::default()
+            },
+            id: value.get("request_id")?.as_str()?.to_string(),
+            tool_use_id: String::new(),
+            tool_name: "mcp_elicitation".into(),
+            description: message,
+            input: Value::Null,
+            suggestions: vec![],
+        },
+    })
+}
+
+#[derive(Default)]
+pub(super) struct Requests {
+    pending: std::collections::HashMap<String, Request>,
+}
+
+enum Request {
+    Questions {
+        questions: Vec<crate::questions::Question>,
+        input: Value,
+    },
+    Form(Vec<FormField>),
+    External,
+    Unsupported,
+    Approval {
+        allow: bool,
+        deny: bool,
+        input: Value,
+        suggestions: Vec<DecisionChoice>,
+    },
+}
+
+impl Requests {
+    pub fn observe(&mut self, frame: &Value) {
+        if frame.get("type").and_then(Value::as_str) == Some("control_cancel_request") {
+            if let Some(id) = frame.get("request_id").and_then(Value::as_str) {
+                self.pending.remove(id);
+            }
+            return;
+        }
+        let Some(SessionEvent::DecisionRequested { decision }) = parse_value(frame) else {
+            return;
+        };
+        let request = match decision.kind {
+            DecisionKind::Questions(questions) => Request::Questions {
+                questions,
+                input: decision.input,
+            },
+            DecisionKind::Form { fields } => Request::Form(fields),
+            DecisionKind::External { .. } => Request::External,
+            DecisionKind::Unsupported { .. } => Request::Unsupported,
+            DecisionKind::Approval => Request::Approval {
+                allow: decision.policy.allow,
+                deny: decision.policy.deny,
+                input: decision.input,
+                suggestions: decision.suggestions,
+            },
+        };
+        self.pending.insert(decision.id, request);
+    }
+
+    pub fn response(
+        &self,
+        id: &str,
+        answer: &crate::DecisionAnswer,
+    ) -> Option<std::io::Result<Value>> {
+        let request = self.pending.get(id)?;
+        Some(match request {
+            Request::Questions { questions, input } => question_response(questions, input, answer),
+            Request::Form(fields) => elicitation_response(Some(fields), answer),
+            Request::External => elicitation_response(None, answer),
+            Request::Unsupported => unsupported_response(answer),
+            Request::Approval {
+                allow,
+                deny,
+                input,
+                suggestions,
+            } => approval_response(*allow, *deny, input, suggestions, answer),
+        })
+    }
+
+    pub fn resolved(&mut self, id: &str) {
+        self.pending.remove(id);
+    }
+}
+
+fn unsupported_response(answer: &crate::DecisionAnswer) -> std::io::Result<Value> {
+    match answer {
+        crate::DecisionAnswer::Deny { .. } => {
+            Ok(serde_json::json!({"action":"decline","content":null}))
+        }
+        crate::DecisionAnswer::Cancel => Ok(serde_json::json!({"action":"cancel","content":null})),
+        _ => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "unsupported elicitation can only be declined or cancelled",
+        )),
+    }
+}
+
+fn approval_response(
+    allow: bool,
+    deny: bool,
+    _input: &Value,
+    suggestions: &[DecisionChoice],
+    answer: &crate::DecisionAnswer,
+) -> std::io::Result<Value> {
+    match answer {
+        crate::DecisionAnswer::Allow { input } if allow => {
+            Ok(serde_json::json!({"behavior":"allow","updatedInput":input}))
+        }
+        crate::DecisionAnswer::Deny { message } if deny => {
+            Ok(serde_json::json!({"behavior":"deny","message":message}))
+        }
+        crate::DecisionAnswer::AllowAlways { input, suggestion }
+            if allow
+                && suggestions
+                    .iter()
+                    .any(|offered| offered.value == *suggestion) =>
+        {
+            Ok(serde_json::json!({
+                "behavior":"allow", "updatedInput":input,
+                "updatedPermissions":[suggestion],
+            }))
+        }
+        crate::DecisionAnswer::Choose { value }
+            if suggestions.iter().any(|offered| offered.value == *value) =>
+        {
+            Ok(serde_json::json!({
+                "behavior":"allow", "updatedInput":_input,
+                "updatedPermissions":[value],
+            }))
+        }
+        _ => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "answer is unavailable for this approval",
+        )),
+    }
+}
+
+fn question_response(
+    questions: &[crate::questions::Question],
+    input: &Value,
+    answer: &crate::DecisionAnswer,
+) -> std::io::Result<Value> {
+    let crate::DecisionAnswer::Questions { answers } = answer else {
+        return match answer {
+            crate::DecisionAnswer::Deny { message } => {
+                Ok(serde_json::json!({"behavior":"deny","message":message}))
+            }
+            crate::DecisionAnswer::Cancel => {
+                Ok(serde_json::json!({"behavior":"deny","message":"Question cancelled"}))
+            }
+            _ => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "question requires question answers",
+            )),
+        };
+    };
+    if answers.len() != questions.len() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "question answer count does not match",
+        ));
+    }
+    let mut updated = input.as_object().cloned().unwrap_or_default();
+    let mut values = serde_json::Map::new();
+    for (question, answer) in questions.iter().zip(answers) {
+        let values_for_question = crate::questions::selected_values(question, answer)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
+        if !values_for_question.is_empty() {
+            values.insert(
+                question.question.clone(),
+                Value::String(values_for_question.join(", ")),
+            );
+        }
+    }
+    updated.insert("answers".into(), Value::Object(values));
+    Ok(serde_json::json!({"behavior":"allow","updatedInput":updated}))
+}
+
+fn elicitation_response(
+    fields: Option<&[FormField]>,
+    answer: &crate::DecisionAnswer,
+) -> std::io::Result<Value> {
+    match answer {
+        crate::DecisionAnswer::Form { values } => {
+            if let Some(fields) = fields {
+                validate_form(fields, values).map_err(|error| {
+                    std::io::Error::new(std::io::ErrorKind::InvalidInput, error)
+                })?;
+            }
+            Ok(serde_json::json!({"action":"accept","content":values}))
+        }
+        crate::DecisionAnswer::Allow { .. } | crate::DecisionAnswer::AllowAlways { .. }
+            if fields.is_none() =>
+        {
+            Ok(serde_json::json!({"action":"accept","content":null}))
+        }
+        crate::DecisionAnswer::Deny { .. } => {
+            Ok(serde_json::json!({"action":"decline","content":null}))
+        }
+        crate::DecisionAnswer::Cancel => Ok(serde_json::json!({"action":"cancel","content":null})),
+        _ => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "elicitation answer does not match its form",
+        )),
+    }
+}
+
+fn claude_choice(value: &Value) -> Option<DecisionChoice> {
+    let destination = match value["destination"].as_str()? {
+        "session" => "this session",
+        "userSettings" => "user settings",
+        "projectSettings" => "project settings",
+        "localSettings" => "local settings",
+        other => other,
+    };
+    let kind = value["type"].as_str()?;
+    let label = match kind {
+        "setMode" => {
+            let mode = match value["mode"].as_str()? {
+                "acceptEdits" => "Accept edits",
+                "bypassPermissions" => "Bypass permissions",
+                "default" => "Default",
+                "plan" => "Plan",
+                "dontAsk" => "Don't ask",
+                "auto" => "Auto",
+                _ => return None,
+            };
+            format!("Use {mode} for {destination}")
+        }
+        "addRules" | "replaceRules" | "removeRules" => {
+            let rules = value["rules"]
+                .as_array()?
+                .iter()
+                .map(|rule| {
+                    let tool = rule["toolName"].as_str()?;
+                    Some(match rule["ruleContent"].as_str() {
+                        Some(content) => format!("{tool}({content})"),
+                        None => tool.into(),
+                    })
+                })
+                .collect::<Option<Vec<String>>>()?;
+            if rules.is_empty() {
+                return None;
+            }
+            let action = if kind == "removeRules" {
+                "Remove rules for"
+            } else {
+                match value["behavior"].as_str()? {
+                    "allow" => "Allow",
+                    "deny" => "Block",
+                    "ask" => "Ask before",
+                    _ => return None,
+                }
+            };
+            let replacement = if kind == "replaceRules" {
+                "Replace rules: "
+            } else {
+                ""
+            };
+            format!(
+                "{replacement}{action} {} in {destination}",
+                rules.join(", ")
+            )
+        }
+        "addDirectories" | "removeDirectories" => {
+            let directories = value["directories"]
+                .as_array()?
+                .iter()
+                .map(Value::as_str)
+                .collect::<Option<Vec<_>>>()?;
+            if directories.is_empty() {
+                return None;
+            }
+            let action = if kind == "addDirectories" {
+                "Allow"
+            } else {
+                "Remove access to"
+            };
+            format!("{action} {} in {destination}", directories.join(", "))
+        }
+        _ => return None,
+    };
+    Some(DecisionChoice {
+        label,
+        value: value.clone(),
+        standing: standing_choice(value),
+    })
+}
+
+fn standing_choice(value: &Value) -> bool {
+    if !matches!(
+        value["destination"].as_str(),
+        Some("userSettings" | "projectSettings" | "localSettings" | "session" | "cliArg")
+    ) {
+        return false;
+    }
+    match value["type"].as_str() {
+        Some("setMode") => matches!(
+            value["mode"].as_str(),
+            Some("acceptEdits" | "bypassPermissions")
+        ),
+        Some("addRules" | "replaceRules") => {
+            value["behavior"] == "allow"
+                && value["rules"].as_array().is_some_and(|rules| {
+                    !rules.is_empty()
+                        && rules.iter().all(|rule| {
+                            rule["toolName"]
+                                .as_str()
+                                .is_some_and(|name| !name.is_empty())
+                        })
+                })
+        }
+        _ => false,
+    }
+}
+
+/// Keep the CLI's useful permission context visible without exposing the
+/// provider envelope to the shared renderer.
+fn request_description(request: &Value) -> String {
+    [
+        "description",
+        "title",
+        "display_name",
+        "decision_reason",
+        "blocked_path",
+    ]
+    .into_iter()
+    .filter_map(|key| request.get(key).and_then(Value::as_str).map(str::trim))
+    .filter(|value| !value.is_empty())
+    .fold(Vec::new(), |mut parts, value| {
+        if !parts.iter().any(|part| *part == value) {
+            parts.push(value);
+        }
+        parts
+    })
+    .join(" · ")
 }
 
 /// A string field, or empty when the provider left it out.
@@ -599,13 +1171,47 @@ fn content_block<'a>(value: &'a Value, kind: &str) -> Option<&'a Value> {
 /// The CLI re-announces init at the head of every turn, carrying the same
 /// `session_id`; Init therefore repeats rather than arriving once.
 fn parse_system(value: &Value) -> Option<SessionEvent> {
-    if value.get("subtype")?.as_str()? != "init" {
-        return None;
+    match value.get("subtype")?.as_str()? {
+        "init" => Some(SessionEvent::Init {
+            session_id: value.get("session_id")?.as_str()?.to_string(),
+            model: value.get("model")?.as_str()?.to_string(),
+        }),
+        "commands_changed" => Some(SessionEvent::Commands {
+            commands: value
+                .get("commands")?
+                .as_array()?
+                .iter()
+                .filter_map(|command| {
+                    Some(crate::SessionCommand {
+                        name: command.get("name")?.as_str()?.to_string(),
+                        description: command
+                            .get("description")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        path: None,
+                    })
+                })
+                .collect(),
+        }),
+        "status" => value
+            .get("permissionMode")
+            .and_then(Value::as_str)
+            .map(|mode| SessionEvent::PermissionMode { mode: mode.into() }),
+        "session_state_changed" => match value.get("state").and_then(Value::as_str) {
+            Some("running") => Some(SessionEvent::RunState {
+                state: crate::RunState::Running,
+            }),
+            Some("requires_action") => Some(SessionEvent::RunState {
+                state: crate::RunState::RequiresAction,
+            }),
+            Some("idle") => Some(SessionEvent::RunState {
+                state: crate::RunState::Idle,
+            }),
+            _ => None,
+        },
+        _ => None,
     }
-    Some(SessionEvent::Init {
-        session_id: value.get("session_id")?.as_str()?.to_string(),
-        model: value.get("model")?.as_str()?.to_string(),
-    })
 }
 
 fn parse_stream_event(value: &Value) -> Option<SessionEvent> {
@@ -647,7 +1253,7 @@ fn parse_result(value: &Value) -> SessionEvent {
         // `terminal_reason` classifies a failure, so it is preferred and
         // `subtype` is the fallback for a line that omits it.
         let classification = if reason.is_empty() { subtype } else { reason };
-        TurnOutcome::Error(describe_error(classification, text))
+        TurnOutcome::Error(describe_error(classification, text, value.get("errors")))
     } else {
         TurnOutcome::Completed
     };
@@ -668,8 +1274,21 @@ fn is_interrupt(terminal_reason: &str) -> bool {
     terminal_reason.starts_with("aborted")
 }
 
-fn describe_error(subtype: &str, text: &str) -> String {
-    match (subtype, text) {
+fn describe_error(subtype: &str, text: &str, errors: Option<&Value>) -> String {
+    let native = errors
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter(|detail| !detail.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let detail = [text, native.as_str()]
+        .into_iter()
+        .filter(|detail| !detail.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    match (subtype, detail.as_str()) {
         ("", "") => "claude CLI reported an error with no detail".to_string(),
         ("", text) => text.to_string(),
         (subtype, "") => subtype.to_string(),
@@ -773,7 +1392,10 @@ mod tests {
             10 + 18865 + 4,
             "input + cache writes + output"
         );
-        assert_eq!(*context_window, Some(200_000), "haiku's window, off the id");
+        assert_eq!(
+            *context_window, None,
+            "unknown native window is not inferred from a model name"
+        );
         let SessionEvent::TokenUsage {
             total_tokens,
             context_window,
@@ -792,8 +1414,6 @@ mod tests {
         );
         assert_eq!(*output_tokens, 48);
         assert_eq!(*reasoning_output_tokens, 39);
-        assert_eq!(window_of_model("claude-opus-5[1m]"), 1_000_000);
-        assert_eq!(window_of_model("claude-fable-5-1"), 200_000);
         assert_eq!(parse_usage(r#"{"type":"user"}"#), None);
     }
 
@@ -837,6 +1457,9 @@ mod tests {
             // captures; these legacy parser fixtures are Main-only.
             SessionEvent::Activity(_) => return None,
             SessionEvent::Init { .. } => "Init",
+            SessionEvent::ModelChanged { .. }
+            | SessionEvent::ConversationReset { .. }
+            | SessionEvent::RunState { .. } => return None,
             SessionEvent::TextDelta { .. } => "TextDelta",
             SessionEvent::ThinkingDelta { .. } => "ThinkingDelta",
             SessionEvent::ToolStarted { .. } => "ToolStarted",
@@ -853,7 +1476,12 @@ mod tests {
             // below and the session test that watches the reader announce them.
             SessionEvent::Commands { .. } => return None,
             SessionEvent::PermissionMode { .. } => return None,
-            SessionEvent::Models { .. } | SessionEvent::Queue(_) => return None,
+            SessionEvent::Models { .. } => return None,
+            SessionEvent::ContextDetails { .. } => return None,
+            SessionEvent::FileChanges { .. } | SessionEvent::TurnDiff { .. } => return None,
+            SessionEvent::McpServers { .. } | SessionEvent::McpAuthorization { .. } => return None,
+            SessionEvent::ContextUsage { .. } | SessionEvent::UsageDetails { .. } => return None,
+            SessionEvent::Queue(_) => return None,
             // Codex's own concept (#9); the Claude CLI never emits one.
             SessionEvent::ReasoningSummaryDelta { .. } => return None,
             // Rides beside a line's own event (`parse_usage`), proved by
@@ -997,7 +1625,7 @@ mod tests {
                 ("edit", 70, 16),
                 // Two Writes, one Decision: the standing answer was adopted on
                 // the first, and the CLI never gated the second.
-                ("permission-always", 58, 15),
+                ("permission-always", 58, 16),
                 // The Thread plans: three TaskCreate calls and the update that
                 // ticks the first off, which is what L2's progress counts.
                 ("todo", 190, 47),
@@ -1027,6 +1655,8 @@ mod tests {
             result: ToolResult::Command {
                 stdout: "ferrite-tool-ok".into(),
                 stderr: String::new(),
+                exit_code: None,
+                duration_ms: None,
             },
         }));
     }
@@ -1125,7 +1755,7 @@ mod tests {
             .into_iter()
             .find_map(|event| match event {
                 SessionEvent::ToolCompleted {
-                    result: ToolResult::Command { stdout, stderr },
+                    result: ToolResult::Command { stdout, stderr, .. },
                     ..
                 } => Some((stdout, stderr)),
                 _ => None,

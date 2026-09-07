@@ -63,7 +63,7 @@ impl Instruments {
             let Body::Tool(tool) = &block.body else {
                 continue;
             };
-            if let Some(diff) = &tool.diff {
+            for diff in &tool.diffs {
                 instruments.added += diff.added;
                 instruments.removed += diff.removed;
                 match instruments
@@ -323,10 +323,13 @@ mod tests {
     #[test]
     fn a_threads_plan_reaches_the_instruments() {
         let mut transcript = Transcript::default();
-        transcript.apply(Input::Event(SessionEvent::ToolStarted {
-            id: "t1".into(),
-            name: "TaskCreate".into(),
-            input: serde_json::json!({ "subject": "tidy" }),
+        transcript.apply(Input::Event(SessionEvent::Progress {
+            event: crate::progress::ProgressEvent::Task {
+                id: "native-task-1".into(),
+                subject: "tidy".into(),
+                status: Some(crate::progress::StepStatus::Pending),
+                deleted: false,
+            },
         }));
 
         assert_eq!(

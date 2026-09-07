@@ -11,6 +11,7 @@ use gpui::component::{
     group_box::{GroupBox, GroupBoxVariants},
     input::{Input, InputState},
     radio::{Radio, RadioGroup},
+    scroll::ScrollableElement,
     tab::{Tab, TabBar},
     Disableable, Sizable,
 };
@@ -22,6 +23,8 @@ pub(crate) struct RequestForms(Rc<RefCell<HashMap<DecisionHandle, RequestForm>>>
 struct RequestForm {
     answers: Vec<ferrite_core::questions::Answer>,
     inputs: Vec<Entity<InputState>>,
+    form_inputs: HashMap<String, Entity<InputState>>,
+    values: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Clone, Default)]
@@ -195,6 +198,8 @@ impl CockpitView {
         self.facts.selected(&self.cockpit, thread, &subject);
         self.panes[index].select_subject(subject, generation, cx);
         self.retry_subject_history(index, cx);
+        self.cockpit
+            .set_visible_subject(thread, self.panes[index].selected.clone());
         self.cockpit.focus_thread(thread);
         self.focus_pane(index);
         self.popover = None;
@@ -206,6 +211,34 @@ impl CockpitView {
         } else {
             window.focus(&self.panes[index].transcript_focus, cx);
         }
+        cx.notify();
+    }
+
+    /// A Bell request already focused its Thread in core. Select its owning
+    /// Subject without synthesizing a window input event or answering it.
+    pub(super) fn select_subject_from_notice(
+        &mut self,
+        thread: ThreadId,
+        subject: Subject,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = self.pane_for(thread) else {
+            return;
+        };
+        let Some(open) = self.cockpit.thread(thread) else {
+            return;
+        };
+        let subject = open.activity().canonical_subject(&subject);
+        let Some(subject_view) = open.activity().subject(&subject) else {
+            return;
+        };
+        self.facts.selected(&self.cockpit, thread, &subject);
+        self.panes[index].select_subject(subject, subject_view.revision(), cx);
+        self.retry_subject_history(index, cx);
+        self.cockpit
+            .set_visible_subject(thread, self.panes[index].selected.clone());
+        self.popover = None;
+        self.context_usage = None;
         cx.notify();
     }
 
@@ -707,9 +740,12 @@ impl CockpitView {
         let activity = self.cockpit.thread(thread)?.activity();
         let all = activity.pending_decisions();
         if pane.is_main()
+            && all.iter().all(|request| {
+                matches!(request.decision.kind, ferrite_core::DecisionKind::Approval)
+            })
             && all
                 .iter()
-                .all(|request| pane::question_of(&request.decision).is_none())
+                .all(|request| request.decision.suggestions.is_empty())
             && all.len() <= 1
             && all
                 .iter()
@@ -807,9 +843,11 @@ impl CockpitView {
             if !forms.0.borrow().contains_key(&handle) {
                 let inputs = questions
                     .iter()
-                    .map(|_| {
+                    .map(|question| {
                         cx.new(|cx| {
-                            InputState::new(window, cx).placeholder("Or write your own answer…")
+                            InputState::new(window, cx)
+                                .placeholder("Or write your own answer…")
+                                .masked(question.secret)
                         })
                     })
                     .collect();
@@ -818,6 +856,8 @@ impl CockpitView {
                     RequestForm {
                         answers: vec![Default::default(); questions.len()],
                         inputs,
+                        form_inputs: Default::default(),
+                        values: Default::default(),
                     },
                 );
             }
@@ -900,19 +940,23 @@ impl CockpitView {
                             })),
                     );
                 }
-                let selector = format!("request-other-{}-{}-{qi}", thread.get(), handle.serial);
-                content = content.child(
-                    section.child(
-                        div()
-                            .w_full()
-                            .min_w_0()
-                            .debug_selector(move || selector.clone())
-                            .child(
-                                Input::new(&forms.0.borrow()[&handle].inputs[qi])
-                                    .disabled(request.submitting),
-                            ),
-                    ),
-                );
+                if question.allow_other {
+                    let selector = format!("request-other-{}-{}-{qi}", thread.get(), handle.serial);
+                    content = content.child(
+                        section.child(
+                            div()
+                                .w_full()
+                                .min_w_0()
+                                .debug_selector(move || selector.clone())
+                                .child(
+                                    Input::new(&forms.0.borrow()[&handle].inputs[qi])
+                                        .disabled(request.submitting),
+                                ),
+                        ),
+                    );
+                } else {
+                    content = content.child(section);
+                }
             }
             let async_question = !request.decision.blocks_execution();
             let working = async_question
@@ -981,7 +1025,6 @@ impl CockpitView {
             }
             let skip_handle = handle.clone();
             let submit_handle = handle.clone();
-            let input = request.decision.input.clone();
             let selector = format!("request-submit-{}-{}", thread.get(), handle.serial);
             body = body.child(
                 div()
@@ -1039,16 +1082,12 @@ impl CockpitView {
                                     cx.notify();
                                     return;
                                 }
-                                let input = ferrite_core::questions::answered_input(
-                                    &input,
-                                    &form.answers,
-                                    &questions,
-                                );
+                                let answers = form.answers.clone();
                                 drop(state);
                                 view.respond_exact(
                                     thread,
                                     &submit_handle,
-                                    DecisionAnswer::Allow { input },
+                                    DecisionAnswer::Questions { answers },
                                     cx,
                                 );
                             })),
@@ -1098,9 +1137,401 @@ impl CockpitView {
                     ),
             )
             .into_any_element();
+        } else if let ferrite_core::DecisionKind::Form { fields } = &request.decision.kind {
+            let fields = fields.clone();
+            let forms = self.panes[index].request_forms.clone();
+            if !forms.0.borrow().contains_key(&handle) {
+                let mut form_inputs = HashMap::new();
+                for field in &fields {
+                    let initial = match &field.kind {
+                        ferrite_core::FormFieldKind::String { default, .. } => {
+                            default.clone().unwrap_or_default()
+                        }
+                        ferrite_core::FormFieldKind::Number { default, .. } => {
+                            default.map(|value| value.to_string()).unwrap_or_default()
+                        }
+                        ferrite_core::FormFieldKind::Integer { default, .. } => {
+                            default.map(|value| value.to_string()).unwrap_or_default()
+                        }
+                        _ => continue,
+                    };
+                    let input = cx.new(|cx| {
+                        let mut input = InputState::new(window, cx);
+                        input.set_value(initial, window, cx);
+                        input
+                    });
+                    form_inputs.insert(field.id.clone(), input);
+                }
+                forms.0.borrow_mut().insert(
+                    handle.clone(),
+                    RequestForm {
+                        answers: Vec::new(),
+                        inputs: Vec::new(),
+                        form_inputs,
+                        values: form_defaults(&fields),
+                    },
+                );
+            }
+            let submit_handle = handle.clone();
+            let selector = format!("request-submit-{}-{}", thread.get(), handle.serial);
+            let mut body = div().w_full().flex().flex_col().gap(px(12.));
+            for (field_index, field) in fields.iter().enumerate() {
+                let mut section = div()
+                    .w_full()
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.))
+                    .debug_selector({
+                        let id = field.id.clone();
+                        move || format!("form-field-{id}")
+                    })
+                    .child(
+                        div()
+                            .text_color(rgb(theme::TEXT))
+                            .child(field.label.clone()),
+                    );
+                if !field.description.is_empty() {
+                    section =
+                        section.child(components::label(field.description.clone(), theme::TEXT_2));
+                }
+                match &field.kind {
+                    ferrite_core::FormFieldKind::String { .. }
+                    | ferrite_core::FormFieldKind::Number { .. }
+                    | ferrite_core::FormFieldKind::Integer { .. } => {
+                        if let Some(input) = forms.0.borrow()[&handle].form_inputs.get(&field.id) {
+                            section = section.child(Input::new(input).disabled(request.submitting));
+                        }
+                    }
+                    ferrite_core::FormFieldKind::Boolean { .. } => {
+                        let checked = forms.0.borrow()[&handle]
+                            .values
+                            .get(&field.id)
+                            .and_then(|value| value.as_bool())
+                            .unwrap_or(false);
+                        let forms = forms.clone();
+                        let handle = handle.clone();
+                        let id = field.id.clone();
+                        section = section.child(
+                            Checkbox::new(("form-bool", field_index))
+                                .checked(checked)
+                                .disabled(request.submitting)
+                                .child("Enabled")
+                                .on_click(cx.listener(move |_, checked: &bool, _, cx| {
+                                    if let Some(form) = forms.0.borrow_mut().get_mut(&handle) {
+                                        form.values
+                                            .insert(id.clone(), serde_json::Value::Bool(*checked));
+                                    }
+                                    cx.notify();
+                                })),
+                        );
+                    }
+                    ferrite_core::FormFieldKind::Enum {
+                        options,
+                        multi_select,
+                        ..
+                    } => {
+                        let selected = forms.0.borrow()[&handle].values.get(&field.id).cloned();
+                        if *multi_select {
+                            for (option_index, option) in options.iter().enumerate() {
+                                let checked = selected
+                                    .as_ref()
+                                    .and_then(|value| value.as_array())
+                                    .is_some_and(|values| {
+                                        values.iter().any(|value| {
+                                            value
+                                                == &serde_json::Value::String(option.value.clone())
+                                        })
+                                    });
+                                let forms = forms.clone();
+                                let handle = handle.clone();
+                                let id = field.id.clone();
+                                let value = option.value.clone();
+                                section = section.child(
+                                    Checkbox::new(("form-enum", field_index * 256 + option_index))
+                                        .checked(checked)
+                                        .disabled(request.submitting)
+                                        .child(option.label.clone())
+                                        .on_click(cx.listener(move |_, checked: &bool, _, cx| {
+                                            if let Some(form) =
+                                                forms.0.borrow_mut().get_mut(&handle)
+                                            {
+                                                let values =
+                                                    form.values.entry(id.clone()).or_insert_with(
+                                                        || serde_json::Value::Array(Vec::new()),
+                                                    );
+                                                let values = values
+                                                    .as_array_mut()
+                                                    .expect("form enum is an array");
+                                                values.retain(|item| {
+                                                    item != &serde_json::Value::String(
+                                                        value.clone(),
+                                                    )
+                                                });
+                                                if *checked {
+                                                    values.push(serde_json::Value::String(
+                                                        value.clone(),
+                                                    ));
+                                                }
+                                            }
+                                            cx.notify();
+                                        })),
+                                );
+                            }
+                        } else {
+                            let selected_index =
+                                selected.as_ref().and_then(|value| value.as_str()).and_then(
+                                    |value| options.iter().position(|option| option.value == value),
+                                );
+                            let forms = forms.clone();
+                            let handle = handle.clone();
+                            let id = field.id.clone();
+                            let options = options.clone();
+                            section = section.child(
+                                RadioGroup::vertical(("form-enum", field_index))
+                                    .selected_index(selected_index)
+                                    .disabled(request.submitting)
+                                    .children(options.iter().enumerate().map(|(index, option)| {
+                                        Radio::new(index).child(option.label.clone())
+                                    }))
+                                    .on_click(cx.listener(move |_, selected: &usize, _, cx| {
+                                        if let (Some(form), Some(option)) = (
+                                            forms.0.borrow_mut().get_mut(&handle),
+                                            options.get(*selected),
+                                        ) {
+                                            form.values.insert(
+                                                id.clone(),
+                                                serde_json::Value::String(option.value.clone()),
+                                            );
+                                        }
+                                        cx.notify();
+                                    })),
+                            );
+                        }
+                    }
+                }
+                body = body.child(section);
+            }
+            if let Some((failed, error)) = &self.panes[index].request_error {
+                if failed == &handle {
+                    body = body.child(
+                        div()
+                            .debug_selector(|| "form-validation-error".into())
+                            .text_color(rgb(theme::BLOCKED))
+                            .child(error.clone()),
+                    );
+                }
+            }
+            let cancel_handle = handle.clone();
+            return card
+                .child(
+                    div()
+                        .max_h(px(
+                            (f32::from(window.viewport_size().height) * 0.45).min(360.)
+                        ))
+                        .flex()
+                        .flex_col()
+                        .overflow_y_scrollbar()
+                        .child(body),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .justify_end()
+                        .gap(px(8.))
+                        .child(
+                            gpui::component::button::Button::new("form-cancel")
+                                .small()
+                                .label("Cancel")
+                                .disabled(!request.decision.policy.deny || request.submitting)
+                                .debug_selector(|| "form-cancel".into())
+                                .on_click(cx.listener(move |view, _, _, cx| {
+                                    view.respond_exact(
+                                        thread,
+                                        &cancel_handle,
+                                        DecisionAnswer::Cancel,
+                                        cx,
+                                    )
+                                })),
+                        )
+                        .child(
+                            gpui::component::button::Button::new("form-send")
+                                .primary()
+                                .small()
+                                .label("Send")
+                                .disabled(!request.decision.policy.allow || request.submitting)
+                                .debug_selector(move || selector.clone())
+                                .on_click(cx.listener(move |view, _, _, cx| {
+                                    let mut state = forms.0.borrow_mut();
+                                    let Some(form) = state.get_mut(&submit_handle) else {
+                                        return;
+                                    };
+                                    for field in &fields {
+                                        let Some(input) = form.form_inputs.get(&field.id) else {
+                                            continue;
+                                        };
+                                        let text = input.read(cx).value().to_string();
+                                        if text.trim().is_empty() {
+                                            if field.required {
+                                                form.values.insert(
+                                                    field.id.clone(),
+                                                    serde_json::Value::Null,
+                                                );
+                                            } else {
+                                                form.values.remove(&field.id);
+                                            }
+                                            continue;
+                                        }
+                                        let value = match &field.kind {
+                                            ferrite_core::FormFieldKind::String { .. } => {
+                                                serde_json::Value::String(text)
+                                            }
+                                            ferrite_core::FormFieldKind::Number { .. } => {
+                                                match text
+                                                    .parse::<f64>()
+                                                    .ok()
+                                                    .and_then(serde_json::Number::from_f64)
+                                                {
+                                                    Some(value) => serde_json::Value::Number(value),
+                                                    None => {
+                                                        form.values.insert(
+                                                            field.id.clone(),
+                                                            serde_json::Value::String(text),
+                                                        );
+                                                        continue;
+                                                    }
+                                                }
+                                            }
+                                            ferrite_core::FormFieldKind::Integer { .. } => {
+                                                match text.parse::<i64>() {
+                                                    Ok(value) => serde_json::Value::from(value),
+                                                    Err(_) => {
+                                                        form.values.insert(
+                                                            field.id.clone(),
+                                                            serde_json::Value::String(text),
+                                                        );
+                                                        continue;
+                                                    }
+                                                }
+                                            }
+                                            _ => continue,
+                                        };
+                                        form.values.insert(field.id.clone(), value);
+                                    }
+                                    let values = serde_json::Value::Object(form.values.clone());
+                                    drop(state);
+                                    if let Err(error) =
+                                        ferrite_core::validate_form(&fields, &values)
+                                    {
+                                        if let Some(index) = view.pane_for(thread) {
+                                            view.panes[index].request_error =
+                                                Some((submit_handle.clone(), error));
+                                        }
+                                        cx.notify();
+                                        return;
+                                    }
+                                    view.respond_exact(
+                                        thread,
+                                        &submit_handle,
+                                        DecisionAnswer::Form { values },
+                                        cx,
+                                    );
+                                })),
+                        ),
+                )
+                .into_any_element();
+        } else if let ferrite_core::DecisionKind::External { url } = &request.decision.kind {
+            let url = url.clone();
+            let complete_handle = handle.clone();
+            let cancel_handle = handle.clone();
+            return card
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(10.))
+                        .child(components::label(
+                            "Complete this request in your browser, then confirm here.",
+                            theme::TEXT_2,
+                        ))
+                        .child(
+                            gpui::component::button::Button::new("external-open")
+                                .small()
+                                .label("Open link")
+                                .disabled(!safe_external_url(&url))
+                                .on_click(cx.listener(move |_, _, _, cx| cx.open_url(&url))),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .justify_end()
+                                .gap(px(8.))
+                                .child(
+                                    gpui::component::button::Button::new("external-cancel")
+                                        .small()
+                                        .label("Cancel")
+                                        .disabled(
+                                            !request.decision.policy.deny || request.submitting,
+                                        )
+                                        .on_click(cx.listener(move |view, _, _, cx| {
+                                            view.respond_exact(
+                                                thread,
+                                                &cancel_handle,
+                                                DecisionAnswer::Cancel,
+                                                cx,
+                                            )
+                                        })),
+                                )
+                                .child(
+                                    gpui::component::button::Button::new("external-complete")
+                                        .primary()
+                                        .small()
+                                        .label("Complete")
+                                        .disabled(
+                                            !request.decision.policy.allow || request.submitting,
+                                        )
+                                        .on_click(cx.listener(move |view, _, _, cx| {
+                                            view.respond_exact(
+                                                thread,
+                                                &complete_handle,
+                                                DecisionAnswer::Allow {
+                                                    input: serde_json::Value::Null,
+                                                },
+                                                cx,
+                                            )
+                                        })),
+                                ),
+                        ),
+                )
+                .into_any_element();
+        } else if let ferrite_core::DecisionKind::Unsupported { reason } = &request.decision.kind {
+            let cancel_handle = handle.clone();
+            return card
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(10.))
+                        .child(components::label(reason.clone(), theme::TEXT_2))
+                        .child(
+                            gpui::component::button::Button::new("unsupported-cancel")
+                                .small()
+                                .label("Cancel")
+                                .disabled(!request.decision.policy.deny || request.submitting)
+                                .on_click(cx.listener(move |view, _, _, cx| {
+                                    view.respond_exact(
+                                        thread,
+                                        &cancel_handle,
+                                        DecisionAnswer::Cancel,
+                                        cx,
+                                    )
+                                })),
+                        ),
+                )
+                .into_any_element();
         } else {
             let accepted = request.decision.input.clone();
             let allow_handle = handle.clone();
+            let choice_handle = handle.clone();
             card = card.child(
                 div()
                     .flex()
@@ -1112,6 +1543,7 @@ impl CockpitView {
                         )))
                         .tab_stop(true)
                         .label("Allow")
+                        .disabled(!request.decision.policy.allow || request.submitting)
                         .debug_selector(move || {
                             format!("request-allow-{}-{}", thread.get(), allow_handle.serial)
                         })
@@ -1136,6 +1568,7 @@ impl CockpitView {
                         )))
                         .tab_stop(true)
                         .label("Deny")
+                        .disabled(!request.decision.policy.deny || request.submitting)
                         .on_click(cx.listener(move |view, _, _, cx| {
                             view.respond_exact(
                                 thread,
@@ -1148,6 +1581,31 @@ impl CockpitView {
                         })),
                     ),
             );
+            for (choice_index, choice) in request.decision.suggestions.iter().enumerate() {
+                let handle = choice_handle.clone();
+                let value = choice.value.clone();
+                let label = choice.label.clone();
+                card = card.child(
+                    components::button(SharedString::from(format!(
+                        "approval-choice-{}-{}",
+                        handle.serial, choice_index
+                    )))
+                    .tab_stop(true)
+                    .label(label.clone())
+                    .disabled(request.submitting)
+                    .debug_selector(move || format!("approval-choice-{choice_index}"))
+                    .on_click(cx.listener(move |view, _, _, cx| {
+                        view.respond_exact(
+                            thread,
+                            &handle,
+                            DecisionAnswer::Choose {
+                                value: value.clone(),
+                            },
+                            cx,
+                        )
+                    })),
+                );
+            }
         }
         card.into_any_element()
     }
@@ -1227,7 +1685,24 @@ impl CockpitView {
         answer: Answer,
         cx: &mut Context<Self>,
     ) {
-        if pane::question_of(&request.decision).is_some() && answer != Answer::Deny {
+        if (pane::question_of(&request.decision).is_some()
+            || matches!(
+                request.decision.kind,
+                ferrite_core::DecisionKind::Form { .. }
+                    | ferrite_core::DecisionKind::External { .. }
+                    | ferrite_core::DecisionKind::Unsupported { .. }
+            ))
+            && answer != Answer::Deny
+        {
+            return;
+        }
+        if request.decision.policy.interaction_required && answer != Answer::Deny {
+            return;
+        }
+        if answer == Answer::Allow && !request.decision.policy.allow {
+            return;
+        }
+        if answer == Answer::Deny && !request.decision.policy.deny {
             return;
         }
         let response = match answer {
@@ -1247,6 +1722,10 @@ impl CockpitView {
         };
         self.respond_exact(thread, &request.handle, response, cx);
     }
+}
+
+fn safe_external_url(url: &str) -> bool {
+    url.starts_with("https://") || url.starts_with("http://")
 }
 
 /// Labels and descriptions wrap inside the native choice's content slot.
@@ -1271,4 +1750,52 @@ fn question_choice(choice: &ferrite_core::questions::Choice) -> impl IntoElement
                     .child(choice.description.clone()),
             )
         })
+}
+
+fn form_defaults(fields: &[ferrite_core::FormField]) -> serde_json::Map<String, serde_json::Value> {
+    fields
+        .iter()
+        .filter_map(|field| {
+            let value = match &field.kind {
+                ferrite_core::FormFieldKind::String { default, .. } => {
+                    default.clone().map(serde_json::Value::String)
+                }
+                ferrite_core::FormFieldKind::Number { default, .. } => default
+                    .and_then(serde_json::Number::from_f64)
+                    .map(serde_json::Value::Number),
+                ferrite_core::FormFieldKind::Integer { default, .. } => {
+                    default.map(serde_json::Value::from)
+                }
+                ferrite_core::FormFieldKind::Boolean { default } => default
+                    .or(field.required.then_some(false))
+                    .map(serde_json::Value::from),
+                ferrite_core::FormFieldKind::Enum {
+                    options,
+                    multi_select,
+                    default,
+                    ..
+                } => {
+                    let allowed = |value: &str| options.iter().any(|option| option.value == value);
+                    match default {
+                        Some(serde_json::Value::String(value))
+                            if !multi_select && allowed(value) =>
+                        {
+                            Some(serde_json::Value::String(value.clone()))
+                        }
+                        Some(serde_json::Value::Array(values)) if *multi_select => {
+                            Some(serde_json::Value::Array(
+                                values
+                                    .iter()
+                                    .filter(|value| value.as_str().is_some_and(allowed))
+                                    .cloned()
+                                    .collect(),
+                            ))
+                        }
+                        _ => None,
+                    }
+                }
+            }?;
+            Some((field.id.clone(), value))
+        })
+        .collect()
 }
