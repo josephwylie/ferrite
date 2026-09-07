@@ -276,6 +276,10 @@ enum BrowseThen {
     Draft,
     /// The nav's Project filter.
     Filter,
+    /// Attach every picked directory to an existing Project.
+    AddToProject(ProjectId),
+    /// Replace one directory in a Project (`0` is its primary root).
+    ReplaceProjectDirectory(ProjectId, usize),
 }
 
 /// What a right-click was on.
@@ -311,6 +315,10 @@ enum MenuVerb {
     CopyPath,
     Delete,
     RemoveProject,
+    ChangePrimaryDirectory,
+    AddProjectDirectories,
+    ReplaceProjectDirectory(usize),
+    RemoveProjectDirectory(usize),
 }
 
 #[derive(Clone, Copy)]
@@ -545,8 +553,8 @@ enum BandChoice {
     /// choose it.
     RegisterPath(std::path::PathBuf),
     Target(DraftTarget),
-    /// Open the platform's folder picker; the folder picked registers
-    /// and becomes the draft's Project.
+    /// Open the platform's folder picker; the folders become one Project,
+    /// with the first as its primary working directory.
     Browse,
 }
 
@@ -1523,6 +1531,32 @@ impl CockpitView {
                 )));
                 rows.push(Some((menu::Item::new("Copy Path"), MenuVerb::CopyPath)));
                 rows.push(None);
+                rows.push(Some((
+                    menu::Item::new("Change Primary Directory…"),
+                    MenuVerb::ChangePrimaryDirectory,
+                )));
+                rows.push(Some((
+                    menu::Item::new("Add Directories…"),
+                    MenuVerb::AddProjectDirectories,
+                )));
+                if let Some(project) = self.cockpit.registry().project(project) {
+                    for (offset, directory) in project.additional_roots.iter().enumerate() {
+                        let index = offset + 1;
+                        let name = directory
+                            .file_name()
+                            .map(|name| name.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| directory.display().to_string());
+                        rows.push(Some((
+                            menu::Item::new(format!("Change {name}…")),
+                            MenuVerb::ReplaceProjectDirectory(index),
+                        )));
+                        rows.push(Some((
+                            menu::Item::new(format!("Remove {name}")).destructive(),
+                            MenuVerb::RemoveProjectDirectory(index),
+                        )));
+                    }
+                }
+                rows.push(None);
                 let in_use = self.project_in_use(project);
                 rows.push(Some((
                     menu::Item::new(if in_use {
@@ -1735,6 +1769,22 @@ impl CockpitView {
                     if self.nav_filter == Some(project) {
                         self.nav_filter = None;
                     }
+                    self.group_error = None;
+                }
+            }
+            (MenuTarget::Project(project), MenuVerb::ChangePrimaryDirectory) => {
+                self.browse_for_project(BrowseThen::ReplaceProjectDirectory(project, 0), cx);
+            }
+            (MenuTarget::Project(project), MenuVerb::AddProjectDirectories) => {
+                self.browse_for_project(BrowseThen::AddToProject(project), cx);
+            }
+            (MenuTarget::Project(project), MenuVerb::ReplaceProjectDirectory(index)) => {
+                self.browse_for_project(BrowseThen::ReplaceProjectDirectory(project, index), cx);
+            }
+            (MenuTarget::Project(project), MenuVerb::RemoveProjectDirectory(index)) => {
+                if let Err(error) = self.cockpit.remove_project_directory(project, index) {
+                    self.group_error = Some(format!("directory unchanged: {error}").into());
+                } else {
                     self.group_error = None;
                 }
             }
@@ -3853,9 +3903,19 @@ impl CockpitView {
                     .projects()
                     .iter()
                     .map(|project| {
+                        let detail = if project.additional_roots.is_empty() {
+                            project.root.display().to_string()
+                        } else {
+                            let count = project.additional_roots.len();
+                            format!(
+                                "{} · +{count} director{}",
+                                project.root.display(),
+                                if count == 1 { "y" } else { "ies" }
+                            )
+                        };
                         band_row(
                             SharedString::from(project.title.clone()),
-                            SharedString::from(project.root.display().to_string()),
+                            SharedString::from(detail),
                             draft.binding.project() == project.id,
                             BandChoice::Project(project.id),
                         )
@@ -3881,8 +3941,8 @@ impl CockpitView {
                     ));
                 }
                 rows.push(band_row(
-                    SharedString::from("Choose folder…"),
-                    SharedString::from("add a Project"),
+                    SharedString::from("Choose folders…"),
+                    SharedString::from("create one Project"),
                     false,
                     BandChoice::Browse,
                 ));
@@ -4057,66 +4117,92 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// The platform's folder picker, for a Project not yet registered.
-    /// The picker is modal to the window and answers later; the folder it
-    /// returns registers through the core door and lands where `then`
-    /// says. Cancel changes nothing.
+    /// The platform's folder picker for creating or editing a Project. It is
+    /// modal to the window and answers later; `then` says whether the paths
+    /// create, extend, or replace. Cancel changes nothing.
     fn browse_for_project(&mut self, then: BrowseThen, cx: &mut Context<Self>) {
+        let replacing = matches!(then, BrowseThen::ReplaceProjectDirectory(_, _));
         let receiver = cx.prompt_for_paths(gpui::PathPromptOptions {
             files: false,
             directories: true,
-            multiple: false,
-            prompt: Some("Add Project".into()),
+            multiple: !replacing,
+            prompt: Some(
+                if replacing {
+                    "Change Project Directory"
+                } else {
+                    "Add Project Directories"
+                }
+                .into(),
+            ),
         });
         cx.spawn(async move |this, cx| {
-            let picked = match receiver.await {
-                Ok(Ok(Some(mut paths))) => paths.pop(),
-                _ => None,
+            let paths = match receiver.await {
+                Ok(Ok(Some(paths))) => paths,
+                _ => return,
             };
-            let Some(path) = picked else {
+            if paths.is_empty() {
                 return;
-            };
-            this.update(cx, |view, cx| view.adopt_browsed_project(path, then, cx))
+            }
+            this.update(cx, |view, cx| view.adopt_browsed_projects(paths, then, cx))
                 .ok();
         })
         .detach();
     }
 
-    /// A folder the picker returned: registered, then chosen where the
-    /// picker was opened from — the draft's Project chip, or the nav's
-    /// filter. A refusal lands where that surface shows errors.
-    fn adopt_browsed_project(
+    /// Apply folders returned by the picker. A new Project takes the first
+    /// as primary and the rest as additional roots; editing actions attach
+    /// or replace atomically. Refusals land on the surface that opened it.
+    fn adopt_browsed_projects(
         &mut self,
-        path: std::path::PathBuf,
+        paths: Vec<std::path::PathBuf>,
         then: BrowseThen,
         cx: &mut Context<Self>,
     ) {
-        match self.cockpit.register_project(&path) {
-            Ok(project) => match then {
-                BrowseThen::Draft => {
-                    if !self.cancel_focused_draft_start() {
-                        return;
-                    }
-                    if let Some(draft) = self.focused_draft_mut() {
+        if then == BrowseThen::Draft && !self.cancel_focused_draft_start() {
+            return;
+        }
+        let result: std::io::Result<Option<ProjectId>> = match then {
+            BrowseThen::Draft | BrowseThen::Filter => {
+                self.cockpit.register_project_directories(&paths).map(Some)
+            }
+            BrowseThen::AddToProject(project) => self
+                .cockpit
+                .add_project_directories(project, &paths)
+                .map(|()| None),
+            BrowseThen::ReplaceProjectDirectory(project, index) => paths
+                .first()
+                .ok_or_else(|| {
+                    std::io::Error::new(std::io::ErrorKind::InvalidInput, "no directory selected")
+                })
+                .and_then(|path| self.cockpit.replace_project_directory(project, index, path))
+                .map(|()| None),
+        };
+        let (selected, error) = match result {
+            Ok(selected) => (selected, None),
+            Err(error) => (
+                None,
+                Some(SharedString::from(format!(
+                    "Project directories unchanged: {error}"
+                ))),
+            ),
+        };
+        match then {
+            BrowseThen::Draft => {
+                if let Some(draft) = self.focused_draft_mut() {
+                    if let Some(project) = selected {
                         draft.binding.choose_checkout(project);
-                        draft.error = None;
                     }
+                    draft.error = error;
                 }
-                BrowseThen::Filter => {
+            }
+            BrowseThen::Filter => {
+                if let Some(project) = selected {
                     self.nav_filter = Some(project);
-                    self.group_error = None;
                 }
-            },
-            Err(e) => {
-                let message = SharedString::from(format!("cannot add {}: {e}", path.display()));
-                match then {
-                    BrowseThen::Draft => {
-                        if let Some(draft) = self.focused_draft_mut() {
-                            draft.error = Some(message);
-                        }
-                    }
-                    BrowseThen::Filter => self.group_error = Some(message),
-                }
+                self.group_error = error;
+            }
+            BrowseThen::AddToProject(_) | BrowseThen::ReplaceProjectDirectory(_, _) => {
+                self.group_error = error;
             }
         }
         cx.notify();
@@ -7721,6 +7807,55 @@ mod tests {
                     .cwd(),
                 repo.canonicalize().unwrap()
             );
+        });
+    }
+
+    #[gpui::test]
+    fn choosing_multiple_folders_creates_one_project_with_additional_directories(
+        cx: &mut TestAppContext,
+    ) {
+        let (core, _) = cockpit("multi-project-picker", 1);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        let base = scratch("multi-project-picker-folders");
+        let first = base.join("first");
+        let second = base.join("second");
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+
+        view.update(cx, |view, cx| {
+            let before = view.cockpit.registry().projects().len();
+            view.open_draft(DraftTarget::Main, cx);
+            view.adopt_browsed_projects(vec![first.clone(), second.clone()], BrowseThen::Draft, cx);
+
+            assert_eq!(view.cockpit.registry().projects().len(), before + 1);
+            let draft = view.panes[view.focused()].draft().unwrap();
+            let project = view
+                .cockpit
+                .registry()
+                .project(draft.binding.project())
+                .unwrap();
+            assert_eq!(project.root, first.canonicalize().unwrap());
+            assert_eq!(project.additional_roots, [second.canonicalize().unwrap()]);
+            assert!(draft.error.is_none());
+
+            view.open_context_menu(
+                MenuTarget::Project(project.id),
+                gpui::point(px(20.), px(20.)),
+                cx,
+            );
+            let labels: Vec<_> = view
+                .context_menu
+                .as_ref()
+                .unwrap()
+                .rows
+                .iter()
+                .flatten()
+                .map(|(item, _)| item.label.to_string())
+                .collect();
+            assert!(labels.contains(&"Change Primary Directory…".to_string()));
+            assert!(labels.contains(&"Add Directories…".to_string()));
+            assert!(labels.contains(&"Change second…".to_string()));
+            assert!(labels.contains(&"Remove second".to_string()));
         });
     }
 
@@ -12498,6 +12633,49 @@ mod tests {
             assert!(view.popover.is_none(), "no binding, no popover");
         });
         assert_eq!(composer_text(&view, cx), "@", "typing was not eaten");
+    }
+
+    fn local_render_probe(id: u64, cx: &mut TestAppContext) {
+        let fake = Fake::default();
+        let store = Store::open("/tmp/ferrite-perf.7xYdTK").unwrap();
+        let mut core = Cockpit::new(store, Box::new(fake.clone()));
+        let revive = std::time::Instant::now();
+        core.revive(ThreadId::new(id)).unwrap();
+        let revive = revive.elapsed();
+        bind_production_keys(cx);
+        let render = std::time::Instant::now();
+        let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        tick(cx);
+        let render = render.elapsed();
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TextDelta { text: "x".into() })
+            .unwrap();
+        let pump = std::time::Instant::now();
+        _view.update(cx, |view, cx| view.pump(cx));
+        let pump = pump.elapsed();
+        let repaint = std::time::Instant::now();
+        cx.run_until_parked();
+        let repaint = repaint.elapsed();
+        eprintln!(
+            "PERF_UI thread={id} revive_ms={:.3} initial_ms={:.3} pump_ms={:.3} repaint_ms={:.3}",
+            revive.as_secs_f64() * 1000.0,
+            render.as_secs_f64() * 1000.0,
+            pump.as_secs_f64() * 1000.0,
+            repaint.as_secs_f64() * 1000.0,
+        );
+    }
+
+    #[gpui::test]
+    #[ignore = "local performance probe"]
+    fn local_render_probe_small(cx: &mut TestAppContext) {
+        local_render_probe(1, cx);
+    }
+
+    #[gpui::test]
+    #[ignore = "local performance probe"]
+    fn local_render_probe_slow(cx: &mut TestAppContext) {
+        local_render_probe(5, cx);
     }
 
     /// #24's dismissal law holds for the menus: a press the popover did not

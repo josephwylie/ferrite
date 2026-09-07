@@ -121,7 +121,7 @@ impl DraftBinding {
                         )
                     })?;
                 WorkspaceChoice::ExistingWorktree {
-                    repo,
+                    repo: worktree.repo.clone(),
                     path: worktree.path.clone(),
                 }
             }

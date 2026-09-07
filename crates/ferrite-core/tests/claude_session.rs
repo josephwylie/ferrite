@@ -663,6 +663,7 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
     let mut session = ClaudeSession::spawn(ClaudeConfig {
         program,
         cwd: Some(std::env::temp_dir()),
+        additional_directories: vec![std::path::PathBuf::from("/extra/project")],
         model: Some("haiku".into()),
         effort: Some("high".into()),
         prompt_suggestions: false,
@@ -692,7 +693,7 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
         recorded[0],
         "-p --input-format stream-json --output-format stream-json \
          --include-partial-messages --thinking-display summarized --forward-subagent-text --verbose --permission-prompt-tool stdio --prompt-suggestions false \
-         --model haiku --permission-mode default --name CI flake"
+         --model haiku --permission-mode default --name CI flake --add-dir /extra/project"
     );
     assert_eq!(sent.len(), 5, "the rename wrote nothing");
     // Feature detection comes first, before a word of the Thread.

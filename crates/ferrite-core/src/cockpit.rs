@@ -56,6 +56,24 @@ pub struct SpawnRequest<'a> {
     /// works in; `None` only for a Thread from before bindings were
     /// recorded.
     pub cwd: Option<&'a Path>,
+    /// Other roots in the same Project. Providers expose these alongside
+    /// `cwd`; they never change which directory the Session starts in.
+    pub additional_directories: Vec<PathBuf>,
+}
+
+fn project_additional_directories(
+    registry: &Registry,
+    project: Option<ProjectId>,
+    cwd: Option<&Path>,
+) -> Vec<PathBuf> {
+    let cwd = cwd.map(|cwd| std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf()));
+    project
+        .and_then(|project| registry.project(project))
+        .into_iter()
+        .flat_map(|project| project.directories())
+        .filter(|directory| Some(*directory) != cwd.as_deref())
+        .map(Path::to_path_buf)
+        .collect()
 }
 
 /// How a Session is started. Injected so the cockpit can be driven with
@@ -615,6 +633,31 @@ impl Cockpit {
         self.registry.register(root)
     }
 
+    pub fn register_project_directories(&mut self, roots: &[PathBuf]) -> io::Result<ProjectId> {
+        self.registry.register_directories(roots)
+    }
+
+    pub fn add_project_directories(
+        &mut self,
+        project: ProjectId,
+        roots: &[PathBuf],
+    ) -> io::Result<()> {
+        self.registry.add_directories(project, roots)
+    }
+
+    pub fn replace_project_directory(
+        &mut self,
+        project: ProjectId,
+        index: usize,
+        root: &Path,
+    ) -> io::Result<()> {
+        self.registry.replace_directory(project, index, root)
+    }
+
+    pub fn remove_project_directory(&mut self, project: ProjectId, index: usize) -> io::Result<()> {
+        self.registry.remove_directory(project, index)
+    }
+
     /// A Group's Pane layout, reconciled to its members; None for a Group
     /// that no longer exists.
     pub fn group_layout(&self, group: GroupId) -> Option<crate::layout::Tree> {
@@ -678,6 +721,7 @@ impl Cockpit {
 
         let mut restarts = Vec::new();
         for (id, rss) in over {
+            let project = self.project_id(id);
             let Some(thread) = self.threads.get_mut(&id) else {
                 continue;
             };
@@ -699,6 +743,11 @@ impl Cockpit {
                 resume: resume.as_deref(),
                 cwd: cwd.as_deref(),
                 name: thread.title.as_deref(),
+                additional_directories: project_additional_directories(
+                    &self.registry,
+                    project,
+                    cwd.as_deref(),
+                ),
             });
             let note = match spawned {
                 Ok(session) => {
@@ -808,6 +857,11 @@ impl Cockpit {
             resume: None,
             cwd: workspace::effective_cwd(None, Some(&binding)),
             name: None,
+            additional_directories: project_additional_directories(
+                &self.registry,
+                Some(project),
+                Some(binding.cwd()),
+            ),
         }) {
             Ok(session) => session,
             // The bootstrap's failure contract: no Thread. The worktree, if
@@ -1083,6 +1137,7 @@ impl Cockpit {
         effort: Option<String>,
         kind: ReplacementKind,
     ) -> Result<(), ProvisionError> {
+        let project = self.project_id(thread);
         let state = self.threads.get(&thread).expect("checked by caller");
         if state.native_queue.pending()
             || (state.busy() && !matches!(kind, ReplacementKind::Fresh))
@@ -1108,6 +1163,11 @@ impl Cockpit {
                 resume,
                 cwd,
                 name: state.title.as_deref(),
+                additional_directories: project_additional_directories(
+                    &self.registry,
+                    project,
+                    cwd,
+                ),
             })
             .map_err(ProvisionError::Spawn)?;
         let replacement = Replacement {
@@ -1322,6 +1382,8 @@ impl Cockpit {
         let model = snapshot.model();
         let effort = snapshot.effort();
         let title = snapshot.title().map(str::to_string);
+        let additional_directories =
+            project_additional_directories(&self.registry, snapshot.project_id(), cwd.as_deref());
         let session = self
             .spawner
             .start(SpawnRequest {
@@ -1331,6 +1393,7 @@ impl Cockpit {
                 resume: snapshot.resume_target(),
                 cwd: cwd.as_deref(),
                 name: title.as_deref(),
+                additional_directories,
             })
             .map_err(LoadError::Io)?;
         let writer = self.store.writer(thread)?;
@@ -1424,6 +1487,7 @@ impl Cockpit {
         if self.bootstraps.contains_key(&thread) {
             return;
         }
+        let project = self.project_id(thread);
         let Some(state) = self.threads.get_mut(&thread) else {
             return;
         };
@@ -1443,6 +1507,8 @@ impl Cockpit {
                 state.workspace.as_ref(),
             )
             .map(Path::to_path_buf);
+            let additional_directories =
+                project_additional_directories(&self.registry, project, cwd.as_deref());
             match self.spawner.start(SpawnRequest {
                 provider: state.provider,
                 model: state.model.as_deref(),
@@ -1450,6 +1516,7 @@ impl Cockpit {
                 resume: resume.as_deref(),
                 cwd: cwd.as_deref(),
                 name: state.title.as_deref(),
+                additional_directories,
             }) {
                 Ok(session) => {
                     state.session = Some(session);
@@ -3593,6 +3660,7 @@ mod tests {
         fail_effort: Rc<RefCell<bool>>,
         resumed: Rc<RefCell<Vec<Option<String>>>>,
         cwds: Rc<RefCell<Vec<Option<std::path::PathBuf>>>>,
+        additional_directories: Rc<RefCell<Vec<Vec<std::path::PathBuf>>>>,
         /// The title each spawn was handed.
         names: Rc<RefCell<Vec<Option<String>>>>,
         /// Every rename a live Session was told.
@@ -3653,6 +3721,9 @@ mod tests {
             self.cwds
                 .borrow_mut()
                 .push(request.cwd.map(|path| path.to_path_buf()));
+            self.additional_directories
+                .borrow_mut()
+                .push(request.additional_directories);
             self.names
                 .borrow_mut()
                 .push(request.name.map(|name| name.to_string()));
@@ -3737,6 +3808,38 @@ mod tests {
             fake.cwds.borrow().last().unwrap().as_deref(),
             Some(path.as_path()),
             "the Session must spawn inside the worktree"
+        );
+    }
+
+    #[test]
+    fn opening_a_project_exposes_its_additional_directories_without_changing_cwd() {
+        let root = scratch("project-extra-roots");
+        let primary = root.join("primary");
+        let extra = root.join("extra");
+        std::fs::create_dir_all(&primary).unwrap();
+        std::fs::create_dir_all(&extra).unwrap();
+        let (mut cockpit, fake) = cockpit("project-extra-roots-store");
+        let project = cockpit.register_project(&primary).unwrap();
+        cockpit
+            .add_project_directories(project, std::slice::from_ref(&extra))
+            .unwrap();
+
+        cockpit
+            .open(
+                Provider::Claude,
+                WorkspaceChoice::Main {
+                    checkout: primary.clone(),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(
+            fake.cwds.borrow().last().unwrap().as_deref(),
+            Some(primary.as_path())
+        );
+        assert_eq!(
+            fake.additional_directories.borrow().last().unwrap(),
+            &[extra.canonicalize().unwrap()]
         );
     }
 
@@ -6915,6 +7018,27 @@ mod tests {
         assert_eq!(cockpit.next_decision(), Some(threads[2]));
         assert_eq!(cockpit.roster().view(), View::Group(group));
         assert_eq!(cockpit.roster().focused_thread(), Some(threads[2]));
+    }
+
+    #[test]
+    #[ignore = "local performance probe"]
+    fn local_thread_revival_probe() {
+        let store_dir = std::path::PathBuf::from("/tmp/ferrite-perf.7xYdTK");
+        for id in [1_u64, 5_u64] {
+            let store = Store::open(&store_dir).unwrap();
+            let fake = Fake::default();
+            let mut cockpit = Cockpit::new(store, Box::new(fake));
+            let started = std::time::Instant::now();
+            cockpit.revive(ThreadId::new(id)).unwrap();
+            let elapsed = started.elapsed();
+            let open = cockpit.thread(ThreadId::new(id)).unwrap();
+            let subject = open.activity().subject(&crate::activity::Subject::Main).unwrap();
+            eprintln!(
+                "PERF thread={id} revive_ms={:.3} blocks={}",
+                elapsed.as_secs_f64() * 1000.0,
+                subject.transcript().blocks().len(),
+            );
+        }
     }
 }
 
