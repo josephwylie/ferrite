@@ -858,7 +858,8 @@ pub fn thread_row_with_title(row: &ThreadRow, title: impl IntoElement) -> Statef
 }
 
 /// The grouped view has already named the Project, so its Thread rows keep
-/// only the useful title, state and provider mark. This is the screenshot's
+/// the useful title, state, provider, subagent count and recency while
+/// dropping only the now-redundant Project label. This is the screenshot's
 /// compact section rhythm, expressed in Ferrite's existing row grammar.
 pub fn project_thread_row_with_title(row: &ThreadRow, title: impl IntoElement) -> Stateful<Div> {
     row_frame(
@@ -887,6 +888,7 @@ pub fn project_thread_row_with_title(row: &ThreadRow, title: impl IntoElement) -
             .child(title),
     )
     .child(provider_mark(row.provider, PROVIDER_MARK))
+    .child(meta_tail(row.thread, row.subagents, row.last_used.clone()))
 }
 
 /// The compact facts at the right edge of line 2. They stay one group so

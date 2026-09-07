@@ -9516,10 +9516,20 @@ mod tests {
 
     #[gpui::test]
     fn thread_order_is_changed_from_the_main_nav_menu(cx: &mut TestAppContext) {
-        let (core, _) = cockpit("nav-thread-order", 1);
+        let (core, fake) = cockpit("nav-thread-order", 1);
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        let key = ferrite_core::activity::AgentKey::new(Provider::Claude, "nav", "child");
+        let mut info = ferrite_core::activity::AgentInfo::new(key);
+        info.parent = Some(ferrite_core::activity::Subject::Main);
+        fake.streams.borrow()[0]
+            .send(SessionEvent::Activity(
+                ferrite_core::activity::ActivityEvent::Discovered(info),
+            ))
+            .unwrap();
         tick(cx);
+        let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+        assert_eq!(view.read_with(cx, |view, _| view.thread_row(thread).subagents), 1);
 
         let button = cx
             .debug_bounds("thread-list-order")
@@ -9531,6 +9541,17 @@ mod tests {
             .expect("the grouped option is available from the control");
         cx.simulate_click(grouped.center(), gpui::Modifiers::none());
         cx.run_until_parked();
+
+        let age_id: &'static str = format!("nav-since-{}", thread.get()).leak();
+        assert!(
+            cx.debug_bounds(age_id).is_some(),
+            "grouped Project rows retain the Thread's recency"
+        );
+        let subagents_id: &'static str = format!("nav-subagents-{}", thread.get()).leak();
+        assert!(
+            cx.debug_bounds(subagents_id).is_some(),
+            "grouped Project rows retain the subagent metadata slot"
+        );
 
         view.read_with(cx, |view, _| {
             assert_eq!(
