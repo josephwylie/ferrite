@@ -942,17 +942,17 @@ pub fn project_thread_row_with_title(
     )
 }
 
-/// A short piece of the Group members' rail. Project order flattens Groups
-/// into their Projects, so this keeps durable membership visible without
-/// competing with the Thread's status dot or provider mark.
+/// The four-Pane Group mark. Project order flattens Groups into their
+/// Projects, so this keeps durable membership visible without competing
+/// with the Thread's status dot or provider mark.
 fn group_membership_indicator(thread: ThreadId) -> Stateful<Div> {
     div()
         .id(("nav-group-membership", thread.get() as usize))
         .debug_selector(move || format!("nav-group-membership-{}", thread.get()))
+        .flex()
         .flex_shrink_0()
-        .w(px(1.))
-        .h(px(14.))
-        .bg(rgb(GROUP_RAIL))
+        .items_center()
+        .child(icon(icons::GROUP, ROW_ICON, TEXT_MUTED))
         .tooltip(|window, cx| Tooltip::new("In a group").build(window, cx))
 }
 

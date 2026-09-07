@@ -59,6 +59,7 @@ icons![
     "plus",
     "gear",
     "list-filter",
+    "group",
     "subagents",
     "window-minimize",
     "window-maximize",
@@ -94,6 +95,8 @@ pub const PLUS: &str = "icons/plus.svg";
 pub const GEAR: &str = "icons/gear.svg";
 /// Sort and grouping choices for the Thread list.
 pub const LIST_FILTER: &str = "icons/list-filter.svg";
+/// Four Panes held together as one durable Group.
+pub const GROUP: &str = "icons/group.svg";
 /// A parent Agent branching to two children.
 pub const SUBAGENTS: &str = "icons/subagents.svg";
 /// The four caption marks the Windows titlebar draws (`titlebar.rs`). They
@@ -300,6 +303,7 @@ mod tests {
             FERRITE_LOWER,
             GEAR,
             LIST_FILTER,
+            GROUP,
             SUBAGENTS,
             WINDOW_MINIMIZE,
             WINDOW_MAXIMIZE,
@@ -316,7 +320,7 @@ mod tests {
         }
         assert_eq!(
             ICONS.len(),
-            21,
+            22,
             "the prototype and app controls, including disclosure and close,              and the four Windows caption glyphs"
         );
     }
@@ -336,6 +340,7 @@ mod tests {
             CHECK,
             GEAR,
             LIST_FILTER,
+            GROUP,
             SUBAGENTS,
         ] {
             let bytes = Assets.load(key).unwrap().unwrap();
