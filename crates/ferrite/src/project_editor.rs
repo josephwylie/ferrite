@@ -17,6 +17,10 @@ use crate::theme::{
 };
 
 const WIDTH: f32 = 640.;
+/// A definite height, as on Settings: the body scrolls inside the card, and
+/// a scroll container only knows what to scroll against a parent that has
+/// already been given a height.
+const HEIGHT: f32 = 420.;
 const PAD: f32 = 18.;
 
 pub fn veil() -> Div {
@@ -37,6 +41,7 @@ pub fn card() -> Div {
         .flex_col()
         .w(px(WIDTH))
         .max_w(gpui::relative(0.94))
+        .h(px(HEIGHT))
         .max_h(gpui::relative(0.84))
         .overflow_hidden()
         .rounded(px(R_MENU))
@@ -78,7 +83,7 @@ pub fn head(title: SharedString, close: impl IntoElement) -> Div {
                 .text_size(px(FS_LG))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(rgb(TEXT_STRONG))
-                .child(format!("Edit {title}")),
+                .child(title),
         )
         .child(
             div()
@@ -100,10 +105,15 @@ pub fn close_button() -> Button {
         .child(icon(icons::CLOSE, ICON_BUTTON_GLYPH, TEXT_MUTED))
 }
 
+/// The card's content: everything under the head, scrolling within it.
+/// `flex_1` against the card's definite height is what gives the scroll
+/// container something to scroll inside — without it the body claims no
+/// height at all and the card draws as a bare title bar.
 pub fn body() -> Scrollable<Div> {
     div()
         .flex()
         .flex_col()
+        .flex_1()
         .min_h_0()
         .overflow_y_scrollbar()
         .px(px(PAD))
@@ -111,7 +121,7 @@ pub fn body() -> Scrollable<Div> {
         .gap(px(8.))
 }
 
-pub fn section_label() -> Div {
+pub fn section_label(title: &'static str, hint: &'static str) -> Div {
     div()
         .flex()
         .flex_col()
@@ -123,14 +133,85 @@ pub fn section_label() -> Div {
                 .text_size(px(FS_MD))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(rgb(TEXT_STRONG))
-                .child("Assigned directories"),
+                .child(title),
         )
         .child(
             div()
                 .text_size(px(FS_MONO))
                 .text_color(rgb(TEXT_MUTED))
-                .child("The original directory stays primary. Add or remove the others."),
+                .child(hint),
         )
+}
+
+/// The Project name row: a label above the live editor, boxed like every
+/// other control on the card so the caret has somewhere to sit.
+pub fn name_field(editor: impl IntoElement) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(6.))
+        .pt(px(4.))
+        .child(
+            div()
+                .text_size(px(FS_MD))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(TEXT_STRONG))
+                .child("Name"),
+        )
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .min_h(px(34.))
+                .px(px(10.))
+                .rounded(px(R_CONTROL))
+                .bg(rgb(RAISED))
+                .child(div().min_w_0().flex_1().child(editor)),
+        )
+}
+
+/// A refusal from the registry, shown on the card that caused it rather
+/// than on the nav behind it.
+pub fn error_line(message: SharedString) -> Div {
+    div()
+        .pt(px(4.))
+        .font_family(FONT_MONO)
+        .text_size(px(FS_MONO))
+        .text_color(rgb(BLOCKED))
+        .child(message)
+}
+
+/// The create card's empty state: no directory has been picked yet, so
+/// there is nothing to be primary.
+pub fn empty_directories() -> Div {
+    div()
+        .flex()
+        .items_center()
+        .min_h(px(52.))
+        .px(px(12.))
+        .rounded(px(R_CONTROL))
+        .bg(rgb(RAISED))
+        .font_family(FONT_MONO)
+        .text_size(px(FS_MONO))
+        .text_color(rgb(TEXT_MUTED))
+        .child("No directory yet — add the main directory to begin.")
+}
+
+/// The confirming button: the one filled control on the card.
+pub fn primary_button(
+    id: impl Into<gpui::ElementId>,
+    label: &'static str,
+    disabled: bool,
+) -> Button {
+    components::button(id)
+        .tab_stop(true)
+        .disabled(disabled)
+        .h(px(28.))
+        .px(px(11.))
+        .child(components::label(
+            label,
+            if disabled { TEXT_MUTED } else { TEXT_STRONG },
+        ))
 }
 
 pub fn directory_row(path: SharedString, role: &'static str, actions: impl IntoElement) -> Div {
@@ -171,6 +252,7 @@ pub fn directory_row(path: SharedString, role: &'static str, actions: impl IntoE
 pub fn action_button(id: impl Into<gpui::ElementId>, label: &'static str) -> Button {
     components::button(id)
         .tab_stop(true)
+        .debug_selector(move || format!("project-{label}"))
         .h(px(28.))
         .px(px(9.))
         .child(components::label(label, TEXT_2))

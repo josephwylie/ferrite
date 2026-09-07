@@ -507,12 +507,13 @@ pub fn filter_option(index: usize, option: &FilterOption) -> Stateful<Div> {
         )
 }
 
-/// The visible door to Project management. The all-projects option has no
-/// matching button because it is a filter state, not a Project.
-pub fn project_edit_button(index: usize) -> gpui::component::button::Button {
-    components::button(("project-edit", index))
+/// The visible door to Project management: the pencil beside the filter
+/// trigger. It is drawn only while the filter names a Project — `All
+/// Projects` is a filter state, not a Project, and has nothing to edit.
+pub fn project_edit_button() -> gpui::component::button::Button {
+    components::button("project-edit")
         .tab_stop(true)
-        .debug_selector(move || format!("project-edit-{index}"))
+        .debug_selector(|| "project-edit".into())
         .w(px(ICON_BUTTON))
         .h(px(ICON_BUTTON))
         .p_0()
