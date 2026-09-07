@@ -62,6 +62,8 @@ pub struct ClaudeConfig {
     pub program: String,
     /// Working directory for the CLI process (the Thread's workspace binding).
     pub cwd: Option<PathBuf>,
+    /// Project roots exposed in addition to the process working directory.
+    pub additional_directories: Vec<PathBuf>,
     /// Model override passed through to the CLI.
     pub model: Option<String>,
     /// Reasoning effort (`"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`)
@@ -92,6 +94,7 @@ impl Default for ClaudeConfig {
         Self {
             program: "claude".into(),
             cwd: None,
+            additional_directories: Vec::new(),
             model: None,
             effort: None,
             prompt_suggestions: false,
@@ -267,6 +270,9 @@ impl ClaudeSession {
         }
         if let Some(cwd) = &config.cwd {
             command.current_dir(cwd);
+        }
+        for directory in &config.additional_directories {
+            command.arg("--add-dir").arg(directory);
         }
         let mut child = command
             .stdin(Stdio::piped())

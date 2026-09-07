@@ -234,6 +234,7 @@ impl Spawn {
         let model = request.model.map(|model| model.to_string());
         let resume = request.resume.map(|target| target.to_string());
         let name = request.name.map(|name| name.to_string());
+        let additional_directories = request.additional_directories;
         let defaults = self
             .defaults
             .lock()
@@ -258,6 +259,7 @@ impl Spawn {
                 permission_mode: defaults.claude_permission_mode,
                 prompt_suggestions: defaults.placeholder_suggestions,
                 resume,
+                additional_directories,
                 ..Default::default()
             }),
             Provider::Codex => SessionConfig::Codex(CodexConfig {
@@ -270,6 +272,7 @@ impl Spawn {
                     .or_else(|| Some("on-request".into())),
                 sandbox: defaults.codex_sandbox,
                 resume,
+                additional_directories,
                 ..Default::default()
             }),
         }

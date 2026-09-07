@@ -40,6 +40,7 @@ use crate::notifications::{Bell, Handle, Row as NoticeRow, Verb};
 use crate::pane::{self, PaneView};
 use crate::pointer::{Pointer, PointerPressed};
 use crate::prefs;
+use crate::project_editor;
 use crate::select::TranscriptText;
 
 actions!(
@@ -189,6 +190,10 @@ pub struct CockpitView {
     prefs: Preferences,
     /// The Settings panel is up.
     settings_open: bool,
+    /// The Project card: creating a Project, or editing the one the nav
+    /// filter names. `None` is closed.
+    project_editor: Option<ProjectEditor>,
+    project_editor_focus: FocusHandle,
     settings_focus: FocusHandle,
     /// Whether the window is maximized, read once per frame in `render`.
     /// The nav's band is drawn without a `Window` in hand, and the two
@@ -273,13 +278,36 @@ impl Render for PaneDragPreview {
 /// How wide the grab band over a seam is, centred on the 8px gap.
 const SEAM_GRAB: f32 = 10.0;
 
-/// Where a folder the picker returns should land.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum BrowseThen {
-    /// The focused draft's Project chip.
-    Draft,
-    /// The nav's Project filter.
-    Filter,
+/// The open Project card. One surface serves both verbs: `target` names
+/// the Project being edited, or `None` while one is being created.
+///
+/// `staged` is the create card's directory list — a Project does not exist
+/// until it is confirmed, so its directories live here until then. The edit
+/// card writes through to the registry instead and leaves `staged` empty.
+struct ProjectEditor {
+    target: Option<ProjectId>,
+    /// The name line. Empty means "call it after the main directory".
+    name: Entity<crate::composer::Composer>,
+    staged: Vec<std::path::PathBuf>,
+    /// A refusal, shown on the card that caused it.
+    error: Option<SharedString>,
+}
+
+impl ProjectEditor {
+    /// The name to save: what was typed, else the main directory's leaf.
+    /// A directory with no leaf name (a drive root) keeps its whole path.
+    fn resolved_name(&self, typed: &str) -> Option<String> {
+        let typed = typed.trim();
+        if !typed.is_empty() {
+            return Some(typed.to_string());
+        }
+        let main = self.staged.first()?;
+        Some(
+            main.file_name()
+                .map(|leaf| leaf.to_string_lossy().into_owned())
+                .unwrap_or_else(|| main.display().to_string()),
+        )
+    }
 }
 
 /// What a right-click was on.
@@ -290,7 +318,6 @@ enum MenuTarget {
     /// A Pane — the same Thread, but the rename opens in the head.
     Pane(ThreadId),
     Group(GroupId),
-    Project(ProjectId),
 }
 
 /// One thing a context-menu row does.
@@ -314,7 +341,6 @@ enum MenuVerb {
     Reveal,
     CopyPath,
     Delete,
-    RemoveProject,
 }
 
 #[derive(Clone, Copy)]
@@ -549,9 +575,8 @@ enum BandChoice {
     /// choose it.
     RegisterPath(std::path::PathBuf),
     Target(DraftTarget),
-    /// Open the platform's folder picker; the folder picked registers
-    /// and becomes the draft's Project.
-    Browse,
+    /// Open the Project card, as the nav's dropdown does.
+    AddProject,
 }
 
 /// Allow only pixel rounding at the bottom of a native scroll container.
@@ -639,6 +664,8 @@ impl CockpitView {
             drop_preview: None,
             prefs,
             settings_open: false,
+            project_editor: None,
+            project_editor_focus: cx.focus_handle(),
             settings_focus: cx.focus_handle(),
             maximized: false,
             cli_versions: None,
@@ -1161,6 +1188,7 @@ impl CockpitView {
     /// never see the press (`titlebar.rs`).
     fn overlay_open(&self) -> bool {
         self.settings_open
+            || self.project_editor.is_some()
             || self.nav_filter_open
             || self.popover.is_some()
             || self.context_checks.is_some()
@@ -1516,29 +1544,6 @@ impl CockpitView {
                     MenuVerb::DissolveGroup,
                 )));
             }
-            MenuTarget::Project(project) => {
-                rows.push(Some((
-                    menu::Item::new("New Thread here").hint("⌘T"),
-                    MenuVerb::NewThread,
-                )));
-                rows.push(Some((
-                    menu::Item::new("Reveal in Finder"),
-                    MenuVerb::Reveal,
-                )));
-                rows.push(Some((menu::Item::new("Copy Path"), MenuVerb::CopyPath)));
-                rows.push(None);
-                let in_use = self.project_in_use(project);
-                rows.push(Some((
-                    menu::Item::new(if in_use {
-                        "Remove Project (has Threads)"
-                    } else {
-                        "Remove Project"
-                    })
-                    .destructive()
-                    .disabled(in_use),
-                    MenuVerb::RemoveProject,
-                )));
-            }
         }
         rows
     }
@@ -1552,16 +1557,11 @@ impl CockpitView {
             .any(|thread| self.cockpit.project_id(thread) == Some(project))
     }
 
-    /// A Thread's effective cwd or a Project's root. A Group has no cwd.
+    /// A Thread's effective cwd. A Group has no cwd.
     fn target_path(&self, target: MenuTarget) -> Option<std::path::PathBuf> {
         match target {
             MenuTarget::Thread(thread) | MenuTarget::Pane(thread) => self.thread_path(thread),
             MenuTarget::Group(_) => None,
-            MenuTarget::Project(project) => self
-                .cockpit
-                .registry()
-                .project(project)
-                .map(|project| project.root.clone()),
         }
     }
 
@@ -1688,7 +1688,6 @@ impl CockpitView {
             }
             (_, MenuVerb::NewThread) => {
                 let project = match target {
-                    MenuTarget::Project(project) => Some(project),
                     MenuTarget::Thread(thread) | MenuTarget::Pane(thread) => {
                         self.cockpit.project_id(thread)
                     }
@@ -1731,16 +1730,6 @@ impl CockpitView {
                 }
                 self.sync_panes(cx);
                 self.facts.parked_changed(&self.cockpit);
-            }
-            (MenuTarget::Project(project), MenuVerb::RemoveProject) => {
-                if let Err(error) = self.cockpit.remove_project(project) {
-                    self.group_error = Some(format!("remove refused: {error}").into());
-                } else {
-                    if self.nav_filter == Some(project) {
-                        self.nav_filter = None;
-                    }
-                    self.group_error = None;
-                }
             }
             _ => {}
         }
@@ -2044,6 +2033,7 @@ impl CockpitView {
     fn toggle_settings(&mut self, cx: &mut Context<Self>) {
         self.settings_open = !self.settings_open;
         if self.settings_open {
+            self.project_editor = None;
             self.popover = None;
             self.context_menu = None;
             self.nav_filter_open = false;
@@ -2352,6 +2342,365 @@ impl CockpitView {
         )
     }
 
+    /// Open the card on an existing Project, seeded with its name.
+    fn open_project_editor(&mut self, project: ProjectId, cx: &mut Context<Self>) {
+        let Some(title) = self
+            .cockpit
+            .registry()
+            .project(project)
+            .map(|project| project.title.clone())
+        else {
+            return;
+        };
+        let name = cx.new(crate::composer::Composer::new);
+        name.update(cx, |name, cx| name.set(title, cx));
+        self.show_project_editor(
+            ProjectEditor {
+                target: Some(project),
+                name,
+                staged: Vec::new(),
+                error: None,
+            },
+            cx,
+        );
+    }
+
+    /// Open the card on a Project that does not exist yet: an empty name
+    /// and no directories. Nothing is registered until Create.
+    fn open_project_creator(&mut self, cx: &mut Context<Self>) {
+        let name = cx.new(crate::composer::Composer::new);
+        self.show_project_editor(
+            ProjectEditor {
+                target: None,
+                name,
+                staged: Vec::new(),
+                error: None,
+            },
+            cx,
+        );
+    }
+
+    /// The card is modal: everything else floating goes down with it.
+    fn show_project_editor(&mut self, editor: ProjectEditor, cx: &mut Context<Self>) {
+        self.project_editor = Some(editor);
+        self.settings_open = false;
+        self.nav_filter_open = false;
+        self.popover = None;
+        self.context_menu = None;
+        self.bell.open = false;
+        cx.notify();
+    }
+
+    /// Whether the card's confirm can commit — a new Project needs at least
+    /// its main directory.
+    fn project_editor_ready(&self) -> bool {
+        self.project_editor
+            .as_ref()
+            .is_some_and(|editor| editor.target.is_some() || !editor.staged.is_empty())
+    }
+
+    /// Commit the card. Creating registers the staged directories as one
+    /// Project — the first is primary — and names it; editing only renames,
+    /// because its directory edits already went through. A refusal keeps the
+    /// card open with the reason on it, so nothing typed is lost.
+    fn confirm_project_editor(&mut self, cx: &mut Context<Self>) {
+        let Some(editor) = self.project_editor.take() else {
+            return;
+        };
+        let typed = editor.name.read(cx).text().to_string();
+        let outcome = match editor.target {
+            Some(project) => {
+                let typed = typed.trim();
+                if typed.is_empty() {
+                    Ok(project)
+                } else {
+                    self.cockpit
+                        .rename_project(project, typed)
+                        .map(|()| project)
+                }
+            }
+            None => {
+                let name = editor.resolved_name(&typed);
+                self.cockpit
+                    .register_project_directories(&editor.staged)
+                    .and_then(|project| {
+                        match name {
+                            Some(name) => self.cockpit.rename_project(project, &name),
+                            None => Ok(()),
+                        }
+                        .map(|()| project)
+                    })
+            }
+        };
+        match outcome {
+            Ok(project) => {
+                // The Project the operator just described is the one they
+                // want to look at, and to work in.
+                self.choose_nav_filter(Some(project), cx);
+                self.group_error = None;
+                self.refresh_names();
+            }
+            Err(error) => {
+                self.project_editor = Some(ProjectEditor {
+                    error: Some(format!("Project unchanged: {error}").into()),
+                    ..editor
+                });
+            }
+        }
+        cx.notify();
+    }
+
+    /// One directory, for the open card. The picker is single-select
+    /// deliberately: a Project's main directory is the first one added, and
+    /// a multi-select would leave which-is-which to the file dialog.
+    fn browse_for_project_directory(&mut self, cx: &mut Context<Self>) {
+        let receiver = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some("Add Directory".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let path = match receiver.await {
+                Ok(Ok(Some(paths))) => paths.into_iter().next(),
+                _ => return,
+            };
+            let Some(path) = path else {
+                return;
+            };
+            this.update(cx, |view, cx| view.adopt_editor_directory(path, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    /// Land a picked directory on the open card. On a new Project it is
+    /// staged — and the first one also names the Project, unless a name has
+    /// already been typed. On an existing one it is attached at once, so
+    /// the card always shows the registry's own list.
+    fn adopt_editor_directory(&mut self, path: std::path::PathBuf, cx: &mut Context<Self>) {
+        let Some(editor) = self.project_editor.as_mut() else {
+            return;
+        };
+        match editor.target {
+            Some(project) => {
+                editor.error = None;
+                if let Err(error) = self.cockpit.add_project_directories(project, &[path]) {
+                    if let Some(editor) = self.project_editor.as_mut() {
+                        editor.error = Some(format!("directory unchanged: {error}").into());
+                    }
+                }
+            }
+            None => {
+                if editor.staged.contains(&path) {
+                    editor.error = Some("that directory is already on this Project".into());
+                    cx.notify();
+                    return;
+                }
+                let first = editor.staged.is_empty();
+                editor.error = None;
+                editor.staged.push(path);
+                if first {
+                    let name = editor.name.clone();
+                    let seed = editor.resolved_name("");
+                    if name.read(cx).text().trim().is_empty() {
+                        if let Some(seed) = seed {
+                            name.update(cx, |name, cx| name.set(seed, cx));
+                        }
+                    }
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    /// Drop a staged directory from a Project that does not exist yet. If
+    /// the main one goes, the next takes its place — the list is ordered,
+    /// and the top of it is always primary.
+    fn drop_staged_directory(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(editor) = self.project_editor.as_mut() else {
+            return;
+        };
+        if index < editor.staged.len() {
+            editor.staged.remove(index);
+            editor.error = None;
+        }
+        cx.notify();
+    }
+
+    /// Project mutations stay visible together in one protected surface.
+    /// Folder picking may temporarily leave the app, but the card remains
+    /// open so the changed directory list is visible on return.
+    fn project_editor_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let editor = self.project_editor.as_ref()?;
+        let project = editor
+            .target
+            .and_then(|project| self.cockpit.registry().project(project));
+        // An editing card whose Project was removed underneath it has
+        // nothing left to edit.
+        if editor.target.is_some() && project.is_none() {
+            return None;
+        }
+        let title = match project {
+            Some(project) => SharedString::from(format!("Edit {}", project.title)),
+            None => SharedString::from("New Project"),
+        };
+        let directories: Vec<_> = match project {
+            Some(project) => std::iter::once(project.root.clone())
+                .chain(project.additional_roots.iter().cloned())
+                .collect(),
+            None => editor.staged.clone(),
+        };
+        let editing = editor.target;
+
+        let close =
+            project_editor::close_button().on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
+                cx.stop_propagation();
+                view.project_editor = None;
+                cx.notify();
+            }));
+        let mut body = project_editor::body()
+            .child(project_editor::name_field(editor.name.clone()))
+            .child(project_editor::section_label(
+                "Directories",
+                "The first directory is the main one. Add the others one at a time.",
+            ));
+        if directories.is_empty() {
+            body = body.child(project_editor::empty_directories());
+        }
+        for (index, directory) in directories.into_iter().enumerate() {
+            let mut actions = div().flex().items_center().gap(px(4.));
+            // An existing Project's main directory is fixed: Threads,
+            // worktrees and titles all hang off it. A staged one is not
+            // real yet, so any row can go.
+            if editing.is_none() || index > 0 {
+                actions = actions.child(
+                    project_editor::destructive_button(
+                        ("remove-project-directory", index),
+                        "Remove",
+                        false,
+                    )
+                    .on_click(cx.listener(
+                        move |view, _: &ClickEvent, _, cx| {
+                            cx.stop_propagation();
+                            let Some(project) = editing else {
+                                view.drop_staged_directory(index, cx);
+                                return;
+                            };
+                            let refusal = view
+                                .cockpit
+                                .remove_project_directory(project, index)
+                                .err()
+                                .map(|error| {
+                                    SharedString::from(format!("directory unchanged: {error}"))
+                                });
+                            if let Some(editor) = view.project_editor.as_mut() {
+                                editor.error = refusal;
+                            }
+                            cx.notify();
+                        },
+                    )),
+                );
+            }
+            body = body.child(project_editor::directory_row(
+                directory.display().to_string().into(),
+                if index == 0 {
+                    "Main directory"
+                } else {
+                    "Additional directory"
+                },
+                actions,
+            ));
+        }
+        let add = project_editor::action_button("add-project-directory", "Add Directory").on_click(
+            cx.listener(move |view, _: &ClickEvent, _, cx| {
+                cx.stop_propagation();
+                view.browse_for_project_directory(cx);
+            }),
+        );
+        let mut right = div().flex().items_center().gap(px(8.));
+        if let Some(project) = editing {
+            let in_use = self.project_in_use(project);
+            right = right.child(
+                project_editor::destructive_button(
+                    "remove-project",
+                    if in_use {
+                        "Project has Threads"
+                    } else {
+                        "Remove Project"
+                    },
+                    in_use,
+                )
+                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    if view.project_in_use(project) {
+                        return;
+                    }
+                    match view.cockpit.remove_project(project) {
+                        Err(error) => {
+                            if let Some(editor) = view.project_editor.as_mut() {
+                                editor.error = Some(format!("remove refused: {error}").into());
+                            }
+                        }
+                        Ok(()) => {
+                            if view.nav_filter == Some(project) {
+                                view.nav_filter = None;
+                            }
+                            view.group_error = None;
+                            view.project_editor = None;
+                        }
+                    }
+                    cx.notify();
+                })),
+            );
+        }
+        let ready = self.project_editor_ready();
+        right = right.child(
+            project_editor::primary_button(
+                "confirm-project",
+                if editing.is_some() { "Done" } else { "Create" },
+                !ready,
+            )
+            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                cx.stop_propagation();
+                if view.project_editor_ready() {
+                    view.confirm_project_editor(cx);
+                }
+            })),
+        );
+        body = body.child(project_editor::footer(add, right));
+        if let Some(error) = editor.error.clone() {
+            body = body.child(project_editor::error_line(error));
+        }
+
+        let card = project_editor::card()
+            .id("project-editor-card")
+            .debug_selector(|| "project-editor-card".into())
+            .track_focus(&self.project_editor_focus)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
+            )
+            .child(project_editor::head(title, close))
+            .child(body);
+        Some(
+            deferred(
+                project_editor::veil()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|view, _: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            view.project_editor = None;
+                            cx.notify();
+                        }),
+                    )
+                    .child(card),
+            )
+            .with_priority(3)
+            .into_any_element(),
+        )
+    }
+
     /// The Pane head's title: the live editor while this Thread is being
     /// renamed from its head, else the name — a double-click opens the
     /// editor, a single click only lands on the Pane. The press stops
@@ -2459,6 +2808,13 @@ impl CockpitView {
     }
 
     fn submit(&mut self, _: &Submit, _window: &mut Window, cx: &mut Context<Self>) {
+        // The card's ↵ is its confirm: the only line on it is the name.
+        if self.project_editor.is_some() {
+            if self.project_editor_ready() {
+                self.confirm_project_editor(cx);
+            }
+            return;
+        }
         if self.rename.is_some() {
             self.finish_rename(true, cx);
             return;
@@ -2574,6 +2930,10 @@ impl CockpitView {
             cx.notify();
             return;
         }
+        if self.project_editor.take().is_some() {
+            cx.notify();
+            return;
+        }
         if self.rename.is_some() {
             self.finish_rename(false, cx);
             return;
@@ -2608,7 +2968,11 @@ impl CockpitView {
     /// line renders from, so the key and the ghost text can never disagree
     /// about whether there is something to accept.
     fn accept_suggestion(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.settings_open || self.rename.is_some() || self.popover.is_some() {
+        if self.settings_open
+            || self.project_editor.is_some()
+            || self.rename.is_some()
+            || self.popover.is_some()
+        {
             return false;
         }
         let Some(thread) = self.focused_thread() else {
@@ -2648,6 +3012,7 @@ impl CockpitView {
             return;
         }
         if self.settings_open
+            || self.project_editor.is_some()
             || self
                 .focused_thread()
                 .and_then(|thread| self.cockpit.thread(thread))
@@ -2695,6 +3060,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) {
         if self.settings_open
+            || self.project_editor.is_some()
             || self
                 .focused_thread()
                 .and_then(|thread| self.cockpit.thread(thread))
@@ -3693,6 +4059,29 @@ impl CockpitView {
         );
     }
 
+    /// Point navigation at a Project — or back at all of them — and bring
+    /// any standing draft with it. The Composer's chip names the Project a
+    /// send will run in, and it must not sit there disagreeing with the
+    /// Project the operator just chose in the nav. A draft already
+    /// bootstrapping is on its way out and is left alone.
+    fn choose_nav_filter(&mut self, project: Option<ProjectId>, cx: &mut Context<Self>) {
+        self.nav_filter = project;
+        if let Some(project) = project {
+            let standing = self.panes.iter().position(|pane| {
+                pane.identity
+                    .draft()
+                    .is_some_and(|draft| !self.cockpit.draft_starting(draft))
+            });
+            if let Some(draft) = standing.and_then(|index| self.panes[index].draft_mut()) {
+                // The same move the Project chip makes, so the workspace
+                // choice under it cannot outlive the repo it named.
+                draft.binding.choose_project(project);
+                draft.error = None;
+            }
+        }
+        cx.notify();
+    }
+
     fn open_draft_with_choice(
         &mut self,
         target: DraftTarget,
@@ -3730,28 +4119,35 @@ impl CockpitView {
             cx.notify();
             return;
         }
-        // The project starts where the operator is looking: a Group's own
-        // Project, or the launch project.
-        let project = match placement {
-            DraftPlacement::NewGroupWith(thread) => self
-                .cockpit
-                .project_id(thread)
-                .unwrap_or(self.launch_project),
-            _ => match self.cockpit.roster().view() {
-                View::Group(group) => self
+        // The project starts where the operator is looking. A chosen filter
+        // is the most explicit statement of that there is — the operator
+        // named a Project and is looking at nothing else — so a draft
+        // opened under one starts on it, with its directories, rather than
+        // on the launch project. `All Projects` names nothing, and the
+        // draft falls back to a Group's own Project.
+        let project = match self.nav_filter {
+            Some(project) => project,
+            None => match placement {
+                DraftPlacement::NewGroupWith(thread) => self
                     .cockpit
-                    .roster()
-                    .focused_thread()
-                    .and_then(|thread| self.cockpit.project_id(thread))
-                    .or_else(|| {
-                        self.cockpit
-                            .groups()
-                            .get(group)
-                            .and_then(|group| group.members.first())
-                            .and_then(|thread| self.cockpit.project_id(*thread))
-                    })
+                    .project_id(thread)
                     .unwrap_or(self.launch_project),
-                View::Solo => self.launch_project,
+                _ => match self.cockpit.roster().view() {
+                    View::Group(group) => self
+                        .cockpit
+                        .roster()
+                        .focused_thread()
+                        .and_then(|thread| self.cockpit.project_id(thread))
+                        .or_else(|| {
+                            self.cockpit
+                                .groups()
+                                .get(group)
+                                .and_then(|group| group.members.first())
+                                .and_then(|thread| self.cockpit.project_id(*thread))
+                        })
+                        .unwrap_or(self.launch_project),
+                    View::Solo => self.launch_project,
+                },
             },
         };
         let binding = pane::DraftBinding {
@@ -3857,9 +4253,19 @@ impl CockpitView {
                     .projects()
                     .iter()
                     .map(|project| {
+                        let detail = if project.additional_roots.is_empty() {
+                            project.root.display().to_string()
+                        } else {
+                            let count = project.additional_roots.len();
+                            format!(
+                                "{} · +{count} director{}",
+                                project.root.display(),
+                                if count == 1 { "y" } else { "ies" }
+                            )
+                        };
                         band_row(
                             SharedString::from(project.title.clone()),
-                            SharedString::from(project.root.display().to_string()),
+                            SharedString::from(detail),
                             draft.binding.project() == project.id,
                             BandChoice::Project(project.id),
                         )
@@ -3884,11 +4290,14 @@ impl CockpitView {
                         BandChoice::RegisterPath(expand_home(path)),
                     ));
                 }
+                // The same verb the nav's dropdown ends on, opening the
+                // same card: one way to add a Project, wherever it is
+                // asked for.
                 rows.push(band_row(
-                    SharedString::from("Choose folder…"),
-                    SharedString::from("add a Project"),
+                    SharedString::from("Add Project…"),
+                    SharedString::from("name it and choose its directories"),
                     false,
-                    BandChoice::Browse,
+                    BandChoice::AddProject,
                 ));
                 rows
             }
@@ -4056,72 +4465,7 @@ impl CockpitView {
                     draft.error = None;
                 }
             }
-            BandChoice::Browse => self.browse_for_project(BrowseThen::Draft, cx),
-        }
-        cx.notify();
-    }
-
-    /// The platform's folder picker, for a Project not yet registered.
-    /// The picker is modal to the window and answers later; the folder it
-    /// returns registers through the core door and lands where `then`
-    /// says. Cancel changes nothing.
-    fn browse_for_project(&mut self, then: BrowseThen, cx: &mut Context<Self>) {
-        let receiver = cx.prompt_for_paths(gpui::PathPromptOptions {
-            files: false,
-            directories: true,
-            multiple: false,
-            prompt: Some("Add Project".into()),
-        });
-        cx.spawn(async move |this, cx| {
-            let picked = match receiver.await {
-                Ok(Ok(Some(mut paths))) => paths.pop(),
-                _ => None,
-            };
-            let Some(path) = picked else {
-                return;
-            };
-            this.update(cx, |view, cx| view.adopt_browsed_project(path, then, cx))
-                .ok();
-        })
-        .detach();
-    }
-
-    /// A folder the picker returned: registered, then chosen where the
-    /// picker was opened from — the draft's Project chip, or the nav's
-    /// filter. A refusal lands where that surface shows errors.
-    fn adopt_browsed_project(
-        &mut self,
-        path: std::path::PathBuf,
-        then: BrowseThen,
-        cx: &mut Context<Self>,
-    ) {
-        match self.cockpit.register_project(&path) {
-            Ok(project) => match then {
-                BrowseThen::Draft => {
-                    if !self.cancel_focused_draft_start() {
-                        return;
-                    }
-                    if let Some(draft) = self.focused_draft_mut() {
-                        draft.binding.choose_checkout(project);
-                        draft.error = None;
-                    }
-                }
-                BrowseThen::Filter => {
-                    self.nav_filter = Some(project);
-                    self.group_error = None;
-                }
-            },
-            Err(e) => {
-                let message = SharedString::from(format!("cannot add {}: {e}", path.display()));
-                match then {
-                    BrowseThen::Draft => {
-                        if let Some(draft) = self.focused_draft_mut() {
-                            draft.error = Some(message);
-                        }
-                    }
-                    BrowseThen::Filter => self.group_error = Some(message),
-                }
-            }
+            BandChoice::AddProject => self.open_project_creator(cx),
         }
         cx.notify();
     }
@@ -5148,6 +5492,7 @@ impl Render for CockpitView {
             level != Level::Transcript
                 || self.focused_thread() != Some(thread)
                 || self.settings_open
+                || self.project_editor.is_some()
                 || self
                     .facts
                     .get(thread)
@@ -5161,6 +5506,7 @@ impl Render for CockpitView {
         if self.context_usage.is_some_and(|(identity, _)| {
             level != Level::Transcript
                 || self.settings_open
+                || self.project_editor.is_some()
                 || self.panes.get(self.focused()).map(|pane| pane.identity) != Some(identity)
                 || match identity {
                     // A Thread's card is a reading, and goes when the
@@ -5308,6 +5654,10 @@ impl Render for CockpitView {
             // The pump must not steal focus from Settings search or controls.
             if !self.settings_focus.contains_focused(window, cx) {
                 window.focus(&self.settings_focus, cx);
+            }
+        } else if self.project_editor.is_some() {
+            if !self.project_editor_focus.contains_focused(window, cx) {
+                window.focus(&self.project_editor_focus, cx);
             }
         } else if !self
             .popover
@@ -5583,6 +5933,7 @@ impl Render for CockpitView {
             .children(self.context_usage_element(cx))
             .children(self.context_checks_element(cx))
             .children(self.settings_element(cx))
+            .children(self.project_editor_element(cx))
             .children(gpui::component::Root::render_dialog_layer(window, cx))
             .children(gpui::component::Root::render_notification_layer(window, cx))
     }
@@ -5600,7 +5951,7 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> Div {
         let content = self.pane_content(index, level, window, cx);
-        if self.settings_open || !self.panes[index].is_main() {
+        if self.settings_open || self.project_editor.is_some() || !self.panes[index].is_main() {
             return content;
         }
         let content = self.panes[index].preview.mount(content);
@@ -6666,39 +7017,37 @@ impl CockpitView {
                 view.open_draft(DraftTarget::Main, cx);
             },
         )));
+        // The pencil belongs to the chosen Project, so it lives beside the
+        // dropdown that names it — not inside the menu, which is shut for
+        // most of the Project's life. `All Projects` is a filter state, not
+        // a Project, and has nothing to edit.
+        let head = match self.nav_filter {
+            Some(project) => head.child(nav::project_edit_button().on_click(cx.listener(
+                move |view, _: &ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    view.open_project_editor(project, cx);
+                },
+            ))),
+            None => head,
+        };
         if !state.filter.open {
             return head;
         }
         let mut menu = nav::filter_menu();
         for (index, option) in state.filter.options.iter().enumerate() {
             let project = option.project;
-            menu = menu.child(
-                nav::filter_option(index, option)
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                            cx.stop_propagation();
-                            // The filter narrows navigation and nothing else: no
-                            // Pane opens, closes or moves because of it.
-                            view.nav_filter = project;
-                            view.nav_filter_open = false;
-                            cx.notify();
-                        }),
-                    )
-                    .on_mouse_down(
-                        MouseButton::Right,
-                        cx.listener(move |view, event: &MouseDownEvent, _, cx| {
-                            cx.stop_propagation();
-                            if let Some(project) = project {
-                                view.open_context_menu(
-                                    MenuTarget::Project(project),
-                                    event.position,
-                                    cx,
-                                );
-                            }
-                        }),
-                    ),
+            let row = nav::filter_option(index, option).on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    // The filter narrows navigation and nothing else: no
+                    // Pane opens, closes or moves because of it. What it
+                    // does carry is a standing draft's Project.
+                    view.choose_nav_filter(project, cx);
+                    view.nav_filter_open = false;
+                }),
             );
+            menu = menu.child(row);
         }
         let count = state.filter.options.len();
         menu = menu.child(nav::filter_action(count, "Add Project…").on_mouse_down(
@@ -6706,7 +7055,7 @@ impl CockpitView {
             cx.listener(|view, _: &MouseDownEvent, _, cx| {
                 cx.stop_propagation();
                 view.nav_filter_open = false;
-                view.browse_for_project(BrowseThen::Filter, cx);
+                view.open_project_creator(cx);
                 cx.notify();
             }),
         ));
@@ -7740,6 +8089,264 @@ mod tests {
                     .unwrap()
                     .cwd(),
                 repo.canonicalize().unwrap()
+            );
+        });
+    }
+
+    /// The draft's Project chip offers what the nav's dropdown offers: the
+    /// registered Projects to pick from, and one row that opens the card.
+    #[gpui::test]
+    fn the_project_chip_picks_a_project_or_adds_one(cx: &mut TestAppContext) {
+        let (mut core, _) = cockpit("chip-matches-filter", 1);
+        let repo = repo_in(&scratch("chip-matches-filter-repo"));
+        let other = core.register_project(&repo).unwrap();
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        let added = scratch("chip-matches-filter-added");
+        std::fs::create_dir_all(&added).unwrap();
+
+        view.update(cx, |view, cx| {
+            view.open_draft(DraftTarget::Main, cx);
+            let draft = view.panes[view.focused()].draft().unwrap();
+            let rows = view.band_rows(draft, pane::BandChip::Project, cx);
+
+            let labels: Vec<_> = rows.iter().map(|row| row.row.name.to_string()).collect();
+            assert_eq!(
+                rows.iter()
+                    .filter(|row| matches!(
+                        row.consequence,
+                        Consequence::Band(BandChoice::Project(_))
+                    ))
+                    .count(),
+                2,
+                "both registered Projects are offered: {labels:?}"
+            );
+            assert_eq!(labels.last().unwrap(), "Add Project…");
+            assert!(matches!(
+                rows.last().unwrap().consequence,
+                Consequence::Band(BandChoice::AddProject)
+            ));
+            assert!(
+                rows.iter().any(|row| row.active
+                    && row.consequence
+                        == Consequence::Band(BandChoice::Project(view.launch_project))),
+                "the draft's own Project is the ticked row"
+            );
+
+            // The row opens the same card the nav's dropdown opens, and
+            // what it creates is what the draft ends up on.
+            view.open_project_creator(cx);
+            assert!(view.popover.is_none(), "the card replaces the popover");
+            view.adopt_editor_directory(added.clone(), cx);
+            view.confirm_project_editor(cx);
+
+            let created = view.nav_filter.expect("the new Project is the filter");
+            assert_ne!(created, other);
+            assert_eq!(
+                view.panes[view.focused()]
+                    .draft()
+                    .unwrap()
+                    .binding
+                    .project(),
+                created,
+                "the chip follows the Project just added"
+            );
+        });
+    }
+
+    /// The create card (#29): `Add Project…` opens on nothing, each press of
+    /// Add Directory contributes exactly one directory, the first names the
+    /// Project until the operator types over it, and nothing is registered
+    /// until Create.
+    #[gpui::test]
+    fn the_project_card_stages_directories_and_registers_on_confirm(cx: &mut TestAppContext) {
+        let (core, _) = cockpit("project-card-create", 1);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        let base = scratch("project-card-create-folders");
+        let main = base.join("primary");
+        let extra = base.join("extra");
+        std::fs::create_dir_all(&main).unwrap();
+        std::fs::create_dir_all(&extra).unwrap();
+
+        view.update(cx, |view, cx| {
+            let before = view.cockpit.registry().projects().len();
+            view.open_project_creator(cx);
+            assert!(
+                !view.project_editor_ready(),
+                "a Project with no directory cannot be created"
+            );
+
+            view.adopt_editor_directory(main.clone(), cx);
+            let editor = view.project_editor.as_ref().unwrap();
+            assert_eq!(editor.staged, [main.clone()]);
+            assert_eq!(
+                editor.name.read(cx).text(),
+                "primary",
+                "the main directory names the Project until one is typed"
+            );
+
+            view.adopt_editor_directory(extra.clone(), cx);
+            assert_eq!(
+                view.project_editor.as_ref().unwrap().staged,
+                [main.clone(), extra.clone()]
+            );
+            assert_eq!(
+                view.cockpit.registry().projects().len(),
+                before,
+                "nothing is registered before Create"
+            );
+
+            view.confirm_project_editor(cx);
+            assert!(view.project_editor.is_none());
+            assert_eq!(view.cockpit.registry().projects().len(), before + 1);
+
+            let project = view
+                .cockpit
+                .registry()
+                .project(view.nav_filter.expect("the new Project is the filter"))
+                .unwrap();
+            assert_eq!(project.root, main.canonicalize().unwrap());
+            assert_eq!(project.additional_roots, [extra.canonicalize().unwrap()]);
+            assert_eq!(project.title, "primary");
+        });
+    }
+
+    /// The edit card writes through: a directory added there is on the
+    /// Project at once, and the name line renames it on Done.
+    #[gpui::test]
+    fn the_project_card_edits_an_existing_project(cx: &mut TestAppContext) {
+        let (mut core, _) = cockpit("project-card-edit", 1);
+        let repo = repo_in(&scratch("project-card-edit-repo"));
+        let project = core.register_project(&repo).unwrap();
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        let extra = scratch("project-card-edit-extra");
+        std::fs::create_dir_all(&extra).unwrap();
+
+        view.update(cx, |view, cx| {
+            view.open_project_editor(project, cx);
+            view.adopt_editor_directory(extra.clone(), cx);
+            assert_eq!(
+                view.cockpit
+                    .registry()
+                    .project(project)
+                    .unwrap()
+                    .additional_roots,
+                [extra.canonicalize().unwrap()],
+                "the edit card attaches without waiting for Done"
+            );
+
+            let name = view.project_editor.as_ref().unwrap().name.clone();
+            name.update(cx, |name, cx| name.set("Renamed".into(), cx));
+            view.confirm_project_editor(cx);
+
+            assert!(view.project_editor.is_none());
+            assert_eq!(
+                view.cockpit.registry().project(project).unwrap().title,
+                "Renamed"
+            );
+        });
+    }
+
+    /// The card is a card, not a title bar: whatever the head says, the
+    /// body under it has to be on screen.
+    #[gpui::test]
+    fn the_project_card_draws_its_body(cx: &mut TestAppContext) {
+        let (core, _) = cockpit("project-card-body", 1);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, cx| view.open_project_creator(cx));
+        cx.run_until_parked();
+
+        let card = cx
+            .debug_bounds("project-editor-card")
+            .expect("the card is up");
+        let add = cx
+            .debug_bounds("project-Add Directory")
+            .expect("the Add Directory button is on screen");
+        assert!(
+            add.size.height > px(0.) && card.contains(&add.origin),
+            "the body is inside the card, not clipped under it:              card {card:?}, button {add:?}"
+        );
+    }
+
+    /// A draft opened while the nav names a Project starts on that Project,
+    /// so the Thread it becomes runs in that Project's directories rather
+    /// than the launch one's.
+    #[gpui::test]
+    fn a_draft_starts_on_the_filtered_project(cx: &mut TestAppContext) {
+        let (mut core, _) = cockpit("draft-follows-filter", 1);
+        let repo = repo_in(&scratch("draft-follows-filter-repo"));
+        let chosen = core.register_project(&repo).unwrap();
+        let extra = scratch("draft-follows-filter-extra");
+        std::fs::create_dir_all(&extra).unwrap();
+        core.add_project_directories(chosen, &[extra.clone()])
+            .unwrap();
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+
+        view.update(cx, |view, cx| {
+            view.open_draft(DraftTarget::Main, cx);
+            assert_eq!(
+                view.panes[view.focused()]
+                    .draft()
+                    .unwrap()
+                    .binding
+                    .project(),
+                view.launch_project,
+                "with no filter the draft starts where Ferrite was launched"
+            );
+        });
+
+        view.update(cx, |view, cx| {
+            let standing = view.panes[view.focused()].identity.draft().unwrap();
+            view.cockpit.discard_draft(standing).unwrap();
+            view.sync_panes(cx);
+            view.nav_filter = Some(chosen);
+            view.open_draft(DraftTarget::Main, cx);
+
+            let draft = view.panes[view.focused()].draft().unwrap();
+            assert_eq!(draft.binding.project(), chosen);
+            let project = view.cockpit.registry().project(chosen).unwrap();
+            assert_eq!(
+                project.directories().collect::<Vec<_>>(),
+                [repo.canonicalize().unwrap(), extra.canonicalize().unwrap()],
+                "and that Project brings all of its directories"
+            );
+        });
+    }
+
+    /// Choosing a Project in the nav while a draft is standing carries the
+    /// draft with it: the chip in the Composer names the Project the send
+    /// will run in, so it cannot be left naming the previous one.
+    #[gpui::test]
+    fn choosing_a_project_moves_the_standing_draft(cx: &mut TestAppContext) {
+        let (mut core, _) = cockpit("filter-moves-draft", 1);
+        let repo = repo_in(&scratch("filter-moves-draft-repo"));
+        let chosen = core.register_project(&repo).unwrap();
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+
+        view.update(cx, |view, cx| {
+            view.open_draft(DraftTarget::Main, cx);
+            let draft = view.panes[view.focused()].draft().unwrap();
+            assert_eq!(draft.binding.project(), view.launch_project);
+
+            view.choose_nav_filter(Some(chosen), cx);
+
+            let draft = view.panes[view.focused()].draft().unwrap();
+            assert_eq!(draft.binding.project(), chosen);
+            assert_eq!(
+                *draft.binding.target(),
+                DraftTarget::Main,
+                "the workspace under it resets with the repo it named"
+            );
+
+            // `All Projects` names no Project, so there is nothing to move
+            // the draft onto: it stays where the operator put it.
+            view.choose_nav_filter(None, cx);
+            assert_eq!(
+                view.panes[view.focused()]
+                    .draft()
+                    .unwrap()
+                    .binding
+                    .project(),
+                chosen
             );
         });
     }
@@ -12682,6 +13289,49 @@ mod tests {
             assert!(view.popover.is_none(), "no binding, no popover");
         });
         assert_eq!(composer_text(&view, cx), "@", "typing was not eaten");
+    }
+
+    fn local_render_probe(id: u64, cx: &mut TestAppContext) {
+        let fake = Fake::default();
+        let store = Store::open("/tmp/ferrite-perf.7xYdTK").unwrap();
+        let mut core = Cockpit::new(store, Box::new(fake.clone()));
+        let revive = std::time::Instant::now();
+        core.revive(ThreadId::new(id)).unwrap();
+        let revive = revive.elapsed();
+        bind_production_keys(cx);
+        let render = std::time::Instant::now();
+        let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        tick(cx);
+        let render = render.elapsed();
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TextDelta { text: "x".into() })
+            .unwrap();
+        let pump = std::time::Instant::now();
+        _view.update(cx, |view, cx| view.pump(cx));
+        let pump = pump.elapsed();
+        let repaint = std::time::Instant::now();
+        cx.run_until_parked();
+        let repaint = repaint.elapsed();
+        eprintln!(
+            "PERF_UI thread={id} revive_ms={:.3} initial_ms={:.3} pump_ms={:.3} repaint_ms={:.3}",
+            revive.as_secs_f64() * 1000.0,
+            render.as_secs_f64() * 1000.0,
+            pump.as_secs_f64() * 1000.0,
+            repaint.as_secs_f64() * 1000.0,
+        );
+    }
+
+    #[gpui::test]
+    #[ignore = "local performance probe"]
+    fn local_render_probe_small(cx: &mut TestAppContext) {
+        local_render_probe(1, cx);
+    }
+
+    #[gpui::test]
+    #[ignore = "local performance probe"]
+    fn local_render_probe_slow(cx: &mut TestAppContext) {
+        local_render_probe(5, cx);
     }
 
     /// #24's dismissal law holds for the menus: a press the popover did not

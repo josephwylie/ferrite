@@ -77,6 +77,8 @@ pub struct CodexConfig {
     /// Working directory for the thread (the Thread's workspace binding),
     /// passed in thread/start rather than inherited from the process.
     pub cwd: Option<PathBuf>,
+    /// Project roots added to workspace-write turns without changing `cwd`.
+    pub additional_directories: Vec<PathBuf>,
     /// Model override passed through in thread/start.
     pub model: Option<String>,
     /// Reasoning effort (`"low"` … `"xhigh"`, `"max"`, `"ultra"` where the
@@ -103,6 +105,7 @@ impl Default for CodexConfig {
         Self {
             program: "codex".into(),
             cwd: None,
+            additional_directories: Vec::new(),
             model: None,
             effort: None,
             approval_policy: None,
@@ -226,6 +229,8 @@ pub struct CodexSession {
     skills: Arc<Mutex<Vec<crate::SessionCommand>>>,
     /// The thread's cwd, kept for resolving `@path` mention tokens.
     cwd: Option<PathBuf>,
+    additional_directories: Vec<PathBuf>,
+    sandbox: Option<String>,
     next_request_id: u64,
     question_replies: Arc<Mutex<questions::Replies>>,
     queue: Arc<Mutex<queue::Queue>>,
@@ -308,6 +313,8 @@ impl CodexSession {
             current_turn,
             skills,
             cwd: config.cwd.clone(),
+            additional_directories: config.additional_directories.clone(),
+            sandbox: config.sandbox.clone(),
             next_request_id: 1,
             question_replies,
             queue,
@@ -491,6 +498,7 @@ impl CodexSession {
         if let Some(effort) = &self.effort {
             params["effort"] = serde_json::json!(effort);
         }
+        self.apply_project_roots(&mut params);
         let id = self.take_request_id();
         self.write_line(&serde_json::json!({
             "jsonrpc": "2.0",
@@ -559,6 +567,7 @@ impl CodexSession {
                 if let Some(effort) = &self.effort {
                     request["params"]["effort"] = effort.clone().into();
                 }
+                self.apply_project_roots(&mut request["params"]);
             }
             let result = self.write_line(&request);
             if result.is_err() {
@@ -610,6 +619,17 @@ impl CodexSession {
         let id = self.next_request_id;
         self.next_request_id += 1;
         id
+    }
+
+    fn apply_project_roots(&self, params: &mut serde_json::Value) {
+        if self.sandbox.as_deref() == Some("workspace-write")
+            && !self.additional_directories.is_empty()
+        {
+            params["sandboxPolicy"] = serde_json::json!({
+                "type": "workspaceWrite",
+                "writableRoots": self.additional_directories,
+            });
+        }
     }
 
     fn write_line(&mut self, value: &serde_json::Value) -> io::Result<()> {

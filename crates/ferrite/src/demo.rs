@@ -1197,6 +1197,7 @@ mod tests {
                 resume: Some("4f2a"),
                 cwd: None,
                 name: None,
+                additional_directories: Vec::new(),
             })
             .expect("demo spawns never fail");
         let events = revived.events();

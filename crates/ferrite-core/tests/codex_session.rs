@@ -815,10 +815,11 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
     let mut session = CodexSession::spawn(CodexConfig {
         program,
         cwd: Some(std::env::temp_dir()),
+        additional_directories: vec![std::path::PathBuf::from("/extra/project")],
         model: Some("gpt-5.4-mini".into()),
         effort: Some("high".into()),
         approval_policy: Some("on-request".into()),
-        sandbox: Some("read-only".into()),
+        sandbox: Some("workspace-write".into()),
         resume: None,
     })
     .unwrap();
@@ -858,7 +859,7 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
                 "cwd": std::env::temp_dir().display().to_string(),
                 "model": "gpt-5.4-mini",
                 "approvalPolicy": "on-request",
-                "sandbox": "read-only",
+                "sandbox": "workspace-write",
             },
         })
     );
@@ -892,6 +893,10 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
                 "input": [{"type": "text", "text": "hi"}],
                 "summary": "detailed",
                 "effort": "high",
+                "sandboxPolicy": {
+                    "type": "workspaceWrite",
+                    "writableRoots": ["/extra/project"],
+                },
             },
         })
     );

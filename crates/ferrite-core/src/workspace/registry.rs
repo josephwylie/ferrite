@@ -35,6 +35,9 @@ pub struct Project {
     pub title: String,
     /// The canonicalized root path.
     pub root: PathBuf,
+    /// Other canonicalized roots made available to Sessions in this Project.
+    /// `root` remains the primary working directory and git-worktree source.
+    pub additional_roots: Vec<PathBuf>,
     /// The high-water mark `mint_branch` counts from. Never decremented —
     /// a removed worktree's branch survives removal, so its number must
     /// never be dealt to a "new worktree" again.
@@ -45,6 +48,9 @@ pub struct Project {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorktreeEntry {
     pub project: ProjectId,
+    /// The repository this worktree belongs to. Kept explicitly so changing
+    /// a Project's primary root cannot retarget an existing worktree.
+    pub repo: PathBuf,
     pub branch: String,
     pub path: PathBuf,
 }
@@ -60,7 +66,7 @@ pub struct Registry {
 }
 
 /// The registry file's schema, versioned from day one like the Thread log's.
-const SCHEMA_VERSION: u32 = 1;
+const SCHEMA_VERSION: u32 = 2;
 
 const FILE_NAME: &str = "registry.json";
 
@@ -77,12 +83,16 @@ struct PersistedProject {
     id: ProjectId,
     title: String,
     root: PathBuf,
+    #[serde(default)]
+    additional_roots: Vec<PathBuf>,
     minted: u64,
 }
 
 #[derive(Serialize, Deserialize)]
 struct PersistedWorktree {
     project: ProjectId,
+    #[serde(default)]
+    repo: Option<PathBuf>,
     branch: String,
     path: PathBuf,
 }
@@ -106,7 +116,7 @@ impl Registry {
         };
         let persisted = serde_json::from_slice::<PersistedRegistry>(&bytes)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        if persisted.schema != SCHEMA_VERSION {
+        if !(1..=SCHEMA_VERSION).contains(&persisted.schema) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!(
@@ -123,8 +133,16 @@ impl Registry {
         let roots: BTreeSet<&Path> = persisted
             .projects
             .iter()
-            .map(|project| project.root.as_path())
+            .flat_map(|project| {
+                std::iter::once(project.root.as_path())
+                    .chain(project.additional_roots.iter().map(PathBuf::as_path))
+            })
             .collect();
+        let root_count: usize = persisted
+            .projects
+            .iter()
+            .map(|project| 1 + project.additional_roots.len())
+            .sum();
         let max_id = persisted
             .projects
             .iter()
@@ -132,7 +150,7 @@ impl Registry {
             .max()
             .unwrap_or(0);
         if ids.len() != persisted.projects.len()
-            || roots.len() != persisted.projects.len()
+            || roots.len() != root_count
             || persisted.next_project <= max_id
             || persisted
                 .worktrees
@@ -152,16 +170,24 @@ impl Registry {
                 id: project.id,
                 title: project.title,
                 root: project.root,
+                additional_roots: project.additional_roots,
                 minted: project.minted,
             })
             .collect();
         for worktree in persisted.worktrees {
+            let repo = worktree.repo.unwrap_or_else(|| {
+                registry
+                    .project(worktree.project)
+                    .map(|project| project.root.clone())
+                    .unwrap_or_default()
+            });
             registry
                 .worktrees
                 .entry(worktree.project)
                 .or_default()
                 .push(WorktreeEntry {
                     project: worktree.project,
+                    repo,
                     branch: worktree.branch,
                     path: worktree.path,
                 });
@@ -174,8 +200,61 @@ impl Registry {
     /// one directory can never become two projects. Durable before this
     /// returns.
     pub fn register(&mut self, root: &Path) -> io::Result<ProjectId> {
-        let root = fs::canonicalize(root)?;
-        self.register_resolved(root)
+        self.register_directories(&[root.to_path_buf()])
+    }
+
+    /// Register one Project from an ordered set of roots in one durable
+    /// mutation. The first root is primary. If any selected root already
+    /// belongs to one Project, the remaining roots attach to that Project;
+    /// selections spanning two Projects are refused.
+    pub fn register_directories(&mut self, roots: &[PathBuf]) -> io::Result<ProjectId> {
+        let mut resolved = Vec::new();
+        for root in roots {
+            let root = fs::canonicalize(root)?;
+            if !resolved.contains(&root) {
+                resolved.push(root);
+            }
+        }
+        let Some(primary) = resolved.first().cloned() else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "a Project needs at least one directory",
+            ));
+        };
+        let owners: BTreeSet<_> = self
+            .projects
+            .iter()
+            .filter(|project| {
+                project
+                    .directories()
+                    .any(|directory| resolved.iter().any(|root| root == directory))
+            })
+            .map(|project| project.id)
+            .collect();
+        if owners.len() > 1 {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "the selected directories belong to different Projects",
+            ));
+        }
+        if let Some(project) = owners.first().copied() {
+            self.add_directories(project, &resolved)?;
+            return Ok(project);
+        }
+
+        let mut next = self.clone();
+        let id = ProjectId(next.next_project);
+        next.next_project += 1;
+        next.projects.push(Project {
+            id,
+            title: leaf(&primary),
+            root: primary,
+            additional_roots: resolved.into_iter().skip(1).collect(),
+            minted: 0,
+        });
+        next.persist()?;
+        *self = next;
+        Ok(id)
     }
 
     /// Imported history may name a checkout that no longer exists on this
@@ -187,7 +266,11 @@ impl Registry {
     }
 
     fn register_resolved(&mut self, root: PathBuf) -> io::Result<ProjectId> {
-        if let Some(existing) = self.projects.iter().find(|project| project.root == root) {
+        if let Some(existing) = self
+            .projects
+            .iter()
+            .find(|project| project.directories().any(|directory| directory == root))
+        {
             return Ok(existing.id);
         }
         let mut next = self.clone();
@@ -197,6 +280,7 @@ impl Registry {
             id,
             title: leaf(&root),
             root,
+            additional_roots: Vec::new(),
             minted: 0,
         });
         next.persist()?;
@@ -211,6 +295,108 @@ impl Registry {
 
     pub fn project(&self, id: ProjectId) -> Option<&Project> {
         self.projects.iter().find(|project| project.id == id)
+    }
+
+    /// Add roots to one Project atomically. Paths are canonicalized and no
+    /// directory may belong to two Projects; repeats already on this Project
+    /// are harmless.
+    pub fn add_directories(&mut self, id: ProjectId, roots: &[PathBuf]) -> io::Result<()> {
+        let roots = roots
+            .iter()
+            .map(fs::canonicalize)
+            .collect::<io::Result<Vec<_>>>()?;
+        let mut next = self.clone();
+        for root in roots {
+            if let Some(owner) = next
+                .projects
+                .iter()
+                .find(|project| project.directories().any(|directory| directory == root))
+            {
+                if owner.id == id {
+                    continue;
+                }
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    format!("{} already belongs to another Project", root.display()),
+                ));
+            }
+            let project = next.project_mut(id)?;
+            project.additional_roots.push(root);
+        }
+        next.persist()?;
+        *self = next;
+        Ok(())
+    }
+
+    /// Replace a Project directory by its displayed index (`0` is primary).
+    /// Existing Threads keep their durable bindings; new Threads start in a
+    /// newly replaced primary directory.
+    pub fn replace_directory(
+        &mut self,
+        id: ProjectId,
+        index: usize,
+        root: &Path,
+    ) -> io::Result<()> {
+        let root = fs::canonicalize(root)?;
+        let current = self
+            .project(id)
+            .and_then(|project| project.directories().nth(index))
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotFound, "project directory is missing")
+            })?;
+        if current == root {
+            return Ok(());
+        }
+        if self.projects.iter().any(|project| {
+            project
+                .directories()
+                .any(|directory| directory == root.as_path())
+        }) {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("{} already belongs to a Project", root.display()),
+            ));
+        }
+        let mut next = self.clone();
+        let project = next.project_mut(id)?;
+        if index == 0 {
+            project.root = root;
+        } else {
+            project.additional_roots[index - 1] = root;
+        }
+        next.persist()?;
+        *self = next;
+        Ok(())
+    }
+
+    /// Remove an additional directory. The primary root cannot be removed;
+    /// callers replace it so a Project always has a working directory.
+    pub fn remove_directory(&mut self, id: ProjectId, index: usize) -> io::Result<()> {
+        if index == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "replace the primary directory instead of removing it",
+            ));
+        }
+        let mut next = self.clone();
+        let project = next.project_mut(id)?;
+        if index > project.additional_roots.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "project directory is missing",
+            ));
+        }
+        project.additional_roots.remove(index - 1);
+        next.persist()?;
+        *self = next;
+        Ok(())
+    }
+
+    fn project_mut(&mut self, id: ProjectId) -> io::Result<&mut Project> {
+        self.projects
+            .iter_mut()
+            .find(|project| project.id == id)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "project is not registered"))
     }
 
     /// Forget a registered Project. Its worktree entries go with it — the
@@ -300,9 +486,11 @@ impl Registry {
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "project is not registered"))?;
         registered.minted += 1;
         let branch = format!("ferrite/wt-{}", registered.minted);
+        let repo = registered.root.clone();
         let path = next.place(project, &branch);
         let entry = WorktreeEntry {
             project,
+            repo,
             branch,
             path,
         };
@@ -353,6 +541,10 @@ impl Registry {
             .or_default()
             .push(WorktreeEntry {
                 project,
+                repo: self
+                    .project(project)
+                    .map(|project| project.root.clone())
+                    .unwrap_or_default(),
                 branch: branch.to_string(),
                 path: path.to_path_buf(),
             });
@@ -392,6 +584,7 @@ impl Registry {
                     id: project.id,
                     title: project.title.clone(),
                     root: project.root.clone(),
+                    additional_roots: project.additional_roots.clone(),
                     minted: project.minted,
                 })
                 .collect(),
@@ -401,6 +594,7 @@ impl Registry {
                 .flatten()
                 .map(|entry| PersistedWorktree {
                     project: entry.project,
+                    repo: Some(entry.repo.clone()),
                     branch: entry.branch.clone(),
                     path: entry.path.clone(),
                 })
@@ -413,6 +607,14 @@ impl Registry {
             serde_json::to_vec(&persisted).map_err(io::Error::other)?,
         )?;
         fs::rename(&tmp, &path)
+    }
+}
+
+impl Project {
+    /// Primary first, then additional roots in the operator's order.
+    pub fn directories(&self) -> impl Iterator<Item = &Path> {
+        std::iter::once(self.root.as_path())
+            .chain(self.additional_roots.iter().map(PathBuf::as_path))
     }
 }
 
@@ -532,10 +734,16 @@ mod tests {
 
         assert_eq!(reopened.projects().len(), 1);
         assert_eq!(reopened.project(project).unwrap().title, "repo");
+        // The entry names its repo the way the registry does — canonically.
+        // Spelling the raw temp path here fails wherever canonicalizing
+        // rewrites it: the `\\?\` prefix on Windows, `/private/var` on macOS.
+        let canonical = reopened.project(project).unwrap().root.clone();
+        assert_eq!(canonical, repo.canonicalize().unwrap());
         assert_eq!(
             reopened.worktrees(project),
             [WorktreeEntry {
                 project,
+                repo: canonical,
                 branch: branch.clone(),
                 path: path.clone(),
             }]
@@ -804,6 +1012,77 @@ mod tests {
         registry.register(&second).unwrap();
         assert_eq!(registry.projects().len(), 2);
         assert_eq!(Registry::open(&store).unwrap().projects().len(), 2);
+    }
+
+    #[test]
+    fn project_directories_can_be_added_replaced_removed_and_reopened() {
+        let dir = scratch("project-directories");
+        let primary = dir.join("primary");
+        let extra = dir.join("extra");
+        let replacement = dir.join("replacement");
+        for path in [&primary, &extra, &replacement] {
+            fs::create_dir_all(path).unwrap();
+        }
+        let store = dir.join("store");
+        let mut registry = Registry::open(&store).unwrap();
+        let project = registry.register(&primary).unwrap();
+        let old_worktree = registry.reserve_worktree(project).unwrap();
+
+        registry
+            .add_directories(project, std::slice::from_ref(&extra))
+            .unwrap();
+        registry
+            .replace_directory(project, 0, &replacement)
+            .unwrap();
+
+        let reopened = Registry::open(&store).unwrap();
+        let roots: Vec<_> = reopened
+            .project(project)
+            .unwrap()
+            .directories()
+            .map(Path::to_path_buf)
+            .collect();
+        assert_eq!(
+            roots,
+            [
+                replacement.canonicalize().unwrap(),
+                extra.canonicalize().unwrap()
+            ]
+        );
+        assert_eq!(
+            reopened.worktrees(project)[0].repo,
+            primary.canonicalize().unwrap(),
+            "changing the primary root must not retarget an existing worktree"
+        );
+        assert_eq!(reopened.worktrees(project)[0].path, old_worktree.path);
+
+        registry.remove_directory(project, 1).unwrap();
+        assert!(registry
+            .project(project)
+            .unwrap()
+            .additional_roots
+            .is_empty());
+        assert_eq!(
+            registry.remove_directory(project, 0).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+    }
+
+    #[test]
+    fn version_one_projects_migrate_with_their_root_as_primary() {
+        let dir = scratch("schema-one-migration");
+        let store = dir.join("store");
+        fs::create_dir_all(&store).unwrap();
+        fs::write(
+            store.join(FILE_NAME),
+            r#"{"schema":1,"next_project":2,"projects":[{"id":1,"title":"old","root":"/old/root","minted":0}],"worktrees":[]}"#,
+        )
+        .unwrap();
+
+        let registry = Registry::open(&store).unwrap();
+        let project = &registry.projects()[0];
+        assert_eq!(project.root, PathBuf::from("/old/root"));
+        assert!(project.additional_roots.is_empty());
     }
 
     #[test]
