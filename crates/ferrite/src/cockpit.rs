@@ -1146,7 +1146,29 @@ impl CockpitView {
                     open.session_project_root(),
                     open.workspace(),
                 )?;
-                Some((thread, cwd.to_path_buf()))
+                let project = self
+                    .cockpit
+                    .peek(thread)
+                    .ok()
+                    .and_then(|meta| meta.project_id)
+                    .and_then(|project| self.cockpit.registry().project(project));
+                let directories = project
+                    .map(|project| {
+                        project
+                            .directories()
+                            .enumerate()
+                            .map(|(index, directory)| {
+                                let checkout = if index == 0 { cwd } else { directory };
+                                let label = directory
+                                    .file_name()
+                                    .map(|name| name.to_string_lossy().into_owned())
+                                    .unwrap_or_else(|| directory.display().to_string());
+                                (SharedString::from(label), checkout.to_path_buf())
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                Some((thread, cwd.to_path_buf(), directories))
             })
             .collect();
         if targets.is_empty() {
@@ -1159,13 +1181,34 @@ impl CockpitView {
                 .spawn(async move {
                     targets
                         .into_iter()
-                        .map(|(thread, cwd)| (thread, ferrite_core::workspace::branch_status(&cwd)))
-                        .collect()
+                        .map(|(thread, cwd, directories)| {
+                            let status = ferrite_core::workspace::branch_status(&cwd);
+                            let project_branches = directories
+                                .into_iter()
+                                .filter_map(|(label, directory)| {
+                                    ferrite_core::workspace::checkout_branch(&directory)
+                                        .map(|branch| (label, SharedString::from(branch)))
+                                })
+                                .collect();
+                            (thread, status, project_branches)
+                        })
+                        .collect::<Vec<_>>()
                 })
                 .await;
             this.update(cx, |view, cx| {
                 view.branch_refreshing = false;
-                view.facts.set_branches(branches);
+                view.facts.set_branches(
+                    branches
+                        .iter()
+                        .map(|(thread, status, _)| (*thread, status.clone()))
+                        .collect(),
+                );
+                view.facts.set_project_branches(
+                    branches
+                        .into_iter()
+                        .map(|(thread, _, project_branches)| (thread, project_branches))
+                        .collect(),
+                );
                 cx.notify();
             })
             .ok();
@@ -6474,6 +6517,9 @@ impl CockpitView {
             // The cached checkout label (#29) — display-only.
             branch: cached.and_then(|facts| facts.branch.clone()),
             checkout: cached.and_then(|facts| facts.status.as_ref()),
+            project_branches: cached
+                .map(|facts| facts.project_branches.as_slice())
+                .unwrap_or_default(),
             composer_empty: pane.composer.read(cx).is_empty(),
             history_available: self.history_available(index, level),
             focused,
@@ -9731,6 +9777,28 @@ mod tests {
         view.read_with(cx, |view, _| assert!(view.context_checks.is_some()));
         cx.simulate_keystrokes("escape");
         view.read_with(cx, |view, _| assert!(view.context_checks.is_none()));
+    }
+
+    #[gpui::test]
+    fn the_thread_header_shows_every_project_directory_branch(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("project-branches", 1);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        let thread = view.read_with(cx, |view, _| view.cockpit.threads()[0]);
+        view.update(cx, |view, cx| {
+            view.facts.set_project_branches(vec![(
+                thread,
+                vec![
+                    ("frontend".into(), "feat/header".into()),
+                    ("api".into(), "main".into()),
+                ],
+            )]);
+            cx.notify();
+        });
+        tick(cx);
+
+        assert!(cx.debug_bounds("project-branch-0").is_some());
+        assert!(cx.debug_bounds("project-branch-1").is_some());
     }
 
     /// A PR whose rollup is empty claims nothing about CI, so there is no
