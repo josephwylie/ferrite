@@ -11,9 +11,9 @@ use gpui::{
 use crate::StyledExt;
 use crate::text::TextViewFormat;
 use crate::text::markdown_ext::{MarkdownExtensions, MarkdownNode, MarkdownPlugin};
-use crate::text::node::{CodeBlock, TableData};
+use crate::text::node::{CodeBlock, NodeContext, TableData};
 use crate::text::state::{LineSpan, SelectionFormat, TextViewState};
-use crate::{GlobalState, TextSelection, text::TextViewStyle};
+use crate::{GlobalState, TextSelection, TextSelectionDocument, text::TextViewStyle};
 
 /// Type for code block actions generator function.
 pub(crate) type CodeBlockActionsFn =
@@ -73,6 +73,15 @@ impl TextViewDefaults {
 pub(crate) type TableActionsFn =
     dyn Fn(&TableData, &mut Window, &mut App) -> AnyElement + Send + Sync;
 
+pub(crate) type LinkRendererFn = dyn Fn(
+        &SharedString,
+        &SharedString,
+        &mut Window,
+        &mut App,
+    ) -> Option<(gpui::Size<Pixels>, AnyElement)>
+    + Send
+    + Sync;
+
 pub(crate) type LinkClickHandlerFn =
     dyn Fn(&SharedString, &ClickEvent, &mut Window, &mut App) + Send + Sync;
 
@@ -128,7 +137,9 @@ pub struct TextView {
     code_block_highlighter: Option<Arc<CodeBlockHighlighterFn>>,
     table_actions: Option<Arc<TableActionsFn>>,
     link_click_handler: Option<Arc<LinkClickHandlerFn>>,
+    link_renderer: Option<Arc<LinkRendererFn>>,
     markdown_extensions: Arc<MarkdownExtensions>,
+    selection_document: Option<(TextSelectionDocument, SharedString)>,
 }
 
 /// A plugin that can configure a [`TextView`].
@@ -155,6 +166,14 @@ impl Styled for TextView {
 }
 
 impl TextView {
+    /// Returns the plain text produced by the native Markdown parser without
+    /// creating a view or waiting for its asynchronous parser task.
+    pub fn markdown_plain_text(source: &str) -> String {
+        crate::text::format::markdown::parse(source, &mut NodeContext::default())
+            .map(|document| document.text())
+            .unwrap_or_else(|_| source.to_string())
+    }
+
     /// Create new TextView with managed state.
     pub fn new(state: &Entity<TextViewState>) -> Self {
         Self {
@@ -172,7 +191,9 @@ impl TextView {
             code_block_highlighter: None,
             table_actions: None,
             link_click_handler: None,
+            link_renderer: None,
             markdown_extensions: Arc::default(),
+            selection_document: None,
         }
     }
 
@@ -193,7 +214,9 @@ impl TextView {
             code_block_highlighter: None,
             table_actions: None,
             link_click_handler: None,
+            link_renderer: None,
             markdown_extensions: Arc::default(),
+            selection_document: None,
         }
     }
 
@@ -214,7 +237,9 @@ impl TextView {
             code_block_highlighter: None,
             table_actions: None,
             link_click_handler: None,
+            link_renderer: None,
             markdown_extensions: Arc::default(),
+            selection_document: None,
         }
     }
 
@@ -227,6 +252,16 @@ impl TextView {
     /// Set whether the text view is selectable, default is true.
     pub fn selectable(mut self, selectable: bool) -> Self {
         self.selectable = selectable;
+        self
+    }
+
+    /// Binds this fragment to a retained virtual selection document.
+    pub fn selection_document(
+        mut self,
+        document: TextSelectionDocument,
+        key: impl Into<SharedString>,
+    ) -> Self {
+        self.selection_document = Some((document, key.into()));
         self
     }
 
@@ -318,6 +353,24 @@ impl TextView {
         self.table_actions = Some(Arc::new(move |table, window, cx| {
             f(table, window, cx).into_any_element()
         }));
+        self
+    }
+
+    /// Replace chosen links with an application-owned inline element and its preferred size.
+    /// Returning None retains the native link. The original Markdown and selection remain intact.
+    pub fn link_renderer<F>(mut self, renderer: F) -> Self
+    where
+        F: Fn(
+                &SharedString,
+                &SharedString,
+                &mut Window,
+                &mut App,
+            ) -> Option<(gpui::Size<Pixels>, AnyElement)>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.link_renderer = Some(Arc::new(renderer));
         self
     }
 
@@ -554,6 +607,7 @@ impl Element for TextView {
             state.code_block_highlighter = code_block_highlighter.clone();
             state.table_actions = self.table_actions.clone();
             state.link_click_handler = self.link_click_handler.clone();
+            state.link_renderer = self.link_renderer.clone();
             state.set_markdown_extensions(self.markdown_extensions.clone(), cx);
             state.selectable = self.selectable;
             state.selection_format = self.selection_format;
@@ -568,6 +622,10 @@ impl Element for TextView {
                 state.set_text(text.as_str(), cx);
             }
         });
+        if let Some((document, key)) = &self.selection_document {
+            let selection = state.read(cx).selection_adapter.handle();
+            document.bind(key.clone(), &selection, Some(state.clone().into_any()), cx);
+        }
 
         let focus_handle = state.read(cx).focus_handle.clone();
         let list_state = state.read(cx).list_state.clone();
@@ -719,14 +777,24 @@ impl Element for TextView {
                 )
             };
             let document_order = GlobalState::global_mut(cx).next_selection_document_order();
-            adapter.register(
+            let registration = adapter.registration(
                 prepaint.hitbox.clone(),
                 content_bounds,
                 scroll_offset,
                 document_order,
-                window,
-                cx,
             );
+            if let Some((document, _)) = &self.selection_document {
+                document.register_visible(adapter.handle(), registration, window, cx);
+            } else {
+                adapter.register(
+                    prepaint.hitbox.clone(),
+                    content_bounds,
+                    scroll_offset,
+                    document_order,
+                    window,
+                    cx,
+                );
+            }
         }
     }
 }

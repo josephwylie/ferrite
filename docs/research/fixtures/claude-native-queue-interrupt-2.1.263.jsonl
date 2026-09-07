@@ -1,0 +1,9 @@
+{"mode": "interrupt", "version": "2.1.263 (Claude Code)", "capture_ends": "interrupt receipt"}
+{"type": "command_lifecycle", "command_uuid": "24dec987-ccf5-4eb8-a104-64b169fac51a", "state": "queued"}
+{"type": "command_lifecycle", "command_uuid": "24dec987-ccf5-4eb8-a104-64b169fac51a", "state": "started"}
+{"type": "system", "subtype": "init", "claude_code_version": "2.1.263", "capabilities": ["interrupt_receipt_v1", "interrupt_cancel_queued_v1", "msg_lifecycle_v1"]}
+{"type": "command_lifecycle", "command_uuid": "2a952eb1-c98b-45ac-be8c-1183e256d38a", "state": "queued"}
+{"type": "command_lifecycle", "command_uuid": "2ace7b58-e514-4ddf-af02-604770204b49", "state": "queued"}
+{"type": "command_lifecycle", "command_uuid": "2a952eb1-c98b-45ac-be8c-1183e256d38a", "state": "cancelled"}
+{"type": "command_lifecycle", "command_uuid": "2ace7b58-e514-4ddf-af02-604770204b49", "state": "cancelled"}
+{"type": "control_response", "request_id": "interrupt", "subtype": "success", "response": {"cancelled": ["2a952eb1-c98b-45ac-be8c-1183e256d38a", "2ace7b58-e514-4ddf-af02-604770204b49"], "still_queued": []}}

@@ -56,6 +56,9 @@ pub struct ThreadFacts {
     /// rows by and what its "40m / 2h / 3d" line says. `None` when the log
     /// cannot be stat'd; such a row claims nothing and sorts last.
     pub last_used: Option<SystemTime>,
+    /// Subagents observed for this Thread. Retained while parked so
+    /// its navigation row keeps the last known count without reopening logs.
+    pub subagents: usize,
     /// The wall cell's folded reading — everything the L3 recipe needs that
     /// is not an O(1) transcript read. A frame never walks Blocks at L3.
     pub wall: WallCard,
@@ -190,6 +193,7 @@ impl Facts {
             facts.provider = Some(meta.provider);
             facts.project = meta.project_id;
             facts.project_label = project_label(cockpit, meta.project_id, meta.workspace.as_ref());
+            facts.subagents = cockpit.subagent_count(*thread).unwrap_or_default();
             // The checkout, for a parked Thread, in the order that costs
             // least: the registry already knows a worktree's branch, and a
             // main checkout is asked `git` exactly once, ever.
@@ -303,6 +307,9 @@ impl Facts {
         let last_used = cockpit.last_used(thread);
         let facts = self.threads.entry(thread).or_default();
         facts.wall = card;
+        if open.is_some() {
+            facts.subagents = cockpit.subagent_count(thread).unwrap_or_default();
+        }
         // The wall refolds on exactly the moments that append to the log —
         // a stream, a prompt, an act — so recency rides it rather than
         // needing a moment of its own.

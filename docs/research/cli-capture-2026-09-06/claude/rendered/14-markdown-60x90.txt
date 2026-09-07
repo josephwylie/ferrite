@@ -1,0 +1,90 @@
+                                                            
+                                                            
+✻ Cooked for 5s · done 8:59 pm                              
+                                                            
+❯ Use AskUserQuestion to show a single-choice question      
+  titled Display with two options Compact and Detailed,     
+  each with a short description. This is only a disposable  
+  UI capture; do not change any setting or file. After I    
+  answer, acknowledge my selection in one sentence.         
+                                                            
+⏺ Showing the Display question.                             
+                                                            
+⏺ User answered Claude's questions:                         
+  ⎿  · Which display mode do you prefer? → Detailed         
+                                                            
+⏺ You selected Detailed, and no setting or file was changed.
+                                                            
+✻ Crunched for 7s · done 9:01 pm                            
+                                                            
+❯ Read formatting.md in this synthetic directory. Reply     
+  with its exact complete contents as Markdown, preserving  
+  all whitespace. Do not wrap the whole response in an      
+  extra code fence. No preface or suffix. Do not write or   
+  change files or use external tools.                       
+                                                            
+⏺ Reading formatting.md.                                    
+                                                            
+  Read 1 file                                               
+                                                            
+⏺ Heading one                                               
+                                                            
+  Heading two                                               
+                                                            
+  Heading three                                             
+                                                            
+  Heading four                                              
+                                                            
+  Heading five                                              
+                                                            
+  Heading six                                               
+                                                            
+  Normal alpha beta. Double alpha  beta. Triple alpha       
+  beta. NBSP alpha beta.                                    
+  This is a soft break                                      
+  on the next source line.                                  
+  This is a hard break                                      
+  on the next source line.                                  
+                                                            
+  Bold, italic, ~~strike~~, inline  code, and example link. 
+                                                            
+  - Outer item with bold and code.                          
+    - Nested item with a long continuation that should wrap 
+      naturally when the terminal width becomes narrow      
+      enough to require another row.                        
+  - Second outer item.                                      
+                                                            
+  9. Ninth item.                                            
+  10. Tenth item with continuation text long enough to wrap 
+      in a narrow terminal and show the hanging indentation.
+                                                            
+  ▎ Quoted alpha  beta.                                     
+  ▎ Second quoted line.                                     
+                                                            
+  ┌───────┬───────┬─────────────────────┐                   
+  │ Name  │ Count │        Note         │                   
+  ├───────┼───────┼─────────────────────┤                   
+  │ Alpha │     2 │ two  spaces         │                   
+  ├───────┼───────┼─────────────────────┤                   
+  │ Beta  │    12 │ a longer table cell │                   
+  └───────┴───────┴─────────────────────┘                   
+                                                            
+  ---                                                       
+                                                            
+  one two                                                   
+  one  two   three    four                                  
+      four leading spaces                                   
+        actual tab character                                
+  trailing two spaces:                                      
+                                                            
+  Unicode: café naïve → ✓ 界 é                              
+  0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuv
+  wxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqr
+  stuvwxyz                                                  
+                                                            
+✻ Baked for 10s · done 9:02 pm                              
+                                                            
+────────────────────────────────────────────────────────────
+❯ Now do the same for sample.py with a short explanation    
+────────────────────────────────────────────────────────────
+  ⏸ manual mode on · ? for shortcuts                   /rc  

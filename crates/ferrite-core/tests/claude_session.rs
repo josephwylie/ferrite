@@ -582,7 +582,7 @@ fn a_resumed_session_answers_from_the_previous_process_history() {
         recorded[0],
         format!(
             "-p --input-format stream-json --output-format stream-json \
-             --include-partial-messages --thinking-display summarized --forward-subagent-text --verbose --permission-prompt-tool stdio \
+             --include-partial-messages --thinking-display summarized --forward-subagent-text --verbose --permission-prompt-tool stdio --prompt-suggestions false \
              --resume {resumed}"
         )
     );
@@ -665,6 +665,7 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
         cwd: Some(std::env::temp_dir()),
         model: Some("haiku".into()),
         effort: Some("high".into()),
+        prompt_suggestions: false,
         name: Some("CI flake".into()),
         permission_mode: Some("default".into()),
         resume: None,
@@ -690,7 +691,7 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
     assert_eq!(
         recorded[0],
         "-p --input-format stream-json --output-format stream-json \
-         --include-partial-messages --thinking-display summarized --forward-subagent-text --verbose --permission-prompt-tool stdio \
+         --include-partial-messages --thinking-display summarized --forward-subagent-text --verbose --permission-prompt-tool stdio --prompt-suggestions false \
          --model haiku --permission-mode default --name CI flake"
     );
     assert_eq!(sent.len(), 5, "the rename wrote nothing");
@@ -746,7 +747,7 @@ fn no_model_or_permission_mode_is_passed_when_the_config_names_none() {
     assert_eq!(
         recorded[0],
         "-p --input-format stream-json --output-format stream-json \
-         --include-partial-messages --thinking-display summarized --forward-subagent-text --verbose --permission-prompt-tool stdio"
+         --include-partial-messages --thinking-display summarized --forward-subagent-text --verbose --permission-prompt-tool stdio --prompt-suggestions false"
     );
 }
 
@@ -982,4 +983,134 @@ fn read_lines(path: &std::path::Path, wanted: usize) -> Vec<String> {
         );
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+#[test]
+fn native_queue_admission_and_cancellation_use_the_existing_session_pipe() {
+    use ferrite_core::QueueEvent;
+    let frames: Vec<Value> =
+        include_str!("../../../docs/research/fixtures/claude-native-queue-cancel-2.1.263.jsonl")
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+    let cancelled = frames
+        .iter()
+        .find(|frame| frame["state"] == "cancelled")
+        .unwrap();
+    let id = cancelled["command_uuid"].as_str().unwrap();
+    let queued = frames
+        .iter()
+        .find(|frame| frame["state"] == "queued" && frame["command_uuid"] == id)
+        .unwrap();
+    let log =
+        std::env::temp_dir().join(format!("ferrite-claude-native-{}.log", std::process::id()));
+    let program = stub(
+        "native-queue",
+        &format!(
+            r#"{PRELUDE}
+read -r line
+printf '%s\n' "$line" > '{}'
+echo '{{"type":"system","subtype":"init","session_id":"native","model":"stub","capabilities":["msg_lifecycle_v1"]}}'
+read -r line
+printf '%s\n' "$line" >> '{}'
+echo '{}'
+read -r line
+printf '%s\n' "$line" >> '{}'
+echo '{}'
+echo '{{"type":"control_response","response":{{"subtype":"success","request_id":"req_2","response":{{"cancelled":true}}}}}}'
+exec cat > /dev/null"#,
+            log.display(),
+            log.display(),
+            queued,
+            log.display(),
+            cancelled
+        ),
+    );
+    let mut session = ClaudeSession::spawn(config(program)).unwrap();
+    while !matches!(
+        session
+            .events()
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap(),
+        SessionEvent::Init { .. }
+    ) {}
+    session.enqueue(id, "operator input").unwrap();
+    assert!(matches!(
+        session
+            .events()
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap(),
+        SessionEvent::Queue(QueueEvent::Accepted(_))
+    ));
+    session.cancel_queued(id).unwrap();
+    loop {
+        if let SessionEvent::Queue(QueueEvent::Cancelled { cancelled, .. }) = session
+            .events()
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+        {
+            assert!(cancelled);
+            break;
+        }
+    }
+    let lines: Vec<Value> = fs::read_to_string(&log)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(lines[1]["uuid"], id);
+    assert_eq!(lines[1]["isAsync"], true);
+    assert_eq!(lines[2]["request"]["message_uuid"], id);
+    assert_eq!(lines[2]["request"]["subtype"], "cancel_async_message");
+}
+
+#[test]
+fn native_followups_arrive_after_result_through_the_session_adapter() {
+    let script = format!(
+        r#"{PRELUDE}
+previous=''
+for arg in "$@"; do
+  if [ "$previous" = '--prompt-suggestions' ]; then enabled="$arg"; fi
+  previous="$arg"
+done
+while IFS= read -r line; do
+  case "$line" in
+    *'"type":"user"'*)
+      echo '{{"type":"system","subtype":"init","session_id":"native-main"}}'
+      echo '{{"type":"result","subtype":"success","is_error":false,"session_id":"native-main","total_cost_usd":0}}'
+      if [ "$enabled" = true ]; then
+        sleep 0.05
+        echo '{{"type":"prompt_suggestion","suggestion":"write the tests","uuid":"native-1","session_id":"native-main"}}'
+      fi
+      ;;
+  esac
+done
+"#
+    );
+    let mut session = ClaudeSession::spawn(ClaudeConfig {
+        program: stub("native-followups", &script),
+        prompt_suggestions: true,
+        ..Default::default()
+    })
+    .unwrap();
+    session.send("Show the function").unwrap();
+    let events = drain(session.events());
+    assert!(events
+        .iter()
+        .any(|event| matches!(event, SessionEvent::TurnEnded { .. })));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let text = loop {
+        if let Some(text) = session.take_suggestion() {
+            break text;
+        }
+        assert!(Instant::now() < deadline, "native suggestion never arrived");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(text, "write the tests");
+    assert_eq!(session.take_suggestion(), None);
+    session.set_suggestions_enabled(false).unwrap();
+    session.send("Continue").unwrap();
+    drain(session.events());
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(session.take_suggestion(), None);
 }

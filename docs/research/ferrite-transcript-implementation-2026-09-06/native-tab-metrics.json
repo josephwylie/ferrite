@@ -1,0 +1,18 @@
+[
+  {
+    "source": "\tb",
+    "b_x_logical_px": 28.0
+  },
+  {
+    "source": "a\tb",
+    "b_x_logical_px": 28.0
+  },
+  {
+    "source": "aaaa\tb",
+    "b_x_logical_px": 56.0
+  },
+  {
+    "source": "        b",
+    "b_x_logical_px": 57.600006103515625
+  }
+]

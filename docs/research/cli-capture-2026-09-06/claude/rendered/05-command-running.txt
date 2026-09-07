@@ -1,0 +1,44 @@
+❯ Read only sample.txt and sample.py in this synthetic fixture directory using the built-in Read tool. Do not modify    
+  files, inspect anything outside this directory, use network tools, or delegate. Briefly announce the task before      
+  reading. After reading, give a short response with a heading, bold text, inline code, two bullets, and a fenced       
+  Python example. Preserve the double and triple spaces in the fixture when quoting it.                                 
+                                                                                                                        
+⏺ Reading sample.txt and sample.py.                                                                                     
+                                                                                                                        
+  Read 2 files                                                                                                          
+                                                                                                                        
+⏺ Fixture contents                                                                                                      
+                                                                                                                        
+  sample.txt is a terminal transcript fixture with mixed whitespace and Unicode. sample.py defines greet and prints its 
+  result.                                                                                                               
+                                                                                                                        
+  - Spacing line quoted verbatim: one  two   three    four (double, triple, quadruple spaces), plus a tab-indented line 
+    and Unicode café naïve → ✓ 界 é.                                                                                    
+  - The Python file is two statements: a function returning an f-string, then a print call.                             
+                                                                                                                        
+  def greet(name):                                                                                                      
+      return f'Hello, {name}!'                                                                                          
+                                                                                                                        
+  print(greet('world'))  # Hello, world!                                                                                
+                                                                                                                        
+✻ Worked for 7s · done 8:53 pm                                                                                          
+                                                                                                                        
+❯ Run this harmless shell command once to demonstrate streamed stdout, stderr, and a nonzero exit. Do not fix or retry  
+  it. Do not modify any file or use any external tool. Command: python3 -c 'import time,sys; print("first  second       
+  third", flush=True); time.sleep(8); print("fixture stderr", file=sys.stderr, flush=True); sys.exit(7)'. Explain the   
+  outcome in one sentence.                                                                                              
+                                                                                                                        
+⏺ Running the command once.                                                                                             
+                                                                                                                        
+⏺ Running Python demo printing stdout, stderr, exiting 7 · 3m 17s                                                       
+  ⎿  $ python3 -c 'import time,sys; print("first second third", flush=True); time.sleep(8); print("fixture stderr",     
+     file=sys.stderr, flush=True); sys.exit(7)' (7s · 2 lines)                                                          
+     (ctrl+b ctrl+b (twice) to run in background)                                                                       
+                                                                                                                        
+✢ Skedaddling… (12s · ↓ 160 tokens)                                                                                     
+  ⎿  Tip: Run /install-slack-app to use Claude in Slack                                                                 
+                                                                                                      ● high · /effort  
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯                                                                                                                       
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on · esc to interrupt                                                                              /rc  

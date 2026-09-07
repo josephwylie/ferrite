@@ -15,6 +15,7 @@ pub mod commands;
 pub mod discover;
 pub mod limits;
 pub mod models;
+pub(crate) mod oneshot;
 // The Win32 calls are cfg(windows); the pid-selection logic inside is pure
 // and part of the host suite, like `cmd_shim` below.
 #[cfg(any(windows, test))]
@@ -72,6 +73,18 @@ pub trait Session {
     /// The bounded event stream. The pump drains this per frame.
     fn events(&self) -> &Receiver<SessionEvent>;
     fn send(&mut self, text: &str) -> io::Result<()>;
+    fn enqueue(&mut self, _client_id: &str, _text: &str) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "native queuing is unavailable in this Session",
+        ))
+    }
+    fn cancel_queued(&mut self, _id: &str) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "native queue cancellation is unavailable",
+        ))
+    }
     /// Change effort for the next turn without replacing this Session or
     /// its conversation. `None` restores the provider's configured default.
     fn set_effort(&mut self, _effort: Option<&str>) -> io::Result<()> {
@@ -79,6 +92,14 @@ pub trait Session {
             io::ErrorKind::Unsupported,
             "this Session cannot change effort",
         ))
+    }
+    /// Native follow-ups are optional; providers without them use the
+    /// one-shot prediction path. These never enter the durable transcript.
+    fn set_suggestions_enabled(&mut self, _enabled: bool) -> io::Result<()> {
+        Ok(())
+    }
+    fn take_suggestion(&mut self) -> Option<String> {
+        None
     }
     fn interrupt(&mut self) -> io::Result<()>;
     fn respond_to_decision(&mut self, id: &str, answer: DecisionAnswer) -> io::Result<()>;
@@ -102,6 +123,20 @@ pub trait Session {
 }
 
 impl Session for ClaudeSession {
+    fn enqueue(&mut self, client_id: &str, text: &str) -> io::Result<()> {
+        ClaudeSession::enqueue(self, client_id, text)
+    }
+    fn cancel_queued(&mut self, id: &str) -> io::Result<()> {
+        ClaudeSession::cancel_queued(self, id)
+    }
+
+    fn set_suggestions_enabled(&mut self, enabled: bool) -> io::Result<()> {
+        ClaudeSession::set_suggestions_enabled(self, enabled)
+    }
+    fn take_suggestion(&mut self) -> Option<String> {
+        ClaudeSession::take_suggestion(self)
+    }
+
     fn set_effort(&mut self, effort: Option<&str>) -> io::Result<()> {
         ClaudeSession::set_effort(self, effort)
     }
@@ -127,6 +162,13 @@ impl Session for ClaudeSession {
 }
 
 impl Session for CodexSession {
+    fn enqueue(&mut self, client_id: &str, text: &str) -> io::Result<()> {
+        CodexSession::enqueue(self, client_id, text)
+    }
+    fn cancel_queued(&mut self, id: &str) -> io::Result<()> {
+        CodexSession::cancel_queued(self, id)
+    }
+
     fn set_effort(&mut self, effort: Option<&str>) -> io::Result<()> {
         CodexSession::set_effort(self, effort)
     }

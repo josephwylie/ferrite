@@ -1,0 +1,26 @@
+{
+  "claude/input": {
+    "bytes": 2642,
+    "chunks": 55,
+    "sha256": "55c56c34e57771f5cd4514d9929659f0068d09da3a1803dc956535f4a6ba71ef",
+    "index_valid": true
+  },
+  "claude/output": {
+    "bytes": 299802,
+    "chunks": 1217,
+    "sha256": "7f02da431125990f83372fc3cc4ba832e53f08c3c3b95e3bc2db1b2d0b71e2c1",
+    "index_valid": true
+  },
+  "codex/input": {
+    "bytes": 2729,
+    "chunks": 51,
+    "sha256": "ae90f11873a8a2715fd03aff8b3cb57657c1b8912e5d67d1b4aaea40eda69847",
+    "index_valid": true
+  },
+  "codex/output": {
+    "bytes": 616834,
+    "chunks": 3906,
+    "sha256": "4a8da8cc6ecbf23d32b805d0594f433a562451046bddb2efd83e8c5132814346",
+    "index_valid": true
+  }
+}

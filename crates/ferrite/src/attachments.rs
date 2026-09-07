@@ -82,12 +82,14 @@ impl RenderOnce for Attachments {
         });
         let stock = &cx.global::<Appearance>().0;
         let tokens = stock.semantic_tokens();
+        let composer_edge = gpui::rgba(crate::theme::COMPOSER_EDGE);
         let cards = AttachmentGroup::new(self.id)
             .when(self.island.is_some(), |group| {
                 group.w_auto().max_w_full().gap_1p5().py_0()
             })
             .font_family(stock.font_family.clone())
             .children(self.files.into_iter().enumerate().map(|(index, path)| {
+                let island = self.island.is_some();
                 let name = path
                     .file_name()
                     .unwrap_or_default()
@@ -113,7 +115,7 @@ impl RenderOnce for Attachments {
                     } else {
                         tokens.radius.md
                     });
-                Attachment::new()
+                let card = Attachment::new()
                     .id(("attachment", index))
                     .when(self.island.is_some(), |attachment| {
                         attachment.xsmall().min_w_0().w_32()
@@ -161,11 +163,17 @@ impl RenderOnce for Attachments {
                                     .text_color(tokens.colors.muted_foreground),
                             ),
                     )
-                    .when(image, |attachment| {
-                        attachment.on_click(move |_, window, cx| {
-                            cx.stop_propagation();
+                    .on_click(move |_, window, cx| {
+                        cx.stop_propagation();
+                        if image {
                             card_host.open(preview.clone(), title.clone(), window, cx);
-                        })
+                        } else {
+                            crate::file_links::FileLink {
+                                path: preview.clone(),
+                                location: None,
+                            }
+                            .open(window, cx);
+                        }
                     })
                     .when_some(self.on_remove.clone(), |attachment, remove| {
                         attachment.actions(
@@ -183,7 +191,24 @@ impl RenderOnce for Attachments {
                                     }),
                             ),
                         )
-                    })
+                    });
+                // The kit's own hover tints the card with `muted`, which is
+                // the island's ground here, so a hovered card dissolves into
+                // it. A ring outside the card is immune to that tint and
+                // answers for every card, clickable or not.
+                if island {
+                    gpui::div()
+                        .flex_none()
+                        .min_w_0()
+                        .rounded(tokens.radius.xl + px(1.))
+                        .border_1()
+                        .border_color(gpui::rgba(crate::theme::TRANSPARENT))
+                        .hover(|style| style.border_color(gpui::rgb(crate::theme::FILL_HOVER)))
+                        .child(card)
+                        .into_any_element()
+                } else {
+                    card.into_any_element()
+                }
             }));
         KitScale {
             child: if let Some(entrance) = entrance {
@@ -191,10 +216,9 @@ impl RenderOnce for Attachments {
                 let radius = Theme::global(cx).radius_2xl();
                 let surface = gpui::div()
                     .bg(background)
-                    .rounded_tl(radius)
-                    .rounded_tr(radius)
-                    .rounded_bl(px(0.))
-                    .rounded_br(px(0.))
+                    .rounded(radius)
+                    .border_1()
+                    .border_color(composer_edge)
                     .p_1p5()
                     .min_w_0()
                     .style()
@@ -212,7 +236,6 @@ impl RenderOnce for Attachments {
                             .relative()
                             .top(px(8. * (1. - entrance)))
                             .opacity(0.6 + 0.4 * entrance)
-                            .child(crate::components::composer_join(radius, background))
                             .child(
                                 GroupBox::new()
                                     .id("attachment-island")
@@ -230,6 +253,142 @@ impl RenderOnce for Attachments {
             rem_size: stock.font_size,
         }
     }
+}
+
+/// The existing Attachment family, reduced to a single transcript-height row.
+/// The native Markdown flow reserves this size and wraps the card atomically.
+pub fn inline_file(
+    file: crate::file_links::FileLink,
+    label: &str,
+    preview: Option<&Preview>,
+    window: &mut Window,
+    cx: &mut App,
+) -> (gpui::Size<gpui::Pixels>, gpui::AnyElement) {
+    let stock = &cx.global::<Appearance>().0;
+    let tokens = stock.semantic_tokens();
+    let name = file
+        .path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let extension = file
+        .path
+        .extension()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_ascii_uppercase();
+    let kind = if extension.is_empty() || extension.len() > 8 {
+        "FILE".to_string()
+    } else {
+        extension
+    };
+    let location = file
+        .location
+        .as_ref()
+        .map(|line| format!(":{line}"))
+        .unwrap_or_default();
+    let title = format!("{name}{location}");
+    let image = gpui::Img::extensions().contains(&kind.to_ascii_lowercase().as_str());
+    let font_size = px(crate::theme::FS_MD);
+    let run = window.text_style().to_run(title.len() + kind.len());
+    let width = window
+        .text_system()
+        .shape_line(format!("{title}{kind}").into(), font_size, &[run], None)
+        .width()
+        + px(46.);
+    let size = gpui::size(width.clamp(px(88.), px(240.)), px(26.));
+    let host = preview.cloned();
+    let name_for_open = name.clone();
+    let tooltip = format!("{label}\n{}", file.path.display());
+    let selector = format!("file-attachment-{}", file.path.display());
+    let accessibility = format!("Open {name}");
+    let thumbnail = file.path.clone();
+    let open = move |_: &gpui::ClickEvent, window: &mut Window, cx: &mut App| {
+        gpui::base::TextSelection::end(window, cx);
+        cx.stop_propagation();
+        if image && file.path.exists() {
+            if let Some(host) = &host {
+                host.open(file.path.clone(), name_for_open.clone(), window, cx);
+                return;
+            }
+        }
+        file.open(window, cx);
+    };
+    let card = Attachment::new()
+        .id("inline-file-open")
+        .xsmall()
+        .axis(Axis::Horizontal)
+        .w_full()
+        .min_w_0()
+        .h(size.height)
+        .py_0()
+        .px(px(4.))
+        .bg(tokens.colors.background)
+        .text_color(tokens.colors.foreground)
+        .border_color(tokens.colors.border)
+        .rounded(tokens.radius.sm)
+        .font_family(crate::theme::FONT_UI)
+        .text_size(font_size)
+        .media(
+            AttachmentMedia::new()
+                .size(px(16.))
+                .rounded(tokens.radius.sm)
+                .bg(tokens.colors.muted)
+                .text_color(tokens.colors.foreground)
+                .map(|media| {
+                    if image {
+                        media.src(thumbnail.clone())
+                    } else {
+                        media.child(Icon::new(IconName::FileText).size(px(13.)))
+                    }
+                }),
+        )
+        .content(
+            AttachmentContent::new()
+                .min_w_0()
+                .title(AttachmentTitle::new(title).text_size(font_size)),
+        )
+        .actions(
+            AttachmentActions::new().child(
+                gpui::div()
+                    .text_size(px(9.))
+                    .text_color(tokens.colors.muted_foreground)
+                    .child(kind),
+            ),
+        );
+    let rem_size = stock.font_size;
+    (
+        size,
+        KitScale {
+            child: gpui::div()
+                .id("inline-file")
+                .debug_selector(move || selector.clone())
+                .relative()
+                .w_full()
+                .h(size.height)
+                .cursor_pointer()
+                .tooltip(move |window, cx| {
+                    gpui::component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)
+                })
+                .child(card)
+                .child(
+                    Button::new("inline-file-action")
+                        .ghost()
+                        .absolute()
+                        .inset_0()
+                        .size_full()
+                        .min_w_0()
+                        .p_0()
+                        .key_context("PromptAttachment")
+                        .accessibility_label(accessibility)
+                        .on_click(open),
+                )
+                .into_any_element(),
+            rem_size,
+        }
+        .into_any_element(),
+    )
 }
 
 /// Concave shoulders turn the kit container's sides into the prompt's top

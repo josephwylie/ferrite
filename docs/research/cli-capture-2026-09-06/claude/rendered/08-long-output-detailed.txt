@@ -1,0 +1,44 @@
+     row 05  alpha   beta    gamma                                                                                      
+     row 06  alpha   beta    gamma                                                                                      
+     row 07  alpha   beta    gamma                                                                                      
+     row 08  alpha   beta    gamma                                                                                      
+     row 09  alpha   beta    gamma                                                                                      
+     row 10  alpha   beta    gamma                                                                                      
+     row 11  alpha   beta    gamma                                                                                      
+     row 12  alpha   beta    gamma                                                                                      
+     row 13  alpha   beta    gamma                                                                                      
+     row 14  alpha   beta    gamma                                                                                      
+     row 15  alpha   beta    gamma                                                                                      
+     row 16  alpha   beta    gamma                                                                                      
+     row 17  alpha   beta    gamma                                                                                      
+     row 18  alpha   beta    gamma                                                                                      
+     row 19  alpha   beta    gamma                                                                                      
+     row 20  alpha   beta    gamma                                                                                      
+     row 21  alpha   beta    gamma                                                                                      
+     row 22  alpha   beta    gamma                                                                                      
+     row 23  alpha   beta    gamma                                                                                      
+     row 24  alpha   beta    gamma                                                                                      
+     row 25  alpha   beta    gamma                                                                                      
+     row 26  alpha   beta    gamma                                                                                      
+     row 27  alpha   beta    gamma                                                                                      
+     row 28  alpha   beta    gamma                                                                                      
+     row 29  alpha   beta    gamma                                                                                      
+     row 30  alpha   beta    gamma                                                                                      
+     row 31  alpha   beta    gamma                                                                                      
+     row 32  alpha   beta    gamma                                                                                      
+     row 33  alpha   beta    gamma                                                                                      
+     row 34  alpha   beta    gamma                                                                                      
+     row 35  alpha   beta    gamma                                                                                      
+     row 36  alpha   beta    gamma                                                                                      
+     row 37  alpha   beta    gamma                                                                                      
+     row 38  alpha   beta    gamma                                                                                      
+     row 39  alpha   beta    gamma                                                                                      
+     row 40  alpha   beta    gamma                                                                                      
+                                                                                                                        
+                                                                                       08:59 PM claude-fable-5-1        
+⏺ Output complete.                                                                                                      
+                                                                                                                        
+✻ Cooked for 5s · done 8:59 pm                                                                                          
+                                                                                                                        
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Showing detailed transcript · ctrl+o to toggle · ↑↓ scroll · v to open in nano · ? for shortcuts              verbose 

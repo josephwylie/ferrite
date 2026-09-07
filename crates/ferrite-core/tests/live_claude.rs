@@ -20,6 +20,7 @@ fn live_config() -> ClaudeConfig {
         cwd: Some(std::env::temp_dir()),
         model: Some("haiku".into()),
         effort: None,
+        prompt_suggestions: false,
         name: None,
         permission_mode: None,
         resume: None,

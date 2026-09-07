@@ -1,0 +1,44 @@
+  ┌───────┬───────┬─────────────────────┐                                                                               
+  │ Name  │ Count │        Note         │                                                                               
+  ├───────┼───────┼─────────────────────┤                                                                               
+  │ Alpha │     2 │ two  spaces         │                                                                               
+  ├───────┼───────┼─────────────────────┤                                                                               
+  │ Beta  │    12 │ a longer table cell │                                                                               
+  └───────┴───────┴─────────────────────┘                                                                               
+                                                                                                                        
+  ---                                                                                                                   
+                                                                                                                        
+  one two                                                                                                               
+  one  two   three    four                                                                                              
+      four leading spaces                                                                                               
+        actual tab character                                                                                            
+  trailing two spaces:                                                                                                  
+                                                                                                                        
+  Unicode: café naïve → ✓ 界 é                                                                                          
+  0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrst
+  uvwxyz                                                                                                                
+                                                                                                                        
+✻ Baked for 10s · done 9:02 pm                                                                                          
+                                                                                                                        
+❯ /model                                                                                                                
+  ⎿  Kept model as Fable 5.1                                                                                            
+                                                                                                                        
+❯ Run only this harmless waiting command once: python3 -c 'import time; print("waiting fixture", flush=True);           
+  time.sleep(20); print("finished fixture", flush=True)'. Do not write files or use external tools. I will test the     
+  queue and interrupt controls while it waits.                                                                          
+                                                                                                                        
+⏺ Running the 20-second waiting command once.                                                                           
+                                                                                                                        
+  Ran 1 shell command                                                                                                   
+  ⎿  Interrupted · What should Claude do instead?                                                                       
+                                                                                                                        
+❯ After this finishes, reply only: queued fixture.                                                                      
+                                                                                                                        
+⏺ queued fixture.                                                                                                       
+                                                                                                                        
+✻ Cogitated for 1s · done 9:05 pm                                                                                       
+                                                                                                      ● high · /effort  
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ run it again with a 5 second sleep                                                                                    
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on · ? for shortcuts                                                                               /rc  

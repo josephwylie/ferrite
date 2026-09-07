@@ -1,0 +1,1086 @@
+   Compiling gpui-base v0.6.0 (/Users/josephwylie/Desktop/Projects/ferrite/.worktrees/ui-rendering-architecture/vendor/gpui-base)
+   Compiling ferrite-core v0.1.0 (/Users/josephwylie/Desktop/Projects/ferrite/.worktrees/ui-rendering-architecture/crates/ferrite-core)
+   Compiling gpui-component v0.6.0
+   Compiling gpui-kit v0.6.0
+   Compiling ferrite v0.1.0 (/Users/josephwylie/Desktop/Projects/ferrite/.worktrees/ui-rendering-architecture/crates/ferrite)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 28.27s
+warning: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/main.rs (/Users/josephwylie/.cache/ferrite-ui-architecture-target/debug/deps/ferrite-4de8e60c17dd9179)
+
+running 282 tests
+test cockpit::tests::a_crowded_board_drags_every_seam_and_every_title ... ok
+test cockpit::tests::a_draft_close_button_discards_it_and_restores_the_original_thread ... ok
+test cockpit::tests::a_draft_inherits_the_focused_provider_model_and_only_announced_models ... ok
+test cockpit::tests::a_draft_pane_shows_the_usage_meter_and_its_card ... ok
+test cockpit::tests::a_drag_in_a_scrolled_back_transcript_selects_the_rows_under_the_pointer ... ok
+test cockpit::tests::a_drag_selects_characters_and_the_copy_key_takes_exactly_them ... ok
+test cockpit::tests::a_failed_bootstrap_keeps_the_draft_and_the_prompt ... ok
+test cockpit::tests::a_finish_on_the_focused_pane_is_read_at_once_and_never_toasts ... ok
+test cockpit::tests::a_finished_thread_rings_the_bell_and_pulses_until_focused ... ok
+test cockpit::tests::a_foreign_file_pick_surfaces_the_refusal_in_the_transcript ... ok
+test cockpit::tests::a_fresh_thread_lists_the_local_import_entry_atop_the_slash_menu ... ok
+test cockpit::tests::a_fullscreened_thread_parked_externally_falls_back_to_the_grid ... ok
+test cockpit::tests::a_hundred_member_group_remains_reachable_through_nav_scroll ... ok
+test cockpit::tests::a_launch_that_opens_nothing_still_lists_the_parked_threads ... ok
+test cockpit::tests::a_new_thread_binds_to_the_main_checkout ... ok
+test cockpit::tests::a_pending_decision_changes_nothing_in_the_nav ... ok
+test cockpit::tests::a_pending_decision_keeps_the_composer_live_and_an_empty_line_answers ... ok
+test cockpit::tests::a_plain_transcript_click_does_not_move_the_viewport ... ok
+test cockpit::tests::a_pr_without_checks_offers_no_ci_control ... ok
+test cockpit::tests::a_press_on_the_transcript_dismisses_the_open_menu ... ok
+test cockpit::tests::a_press_on_the_transcript_dismisses_the_open_picker ... ok
+test cockpit::tests::a_question_decision_is_answered_by_its_form ... ok
+test cockpit::tests::a_reopened_thread_opens_at_the_bottom_and_keeps_following_the_tail ... ok
+test cockpit::tests::a_right_click_summons_the_menu_and_delete_takes_two_presses ... ok
+test cockpit::tests::a_second_new_thread_reuses_the_standing_draft ... ok
+test cockpit::tests::a_stale_draft_workspace_neither_completes_nor_sends_from_main ... ok
+test cockpit::tests::a_standing_draft_is_re_aimed_at_the_new_group ... ok
+test cockpit::tests::a_sweep_across_a_tool_row_copies_its_text_and_never_its_chrome ... ok
+test cockpit::tests::a_thread_can_be_opened_in_its_own_worktree ... ok
+test cockpit::tests::a_thread_without_a_binding_opens_no_file_menu ... ok
+test cockpit::tests::a_titlers_answer_names_only_an_untitled_thread ... ok
+test cockpit::tests::a_typed_line_answers_a_question_in_the_operators_words ... ok
+test cockpit::tests::a_wall_flagged_decision_is_answered_without_focusing_its_pane ... ok
+test cockpit::tests::add_thread_button_opens_a_loose_draft_even_from_a_group ... ok
+test cockpit::tests::always_does_nothing_at_the_wall_when_nothing_was_offered ... ok
+test cockpit::tests::an_evicted_native_selection_clears_instead_of_sliding_onto_later_blocks ... ok
+test cockpit::tests::announced_models_ride_the_picker_and_a_pick_reaims_the_model ... ok
+test cockpit::tests::backspace_on_an_empty_line_unqueues_the_held_prompt ... ok
+test cockpit::tests::clicking_a_keycap_runs_its_own_decide_verb ... ok
+test cockpit::tests::clicking_a_pane_focuses_it_and_the_keyboard_follows ... ok
+test cockpit::tests::clicking_a_parked_nav_row_revives_that_thread ... ok
+test cockpit::tests::clicking_a_running_nav_row_focuses_its_pane_and_reaims_fullscreen ... ok
+test cockpit::tests::clicking_the_footer_chip_opens_the_provider_picker ... ok
+test cockpit::tests::clicking_the_tool_chevron_replaces_the_compact_line_with_selectable_output ... ok
+test cockpit::tests::closing_a_pane_parks_the_thread_rather_than_losing_it ... ok
+test cockpit::tests::closing_the_fullscreened_thread_fullscreens_the_survivor ... ok
+test cockpit::tests::cmd_b_collapses_the_nav_and_the_cells_grow_a_level ... ok
+test cockpit::tests::cmd_f_fullscreens_the_focused_pane_and_toggles_back ... ok
+test cockpit::tests::cmd_f_reaches_a_draft_from_a_dense_grid ... ok
+test cockpit::tests::cmd_t_opens_a_new_thread_and_cmd_n_still_does ... ok
+test cockpit::tests::command_rows_filter_and_highlight_by_fuzzy_match ... ok
+test cockpit::tests::composer_usage_lines_show_context_and_subscription_windows ... ok
+test cockpit::tests::consecutive_mixed_tools_share_one_disclosure_and_keep_failures_visible ... ok
+test cockpit::tests::delayed_bootstrap_preserves_edited_composer_focus_and_another_drafts_picker ... ok
+test cockpit::tests::disabled_placeholder_suggestions_are_hidden_and_tab_does_not_accept_them ... ok
+test cockpit::tests::discovery_updates_an_open_draft_picker_without_starting_a_session ... ok
+test cockpit::tests::double_click_selects_the_word_and_triple_click_the_line ... ok
+test cockpit::tests::draft_import_replaces_the_draft_and_focuses_the_imported_thread ... ok
+test cockpit::tests::draft_mentions_are_scoped_to_the_selected_project ... ok
+test cockpit::tests::draft_mentions_follow_the_selected_workspace ... ok
+test cockpit::tests::drag_from_a_pair_tracks_the_origin_and_focuses_the_survivor ... ok
+test cockpit::tests::dragging_filtered_members_uses_the_full_group_order ... ok
+test cockpit::tests::enter_adopts_the_picked_session_and_the_blank_thread_goes ... ok
+test cockpit::tests::escape_dismisses_the_menu_keeps_the_text_and_typing_reopens ... ok
+test cockpit::tests::ferrites_effort_row_replaces_the_providers_and_a_typed_level_is_honoured ... ok
+test cockpit::tests::focused_placeholder_starts_immediately_after_the_caret ... ok
+test cockpit::tests::fullscreen_forces_transcript_level_even_in_a_tiny_window ... ok
+test cockpit::tests::group_scope_is_one_view_and_cmd_w_makes_the_focused_thread_live_and_solo ... ok
+test cockpit::tests::groups_and_solo_threads_share_one_recency_order ... ok
+test cockpit::tests::history_arrows_only_replace_the_composer_and_restore_the_exact_draft ... ok
+test cockpit::tests::inline_title_rename_disarms_the_thread_composer_history_context_and_hint ... ok
+test cockpit::tests::keyboard_cycles_tool_controls_and_enter_toggles_without_submitting ... ok
+test cockpit::tests::launch_provider_seeds_the_first_empty_store_draft ... ok
+test cockpit::tests::mention_rows_split_name_from_directory ... ok
+test cockpit::tests::menu_and_decision_states_disarm_history_before_their_arrows_dispatch ... ok
+test cockpit::tests::multi_project_groups_keep_bindings_and_filter_only_navigation ... ok
+test cockpit::tests::multiline_tool_input_is_compact_and_disclosable_while_running ... ok
+test cockpit::tests::native_file_drops_follow_the_pointer_across_panes_and_groups ... ok
+test cockpit::tests::native_progress_stays_visible_while_scrolling_and_metadata_refreshes_the_wall ... ok
+test cockpit::tests::new_thread_shortcut_from_a_group_adds_the_thread_to_that_group ... ok
+test cockpit::tests::notifications_keep_focus_until_escape_dismisses_the_bell ... ok
+test cockpit::tests::notifications_scroll_to_and_open_the_oldest_row ... ok
+test cockpit::tests::one_key_jumps_to_the_pane_that_needs_answering ... ok
+test cockpit::tests::one_keystroke_answers_the_card ... ok
+test cockpit::tests::opening_a_notice_lands_on_its_pane_and_reads_it ... ok
+test cockpit::tests::paging_while_fullscreen_moves_the_fullscreen_to_the_next_thread ... ok
+test cockpit::tests::parking_the_last_fullscreened_thread_falls_back_to_the_grid ... ok
+test cockpit::tests::picking_a_mention_on_a_codex_thread_stages_the_pill ... ok
+test cockpit::tests::picking_import_opens_the_file_picker_and_sends_the_provider_nothing ... ok
+test cockpit::tests::pointer_drag_joins_then_reorders_to_the_after_last_target ... ok
+test cockpit::tests::pointer_opens_a_group_and_renames_parked_thread_and_group_titles ... ok
+test cockpit::tests::presses_on_chrome_select_nothing_and_a_drag_out_the_bottom_clamps ... ok
+test cockpit::tests::reasoning_discloses_body_without_repeating_its_heading ... ok
+test cockpit::tests::recalling_a_slash_prompt_does_not_open_its_menu_until_a_real_edit ... ok
+test cockpit::tests::refused_draft_import_preserves_the_draft_and_command ... ok
+test cockpit::tests::render_performance::dragging_across_virtualized_thinking_rows_copies_the_logical_range ... ok
+test cockpit::tests::render_performance::native_transcript_rows_stay_bounded_by_a_fixed_viewport_as_history_grows ... viewport native rows: history=30 mounted=6; history=200 mounted=6
+ok
+test cockpit::tests::render_performance::partial_thinking_selection_survives_a_wrapping_resize ... ok
+test cockpit::tests::render_performance::replacing_an_offscreen_selected_thinking_row_clears_only_that_selection ... ok
+test cockpit::tests::render_performance::retained_transcript_relative_file_links_use_the_thread_workspace_and_copy_text ... ok
+test cockpit::tests::render_performance::streaming_one_pane_does_not_render_sibling_native_transcripts ... ok
+test cockpit::tests::render_performance::typing_in_a_focused_composer_does_not_render_sibling_native_transcripts ... ok
+test cockpit::tests::reopening_again_walks_the_park_order_backwards ... ok
+test cockpit::tests::reopening_brings_a_parked_thread_back_with_its_history ... ok
+test cockpit::tests::reopening_falls_back_to_creation_order_for_threads_parked_before_launch ... ok
+test cockpit::tests::reopening_revives_the_thread_parked_most_recently ... ok
+test cockpit::tests::reopening_the_picker_and_pressing_enter_keeps_the_standing_choice ... ok
+test cockpit::tests::resizing_the_window_cannot_leave_text_selection_dragging ... ok
+test cockpit::tests::resizing_the_window_changes_every_panes_level ... ok
+test cockpit::tests::settings_open_on_cmd_comma_and_every_change_saves ... ok
+test cockpit::tests::short_reasoning_has_no_empty_disclosure ... ok
+test cockpit::tests::solo_group_draft_and_close_follow_the_persisted_view_state_machine ... ok
+test cockpit::tests::streaming_output_preserves_native_selection_scroll_and_command_identity ... ok
+test cockpit::tests::subagents::a_status_reorder_between_pointer_down_and_up_cannot_select_the_new_occupant ... ok
+test cockpit::tests::subagents::an_open_overflow_menu_resolves_a_subject_alias_before_selecting_its_request ... ok
+test cockpit::tests::subagents::attention_and_global_navigation_visit_every_distinct_pending_subject_then_wrap ... ok
+test cockpit::tests::subagents::child_scroll_disclosure_and_native_text_entity_survive_switching ... ok
+test cockpit::tests::subagents::child_tabs_switch_transcripts_preserve_main_draft_and_survive_reorder ... ok
+test cockpit::tests::subagents::core_eviction_releases_a_hidden_retained_transcript_entity ... ok
+test cockpit::tests::subagents::hidden_child_requests_jump_and_reply_only_to_their_captured_handle ... ok
+test cockpit::tests::subagents::keyboard_focus_and_a_held_space_press_follow_the_agent_across_status_reorder ... ok
+test cockpit::tests::subagents::native_child_progress_uses_the_shared_pinned_row_and_selected_wall_cache ... ok
+test cockpit::tests::subagents::native_selection_clears_on_subject_navigation_without_leaking_into_another_agent ... ok
+test cockpit::tests::subagents::native_tab_overflow_follows_measured_header_width_and_keeps_discovery_order ... ok
+test cockpit::tests::subagents::native_tab_press_cannot_jump_to_an_overflow_slot_after_resize ... ok
+test cockpit::tests::subagents::next_child_request_leaves_another_group_and_opens_its_root ... ok
+test cockpit::tests::subagents::unattributed_question_keeps_native_input_focus_across_repaint_and_sends_exact_answer ... ok
+test cockpit::tests::tab_accepts_the_predicted_follow_up_without_sending_it ... ok
+test cockpit::tests::the_age_hangs_under_the_provider_mark ... ok
+test cockpit::tests::the_age_label_rounds_to_the_operator_scale ... ok
+test cockpit::tests::the_announced_permission_mode_reaches_the_meta_row_state ... ok
+test cockpit::tests::the_answer_keys_are_letters_when_nothing_is_blocked ... ok
+test cockpit::tests::the_answer_keys_stay_letters_while_the_line_holds_text ... ok
+test cockpit::tests::the_ci_mark_opens_the_checks_it_counts ... ok
+test cockpit::tests::the_effort_chip_starts_the_thread_on_its_pick ... ok
+test cockpit::tests::the_effort_picker_lists_the_models_ladder_and_a_pick_reaims_it ... ok
+test cockpit::tests::the_first_prompt_fixes_the_provider_but_the_model_picker_stays_open ... ok
+test cockpit::tests::the_first_send_bootstraps_the_thread_and_drops_the_band ... ok
+test cockpit::tests::the_grid_follows_the_groups_own_membership ... ok
+test cockpit::tests::the_group_board_resizes_by_its_seam_and_reorders_by_drop ... ok
+test cockpit::tests::the_locked_pane_caches_the_actual_checkout_branch ... ok
+test cockpit::tests::the_nav_lists_every_thread_most_recently_used_first ... ok
+test cockpit::tests::the_slash_and_mention_triggers_parse_the_line ... ok
+test cockpit::tests::the_slash_provider_row_opens_the_picker_and_picks_codex ... ok
+test cockpit::tests::the_usage_meter_can_be_drawn_as_rings ... ok
+test cockpit::tests::the_workspace_chip_scopes_to_the_chosen_project ... ok
+test cockpit::tests::titlebar_add_from_a_loose_thread_scopes_the_draft_to_a_new_group ... ok
+test cockpit::tests::transcript_details_wrap_to_the_pane ... ok
+test cockpit::tests::transcript_spacing_separates_prompts_tools_and_answers ... ok
+test cockpit::tests::typing_at_completes_files_from_the_workspace_binding ... ok
+test cockpit::tests::typing_slash_opens_the_command_menu_and_enter_inserts_the_pick ... ok
+test cockpit::tests::wheel_scroll_detaches_from_the_tail_and_scrolling_back_reattaches ... ok
+test cockpit::tests::with_no_session_files_found_the_pick_says_so ... ok
+test composer::tests::overlapping_pill_candidates_keep_the_first ... ok
+test composer::tests::paste_attaches_clipboard_files_without_inserting_their_paths ... ok
+test composer::tests::paste_keeps_the_existing_text_behavior ... ok
+test composer::tests::pill_ranges_cover_whole_tokens_only ... ok
+test composer::tests::runs_split_at_pill_and_marked_boundaries ... ok
+test composer::tests::selected_runs_take_the_strong_ink ... ok
+test composer::tests::shift_enter_breaks_the_line_and_enter_still_submits ... ok
+test composer::tests::the_box_grows_with_its_text_and_scrolls_past_eight_rows ... ok
+test composer::tests::the_caret_is_solid_on_focus_then_blinks_and_typing_resets_it ... ok
+test composer::tests::the_pointer_places_and_selects_across_wrapped_rows ... ok
+test composer::tests::up_walks_rows_before_it_recalls_history ... ok
+test demo::tests::a_cancelled_playback_ends_the_turn_interrupted ... ok
+test demo::tests::a_revived_demo_thread_announces_its_mode_and_replays_nothing ... ok
+test demo::tests::answering_the_demo_decision_plays_the_rest_of_the_turn ... ok
+test demo::tests::replaying_the_demo_script_leaves_a_paid_turn_and_a_thread_on_the_operator ... ok
+test demo::tests::the_demo_script_opens_a_session_and_stops_on_a_decision ... ok
+test demo::tests::the_demo_seeds_deal_the_wall_census ... ok
+test facts::tests::a_future_stamp_reads_now ... ok
+test facts::tests::the_shorthand_climbs_one_unit_at_a_time ... ok
+test file_links::tests::paths_are_encoded_and_source_locations_do_not_reach_the_os ... ok
+test file_links::tests::relative_paths_use_the_threads_checkout ... ok
+test fuzzy::tests::a_subsequence_matches_and_a_non_subsequence_does_not ... ok
+test fuzzy::tests::an_empty_needle_matches_everything_with_no_highlight ... ok
+test fuzzy::tests::contiguous_and_early_matches_outscore_scattered_ones ... ok
+test fuzzy::tests::matching_is_case_insensitive ... ok
+test fuzzy::tests::multibyte_candidates_neither_panic_nor_misalign ... ok
+test fuzzy::tests::the_ranges_cover_exactly_the_matched_bytes_merged_where_adjacent ... ok
+test icons::tests::an_unknown_key_is_absent_rather_than_an_error ... ok
+test icons::tests::every_icon_key_loads_an_svg ... ok
+test icons::tests::ferrite_snap_matches_the_supplied_animation_timeline ... ok
+test icons::tests::line_icons_bake_the_stroke_class_and_logomarks_do_not ... ok
+test keymap::tests::both_platforms_bind_the_same_actions_in_the_same_contexts ... ok
+test keymap::tests::close_remains_and_the_invented_group_shortcuts_are_absent ... ok
+test keymap::tests::every_keystroke_in_the_table_parses ... ok
+test keymap::tests::primary_shortcuts_are_cmd_on_mac_and_ctrl_on_windows ... ok
+test keymap::tests::prompt_history_arrows_are_scoped_and_menu_arrows_stay_later ... ok
+test keymap::tests::row_arrows_sit_between_history_and_the_menu ... ok
+test keymap::tests::tab_cycles_the_band_on_both_platforms ... ok
+test keymap::tests::the_composer_menu_keys_are_scoped_to_its_context_on_both_platforms ... ok
+test keymap::tests::windows_never_binds_the_cmd_modifier ... ok
+test keymap::tests::word_editing_follows_each_platforms_text_field_grammar ... ok
+test line::tests::a_hard_newline_is_held_and_sent_as_typed ... ok
+test line::tests::a_line_can_be_handed_back_with_the_cursor_at_the_end ... ok
+test line::tests::a_word_is_selected_under_a_double_click ... ok
+test line::tests::an_ime_composition_replaces_its_marked_range_until_it_is_committed ... ok
+test line::tests::backspace_removes_the_character_before_the_cursor ... ok
+test line::tests::delete_removes_the_character_after_the_cursor ... ok
+test line::tests::delete_to_start_and_end_clear_either_side_of_the_caret ... ok
+test line::tests::delete_word_left_removes_one_word_at_a_time ... ok
+test line::tests::delete_word_right_mirrors_it ... ok
+test line::tests::home_and_end_jump_to_the_ends_of_the_line ... ok
+test line::tests::shift_motions_extend_a_selection_from_the_anchor ... ok
+test line::tests::take_hands_over_the_line_and_clears_it ... ok
+test line::tests::the_cursor_steps_over_whole_characters_not_bytes ... ok
+test line::tests::typing_inserts_at_the_cursor ... ok
+test line::tests::undo_takes_back_a_word_of_typing_and_redo_returns_it ... ok
+test line::tests::utf16_offsets_round_trip_through_astral_characters ... ok
+test line::tests::word_motions_step_the_caret_by_words ... ok
+test menu::tests::a_live_row_is_a_button_and_a_disabled_one_is_not ... ok
+test menu::tests::an_armed_destructive_row_wears_the_wash ... ok
+test menu::tests::the_context_menu_blocks_hover_on_the_card_beneath_it ... ok
+test menu::tests::the_floating_shell_masks_the_cursor_beneath_it ... ok
+test nav::tests::a_working_row_is_the_same_box_as_a_quiet_one ... ok
+test nav::tests::an_unresolved_row_keeps_its_height ... ok
+test nav::tests::every_row_and_rail_item_advertises_its_grab ... ok
+test nav::tests::only_the_current_row_carries_the_selected_fill ... ok
+test nav::tests::subagent_count_is_hidden_at_zero_and_uses_natural_copy ... ok
+test nav::tests::the_column_has_no_edge ... ok
+test notifications::tests::a_rows_detail_names_the_outcome_and_the_project ... ok
+test pane::tests::a_blocked_thread_paints_its_decision_card ... ok
+test pane::tests::a_fenced_block_paints_every_syntax_class ... ok
+test pane::tests::a_hunk_card_draws_a_bounded_number_of_rows_and_says_what_it_left ... ok
+test pane::tests::a_hunk_row_colours_its_code_by_which_way_it_went ... ok
+test pane::tests::a_tool_row_reads_its_outcome_from_the_verb_and_the_result ... ok
+test pane::tests::durations_read_at_the_comps_grammar ... ok
+test pane::tests::every_block_kind_paints ... ok
+test pane::tests::every_block_kind_registers_its_selectable_text ... ok
+test pane::tests::every_decision_surface_shares_one_subject_derivation ... ok
+test pane::tests::footer_advertises_history_only_when_the_context_is_armed ... ok
+test pane::tests::footer_advertises_the_accept_key_while_a_prediction_shows ... ok
+test pane::tests::import_is_offered_only_while_the_thread_has_no_conversation ... ok
+test pane::tests::inline_code_and_links_carry_their_own_ink ... ok
+test pane::tests::progress_metadata_sits_below_reasoning_without_a_duplicate_command ... ok
+test pane::tests::progress_token_counts_stay_compact ... ok
+test pane::tests::rate_limit_resets_read_as_compact_countdowns ... ok
+test pane::tests::rows_advertise_their_click_with_the_cursor_and_inert_rows_do_not ... ok
+test pane::tests::the_chrome_names_the_workspace_a_thread_works_in ... ok
+test pane::tests::the_mode_chip_labels_accept_edits_the_prototypes_way_and_the_rest_verbatim ... ok
+test pane::tests::the_model_label_strips_the_provider_the_logomark_already_names ... ok
+test pane::tests::the_placeholder_says_what_the_pane_is_waiting_on ... ok
+test pane::tests::the_todo_meter_caps_its_glyph_run ... ok
+test pane::tests::the_wall_card_folds_progress_result_and_context_lines ... ok
+test pane::tests::the_wall_reads_turn_completion_without_a_cost ... ok
+test pane::tests::the_wall_state_matrix_reads_exactly_as_the_glance_spec ... ok
+test pointer::tests::each_role_pairs_its_token_with_the_pointer ... ok
+test prefs::tests::the_selected_chip_carries_the_fill_and_the_rest_the_raised_ground ... ok
+test rich::file_link_tests::custom_inline_link_preserves_source_selection ... ok
+test rich::file_link_tests::drag_selection_across_file_card_copies_the_original_sentence ... ok
+test rich::file_link_tests::file_cards_wrap_inline_and_preserve_markdown_and_copying ... ok
+test rich::file_link_tests::image_file_card_uses_the_existing_pane_preview ... ok
+test rich::file_link_tests::keyboard_can_open_a_file_card ... ok
+test rich::file_link_tests::local_file_click_opens_a_file_url_without_line_suffix ... ok
+test rich::file_link_tests::missing_file_does_not_reach_the_os ... ok
+test rich::spacing_tests::markdown_spacing_between_all_block_kinds ... ok
+test rich::spacing_tests::markdown_spacing_nested_lists_and_zero_gap ... ok
+test rich::spacing_tests::markdown_spacing_preserves_hard_breaks_and_ignores_definitions ... ok
+test scrollbar::tests::thumb_hover_bounds_stay_inside_click_and_cursor_gutter ... ok
+test scrollbar::tests::thumb_padding_drags_without_jumping ... ok
+test session::tests::default_effort_reads_current_settings_for_the_ready_sessions_provider ... ok
+test session::tests::the_rss_sampler_reads_this_very_process ... ok
+test session::tests::the_settings_effort_is_the_default_when_the_thread_chose_none ... ok
+test session::tests::the_watchdog_never_waits_for_process_measurement ... ok
+test shell::unix::tests::a_real_login_shell_reports_its_path ... ok
+test shell::unix::tests::no_marker_means_nothing_is_adopted ... ok
+test shell::unix::tests::the_listing_after_the_marker_is_adopted_and_the_shells_own_lines_are_not ... ok
+test tests::a_dock_launch_stands_where_the_newest_thread_works ... ok
+test tests::an_unimportable_file_is_refused_and_adopted_by_nobody ... ok
+test tests::every_table_entry_builds_for_both_platforms ... ok
+test tests::the_default_thread_is_the_one_the_operator_used_most_recently ... ok
+test tests::typing_does_not_hide_the_mouse_cursor ... ok
+test titlebar::tests::a_caption_button_is_the_platform_width_and_square ... ok
+test titlebar::tests::a_restored_window_keeps_its_top_resize_edge ... ok
+test titlebar::tests::the_strip_is_an_overlay_of_the_band_the_board_reserves ... ok
+test transcript::rows::tests::adjacent_tools_merge_into_the_leaders_stable_activity_row ... ok
+test transcript::rows::tests::append_keeps_prior_row_rcs_and_splices_the_tail ... ok
+test transcript::rows::tests::blank_thinking_is_not_a_row ... ok
+test transcript::rows::tests::contiguous_markdown_blocks_share_one_native_answer_row ... ok
+test transcript::rows::tests::front_eviction_deletes_the_head_before_appending_the_tail ... ok
+test transcript::rows::tests::prepend_preserves_the_existing_suffix_rows ... ok
+
+test result: ok. 282 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 25.81s
+
+     Running unittests src/lib.rs (/Users/josephwylie/.cache/ferrite-ui-architecture-target/debug/deps/ferrite_core-d0b7e656c3497bbd)
+
+running 470 tests
+test cockpit::lifecycle_tests::delayed_draft_startup_and_first_send_failures_restore_the_original_draft ... ok
+test cockpit::lifecycle_tests::delayed_draft_success_delivers_once_and_preserves_unrelated_roster_actions ... ok
+test cockpit::lifecycle_tests::delayed_replacement_failure_preserves_header_and_the_original_session ... ok
+test cockpit::lifecycle_tests::discard_and_park_before_ready_cannot_deliver_even_without_another_pump ... ok
+test cockpit::lifecycle_tests::effort_waits_for_handover_then_tunes_in_place_without_consuming_context ... ok
+test cockpit::lifecycle_tests::effort_waits_for_startup_without_losing_the_pending_prompt ... ok
+test cockpit::lifecycle_tests::failed_handover_rewrite_leaves_no_durable_handover_and_keeps_serving ... ok
+test cockpit::lifecycle_tests::grouped_draft_revalidates_membership_before_delivering ... ok
+test cockpit::lifecycle_tests::handover_commit_and_delivery_wait_for_readiness_and_failed_send_keeps_carry ... ok
+test cockpit::queue::tests::cancellation_race_never_restores_started_input_and_snapshot_owns_pending ... ok
+test cockpit::tests::a_code_fence_comes_back_highlighted_without_the_app_routing_anything ... ok
+test cockpit::tests::a_codex_thread_requests_a_codex_prediction ... ok
+test cockpit::tests::a_commands_event_becomes_the_thread_menu_and_never_the_history ... ok
+test cockpit::tests::a_decision_is_pending_against_the_thread_that_raised_it ... ok
+test cockpit::tests::a_draft_beside_a_loose_thread_creates_and_opens_a_group_on_send ... ok
+test cockpit::tests::a_drop_out_of_a_pair_tracks_its_origin_and_lands_on_the_survivor ... ok
+test cockpit::tests::a_failed_first_send_leaves_no_thread_or_log ... ok
+test cockpit::tests::a_failed_provider_spawn_leaves_the_old_session_serving ... ok
+test cockpit::tests::a_failed_spawn_at_bootstrap_leaves_no_thread_behind ... ok
+test cockpit::tests::a_failed_thread_create_removes_the_reserved_worktree ... ok
+test cockpit::tests::a_finished_turn_asks_for_one_follow_up_prediction ... ok
+test cockpit::tests::a_leaking_session_is_restarted_where_the_operator_can_see_it ... ok
+test cockpit::tests::a_models_event_becomes_the_thread_menu_and_never_the_history ... ok
+test cockpit::tests::a_native_prompt_is_retrieved_only_after_cancel_receipt ... ok
+test cockpit::tests::a_new_cockpit_recovers_prompt_history_from_the_store ... ok
+test cockpit::tests::a_new_provider_menu_replaces_the_learned_menu_in_full ... ok
+test cockpit::tests::a_new_thread_started_from_a_group_remains_outside_the_group ... ok
+test cockpit::tests::a_new_turn_drops_the_previous_prediction ... ok
+test cockpit::tests::a_park_then_revive_keeps_the_chosen_provider_and_model ... ok
+test cockpit::tests::a_parked_switch_waits_for_revive_and_a_revived_switch_still_carries ... ok
+test cockpit::tests::a_parked_thread_revives_with_its_history_and_says_so ... ok
+test cockpit::tests::a_provider_switch_after_the_first_prompt_hands_the_conversation_over ... ok
+test cockpit::tests::a_refused_effort_keeps_the_choice_and_pending_handover ... ok
+test cockpit::tests::a_relaunch_restores_the_binding_and_spawns_where_it_points ... ok
+test cockpit::tests::a_restart_finds_the_threads_it_left_behind ... ok
+test cockpit::tests::a_revived_thread_keeps_its_root_and_prefaces_its_first_prompt_again ... ok
+test cockpit::tests::a_send_after_a_failed_restart_attempts_one_spawn_and_reports_the_failure ... ok
+test cockpit::tests::a_send_with_a_vanished_root_is_refused_naming_the_path_and_the_remedy ... ok
+test cockpit::tests::a_sent_prompt_reaches_the_provider_the_transcript_and_the_log ... ok
+test cockpit::tests::a_session_file_imports_through_the_cockpits_own_door ... ok
+test cockpit::tests::a_stale_prediction_is_dropped ... ok
+test cockpit::tests::a_sweep_respawned_session_prefaces_its_next_prompt ... ok
+test cockpit::tests::a_thread_is_named_by_its_title_then_its_first_prompt_then_its_number ... ok
+test cockpit::tests::a_thread_s_title_reaches_its_session_and_every_respawn ... ok
+test cockpit::tests::a_turn_ending_with_nothing_held_sends_nothing ... ok
+test cockpit::tests::a_turn_that_ends_takes_its_unanswered_decision_with_it ... ok
+test cockpit::tests::adopting_a_directory_that_is_not_a_worktree_refuses_and_leaves_no_thread ... ok
+test cockpit::tests::answering_a_decision_that_is_no_longer_pending_is_refused_not_forwarded ... ok
+test cockpit::tests::answering_through_the_cockpit_clears_the_card_and_records_who_did_it ... ok
+test cockpit::tests::bootstrap_delivery_is_immediately_recallable ... ok
+test cockpit::tests::changing_effort_after_handover_keeps_the_session_and_delivers_context ... ok
+test cockpit::tests::changing_the_root_ends_the_session_and_the_next_prompt_respawns_with_the_preface ... ok
+test cockpit::tests::choosing_a_provider_pre_lock_respawns_eagerly_and_the_first_send_uses_it ... ok
+test cockpit::tests::claude_uses_native_suggestions_without_a_second_model_request ... ok
+test cockpit::tests::closing_in_solo_parks_and_closing_in_a_group_leaves_onto_the_ordinal_survivor ... ok
+test cockpit::tests::deleting_a_grouped_thread_removes_membership_before_the_log ... ok
+test cockpit::tests::deleting_a_main_bound_thread_leaves_the_checkout_alone ... ok
+test cockpit::tests::deleting_a_thread_preserves_a_shared_registered_worktree ... ok
+test cockpit::tests::disabled_suggestions_neither_run_nor_land ... ok
+test cockpit::tests::disabling_suggestions_clears_an_existing_prediction ... ok
+test cockpit::tests::each_thread_folds_only_its_own_events ... ok
+test cockpit::tests::effort_changes_in_place_and_persists ... ok
+test cockpit::tests::entering_a_group_revives_parked_members_and_keeps_focus_on_a_member ... ok
+test cockpit::tests::failed_delete_restores_the_exact_group_snapshot ... ok
+test cockpit::tests::fullscreen_follows_focus_and_survives_a_close_but_not_an_external_park ... ok
+test cockpit::tests::grouped_bootstrap_persists_membership_before_sending ... ok
+test cockpit::tests::jumping_to_the_next_decision_wraps_around_the_cockpit ... ok
+test cockpit::tests::learned_provider_models_survive_parking_and_a_restart ... ok
+test cockpit::tests::native_pending_prompts_survive_turn_end_without_client_dispatch ... ok
+test cockpit::tests::native_queue_history_records_consumption_once ... ok
+test cockpit::tests::older_turn_predictions_cannot_replace_the_latest_or_survive_disabling ... ok
+test cockpit::tests::open_threads_are_the_roster_and_solo_shows_the_focused_one ... ok
+test cockpit::tests::opening_on_the_main_checkout_spawns_the_session_there ... ok
+test cockpit::tests::opening_registers_the_project_and_places_the_worktree_centrally ... ok
+test cockpit::tests::opening_with_a_worktree_choice_creates_it_and_spawns_the_session_inside ... ok
+test cockpit::tests::opening_with_an_existing_worktree_adopts_the_standing_tree ... ok
+test cockpit::tests::prompt_history_is_per_thread_and_rebuilt_from_the_log ... ok
+test cockpit::tests::re_picking_the_current_provider_and_model_is_a_no_op ... ok
+test cockpit::tests::reopen_walks_this_launches_park_order_then_creation_order ... ok
+test cockpit::tests::replacing_a_claude_session_does_not_resubmit_native_pending_work ... ok
+test cockpit::tests::revive_group_is_ordered_and_rolls_back_when_a_later_member_fails ... ok
+test cockpit::tests::the_carry_digest_keeps_the_newest_pairs_within_budget ... ok
+test cockpit::tests::the_carry_rides_between_the_preface_and_the_prompt ... ok
+test cockpit::tests::the_first_prompt_of_a_session_carries_the_hidden_context_and_the_second_does_not ... ok
+test cockpit::tests::the_import_door_passes_a_refusal_through_unchanged ... ok
+test cockpit::tests::the_model_can_change_after_the_first_prompt_by_resuming ... ok
+test cockpit::tests::the_next_decision_lands_in_the_view_that_shows_the_waiting_thread ... ok
+test cockpit::tests::thread_title_is_durable_and_blank_rename_is_refused ... ok
+test cockpit::tests::tool_calls_are_clocked_at_ingestion ... ok
+test cockpit::tests::two_threads_on_one_repo_work_in_isolated_worktrees ... ok
+test docview::tests::a_threads_plan_reaches_the_instruments ... ok
+test docview::tests::each_level_draws_only_what_it_can_show ... ok
+test docview::tests::instruments_are_derived_from_blocks_already_folded ... ok
+test docview::tests::size_alone_decides_the_level ... ok
+test docview::tests::test_counts_fold_from_the_runners_own_lines ... ok
+test docview::tests::the_latest_test_run_is_the_one_that_counts ... ok
+test docview::tests::the_newest_running_tool_names_the_activity_line ... ok
+test docview::tests::touching_a_test_file_is_not_a_test_result ... ok
+test draft::tests::changing_project_resets_workspace_but_reselecting_it_preserves_the_choice ... ok
+test draft::tests::changing_provider_or_model_keeps_only_compatible_effort ... ok
+test draft::tests::main_new_and_existing_choices_share_their_source_files_with_resolution ... ok
+test draft::tests::stale_choices_refuse_resolution_without_falling_back_or_changing_the_draft ... ok
+test followup::tests::a_closed_session_outranks_the_prediction ... ok
+test followup::tests::a_decision_outranks_the_prediction ... ok
+test followup::tests::a_prediction_becomes_the_line ... ok
+test followup::tests::a_streaming_thread_shows_no_prediction ... ok
+test followup::tests::nothing_predicted_leaves_the_generic_line ... ok
+test followup::tests::only_a_prediction_is_acceptable ... ok
+test groups::tests::a_stored_layout_round_trips_and_older_files_load_without_one ... ok
+test groups::tests::drop_plans_create_target_first_join_leave_reorder_and_group_move ... ok
+test groups::tests::joining_and_leaving_keep_the_layout_reconciled_and_set_layout_checks_its_leaves ... ok
+test groups::tests::load_heals_a_stored_layout_whose_leaves_drifted_from_the_members ... ok
+test groups::tests::member_reorders_use_final_positions_while_group_moves_use_gaps ... ok
+test groups::tests::missing_project_identity_is_not_treated_as_a_shared_project ... ok
+test groups::tests::moving_from_a_pair_dissolves_it_and_reports_the_survivor ... ok
+test groups::tests::one_hundred_members_persist_in_order_with_cross_project_moves ... ok
+test groups::tests::persisted_groups_heal_deleted_thread_ids ... ok
+test groups::tests::unreadable_thread_metadata_refuses_load_without_overwriting_groups ... ok
+test layout::tests::a_drop_swaps_in_the_centre_core_and_splits_toward_the_nearest_edge ... ok
+test layout::tests::a_seam_drag_keeps_every_pane_at_least_the_floor_or_its_own_length ... ok
+test layout::tests::a_seam_drag_moves_only_the_two_panes_touching_it ... ok
+test layout::tests::a_seam_drag_treats_a_cross_axis_neighbour_as_one_and_reaches_down_a_first_chain ... ok
+test layout::tests::even_grids_hand_every_pane_an_equal_cell ... ok
+test layout::tests::even_grids_pack_the_spec_locked_rows_and_columns ... ok
+test layout::tests::insert_splits_the_largest_leaf_along_its_longer_side_with_the_newcomer_second ... ok
+test layout::tests::ratio_for_puts_the_seam_under_the_pointer_and_round_trips_through_set_ratio ... ok
+test layout::tests::reconcile_heals_corrupt_duplicate_and_stale_trees_and_then_holds_still ... ok
+test layout::tests::rects_share_the_bounds_minus_the_gap_and_stay_inside ... ok
+test layout::tests::remove_collapses_the_sibling_up_and_the_last_leaf_empties_the_tree ... ok
+test layout::tests::seams_sit_in_the_gap_between_their_two_sides_widened_to_the_grab ... ok
+test layout::tests::set_ratio_clamps_to_the_minimum_share_and_needs_a_split ... ok
+test layout::tests::split_moves_the_source_onto_the_named_edge_of_the_target ... ok
+test layout::tests::swap_exchanges_two_leaves_and_keeps_every_ratio ... ok
+test layout::tests::trees_round_trip_through_json_with_leaves_as_thread_numbers ... ok
+test layout::tests::zone_rects_preview_the_half_a_drop_takes ... ok
+test notifications::tests::a_disconnected_thread_owes_nothing ... ok
+test notifications::tests::a_failed_turn_notifies_with_the_providers_error_and_an_interrupt_never_does ... ok
+test notifications::tests::a_provider_that_never_resumes_main_notifies_after_the_grace ... ok
+test notifications::tests::a_resume_inside_the_grace_cancels_it_until_that_turn_ends ... ok
+test notifications::tests::a_settle_and_a_resume_in_one_frame_defer_to_the_new_turn ... ok
+test notifications::tests::a_subagent_finishing_is_never_news_on_its_own ... ok
+test notifications::tests::a_turn_end_that_sends_a_held_prompt_is_not_a_finish ... ok
+test notifications::tests::a_turn_end_with_children_working_waits_for_them_and_for_mains_resume ... ok
+test notifications::tests::a_turn_that_ends_with_no_children_working_notifies_at_once ... ok
+test notifications::tests::an_unfinished_child_at_the_grace_holds_the_deferral ... ok
+test notifications::tests::reading_is_by_thread_or_by_notice_and_attention_follows_the_unread ... ok
+test notifications::tests::the_store_keeps_the_newest_hundred ... ok
+test prompt_files::tests::references_round_trip_and_ignore_prose_or_partial_tokens ... ok
+test prompt_history::tests::duplicates_are_distinct_and_reset_forgets_the_saved_draft ... ok
+test prompt_history::tests::traverses_both_directions_and_restores_the_exact_draft ... ok
+test providers::claude::activity::tests::ambiguous_tool_ids_do_not_guess_a_decision_owner_or_complete_another_childs_tool ... ok
+test providers::claude::activity::tests::answered_request_does_not_keep_a_child_waiting_after_its_other_request_is_cancelled ... ok
+test providers::claude::activity::tests::attributed_or_malformed_result_cannot_end_main_or_report_main_usage ... ok
+test providers::claude::activity::tests::captured_decisions_are_two_independent_child_routes ... ok
+test providers::claude::activity::tests::child_string_prompt_is_preserved_without_becoming_main_input ... ok
+test providers::claude::activity::tests::complete_block_identity_and_duplicates_do_not_restart_settled_children ... ok
+test providers::claude::activity::tests::every_child_frame_is_scoped_before_tools_or_usage_can_reach_main ... ok
+test providers::claude::activity::tests::existing_main_captures_keep_their_event_and_usage_projection ... ok
+test providers::claude::activity::tests::nested_tool_invocation_preserves_the_direct_parent ... ok
+test providers::claude::activity::tests::persisted_native_aliases_resolve_a_fresh_decoder_back_to_the_original_tab ... ok
+test providers::claude::activity::tests::resumed_content_and_new_task_invocation_keep_the_original_key ... ok
+test providers::claude::activity::tests::schema_non_human_and_unknown_origins_cannot_acknowledge_an_operator_turn ... ok
+test providers::claude::activity::tests::unknown_decision_and_its_cancellation_remain_connection_scoped ... ok
+test providers::claude::activity::tests::unknown_task_status_is_not_false_completion_and_bash_is_not_an_agent ... ok
+test providers::claude::queue::tests::native_batch_fixture_consumes_each_uuid_independently_of_results ... ok
+test providers::claude::suggestions::tests::native_suggestions_follow_success_and_never_leak_across_sends_or_settings ... ok
+test providers::claude::tests::a_prerelease_suffix_still_parses ... ok
+test providers::claude::tests::older_major_and_minor_lines_are_below_the_pin ... ok
+test providers::claude::tests::parses_the_real_version_banner ... ok
+test providers::claude::tests::the_captured_fixture_version_is_supported ... ok
+test providers::claude::tests::the_displayed_window_matches_the_pins ... ok
+test providers::claude::tests::the_next_major_is_out_and_the_release_before_it_is_in ... ok
+test providers::claude::tests::the_pinned_boundary_is_met_and_one_below_is_not ... ok
+test providers::claude::tests::unparseable_banners_yield_nothing ... ok
+test providers::claude::wire::tests::a_capability_response_to_another_request_is_not_taken ... ok
+test providers::claude::wire::tests::a_command_carries_the_streams_it_wrote ... ok
+test providers::claude::wire::tests::a_creation_counts_the_lines_it_wrote ... ok
+test providers::claude::wire::tests::a_denied_tool_fails_without_failing_the_turn ... ok
+test providers::claude::wire::tests::a_permission_request_missing_its_tool_details_is_still_answerable ... ok
+test providers::claude::wire::tests::a_result_without_an_error_flag_is_a_success ... ok
+test providers::claude::wire::tests::a_result_without_cost_still_ends_the_turn ... ok
+test providers::claude::wire::tests::aborting_during_tool_use_is_also_an_interrupt ... ok
+test providers::claude::wire::tests::an_edit_carries_the_patch_hunks_it_applied ... ok
+test providers::claude::wire::tests::an_empty_capability_response_claims_nothing ... ok
+test providers::claude::wire::tests::an_empty_creation_claims_no_lines ... ok
+test providers::claude::wire::tests::an_empty_patch_that_is_no_creation_is_no_change ... ok
+test providers::claude::wire::tests::an_interrupted_turn_is_not_an_error ... ok
+test providers::claude::wire::tests::dropped_images_are_native_blocks_and_other_files_stay_references ... ok
+test providers::claude::wire::tests::error_results_carry_their_detail ... ok
+test providers::claude::wire::tests::every_fixture_ignores_far_more_lines_than_it_models ... ok
+test providers::claude::wire::tests::every_message_and_the_result_report_the_context_in_use ... ok
+test providers::claude::wire::tests::every_session_event_variant_is_produced_by_a_fixture ... ok
+test providers::claude::wire::tests::fixture_carries_thinking ... ok
+test providers::claude::wire::tests::fixture_ends_with_a_completed_turn ... ok
+test providers::claude::wire::tests::fixture_text_deltas_concatenate_to_the_answer ... ok
+test providers::claude::wire::tests::fixture_yields_exactly_one_init ... ok
+test providers::claude::wire::tests::fixture_yields_nothing_else ... ok
+test providers::claude::wire::tests::junk_lines_are_ignored_never_fatal ... ok
+test providers::claude::wire::tests::the_capability_response_carries_the_command_menu ... ok
+test providers::claude::wire::tests::the_capability_response_carries_versioned_names_and_effort_ladders ... ok
+test providers::claude::wire::tests::the_capability_response_is_read_for_what_ferrite_acts_on ... ok
+test providers::claude::wire::tests::the_captured_creation_reports_its_one_line ... ok
+test providers::claude::wire::tests::the_tool_fixture_yields_a_start_and_a_completion_that_agree ... ok
+test providers::claude::wire::tests::unified_rate_limit_windows_are_normalized ... ok
+test providers::codex::activity::tests::a_read_cannot_append_unseen_old_items_after_new_live_content ... ok
+test providers::codex::activity::tests::captured_nested_tree_uses_immediate_parent_and_root_scoped_identity ... ok
+test providers::codex::activity::tests::captured_overlap_reuse_stays_out_of_main_and_recovers_provider_names ... ok
+test providers::codex::activity::tests::child_approval_retains_typed_handle_and_cancellation ... ok
+test providers::codex::activity::tests::conflicting_or_malformed_scope_and_parent_fields_never_fall_back ... ok
+test providers::codex::activity::tests::contradictory_history_quarantines_further_child_events ... ok
+test providers::codex::activity::tests::history_is_read_without_resuming_and_does_not_create_fresh_work ... ok
+test providers::codex::activity::tests::incomplete_metadata_does_not_veto_later_explicit_discovery ... ok
+test providers::codex::activity::tests::malformed_history_reply_keeps_request_and_stale_history_cannot_replace_live_final ... ok
+test providers::codex::activity::tests::old_child_completion_cannot_retire_a_reused_child_turn ... ok
+test providers::codex::activity::tests::read_capacity_does_not_limit_discovery_content_or_decisions ... ok
+test providers::codex::activity::tests::resolved_unknown_approval_is_not_resurrected_after_discovery ... ok
+test providers::codex::activity::tests::root_resume_discovers_stored_children_without_replaying_main_content ... ok
+test providers::codex::activity::tests::unknown_attribution_is_bounded_then_replayed_only_after_explicit_parentage ... ok
+test providers::codex::catalog::tests::a_failed_or_malformed_catalog_does_not_become_a_menu ... ok
+test providers::codex::catalog::tests::a_silent_catalog_times_out_and_reaps_its_process ... ok
+test providers::codex::catalog::tests::discovery_paginates_and_keeps_the_providers_default_and_efforts ... ok
+test providers::codex::questions::tests::async_question_delivery_keeps_work_live_and_retains_rejected_answers ... ok
+test providers::codex::queue::tests::native_snapshot_pages_and_change_race_reconcile_before_publishing ... ok
+test providers::codex::tests::a_prerelease_suffix_still_parses ... ok
+test providers::codex::tests::older_minor_lines_are_below_the_pin ... ok
+test providers::codex::tests::parses_the_real_version_banner ... ok
+test providers::codex::tests::the_captured_fixture_version_is_supported ... ok
+test providers::codex::tests::the_displayed_window_matches_the_pins ... ok
+test providers::codex::tests::the_next_major_is_out_and_the_release_before_it_is_in ... ok
+test providers::codex::tests::the_pinned_boundary_is_met_and_one_below_is_not ... ok
+test providers::codex::tests::unparseable_banners_yield_nothing ... ok
+test providers::codex::wire::tests::a_declined_tool_fails_without_failing_the_turn ... ok
+test providers::codex::wire::tests::a_failed_turn_ends_with_the_reason_the_server_gave ... ok
+test providers::codex::wire::tests::a_leading_listed_skill_becomes_the_typed_item_with_its_args_as_text ... ok
+test providers::codex::wire::tests::a_patch_approval_is_a_decision_on_the_file_change_item ... ok
+test providers::codex::wire::tests::a_thread_response_without_a_thread_is_no_handshake ... ok
+test providers::codex::wire::tests::an_approval_request_arrives_as_a_decision_naming_its_tool_call ... ok
+test providers::codex::wire::tests::an_interrupted_turn_ends_as_interrupted ... ok
+test providers::codex::wire::tests::at_tokens_naming_real_files_ride_as_mention_items ... ok
+test providers::codex::wire::tests::context_usage_tracks_the_latest_window_while_output_totals_keep_growing ... ok
+test providers::codex::wire::tests::decision_handles_preserve_id_types_and_string_escapes ... ok
+test providers::codex::wire::tests::dropped_images_and_other_files_use_native_input_items ... ok
+test providers::codex::wire::tests::every_codex_session_event_variant_is_produced_by_a_fixture ... ok
+test providers::codex::wire::tests::every_fixture_ignores_far_more_lines_than_it_models ... ok
+test providers::codex::wire::tests::fixture_carries_a_reasoning_summary ... ok
+test providers::codex::wire::tests::fixture_ends_with_a_completed_turn_and_no_dollar_cost ... ok
+test providers::codex::wire::tests::fixture_reports_token_usage_against_the_context_window ... ok
+test providers::codex::wire::tests::fixture_text_deltas_concatenate_to_the_answer ... ok
+test providers::codex::wire::tests::invalid_decision_ids_are_not_accepted_or_reinterpreted_as_strings ... ok
+test providers::codex::wire::tests::junk_lines_are_ignored_never_fatal ... ok
+test providers::codex::wire::tests::rate_limits_are_named_by_duration_not_provider_order ... ok
+test providers::codex::wire::tests::response_envelopes_require_a_result_or_error ... ok
+test providers::codex::wire::tests::responses_answer_only_their_own_request ... ok
+test providers::codex::wire::tests::server_requests_do_not_answer_host_requests_with_matching_ids ... ok
+test providers::codex::wire::tests::skills_and_mentions_compose_into_one_items_array ... ok
+test providers::codex::wire::tests::the_model_list_becomes_picker_rows_with_their_effort_ladders ... ok
+test providers::codex::wire::tests::the_resume_fixture_answers_from_the_previous_process_history ... ok
+test providers::codex::wire::tests::the_resume_response_names_the_resumed_thread ... ok
+test providers::codex::wire::tests::the_skills_response_is_read_as_the_command_menu ... ok
+test providers::codex::wire::tests::the_thread_response_is_read_for_what_ferrite_acts_on ... ok
+test providers::codex::wire::tests::the_tool_fixture_yields_a_start_and_a_completion_that_agree ... ok
+test providers::codex::wire::tests::unfamiliar_turn_completions_still_end_the_turn ... ok
+test providers::codex::wire::tests::unlisted_or_malformed_slash_text_stays_plain_text ... ok
+test providers::codex::wire::tests::unreadable_skills_responses_offer_no_menu ... ok
+test providers::discover::tests::a_mute_copy_is_skipped ... ok
+test providers::discover::tests::equal_versions_keep_path_order ... ok
+test providers::discover::tests::nothing_found_is_none_and_the_program_is_the_bare_name ... ok
+test providers::discover::tests::the_newest_copy_wins_and_links_do_not_double_count ... ok
+test providers::job::tests::a_cmd_wrapper_yields_the_cli_beneath_it ... ok
+test providers::job::tests::a_direct_cli_is_metered_itself_not_its_tools ... ok
+test providers::job::tests::a_parent_match_outside_the_job_is_a_stranger ... ok
+test providers::job::tests::a_wrapper_with_no_cli_yet_is_metered_as_itself ... ok
+test providers::job::tests::conhost_is_never_the_cli ... ok
+test providers::job::tests::image_names_match_case_insensitively ... ok
+test providers::job::tests::the_clis_tool_children_are_not_chosen_over_it ... ok
+test providers::limits::tests::a_corrupt_cache_leaves_the_provider_unknown_and_is_not_overwritten ... ok
+test providers::limits::tests::a_providers_own_reset_instant_expires_the_reading_early ... ok
+test providers::limits::tests::a_reported_reading_survives_a_relaunch ... ok
+test providers::limits::tests::a_window_that_has_rolled_over_reads_as_unknown_again ... ok
+test providers::limits::tests::an_empty_report_cannot_erase_a_usable_reading ... ok
+test providers::models::cache::tests::a_corrupt_provider_cache_does_not_hide_the_other_provider ... ok
+test providers::models::cache::tests::a_write_failure_keeps_the_announced_models_usable_in_memory ... ferrite: could not save Claude model catalog: File exists (os error 17)
+ok
+test providers::models::tests::a_detail_drops_the_name_the_row_already_shows ... ok
+test providers::models::tests::a_label_prefers_what_the_provider_announced ... ok
+test providers::models::tests::efforts_follow_the_chosen_model ... ok
+test providers::models::tests::every_provider_has_a_fallback_and_an_announcement_replaces_it ... ok
+test providers::models::tests::raw_ids_become_names_a_person_would_say ... ok
+test providers::models::tests::the_fallback_carries_each_models_effort_ladder ... ok
+test providers::models::tests::the_fallback_names_are_versioned_and_labels_agree_with_them ... ok
+test providers::oneshot::tests::processes::absent_provider_never_falls_back_to_another_cli ... ok
+test providers::oneshot::tests::processes::predictions_use_each_adapters_output_format_and_pipe_the_context ... ok
+test providers::oneshot::tests::processes::unread_stdin_and_inherited_stdout_cannot_defeat_the_deadline ... ok
+test providers::oneshot::tests::provider_policies_keep_predictions_local_and_lightweight ... ok
+test providers::tests::a_bare_name_with_only_a_cmd_shim_resolves_to_the_shim ... ok
+test providers::tests::an_exe_on_path_needs_no_help ... ok
+test providers::tests::earlier_path_directories_win ... ok
+test providers::tests::nothing_found_stays_a_bare_name ... ok
+test providers::tests::paths_and_extensions_pass_through ... ok
+test questions::tests::answered_input_keeps_the_original_and_adds_answers ... ok
+test questions::tests::free_text_answers_and_unanswered_questions ... ok
+test questions::tests::missing_optional_fields_default ... ok
+test questions::tests::out_of_range_picks_are_ignored ... ok
+test questions::tests::parses_a_realistic_input ... ok
+test questions::tests::recognises_the_tool_by_name ... ok
+test questions::tests::rejects_inputs_that_are_not_questions ... ok
+test questions::tests::summary_falls_back_to_question_text_without_a_header ... ok
+test questions::tests::summary_names_questions_by_header ... ok
+test roster::tests::a_draft_becomes_a_thread_in_its_own_slot ... ok
+test roster::tests::focus_is_the_one_door_and_fullscreen_follows_it ... ok
+test roster::tests::four_of_a_group_lay_out_on_the_tall_left_board_and_others_on_the_grid ... ok
+test roster::tests::healing_lands_on_the_first_visible_pane_or_falls_back_to_solo ... ok
+test roster::tests::solo_shows_the_focused_pane_and_a_group_shows_its_membership_in_order ... ok
+test session_event::tests::the_standing_answer_is_the_structured_one_each_provider_offers ... ok
+test settings::tests::a_corrupt_file_is_the_defaults_and_is_left_untouched ... ok
+test settings::tests::a_missing_file_or_directory_is_the_defaults ... ok
+test settings::tests::a_partial_file_fills_in_the_defaults ... ok
+test settings::tests::an_unknown_field_is_ignored ... ok
+test settings::tests::an_unreadable_file_is_the_defaults ... ok
+test settings::tests::effort_is_kept_per_provider ... ok
+test settings::tests::model_is_kept_per_provider ... ok
+test settings::tests::save_creates_the_directory_and_replaces_the_file_atomically ... ok
+test settings::tests::saved_settings_load_back_unchanged ... ok
+test settings::tests::the_defaults_are_the_documented_ones ... ok
+test store::activity_tests::attributed_facts_round_trip_with_native_identity_and_complete_payloads ... ok
+test store::activity_tests::bounded_cache_reload_marks_omitted_local_history_partial ... ok
+test store::activity_tests::cache_restores_historical_failure_rows_without_replacing_matching_live_status ... ok
+test store::activity_tests::child_cache_checkpoint_excludes_later_appends_and_unrelated_actors ... ok
+test store::activity_tests::child_cache_reload_keeps_oversized_records_on_disk_and_allows_reattachment ... ok
+test store::activity_tests::child_cache_reload_resolves_aliases_and_restores_only_target_timings ... ok
+test store::activity_tests::child_completion_flushes_after_main_idle_without_cross_actor_coalescing ... ok
+test store::activity_tests::chronology_and_tool_durations_remain_scoped_across_main_and_children ... ok
+test store::activity_tests::durable_replay_cannot_make_working_history_or_approvals_current ... ok
+test store::activity_tests::failed_writer_keeps_encoded_records_immutable_when_new_text_arrives ... ok
+test store::activity_tests::handover_excludes_child_prompts_and_text_and_reconciles_main_item_snapshots ... ok
+test store::activity_tests::partial_write_retry_preserves_buffer_and_never_duplicates_the_written_prefix ... ok
+test store::activity_tests::pending_decisions_and_cancellations_never_enter_the_log_or_replay ... ok
+test store::activity_tests::replay_timings_use_latest_completion_after_alias_resolution ... ok
+test store::activity_tests::schema_eight_child_scan_remains_empty_then_reads_appended_schema_nine ... ok
+test store::activity_tests::schema_eight_upgrade_retains_main_history_before_new_attributed_facts ... ok
+test store::activity_tests::streaming_child_reader_recovers_torn_tail_and_refuses_future_header ... ok
+test store::activity_tests::streaming_reader_filters_large_unrelated_history_and_late_aliases_in_two_passes ... ok
+test store::activity_tests::sync_failure_retries_sync_without_reappending_already_written_records ... ok
+test store::tests::a_codex_turn_keeps_its_reasoning_and_token_accounting ... ok
+test store::tests::a_crash_torn_tail_never_loses_the_thread ... ok
+test store::tests::a_created_thread_survives_reopening_the_store ... ok
+test store::tests::a_deleted_thread_is_gone_and_its_neighbours_are_not ... ok
+test store::tests::a_flushed_turn_replays_identically_after_reopening ... ok
+test store::tests::a_handover_is_replayed_and_shadows_the_old_providers_init ... ok
+test store::tests::a_log_from_ferrites_future_is_refused_not_half_read ... ok
+test store::tests::a_log_written_at_schema_v1_still_loads_after_the_bump ... ok
+test store::tests::a_log_written_at_schema_v2_still_loads_after_the_bump ... ok
+test store::tests::a_log_written_at_schema_v3_still_loads_after_the_bump ... ok
+test store::tests::a_log_written_at_schema_v4_still_loads_after_the_bump ... ok
+test store::tests::a_log_written_at_schema_v5_still_loads_after_the_bump ... ok
+test store::tests::a_log_written_at_schema_v7_still_loads_after_the_bump ... ok
+test store::tests::a_long_turn_flushes_on_the_interval_not_per_delta ... ok
+test store::tests::a_thread_s_provider_and_model_survive_reopening_the_store ... ok
+test store::tests::a_thread_s_session_project_root_survives_reopening_the_store ... ok
+test store::tests::a_thread_s_workspace_binding_survives_reopening_the_store ... ok
+test store::tests::appending_after_a_crash_never_hides_the_new_turn ... ok
+test store::tests::appending_to_a_v1_thread_upgrades_its_log_first ... ok
+test store::tests::no_durable_write_ever_occurs_per_delta ... ok
+test store::tests::peek_reads_the_header_line_and_never_the_records ... ok
+test store::tests::peek_refuses_a_future_schema_like_load_does ... ok
+test store::tests::persisted_turn_outcomes_and_next_prompts_restore_the_completion_reading ... ok
+test store::tests::the_operator_prompt_and_the_diff_card_survive_the_round_trip ... ok
+test suggest::tests::a_long_answer_keeps_its_tail ... ok
+test suggest::tests::an_empty_transcript_is_not_worth_predicting ... ok
+test suggest::tests::an_unanswered_prompt_is_not_worth_predicting ... ok
+test suggest::tests::the_context_carries_the_prompt_and_the_answer ... ok
+test suggest::tests::the_filter_refuses_what_the_operator_would_never_type ... ok
+test titler::tests::claude_fills_a_print_mode_form_with_the_prompt_last ... ok
+test titler::tests::clean_rejects_empty_and_caps_length ... ok
+test titler::tests::clean_strips_quotes_period_and_noise ... ok
+test titler::tests::codex_fills_an_exec_form_with_the_prompt_last ... ok
+test titler::tests::prompt_asks_for_a_short_title_and_includes_both_texts ... ok
+test titler::tests::prompt_caps_long_inputs_on_char_boundaries ... ok
+test titler::tests::prompt_omits_an_absent_or_blank_reply ... ok
+test titler::tests::real_clis::claude_titles_a_thread ... ignored, runs the installed claude CLI and costs a model call
+test titler::tests::real_clis::codex_titles_a_thread ... ignored, runs the installed codex CLI and costs a model call
+test titler::tests::with_stub_programs::a_failing_stub_yields_none ... ok
+test titler::tests::with_stub_programs::a_hanging_stub_is_killed_at_the_deadline ... ok
+test titler::tests::with_stub_programs::a_missing_program_yields_none ... ok
+test titler::tests::with_stub_programs::a_printing_stub_yields_the_cleaned_title ... ok
+test titler::tests::with_stub_programs::a_silent_stub_yields_none ... ok
+test titler::tests::with_stub_programs::the_stub_receives_the_forms_arguments ... ok
+test transcript::highlight::tests::an_unknown_language_still_reads_its_strings_but_claims_no_keywords ... ok
+test transcript::highlight::tests::every_byte_of_the_source_comes_back_exactly_once ... ok
+test transcript::highlight::tests::keywords_strings_numbers_and_comments_are_told_apart ... ok
+test transcript::tests::a_blank_line_starts_a_new_paragraph ... ok
+test transcript::tests::a_closed_session_says_why_and_stops ... ok
+test transcript::tests::a_decision_blocks_the_session_and_says_what_is_waiting ... ok
+test transcript::tests::a_denied_decision_says_so ... ok
+test transcript::tests::a_failed_tool_carries_its_error_trimmed_to_a_row ... ok
+test transcript::tests::a_failed_turn_surfaces_the_providers_message ... ok
+test transcript::tests::a_fenced_block_becomes_code_not_prose ... ok
+test transcript::tests::a_file_edit_settles_its_row_into_a_diff_card_with_counts ... ok
+test transcript::tests::a_heading_is_its_own_block_without_a_blank_line ... ok
+test transcript::tests::a_paid_turn_records_its_cost_without_rendering_it ... ok
+test transcript::tests::a_planned_todo_list_is_counted_as_it_is_worked ... ok
+test transcript::tests::a_prompt_is_echoed_as_its_own_block_and_starts_the_turn ... ok
+test transcript::tests::a_reasoning_summary_breaks_where_the_provider_broke_it ... ok
+test transcript::tests::a_revived_thread_says_it_was_revived ... ok
+test transcript::tests::a_rust_fence_comes_back_highlighted_through_the_apply_path ... ok
+test transcript::tests::a_settled_code_block_is_highlighted_through_the_same_apply_path ... ok
+test transcript::tests::a_settled_tool_retains_exact_bounded_output_on_its_stable_row ... ok
+test transcript::tests::a_thread_that_streams_forever_stops_growing ... ok
+test transcript::tests::a_tool_call_becomes_a_row_naming_what_it_touched ... ok
+test transcript::tests::a_tool_result_keeps_its_first_line_for_the_continuation_row ... ok
+test transcript::tests::a_tool_result_mutates_its_own_row_long_after_the_tail_moved_on ... ok
+test transcript::tests::a_turn_ending_marks_a_boundary_and_streaming_text_does_not ... ok
+test transcript::tests::a_turn_has_a_clock_and_a_token_count ... ok
+test transcript::tests::an_empty_thinking_delta_makes_no_block ... ok
+test transcript::tests::an_interrupted_turn_says_so_and_carries_no_cost ... ok
+test transcript::tests::an_overlong_transcript_drops_its_oldest_blocks_and_says_which ... ok
+test transcript::tests::answering_a_decision_records_it_and_unblocks_the_status ... ok
+test transcript::tests::blank_or_failed_output_leaves_no_continuation_row ... ok
+test transcript::tests::bold_and_links_are_their_own_spans ... ok
+test transcript::tests::bold_may_wrap_inline_code ... ok
+test transcript::tests::each_bullet_is_its_own_block_and_ends_the_paragraph_above_it ... ok
+test transcript::tests::ferrite_can_say_something_of_its_own ... ok
+test transcript::tests::finished_work_never_outruns_the_plan ... ok
+test transcript::tests::init_names_the_session_the_header_shows ... ok
+test transcript::tests::inline_code_is_its_own_span ... ok
+test transcript::tests::live_rate_limits_are_kept_separately_from_persisted_token_usage ... ok
+test transcript::tests::markdown_run_identity_survives_core_eviction_and_changes_at_boundaries ... ok
+test transcript::tests::mixed_tools_group_between_visible_reasoning_and_commentary ... ok
+test transcript::tests::presentation_revision_tracks_changes_without_reminting_blocks ... ok
+test transcript::tests::prompting_a_closed_or_blocked_session_never_shows_streaming ... ok
+test transcript::tests::revived_activity_retires_the_previous_turns_outcome ... ok
+test transcript::tests::rich_markdown_source_survives_stream_chunk_boundaries ... ok
+test transcript::tests::streamed_text_folds_into_one_growing_paragraph ... ok
+test transcript::tests::the_current_task_is_the_first_unfinished_subject ... ok
+test transcript::tests::thinking_never_joins_the_answer ... ok
+test transcript::tests::token_usage_is_kept_for_the_status_line ... ok
+test transcript::tests::turn_completion_reads_the_outcome_independently_of_cost ... ok
+test workspace::registry::tests::a_failed_persist_rolls_memory_back_and_retry_is_real ... ok
+test workspace::registry::tests::a_failed_removal_leaves_the_project_registered ... ok
+test workspace::registry::tests::adoption_accepts_a_live_worktree_and_refuses_impostors ... ok
+test workspace::registry::tests::future_schema_is_refused_and_never_overwritten ... ok
+test workspace::registry::tests::minted_branches_never_reuse_a_removed_worktree_s_number ... ok
+test workspace::registry::tests::placement_follows_the_central_layout_and_separates_same_named_repos ... ok
+test workspace::registry::tests::re_registering_a_removed_root_mints_a_new_id ... ok
+test workspace::registry::tests::registering_two_spellings_of_one_root_yields_one_project ... ok
+test workspace::registry::tests::removing_a_project_drops_its_worktrees_and_persists ... ok
+test workspace::registry::tests::renaming_a_project_persists_and_refuses_blank ... ok
+test workspace::registry::tests::the_registry_survives_reopening_its_store ... ok
+test workspace::registry::tests::worktrees_are_scoped_to_their_own_project ... ok
+test workspace::tests::a_branch_already_checked_out_refuses_a_second_worktree_cleanly ... ok
+test workspace::tests::a_hand_deleted_worktree_is_recreated_on_its_own_branch ... ok
+test workspace::tests::a_posted_commit_status_is_listed_beside_the_actions_jobs ... ok
+test workspace::tests::a_pr_reading_takes_the_worst_check_in_the_rollup ... ok
+test workspace::tests::a_pr_without_checks_claims_no_ci ... ok
+test workspace::tests::a_repo_with_no_commits_still_gets_a_worktree ... ok
+test workspace::tests::a_worktree_is_created_on_demand_with_its_own_branch ... ok
+test workspace::tests::an_all_skipped_rollup_is_not_a_pass ... ok
+test workspace::tests::an_unknown_conclusion_stays_pending ... ok
+test workspace::tests::branches_lists_the_local_branches ... ok
+test workspace::tests::checkout_branch_names_the_branch_the_detached_head_or_nothing ... ok
+test workspace::tests::clean_means_exactly_what_git_status_says ... ok
+test workspace::tests::every_run_behind_the_rollup_is_kept_in_order ... ok
+test workspace::tests::junk_from_gh_reads_as_no_pr ... ok
+test workspace::tests::linked_worktrees_inside_the_binding_are_discovered ... ok
+test workspace::tests::mention_files_walks_with_the_scan_skip_list_and_caps_the_answer ... ok
+test workspace::tests::nested_repositories_scans_four_levels_and_skips_the_noise ... ok
+test workspace::tests::removing_a_clean_worktree_keeps_its_branch ... ok
+test workspace::tests::removing_a_dirty_worktree_is_refused_and_loses_nothing ... ok
+test workspace::tests::skipped_runs_count_as_themselves ... ok
+test workspace::tests::the_effective_cwd_chain_falls_back_in_order ... ok
+test workspace::tests::two_worktrees_of_one_repo_cannot_touch_each_other ... ok
+
+test result: ok. 468 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 13.38s
+
+     Running tests/activity.rs (/Users/josephwylie/.cache/ferrite-ui-architecture-target/debug/deps/activity-9a8f305ab0cc1446)
+
+running 22 tests
+test alias_cannot_join_an_ancestor_and_descendant ... ok
+test alias_join_preserves_latest_runtime_and_complete_frame_identity ... ok
+test another_child_ending_or_answering_cannot_clear_a_pending_request ... ok
+test background_completion_settles_autonomous_work_but_preserves_operator_turn ... ok
+test cache_retry_discards_projection_but_preserves_live_request_and_runtime ... ok
+test cancelling_one_request_keeps_other_attention_without_inventing_completion ... ok
+test cold_aliases_are_preserved_independently_of_transcript_cache_limit ... ok
+test complete_frames_deduplicate_by_delivery_not_shared_message_id ... ok
+test completed_item_reconciles_deltas_and_preserves_other_items ... ok
+test decisions_keep_request_identity_through_owner_enrichment_and_session_replacement ... ok
+test descendant_discovery_waits_for_verified_parent_and_rejects_cycles ... ok
+test frozen_history_duration_cannot_replace_a_newer_live_completed_tool ... ok
+test highlights_are_scoped_even_when_children_reuse_block_ids ... ok
+test history_reads_cannot_change_live_waiting_status_or_timing ... ok
+test interleaving_child_content_and_completion_never_ends_main ... ok
+test oversized_render_content_is_bounded_and_marks_partial_coverage ... ok
+test replay_has_no_actionable_decisions_or_running_indicators ... ok
+test restored_timings_advance_presentation_without_rebuilding_history ... ok
+test same_tool_id_is_timed_separately_per_subject ... ok
+test summary_deltas_and_thinking_snapshot_share_one_item ... ok
+test transcript_cache_limit_retains_metadata_decisions_and_durable_facts ... ok
+test working_order_is_stable_and_completed_identity_can_work_again ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/claude_session.rs (/Users/josephwylie/.cache/ferrite-ui-architecture-target/debug/deps/claude_session-b6939382af183ed9)
+
+running 30 tests
+test a_cli_at_the_next_major_is_refused_rather_than_trusted ... ok
+test a_cli_below_the_pin_is_refused_before_any_session ... ok
+test a_cli_exactly_at_the_pin_is_accepted ... ok
+test a_failed_turn_ends_with_the_reason_the_cli_gave ... ok
+test a_failing_version_check_is_not_mistaken_for_an_old_cli ... ok
+test a_line_of_invalid_utf8_does_not_end_the_session ... ok
+test a_missing_cli_is_named_in_the_error ... ok
+test a_permission_request_arrives_as_a_decision_naming_its_tool_call ... ok
+test a_rejected_effort_is_reported_and_the_session_can_still_send ... ok
+test a_resumed_session_answers_from_the_previous_process_history ... ok
+test a_silent_cli_leaves_its_capabilities_empty_rather_than_assumed ... ok
+test a_slow_consumer_stalls_the_cli_instead_of_losing_events ... ok
+test a_tool_call_arrives_as_a_start_and_a_completion ... ok
+test adopting_a_standing_answer_writes_the_permission_change_the_cli_honoured ... ok
+test allowing_a_decision_writes_what_the_cli_accepted ... ok
+test an_abnormal_exit_explains_itself_with_stderr ... ok
+test an_unreadable_version_banner_is_its_own_error ... ok
+test denying_a_decision_carries_the_operator_s_reason_to_the_model ... ok
+test effort_changes_clear_the_override_without_replacing_the_process ... ok
+test native_followups_arrive_after_result_through_the_session_adapter ... ok
+test native_queue_admission_and_cancellation_use_the_existing_session_pipe ... ok
+test no_model_or_permission_mode_is_passed_when_the_config_names_none ... ok
+test only_the_tail_of_a_noisy_stderr_is_kept ... ok
+test spawn_completes_the_capability_handshake ... ok
+test stdout_eof_closes_the_session_with_the_exit_status ... ok
+test the_cli_runs_in_the_configured_workspace ... ok
+test the_handshake_announces_the_command_menu_on_the_event_stream ... ok
+test the_last_release_below_the_next_major_is_accepted ... ok
+test the_reader_thread_delivers_the_captured_stream ... ok
+test the_session_speaks_the_pinned_command_line_and_protocol ... ok
+
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 20.41s
+
+     Running tests/claude_subagents.rs (/Users/josephwylie/.cache/ferrite-ui-architecture-target/debug/deps/claude_subagents-9b3619fcdd58ebbd)
+
+running 3 tests
+test background_notification_results_do_not_masquerade_as_operator_turn_ends ... ok
+test forwarding_is_enabled_only_through_the_scoped_reader ... ok
+test simultaneous_child_decisions_reply_through_the_original_host_handles ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.19s
+
+     Running tests/codex_decision_ids.rs (/Users/josephwylie/.cache/ferrite-ui-architecture-target/debug/deps/codex_decision_ids-c844e4261ba486dd)
+
+running 1 test
+test simultaneous_numeric_and_string_decisions_reply_with_their_original_ids ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.40s
+
+     Running tests/codex_session.rs (/Users/josephwylie/.cache/ferrite-ui-architecture-target/debug/deps/codex_session-44cdee8c80bacb8d)
+
+running 40 tests
+test a_cli_at_the_next_major_is_refused_rather_than_trusted ... ok
+test a_cli_below_the_pin_is_refused_before_any_session ... ok
+test a_cli_exactly_at_the_pin_is_accepted ... ok
+test a_command_run_arrives_as_a_start_and_a_completion ... ok
+test a_failed_turn_ends_with_the_reason_the_server_gave ... ok
+test a_failing_version_check_is_not_mistaken_for_an_old_cli ... ok
+test a_line_of_invalid_utf8_does_not_end_the_session ... ok
+test a_listed_skill_is_sent_as_the_typed_item_never_as_slash_text ... ok
+test a_mentioned_file_rides_as_a_mention_item_beside_the_text ... ok
+test a_missing_cli_is_named_in_the_error ... ok
+test a_patch_approval_arrives_as_a_decision_on_the_file_change ... ok
+test a_refused_thread_start_fails_the_spawn_with_the_server_s_reason ... ok
+test a_resumed_session_answers_from_the_previous_process_history ... ok
+test a_resumed_session_passes_effort_on_its_next_turn ... ok
+test a_server_that_dies_in_the_handshake_explains_itself ... ok
+test a_silent_server_fails_the_spawn_within_the_budget ... ok
+test a_slow_consumer_stalls_the_server_instead_of_losing_events ... ok
+test adopting_a_standing_answer_writes_the_amendment_the_server_accepted ... ok
+test allowing_a_decision_writes_what_the_server_accepted ... ok
+test an_abnormal_exit_explains_itself_with_stderr ... ok
+test an_allow_with_edited_input_still_writes_the_bare_accept ... ok
+test an_approval_request_arrives_as_a_decision_naming_its_tool_call ... ok
+test an_interrupted_capture_replays_as_an_interrupted_turn ... ok
+test an_unreadable_version_banner_is_its_own_error ... ok
+test astra_from_the_installed_cli_reaches_the_model_picker ... ok
+test default_effort_uses_the_models_default_when_the_cli_has_no_override ... ok
+test denying_a_decision_writes_what_the_server_accepted ... ok
+test effort_changes_and_default_stay_on_the_same_thread ... ok
+test interrupting_after_the_turn_completed_writes_nothing ... ok
+test interrupting_before_any_turn_writes_nothing ... ok
+test model_discovery_asks_the_cli_without_creating_a_thread ... ok
+test native_queue_admission_and_cancellation_use_the_existing_session_pipe ... ok
+test nothing_is_passed_when_the_config_names_nothing ... ok
+test only_the_tail_of_a_noisy_stderr_is_kept ... ok
+test spawn_completes_the_capability_handshake ... ok
+test stdout_eof_closes_the_session_with_the_exit_status ... ok
+test the_last_release_below_the_next_major_is_accepted ... ok
+test the_model_list_is_announced_on_the_event_stream ... ok
+test the_reader_thread_delivers_the_captured_stream ... ok
+test the_session_speaks_the_pinned_command_line_and_protocol ... ok
+
+test result: ok. 40 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 20.84s
+
+     Running tests/codex_subagent_interrupt.rs (/Users/josephwylie/.cache/ferrite-ui-architecture-target/debug/deps/codex_subagent_interrupt-677bb54999572d27)
+
+running 3 tests
+test child_lifecycle_cannot_replace_or_retire_mains_interrupt_target ... ok
+test handshake_selects_main_from_interleaved_early_turns ... ok
+test overflowing_early_candidates_never_falls_back_to_a_child ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.10s
+
+     Running tests/codex_subagents.rs (/Users/josephwylie/.cache/ferrite-ui-architecture-target/debug/deps/codex_subagents-7b2d68b5324910d7)
+
+running 2 tests
+test a_large_resumed_tree_does_not_block_session_handshake ... ok
+test descendants_read_history_on_parent_connection_and_answer_the_exact_child_requests ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.89s
+
+     Running tests/import.rs (/Users/josephwylie/.cache/ferrite-ui-architecture-target/debug/deps/import-1175788e6d85d808)
+
+running 19 tests
+test a_claude_session_file_imports_into_a_thread_that_can_resume_it ... ok
+test a_codex_rollout_cut_off_inside_a_turn_closes_it_as_interrupted ... ok
+test a_codex_rollout_imports_into_a_thread_that_can_resume_it ... ok
+test a_file_ending_inside_a_tool_call_imports_as_an_interrupted_turn ... ok
+test a_file_ending_on_an_unanswered_prompt_imports_as_an_interrupted_turn ... ok
+test a_missing_file_is_an_io_error_with_the_os_reason ... ok
+test a_session_file_without_a_session_id_is_refused ... ok
+test a_subagent_transcript_is_refused_not_adopted_as_the_parent_session ... ok
+test a_valid_marker_followed_by_junk_is_refused_by_the_parser_itself ... ok
+test an_array_content_prompt_imports_as_the_prompt_text ... ok
+test an_imported_codex_command_arrives_as_a_tool_round_trip ... ok
+test an_imported_thread_replays_to_an_idle_transcript ... ok
+test an_injected_meta_line_is_not_the_operator_speaking ... ok
+test arbitrary_junk_never_panics_the_importer ... ok
+test foreign_files_are_refused_with_a_readable_reason ... ok
+test imported_context_usage_is_the_latest_window_not_lifetime_spend ... ok
+test session_file_discovery_walks_both_roots_newest_first_and_capped ... ok
+test the_imported_claude_history_replays_as_the_conversation ... ok
+test the_imported_codex_history_replays_as_the_conversation ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s
+
+     Running tests/live_claude.rs (/Users/josephwylie/.cache/ferrite-ui-architecture-target/debug/deps/live_claude-a9e63947199f29d6)
+
+running 6 tests
+test a_parked_thread_resumes_across_processes ... ignored, spawns the real claude CLI
+test a_session_serves_more_than_one_turn ... ignored, spawns the real claude CLI
+test allowing_a_decision_runs_the_tool ... ignored, spawns the real claude CLI
+test an_interrupted_turn_ends_as_interrupted ... ignored, spawns the real claude CLI
+test denying_a_decision_leaves_the_turn_running ... ignored, spawns the real claude CLI
+test the_real_cli_answers_the_capability_handshake ... ignored, spawns the real claude CLI
+
+test result: ok. 0 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/live_codex.rs (/Users/josephwylie/.cache/ferrite-ui-architecture-target/debug/deps/live_codex-fba24266626aa126)
+
+running 7 tests
+test a_parked_thread_resumes_across_processes ... ignored, spawns the real codex CLI
+test a_session_serves_more_than_one_turn ... ignored, spawns the real codex CLI
+test allowing_a_decision_runs_the_tool ... ignored, spawns the real codex CLI
+test an_interrupted_turn_ends_as_interrupted ... ignored, spawns the real codex CLI
+test denying_a_decision_leaves_the_session_running ... ignored, spawns the real codex CLI
+test the_real_server_answers_the_capability_handshake ... ignored, spawns the real codex CLI
+test the_real_server_lists_models_without_a_session ... ignored, queries the installed Codex CLI model catalog
+
+test result: ok. 0 passed; 0 failed; 7 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/live_import.rs (/Users/josephwylie/.cache/ferrite-ui-architecture-target/debug/deps/live_import-f11b6bd07e90a858)
+
+running 2 tests
+test an_imported_claude_session_continues_on_the_next_prompt ... ignored, spawns the real claude CLI
+test an_imported_codex_session_continues_on_the_next_prompt ... ignored, spawns the real codex CLI
+
+test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/live_progress.rs (/Users/josephwylie/.cache/ferrite-ui-architecture-target/debug/deps/live_progress-bda319cfa5fe9e22)
+
+running 2 tests
+test native_claude_progress ... ignored, uses the installed Claude CLI and its authenticated account
+test native_codex_progress ... ignored, uses the installed Codex app-server and its authenticated account
+
+test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/notifications.rs (/Users/josephwylie/.cache/ferrite-ui-architecture-target/debug/deps/notifications-b56280ae6f5c4aa8)
+
+running 12 tests
+test a_finish_on_the_focused_thread_is_born_read ... ok
+test a_finished_thread_the_operator_is_not_on_is_unread_until_they_land_on_it ... ok
+test a_main_that_ends_while_children_work_waits_for_its_resume ... ok
+test a_native_pending_prompt_suppresses_finish_until_provider_consumption ... ok
+test a_subagents_own_end_never_notifies_and_a_deleted_thread_is_forgotten ... ok
+test notifications_discard_a_parked_deferral_but_keep_existing_notices ... ok
+test notifications_wait_for_a_child_permission_before_finishing ... ok
+test opening_a_notice_lands_on_its_thread_and_revives_a_parked_one ... ok
+test the_claude_nested_capture_finishes_once ... ok
+test the_claude_overlap_capture_finishes_twice_never_while_agents_run ... ok
+test the_codex_nested_capture_finishes_once ... ok
+test the_codex_overlap_capture_finishes_once_after_every_child ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.52s
+
+     Running tests/progress_lifecycle.rs (/Users/josephwylie/.cache/ferrite-ui-architecture-target/debug/deps/progress_lifecycle-94d9a794bb35d354)
+
+running 7 tests
+test a_completed_reasoning_snapshot_updates_history_without_restarting_work ... ok
+test latest_output_survives_the_disclosed_prefix_limit_and_split_lines ... ok
+test persisted_tool_ticks_preserve_nonempty_message_and_monotonic_elapsed_time ... ok
+test progress_before_prose_starts_the_shared_view_and_closed_tools_cannot_restart_it ... ok
+test repeated_native_wait_detail_is_compared_in_its_display_form ... ok
+test scoped_native_progress_roundtrips_without_leaking_to_main_or_restarting_clocks ... ok
+test unavailable_latest_test_run_clears_the_previous_verdict ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/provider_progress.rs (/Users/josephwylie/.cache/ferrite-ui-architecture-target/debug/deps/provider_progress-83da00524bee8817)
+
+running 25 tests
+test tests::captured_claude_api_retry_is_visible ... ok
+test tests::captured_claude_task_progress_is_visible ... ok
+test tests::captured_current_codex_heading_is_visible_once_even_if_completion_repeats ... ok
+test tests::child_notifications_cannot_replace_main_heading_or_finish_main_turn ... ok
+test tests::claude_progress_ticks_change_visible_state ... ok
+test tests::claude_prose_and_thinking_reach_transcript ... ok
+test tests::claude_retry_reason_is_visible ... ok
+test tests::codex_command_output_is_visible_before_completion ... ok
+test tests::codex_mcp_start_is_visible ... ok
+test tests::codex_plan_is_visible ... ok
+test tests::codex_prose_and_summary_reach_transcript ... ok
+test tests::codex_web_search_is_visible ... ok
+test tests::completion_corrects_earlier_summary_parts_in_place ... ok
+test tests::native_claude_parallel_tool_blocks_are_all_retained ... ok
+test tests::native_claude_receipts_match_task_identity_and_delete_without_legacy_fallback ... ok
+test tests::native_claude_task_progress_reaches_its_child_before_any_prose ... ok
+test tests::native_codex_children_share_progress_and_do_not_revive_from_stale_turn_deltas ... ok
+test tests::native_reasoning_items_keep_distinct_headings_and_deduplicate_snapshots ... ok
+test tests::native_summary_snapshot_without_deltas_is_still_visible ... ok
+test tests::output_stays_an_exact_utf8_prefix_after_first_omission ... ok
+test tests::partial_tool_output_stays_bounded_and_completion_is_authoritative ... ok
+test tests::repeated_answer_completion_does_not_repeat_the_answer ... ok
+test tests::status_text_is_unicode_safe_and_terminal_escapes_never_reach_the_caption ... ok
+test tests::thinking_supplies_l2_activity ... ok
+test tests::turn_end_clears_main_progress_but_background_requires_its_own_end ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.14s
+
+     Running tests/store.rs (/Users/josephwylie/.cache/ferrite-ui-architecture-target/debug/deps/store-ed97b708f3b2dbc0)
+
+running 1 test
+test a_restart_restores_the_thread_and_the_next_prompt_continues_the_session ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.40s
+
+     Running tests/subagent_cockpit.rs (/Users/josephwylie/.cache/ferrite-ui-architecture-target/debug/deps/subagent_cockpit-385155d1deebf3c3)
+
+running 17 tests
+test a_child_turn_end_retires_only_that_childs_pending_decisions ... ok
+test aliasing_evicted_history_into_a_retained_child_recovers_both_prefixes_and_live_decision ... ok
+test an_autonomous_reply_after_main_finished_does_not_leave_main_permanently_busy ... ok
+test an_unresolved_decision_remains_visible_without_guessing_its_owner ... ok
+test autonomous_background_completion_does_not_retire_mains_live_work ... ok
+test cancellation_retires_only_its_request_and_clears_waiting_after_the_last_one ... ok
+test child_completion_cannot_release_mains_prompt_or_pending_decision ... ok
+test child_history_reload_cannot_restore_old_labels_or_reattach_a_detached_child ... ok
+test detached_children_wait_for_verified_parentage_without_leaking_into_main ... ok
+test evicted_child_history_merges_frozen_prefix_and_live_tail_once_without_changing_runtime ... ok
+test handover_preserves_child_history_and_rejects_old_provider_decisions ... ok
+test header_rewrite_invalidates_old_history_read_and_a_fresh_selection_recovers ... ok
+test hidden_child_decisions_reply_in_reverse_order_and_failed_writes_stay_pending ... ok
+test overlapping_tool_and_message_ids_keep_transcripts_usage_and_resume_isolated ... ok
+test parking_restores_child_history_without_decisions_or_a_queued_prompt ... ok
+test watchdog_rejects_old_decisions_and_preserves_child_history ... ok
+test watchdog_replacement_invalidates_pending_history_read_before_a_new_read ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.40s
+
+     Running tests/windows_session_tree.rs (/Users/josephwylie/.cache/ferrite-ui-architecture-target/debug/deps/windows_session_tree-aa2c4f1cca364df2)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests ferrite_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

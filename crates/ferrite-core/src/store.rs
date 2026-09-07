@@ -725,7 +725,7 @@ impl Record {
             // to serve them and the next one announces its own.
             SessionEvent::Commands { .. } => return None,
             SessionEvent::PermissionMode { .. } => return None,
-            SessionEvent::Models { .. } => return None,
+            SessionEvent::Models { .. } | SessionEvent::Queue(_) => return None,
             SessionEvent::RateLimits { .. } => return None,
         })
     }

@@ -1,12 +1,13 @@
-use std::{cell::RefCell, ops::RangeInclusive, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, ops::RangeInclusive, rc::Rc};
 
 use crate::{
     TextSelectionContentKey, TextSelectionCoverage, TextSelectionEndpoint, TextSelectionEvent,
     TextSelectionHandle, TextSelectionRegistration, TextSelectionSnapshot,
+    text_selection::TextSelectionDocumentRange,
 };
 use gpui::{App, Bounds, EntityId, Hitbox, Pixels, Point, WeakEntity, Window};
 
-use super::TextViewState;
+use super::{TextViewState, inline::InlineSelectionProjection};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct CachedBlockEndpoint {
@@ -73,6 +74,8 @@ impl VirtualBlockSelection {
 pub(super) struct TextViewSelectionAdapter {
     selection: TextSelectionHandle,
     text_bounds: Vec<Bounds<Pixels>>,
+    projections: Rc<RefCell<Vec<InlineSelectionProjection>>>,
+    source_ordinals: HashMap<usize, usize>,
     layout_revision: Option<usize>,
 }
 
@@ -81,6 +84,7 @@ impl TextViewSelectionAdapter {
         let selection = TextSelectionHandle::new("", cx);
         let selection_id = selection.entity_id();
         let virtual_blocks = Rc::new(RefCell::new(VirtualBlockSelection::default()));
+        let projections = Rc::new(RefCell::new(Vec::<InlineSelectionProjection>::new()));
 
         let view_for_events = view.clone();
         let blocks_for_events = virtual_blocks.clone();
@@ -142,6 +146,31 @@ impl TextViewSelectionAdapter {
             cx,
         );
 
+        let view_for_document_copy = view.clone();
+        let projections_for_document_copy = projections.clone();
+        selection.document_copy_with(
+            move |coverage, points, document_range, cx| {
+                for projection in projections_for_document_copy.borrow().iter() {
+                    if let Some(document_range) = document_range {
+                        projection
+                            .project_document_range(projection.document_ordinal(), document_range);
+                    } else {
+                        // Generic participants retain their geometry fallback.
+                        projection.project(points.anchor(), points.cursor());
+                    }
+                }
+                let Some(view) = view_for_document_copy.upgrade() else {
+                    return String::new();
+                };
+                let state = view.read(cx);
+                match coverage {
+                    TextSelectionCoverage::Full => state.parsed_content.document.text(),
+                    _ => state.selected_text(),
+                }
+            },
+            cx,
+        );
+
         let view_for_content_key = view.clone();
         selection.resolve_content_key_with(
             move |point, cx| {
@@ -149,6 +178,27 @@ impl TextViewSelectionAdapter {
                 view.read(cx)
                     .block_ix_at(point.y)
                     .map(|block| TextSelectionContentKey::new(block as u64))
+            },
+            cx,
+        );
+
+        let view_for_document_position = view.clone();
+        let projections_for_document_position = projections.clone();
+        selection.resolve_document_position_with(
+            move |content_point, cx| {
+                let view = view_for_document_position.upgrade()?;
+                let state = view.read(cx);
+                let window_point = content_point + state.scroll_offset() + state.bounds().origin;
+                projections_for_document_position
+                    .borrow()
+                    .iter()
+                    .find_map(|projection| {
+                        projection.document_position_at(window_point).map(|offset| {
+                            TextSelectionContentKey::new(
+                                ((projection.document_ordinal() as u64) << 32) | (offset as u64),
+                            )
+                        })
+                    })
             },
             cx,
         );
@@ -168,6 +218,8 @@ impl TextViewSelectionAdapter {
         Self {
             selection,
             text_bounds: Vec::new(),
+            projections,
+            source_ordinals: HashMap::new(),
             layout_revision: None,
         }
     }
@@ -176,7 +228,10 @@ impl TextViewSelectionAdapter {
         let changed = self
             .layout_revision
             .is_some_and(|previous| previous != revision);
-        if !changed || !is_selecting {
+        if changed && !is_selecting {
+            self.layout_revision = Some(revision);
+            self.projections.borrow_mut().clear();
+        } else if !changed {
             self.layout_revision = Some(revision);
         }
         changed && !is_selecting
@@ -184,10 +239,25 @@ impl TextViewSelectionAdapter {
 
     pub(super) fn begin_frame(&mut self) {
         self.text_bounds.clear();
+        // This runs only when this native view paints. An unmounted virtual
+        // row does not enter a frame, so its last projections stay available
+        // for an offscreen retained document endpoint.
+        self.projections.borrow_mut().clear();
+        self.source_ordinals.clear();
     }
 
     pub(super) fn register_inline(&mut self, bounds: Vec<Bounds<Pixels>>) {
         self.text_bounds.extend(bounds);
+    }
+
+    pub(super) fn register_projection(&mut self, mut projection: InlineSelectionProjection) {
+        let next_ordinal = self.source_ordinals.len();
+        let ordinal = *self
+            .source_ordinals
+            .entry(projection.source_root())
+            .or_insert(next_ordinal);
+        projection.set_document_ordinal(ordinal);
+        self.projections.borrow_mut().push(projection);
     }
 
     pub(super) fn register(
@@ -200,18 +270,43 @@ impl TextViewSelectionAdapter {
         cx: &mut App,
     ) {
         self.selection.register(
-            TextSelectionRegistration::new(hitbox, bounds)
-                .with_scroll_offset(scroll_offset)
-                .with_document_order(document_order)
-                .with_text_bounds(self.text_bounds.clone()),
+            self.registration(hitbox, bounds, scroll_offset, document_order),
             window,
             cx,
         );
     }
 
+    pub(super) fn registration(
+        &self,
+        hitbox: Hitbox,
+        bounds: Bounds<Pixels>,
+        scroll_offset: Point<Pixels>,
+        document_order: u64,
+    ) -> TextSelectionRegistration {
+        TextSelectionRegistration::new(hitbox, bounds)
+            .with_scroll_offset(scroll_offset)
+            .with_document_order(document_order)
+            .with_text_bounds(self.text_bounds.clone())
+    }
+
+    pub(super) fn handle(&self) -> TextSelectionHandle {
+        self.selection.clone()
+    }
+
     pub(super) fn selection_points(&self, cx: &App) -> Option<(Point<Pixels>, Point<Pixels>)> {
         let points = self.selection.snapshot(cx)?.window_points()?;
         Some((points.anchor(), points.cursor()))
+    }
+
+    pub(super) fn document_range(&self, cx: &App) -> Option<TextSelectionDocumentRange> {
+        self.selection.snapshot(cx)?.document_range()
+    }
+
+    pub(super) fn document_ordinal_for_source(&self, source_root: usize) -> usize {
+        self.source_ordinals
+            .get(&source_root)
+            .copied()
+            .unwrap_or(self.source_ordinals.len())
     }
 
     pub(super) fn set_local_selection(&self, active: bool, cx: &mut App) {

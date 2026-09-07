@@ -19,9 +19,14 @@ gpui = { package = "gpui-kit", version = "=0.6.0" }
 serde_json = { workspace = true }
 # Same platform already used by GPUI Kit; enable its framebuffer test hook only.
 gpui-reference-platform = { package = "gpui-pre-platform", version = "=0.3.3", features = ["test-support"], optional = true }
+url = "2"
+percent-encoding = "2"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_ProcessStatus", "Win32_System_Threading"] }
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = { version = "0.1", default-features = false }
 
 [dev-dependencies]
 # The smoke render needs a window; gpui's own test harness provides a headless

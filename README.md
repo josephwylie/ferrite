@@ -44,8 +44,8 @@ Download the latest archive from
 
 ```sh
 tar -xzf ferrite-v*-aarch64-apple-darwin.tar.gz
-xattr -c ferrite   # unsigned binary; clear the download quarantine
-./ferrite
+xattr -cr Ferrite.app   # ad-hoc signed; clear the download quarantine
+open Ferrite.app
 ```
 
 From a checkout, `scripts/install-app.sh` builds the release binary and

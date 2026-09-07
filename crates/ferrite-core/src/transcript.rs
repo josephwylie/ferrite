@@ -363,6 +363,8 @@ pub enum Boundary {
 pub struct Transcript {
     blocks: Vec<Block>,
     last_id: u64,
+    /// Monotonic presentation version for cached transcript renderers.
+    revision: u64,
     /// The Block still growing, and the raw markdown it was folded from.
     open: Option<BlockId>,
     source: String,
@@ -471,6 +473,7 @@ impl Transcript {
         Self {
             blocks: Vec::new(),
             last_id: 0,
+            revision: 0,
             open: None,
             source: String::new(),
             highlighter,
@@ -500,6 +503,11 @@ impl Transcript {
         self.status
     }
 
+    /// Advances whenever transcript-owned presentation state may have changed.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
     pub(crate) fn set_attention(&mut self, pending: bool, busy: bool) {
         if pending {
             self.status = Status::Blocked;
@@ -510,6 +518,7 @@ impl Transcript {
                 Status::Idle
             };
         }
+        self.advance_revision();
     }
 
     pub(crate) fn clear_activity(&mut self) -> Update {
@@ -518,10 +527,12 @@ impl Transcript {
         }
         self.turn_started = None;
         self.progress.disconnected();
-        Update {
+        let update = Update {
             dirty: self.retire_tools(),
             ..Update::default()
-        }
+        };
+        self.advance_revision();
+        update
     }
 
     pub(crate) fn runtime(&self) -> Runtime {
@@ -573,6 +584,7 @@ impl Transcript {
         self.turn_started = runtime.turn_started;
         self.turn_output_tokens = runtime.turn_output_tokens;
         self.last_report = runtime.last_report;
+        self.advance_revision();
     }
 
     pub fn model(&self) -> Option<&str> {
@@ -693,6 +705,7 @@ impl Transcript {
             Status::Idle => self.turn_started = None,
             _ => {}
         }
+        self.advance_revision();
         update
     }
 
@@ -1110,7 +1123,7 @@ impl Transcript {
             // Block, nothing dirty.
             Input::Event(SessionEvent::Commands { .. }) => Update::default(),
             Input::Event(SessionEvent::PermissionMode { .. }) => Update::default(),
-            Input::Event(SessionEvent::Models { .. }) => Update::default(),
+            Input::Event(SessionEvent::Models { .. } | SessionEvent::Queue(_)) => Update::default(),
             Input::Event(SessionEvent::Closed { reason }) => {
                 self.progress.disconnected();
                 self.latest_reasoning_part = None;
@@ -1347,6 +1360,10 @@ impl Transcript {
     fn mint(&mut self) -> BlockId {
         self.last_id += 1;
         BlockId(self.last_id)
+    }
+
+    fn advance_revision(&mut self) {
+        self.revision = self.revision.saturating_add(1);
     }
 }
 
@@ -1745,6 +1762,30 @@ mod tests {
         assert_eq!(first.dirty.len(), 1);
         assert_eq!(first.dirty, second.dirty); // the same block grew
         assert_eq!(body_text(&transcript.blocks()[0]), "Reading the composer.");
+    }
+
+    #[test]
+    fn presentation_revision_tracks_changes_without_reminting_blocks() {
+        let mut transcript = Transcript::default();
+        assert_eq!(transcript.revision(), 0);
+        let _ = (transcript.blocks(), transcript.status(), transcript.usage());
+        assert_eq!(transcript.revision(), 0);
+
+        transcript.apply(text("Reading"));
+        let id = transcript.blocks()[0].id;
+        assert_eq!(transcript.revision(), 1);
+
+        transcript.apply(Input::Event(SessionEvent::TokenUsage {
+            total_tokens: 12,
+            input_tokens: 8,
+            cached_input_tokens: 0,
+            output_tokens: 4,
+            reasoning_output_tokens: 0,
+            context_window: Some(128),
+        }));
+
+        assert_eq!(transcript.revision(), 2);
+        assert_eq!(transcript.blocks()[0].id, id);
     }
 
     #[test]

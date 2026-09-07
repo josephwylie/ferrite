@@ -13,8 +13,10 @@
 mod activity;
 pub(super) mod catalog;
 mod questions;
+mod queue;
 pub(super) mod wire;
 
+use crate::spawn::NoConsoleWindow;
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
@@ -226,6 +228,7 @@ pub struct CodexSession {
     cwd: Option<PathBuf>,
     next_request_id: u64,
     question_replies: Arc<Mutex<questions::Replies>>,
+    queue: Arc<Mutex<queue::Queue>>,
 }
 
 impl CodexSession {
@@ -239,7 +242,7 @@ impl CodexSession {
         check_version(&program)?;
 
         let mut command = Command::new(&program);
-        command.arg("app-server");
+        command.arg("app-server").no_console_window();
         if let Some(cwd) = &config.cwd {
             // The thread's cwd travels in thread/start; the process gets the
             // same one so anything the server resolves against itself agrees.
@@ -276,6 +279,7 @@ impl CodexSession {
         let models = Arc::new(Mutex::new(Vec::new()));
         let question_replies = Arc::new(Mutex::new(questions::Replies::default()));
         let (skills_sender, skills_ready) = sync_channel(1);
+        let queue = Arc::new(Mutex::new(queue::Queue::default()));
         let handshake = read_stdout(
             stdout,
             Arc::downgrade(&stdin),
@@ -287,6 +291,7 @@ impl CodexSession {
             skills_sender,
             Arc::clone(&models),
             Arc::clone(&question_replies),
+            queue.clone(),
         );
 
         let mut session = Self {
@@ -305,6 +310,7 @@ impl CodexSession {
             cwd: config.cwd.clone(),
             next_request_id: 1,
             question_replies,
+            queue,
         };
 
         // The handshake, in the server's required order. A failed one must
@@ -339,6 +345,8 @@ impl CodexSession {
             "method": "model/list",
             "params": {},
         }));
+        let request = lock(&session.queue).initialize(&session.thread_id);
+        let _ = session.write_line(&request);
         Ok(session)
     }
 
@@ -357,7 +365,7 @@ impl CodexSession {
             "jsonrpc": "2.0",
             "id": id,
             "method": "initialize",
-            "params": {"clientInfo": {"name": "ferrite", "version": env!("CARGO_PKG_VERSION")}},
+            "params": {"capabilities":{"experimentalApi":true}, "clientInfo": {"name": "ferrite", "version": env!("CARGO_PKG_VERSION")}},
         }))
         .map_err(|e| format!("could not write initialize: {e}"))?;
         match await_step(steps, "initialize")? {
@@ -454,6 +462,26 @@ impl CodexSession {
     /// `@path` tokens naming real files ride as `{"type":"mention"}` items —
     /// the server never intercepts slash text, so this seam is where the
     /// Composer's picks become real.
+    pub fn enqueue(&mut self, client_id: &str, text: &str) -> io::Result<()> {
+        let input = wire::input_items(text, &lock(&self.skills), self.cwd.as_deref());
+        let request = {
+            let mut queue = lock(&self.queue);
+            if !queue.supported {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "Codex has not confirmed native queue support",
+                ));
+            }
+            queue.add(client_id, serde_json::json!(input))
+        };
+        self.write_line(&request)
+    }
+
+    pub fn cancel_queued(&mut self, id: &str) -> io::Result<()> {
+        let request = lock(&self.queue).delete(id);
+        self.write_line(&request)
+    }
+
     pub fn send(&mut self, text: &str) -> io::Result<()> {
         let input = wire::input_items(text, &lock(&self.skills), self.cwd.as_deref());
         // The Pane makes its own compact preview; request the detailed
@@ -651,6 +679,7 @@ fn read_stdout(
     skills_ready: SyncSender<Result<(), String>>,
     model_catalog: Arc<Mutex<Vec<crate::ModelInfo>>>,
     question_replies: Arc<Mutex<questions::Replies>>,
+    queue: Arc<Mutex<queue::Queue>>,
 ) -> Receiver<Result<HandshakeStep, String>> {
     let (step_sender, steps) = sync_channel(2);
     thread::spawn(move || {
@@ -690,6 +719,7 @@ fn read_stdout(
                     Some(Ok(result)) => match wire::parse_thread_response(&result) {
                         Some(thread) => {
                             turns.identify_main(&thread.thread_id);
+                            let queue_events = lock(&queue).identify(&result["thread"]);
                             // The Session announces itself the way every
                             // provider does; the values are the wire's, only
                             // the correlation is Ferrite's.
@@ -702,6 +732,11 @@ fn read_stdout(
                             // large resumed tree into the bounded event stream.
                             // Main's interrupt owner is already authoritative.
                             let _ = step_sender.send(Ok(HandshakeStep::Thread(Box::new(thread))));
+                            for event in queue_events {
+                                if sender.send(event).is_err() {
+                                    return;
+                                }
+                            }
                             models_pending = true;
                             if !publish_activity(update, &mut activity, &sender, &stdin) {
                                 return;
@@ -774,6 +809,17 @@ fn read_stdout(
             }
             turns.observe(text);
             if let Ok(frame) = serde_json::from_str(text) {
+                let (events, requests) = lock(&queue).observe(&frame);
+                for event in events {
+                    if sender.send(event).is_err() {
+                        return;
+                    }
+                }
+                for request in requests {
+                    if let Some(stdin) = stdin.upgrade() {
+                        let _ = write_request(&stdin, &request);
+                    }
+                }
                 let reply = lock(&question_replies).observe(&frame);
                 if let Some(reply) = reply {
                     if sender.send(reply).is_err() {
@@ -959,6 +1005,7 @@ fn spawn_error(program: &str, e: io::Error) -> CodexSpawnError {
 fn check_version(program: &str) -> Result<(), CodexSpawnError> {
     let output = Command::new(program)
         .arg("--version")
+        .no_console_window()
         .output()
         .map_err(|e| spawn_error(program, e))?;
     if !output.status.success() {
@@ -1015,7 +1062,7 @@ fn parse_version_token(token: &str) -> Option<(String, [u64; 3])> {
 /// Codex's way of titling a Thread: `codex exec`, whose stdout is the
 /// final message alone (the banner goes to stderr).
 pub mod title {
-    use crate::titler::TitleForm;
+    use crate::providers::oneshot::Form as TitleForm;
 
     /// The small model in Codex's own catalogue.
     pub const MODEL: &str = "gpt-5.4-mini";
@@ -1029,13 +1076,17 @@ pub mod title {
     /// verified against `codex exec --help` of 0.144.4. The prompt is the
     /// positional argument.
     pub fn fill(program: &str, prompt: &str) -> TitleForm {
+        fill_with_model(program, prompt, MODEL)
+    }
+
+    pub(super) fn fill_with_model(program: &str, prompt: &str, model: &'static str) -> TitleForm {
         let effort = format!("model_reasoning_effort=\"{EFFORT}\"");
         TitleForm {
             program: program.to_string(),
             args: [
                 "exec",
                 "--model",
-                MODEL,
+                model,
                 "-c",
                 effort.as_str(),
                 "--ephemeral",
@@ -1051,9 +1102,36 @@ pub mod title {
             .into_iter()
             .map(str::to_string)
             .collect(),
-            model: MODEL,
+            model,
             effort: EFFORT,
         }
+    }
+}
+
+/// Follow-ups use the same isolated exec policy as Titles, with the
+/// operator-requested GPT-5.5 at its lowest supported reasoning effort.
+pub(super) mod followup {
+    use super::title;
+    use crate::providers::oneshot::Form;
+
+    pub fn fill(program: &str, system: &str) -> Form {
+        let mut form = title::fill_with_model(program, system, "gpt-5.5");
+        // No local tools or external connectors are needed for a prediction.
+        form.args.splice(
+            1..1,
+            [
+                "-c",
+                "features.shell_tool=false",
+                "-c",
+                "features.apps=false",
+                "-c",
+                "features.multi_agent=false",
+                "-c",
+                "web_search=\"disabled\"",
+            ]
+            .map(str::to_string),
+        );
+        form
     }
 }
 

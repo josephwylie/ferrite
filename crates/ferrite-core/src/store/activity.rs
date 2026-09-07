@@ -796,6 +796,10 @@ fn project_agent<R: std::borrow::Borrow<super::Record>>(
             | PersistedActivity::Status { key, .. }
             | PersistedActivity::Coverage { key, .. }
             | PersistedActivity::Detached { key } => key,
+            PersistedActivity::CompletionObservation {
+                subject: PersistedSubject::Subagent { key },
+                ..
+            } => key,
             _ => continue,
         };
         if aliases.resolve(observed_key) != canonical {
@@ -856,14 +860,13 @@ fn project_agent<R: std::borrow::Borrow<super::Record>>(
                         _ => None,
                     }
                 };
-                outcome.map(|outcome| {
-                    (
-                        None,
-                        ExecutionEvent::TurnEnded {
-                            outcome,
-                            cost_usd: None,
-                        },
-                    )
+                outcome.map(|outcome| ActivityEvent::HistoryContent {
+                    key: key.clone(),
+                    id: None,
+                    event: ExecutionEvent::TurnEnded {
+                        outcome,
+                        cost_usd: None,
+                    },
                 })
             }
             PersistedActivity::Content { id, event, .. }
@@ -900,11 +903,16 @@ fn project_agent<R: std::borrow::Borrow<super::Record>>(
                     omitted = true;
                     continue;
                 }
-                Some((id.clone(), event.live()))
+                Some(ActivityEvent::HistoryContent {
+                    key: key.clone(),
+                    id: id.clone(),
+                    event: event.live(),
+                })
             }
+            PersistedActivity::CompletionObservation { .. } => Some(observation.live()),
             _ => None,
         };
-        let Some((id, event)) = historical_content else {
+        let Some(event) = historical_content else {
             continue;
         };
         // Serialization cost is a conservative proxy for retained strings/JSON.
@@ -916,15 +924,7 @@ fn project_agent<R: std::borrow::Borrow<super::Record>>(
         let timing = observation
             .tool_duration()
             .map(|(_, id, duration)| (id, duration));
-        content.push_back((
-            ActivityEvent::HistoryContent {
-                key: key.clone(),
-                id,
-                event,
-            },
-            size,
-            timing,
-        ));
+        content.push_back((event, size, timing));
         bytes = bytes.saturating_add(size);
         while bytes > limits.content_bytes_per_subject
             || content.len() > limits.blocks_per_subject.saturating_mul(8).max(1)

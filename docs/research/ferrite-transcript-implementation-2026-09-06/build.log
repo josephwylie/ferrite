@@ -1,0 +1,40 @@
+   Compiling ferrite v0.1.0 (/Users/josephwylie/Desktop/Projects/ferrite/crates/ferrite)
+warning: associated function `ephemeral` is never used
+   --> crates/ferrite/src/cockpit.rs:234:8
+    |
+232 | impl Preferences {
+    | ---------------- associated function in this implementation
+233 |     /// Defaults saved nowhere — the test constructor's and the demo's.
+234 |     fn ephemeral() -> Self {
+    |        ^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: associated function `new_with_provider` is never used
+   --> crates/ferrite/src/cockpit.rs:575:12
+    |
+569 | impl CockpitView {
+    | ---------------- associated function in this implementation
+...
+575 |     pub fn new_with_provider(
+    |            ^^^^^^^^^^^^^^^^^
+
+warning: method `ordered_solos` is never used
+   --> crates/ferrite/src/nav.rs:137:12
+    |
+122 | impl NavState {
+    | ------------- method in this implementation
+...
+137 |     pub fn ordered_solos(&self) -> Vec<&ThreadRow> {
+    |            ^^^^^^^^^^^^^
+
+warning: function `model_label` is never used
+    --> crates/ferrite/src/pane.rs:2200:8
+     |
+2200 | pub fn model_label(model: &str) -> SharedString {
+     |        ^^^^^^^^^^^
+
+warning: `ferrite` (bin "ferrite") generated 4 warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.10s
+warning: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`

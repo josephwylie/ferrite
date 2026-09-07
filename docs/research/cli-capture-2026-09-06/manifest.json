@@ -1,0 +1,71 @@
+{
+  "created_utc": "2026-09-06T11:23:04.480566+00:00",
+  "socket": "ferrite-capture-93146",
+  "columns": 120,
+  "rows": 44,
+  "sample_interval_s": 0.1,
+  "terminal": "tmux-256color",
+  "term_program": "tmux",
+  "default_foreground": "#d8dee9",
+  "default_background": "#17191f",
+  "commands": {
+    "claude": [
+      "claude",
+      "--strict-mcp-config",
+      "--permission-mode",
+      "manual",
+      "--tools",
+      "Read,Glob,Grep,Bash,AskUserQuestion",
+      "--settings",
+      "{\"disableAllHooks\":true}",
+      "--append-system-prompt",
+      "This is a harmless terminal presentation capture. Only read synthetic files in the current directory. Never modify files, use network tools, inspect secrets, or delegate to agents. Execute only explicitly requested harmless shell commands."
+    ],
+    "codex": [
+      "codex",
+      "-s",
+      "read-only",
+      "-a",
+      "on-request",
+      "-c",
+      "web_search=\"disabled\"",
+      "-c",
+      "tui.notifications=false"
+    ]
+  },
+  "fixture": "/var/folders/5y/hnh41b2j29z8kqxy7ftzfdn80000gn/T/ferrite-cli-fixture-2qxmbany",
+  "notes": [
+    "Inherited authentication and user configuration; no credentials copied into evidence.",
+    "Claude hooks disabled for this invocation; only named built-in tools enabled.",
+    "Codex shell sandbox read-only; no web search; external tools not requested.",
+    "Captured grids sampled, raw PTY output continuous. Rendered images are reconstructions, not native screenshots."
+  ],
+  "versions": {
+    "claude": "2.1.263 (Claude Code)",
+    "codex": "codex-cli 0.153.4",
+    "tmux": "tmux 3.7b"
+  },
+  "stopped_utc": "2026-09-06T11:43:16.196114+00:00",
+  "python": "3.13.13 (main, Apr 14 2026, 14:32:41) [Clang 22.1.3 ]",
+  "pillow": "11.3.0",
+  "wcwidth": "0.8.2",
+  "tab_stop_columns": 8,
+  "tab_stop_changes_observed": false,
+  "default_palette_responses_verified": [
+    "codex: OSC10 rgb:d8d8/dede/e9e9",
+    "codex: OSC11 rgb:1717/1919/1f1f"
+  ],
+  "cli_exit_status": {
+    "claude": 0,
+    "codex": 0
+  },
+  "font_assets": {
+    "OFL.txt": "b118dd41337806a5d4797052c77caf3bd096aed783e5eb21b4d11154351e1ac0",
+    "NotoSansSymbols2-Regular.ttf": "7d5fb73b7ca67a6798101741f5d280a3d016a56a197afcd4199dbb57b4b82a21"
+  },
+  "fixture_hashes": {
+    "sample.py": "f7586d90f112f525c56fade53e38f44237885f16cef946b360badeed42771b67",
+    "formatting.md": "ff6efe5aaa55a5feb3ff247ba9f1d4286d1085d0eb62c80c433ab2918d76c5f0",
+    "sample.txt": "3d17c2eb65ac85754384977f0175c22ede5d458f5180df4a04246b80716a2f3e"
+  }
+}

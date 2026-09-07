@@ -10,7 +10,7 @@ and parent review of both tests and production changes.
 ## Direction and confidence
 
 Use Claude's presentation approach for both Providers, as accepted in
-[ADR 0006](../adr/0006-claude-transcript-presentation.md). The job is to let an
+[ADR 0006](../adr/0007-claude-transcript-presentation.md). The job is to let an
 operator following several Threads quickly distinguish answers, routine work,
 active work, and Decisions, then inspect details without losing their place.
 

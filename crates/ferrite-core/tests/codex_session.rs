@@ -610,7 +610,7 @@ fn a_listed_skill_is_sent_as_the_typed_item_never_as_slash_text() {
 
     session.send("/probe-body follow the skill").unwrap();
 
-    // Five startup lines (initialize, initialized, skills/list,
+    // Five non-queue startup lines (initialize, initialized, skills/list,
     // thread/start, model/list), then the turn.
     let recorded = read_lines(&log, 6);
     drop(session);
@@ -837,6 +837,13 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
     assert_eq!(sent[0]["method"], "initialize");
     assert_eq!(sent[0]["id"], 1);
     assert_eq!(sent[0]["params"]["clientInfo"]["name"], "ferrite");
+    assert_eq!(sent[0]["params"]["capabilities"]["experimentalApi"], true);
+    assert!(fs::read_to_string(&log)
+        .unwrap()
+        .lines()
+        .any(|line| serde_json::from_str::<Value>(line)
+            .ok()
+            .is_some_and(|frame| frame["method"] == "thread/queue/list")));
     assert_eq!(
         sent[1],
         serde_json::json!({"jsonrpc": "2.0", "method": "initialized"})
@@ -1374,6 +1381,13 @@ fn read_lines(path: &std::path::Path, wanted: usize) -> Vec<String> {
         let lines: Vec<String> = fs::read_to_string(path)
             .unwrap_or_default()
             .lines()
+            // Queue capability discovery is independent of the older wire
+            // assertions below; its exact handshake is asserted separately.
+            .filter(|line| {
+                serde_json::from_str::<Value>(line)
+                    .ok()
+                    .is_none_or(|frame| frame["method"] != "thread/queue/list")
+            })
             .map(str::to_string)
             .collect();
         if lines.len() >= wanted {
@@ -1415,7 +1429,7 @@ cat >> '{log}'"#,
 
     session.send("/probe-body follow the skill").unwrap();
 
-    // Five startup lines (initialize, initialized, skills/list,
+    // Five non-queue startup lines (initialize, initialized, skills/list,
     // thread/start, model/list), then the turn.
     let recorded = read_lines(&log, 6);
     drop(session);
@@ -1444,4 +1458,74 @@ fn refused_skill_discovery_fails_startup_instead_of_sending_plain_text() {
         Err(error) => error.to_string(),
     };
     assert!(error.contains("skill discovery refused"), "{error}");
+}
+
+#[test]
+fn native_queue_admission_and_cancellation_use_the_existing_session_pipe() {
+    use ferrite_core::QueueEvent;
+    let capture: Value = serde_json::from_str(include_str!(
+        "../../../docs/research/native-queues/codex-0.153.4.json"
+    ))
+    .unwrap();
+    let item = &capture["after_process_restart"][0];
+    let id = item["id"].as_str().unwrap();
+    let client = item["clientUserMessageId"].as_str().unwrap();
+    let log = log_path("native-queue.log");
+    let program = stub(
+        "native-queue",
+        &format!(
+            r#"{PRELUDE}
+: > '{}'
+for count in 1 2 3 4 5 6; do read -r line; printf '%s\n' "$line" >> '{}'; done
+echo '{{"id":"ferrite-queue-1","result":{{"data":[],"nextCursor":null}}}}'
+read -r line
+printf '%s\n' "$line" >> '{}'
+echo '{{"id":"ferrite-queue-2","result":{{"queuedSubmission":{}}}}}'
+read -r line
+printf '%s\n' "$line" >> '{}'
+echo '{{"id":"ferrite-queue-3","result":{{"deleted":true}}}}'
+exec cat > /dev/null"#,
+            log.display(),
+            log.display(),
+            log.display(),
+            item,
+            log.display()
+        ),
+    );
+    let mut session = CodexSession::spawn(config(program)).unwrap();
+    while !matches!(
+        session
+            .events()
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap(),
+        SessionEvent::Queue(QueueEvent::Snapshot(_))
+    ) {}
+    session.enqueue(client, "operator input").unwrap();
+    assert!(matches!(
+        session
+            .events()
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap(),
+        SessionEvent::Queue(QueueEvent::Accepted(_))
+    ));
+    session.cancel_queued(id).unwrap();
+    assert!(matches!(
+        session
+            .events()
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap(),
+        SessionEvent::Queue(QueueEvent::Cancelled {
+            cancelled: true,
+            ..
+        })
+    ));
+    let lines: Vec<Value> = fs::read_to_string(&log)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(lines[6]["method"], "thread/queue/add");
+    assert_eq!(lines[6]["params"]["clientUserMessageId"], client);
+    assert_eq!(lines[7]["method"], "thread/queue/delete");
+    assert_eq!(lines[7]["params"]["queuedSubmissionId"], id);
 }

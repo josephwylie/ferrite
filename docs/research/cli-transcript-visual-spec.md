@@ -4,7 +4,7 @@ Captured 2026-09-06, Australia/Adelaide. Claude Code **2.1.263**, Codex CLI
 **0.153.4**. These are observations of the installed CLIs, not mockups.
 
 **Product direction, 2026-09-06:** the operator chose Claude's design approach
-for both Providers. [ADR 0006](../adr/0006-claude-transcript-presentation.md)
+for both Providers. [ADR 0006](../adr/0007-claude-transcript-presentation.md)
 records that decision. The comparisons below preserve the observed differences;
 they do not require separate Claude and Codex visual designs in Ferrite.
 

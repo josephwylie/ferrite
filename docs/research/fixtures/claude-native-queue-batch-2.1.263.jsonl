@@ -1,0 +1,13 @@
+{"mode": "batch", "version": "2.1.263 (Claude Code)", "capture_ends": "second result"}
+{"type": "command_lifecycle", "command_uuid": "5090f9de-d9ba-403b-aa68-52391a3861f6", "state": "queued"}
+{"type": "command_lifecycle", "command_uuid": "5090f9de-d9ba-403b-aa68-52391a3861f6", "state": "started"}
+{"type": "system", "subtype": "init", "claude_code_version": "2.1.263", "capabilities": ["interrupt_receipt_v1", "interrupt_cancel_queued_v1", "msg_lifecycle_v1"]}
+{"type": "command_lifecycle", "command_uuid": "d0c12b46-c11b-495b-8606-b00c913b8207", "state": "queued"}
+{"type": "command_lifecycle", "command_uuid": "ae0d80cb-966c-4aba-b959-d4c2bd15e0cc", "state": "queued"}
+{"type": "control_response", "request_id": "cancel_started", "subtype": "success", "response": {"cancelled": false}}
+{"type": "result", "subtype": "success", "terminal_reason": "completed", "user_message_uuid": "5090f9de-d9ba-403b-aa68-52391a3861f6", "user_message_uuids": ["5090f9de-d9ba-403b-aa68-52391a3861f6"], "queued_turn_count": 0}
+{"type": "command_lifecycle", "command_uuid": "5090f9de-d9ba-403b-aa68-52391a3861f6", "state": "completed"}
+{"type": "command_lifecycle", "command_uuid": "d0c12b46-c11b-495b-8606-b00c913b8207", "state": "started"}
+{"type": "command_lifecycle", "command_uuid": "ae0d80cb-966c-4aba-b959-d4c2bd15e0cc", "state": "started"}
+{"type": "system", "subtype": "init", "claude_code_version": "2.1.263", "capabilities": ["interrupt_receipt_v1", "interrupt_cancel_queued_v1", "msg_lifecycle_v1"]}
+{"type": "result", "subtype": "success", "terminal_reason": "completed", "user_message_uuid": "ae0d80cb-966c-4aba-b959-d4c2bd15e0cc", "user_message_uuids": ["d0c12b46-c11b-495b-8606-b00c913b8207", "ae0d80cb-966c-4aba-b959-d4c2bd15e0cc"], "queued_turn_count": 0}

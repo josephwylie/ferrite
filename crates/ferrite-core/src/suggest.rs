@@ -1,25 +1,8 @@
-//! The Composer's follow-up suggestion, predicted by a small model.
-//!
-//! Neither provider hands Ferrite a prediction it can rely on. Codex has no
-//! such surface at all. Claude Code does — `--prompt-suggestions` emits a
-//! `prompt_suggestion` frame — but it sits behind a server-side flag and a
-//! filter that discards most candidates, so a cockpit cannot count on one
-//! arriving. Ferrite asks for its own instead, and asks the same way for both
-//! providers so two Panes side by side behave alike.
-//!
-//! The ask is a one-shot `claude` run on Haiku with the session stripped to
-//! nothing: no tools, no MCP, no skills, no CLAUDE.md, no persisted session,
-//! and Ferrite's own system prompt in place of the CLI's. That holds it to a
-//! few hundred input tokens, and it reuses whatever credentials the
-//! operator's CLI already has — Ferrite keeps no API key of its own.
-//!
-//! Every run is a spawned thread that ends by sending one [`Suggestion`] or
-//! nothing at all. Failure is silence by design: a Thread whose suggestion
-//! never lands keeps the generic idle line, which is what it had before.
+//! Follow-up context and filtering, independent of provider protocol.
+//! Codex predicts through the same bounded one-shot runner used by Titles.
+//! Claude supplies native suggestions through its live Session instead. Missing CLIs, failed runs and refused replies leave the
+//! generic idle line. No conversation is sent to a different Provider.
 
-use std::io::Write;
-use std::path::PathBuf;
-use std::process::{Command, Stdio};
 use std::sync::mpsc::Sender;
 
 use crate::store::Provider;
@@ -51,6 +34,8 @@ pub struct Suggestion {
     /// provider switch moves the generation on, and a reply carrying the old
     /// one is answering a conversation that no longer exists.
     pub generation: u64,
+    /// Reject replies superseded within the same Session.
+    pub revision: u64,
     pub text: String,
 }
 
@@ -60,12 +45,9 @@ pub struct Suggestion {
 pub struct Request {
     pub thread: ThreadId,
     pub generation: u64,
-    /// The `claude` program to run — the same discovery every Session uses.
-    pub program: String,
-    /// Where to run it. `--safe-mode` means no CLAUDE.md or settings are read
-    /// from here; this only keeps the run inside a directory the operator
-    /// already works in.
-    pub cwd: Option<PathBuf>,
+    /// Reject replies superseded within the same Session.
+    pub revision: u64,
+    pub provider: Provider,
     /// The digest of the last exchange, from [`context`].
     pub context: String,
 }
@@ -74,13 +56,17 @@ pub struct Request {
 /// if it arrives at all.
 pub fn spawn(request: Request, replies: Sender<Suggestion>) {
     std::thread::spawn(move || {
-        let Some(text) = run(&request) else {
+        let Some(text) =
+            crate::providers::oneshot::predict(request.provider, SYSTEM, &request.context)
+                .filter(|text| accept(text))
+        else {
             return;
         };
         // A closed receiver means the cockpit is gone. Nothing to report to.
         let _ = replies.send(Suggestion {
             thread: request.thread,
             generation: request.generation,
+            revision: request.revision,
             text,
         });
     });
@@ -144,72 +130,6 @@ fn clip(text: &str) -> String {
         .collect::<String>()
         .trim()
         .to_string()
-}
-
-/// Run the CLI and read one suggestion out of it. None for anything at all
-/// going wrong — a missing binary, a non-zero exit, an error result,
-/// unparseable output, or a reply the filter refuses.
-fn run(request: &Request) -> Option<String> {
-    let program = crate::providers::spawnable_program(&request.program);
-    let mut command = Command::new(&program);
-    command.args([
-        "-p",
-        // The alias, not a pinned id: the operator's CLI resolves it to
-        // whatever the current small model is, and Ferrite does not want a
-        // model name it has to keep up to date.
-        "--model",
-        "haiku",
-        "--output-format",
-        "json",
-        // Nothing about this run should outlive it or touch the operator's
-        // own state: no entry in their `/resume` picker, and no settings,
-        // CLAUDE.md, skills, hooks or MCP servers read from their machine.
-        "--no-session-persistence",
-        "--safe-mode",
-        // No tools at all. This is the single biggest cost lever — the tool
-        // schema dwarfs the prompt — and a predictor has nothing to run.
-        "--tools",
-        "",
-        // Nothing can prompt with no tools, but a run that somehow blocked
-        // on a permission would hang its thread forever.
-        "--permission-prompts",
-        "none",
-        "--system-prompt",
-        SYSTEM,
-    ]);
-    if let Some(cwd) = request.cwd.as_deref().filter(|cwd| cwd.is_dir()) {
-        command.current_dir(cwd);
-    }
-    // The context goes on stdin, not in argv: it is operator and model prose,
-    // which may be long, may hold newlines, and on Windows would go through a
-    // `.cmd` shim's quoting on its way to the real CLI.
-    let mut child = command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-    child
-        .stdin
-        .take()
-        .expect("stdin was piped")
-        .write_all(request.context.as_bytes())
-        .ok()?;
-    let output = child.wait_with_output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    parse(&String::from_utf8_lossy(&output.stdout))
-}
-
-/// The usable suggestion in one `--output-format json` document.
-pub(crate) fn parse(stdout: &str) -> Option<String> {
-    let value: serde_json::Value = serde_json::from_str(stdout.trim()).ok()?;
-    if value.get("is_error").and_then(serde_json::Value::as_bool) != Some(false) {
-        return None;
-    }
-    let text = value.get("result")?.as_str()?.trim();
-    accept(text).then(|| text.to_string())
 }
 
 /// Whether a reply is worth putting in the box.
@@ -299,14 +219,6 @@ fn multiple_sentences(text: &str) -> bool {
     })
 }
 
-/// The `claude` program to ask, whatever the Thread's own provider is — the
-/// predictor is Ferrite's, not the Thread's. None when no Claude CLI was
-/// found anywhere, the one configuration this path cannot serve.
-pub fn program() -> Option<String> {
-    crate::providers::discover::located(Provider::Claude)
-        .map(|_| crate::providers::discover::program(Provider::Claude))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -361,24 +273,6 @@ mod tests {
             "{}",
             context.chars().count()
         );
-    }
-
-    #[test]
-    fn a_usable_reply_is_read_out_of_the_json() {
-        let stdout = r#"{"is_error":false,"result":"Run the tests and report back."}"#;
-        assert_eq!(parse(stdout), Some("Run the tests and report back.".into()));
-    }
-
-    #[test]
-    fn an_errored_or_malformed_run_yields_nothing() {
-        for stdout in [
-            r#"{"is_error":true,"result":"Credit balance too low"}"#,
-            r#"{"result":"no is_error field"}"#,
-            "not json at all",
-            "",
-        ] {
-            assert_eq!(parse(stdout), None, "{stdout}");
-        }
     }
 
     /// The vendor's own filters, because the failure modes are the vendor's

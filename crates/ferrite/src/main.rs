@@ -1,4 +1,8 @@
 // Ferrite: the cockpit window and the pump behind it.
+// A GUI app, not a console one: without this Windows hands ferrite.exe its
+// own console window at launch. Left on in debug builds so `cargo run`
+// still prints.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod attachment_preview;
 mod attachments;
 mod cockpit;
@@ -6,6 +10,7 @@ mod components;
 mod composer;
 mod demo;
 mod facts;
+mod file_links;
 mod fuzzy;
 mod icons;
 mod keymap;
@@ -24,6 +29,7 @@ mod session;
 mod shell;
 mod theme;
 mod titlebar;
+mod transcript;
 
 use ::gpui;
 use ::gpui as kit;

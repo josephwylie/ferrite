@@ -1,0 +1,42 @@
+# Heading one
+## Heading two
+### Heading three
+#### Heading four
+##### Heading five
+###### Heading six
+
+Normal alpha beta. Double alpha  beta. Triple alpha   beta. NBSP alpha beta.
+This is a soft break
+on the next source line.
+This is a hard break  
+on the next source line.
+
+**Bold**, *italic*, ~~strike~~, `inline  code`, and [example link](https://example.com/fixture).
+
+- Outer item with **bold** and `code`.
+  - Nested item with a long continuation that should wrap naturally when the terminal width becomes narrow enough to require another row.
+- Second outer item.
+
+9. Ninth item.
+10. Tenth item with continuation text long enough to wrap in a narrow terminal and show the hanging indentation.
+
+> Quoted alpha  beta.
+> Second quoted line.
+
+| Name | Count | Note |
+| :--- | ---: | :--- |
+| Alpha | 2 | two  spaces |
+| Beta | 12 | a longer table cell |
+
+---
+
+```text
+one two
+one  two   three    four
+    four leading spaces
+	actual tab character
+trailing two spaces:  
+
+Unicode: café naïve → ✓ 界 é
+0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz
+```

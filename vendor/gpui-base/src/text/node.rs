@@ -568,7 +568,7 @@ fn emit_run(
     let Ok(state) = state.lock() else {
         return selected;
     };
-    let Some(selection) = &state.selection else {
+    let Some(selection) = state.selected_range() else {
         return selected;
     };
     if selection.start >= selection.end {
@@ -860,13 +860,13 @@ impl Paragraph {
             let Ok(state) = c.state.lock() else {
                 continue;
             };
-            if let Some(selection) = &state.selection {
+            if let Some(selection) = state.selected_range() {
                 text.push_str(&state.text[selection.start..selection.end]);
             }
         }
 
         if let Ok(state) = self.state.lock()
-            && let Some(selection) = &state.selection
+            && let Some(selection) = state.selected_range()
         {
             text.push_str(&state.text[selection.start..selection.end]);
         }
@@ -944,24 +944,25 @@ impl Paragraph {
     ///
     /// Mirrors the [`selected_text`](Self::selected_text) traversal.
     pub(super) fn has_selection(&self) -> bool {
-        self.children
-            .iter()
-            .any(|c| c.state.lock().is_ok_and(|state| state.selection.is_some()))
-            || self
-                .state
+        self.children.iter().any(|c| {
+            c.state
                 .lock()
-                .is_ok_and(|state| state.selection.is_some())
+                .is_ok_and(|state| state.selected_range().is_some())
+        }) || self
+            .state
+            .lock()
+            .is_ok_and(|state| state.selected_range().is_some())
     }
 
     pub(super) fn clear_selection(&self) {
         for c in self.children.iter() {
             if let Ok(mut state) = c.state.lock() {
-                state.selection = None;
+                state.clear_selection();
             }
         }
 
         if let Ok(mut state) = self.state.lock() {
-            state.selection = None;
+            state.clear_selection();
         }
     }
 }
@@ -1242,7 +1243,7 @@ impl CodeBlock {
     pub(super) fn selected_text(&self) -> String {
         let mut text = String::new();
         if let Ok(state) = self.state.lock()
-            && let Some(selection) = &state.selection
+            && let Some(selection) = state.selected_range()
         {
             text.push_str(&state.text[selection.start..selection.end]);
         }
@@ -1280,12 +1281,12 @@ impl CodeBlock {
     pub(super) fn has_selection(&self) -> bool {
         self.state
             .lock()
-            .is_ok_and(|state| state.selection.is_some())
+            .is_ok_and(|state| state.selected_range().is_some())
     }
 
     pub(super) fn clear_selection(&self) {
         if let Ok(mut state) = self.state.lock() {
-            state.selection = None;
+            state.clear_selection();
         }
     }
 
@@ -1351,6 +1352,7 @@ pub(crate) struct NodeContext {
     pub(crate) code_block_actions: Option<Arc<CodeBlockActionsFn>>,
     pub(crate) code_block_highlighter: Option<Arc<CodeBlockHighlighterFn>>,
     pub(crate) table_actions: Option<Arc<TableActionsFn>>,
+    pub(crate) link_renderer: Option<Arc<super::text_view::LinkRendererFn>>,
     pub(crate) link_click_handler: Option<Arc<LinkClickHandlerFn>>,
     pub(crate) markdown_extensions: Arc<MarkdownExtensions>,
 }
@@ -1374,13 +1376,20 @@ impl Paragraph {
         let span = self.span;
         let children = &self.children;
 
-        if self.should_render_inline_flow() {
-            return InlineFlow::new(
+        let has_custom_links = node_cx.link_renderer.is_some()
+            && children
+                .iter()
+                .any(|child| child.marks.iter().any(|(_, mark)| mark.link.is_some()));
+        if self.should_render_inline_flow() || has_custom_links {
+            let flow = InlineFlow::new(
                 span.unwrap_or_default(),
                 self.inline_flow_items(node_cx, cx),
                 node_cx.link_click_handler.clone(),
             )
-            .into_any_element();
+            .render_links(node_cx.link_renderer.as_ref(), _window, cx);
+            if self.should_render_inline_flow() || flow.has_elements() {
+                return flow.into_any_element();
+            }
         }
 
         let mut child_nodes: Vec<AnyElement> = vec![];
@@ -1869,10 +1878,7 @@ impl BlockNode {
     ) -> AnyElement {
         match item {
             BlockNode::ListItem {
-                children,
-                spread,
-                checked,
-                ..
+                children, checked, spread, ..
             } => v_flex()
                 .id(("li", options.ix))
                 .w_full()

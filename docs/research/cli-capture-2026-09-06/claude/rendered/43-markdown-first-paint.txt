@@ -1,0 +1,44 @@
+                                                                                                                        
+  a short description. This is only a disposable UI capture; do not change any setting or file. After I answer,         
+  acknowledge my selection in one sentence.                                                                             
+                                                                                                                        
+⏺ Showing the Display question.                                                                                         
+                                                                                                                        
+⏺ User answered Claude's questions:                                                                                     
+  ⎿  · Which display mode do you prefer? → Detailed                                                                     
+                                                                                                                        
+⏺ You selected Detailed, and no setting or file was changed.                                                            
+                                                                                                                        
+✻ Crunched for 7s · done 9:01 pm                                                                                        
+                                                                                                                        
+❯ Read formatting.md in this synthetic directory. Reply with its exact complete contents as Markdown, preserving all    
+  whitespace. Do not wrap the whole response in an extra code fence. No preface or suffix. Do not write or change files 
+  or use external tools.                                                                                                
+                                                                                                                        
+⏺ Reading formatting.md.                                                                                                
+                                                                                                                        
+  Read 1 file                                                                                                           
+  ⎿  formatting.md                                                                                                      
+⏺ Heading one                                                                                                           
+                                                                                                                        
+  Heading two                                                                                                           
+                                                                                                                        
+  Heading three                                                                                                         
+                                                                                                                        
+  Heading four                                                                                                          
+                                                                                                                        
+  Heading five                                                                                                          
+                                                                                                                        
+  Heading six                                                                                                           
+                                                                                                                        
+  Normal alpha beta. Double alpha  beta. Triple alpha   beta. NBSP alpha beta.                                          
+  This is a soft break                                                                                                  
+  on the next source line.                                                                                              
+  This is a hard break                                                                                                  
+  on the next source line.                                                                                              
+                                                                                                                        
+                                                                                                                        
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯                                                                                                                       
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on · esc to interrupt                                                                              /rc  

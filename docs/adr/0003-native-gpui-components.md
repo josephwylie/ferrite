@@ -9,7 +9,7 @@ The toolkit owns rich-text parsing and selection, popup-menu interaction,
 and Settings categories. Ferrite supplies its existing tokens,
 provider icons, pane frames, command actions and durable Thread identity.
 
-[ADR 0006](0006-claude-transcript-presentation.md) establishes Claude as the
+[ADR 0007](0007-claude-transcript-presentation.md) establishes Claude as the
 shared transcript presentation reference for both Providers.
 
 Keep Ferrite's existing split-tree layout and resize/drop handling. Native dock

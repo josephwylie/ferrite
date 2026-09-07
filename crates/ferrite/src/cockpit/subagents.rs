@@ -1085,6 +1085,7 @@ impl CockpitView {
                             .child(crate::components::composer_join(
                                 radius,
                                 rgb(theme::RAISED).into(),
+                                gpui::rgba(theme::COMPOSER_EDGE).into(),
                             ))
                             .child(
                                 GroupBox::new()
@@ -1195,23 +1196,6 @@ impl CockpitView {
             .0
             .borrow_mut()
             .retain(|handle, _| pending.iter().any(|request| &request.handle == handle));
-    }
-
-    pub(super) fn toggle_subject_tool(
-        &mut self,
-        thread: ThreadId,
-        subject: &Subject,
-        call: &pane::DisclosureId,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(index) = self.pane_for(thread) else {
-            return;
-        };
-        if &self.panes[index].selected != subject {
-            return;
-        }
-        self.toggle_tool(thread, call, window, cx);
     }
 
     pub(super) fn answer_subject(&mut self, answer: Answer, cx: &mut Context<Self>) {

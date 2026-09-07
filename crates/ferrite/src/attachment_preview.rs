@@ -2,9 +2,8 @@
 //! this module supplies the owning Pane's bounds instead of the window's.
 
 use std::{
-    cell::{Cell, RefCell},
     path::PathBuf,
-    rc::Rc,
+    sync::{Arc, Mutex},
 };
 
 use gpui::component::{
@@ -24,31 +23,33 @@ struct State {
 }
 
 #[derive(Clone)]
+// Native Markdown callbacks require Send + Sync captures; the Pane still owns this slot.
 pub struct Preview {
-    state: Rc<RefCell<State>>,
-    bounds: Rc<Cell<Bounds<Pixels>>>,
+    state: Arc<Mutex<State>>,
+    bounds: Arc<Mutex<Bounds<Pixels>>>,
     focus: FocusHandle,
 }
 
 impl Preview {
     pub fn new(cx: &mut App) -> Self {
         Self {
-            state: Rc::new(RefCell::new(State::default())),
-            bounds: Rc::new(Cell::new(Bounds::default())),
+            state: Arc::new(Mutex::new(State::default())),
+            bounds: Arc::new(Mutex::new(Bounds::default())),
             focus: cx.focus_handle(),
         }
     }
 
     pub fn focus_target(&self) -> Option<FocusHandle> {
         self.state
-            .borrow()
+            .lock()
+            .unwrap()
             .image
             .as_ref()
             .map(|_| self.focus.clone())
     }
 
     pub fn open(&self, path: PathBuf, title: String, window: &mut Window, cx: &mut App) {
-        let mut state = self.state.borrow_mut();
+        let mut state = self.state.lock().unwrap();
         if state.image.is_none() {
             state.return_focus = window.focused(cx);
         }
@@ -60,7 +61,7 @@ impl Preview {
     }
 
     fn close(&self, window: &mut Window, cx: &mut App) {
-        let mut state = self.state.borrow_mut();
+        let mut state = self.state.lock().unwrap();
         state.image = None;
         let focus = state.return_focus.take();
         drop(state);
@@ -75,8 +76,12 @@ impl Preview {
         pane.child(
             canvas(
                 move |bounds, window, cx| {
-                    if preview.bounds.replace(bounds) != bounds
-                        && preview.state.borrow().image.is_some()
+                    if {
+                        let mut prior = preview.bounds.lock().unwrap();
+                        let changed = *prior != bounds;
+                        *prior = bounds;
+                        changed
+                    } && preview.state.lock().unwrap().image.is_some()
                     {
                         // refresh() is ignored during prepaint. Schedule the
                         // new pane geometry after this frame completes.
@@ -98,11 +103,11 @@ struct PreviewLayer(Preview);
 impl RenderOnce for PreviewLayer {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let preview = self.0;
-        let image = preview.state.borrow().image.clone();
+        let image = preview.state.lock().unwrap().image.clone();
         let Some((path, title)) = image else {
             return div().absolute().into_any_element();
         };
-        let bounds = preview.bounds.get();
+        let bounds = *preview.bounds.lock().unwrap();
         let close_button = preview.clone();
         let close_dialog = preview.clone();
         let content = div()
