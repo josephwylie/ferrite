@@ -135,7 +135,7 @@ pub fn row(index: usize, item: &Item, armed: bool) -> Stateful<Div> {
         );
     }
     if armed {
-        row = row.bg(rgb(BLOCKED_WASH)).text_color(rgb(TEXT_STRONG));
+        row = row.bg(rgba(BLOCKED_WASH)).text_color(rgb(TEXT_STRONG));
     }
     if item.disabled {
         row
@@ -227,7 +227,7 @@ mod tests {
     fn an_armed_destructive_row_wears_the_wash() {
         let delete = Item::new("Delete Thread").destructive();
         let mut drawn = row(2, &delete, true);
-        assert_eq!(drawn.style().background, Some(rgb(BLOCKED_WASH).into()));
+        assert_eq!(drawn.style().background, Some(rgba(BLOCKED_WASH).into()));
         let mut calm = row(2, &delete, false);
         assert_eq!(calm.style().background, None);
     }
