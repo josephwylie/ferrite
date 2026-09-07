@@ -876,6 +876,15 @@ fn read_stdout(
                                 session_id: thread.thread_id.clone(),
                                 model: thread.model.clone(),
                             });
+                            // So does the approval policy that took effect —
+                            // the Composer's mode chip — the way Claude's
+                            // handshake names its permission mode. A server
+                            // that named none announces none.
+                            if !thread.capabilities.approval_policy.is_empty() {
+                                let _ = sender.send(SessionEvent::PermissionMode {
+                                    mode: thread.capabilities.approval_policy.clone(),
+                                });
+                            }
                             let update = activity.identify_main(&thread.thread_id);
                             // Release spawn before publishing a potentially
                             // large resumed tree into the bounded event stream.

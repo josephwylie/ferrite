@@ -637,6 +637,10 @@ pub struct PaneWiring {
     /// Context and account usage lines beside the model control.
     pub usage_meter: Option<AnyElement>,
     pub session_controls: Option<AnyElement>,
+    /// The mode chip as a menu trigger: a click lists the Session's native
+    /// permission modes and a pick switches the running Session. `None`
+    /// draws the plain chip.
+    pub mode_picker: Option<AnyElement>,
     /// The pending Decision's keycaps, wired to the exact decide verbs the
     /// keys run (#26) — laid into the L1 card or the L2 body. None while
     /// nothing pends, and at the wall, which draws no keycaps.
@@ -800,6 +804,7 @@ pub fn render_pane(
         model_picker,
         usage_meter,
         session_controls,
+        mode_picker,
         mut decide,
         title,
         agents,
@@ -891,6 +896,7 @@ pub fn render_pane(
                     history_available,
                     menu: None,
                     mode: permission_mode.as_deref(),
+                    mode_picker: None,
                     model_picker: None,
                     usage_meter: None,
                     session_controls: None,
@@ -1002,6 +1008,7 @@ pub fn render_pane(
                         history_available,
                         menu,
                         mode: permission_mode.as_deref(),
+                        mode_picker,
                         model_picker,
                         usage_meter,
                         session_controls,
@@ -1181,6 +1188,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
                     history_available: false,
                     menu,
                     mode: None,
+                    mode_picker: None,
                     model_picker: Some(picker),
                     usage_meter,
                     session_controls: None,
@@ -2501,6 +2509,8 @@ struct ComposerStack<'a> {
     history_available: bool,
     menu: Option<AnyElement>,
     mode: Option<&'a str>,
+    /// The mode chip wired to its menu; `None` draws the plain chip.
+    mode_picker: Option<AnyElement>,
     /// The Composer's model picker (#25) — drawn in every Pane.
     model_picker: Option<AnyElement>,
     /// Live usage sits immediately beside the model picker.
@@ -2542,6 +2552,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         history_available,
         menu,
         mode,
+        mode_picker,
         model_picker,
         usage_meter,
         session_controls,
@@ -2682,7 +2693,10 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
     // prototype draws it on its two running Panes and omits it from the
     // Decision and the blocked one.
     if let Some(mode) = mode.filter(|_| running && !blocking) {
-        controls = controls.child(mode_chip(mode));
+        controls = controls.child(match mode_picker {
+            Some(picker) => div().flex_shrink_0().child(picker),
+            None => mode_chip(mode),
+        });
     }
     let escape = if blocking {
         Some("esc dismiss")
@@ -2756,7 +2770,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
 /// The Composer's mode chip (§D.7): 20px on `--hover` at rest, 7px inline
 /// padding, a 10px pencil and the mode's own word. Hover lifts it to
 /// `--fill` / `--text`.
-fn mode_chip(mode: &str) -> Div {
+pub fn mode_chip(mode: &str) -> Div {
     div()
         .flex()
         .flex_shrink_0()
@@ -2814,7 +2828,7 @@ pub fn offers_import(transcript: Option<&Transcript>) -> bool {
 }
 
 /// Display the adapter's label for its native mode; unknown values stay visible.
-fn permission_mode_label(
+pub fn permission_mode_label(
     mode: &str,
     choices: &[ferrite_core::PermissionModeChoice],
 ) -> SharedString {
