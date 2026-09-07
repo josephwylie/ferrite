@@ -7,16 +7,24 @@
 //! `Value` and anything unrecognised — new event types, changed field types,
 //! outright junk — is silently nothing rather than an error.
 
-/// Stream-json accepts native image blocks. Keep every path in the text too:
-/// unreadable, oversized and other formats remain available to Claude's tools.
-/// The read is bounded; dropping an archive never loads it into the UI process.
+/// Stream-json accepts native image and PDF blocks. Keep every path in the text
+/// too: unreadable, oversized and other formats remain available to Claude's
+/// tools. The reads are bounded, including across one prompt.
 pub(super) fn input_content(text: &str, cwd: Option<&std::path::Path>) -> Vec<serde_json::Value> {
     use base64::Engine;
     use std::io::Read;
-    const IMAGE_LIMIT: u64 = 5 * 1024 * 1024;
+    const ATTACHMENT_LIMIT: u64 = 5 * 1024 * 1024;
+    const INLINE_ATTACHMENT_LIMIT: u64 = 20 * 1024 * 1024;
     let mut content = vec![serde_json::json!({"type": "text", "text": text})];
+    let mut inline_bytes = 0;
     for path in crate::prompt_files::paths(text, cwd) {
-        let Some(media_type) = crate::prompt_files::image_type(&path) else {
+        let Some((block, media_type)) = crate::prompt_files::image_type(&path)
+            .map(|media_type| ("image", media_type))
+            .or_else(|| {
+                crate::prompt_files::pdf_type(&path)
+                    .map(|media_type| ("document", media_type))
+            })
+        else {
             continue;
         };
         let Ok(file) = std::fs::File::open(&path) else {
@@ -24,19 +32,21 @@ pub(super) fn input_content(text: &str, cwd: Option<&std::path::Path>) -> Vec<se
         };
         if !file
             .metadata()
-            .is_ok_and(|meta| meta.is_file() && meta.len() <= IMAGE_LIMIT)
+            .is_ok_and(|meta| meta.is_file() && meta.len() <= ATTACHMENT_LIMIT)
         {
             continue;
         }
         let mut bytes = Vec::new();
-        if file.take(IMAGE_LIMIT + 1).read_to_end(&mut bytes).is_err()
+        if file.take(ATTACHMENT_LIMIT + 1).read_to_end(&mut bytes).is_err()
             || bytes.is_empty()
-            || bytes.len() as u64 > IMAGE_LIMIT
+            || bytes.len() as u64 > ATTACHMENT_LIMIT
+            || inline_bytes + bytes.len() as u64 > INLINE_ATTACHMENT_LIMIT
         {
             continue;
         }
+        inline_bytes += bytes.len() as u64;
         content.push(serde_json::json!({
-            "type": "image",
+            "type": block,
             "source": {"type": "base64", "media_type": media_type,
                 "data": base64::engine::general_purpose::STANDARD.encode(bytes)},
         }));

@@ -866,6 +866,8 @@ pub(super) fn input_items(text: &str, skills: &[SessionCommand], cwd: Option<&Pa
         }
         if crate::prompt_files::image_type(&path).is_some() {
             items.push(serde_json::json!({"type": "localImage", "path": path}));
+        } else if crate::prompt_files::audio_type(&path).is_some() {
+            items.push(serde_json::json!({"type": "localAudio", "path": path}));
         } else {
             items.push(serde_json::json!({
                 "type": "mention",
