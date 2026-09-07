@@ -752,7 +752,8 @@ pub fn member_tail(id: GroupId) -> Stateful<Div> {
 
 /// The 43px Group parent row: the title, then its Projects summary.
 /// **The Group is what carries the selected fill** — a Thread row never
-/// does — and the current Group also takes the white title. No provider
+/// does — and the current Group also takes the white title. Its four-Pane
+/// mark is the same one Project order uses for grouped Threads. No provider
 /// mark, no checkout line, no disclosure glyph, no member count.
 #[cfg(test)]
 pub fn group_row(row: &GroupBlock) -> Stateful<Div> {
@@ -790,13 +791,16 @@ pub fn group_row_with_title(row: &GroupBlock, title: impl IntoElement) -> Statef
         div()
             .w(px(ROW_TEXT_W))
             .h(px(TITLE_LG_H))
-            .overflow_hidden()
+            .flex()
+            .items_center()
+            .gap(px(ROW_PAD_X))
+            .child(group_header_icon(row.id))
             .child(
                 div()
                     .flex()
                     .flex_col()
-                    .min_w(px(ROW_TEXT_W + TRUNCATE_SLOP))
-                    .max_w(px(ROW_TEXT_W + TRUNCATE_SLOP))
+                    .min_w(px(ROW_TEXT_W - ROW_ICON - ROW_PAD_X + TRUNCATE_SLOP))
+                    .max_w(px(ROW_TEXT_W - ROW_ICON - ROW_PAD_X + TRUNCATE_SLOP))
                     .truncate()
                     .h(px(TITLE_LG_H))
                     .text_size(px(FS_LG))
@@ -917,8 +921,8 @@ pub fn project_thread_row_with_title(
     .flex_row()
     .items_center()
     .gap(px(ROW_PAD_X))
-    .children(grouped.then(|| group_membership_indicator(row.thread)))
     .child(status_dot(row.thread, row.status))
+    .children(grouped.then(|| group_membership_indicator(row.thread)))
     .child(
         div()
             .flex_1()
@@ -940,6 +944,17 @@ pub fn project_thread_row_with_title(
             })
             .child(provider_mark(row.provider, PROVIDER_MARK)),
     )
+}
+
+fn group_header_icon(group: GroupId) -> Stateful<Div> {
+    div()
+        .id(("nav-group-icon", group.get() as usize))
+        .debug_selector(move || format!("nav-group-icon-{}", group.get()))
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .child(icon(icons::GROUP, ROW_ICON, TEXT_MUTED))
+        .tooltip(|window, cx| Tooltip::new("Group").build(window, cx))
 }
 
 /// The four-Pane Group mark. Project order flattens Groups into their
