@@ -120,11 +120,6 @@ cat >"$BUILT/Contents/Info.plist" <<PLIST
 PLIST
 plutil -lint -s "$BUILT/Contents/Info.plist"
 SIGNING_IDENTITY="${MACOS_SIGNING_IDENTITY:--}"
-if [ -n "$DMG" ] && [ "$SIGNING_IDENTITY" = "-" ]; then
-  echo "MACOS_SIGNING_IDENTITY must name a Developer ID Application certificate when building a DMG" >&2
-  exit 1
-fi
-
 if [ "$SIGNING_IDENTITY" = "-" ]; then
   codesign --force --sign - "$BUILT"
 else
@@ -142,8 +137,10 @@ if [ "$BUNDLE_ONLY" = true ]; then
     mkdir -p "$(dirname "$DMG")"
     rm -f "$DMG"
     hdiutil create -volname "$NAME" -srcfolder "$DMG_ROOT" -ov -format UDZO "$DMG"
-    codesign --force --timestamp --sign "$SIGNING_IDENTITY" "$DMG"
-    codesign --verify --verbose=2 "$DMG"
+    if [ "$SIGNING_IDENTITY" != "-" ]; then
+      codesign --force --timestamp --sign "$SIGNING_IDENTITY" "$DMG"
+      codesign --verify --verbose=2 "$DMG"
+    fi
     echo "Packaged → $DMG"
     exit 0
   fi

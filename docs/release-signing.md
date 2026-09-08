@@ -1,8 +1,10 @@
 # Release signing
 
-Tagged releases fail closed unless both platform signing identities are
-configured. Packaging alone cannot remove operating-system trust warnings: the
-identity must chain to Apple or a Windows-trusted certificate authority.
+Tagged releases build usable unsigned installers when no platform signing
+identity is configured. If some—but not all—secrets for a platform are set, the
+job fails rather than silently publishing an unexpectedly unsigned build.
+Packaging alone cannot remove operating-system trust warnings: the identity
+must chain to Apple or a Windows-trusted certificate authority.
 
 ## macOS
 
@@ -19,10 +21,12 @@ Configure these GitHub Actions secrets:
 - `APPLE_API_ISSUER_ID`: the App Store Connect issuer ID
 - `APPLE_API_PRIVATE_KEY`: the complete contents of the API `.p8` file
 
-The release job signs the `.app` with hardened runtime and a secure timestamp,
-places it in a drag-to-Applications `.dmg`, signs the disk image, submits it
-with `notarytool`, staples the ticket, and verifies it with `stapler` and
-Gatekeeper.
+With all six secrets present, the release job signs the `.app` with hardened
+runtime and a secure timestamp, places it in a drag-to-Applications `.dmg`,
+signs the disk image, submits it with `notarytool`, staples the ticket, and
+verifies it with `stapler` and Gatekeeper. With none present, it gives the app
+an ad-hoc signature and publishes an unsigned DMG; users authorize its first
+launch with **Control-click → Open**.
 
 ## Windows
 
@@ -42,9 +46,12 @@ Configure these GitHub Actions secrets:
 - `WINDOWS_CERTIFICATE`: base64 of the exported `.pfx`
 - `WINDOWS_CERTIFICATE_PASSWORD`: the `.pfx` export password
 
-The release job signs the application executable, builds a per-user Inno Setup
-installer, signs the installer and embedded uninstaller, timestamps every
-signature, and verifies the resulting Authenticode signatures.
+With both secrets present, the release job signs the application executable,
+builds a per-user Inno Setup installer, signs the installer and embedded
+uninstaller, timestamps every signature, and verifies the resulting
+Authenticode signatures. With neither present, it builds the same installer
+unsigned; users pass the first SmartScreen prompt with **More info → Run
+anyway**.
 
 ## Creating a release
 

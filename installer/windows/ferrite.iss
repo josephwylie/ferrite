@@ -41,8 +41,10 @@ SolidCompression=yes
 WizardStyle=modern
 CloseApplications=yes
 RestartApplications=no
-SignTool=authenticode
-SignedUninstaller=yes
+#ifdef MySignedBuild
+  SignTool=authenticode
+  SignedUninstaller=yes
+#endif
 LicenseFile={#MyAppRoot}\LICENSE-MIT
 
 [Languages]

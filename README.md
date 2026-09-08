@@ -42,9 +42,9 @@ Download the latest installer from
 
 ### macOS (Apple silicon)
 
-Open the Apple-notarized `.dmg`, then drag Ferrite into Applications. The app
-is signed with a Developer ID certificate, so Gatekeeper can verify its
-publisher and notarization ticket.
+Open the `.dmg`, then drag Ferrite into Applications. Until release signing is
+configured, first launch it with **Control-click Ferrite → Open → Open**. macOS
+remembers that choice for subsequent launches. Signed releases open normally.
 
 From a checkout, `scripts/install-app.sh` builds the release binary and
 installs it as `/Applications/Ferrite.app`, so it opens from the Dock,
@@ -52,13 +52,14 @@ Spotlight or Launchpad.
 
 ### Windows (x64)
 
-Run `ferrite-v*-x86_64-pc-windows-msvc-setup.exe`. The Authenticode-signed
+Run `ferrite-v*-x86_64-pc-windows-msvc-setup.exe`. Until release signing is
+configured, SmartScreen may appear: choose **More info → Run anyway**. The
 installer adds Ferrite to the Start menu and registers an uninstaller in
-Windows Settings. Installation is per-user and does not require administrator
-access.
+Windows Settings. Installation is per-user and needs no administrator access.
 
-Maintainers: configure the required release credentials described in
-[docs/release-signing.md](docs/release-signing.md) before pushing a version tag.
+Maintainers: releases fall back to unsigned installers when no credentials are
+configured. See [docs/release-signing.md](docs/release-signing.md) to enable
+trusted releases later.
 
 ## Quickstart
 
