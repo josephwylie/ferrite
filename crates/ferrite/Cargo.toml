@@ -14,6 +14,9 @@ ferrite-core = { path = "../ferrite-core" }
 # The kit facade keeps the renderer, native platform and components on one
 # compatible stack. Keep the gpui import name for derives and existing code.
 gpui = { package = "gpui-kit", version = "=0.6.0" }
+# Ferrite owns the semantic states for a few high-contrast actions instead of
+# inheriting GPUI Kit's preset hover foregrounds.
+gpui-base = "=0.6.0"
 # The demo script builds real provider events, whose payloads are the vendors'
 # own JSON. Already in the tree via ferrite-core.
 serde_json = { workspace = true }

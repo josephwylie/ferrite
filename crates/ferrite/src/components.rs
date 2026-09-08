@@ -4,7 +4,7 @@
 use gpui::component::button::{Button, ButtonVariants};
 use gpui::component::Sizable;
 use gpui::prelude::*;
-use gpui::{canvas, div, point, px, rgb, ElementId, Hsla, PathBuilder, Pixels, SharedString};
+use gpui::{div, px, rgb, ElementId, SharedString};
 
 use crate::theme;
 
@@ -195,46 +195,4 @@ pub fn scrollbar(
                 .id(id)
                 .scrollbar_show(gpui::component::scroll::ScrollbarMode::Hover),
         )
-}
-
-pub(crate) fn composer_join(radius: Pixels, background: Hsla, edge: Hsla) -> impl IntoElement {
-    canvas(
-        |_, _, _| (),
-        move |bounds, _, window, _| {
-            let left = bounds.origin.x;
-            let right = bounds.right();
-            let top = bounds.origin.y;
-            let bottom = bounds.bottom();
-            // Each shoulder fills the wedge between its curve and the corner
-            // it turns: curve up to the island's side, straight back down,
-            // then along the bottom to where the curve started.
-            let mut fill = PathBuilder::fill();
-            fill.move_to(point(left, bottom));
-            fill.curve_to(point(left + radius, top), point(left + radius, bottom));
-            fill.line_to(point(left + radius, bottom));
-            fill.close();
-            fill.move_to(point(right, bottom));
-            fill.curve_to(point(right - radius, top), point(right - radius, bottom));
-            fill.line_to(point(right - radius, bottom));
-            fill.close();
-            if let Ok(path) = fill.build() {
-                window.paint_path(path, background);
-            }
-            // The edge rides the same two curves, so the composer's outer
-            // line runs unbroken from the pane wall up into the island.
-            let mut stroke = PathBuilder::stroke(px(1.));
-            stroke.move_to(point(left, bottom));
-            stroke.curve_to(point(left + radius, top), point(left + radius, bottom));
-            stroke.move_to(point(right, bottom));
-            stroke.curve_to(point(right - radius, top), point(right - radius, bottom));
-            if let Ok(path) = stroke.build() {
-                window.paint_path(path, edge);
-            }
-        },
-    )
-    .absolute()
-    .left(-radius)
-    .right(-radius)
-    .bottom_0()
-    .h(radius)
 }

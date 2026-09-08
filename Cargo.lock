@@ -1783,6 +1783,7 @@ name = "ferrite"
 version = "0.1.0"
 dependencies = [
  "ferrite-core",
+ "gpui-base",
  "gpui-kit",
  "gpui-pre-platform",
  "percent-encoding",

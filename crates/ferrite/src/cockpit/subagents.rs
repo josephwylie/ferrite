@@ -82,11 +82,9 @@ fn native_keys<E: gpui::InteractiveElement>(element: E) -> E {
 }
 
 /// The one shell every pending request wears — approvals, questions, forms,
-/// external links and the unreadable fallback alike: the raised island that
-/// joins the Composer below, outlined 1px in the attention colour so the
-/// operator reads "this needs an answer" before reading the words. The
-/// outline runs down the join's shoulders too, so it is one unbroken line
-/// from the Composer's edge up and around the island.
+/// external links and the unreadable fallback alike. It floats above the
+/// Composer as a self-contained island: enough separation to read as the
+/// current task, while the quiet attention edge still communicates urgency.
 fn request_island(
     handle: &DecisionHandle,
     body: impl IntoElement,
@@ -96,12 +94,8 @@ fn request_island(
     let surface = div()
         .bg(rgb(theme::RAISED))
         .border_1()
-        .border_b_0()
-        .border_color(rgb(theme::ATTENTION))
-        .rounded_tl(radius)
-        .rounded_tr(radius)
-        .rounded_bl(px(0.))
-        .rounded_br(px(0.))
+        .border_color(rgba(theme::ATTENTION_EDGE))
+        .rounded(radius)
         .p(px(16.))
         .w_full()
         .min_w_0()
@@ -113,7 +107,8 @@ fn request_island(
             .min_w_0()
             .flex()
             .justify_center()
-            .px(px(theme::PANE_PAD_X + 12.))
+            .px(radius)
+            .pb(px(8.))
             .child(
                 div()
                     .id(("question-island", handle.serial as usize))
@@ -123,11 +118,6 @@ fn request_island(
                     .max_w(px(680.))
                     .min_w_0()
                     .font_family(theme::FONT_UI)
-                    .child(crate::components::composer_join(
-                        radius,
-                        rgb(theme::RAISED).into(),
-                        rgb(theme::ATTENTION).into(),
-                    ))
                     .child(
                         GroupBox::new()
                             .id("question-surface")
@@ -1442,19 +1432,20 @@ impl CockpitView {
             .overflow_y_scroll()
             .flex()
             .flex_col()
-            .gap(px(16.));
+            .gap(px(20.));
         for (qi, question) in questions.iter().enumerate() {
             let mut section = div()
                 .w_full()
                 .min_w_0()
                 .flex()
                 .flex_col()
-                .gap(px(10.))
+                .gap(px(12.))
                 .child(
                     div()
-                        .text_size(px(theme::FS_MD))
+                        .text_size(px(theme::FS_ANSWER))
+                        .line_height(gpui::relative(theme::LINE_UI))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(rgb(theme::TEXT))
+                        .text_color(rgb(theme::TEXT_STRONG))
                         .child(question.question.clone()),
                 );
             if question.multi_select {
@@ -1464,24 +1455,42 @@ impl CockpitView {
                     let forms = forms.clone();
                     let handle = handle.clone();
                     section = section.child(
-                        Checkbox::new(("question-checkbox", qi * 256 + oi))
-                            .debug_selector(move || format!("question-choice-{qi}-{oi}"))
-                            .checked(checked)
-                            .disabled(request.submitting)
-                            .accessibility_label(option.label.clone())
+                        div()
+                            .id(("question-checkbox-hover", qi * 256 + oi))
                             .w_full()
                             .min_w_0()
-                            .child(question_choice(option))
-                            .on_click(cx.listener(move |_, checked: &bool, _, cx| {
-                                if let Some(form) = forms.0.borrow_mut().get_mut(&handle) {
-                                    let picks = &mut form.answers[qi].picks;
-                                    picks.retain(|at| *at != oi);
-                                    if *checked {
-                                        picks.push(oi);
-                                    }
-                                }
-                                cx.notify();
-                            })),
+                            .rounded(px(theme::R_CONTROL))
+                            .border_1()
+                            .border_color(rgba(theme::TRANSPARENT))
+                            .when(!request.submitting, |row| {
+                                row.hover(|style| {
+                                    style
+                                        .bg(rgb(theme::HOVER))
+                                        .border_color(rgb(theme::FILL_HOVER))
+                                })
+                            })
+                            .child(
+                                Checkbox::new(("question-checkbox", qi * 256 + oi))
+                                    .debug_selector(move || format!("question-choice-{qi}-{oi}"))
+                                    .checked(checked)
+                                    .disabled(request.submitting)
+                                    .accessibility_label(option.label.clone())
+                                    .w_full()
+                                    .min_w_0()
+                                    .px(px(10.))
+                                    .py(px(6.))
+                                    .child(question_choice(option))
+                                    .on_click(cx.listener(move |_, checked: &bool, _, cx| {
+                                        if let Some(form) = forms.0.borrow_mut().get_mut(&handle) {
+                                            let picks = &mut form.answers[qi].picks;
+                                            picks.retain(|at| *at != oi);
+                                            if *checked {
+                                                picks.push(oi);
+                                            }
+                                        }
+                                        cx.notify();
+                                    })),
+                            ),
                     );
                 }
             } else if !question.options.is_empty() {
@@ -1498,6 +1507,10 @@ impl CockpitView {
                             Radio::new(oi)
                                 .w_full()
                                 .min_w_0()
+                                .group("question-option")
+                                .rounded(px(theme::R_CONTROL))
+                                .px(px(10.))
+                                .py(px(6.))
                                 .accessibility_label(option.label.clone())
                                 .debug_selector(move || format!("question-choice-{qi}-{oi}"))
                                 .child(question_choice(option))
@@ -1559,21 +1572,24 @@ impl CockpitView {
             .min_w_0()
             .flex()
             .flex_col()
-            .gap(px(12.))
+            .gap(px(16.))
             .child(
                 div()
                     .flex()
                     .flex_wrap()
                     .items_center()
                     .gap(px(8.))
-                    .child(components::label(
-                        if questions.len() == 1 {
-                            "Question for you".into()
-                        } else {
-                            format!("{} questions for you", questions.len())
-                        },
-                        theme::TEXT,
-                    ))
+                    .child(
+                        div()
+                            .text_size(px(theme::FS_MD))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(rgb(theme::ATTENTION))
+                            .child(if questions.len() == 1 {
+                                "Question for you".into()
+                            } else {
+                                format!("{} questions for you", questions.len())
+                            }),
+                    )
                     .child(div().flex_1())
                     .child(status),
             )
@@ -1600,12 +1616,10 @@ impl CockpitView {
             div()
                 .flex()
                 .justify_end()
-                .gap(px(8.))
+                .items_center()
+                .gap(px(10.))
                 .child(
-                    gpui::component::button::Button::new("question-skip")
-                        .ghost()
-                        .small()
-                        .label("Skip")
+                    question_action_button("question-skip", "Skip", false)
                         .disabled(request.submitting)
                         .on_click(cx.listener(move |view, _, _, cx| {
                             view.respond_exact(
@@ -1619,48 +1633,49 @@ impl CockpitView {
                         })),
                 )
                 .child(
-                    gpui::component::button::Button::new("question-send")
-                        .primary()
-                        .small()
-                        .label(if request.submitting {
+                    question_action_button(
+                        "question-send",
+                        if request.submitting {
                             "Sending…"
                         } else {
                             "Send answer"
-                        })
-                        .disabled(request.submitting)
-                        .debug_selector(move || selector.clone())
-                        .on_click(cx.listener(move |view, _, _, cx| {
-                            let mut state = forms.0.borrow_mut();
-                            let Some(form) = state.get_mut(&submit_handle) else {
-                                return;
-                            };
-                            for (answer, input) in form.answers.iter_mut().zip(&form.inputs) {
-                                answer.other = Some(input.read(cx).value().to_string())
-                                    .filter(|text| !text.trim().is_empty());
+                        },
+                        true,
+                    )
+                    .disabled(request.submitting)
+                    .debug_selector(move || selector.clone())
+                    .on_click(cx.listener(move |view, _, _, cx| {
+                        let mut state = forms.0.borrow_mut();
+                        let Some(form) = state.get_mut(&submit_handle) else {
+                            return;
+                        };
+                        for (answer, input) in form.answers.iter_mut().zip(&form.inputs) {
+                            answer.other = Some(input.read(cx).value().to_string())
+                                .filter(|text| !text.trim().is_empty());
+                        }
+                        if form
+                            .answers
+                            .iter()
+                            .any(|answer| answer.picks.is_empty() && answer.other.is_none())
+                        {
+                            if let Some(index) = view.pane_for(thread) {
+                                view.panes[index].request_error = Some((
+                                    submit_handle.clone(),
+                                    "Answer each question before sending.".into(),
+                                ));
                             }
-                            if form
-                                .answers
-                                .iter()
-                                .any(|answer| answer.picks.is_empty() && answer.other.is_none())
-                            {
-                                if let Some(index) = view.pane_for(thread) {
-                                    view.panes[index].request_error = Some((
-                                        submit_handle.clone(),
-                                        "Answer each question before sending.".into(),
-                                    ));
-                                }
-                                cx.notify();
-                                return;
-                            }
-                            let answers = form.answers.clone();
-                            drop(state);
-                            view.respond_exact(
-                                thread,
-                                &submit_handle,
-                                DecisionAnswer::Questions { answers },
-                                cx,
-                            );
-                        })),
+                            cx.notify();
+                            return;
+                        }
+                        let answers = form.answers.clone();
+                        drop(state);
+                        view.respond_exact(
+                            thread,
+                            &submit_handle,
+                            DecisionAnswer::Questions { answers },
+                            cx,
+                        );
+                    })),
                 ),
         );
         request_island(&handle, body, cx)
@@ -1784,6 +1799,64 @@ fn safe_external_url(url: &str) -> bool {
     url.starts_with("https://") || url.starts_with("http://")
 }
 
+/// Question actions deliberately bypass the kit's light primary preset. Its
+/// inherited hover foreground can erase the label on this dark island.
+fn question_action_button(
+    id: impl Into<gpui::ElementId>,
+    label: impl Into<SharedString>,
+    primary: bool,
+) -> gpui_base::Button {
+    let button = gpui_base::Button::new(id)
+        .tab_stop(true)
+        .h(px(32.))
+        .px(px(12.))
+        .rounded(px(theme::R_CONTROL))
+        .border_1()
+        .font_family(theme::FONT_UI)
+        .text_size(px(theme::FS_SM))
+        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .cursor_pointer()
+        .styles(|styles| styles.disabled(|style| style.opacity(0.45)))
+        .child(label.into());
+    if primary {
+        button
+            .bg(rgb(theme::TEXT))
+            .border_color(rgb(theme::TEXT))
+            .text_color(rgb(theme::GROUND))
+            .hover(|style| {
+                style
+                    .bg(rgb(theme::TEXT_STRONG))
+                    .border_color(rgb(theme::TEXT_STRONG))
+                    .text_color(rgb(theme::GROUND))
+            })
+            .active(|style| {
+                style
+                    .bg(rgb(theme::TEXT_2))
+                    .border_color(rgb(theme::TEXT_2))
+                    .text_color(rgb(theme::GROUND))
+            })
+            .focus_visible(|style| style.border_color(rgb(theme::ATTENTION)))
+    } else {
+        button
+            .bg(rgba(theme::TRANSPARENT))
+            .border_color(rgb(theme::FILL))
+            .text_color(rgb(theme::TEXT))
+            .hover(|style| {
+                style
+                    .bg(rgb(theme::HOVER))
+                    .border_color(rgb(theme::FILL_HOVER))
+                    .text_color(rgb(theme::TEXT_STRONG))
+            })
+            .active(|style| {
+                style
+                    .bg(rgb(theme::FILL))
+                    .border_color(rgb(theme::FILL_HOVER))
+                    .text_color(rgb(theme::TEXT_STRONG))
+            })
+            .focus_visible(|style| style.border_color(rgb(theme::ATTENTION)))
+    }
+}
+
 /// Labels and descriptions wrap inside the native choice's content slot.
 fn question_choice(choice: &ferrite_core::questions::Choice) -> impl IntoElement {
     div()
@@ -1791,11 +1864,14 @@ fn question_choice(choice: &ferrite_core::questions::Choice) -> impl IntoElement
         .min_w_0()
         .flex()
         .flex_col()
-        .gap(px(4.))
-        .text_size(px(theme::FS_SM))
+        .gap(px(3.))
+        .rounded(px(theme::R_CONTROL))
+        .group_hover("question-option", |style| style.bg(rgb(theme::HOVER)))
+        .text_size(px(theme::FS_MD))
         .line_height(gpui::relative(theme::LINE_BODY))
         .child(
             div()
+                .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(rgb(theme::TEXT))
                 .child(choice.label.clone()),
         )
