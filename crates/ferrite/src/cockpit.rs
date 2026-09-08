@@ -12418,12 +12418,8 @@ mod tests {
                 .blocks()[0]
                 .id
         });
-        let control = view.read_with(cx, |view, _| {
-            view.panes[0]
-                .tool_bounds(pane::DisclosureId::Reasoning(id))
-                .unwrap()
-        });
-        cx.simulate_click(control.center(), gpui::Modifiers::none());
+        let summary = cx.debug_bounds("reasoning-summary").unwrap();
+        cx.simulate_click(summary.center(), gpui::Modifiers::none());
         tick(cx);
         view.read_with(cx, |view, _| {
             let text = view.selection.registered(view.panes[0].thread().unwrap());
@@ -12444,8 +12440,10 @@ mod tests {
                 "a short summary must size to its text: {summary:?}"
             );
             assert!(
-                (control.left() - summary.right()).abs() <= px(12.),
-                "chevron must immediately follow the text: {summary:?} / {control:?}"
+                control.left() < summary.left()
+                    && (summary.left() - control.left() - px(crate::theme::INDENT)).abs()
+                        <= px(1.),
+                "chevron must stay inside the Pane beside the text: {summary:?} / {control:?}"
             );
         }
 

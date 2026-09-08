@@ -52,7 +52,7 @@ use crate::theme;
 use crate::theme::{
     ATTENTION, ATTENTION_EDGE, ATTENTION_WASH, BLOCKED, BLOCKED_WASH, COMPOSER_EDGE,
     DIFF_ADDED_INK, DIFF_REMOVED_INK, FOCUS, HOVER, IDLE, INLINE_CODE_INK, LINK_INK, METER_OFF,
-    PANE, PANE_HEAD, PANE_HEAD_EDGE, RAISED, RUNNING, RUNNING_WASH, SELECTION, SEP, SYN_KEYWORD,
+    PANE, PANE_HEAD, PANE_HEAD_EDGE, RAISED, RUNNING, RUNNING_WASH, SEP, SYN_KEYWORD,
     SYN_NUMBER, SYN_STRING, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG, TRANSPARENT,
 };
 
@@ -4195,11 +4195,21 @@ pub(crate) fn render_block(
                     .into_any_element();
             };
             let header = div()
+                .id(SharedString::from(format!("reasoning-row-{:?}", block.id)))
+                .relative()
                 .flex()
                 .items_center()
                 .min_w_0()
                 .gap(px(theme::EVENT_GAP))
                 .font_family(theme::FONT_UI)
+                .hover(|style| style.text_color(rgb(TEXT)))
+                .active(|style| style.text_color(rgb(TEXT_STRONG)))
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .w(px(theme::GUTTER_W))
+                        .h(px(theme::FS_MD * theme::LINE_BODY)),
+                )
                 .child(
                     div()
                         .debug_selector(|| "reasoning-summary".into())
@@ -4207,14 +4217,7 @@ pub(crate) fn render_block(
                         .truncate()
                         .child(SharedString::from(summary)),
                 )
-                .child(
-                    div()
-                        .relative()
-                        .flex_shrink_0()
-                        .w(px(theme::GUTTER_W))
-                        .h(px(theme::FS_MD * theme::LINE_BODY))
-                        .children(disclosure),
-                );
+                .children(disclosure);
             let mut reasoning = gpui::component::collapsible::Collapsible::new()
                 .w_full()
                 .open(expanded)
@@ -4393,13 +4396,13 @@ fn render_tool(
     // still carries status colour; the glyph now explains the interaction.
     let has_disclosure = disclosure.is_some();
     let gutter = div()
-        .relative()
         .flex_shrink_0()
         .w(px(theme::GUTTER_W))
         .text_color(rgb(glyph_ink))
-        .child(if has_disclosure { "" } else { glyph })
-        .children(disclosure);
+        .child(if has_disclosure { "" } else { glyph });
     let mut line = div()
+        .id(SharedString::from(format!("tool-row-{}", tool.call)))
+        .relative()
         .flex()
         .flex_row()
         .items_baseline()
@@ -4409,8 +4412,11 @@ fn render_tool(
         .text_size(px(theme::FS_MD))
         .line_height(relative(theme::LINE_BODY))
         .text_color(rgb(TEXT_MUTED))
+        .hover(|style| style.text_color(rgb(TEXT)))
+        .active(|style| style.text_color(rgb(TEXT_STRONG)))
         .child(gutter)
-        .child(call);
+        .child(call)
+        .children(disclosure);
     // A settled call's clock, where the cockpit stamped one; running calls
     // tick on the activity line instead. Only a settled *tool* call carries
     // a time — the prototype ends each non-task trail with one and gives a
@@ -4623,6 +4629,8 @@ where
         summary.into_any_element()
     };
     let mut header = div()
+        .id(SharedString::from(format!("tool-group-row-{call}")))
+        .relative()
         .min_w_0()
         .flex()
         .flex_wrap()
@@ -4638,15 +4646,16 @@ where
         } else {
             TEXT_MUTED
         }))
+        .hover(|style| style.text_color(rgb(TEXT)))
+        .active(|style| style.text_color(rgb(TEXT_STRONG)))
         .child(
             div()
-                .relative()
                 .flex_shrink_0()
                 .w(px(theme::GUTTER_W))
-                .h(px(theme::FS_MD * theme::LINE_BODY))
-                .children(disclosure),
+                .h(px(theme::FS_MD * theme::LINE_BODY)),
         )
-        .child(summary);
+        .child(summary)
+        .children(disclosure);
     if activity.failed > 0 {
         let key = call.clone();
         header = header.child(
@@ -4883,27 +4892,35 @@ fn tool_verdicts(tool: &ToolBlock) -> Vec<ToolVerdict> {
     verdicts
 }
 
-/// The only clickable part of a tool row. Its pointer role and pressed
-/// treatment make the chevron's hit target honest while the row stays text.
+/// A disclosure row's click target. The overlay fills its relative header so
+/// the label and trailing metadata toggle it too; the visible button remains
+/// anchored wholly inside the header edge instead of centering a 20px target
+/// in the narrower glyph gutter and clipping it out of the Pane.
 pub fn tool_disclosure_control(
     call: &DisclosureId,
     expanded: bool,
     targeted: bool,
     focus: &FocusHandle,
 ) -> Div {
-    let control = crate::components::button(SharedString::from(format!("tool-button-{call}")))
+    let tooltip = match (call, expanded) {
+        (DisclosureId::Reasoning(_), false) => "Show reasoning",
+        (DisclosureId::Reasoning(_), true) => "Hide reasoning",
+        (DisclosureId::Group(_), false) => "Show tool calls",
+        (DisclosureId::Group(_), true) => "Hide tool calls",
+        (DisclosureId::TurnDiff(_), false) => "Show turn changes",
+        (DisclosureId::TurnDiff(_), true) => "Hide turn changes",
+        (_, false) => "Show tool details",
+        (_, true) => "Hide tool details",
+    };
+    let control = div()
+        .id(SharedString::from(format!("tool-button-{call}")))
+        .flex()
+        .items_center()
+        .justify_center()
         .w(px(theme::TOOL_DISCLOSURE_HIT))
         .h(px(theme::TOOL_DISCLOSURE_HIT))
-        .p_0()
-        .tooltip(match (call, expanded) {
-            (DisclosureId::Reasoning(_), false) => "Show reasoning",
-            (DisclosureId::Reasoning(_), true) => "Hide reasoning",
-            (DisclosureId::Group(_), false) => "Show tool calls",
-            (DisclosureId::Group(_), true) => "Hide tool calls",
-            (DisclosureId::TurnDiff(_), false) => "Show turn changes",
-            (DisclosureId::TurnDiff(_), true) => "Hide turn changes",
-            (_, false) => "Show tool details",
-            (_, true) => "Hide tool details",
+        .tooltip(move |window, cx| {
+            gpui::component::tooltip::Tooltip::new(tooltip).build(window, cx)
         })
         .child(icon(
             if expanded {
@@ -4916,21 +4933,23 @@ pub fn tool_disclosure_control(
         ));
     div()
         .absolute()
-        .left(px((theme::GUTTER_W - theme::TOOL_DISCLOSURE_HIT) / 2.))
-        .top(px(-1.))
-        .w(px(theme::TOOL_DISCLOSURE_HIT))
-        .h(px(theme::TOOL_DISCLOSURE_HIT))
-        .rounded(px(theme::R_TIGHT))
+        .inset_0()
+        .flex()
+        .items_center()
+        .cursor_pointer()
         // Keyboard cycling is the one time the target has to be visible:
         // without a ground the operator cannot see which row `tab` is on.
         // The pointer never triggers it.
         .when(targeted, |control| {
-            control
-                .bg(rgb(SELECTION))
-                .track_focus(focus)
-                .key_context("ToolDisclosure")
+            control.track_focus(focus).key_context("ToolDisclosure")
         })
-        .child(control)
+        .child(
+            div()
+                .flex_shrink_0()
+                .w(px(theme::TOOL_DISCLOSURE_HIT))
+                .h(px(theme::TOOL_DISCLOSURE_HIT))
+                .child(control),
+        )
 }
 
 /// `.hunk` (§E.13): no card, no filename header — the event above already
