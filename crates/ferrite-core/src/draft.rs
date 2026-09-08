@@ -14,6 +14,8 @@ use crate::ModelInfo;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DraftTarget {
     Main,
+    Branch { name: String },
+    NewBranch,
     Existing { branch: String },
     New,
 }
@@ -106,6 +108,11 @@ impl DraftBinding {
         let repo = project.root.clone();
         Ok(match &self.target {
             DraftTarget::Main => WorkspaceChoice::Main { checkout: repo },
+            DraftTarget::Branch { name } => WorkspaceChoice::Branch {
+                checkout: repo,
+                branch: name.clone(),
+            },
+            DraftTarget::NewBranch => WorkspaceChoice::NewBranch { checkout: repo },
             DraftTarget::New => WorkspaceChoice::NewWorktree { repo },
             DraftTarget::Existing { branch } => {
                 let worktree = registry

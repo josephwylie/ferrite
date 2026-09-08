@@ -810,12 +810,28 @@ impl Cockpit {
         let ProviderChoice { provider, model } = choice;
         let root = match &workspace {
             WorkspaceChoice::Main { checkout } => checkout,
+            WorkspaceChoice::Branch { checkout, .. } | WorkspaceChoice::NewBranch { checkout } => {
+                checkout
+            }
             WorkspaceChoice::NewWorktree { repo } => repo,
             WorkspaceChoice::ExistingWorktree { repo, .. } => repo,
         };
         let project = self.registry.register(root)?;
+        match &workspace {
+            WorkspaceChoice::Branch { checkout, branch } => {
+                workspace::checkout_existing_branch(checkout, branch).map_err(io::Error::other)?;
+            }
+            WorkspaceChoice::NewBranch { checkout } => {
+                let branch = self.registry.reserve_branch(project)?;
+                workspace::checkout_new_branch(checkout, &branch).map_err(io::Error::other)?;
+            }
+            _ => {}
+        }
         let (binding, fresh_branch) = match workspace {
             WorkspaceChoice::Main { checkout } => (WorkspaceBinding::Main { checkout }, None),
+            WorkspaceChoice::Branch { checkout, .. } | WorkspaceChoice::NewBranch { checkout } => {
+                (WorkspaceBinding::Main { checkout }, None)
+            }
             WorkspaceChoice::NewWorktree { repo } => {
                 let entry = self.registry.reserve_worktree(project)?;
                 (
@@ -4102,6 +4118,58 @@ mod tests {
             "base",
         ]);
         repo
+    }
+
+    /// Choosing an existing branch moves the project checkout itself onto
+    /// it before the Session spawns — one checkout, one branch, and the
+    /// Thread's cwd is the repo the operator is already looking at.
+    #[test]
+    fn opening_on_an_existing_branch_switches_the_project_checkout() {
+        let root = scratch("branch-open");
+        let (mut cockpit, _fake) = cockpit("branch-open-store");
+        let repo = init_repo(&root);
+        crate::workspace::git_for_tests(&repo, &["switch", "-q", "-c", "feature/side"]);
+
+        let thread = cockpit
+            .open(
+                Provider::Claude,
+                WorkspaceChoice::Branch {
+                    checkout: repo.clone(),
+                    branch: "main".into(),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(
+            crate::workspace::checkout_branch(&repo).as_deref(),
+            Some("main")
+        );
+        assert_eq!(
+            cockpit.thread(thread).unwrap().workspace().unwrap().cwd(),
+            repo
+        );
+    }
+
+    /// A fresh branch is minted, created and checked out in the project's
+    /// own checkout — the no-worktree half of the composer's two ways to
+    /// start something new.
+    #[test]
+    fn opening_on_a_new_branch_creates_it_in_the_project_checkout() {
+        let root = scratch("new-branch-open");
+        let (mut cockpit, _fake) = cockpit("new-branch-open-store");
+        let repo = init_repo(&root);
+
+        cockpit
+            .open(
+                Provider::Claude,
+                WorkspaceChoice::NewBranch {
+                    checkout: repo.clone(),
+                },
+            )
+            .unwrap();
+
+        let branch = crate::workspace::checkout_branch(&repo).expect("a branch");
+        assert!(branch.starts_with("ferrite/branch-"), "branch: {branch}");
     }
 
     /// The whole binding flow at the cockpit's own seam: the choice becomes

@@ -52,6 +52,8 @@ impl WorkspaceBinding {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkspaceChoice {
     Main { checkout: PathBuf },
+    Branch { checkout: PathBuf, branch: String },
+    NewBranch { checkout: PathBuf },
     NewWorktree { repo: PathBuf },
     ExistingWorktree { repo: PathBuf, path: PathBuf },
 }
@@ -62,10 +64,22 @@ impl WorkspaceChoice {
     pub fn source_root(&self) -> &Path {
         match self {
             Self::Main { checkout } => checkout,
+            Self::Branch { checkout, .. } | Self::NewBranch { checkout } => checkout,
             Self::NewWorktree { repo } => repo,
             Self::ExistingWorktree { path, .. } => path,
         }
     }
+}
+
+/// Move the shared project checkout to an existing branch selected before
+/// the Thread starts. Git owns validation and refuses dirty/conflicting moves.
+pub fn checkout_existing_branch(cwd: &Path, branch: &str) -> Result<(), GitError> {
+    git(cwd, &["switch", branch]).map(|_| ())
+}
+
+/// Create and check out a fresh branch in the shared project checkout.
+pub fn checkout_new_branch(cwd: &Path, branch: &str) -> Result<(), GitError> {
+    git(cwd, &["switch", "-c", branch]).map(|_| ())
 }
 
 /// The one cwd chain every spawn reads (#29): `session_project_root ??

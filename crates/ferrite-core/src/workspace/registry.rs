@@ -503,6 +503,21 @@ impl Registry {
         Ok(entry)
     }
 
+    /// Deal and durably reserve a branch name for the shared checkout.
+    pub fn reserve_branch(&mut self, project: ProjectId) -> io::Result<String> {
+        let mut next = self.clone();
+        let registered = next
+            .projects
+            .iter_mut()
+            .find(|entry| entry.id == project)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "project is not registered"))?;
+        registered.minted += 1;
+        let branch = format!("ferrite/branch-{}", registered.minted);
+        next.persist()?;
+        *self = next;
+        Ok(branch)
+    }
+
     /// Where a worktree of `project` on `branch` lives: the central layout
     /// `<dir>/worktrees/<repoName>-<hash12>/<branch-dashed>` — outside every
     /// repo, keyed by branch so the tree outlives any one Thread, the
