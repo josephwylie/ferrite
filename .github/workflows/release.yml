@@ -15,8 +15,8 @@ env:
   RUST_BACKTRACE: 1
   # Spelled once: the build jobs package these names and the fan-in job
   # attaches them, so a rename cannot drift between the two.
-  MACOS_ARCHIVE: ferrite-${{ github.ref_name }}-aarch64-apple-darwin.tar.gz
-  WINDOWS_ARCHIVE: ferrite-${{ github.ref_name }}-x86_64-pc-windows-msvc.zip
+  MACOS_INSTALLER: ferrite-${{ github.ref_name }}-aarch64-apple-darwin.dmg
+  WINDOWS_INSTALLER: ferrite-${{ github.ref_name }}-x86_64-pc-windows-msvc-setup.exe
 
 jobs:
   macos:
@@ -27,12 +27,77 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Build and package application bundle
-        run: scripts/install-app.sh --archive "$MACOS_ARCHIVE"
+      - name: Detect macOS signing credentials
+        id: macos-signing
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+        run: |
+          present=0
+          missing=()
+          for name in MACOS_CERTIFICATE MACOS_CERTIFICATE_PASSWORD KEYCHAIN_PASSWORD APPLE_API_KEY_ID APPLE_API_ISSUER_ID APPLE_API_PRIVATE_KEY; do
+            if [ -n "${!name}" ]; then
+              present=$((present + 1))
+            else
+              missing+=("$name")
+            fi
+          done
+          if [ "$present" -eq 0 ]; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Building an unsigned macOS DMG because signing credentials are not configured"
+          elif [ "${#missing[@]}" -ne 0 ]; then
+            echo "Partially configured macOS signing credentials; missing: ${missing[*]}" >&2
+            exit 1
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Import Developer ID certificate
+        if: steps.macos-signing.outputs.available == 'true'
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          CERTIFICATE_PATH="$RUNNER_TEMP/ferrite-signing.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/ferrite-signing.keychain-db"
+          printf '%s' "$MACOS_CERTIFICATE" | base64 -D > "$CERTIFICATE_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" -P "$MACOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+          identity="$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | sed -n 's/.*"\(Developer ID Application:.*\)"/\1/p' | head -1)"
+          test -n "$identity" || { echo "No Developer ID Application identity in certificate" >&2; exit 1; }
+          echo "MACOS_SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
+      - name: Build disk image
+        run: scripts/install-app.sh --dmg "$MACOS_INSTALLER"
+      - name: Notarize and staple disk image
+        if: steps.macos-signing.outputs.available == 'true'
+        env:
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+        run: |
+          API_KEY_PATH="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+          printf '%s' "$APPLE_API_PRIVATE_KEY" > "$API_KEY_PATH"
+          xcrun notarytool submit "$MACOS_INSTALLER" --key "$API_KEY_PATH" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID" --wait
+          xcrun stapler staple "$MACOS_INSTALLER"
+          xcrun stapler validate "$MACOS_INSTALLER"
+          spctl --assess --type open --context context:primary-signature --verbose=2 "$MACOS_INSTALLER"
+      - name: Remove signing credentials
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/ferrite-signing.keychain-db" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/ferrite-signing.p12" "$RUNNER_TEMP"/AuthKey_*.p8
       - uses: actions/upload-artifact@v4
         with:
           name: macos
-          path: ${{ env.MACOS_ARCHIVE }}
+          path: ${{ env.MACOS_INSTALLER }}
           if-no-files-found: error
 
   windows:
@@ -46,14 +111,58 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Build release binary
-        run: cargo build --release -p ferrite --locked
-      - name: Package zip
-        run: Compress-Archive -Path target/release/ferrite.exe -DestinationPath "$env:WINDOWS_ARCHIVE"
+      - name: Detect Windows signing credentials
+        id: windows-signing
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          $certificate = -not [string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE)
+          $password = -not [string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_PASSWORD)
+          if (-not $certificate -and -not $password) {
+            "available=false" >> $env:GITHUB_OUTPUT
+            Write-Host "::notice::Building an unsigned Windows installer because signing credentials are not configured"
+          } elseif ($certificate -and $password) {
+            "available=true" >> $env:GITHUB_OUTPUT
+          } else {
+            throw "Windows signing credentials are only partially configured; set both WINDOWS_CERTIFICATE and WINDOWS_CERTIFICATE_PASSWORD"
+          }
+      - name: Import Authenticode certificate
+        if: steps.windows-signing.outputs.available == 'true'
+        id: certificate
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          $path = Join-Path $env:RUNNER_TEMP "ferrite-signing.pfx"
+          [IO.File]::WriteAllBytes($path, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          $password = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+          $certificate = Import-PfxCertificate -FilePath $path -CertStoreLocation Cert:\CurrentUser\My -Password $password |
+            Where-Object HasPrivateKey |
+            Select-Object -First 1
+          if (-not $certificate) { throw "The PFX does not contain a certificate with a private key" }
+          "thumbprint=$($certificate.Thumbprint)" >> $env:GITHUB_OUTPUT
+      - name: Build signed Windows installer
+        if: steps.windows-signing.outputs.available == 'true'
+        shell: pwsh
+        run: scripts/package-windows.ps1 -OutputFile "$env:WINDOWS_INSTALLER" -CertificateThumbprint "${{ steps.certificate.outputs.thumbprint }}"
+      - name: Build unsigned Windows installer
+        if: steps.windows-signing.outputs.available != 'true'
+        shell: pwsh
+        run: scripts/package-windows.ps1 -OutputFile "$env:WINDOWS_INSTALLER"
+      - name: Remove signing credentials
+        if: always()
+        shell: pwsh
+        run: |
+          $thumbprint = "${{ steps.certificate.outputs.thumbprint }}"
+          if ($thumbprint) { Remove-Item -LiteralPath "Cert:\CurrentUser\My\$thumbprint" -Force -ErrorAction SilentlyContinue }
+          Remove-Item -LiteralPath (Join-Path $env:RUNNER_TEMP "ferrite-signing.pfx") -Force -ErrorAction SilentlyContinue
       - uses: actions/upload-artifact@v4
         with:
           name: windows
-          path: ${{ env.WINDOWS_ARCHIVE }}
+          path: ${{ env.WINDOWS_INSTALLER }}
           if-no-files-found: error
 
   release:
@@ -73,7 +182,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="${{ github.ref_name }}"
-          assets=("$MACOS_ARCHIVE" "$WINDOWS_ARCHIVE")
+          assets=("$MACOS_INSTALLER" "$WINDOWS_INSTALLER")
           # Checked first, so a create failure stays a create failure — an
           # unconditional fallback would bury a 5xx or token error under
           # upload's "release not found".
