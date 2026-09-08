@@ -88,6 +88,8 @@ const RAIL_FILTER_GROUP: &str = "nav-rail-filter";
 const FILTER_GROUP: &str = "nav-filter";
 const FILTER_OPTION_GROUP: &str = "nav-filter-option";
 const ORDER_GROUP: &str = "nav-order";
+const PROJECT_SECTION_GROUP: &str = "nav-project-section";
+const PROJECT_ADD_GROUP: &str = "nav-project-add";
 
 // The handful of nav metrics `theme.rs` does not name, kept here rather
 // than written inline so each one is said once and explained once.
@@ -487,8 +489,12 @@ pub fn order_option(index: usize, label: &'static str, selected: bool) -> Button
 
 /// A quiet Project label separates grouped runs without turning each one
 /// into a card. The count helps scan long lists and costs no extra row.
+/// The caller hangs `project_add_button` on the end: the heading is the
+/// only place a Project is named in this view, so it is where a new Thread
+/// in that Project is asked for.
 pub fn project_section(label: SharedString, count: usize, first: bool) -> Div {
     div()
+        .group(PROJECT_SECTION_GROUP)
         .flex()
         .items_center()
         .h(px(30.))
@@ -507,6 +513,26 @@ pub fn project_section(label: SharedString, count: usize, first: bool) -> Div {
         )
 }
 
+/// New Thread in *this* Project. It keeps a heading's reserved slot at all
+/// times — a control that appears only under the pointer cannot be found —
+/// and rests at the muted weight the count beside it uses, brightening
+/// when the pointer is anywhere on the heading.
+pub fn project_add_button(index: usize) -> Button {
+    components::button(("nav-project-add", index))
+        .tab_stop(true)
+        .debug_selector(move || format!("nav-project-add-{index}"))
+        .group(PROJECT_ADD_GROUP)
+        .w(px(ICON_BUTTON))
+        .h(px(ICON_BUTTON))
+        .p_0()
+        .tooltip("New Thread in this Project")
+        .child(
+            icon(icons::PLUS, ICON_BUTTON_GLYPH, TEXT_MUTED)
+                .group_hover(PROJECT_SECTION_GROUP, |style| style.text_color(rgb(TEXT_2)))
+                .group_hover(PROJECT_ADD_GROUP, |style| style.text_color(rgb(TEXT))),
+        )
+}
+
 /// The Project filter trigger rests transparently with its neighboring actions.
 /// Its folder and edge-aligned chevron frame the current Project name; hover
 /// and open states supply the ground only while the control is engaged.
@@ -519,6 +545,7 @@ pub fn filter_trigger(state: &FilterState) -> Stateful<Div> {
     };
     div()
         .id(("nav-filter", 0usize))
+        .debug_selector(|| "nav-filter".into())
         .group(FILTER_GROUP)
         .flex()
         .flex_1()
@@ -636,9 +663,12 @@ pub fn filter_option(index: usize, option: &FilterOption) -> Stateful<Div> {
         )
 }
 
-/// The visible door to Project management: the pencil beside the filter
-/// trigger. It is drawn only while the filter names a Project — `All
-/// Projects` is a filter state, not a Project, and has nothing to edit.
+/// The visible door to Project management: the pencil directly right of
+/// the filter trigger, before the head's actions, so it reads as part of
+/// the control that names the Project rather than one more thing to do
+/// with the list. It is drawn only while the filter names a Project —
+/// `All Projects` is a filter state, not a Project, and has nothing to
+/// edit.
 pub fn project_edit_button() -> gpui::component::button::Button {
     components::button("project-edit")
         .tab_stop(true)

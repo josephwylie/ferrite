@@ -1801,6 +1801,33 @@ impl Cockpit {
         self.threads.keys().copied().collect()
     }
 
+    /// The Project the operator was last working in: the Project of the
+    /// most recently written Thread the store holds, skipping Threads
+    /// whose Project the registry no longer knows — a Project removed from
+    /// the menu must not come back as a draft's default. `None` when no
+    /// Thread names a registered Project, which is what a fresh
+    /// installation looks like.
+    ///
+    /// One `stat` and one header line per Thread, and it stops at the
+    /// first answer, so the common case is two reads. Launch-time only:
+    /// callers keep the answer rather than ask it per frame.
+    pub fn last_worked_project(&self) -> Option<ProjectId> {
+        let mut threads: Vec<(Option<std::time::SystemTime>, ThreadId)> = self
+            .store
+            .thread_ids()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|thread| (self.store.last_used(thread), thread))
+            .collect();
+        // Newest first, and a Thread whose log cannot be stat'd sorts last
+        // rather than counting as the epoch's most recent.
+        threads.sort_by_key(|(used, thread)| (std::cmp::Reverse(*used), std::cmp::Reverse(*thread)));
+        threads.into_iter().find_map(|(_, thread)| {
+            let project = self.project_id(thread)?;
+            self.registry.project(project).map(|_| project)
+        })
+    }
+
     /// The process is quitting: end every Session now, replacements and
     /// pending startups included, so no provider process outlives Ferrite.
     /// A Codex app-server left running holds its thread's writer lock until
@@ -4096,6 +4123,45 @@ mod tests {
         let fake = Fake::default();
         let store = Store::open(scratch(name)).unwrap();
         (Cockpit::new(store, Box::new(fake.clone())), fake)
+    }
+
+    /// An empty store was never worked in; otherwise the answer is the
+    /// most recently used Thread's Project. A registry lost by hand
+    /// orphans nothing, so the Threads keep their headers — but a Project
+    /// the menu no longer offers is not somewhere to send a draft, and the
+    /// answer is nothing rather than an id nothing can resolve.
+    #[test]
+    fn the_last_worked_project_is_a_registered_one_or_nothing() {
+        let (mut core, fake) = cockpit("last-worked-project");
+        assert_eq!(core.last_worked_project(), None);
+        let other = scratch("last-worked-project-other");
+        std::fs::create_dir_all(&other).unwrap();
+
+        let thread = core.open(Provider::Claude, main_choice()).unwrap();
+        let project = core.project_id(thread).expect("the open Thread is bound");
+        assert_eq!(core.last_worked_project(), Some(project));
+
+        // A newer Thread in another Project outranks the older one.
+        let newer = core
+            .open(Provider::Claude, WorkspaceChoice::Main { checkout: other })
+            .unwrap();
+        let newest = core.project_id(newer).expect("the open Thread is bound");
+        assert_ne!(newest, project);
+        assert_eq!(core.last_worked_project(), Some(newest));
+
+        // The same store with its registry file gone: every Thread still
+        // names a Project, and the menu offers none of them.
+        // `scratch` clears what it names, so the store's own path is spelled
+        // out rather than asked for a second time.
+        let dir = std::env::temp_dir().join(format!(
+            "ferrite-cockpit-{}-last-worked-project",
+            std::process::id()
+        ));
+        std::fs::remove_file(dir.join("registry.json")).unwrap();
+        let reopened = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake));
+        assert!(reopened.registry().projects().is_empty());
+        assert_eq!(reopened.project_id(newer), Some(newest));
+        assert_eq!(reopened.last_worked_project(), None);
     }
 
     /// An initialised repo with one committed file, for binding tests.

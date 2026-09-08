@@ -192,9 +192,12 @@ pub struct CockpitView {
     discovery_request: u64,
     pending_files: Option<PendingFileSearch>,
     pending_discovery: Option<PendingDiscovery>,
-    /// The Project new drafts fall back to. Startup only selects an already
-    /// registered Project; it must never turn the app's process directory
-    /// into user workspace state.
+    /// The Project new drafts fall back to: the last one the operator was
+    /// working in. The launch reads it from the store's most recently used
+    /// Thread, and every explicit pick in the Composer's Project chip moves
+    /// it, so the next draft opens where the last one ran. Startup only
+    /// selects an already registered Project; it must never turn the app's
+    /// process directory into user workspace state.
     launch_project: Option<ProjectId>,
     /// The inline title rename in flight, if any: what is being renamed,
     /// and the one-line Composer standing in for its title. At most one —
@@ -697,9 +700,9 @@ impl CockpitView {
         .detach();
 
         // A packaged app's process directory belongs to the app, not the
-        // operator. Start drafts on the newest Project they explicitly
-        // registered, and leave a new installation genuinely empty.
-        let launch_project = startup_project(cockpit.registry());
+        // operator. Start drafts where they were last working, and leave a
+        // new installation genuinely empty.
+        let launch_project = startup_project(&cockpit);
         // The existing GPUI fixtures assume construction supplies a draft.
         // Keep their synthetic seed out of production; `startup_project` is
         // tested directly against an empty registry below.
@@ -4431,7 +4434,7 @@ impl CockpitView {
                 }
             })
             .unwrap_or_else(|| self.default_choice());
-        self.open_draft_with_choice(target, provider, placement, cx);
+        self.open_draft_with_choice(target, provider, placement, None, cx);
     }
 
     /// What a new Thread starts on when nothing on screen says otherwise:
@@ -4457,6 +4460,7 @@ impl CockpitView {
                 model: None,
             },
             DraftPlacement::Loose,
+            None,
             cx,
         );
     }
@@ -4484,11 +4488,30 @@ impl CockpitView {
         cx.notify();
     }
 
+    /// A new Thread in a named Project: the Project heading's `+` in the
+    /// by-Project view, where the heading is the whole statement of intent.
+    /// It is a loose draft like every pointer-made one, and it moves the
+    /// fallback Project, so the draft after it starts here too.
+    fn open_draft_in_project(&mut self, project: ProjectId, cx: &mut Context<Self>) {
+        self.launch_project = Some(project);
+        let provider = self.default_choice();
+        self.open_draft_with_choice(
+            DraftTarget::Main,
+            provider,
+            DraftPlacement::Loose,
+            Some(project),
+            cx,
+        );
+    }
+
+    /// `chosen` is a Project the caller is naming outright, which outranks
+    /// every guess below — the filter, the current Group, the fallback.
     fn open_draft_with_choice(
         &mut self,
         target: DraftTarget,
         provider: ProviderChoice,
         placement: DraftPlacement,
+        chosen: Option<ProjectId>,
         cx: &mut Context<Self>,
     ) {
         // A second press with a draft already up must not stack another:
@@ -4502,6 +4525,13 @@ impl CockpitView {
             let identity = self.panes[index].identity;
             if let Some(draft) = self.panes[index].draft_mut() {
                 draft.binding.choose_target(target);
+                // A named Project re-aims the standing draft as well: the
+                // chip must not sit there naming the Project of an earlier
+                // press while the operator has just asked for another.
+                if let Some(chosen) = chosen {
+                    draft.binding.choose_project(chosen);
+                    draft.error = None;
+                }
             }
             // Re-aim its placement too, not only its target: a standing
             // draft left over from an earlier press must still become the
@@ -4521,13 +4551,14 @@ impl CockpitView {
             cx.notify();
             return;
         }
-        // The project starts where the operator is looking. A chosen filter
+        // The project starts where the operator is looking, unless the
+        // caller named one outright. A chosen filter
         // is the most explicit statement of that there is — the operator
         // named a Project and is looking at nothing else — so a draft
         // opened under one starts on it, with its directories, rather than
         // on the launch project. `All Projects` names nothing, and the
         // draft falls back to a Group's own Project.
-        let project = match self.nav_filter {
+        let project = match chosen.or(self.nav_filter) {
             Some(project) => Some(project),
             None => match placement {
                 DraftPlacement::NewGroupWith(thread) => {
@@ -4874,6 +4905,11 @@ impl CockpitView {
                     draft.binding.choose_project(*project);
                     draft.error = None;
                 }
+                // An explicit pick is the operator saying where they are
+                // working now, so the *next* draft starts there too — the
+                // same answer a relaunch would read off the store, without
+                // waiting for the relaunch.
+                self.launch_project = Some(*project);
             }
             BandChoice::RegisterPath(path) => match self.cockpit.register_project(path) {
                 Ok(project) => {
@@ -8120,6 +8156,20 @@ impl CockpitView {
                 cx.notify();
             }),
         ));
+        // The pencil belongs to the chosen Project, so it sits directly
+        // against the dropdown that names it — not out among the actions,
+        // and not inside the menu, which is shut for most of the Project's
+        // life. `All Projects` is a filter state, not a Project, and has
+        // nothing to edit.
+        let head = match self.nav_filter {
+            Some(project) => head.child(nav::project_edit_button().on_click(cx.listener(
+                move |view, _: &ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    view.open_project_editor(project, cx);
+                },
+            ))),
+            None => head,
+        };
         let head = head.child(
             nav::order_button(
                 state.thread_list_order == ThreadListOrder::ByProject,
@@ -8138,19 +8188,6 @@ impl CockpitView {
                 view.open_draft(DraftTarget::Main, cx);
             },
         )));
-        // The pencil belongs to the chosen Project, so it lives beside the
-        // dropdown that names it — not inside the menu, which is shut for
-        // most of the Project's life. `All Projects` is a filter state, not
-        // a Project, and has nothing to edit.
-        let head = match self.nav_filter {
-            Some(project) => head.child(nav::project_edit_button().on_click(cx.listener(
-                move |view, _: &ClickEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.open_project_editor(project, cx);
-                },
-            ))),
-            None => head,
-        };
         if state.order_open {
             let mut menu = nav::order_menu();
             for (index, (label, value)) in [
@@ -8227,11 +8264,23 @@ impl CockpitView {
         }
         if state.thread_list_order == ThreadListOrder::ByProject {
             for (index, section) in state.project_sections.iter().enumerate() {
-                tree = tree.child(nav::project_section(
+                let heading = nav::project_section(
                     section.label.clone(),
                     section.rows.len(),
                     index == 0,
-                ));
+                );
+                // `Other` gathers Threads whose Project cannot be read, so
+                // it names none to start a Thread in and gets no `+`.
+                let heading = match section.project {
+                    Some(project) => heading.child(nav::project_add_button(index).on_click(
+                        cx.listener(move |view, _: &ClickEvent, _, cx| {
+                            cx.stop_propagation();
+                            view.open_draft_in_project(project, cx);
+                        }),
+                    )),
+                    None => heading,
+                };
+                tree = tree.child(heading);
                 for row in &section.rows {
                     tree = tree.child(self.project_thread_element(row, cx));
                 }
@@ -8597,8 +8646,15 @@ pub(crate) fn here() -> std::path::PathBuf {
     std::env::current_dir().unwrap_or_else(|_| ".".into())
 }
 
-fn startup_project(registry: &ferrite_core::workspace::registry::Registry) -> Option<ProjectId> {
-    registry.projects().last().map(|project| project.id)
+/// The Project a launch's draft starts on: where the operator left off.
+/// The most recently used Thread's Project is the honest answer — it is
+/// the work they were actually doing — and the newest registered Project
+/// is the fallback for a store whose Threads name nothing the registry
+/// still knows.
+fn startup_project(cockpit: &ferrite_core::cockpit::Cockpit) -> Option<ProjectId> {
+    cockpit
+        .last_worked_project()
+        .or_else(|| cockpit.registry().projects().last().map(|project| project.id))
 }
 
 fn expand_home(typed: &str) -> std::path::PathBuf {
@@ -8684,15 +8740,30 @@ mod tests {
 
     #[test]
     fn startup_does_not_make_the_app_directory_a_project() {
-        let dir =
-            std::env::temp_dir().join(format!("ferrite-startup-project-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let registry = ferrite_core::workspace::registry::Registry::open(&dir).unwrap();
+        let (core, _fake) = cockpit("startup-project", 0);
 
-        assert_eq!(startup_project(&registry), None);
-        assert!(registry.projects().is_empty());
+        assert_eq!(startup_project(&core), None);
+        assert!(core.registry().projects().is_empty());
+    }
 
-        let _ = std::fs::remove_dir_all(dir);
+    /// The draft opens where the operator left off: the Project of the
+    /// Thread they used last, not the newest one they happened to register.
+    #[test]
+    fn startup_starts_on_the_last_project_worked_in() {
+        let (mut core, _fake) = cockpit("startup-last-project", 0);
+        let first = core.register_project(&here()).unwrap();
+        let older = core
+            .open(Provider::Claude, WorkspaceChoice::Main { checkout: here() })
+            .unwrap();
+        // A second registered Project, newer than the Thread's — the old
+        // "newest registered" answer would name this one.
+        let second = core
+            .register_project(&std::env::temp_dir().canonicalize().unwrap())
+            .unwrap();
+        assert_ne!(first, second);
+
+        assert_eq!(core.project_id(older), Some(first));
+        assert_eq!(startup_project(&core), Some(first));
     }
 
     struct Scripted {
@@ -9558,6 +9629,31 @@ mod tests {
         });
     }
 
+    /// The pencil edits the Project the dropdown names, so it sits against
+    /// that dropdown — left of the head's actions, not stranded past them.
+    #[gpui::test]
+    fn the_project_pencil_sits_right_of_the_dropdown(cx: &mut TestAppContext) {
+        let (mut core, _) = cockpit("project-pencil-place", 1);
+        let project = core.register_project(&here()).unwrap();
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, cx| view.choose_nav_filter(Some(project), cx));
+        tick(cx);
+
+        let trigger = cx
+            .debug_bounds("nav-filter")
+            .expect("the Project dropdown is up");
+        let pencil = cx
+            .debug_bounds("project-edit")
+            .expect("a named Project offers its editor");
+        let order = cx
+            .debug_bounds("thread-list-order")
+            .expect("the order control is up");
+        let add = cx.debug_bounds("add-thread").expect("New Thread is up");
+        assert!(trigger.right() <= pencil.origin.x, "{trigger:?} {pencil:?}");
+        assert!(pencil.right() <= order.origin.x, "{pencil:?} {order:?}");
+        assert!(order.right() <= add.origin.x, "{order:?} {add:?}");
+    }
+
     /// The card is a card, not a title bar: whatever the head says, the
     /// body under it has to be on screen.
     #[gpui::test]
@@ -9782,6 +9878,50 @@ mod tests {
             );
             assert_eq!(view.panes.len(), 2, "every Group Pane has been restored");
             assert_eq!(view.focused_thread(), Some(threads[1]));
+        });
+    }
+
+    /// The `+` on a Project heading is that Project's door to a new
+    /// Thread: one draft, bound to the Project the heading names, whatever
+    /// the nav filter or the focused Pane happen to say.
+    #[gpui::test]
+    fn project_heading_plus_opens_a_draft_in_that_project(cx: &mut TestAppContext) {
+        let (mut core, _) = cockpit("project-heading-plus", 1);
+        let elsewhere = core
+            .register_project(&std::env::temp_dir().canonicalize().unwrap())
+            .unwrap();
+        let heading = core.project_id(core.threads()[0]).expect("a bound Thread");
+        assert_ne!(heading, elsewhere);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, cx| {
+            view.change_settings(
+                |settings| settings.thread_list_order = ThreadListOrder::ByProject,
+                cx,
+            );
+            // The fallback names the *other* Project, so a draft that
+            // ignored the heading would be caught.
+            view.launch_project = Some(elsewhere);
+        });
+        tick(cx);
+
+        let plus = cx
+            .debug_bounds("nav-project-add-0")
+            .expect("every named Project heading offers a new Thread");
+        cx.simulate_click(plus.center(), gpui::Modifiers::none());
+        cx.run_until_parked();
+
+        view.read_with(cx, |view, _| {
+            let draft = view
+                .panes
+                .iter()
+                .find_map(|pane| pane.draft())
+                .expect("the press opened a draft");
+            assert_eq!(draft.binding.project(), heading);
+            assert_eq!(
+                view.launch_project,
+                Some(heading),
+                "the next draft starts where this one was asked for"
+            );
         });
     }
 
