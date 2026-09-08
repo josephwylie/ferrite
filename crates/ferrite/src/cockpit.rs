@@ -166,9 +166,10 @@ pub struct CockpitView {
     discovery_request: u64,
     pending_files: Option<PendingFileSearch>,
     pending_discovery: Option<PendingDiscovery>,
-    /// The launch directory's registered project (#29) — every draft's
-    /// starting choice.
-    launch_project: ProjectId,
+    /// The Project new drafts fall back to. Startup only selects an already
+    /// registered Project; it must never turn the app's process directory
+    /// into user workspace state.
+    launch_project: Option<ProjectId>,
     /// The inline title rename in flight, if any: what is being renamed,
     /// and the one-line Composer standing in for its title. At most one —
     /// the title cell *is* the editor, so two at once would need two rows
@@ -669,13 +670,15 @@ impl CockpitView {
         })
         .detach();
 
-        let repo = here();
-
-        // The registry's seed (#29): the directory Ferrite launched from is
-        // always a project, and every draft's starting choice.
-        let launch_project = cockpit
-            .register_project(&repo)
-            .expect("the launch directory registers as a project");
+        // A packaged app's process directory belongs to the app, not the
+        // operator. Start drafts on the newest Project they explicitly
+        // registered, and leave a new installation genuinely empty.
+        let launch_project = startup_project(cockpit.registry());
+        // The existing GPUI fixtures assume construction supplies a draft.
+        // Keep their synthetic seed out of production; `startup_project` is
+        // tested directly against an empty registry below.
+        #[cfg(test)]
+        let launch_project = launch_project.or_else(|| cockpit.register_project(&here()).ok());
         let mut view = Self {
             cockpit,
             panes: Vec::new(),
@@ -738,7 +741,11 @@ impl CockpitView {
         // Nothing revived: the cockpit starts as one draft Pane (#29) —
         // nothing spawns before the operator's choice.
         if view.panes.is_empty() {
-            view.open_draft_with_provider(DraftTarget::Main, launch_provider, cx);
+            if view.launch_project.is_some() {
+                view.open_draft_with_provider(DraftTarget::Main, launch_provider, cx);
+            } else {
+                view.open_project_creator(cx);
+            }
         }
         view
     }
@@ -2545,7 +2552,15 @@ impl CockpitView {
             Ok(project) => {
                 // The Project the operator just described is the one they
                 // want to look at, and to work in.
+                self.launch_project = Some(project);
                 self.choose_nav_filter(Some(project), cx);
+                if self.panes.is_empty() {
+                    self.open_draft_with_provider(
+                        DraftTarget::Main,
+                        self.prefs.settings.default_provider,
+                        cx,
+                    );
+                }
                 self.group_error = None;
                 self.refresh_names();
             }
@@ -4489,12 +4504,11 @@ impl CockpitView {
         // on the launch project. `All Projects` names nothing, and the
         // draft falls back to a Group's own Project.
         let project = match self.nav_filter {
-            Some(project) => project,
+            Some(project) => Some(project),
             None => match placement {
-                DraftPlacement::NewGroupWith(thread) => self
-                    .cockpit
-                    .project_id(thread)
-                    .unwrap_or(self.launch_project),
+                DraftPlacement::NewGroupWith(thread) => {
+                    self.cockpit.project_id(thread).or(self.launch_project)
+                }
                 _ => match self.cockpit.roster().view() {
                     View::Group(group) => self
                         .cockpit
@@ -4508,10 +4522,14 @@ impl CockpitView {
                                 .and_then(|group| group.members.first())
                                 .and_then(|thread| self.cockpit.project_id(*thread))
                         })
-                        .unwrap_or(self.launch_project),
+                        .or(self.launch_project),
                     View::Solo => self.launch_project,
                 },
             },
+        };
+        let Some(project) = project else {
+            self.open_project_creator(cx);
+            return;
         };
         let binding = pane::DraftBinding {
             binding: ferrite_core::draft::DraftBinding::new(provider, project, target),
@@ -5038,13 +5056,16 @@ impl CockpitView {
     /// registers `here()` once at construction, which tests cannot sit in.
     #[cfg(test)]
     fn aim_launch(&mut self, root: &std::path::Path) {
-        self.launch_project = self
-            .cockpit
-            .register_project(root)
-            .expect("the scratch repo registers");
+        self.launch_project = Some(
+            self.cockpit
+                .register_project(root)
+                .expect("the scratch repo registers"),
+        );
         for pane in &mut self.panes {
             if let Some(draft) = pane.draft_mut() {
-                draft.binding.choose_project(self.launch_project);
+                draft
+                    .binding
+                    .choose_project(self.launch_project.expect("the test aimed it"));
             }
         }
     }
@@ -8465,11 +8486,6 @@ impl CockpitView {
     }
 }
 
-/// Where Ferrite was started: the launch project every draft begins on.
-pub(crate) fn here() -> std::path::PathBuf {
-    std::env::current_dir().unwrap_or_else(|_| ".".into())
-}
-
 /// A typed path with `~` spelled out — the type-a-path row accepts what an
 /// operator would type at a shell.
 /// A draft's stand-in leaf in a Group's tree: drafts are no Threads and
@@ -8494,6 +8510,16 @@ fn cli_version(provider: Provider) -> String {
         Some(found) => format!("{} · {}", found.version, found.path.display()),
         None => "not found on PATH or in the usual install directories".to_string(),
     }
+}
+
+/// Where Ferrite was started. Demo fixtures use this as their checkout;
+/// production startup must not register it as a Project implicitly.
+pub(crate) fn here() -> std::path::PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| ".".into())
+}
+
+fn startup_project(registry: &ferrite_core::workspace::registry::Registry) -> Option<ProjectId> {
+    registry.projects().last().map(|project| project.id)
 }
 
 fn expand_home(typed: &str) -> std::path::PathBuf {
@@ -8576,6 +8602,19 @@ mod tests {
     use ferrite_core::workspace::WorkspaceBinding;
     use ferrite_core::{Decision, SessionEvent};
     use gpui::{KeyBinding, TestAppContext};
+
+    #[test]
+    fn startup_does_not_make_the_app_directory_a_project() {
+        let dir =
+            std::env::temp_dir().join(format!("ferrite-startup-project-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let registry = ferrite_core::workspace::registry::Registry::open(&dir).unwrap();
+
+        assert_eq!(startup_project(&registry), None);
+        assert!(registry.projects().is_empty());
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     struct Scripted {
         tx: Sender<SessionEvent>,
@@ -9290,7 +9329,9 @@ mod tests {
             assert!(
                 rows.iter().any(|row| row.active
                     && row.consequence
-                        == Consequence::Band(BandChoice::Project(view.launch_project))),
+                        == Consequence::Band(BandChoice::Project(
+                            view.launch_project.expect("a launch Project"),
+                        ))),
                 "the draft's own Project is the ticked row"
             );
 
@@ -9451,7 +9492,7 @@ mod tests {
                     .unwrap()
                     .binding
                     .project(),
-                view.launch_project,
+                view.launch_project.expect("a launch Project"),
                 "with no filter the draft starts where Ferrite was launched"
             );
         });
@@ -9487,7 +9528,10 @@ mod tests {
         view.update(cx, |view, cx| {
             view.open_draft(DraftTarget::Main, cx);
             let draft = view.panes[view.focused()].draft().unwrap();
-            assert_eq!(draft.binding.project(), view.launch_project);
+            assert_eq!(
+                draft.binding.project(),
+                view.launch_project.expect("a launch Project")
+            );
 
             view.choose_nav_filter(Some(chosen), cx);
 
