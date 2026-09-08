@@ -8156,6 +8156,20 @@ impl CockpitView {
                 cx.notify();
             }),
         ));
+        // The pencil belongs to the chosen Project, so it sits directly
+        // against the dropdown that names it — not out among the actions,
+        // and not inside the menu, which is shut for most of the Project's
+        // life. `All Projects` is a filter state, not a Project, and has
+        // nothing to edit.
+        let head = match self.nav_filter {
+            Some(project) => head.child(nav::project_edit_button().on_click(cx.listener(
+                move |view, _: &ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    view.open_project_editor(project, cx);
+                },
+            ))),
+            None => head,
+        };
         let head = head.child(
             nav::order_button(
                 state.thread_list_order == ThreadListOrder::ByProject,
@@ -8174,19 +8188,6 @@ impl CockpitView {
                 view.open_draft(DraftTarget::Main, cx);
             },
         )));
-        // The pencil belongs to the chosen Project, so it lives beside the
-        // dropdown that names it — not inside the menu, which is shut for
-        // most of the Project's life. `All Projects` is a filter state, not
-        // a Project, and has nothing to edit.
-        let head = match self.nav_filter {
-            Some(project) => head.child(nav::project_edit_button().on_click(cx.listener(
-                move |view, _: &ClickEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.open_project_editor(project, cx);
-                },
-            ))),
-            None => head,
-        };
         if state.order_open {
             let mut menu = nav::order_menu();
             for (index, (label, value)) in [
@@ -9626,6 +9627,31 @@ mod tests {
                 "Renamed"
             );
         });
+    }
+
+    /// The pencil edits the Project the dropdown names, so it sits against
+    /// that dropdown — left of the head's actions, not stranded past them.
+    #[gpui::test]
+    fn the_project_pencil_sits_right_of_the_dropdown(cx: &mut TestAppContext) {
+        let (mut core, _) = cockpit("project-pencil-place", 1);
+        let project = core.register_project(&here()).unwrap();
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, cx| view.choose_nav_filter(Some(project), cx));
+        tick(cx);
+
+        let trigger = cx
+            .debug_bounds("nav-filter")
+            .expect("the Project dropdown is up");
+        let pencil = cx
+            .debug_bounds("project-edit")
+            .expect("a named Project offers its editor");
+        let order = cx
+            .debug_bounds("thread-list-order")
+            .expect("the order control is up");
+        let add = cx.debug_bounds("add-thread").expect("New Thread is up");
+        assert!(trigger.right() <= pencil.origin.x, "{trigger:?} {pencil:?}");
+        assert!(pencil.right() <= order.origin.x, "{pencil:?} {order:?}");
+        assert!(order.right() <= add.origin.x, "{order:?} {add:?}");
     }
 
     /// The card is a card, not a title bar: whatever the head says, the

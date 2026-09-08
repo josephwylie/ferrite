@@ -545,6 +545,7 @@ pub fn filter_trigger(state: &FilterState) -> Stateful<Div> {
     };
     div()
         .id(("nav-filter", 0usize))
+        .debug_selector(|| "nav-filter".into())
         .group(FILTER_GROUP)
         .flex()
         .flex_1()
@@ -662,9 +663,12 @@ pub fn filter_option(index: usize, option: &FilterOption) -> Stateful<Div> {
         )
 }
 
-/// The visible door to Project management: the pencil beside the filter
-/// trigger. It is drawn only while the filter names a Project — `All
-/// Projects` is a filter state, not a Project, and has nothing to edit.
+/// The visible door to Project management: the pencil directly right of
+/// the filter trigger, before the head's actions, so it reads as part of
+/// the control that names the Project rather than one more thing to do
+/// with the list. It is drawn only while the filter names a Project —
+/// `All Projects` is a filter state, not a Project, and has nothing to
+/// edit.
 pub fn project_edit_button() -> gpui::component::button::Button {
     components::button("project-edit")
         .tab_stop(true)
