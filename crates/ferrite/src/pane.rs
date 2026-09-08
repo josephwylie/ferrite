@@ -4110,6 +4110,7 @@ pub(crate) fn render_block(
     signal: u32,
     _provider: Option<Provider>,
     preview: &crate::attachment_preview::Preview,
+    prompt_actions: Option<AnyElement>,
 ) -> AnyElement {
     let row = div().w_full().min_w_0().flex_shrink_0();
     match &block.body {
@@ -4118,6 +4119,7 @@ pub(crate) fn render_block(
             let (text, files) = ferrite_core::prompt_files::split(line.clone());
             let row = paragraph(row, TEXT_STRONG)
                 .debug_selector(|| "transcript-prompt".into())
+                .group("sent-prompt")
                 .relative()
                 .px(px(theme::INDENT))
                 .py(px(theme::PROMPT_PAD_Y))
@@ -4134,9 +4136,23 @@ pub(crate) fn render_block(
                         .text_color(rgb(SEP))
                         .child("❯"),
                 )
-                .when(!text.is_empty(), |row| {
-                    row.child(selection.line(block.id, text, Vec::new()))
-                })
+                .child(
+                    div()
+                        .flex()
+                        .items_start()
+                        .w_full()
+                        .min_w_0()
+                        .gap(px(theme::KEYS_GAP))
+                        .when(!text.is_empty(), |line| {
+                            line.child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(selection.line(block.id, text, Vec::new())),
+                            )
+                        })
+                        .children(prompt_actions),
+                )
                 .when(!files.is_empty(), |row| {
                     row.debug_selector(|| "sent-prompt-attachments".into())
                         .child(crate::attachments::Attachments::new(
@@ -4950,6 +4966,94 @@ pub fn tool_disclosure_control(
                 .h(px(theme::TOOL_DISCLOSURE_HIT))
                 .child(control),
         )
+}
+
+pub struct PromptActions {
+    root: Stateful<Div>,
+    block: BlockId,
+}
+
+impl PromptActions {
+    pub fn on_copy(
+        mut self,
+        listener: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
+    ) -> Self {
+        self.root = self
+            .root
+            .child(
+                prompt_action(
+                    "Copy prompt",
+                    icons::COPY,
+                    format!("copy-{:?}", self.block),
+                )
+                .on_click(listener),
+            );
+        self
+    }
+
+    pub fn on_resend(
+        mut self,
+        listener: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
+    ) -> Self {
+        self.root = self.root.child(
+            prompt_action(
+                "Resend prompt",
+                icons::RESEND,
+                format!("resend-{:?}", self.block),
+            )
+            .on_click(listener),
+        );
+        self
+    }
+}
+
+impl IntoElement for PromptActions {
+    type Element = Stateful<Div>;
+
+    fn into_element(self) -> Self::Element {
+        self.root
+    }
+}
+
+pub fn prompt_actions(block: BlockId) -> PromptActions {
+    PromptActions {
+        block,
+        root: div()
+            .id(SharedString::from(format!("prompt-actions-{block:?}")))
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(px(theme::KEYS_GAP))
+            .invisible()
+            .group_hover("sent-prompt", |style| style.visible()),
+    }
+}
+
+fn prompt_action(
+    tooltip: &'static str,
+    icon_key: &'static str,
+    id: impl Into<gpui::ElementId>,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .debug_selector(move || {
+            format!(
+                "prompt-action-{}",
+                tooltip.split_whitespace().next().unwrap_or_default().to_ascii_lowercase()
+            )
+        })
+        .flex()
+        .items_center()
+        .justify_center()
+        .w(px(theme::TOOL_DISCLOSURE_HIT))
+        .h(px(theme::TOOL_DISCLOSURE_HIT))
+        .rounded(px(theme::R_TIGHT))
+        .hover_control()
+        .press_control()
+        .tooltip(move |window, cx| {
+            gpui::component::tooltip::Tooltip::new(tooltip).build(window, cx)
+        })
+        .child(icon(icon_key, theme::ICON_CHEVRON, TEXT_MUTED))
 }
 
 /// `.hunk` (§E.13): no card, no filename header — the event above already

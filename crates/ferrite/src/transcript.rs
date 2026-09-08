@@ -78,6 +78,8 @@ impl TranscriptInput {
 #[derive(Clone, Debug)]
 pub(crate) enum TranscriptEvent {
     ToggleDisclosure(DisclosureId),
+    CopyPrompt(String),
+    ResendPrompt(String),
 }
 
 /// A stable GPUI entity for one Pane Subject's heavy transcript subtree.
@@ -383,7 +385,29 @@ impl TranscriptView {
             pane::signal_color(self.input.signal_status),
             None,
             &self.input.preview,
+            view.map(|view| self.prompt_actions(block, view)),
         )
+    }
+
+    fn prompt_actions(&self, block: &Block, view: Entity<Self>) -> gpui::AnyElement {
+        let Body::Prompt(prompt) = &block.body else {
+            return div().into_any_element();
+        };
+        let copy = prompt.clone();
+        let resend = prompt.clone();
+        let copy_view = view.clone();
+        pane::prompt_actions(block.id)
+            .on_copy(move |_, _, cx| {
+                cx.stop_propagation();
+                copy_view.update(cx, |_, cx| {
+                    cx.emit(TranscriptEvent::CopyPrompt(copy.clone()))
+                });
+            })
+            .on_resend(move |_, _, cx| {
+                cx.stop_propagation();
+                view.update(cx, |_, cx| cx.emit(TranscriptEvent::ResendPrompt(resend.clone())));
+            })
+            .into_any_element()
     }
 
     fn render_turn_diff(
