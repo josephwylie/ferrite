@@ -4125,16 +4125,16 @@ mod tests {
         (Cockpit::new(store, Box::new(fake.clone())), fake)
     }
 
-    /// An empty store was never worked in, and a Project the registry has
-    /// forgotten is not somewhere to go back to — a removed Project must
-    /// not return as a draft's default just because a Thread still names
-    /// it.
+    /// An empty store was never worked in; otherwise the answer is the
+    /// most recently used Thread's Project. A registry lost by hand
+    /// orphans nothing, so the Threads keep their headers — but a Project
+    /// the menu no longer offers is not somewhere to send a draft, and the
+    /// answer is nothing rather than an id nothing can resolve.
     #[test]
     fn the_last_worked_project_is_a_registered_one_or_nothing() {
-        let (mut core, _fake) = cockpit("last-worked-project");
+        let (mut core, fake) = cockpit("last-worked-project");
         assert_eq!(core.last_worked_project(), None);
-        let dir = scratch("last-worked-project-root");
-        let other = dir.join("other");
+        let other = scratch("last-worked-project-other");
         std::fs::create_dir_all(&other).unwrap();
 
         let thread = core.open(Provider::Claude, main_choice()).unwrap();
@@ -4145,16 +4145,23 @@ mod tests {
         let newer = core
             .open(Provider::Claude, WorkspaceChoice::Main { checkout: other })
             .unwrap();
-        let newest_project = core.project_id(newer).expect("the open Thread is bound");
-        assert_ne!(newest_project, project);
-        assert_eq!(core.last_worked_project(), Some(newest_project));
+        let newest = core.project_id(newer).expect("the open Thread is bound");
+        assert_ne!(newest, project);
+        assert_eq!(core.last_worked_project(), Some(newest));
 
-        // Forget it, and the answer falls back to the older Thread's
-        // Project rather than naming a Project no menu offers.
-        core.remove_project(newest_project).unwrap();
-        assert_eq!(core.last_worked_project(), Some(project));
-        core.remove_project(project).unwrap();
-        assert_eq!(core.last_worked_project(), None);
+        // The same store with its registry file gone: every Thread still
+        // names a Project, and the menu offers none of them.
+        // `scratch` clears what it names, so the store's own path is spelled
+        // out rather than asked for a second time.
+        let dir = std::env::temp_dir().join(format!(
+            "ferrite-cockpit-{}-last-worked-project",
+            std::process::id()
+        ));
+        std::fs::remove_file(dir.join("registry.json")).unwrap();
+        let reopened = Cockpit::new(Store::open(&dir).unwrap(), Box::new(fake));
+        assert!(reopened.registry().projects().is_empty());
+        assert_eq!(reopened.project_id(newer), Some(newest));
+        assert_eq!(reopened.last_worked_project(), None);
     }
 
     /// An initialised repo with one committed file, for binding tests.
