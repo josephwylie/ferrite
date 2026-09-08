@@ -4,35 +4,37 @@
 # /Applications/Ferrite.app, the one copy on the machine, so it opens from
 # the Dock, Spotlight and Launchpad like any other app.
 #
-# The bundle is the release binary, its application icon, an Info.plist naming
-# both, and an ad-hoc code signature so macOS keeps treating it as the same app
-# across rebuilds. The build directory is asked of cargo rather than assumed — a
+# The bundle is the release binary, its application icon, and an Info.plist
+# naming both. Local builds receive an ad-hoc signature; release builds set
+# MACOS_SIGNING_IDENTITY to a Developer ID Application identity and can emit a
+# signed drag-to-Applications DMG. The build directory is asked of cargo rather
+# than assumed — a
 # `target-dir` in ~/.cargo/config.toml moves it — and a missing binary is a
 # loud failure, never a silent install of nothing.
 
 set -euo pipefail
 
 BUNDLE_ONLY=false
-ARCHIVE=""
+DMG=""
 case "${1:-}" in
   "") ;;
   --bundle-only)
     if [ "$#" -ne 1 ]; then
-      echo "usage: $0 [--bundle-only | --archive <path>]" >&2
+      echo "usage: $0 [--bundle-only | --dmg <path>]" >&2
       exit 2
     fi
     BUNDLE_ONLY=true
     ;;
-  --archive)
+  --dmg)
     if [ "$#" -ne 2 ]; then
-      echo "usage: $0 [--bundle-only | --archive <path>]" >&2
+      echo "usage: $0 [--bundle-only | --dmg <path>]" >&2
       exit 2
     fi
     BUNDLE_ONLY=true
-    ARCHIVE="$2"
+    DMG="$2"
     ;;
   *)
-    echo "usage: $0 [--bundle-only | --archive <path>]" >&2
+    echo "usage: $0 [--bundle-only | --dmg <path>]" >&2
     exit 2
     ;;
 esac
@@ -117,12 +119,32 @@ cat >"$BUILT/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 plutil -lint -s "$BUILT/Contents/Info.plist"
-codesign --force --sign - "$BUILT"
+SIGNING_IDENTITY="${MACOS_SIGNING_IDENTITY:--}"
+if [ -n "$DMG" ] && [ "$SIGNING_IDENTITY" = "-" ]; then
+  echo "MACOS_SIGNING_IDENTITY must name a Developer ID Application certificate when building a DMG" >&2
+  exit 1
+fi
+
+if [ "$SIGNING_IDENTITY" = "-" ]; then
+  codesign --force --sign - "$BUILT"
+else
+  codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$BUILT"
+  codesign --verify --deep --strict --verbose=2 "$BUILT"
+fi
 
 if [ "$BUNDLE_ONLY" = true ]; then
-  if [ -n "$ARCHIVE" ]; then
-    tar -czf "$ARCHIVE" -C "$(dirname "$BUILT")" "$(basename "$BUILT")"
-    echo "Archived → $ARCHIVE"
+  if [ -n "$DMG" ]; then
+    DMG_ROOT="$TARGET/release/bundle/dmg"
+    rm -rf "$DMG_ROOT"
+    mkdir -p "$DMG_ROOT"
+    ditto "$BUILT" "$DMG_ROOT/$NAME.app"
+    ln -s /Applications "$DMG_ROOT/Applications"
+    mkdir -p "$(dirname "$DMG")"
+    rm -f "$DMG"
+    hdiutil create -volname "$NAME" -srcfolder "$DMG_ROOT" -ov -format UDZO "$DMG"
+    codesign --force --timestamp --sign "$SIGNING_IDENTITY" "$DMG"
+    codesign --verify --verbose=2 "$DMG"
+    echo "Packaged → $DMG"
     exit 0
   fi
   echo "Built → $BUILT"

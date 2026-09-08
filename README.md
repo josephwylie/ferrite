@@ -37,16 +37,14 @@ names the copy in use.
 
 ## Install
 
-Download the latest archive from
+Download the latest installer from
 [GitHub Releases](https://github.com/josephwylie/ferrite/releases/latest).
 
 ### macOS (Apple silicon)
 
-```sh
-tar -xzf ferrite-v*-aarch64-apple-darwin.tar.gz
-xattr -cr Ferrite.app   # ad-hoc signed; clear the download quarantine
-open Ferrite.app
-```
+Open the Apple-notarized `.dmg`, then drag Ferrite into Applications. The app
+is signed with a Developer ID certificate, so Gatekeeper can verify its
+publisher and notarization ticket.
 
 From a checkout, `scripts/install-app.sh` builds the release binary and
 installs it as `/Applications/Ferrite.app`, so it opens from the Dock,
@@ -54,9 +52,13 @@ Spotlight or Launchpad.
 
 ### Windows (x64)
 
-Unzip `ferrite-v*-x86_64-pc-windows-msvc.zip` and run `ferrite.exe`. The
-binary is unsigned, so SmartScreen objects the first time: choose
-**More info → Run anyway**.
+Run `ferrite-v*-x86_64-pc-windows-msvc-setup.exe`. The Authenticode-signed
+installer adds Ferrite to the Start menu and registers an uninstaller in
+Windows Settings. Installation is per-user and does not require administrator
+access.
+
+Maintainers: configure the required release credentials described in
+[docs/release-signing.md](docs/release-signing.md) before pushing a version tag.
 
 ## Quickstart
 
