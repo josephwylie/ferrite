@@ -1801,6 +1801,33 @@ impl Cockpit {
         self.threads.keys().copied().collect()
     }
 
+    /// The Project the operator was last working in: the Project of the
+    /// most recently written Thread the store holds, skipping Threads
+    /// whose Project the registry no longer knows — a Project removed from
+    /// the menu must not come back as a draft's default. `None` when no
+    /// Thread names a registered Project, which is what a fresh
+    /// installation looks like.
+    ///
+    /// One `stat` and one header line per Thread, and it stops at the
+    /// first answer, so the common case is two reads. Launch-time only:
+    /// callers keep the answer rather than ask it per frame.
+    pub fn last_worked_project(&self) -> Option<ProjectId> {
+        let mut threads: Vec<(Option<std::time::SystemTime>, ThreadId)> = self
+            .store
+            .thread_ids()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|thread| (self.store.last_used(thread), thread))
+            .collect();
+        // Newest first, and a Thread whose log cannot be stat'd sorts last
+        // rather than counting as the epoch's most recent.
+        threads.sort_by_key(|(used, thread)| (std::cmp::Reverse(*used), std::cmp::Reverse(*thread)));
+        threads.into_iter().find_map(|(_, thread)| {
+            let project = self.project_id(thread)?;
+            self.registry.project(project).map(|_| project)
+        })
+    }
+
     /// The process is quitting: end every Session now, replacements and
     /// pending startups included, so no provider process outlives Ferrite.
     /// A Codex app-server left running holds its thread's writer lock until
@@ -4096,6 +4123,38 @@ mod tests {
         let fake = Fake::default();
         let store = Store::open(scratch(name)).unwrap();
         (Cockpit::new(store, Box::new(fake.clone())), fake)
+    }
+
+    /// An empty store was never worked in, and a Project the registry has
+    /// forgotten is not somewhere to go back to — a removed Project must
+    /// not return as a draft's default just because a Thread still names
+    /// it.
+    #[test]
+    fn the_last_worked_project_is_a_registered_one_or_nothing() {
+        let (mut core, _fake) = cockpit("last-worked-project");
+        assert_eq!(core.last_worked_project(), None);
+        let dir = scratch("last-worked-project-root");
+        let other = dir.join("other");
+        std::fs::create_dir_all(&other).unwrap();
+
+        let thread = core.open(Provider::Claude, main_choice()).unwrap();
+        let project = core.project_id(thread).expect("the open Thread is bound");
+        assert_eq!(core.last_worked_project(), Some(project));
+
+        // A newer Thread in another Project outranks the older one.
+        let newer = core
+            .open(Provider::Claude, WorkspaceChoice::Main { checkout: other })
+            .unwrap();
+        let newest_project = core.project_id(newer).expect("the open Thread is bound");
+        assert_ne!(newest_project, project);
+        assert_eq!(core.last_worked_project(), Some(newest_project));
+
+        // Forget it, and the answer falls back to the older Thread's
+        // Project rather than naming a Project no menu offers.
+        core.remove_project(newest_project).unwrap();
+        assert_eq!(core.last_worked_project(), Some(project));
+        core.remove_project(project).unwrap();
+        assert_eq!(core.last_worked_project(), None);
     }
 
     /// An initialised repo with one committed file, for binding tests.
