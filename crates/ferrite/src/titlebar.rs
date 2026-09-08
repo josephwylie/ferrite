@@ -29,13 +29,15 @@
 
 use gpui::component::button::Button;
 use gpui::prelude::*;
-use gpui::{div, px, rgb, Div, MouseButton, SharedString, Stateful, WindowControlArea};
+use gpui::{
+    div, px, rgb, rgba, Div, FontWeight, MouseButton, SharedString, Stateful, WindowControlArea,
+};
 
 use crate::icons::{self, icon};
 use crate::pointer::{Pointer, PointerPressed};
 use crate::theme::{
-    BLOCKED, CAPTION_GLYPH, CAPTION_RESIZE_EDGE, CAPTION_W, FS_LG, FS_SM, GRID_PAD, ICON_BUTTON,
-    ICON_BUTTON_GLYPH, TEXT, TEXT_MUTED, WIN_CHROME_H,
+    ATTENTION, ATTENTION_WASH, BLOCKED, CAPTION_GLYPH, CAPTION_RESIZE_EDGE, CAPTION_W, FS_LG,
+    FS_SM, GRID_PAD, ICON_BUTTON, ICON_BUTTON_GLYPH, R_CHIP, TEXT, TEXT_MUTED, WIN_CHROME_H,
 };
 
 /// The active location named in the window chrome. A Group may span
@@ -46,6 +48,14 @@ pub struct Title {
     pub project: Option<SharedString>,
     pub group: Option<SharedString>,
 }
+
+/// Whether this build is an unreleased one. `--release` is not the
+/// question — a locally built release binary is still a dev build, and
+/// wants the badge. Only the release pipeline ships without it, which it
+/// says by setting `FERRITE_RELEASE` for the compile (`build.rs` tracks
+/// the variable so a cached build cannot keep a stale answer). Settings
+/// reports the same fact under About.
+pub const DEV: bool = option_env!("FERRITE_RELEASE").is_none();
 
 /// Whether this build draws its own titlebar. macOS keeps the host's, and
 /// hiding it there would take the traffic lights with it.
@@ -98,6 +108,7 @@ pub fn strip(
         // contextual creation door sits at the trailing edge immediately
         // before the caption controls.
         .child(title_region(title))
+        .children(DEV.then(dev_badge))
         .child(trailing_drag)
         .child(add_thread)
         .children(CUSTOM.then(|| caption_buttons(maximized)))
@@ -150,6 +161,27 @@ pub fn drag_region(id: &'static str, title: Title, maximized: bool) -> Div {
                 })
                 .window_control_area(WindowControlArea::Drag),
         )
+}
+
+/// The dev-build mark, beside the location it qualifies. It is a sibling
+/// of the drag region rather than a child: anything inside one is
+/// non-client to Windows, and the band's text should not travel with the
+/// two drag stretches that also render a `Title`.
+fn dev_badge() -> Div {
+    div()
+        .debug_selector(|| "titlebar-dev-badge".into())
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .h(px(17.0))
+        .px(px(5.0))
+        .rounded(px(R_CHIP))
+        .bg(rgba(ATTENTION_WASH))
+        .text_size(px(FS_SM))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(rgb(ATTENTION))
+        .child("DEV")
 }
 
 fn title_region(title: Title) -> Div {

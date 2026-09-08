@@ -2397,7 +2397,7 @@ impl CockpitView {
             "Version",
             env!("CARGO_PKG_VERSION").into(),
         )];
-        if cfg!(debug_assertions) {
+        if crate::titlebar::DEV {
             about.push(prefs::fact("Development build", "Yes".into()));
         }
         about.extend([
@@ -9154,6 +9154,36 @@ mod tests {
             minimize.center().y,
             "the add button is vertically centered in the titlebar"
         );
+    }
+
+    /// The band says which build this is, and only while it is not a
+    /// release one: the badge is compiled out of a shipped Ferrite.
+    #[gpui::test]
+    fn the_titlebar_marks_a_development_build(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("titlebar-dev-badge", 1);
+        let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        tick(cx);
+
+        let badge = cx.debug_bounds("titlebar-dev-badge");
+        assert_eq!(
+            badge.is_some(),
+            crate::titlebar::DEV,
+            "the dev badge shows in development builds and nowhere else"
+        );
+        if let Some(badge) = badge {
+            let add = cx
+                .debug_bounds("titlebar-add-thread")
+                .expect("the titlebar add button is visible");
+            assert!(
+                badge.right() <= add.origin.x,
+                "the badge stays left of the titlebar's trailing controls"
+            );
+            assert_eq!(
+                badge.center().y,
+                add.center().y,
+                "the badge is vertically centered in the titlebar"
+            );
+        }
     }
 
     /// Pressing new-thread with a draft already up re-aims that draft
@@ -16148,7 +16178,7 @@ mod tests {
         );
         assert_eq!(
             cx.debug_bounds("settings-fact-Development build").is_some(),
-            cfg!(debug_assertions),
+            crate::titlebar::DEV,
             "About identifies development builds without labeling releases"
         );
         assert!(
