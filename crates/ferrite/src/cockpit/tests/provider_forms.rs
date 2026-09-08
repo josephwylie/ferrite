@@ -82,6 +82,73 @@ fn contract_typed_question_renders_and_returns_normalized_picks(cx: &mut TestApp
     );
 }
 
+/// Regression: the live Claude question that crashed Ferrite twice on Windows.
+/// Keep the real labels and descriptions here: the contract is that a provider
+/// can present this ordinary two-choice form without overflowing the UI thread.
+#[gpui::test]
+fn contract_live_claude_base_branch_question_renders(cx: &mut TestAppContext) {
+    // Rust's test workers normally have twice the stack reserved for Ferrite's
+    // Windows GUI main thread, which hid this crash from the existing form
+    // contracts. Re-enter this one test in a production-sized worker so the
+    // regression command exercises the same constraint as ferrite.exe.
+    #[cfg(windows)]
+    if std::env::var_os("FERRITE_QUESTION_STACK_CHILD").is_none() {
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg(
+                "cockpit::tests::provider_forms::contract_live_claude_base_branch_question_renders",
+            )
+            .args(["--exact", "--nocapture"])
+            .env("RUST_MIN_STACK", "1048576")
+            .env("FERRITE_QUESTION_STACK_CHILD", "1")
+            .status()
+            .expect("start the production-stack question probe");
+        assert!(
+            status.success(),
+            "the native question overflowed the production-sized UI stack"
+        );
+        return;
+    }
+
+    let (core, fake) = cockpit("claude-base-branch-question", 1);
+    bind_production_keys(cx);
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1100.), px(800.)));
+
+    let question = ferrite_core::questions::Question {
+        id: None,
+        question: "What should the new threads-menu branch be based on?".into(),
+        header: "Base branch".into(),
+        multi_select: false,
+        secret: false,
+        allow_other: true,
+        options: vec![
+            ferrite_core::questions::Choice {
+                label: "feature/filtering-menu-rework (Recommended)".into(),
+                description: "Branch off the filtering rework so the threads menu can reuse the shared `panel-styles.ts` (SIDEBAR_PANEL/PANEL_SUBHEAD) it introduced. Downside: this PR depends on that one merging first.".into(),
+                preview: None,
+            },
+            ferrite_core::questions::Choice {
+                label: "master".into(),
+                description: "Branch off master and copy the panel style constants locally (as metrics-menu currently does on master). Independent PR, but duplicates the shared constants until the filtering branch lands.".into(),
+                preview: None,
+            },
+        ],
+    };
+    fake.streams.borrow()[0]
+        .send(typed_decision(DecisionKind::Questions(vec![question])))
+        .unwrap();
+    tick(cx);
+
+    assert!(
+        cx.debug_bounds("question-choice-0-0").is_some(),
+        "the first provider choice is visible"
+    );
+    assert!(
+        cx.debug_bounds("question-choice-0-1").is_some(),
+        "the second provider choice is visible"
+    );
+}
+
 #[gpui::test]
 fn contract_mcp_form_defaults_submit_typed_values(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("mcp-form-contract", 1);
