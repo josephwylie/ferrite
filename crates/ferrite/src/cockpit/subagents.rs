@@ -82,11 +82,9 @@ fn native_keys<E: gpui::InteractiveElement>(element: E) -> E {
 }
 
 /// The one shell every pending request wears — approvals, questions, forms,
-/// external links and the unreadable fallback alike: the raised island that
-/// joins the Composer below, outlined 1px in the attention colour so the
-/// operator reads "this needs an answer" before reading the words. The
-/// outline runs down the join's shoulders too, so it is one unbroken line
-/// from the Composer's edge up and around the island.
+/// external links and the unreadable fallback alike. It floats above the
+/// Composer as a self-contained island: enough separation to read as the
+/// current task, while the quiet attention edge still communicates urgency.
 fn request_island(
     handle: &DecisionHandle,
     body: impl IntoElement,
@@ -96,12 +94,8 @@ fn request_island(
     let surface = div()
         .bg(rgb(theme::RAISED))
         .border_1()
-        .border_b_0()
-        .border_color(rgb(theme::ATTENTION))
-        .rounded_tl(radius)
-        .rounded_tr(radius)
-        .rounded_bl(px(0.))
-        .rounded_br(px(0.))
+        .border_color(rgba(theme::ATTENTION_EDGE))
+        .rounded(radius)
         .p(px(16.))
         .w_full()
         .min_w_0()
@@ -113,21 +107,22 @@ fn request_island(
             .min_w_0()
             .flex()
             .justify_center()
-            .px(px(theme::PANE_PAD_X + 12.))
+            .px(radius)
+            .pb(px(8.))
             .child(
                 div()
                     .id(("question-island", handle.serial as usize))
                     .debug_selector(|| "question-island".into())
                     .relative()
+                    // The island floats over the transcript, whose prose is
+                    // selectable and so paints an I-beam. Without a hitbox of
+                    // its own the card inherits that cursor everywhere the
+                    // controls do not cover.
+                    .cursor_default()
                     .w_full()
                     .max_w(px(680.))
                     .min_w_0()
                     .font_family(theme::FONT_UI)
-                    .child(crate::components::composer_join(
-                        radius,
-                        rgb(theme::RAISED).into(),
-                        rgb(theme::ATTENTION).into(),
-                    ))
                     .child(
                         GroupBox::new()
                             .id("question-surface")
@@ -824,24 +819,57 @@ impl CockpitView {
         if requests.is_empty() {
             return None;
         }
+        let multiple_requests = requests.len() > 1;
         let mut cards = div()
             .id(("subject-requests", thread.get()))
-            .max_h(px(
-                (f32::from(window.viewport_size().height) * 0.55).min(440.)
-            ))
-            .overflow_y_scroll()
             .w_full()
             .min_w_0()
             .flex()
+            .flex_shrink_0()
             .flex_col()
             .gap(px(8.));
         for request in requests {
             cards = cards.child(self.request_card(index, thread, request, window, cx));
         }
-        Some(native_keys(cards).into_any_element())
+        if multiple_requests {
+            Some(
+                native_keys(
+                    cards
+                        .max_h(px(
+                            (f32::from(window.viewport_size().height) * 0.55).min(440.)
+                        ))
+                        .overflow_y_scrollbar(),
+                )
+                .into_any_element(),
+            )
+        } else {
+            // A single request owns its own bounded content viewport. Giving
+            // its surrounding stack another scroll container makes that
+            // stack consume the transcript's flex space instead of docking.
+            Some(native_keys(cards).into_any_element())
+        }
     }
 
     pub(super) fn request_card(
+        &self,
+        index: usize,
+        thread: ThreadId,
+        request: PendingDecision,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        // Keep this dispatcher shallow. Windows gives the GUI main thread a
+        // 1 MiB stack; compiling every Decision builder into this one frame
+        // overflowed it as soon as a question arrived.
+        if let Some(questions) = pane::question_of(&request.decision) {
+            let handle = request.handle.clone();
+            return self
+                .question_request_card(index, thread, request, handle, questions, window, cx);
+        }
+        self.non_question_request_card(index, thread, request, window, cx)
+    }
+
+    fn non_question_request_card(
         &self,
         index: usize,
         thread: ThreadId,
@@ -899,264 +927,7 @@ impl CockpitView {
                 ));
             }
         }
-        let questions = pane::question_of(&request.decision);
-        if let Some(questions) = questions {
-            let forms = self.panes[index].request_forms.clone();
-            if !forms.0.borrow().contains_key(&handle) {
-                let inputs = questions
-                    .iter()
-                    .map(|question| {
-                        cx.new(|cx| {
-                            InputState::new(window, cx)
-                                .placeholder("Or write your own answer…")
-                                .masked(question.secret)
-                        })
-                    })
-                    .collect();
-                forms.0.borrow_mut().insert(
-                    handle.clone(),
-                    RequestForm {
-                        answers: vec![Default::default(); questions.len()],
-                        inputs,
-                        form_inputs: Default::default(),
-                        values: Default::default(),
-                    },
-                );
-            }
-            let mut content = div()
-                .id(("question-content", handle.serial as usize))
-                .w_full()
-                .min_w_0()
-                .max_h(px(
-                    (f32::from(window.viewport_size().height) * 0.4).min(320.)
-                ))
-                .overflow_y_scroll()
-                .flex()
-                .flex_col()
-                .gap(px(16.));
-            for (qi, question) in questions.iter().enumerate() {
-                let mut section = div()
-                    .w_full()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .gap(px(10.))
-                    .child(
-                        div()
-                            .text_size(px(theme::FS_MD))
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .text_color(rgb(theme::TEXT))
-                            .child(question.question.clone()),
-                    );
-                if question.multi_select {
-                    section =
-                        section.child(components::label("Choose any that apply", theme::TEXT_2));
-                    for (oi, option) in question.options.iter().enumerate() {
-                        let checked = forms.0.borrow()[&handle].answers[qi].picks.contains(&oi);
-                        let forms = forms.clone();
-                        let handle = handle.clone();
-                        section = section.child(
-                            Checkbox::new(("question-checkbox", qi * 256 + oi))
-                                .debug_selector(move || format!("question-choice-{qi}-{oi}"))
-                                .checked(checked)
-                                .disabled(request.submitting)
-                                .accessibility_label(option.label.clone())
-                                .w_full()
-                                .min_w_0()
-                                .child(question_choice(option))
-                                .on_click(cx.listener(move |_, checked: &bool, _, cx| {
-                                    if let Some(form) = forms.0.borrow_mut().get_mut(&handle) {
-                                        let picks = &mut form.answers[qi].picks;
-                                        picks.retain(|at| *at != oi);
-                                        if *checked {
-                                            picks.push(oi);
-                                        }
-                                    }
-                                    cx.notify();
-                                })),
-                        );
-                    }
-                } else if !question.options.is_empty() {
-                    let selected = forms.0.borrow()[&handle].answers[qi].picks.first().copied();
-                    let forms = forms.clone();
-                    let handle = handle.clone();
-                    section = section.child(
-                        RadioGroup::vertical(("question-radios", qi))
-                            .w_full()
-                            .min_w_0()
-                            .selected_index(selected)
-                            .disabled(request.submitting)
-                            .children(question.options.iter().enumerate().map(|(oi, option)| {
-                                Radio::new(oi)
-                                    .w_full()
-                                    .min_w_0()
-                                    .accessibility_label(option.label.clone())
-                                    .debug_selector(move || format!("question-choice-{qi}-{oi}"))
-                                    .child(question_choice(option))
-                            }))
-                            .on_click(cx.listener(move |_, selected: &usize, _, cx| {
-                                if let Some(form) = forms.0.borrow_mut().get_mut(&handle) {
-                                    form.answers[qi].picks = vec![*selected];
-                                }
-                                cx.notify();
-                            })),
-                    );
-                }
-                if question.allow_other {
-                    let selector = format!("request-other-{}-{}-{qi}", thread.get(), handle.serial);
-                    content = content.child(
-                        section.child(
-                            div()
-                                .w_full()
-                                .min_w_0()
-                                .debug_selector(move || selector.clone())
-                                .child(
-                                    Input::new(&forms.0.borrow()[&handle].inputs[qi])
-                                        .disabled(request.submitting),
-                                ),
-                        ),
-                    );
-                } else {
-                    content = content.child(section);
-                }
-            }
-            let async_question = !request.decision.blocks_execution();
-            let working = async_question
-                && request
-                    .subject
-                    .as_ref()
-                    .and_then(|subject| self.cockpit.thread(thread)?.activity().subject(subject))
-                    .is_some_and(|subject| subject.busy());
-            let status = if request.submitting {
-                "Sending answer…"
-            } else if working {
-                "Work continues while you answer"
-            } else if async_question {
-                "Answer when ready"
-            } else {
-                "Waiting for your answer"
-            };
-            let status = div()
-                .min_w_0()
-                .text_size(px(theme::FS_SM))
-                .text_color(rgb(theme::TEXT_2))
-                .child(status);
-            let status = if request.submitting || working {
-                pane::live_text(status, "question-live".into())
-            } else {
-                status.into_any_element()
-            };
-            let mut body = div()
-                .w_full()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .gap(px(12.))
-                .child(
-                    div()
-                        .flex()
-                        .flex_wrap()
-                        .items_center()
-                        .gap(px(8.))
-                        .child(components::label(
-                            if questions.len() == 1 {
-                                "Question for you".into()
-                            } else {
-                                format!("{} questions for you", questions.len())
-                            },
-                            theme::TEXT,
-                        ))
-                        .child(div().flex_1())
-                        .child(status),
-                )
-                .when(request.subject.is_none(), |body| {
-                    body.child(components::label(
-                        "Agent identity unavailable",
-                        theme::TEXT_2,
-                    ))
-                })
-                .child(content);
-            if let Some(error) = request.reply_error.as_ref().or_else(|| {
-                self.panes[index]
-                    .request_error
-                    .as_ref()
-                    .filter(|(failed, _)| failed == &handle)
-                    .map(|(_, error)| error)
-            }) {
-                body = body.child(div().text_color(rgb(theme::BLOCKED)).child(error.clone()));
-            }
-            let skip_handle = handle.clone();
-            let submit_handle = handle.clone();
-            let selector = format!("request-submit-{}-{}", thread.get(), handle.serial);
-            body = body.child(
-                div()
-                    .flex()
-                    .justify_end()
-                    .gap(px(8.))
-                    .child(
-                        gpui::component::button::Button::new("question-skip")
-                            .ghost()
-                            .small()
-                            .label("Skip")
-                            .disabled(request.submitting)
-                            .on_click(cx.listener(move |view, _, _, cx| {
-                                view.respond_exact(
-                                    thread,
-                                    &skip_handle,
-                                    DecisionAnswer::Deny {
-                                        message: "The operator skipped this question.".into(),
-                                    },
-                                    cx,
-                                )
-                            })),
-                    )
-                    .child(
-                        gpui::component::button::Button::new("question-send")
-                            .primary()
-                            .small()
-                            .label(if request.submitting {
-                                "Sending…"
-                            } else {
-                                "Send answer"
-                            })
-                            .disabled(request.submitting)
-                            .debug_selector(move || selector.clone())
-                            .on_click(cx.listener(move |view, _, _, cx| {
-                                let mut state = forms.0.borrow_mut();
-                                let Some(form) = state.get_mut(&submit_handle) else {
-                                    return;
-                                };
-                                for (answer, input) in form.answers.iter_mut().zip(&form.inputs) {
-                                    answer.other = Some(input.read(cx).value().to_string())
-                                        .filter(|text| !text.trim().is_empty());
-                                }
-                                if form
-                                    .answers
-                                    .iter()
-                                    .any(|answer| answer.picks.is_empty() && answer.other.is_none())
-                                {
-                                    if let Some(index) = view.pane_for(thread) {
-                                        view.panes[index].request_error = Some((
-                                            submit_handle.clone(),
-                                            "Answer each question before sending.".into(),
-                                        ));
-                                    }
-                                    cx.notify();
-                                    return;
-                                }
-                                let answers = form.answers.clone();
-                                drop(state);
-                                view.respond_exact(
-                                    thread,
-                                    &submit_handle,
-                                    DecisionAnswer::Questions { answers },
-                                    cx,
-                                );
-                            })),
-                    ),
-            );
-            return request_island(&handle, body, cx);
-        } else if let ferrite_core::DecisionKind::Form { fields } = &request.decision.kind {
+        if let ferrite_core::DecisionKind::Form { fields } = &request.decision.kind {
             let fields = fields.clone();
             let forms = self.panes[index].request_forms.clone();
             if !forms.0.borrow().contains_key(&handle) {
@@ -1638,6 +1409,319 @@ impl CockpitView {
         request_island(&handle, card, cx)
     }
 
+    fn question_request_card(
+        &self,
+        index: usize,
+        thread: ThreadId,
+        request: PendingDecision,
+        handle: DecisionHandle,
+        questions: Vec<ferrite_core::questions::Question>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let forms = self.panes[index].request_forms.clone();
+        if !forms.0.borrow().contains_key(&handle) {
+            let inputs = questions
+                .iter()
+                .map(|question| {
+                    cx.new(|cx| {
+                        InputState::new(window, cx)
+                            .placeholder("Or write your own answer…")
+                            .masked(question.secret)
+                    })
+                })
+                .collect();
+            forms.0.borrow_mut().insert(
+                handle.clone(),
+                RequestForm {
+                    answers: vec![Default::default(); questions.len()],
+                    inputs,
+                    form_inputs: Default::default(),
+                    values: Default::default(),
+                },
+            );
+        }
+        let mut content = div()
+            .id(("question-content", handle.serial as usize))
+            .w_full()
+            .min_w_0()
+            .max_h(px(
+                (f32::from(window.viewport_size().height) * 0.4).min(320.)
+            ))
+            .overflow_y_scrollbar()
+            .pr(px(4.))
+            .flex()
+            .flex_col()
+            .gap(px(20.));
+        for (qi, question) in questions.iter().enumerate() {
+            let mut section = div()
+                .w_full()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(12.))
+                .child(
+                    div()
+                        .text_size(px(theme::FS_ANSWER))
+                        .line_height(gpui::relative(theme::LINE_UI))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(rgb(theme::TEXT_STRONG))
+                        .child(question.question.clone()),
+                );
+            if question.multi_select {
+                section = section.child(components::label("Choose any that apply", theme::TEXT_2));
+                for (oi, option) in question.options.iter().enumerate() {
+                    let checked = forms.0.borrow()[&handle].answers[qi].picks.contains(&oi);
+                    let forms = forms.clone();
+                    let handle = handle.clone();
+                    section = section.child(
+                        div()
+                            .id(("question-checkbox-hover", qi * 256 + oi))
+                            .w_full()
+                            .min_w_0()
+                            .rounded(px(theme::R_CONTROL))
+                            .border_1()
+                            .border_color(if checked {
+                                rgb(theme::FOCUS)
+                            } else {
+                                rgba(theme::TRANSPARENT)
+                            })
+                            .when(checked, |row| row.bg(rgb(theme::FILL)))
+                            .when(!request.submitting, |row| {
+                                row.cursor_pointer().hover(|style| {
+                                    style
+                                        .bg(rgb(theme::FILL_HOVER))
+                                        .border_color(rgb(theme::SEP))
+                                })
+                            })
+                            .child(
+                                Checkbox::new(("question-checkbox", qi * 256 + oi))
+                                    .debug_selector(move || format!("question-choice-{qi}-{oi}"))
+                                    .checked(checked)
+                                    .disabled(request.submitting)
+                                    .accessibility_label(option.label.clone())
+                                    .w_full()
+                                    .min_w_0()
+                                    .px(px(10.))
+                                    .py(px(6.))
+                                    .child(question_choice(option))
+                                    .on_click(cx.listener(move |_, checked: &bool, _, cx| {
+                                        if let Some(form) = forms.0.borrow_mut().get_mut(&handle) {
+                                            let picks = &mut form.answers[qi].picks;
+                                            picks.retain(|at| *at != oi);
+                                            if *checked {
+                                                picks.push(oi);
+                                            }
+                                        }
+                                        cx.notify();
+                                    })),
+                            ),
+                    );
+                }
+            } else if !question.options.is_empty() {
+                let selected = forms.0.borrow()[&handle].answers[qi].picks.first().copied();
+                let forms = forms.clone();
+                let handle = handle.clone();
+                section = section.child(
+                    RadioGroup::vertical(("question-radios", qi))
+                        .w_full()
+                        .min_w_0()
+                        .selected_index(selected)
+                        .disabled(request.submitting)
+                        .children(question.options.iter().enumerate().map(|(oi, option)| {
+                            let checked = selected == Some(oi);
+                            Radio::new(oi)
+                                .w_full()
+                                .min_w_0()
+                                .group("question-option")
+                                .rounded(px(theme::R_CONTROL))
+                                .border_1()
+                                .border_color(if checked {
+                                    rgb(theme::FOCUS)
+                                } else {
+                                    rgba(theme::TRANSPARENT)
+                                })
+                                .when(checked, |row| row.bg(rgb(theme::FILL)))
+                                .when(!request.submitting, |row| {
+                                    row.cursor_pointer().hover(|style| {
+                                        style
+                                            .bg(rgb(theme::FILL_HOVER))
+                                            .border_color(rgb(theme::SEP))
+                                    })
+                                })
+                                .px(px(10.))
+                                .py(px(6.))
+                                .accessibility_label(option.label.clone())
+                                .debug_selector(move || format!("question-choice-{qi}-{oi}"))
+                                .child(question_choice(option))
+                        }))
+                        .on_click(cx.listener(move |_, selected: &usize, _, cx| {
+                            if let Some(form) = forms.0.borrow_mut().get_mut(&handle) {
+                                form.answers[qi].picks = vec![*selected];
+                            }
+                            cx.notify();
+                        })),
+                );
+            }
+            if question.allow_other {
+                let selector = format!("request-other-{}-{}-{qi}", thread.get(), handle.serial);
+                content = content.child(
+                    section.child(
+                        div()
+                            .w_full()
+                            .min_w_0()
+                            .debug_selector(move || selector.clone())
+                            .cursor_text()
+                            .child(
+                                Input::new(&forms.0.borrow()[&handle].inputs[qi])
+                                    .disabled(request.submitting),
+                            ),
+                    ),
+                );
+            } else {
+                content = content.child(section);
+            }
+        }
+        let async_question = !request.decision.blocks_execution();
+        let working = async_question
+            && request
+                .subject
+                .as_ref()
+                .and_then(|subject| self.cockpit.thread(thread)?.activity().subject(subject))
+                .is_some_and(|subject| subject.busy());
+        let status = if request.submitting {
+            "Sending answer…"
+        } else if working {
+            "Work continues while you answer"
+        } else if async_question {
+            "Answer when ready"
+        } else {
+            "Waiting for your answer"
+        };
+        let status = div()
+            .min_w_0()
+            .text_size(px(theme::FS_SM))
+            .text_color(rgb(theme::TEXT_2))
+            .child(status);
+        let status = if request.submitting || working {
+            pane::live_text(status, "question-live".into())
+        } else {
+            status.into_any_element()
+        };
+        let mut body = div()
+            .w_full()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .gap(px(16.))
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .text_size(px(theme::FS_MD))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(rgb(theme::ATTENTION))
+                            .child(if questions.len() == 1 {
+                                "Question for you".into()
+                            } else {
+                                format!("{} questions for you", questions.len())
+                            }),
+                    )
+                    .child(div().flex_1())
+                    .child(status),
+            )
+            .when(request.subject.is_none(), |body| {
+                body.child(components::label(
+                    "Agent identity unavailable",
+                    theme::TEXT_2,
+                ))
+            })
+            .child(content);
+        if let Some(error) = request.reply_error.as_ref().or_else(|| {
+            self.panes[index]
+                .request_error
+                .as_ref()
+                .filter(|(failed, _)| failed == &handle)
+                .map(|(_, error)| error)
+        }) {
+            body = body.child(div().text_color(rgb(theme::BLOCKED)).child(error.clone()));
+        }
+        let skip_handle = handle.clone();
+        let submit_handle = handle.clone();
+        let selector = format!("request-submit-{}-{}", thread.get(), handle.serial);
+        body = body.child(
+            div()
+                .flex()
+                .justify_end()
+                .items_center()
+                .gap(px(10.))
+                .child(
+                    question_action_button("question-skip", "Skip", false)
+                        .disabled(request.submitting)
+                        .on_click(cx.listener(move |view, _, _, cx| {
+                            view.respond_exact(
+                                thread,
+                                &skip_handle,
+                                DecisionAnswer::Deny {
+                                    message: "The operator skipped this question.".into(),
+                                },
+                                cx,
+                            )
+                        })),
+                )
+                .child(
+                    question_action_button(
+                        "question-send",
+                        if request.submitting {
+                            "Sending…"
+                        } else {
+                            "Send answer"
+                        },
+                        true,
+                    )
+                    .disabled(request.submitting)
+                    .debug_selector(move || selector.clone())
+                    .on_click(cx.listener(move |view, _, _, cx| {
+                        let mut state = forms.0.borrow_mut();
+                        let Some(form) = state.get_mut(&submit_handle) else {
+                            return;
+                        };
+                        for (answer, input) in form.answers.iter_mut().zip(&form.inputs) {
+                            answer.other = Some(input.read(cx).value().to_string())
+                                .filter(|text| !text.trim().is_empty());
+                        }
+                        if form
+                            .answers
+                            .iter()
+                            .any(|answer| answer.picks.is_empty() && answer.other.is_none())
+                        {
+                            if let Some(index) = view.pane_for(thread) {
+                                view.panes[index].request_error = Some((
+                                    submit_handle.clone(),
+                                    "Answer each question before sending.".into(),
+                                ));
+                            }
+                            cx.notify();
+                            return;
+                        }
+                        let answers = form.answers.clone();
+                        drop(state);
+                        view.respond_exact(
+                            thread,
+                            &submit_handle,
+                            DecisionAnswer::Questions { answers },
+                            cx,
+                        );
+                    })),
+                ),
+        );
+        request_island(&handle, body, cx)
+    }
+
     fn reload_subject_history(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
         let Some(index) = self.pane_for(thread) else {
             return;
@@ -1756,18 +1840,78 @@ fn safe_external_url(url: &str) -> bool {
     url.starts_with("https://") || url.starts_with("http://")
 }
 
+/// Question actions deliberately bypass the kit's light primary preset. Its
+/// inherited hover foreground can erase the label on this dark island.
+fn question_action_button(
+    id: impl Into<gpui::ElementId>,
+    label: impl Into<SharedString>,
+    primary: bool,
+) -> gpui_base::Button {
+    let button = gpui_base::Button::new(id)
+        .tab_stop(true)
+        .h(px(32.))
+        .px(px(12.))
+        .rounded(px(theme::R_CONTROL))
+        .border_1()
+        .font_family(theme::FONT_UI)
+        .text_size(px(theme::FS_SM))
+        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .cursor_pointer()
+        .styles(|styles| styles.disabled(|style| style.opacity(0.45)))
+        .child(label.into());
+    if primary {
+        button
+            .bg(rgb(theme::TEXT))
+            .border_color(rgb(theme::TEXT))
+            .text_color(rgb(theme::GROUND))
+            .hover(|style| {
+                style
+                    .bg(rgb(theme::TEXT_STRONG))
+                    .border_color(rgb(theme::TEXT_STRONG))
+                    .text_color(rgb(theme::GROUND))
+            })
+            .active(|style| {
+                style
+                    .bg(rgb(theme::TEXT_2))
+                    .border_color(rgb(theme::TEXT_2))
+                    .text_color(rgb(theme::GROUND))
+            })
+            .focus_visible(|style| style.border_color(rgb(theme::ATTENTION)))
+    } else {
+        button
+            .bg(rgba(theme::TRANSPARENT))
+            .border_color(rgb(theme::FILL))
+            .text_color(rgb(theme::TEXT))
+            .hover(|style| {
+                style
+                    .bg(rgb(theme::HOVER))
+                    .border_color(rgb(theme::FILL_HOVER))
+                    .text_color(rgb(theme::TEXT_STRONG))
+            })
+            .active(|style| {
+                style
+                    .bg(rgb(theme::FILL))
+                    .border_color(rgb(theme::FILL_HOVER))
+                    .text_color(rgb(theme::TEXT_STRONG))
+            })
+            .focus_visible(|style| style.border_color(rgb(theme::ATTENTION)))
+    }
+}
+
 /// Labels and descriptions wrap inside the native choice's content slot.
 fn question_choice(choice: &ferrite_core::questions::Choice) -> impl IntoElement {
     div()
         .flex_1()
         .min_w_0()
+        .mt(px(-theme::CHOICE_LABEL_LIFT))
         .flex()
         .flex_col()
-        .gap(px(4.))
-        .text_size(px(theme::FS_SM))
+        .gap(px(3.))
+        .text_size(px(theme::FS_MD))
         .line_height(gpui::relative(theme::LINE_BODY))
         .child(
             div()
+                .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(rgb(theme::TEXT))
                 .child(choice.label.clone()),
         )

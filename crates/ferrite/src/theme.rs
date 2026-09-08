@@ -574,6 +574,13 @@ pub const ANSWER_MARK: f32 = 15.0;
 /// `LINE_BODY`), so its center sits 10.1px down and the mark is half of its
 /// own 15px above that.
 pub const ANSWER_MARK_TOP: f32 = 2.6;
+/// 1.3px — the lift that drops a question choice's label onto the native
+/// checkbox/radio indicator's center. The control boxes 16px and top-aligns
+/// with the label column, whose first line boxes 18.6px (`FS_MD` on
+/// `LINE_BODY`), so the label rides half that difference too low. Lifting the
+/// label rather than sinking the control keeps a wrapped choice and its
+/// description flowing from the same edge.
+pub const CHOICE_LABEL_LIFT: f32 = 1.3;
 /// 14px — the answer row's gutter-to-prose gap, wider than the `EVENT_GAP`
 /// the tool rows use: an answer's prose is indented off the mark rather than
 /// held on the tool rows' text edge, and the gap clears the mark's overhang.
@@ -770,7 +777,9 @@ pub fn init_components(cx: &mut gpui::App) {
     theme.sidebar_accent = rgb(HOVER).into();
     theme.sidebar_accent_foreground = rgb(TEXT_STRONG).into();
     theme.sidebar_border = rgba(TRANSPARENT).into();
-    theme.input = rgb(RAISED).into();
+    // Native checkbox/radio indicators use `input` for their resting edge.
+    // Matching it to the raised surface made every unchecked control vanish.
+    theme.input = rgb(SEP).into();
     theme.switch = rgb(RAISED).into();
     theme.switch_thumb = rgb(TEXT_STRONG).into();
     // No track: Soft draws no lines, so only the thumb is ever ink, and

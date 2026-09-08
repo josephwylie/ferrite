@@ -812,9 +812,10 @@ pub fn render_pane(
         agents,
         ci,
         activity_attention,
-        activity_decisions,
+        mut activity_decisions,
         child_footer,
     } = wiring;
+    let has_activity_decisions = activity_decisions.is_some();
     let subject = thread.and_then(|thread| thread.activity().subject(&view.selected));
     let transcript = subject.as_ref().map(|subject| subject.transcript());
     let decision = if view.is_main() {
@@ -891,6 +892,7 @@ pub fn render_pane(
                 Some(transcript),
                 ComposerStack {
                     decision,
+                    requests: None,
                     queued,
                     running,
                     empty: composer_empty,
@@ -928,6 +930,12 @@ pub fn render_pane(
             pulse,
         );
     }
+
+    let docked_requests = if decision.is_some_and(|decision| question_of(decision).is_some()) {
+        activity_decisions.take()
+    } else {
+        None
+    };
 
     let mut pane = shell.child(pane_head(
         view,
@@ -985,7 +993,7 @@ pub fn render_pane(
                     );
                 }
             }
-            if let Some(decision) = decision.filter(|_| activity_decisions.is_none()) {
+            if let Some(decision) = decision.filter(|_| !has_activity_decisions) {
                 pane = pane.child(decision_card(
                     decision,
                     decide.take(),
@@ -1004,6 +1012,7 @@ pub fn render_pane(
                     Some(transcript),
                     ComposerStack {
                         decision,
+                        requests: docked_requests,
                         queued,
                         running,
                         empty: composer_empty,
@@ -1184,6 +1193,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
                 None,
                 ComposerStack {
                     decision: None,
+                    requests: None,
                     queued: None,
                     running: false,
                     empty: composer_empty,
@@ -2545,6 +2555,9 @@ fn parked_body() -> Div {
 /// stays readable as the states grow.
 struct ComposerStack<'a> {
     decision: Option<&'a Decision>,
+    /// Rich provider requests dock above the Composer as a shrink-to-content
+    /// island, sharing the same stable bottom stack as attachments.
+    requests: Option<AnyElement>,
     queued: Option<&'a str>,
     running: bool,
     empty: bool,
@@ -2588,6 +2601,7 @@ struct ComposerStack<'a> {
 fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: ComposerStack) -> Div {
     let ComposerStack {
         decision,
+        requests,
         queued,
         running,
         empty,
@@ -2794,10 +2808,21 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         controls = controls.child(div().flex_shrink_0().child(picker));
     }
     div()
+        .relative()
         .flex()
         .flex_col()
         .flex_shrink_0()
         .min_w_0()
+        .when_some(requests, |stack, requests| {
+            stack.child(deferred(
+                div()
+                    .absolute()
+                    .bottom(relative(1.))
+                    .left_0()
+                    .right_0()
+                    .child(requests),
+            ))
+        })
         .when_some(attachments, |stack, attachments| {
             // The island floats clear of the prompt: its own rounded edge,
             // clearance below it, and the composer's top edge left whole.
