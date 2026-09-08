@@ -114,6 +114,11 @@ fn request_island(
                     .id(("question-island", handle.serial as usize))
                     .debug_selector(|| "question-island".into())
                     .relative()
+                    // The island floats over the transcript, whose prose is
+                    // selectable and so paints an I-beam. Without a hitbox of
+                    // its own the card inherits that cursor everywhere the
+                    // controls do not cover.
+                    .cursor_default()
                     .w_full()
                     .max_w(px(680.))
                     .min_w_0()
@@ -1483,7 +1488,7 @@ impl CockpitView {
                             })
                             .when(checked, |row| row.bg(rgb(theme::FILL)))
                             .when(!request.submitting, |row| {
-                                row.hover(|style| {
+                                row.cursor_pointer().hover(|style| {
                                     style
                                         .bg(rgb(theme::FILL_HOVER))
                                         .border_color(rgb(theme::SEP))
@@ -1538,7 +1543,7 @@ impl CockpitView {
                                 })
                                 .when(checked, |row| row.bg(rgb(theme::FILL)))
                                 .when(!request.submitting, |row| {
-                                    row.hover(|style| {
+                                    row.cursor_pointer().hover(|style| {
                                         style
                                             .bg(rgb(theme::FILL_HOVER))
                                             .border_color(rgb(theme::SEP))
@@ -1566,6 +1571,7 @@ impl CockpitView {
                             .w_full()
                             .min_w_0()
                             .debug_selector(move || selector.clone())
+                            .cursor_text()
                             .child(
                                 Input::new(&forms.0.borrow()[&handle].inputs[qi])
                                     .disabled(request.submitting),
@@ -1897,6 +1903,7 @@ fn question_choice(choice: &ferrite_core::questions::Choice) -> impl IntoElement
     div()
         .flex_1()
         .min_w_0()
+        .mt(px(-theme::CHOICE_LABEL_LIFT))
         .flex()
         .flex_col()
         .gap(px(3.))
