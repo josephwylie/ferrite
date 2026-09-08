@@ -20,6 +20,23 @@ use ferrite_core::groups::{Drag, DropTarget, GroupChange, GroupId, Groups, Plan}
 use ferrite_core::layout::{self, Edge, SeamId, Tree, Zone};
 use ferrite_core::roster::{PaneIdentity, View};
 use ferrite_core::settings::ThreadListOrder;
+
+/// Where a nav row sits in the default order. `Ongoing` carries no clock:
+/// every Thread that is currently working ranks identically, so the stable
+/// sort behind it preserves their gathered order instead of re-racing them
+/// on each activity update. Quiet rows fall back to newest-used-first.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum NavRank {
+    Ongoing,
+    Quiet(std::cmp::Reverse<std::time::SystemTime>),
+}
+
+/// Is this row mid-flight? Working and Failing are both live inference —
+/// the states whose recency churns. Attention and Blocked wait on a human,
+/// so they age like any other quiet row.
+fn ongoing(status: nav::RowStatus) -> bool {
+    matches!(status, nav::RowStatus::Working | nav::RowStatus::Failing)
+}
 use ferrite_core::settings::UsageMeterStyle;
 use ferrite_core::store::Provider;
 use ferrite_core::workspace::registry::ProjectId;
@@ -5234,29 +5251,39 @@ impl CockpitView {
         // recent as its most recently used member; its own members keep the
         // operator's order, because that order *is* the Group.
         //
-        // `sort_by_key` is stable, so items sharing a second keep the order
+        // `sort_by_key` is stable, so items sharing a rank keep the order
         // they were gathered in: Groups in the roster's order, Threads in
         // pane-then-park order.
-        let mut order: Vec<(std::time::SystemTime, nav::NavItem)> = groups
+        //
+        // Ongoing Threads sit above the rest and share *one* rank, so their
+        // recency — which ticks with every streamed token — never reorders
+        // them against each other. A row the operator is watching work must
+        // hold still; only leaving the ongoing tier moves it.
+        let mut order: Vec<(NavRank, nav::NavItem)> = groups
             .iter()
             .enumerate()
             .map(|(index, block)| {
-                let recency = block
-                    .members
-                    .iter()
-                    .map(|row| self.last_used(row.thread))
-                    .max()
-                    .unwrap_or(std::time::UNIX_EPOCH);
-                (recency, nav::NavItem::Group(index))
+                let rank = if block.members.iter().any(|row| ongoing(row.status)) {
+                    NavRank::Ongoing
+                } else {
+                    let recency = block
+                        .members
+                        .iter()
+                        .map(|row| self.last_used(row.thread))
+                        .max()
+                        .unwrap_or(std::time::UNIX_EPOCH);
+                    NavRank::Quiet(std::cmp::Reverse(recency))
+                };
+                (rank, nav::NavItem::Group(index))
             })
             .chain(
                 solos
                     .iter()
                     .enumerate()
-                    .map(|(index, row)| (self.last_used(row.thread), nav::NavItem::Solo(index))),
+                    .map(|(index, row)| (self.nav_rank(row), nav::NavItem::Solo(index))),
             )
             .collect();
-        order.sort_by_key(|(recency, _)| std::cmp::Reverse(*recency));
+        order.sort_by_key(|(rank, _)| *rank);
         let order = order.into_iter().map(|(_, item)| item).collect();
 
         // Project sections are a second projection of the same rows, not a
@@ -5268,7 +5295,7 @@ impl CockpitView {
             .flat_map(|group| group.members.iter().cloned())
             .chain(solos.iter().cloned())
             .collect();
-        rows.sort_by_key(|row| std::cmp::Reverse(self.last_used(row.thread)));
+        rows.sort_by_key(|row| self.nav_rank(row));
         rows.dedup_by_key(|row| row.thread);
         let mut project_sections: Vec<nav::ProjectSection> = Vec::new();
         for row in rows {
@@ -5367,6 +5394,18 @@ impl CockpitView {
     /// When a Thread was last used, for the nav's default order. A Thread
     /// whose log cannot be stat'd sorts to the bottom rather than to the
     /// top: an unknown time is not a recent one.
+    /// A row's place in the nav's default order: ongoing first, then the
+    /// rest newest-first. Every ongoing row shares [`NavRank::Ongoing`], so
+    /// a stable sort leaves them in the order they were gathered rather
+    /// than shuffling them each time one of them speaks.
+    fn nav_rank(&self, row: &nav::ThreadRow) -> NavRank {
+        if ongoing(row.status) {
+            NavRank::Ongoing
+        } else {
+            NavRank::Quiet(std::cmp::Reverse(self.last_used(row.thread)))
+        }
+    }
+
     fn last_used(&self, thread: ThreadId) -> std::time::SystemTime {
         self.facts
             .last_used(thread)
@@ -13802,6 +13841,69 @@ mod tests {
                 "a fullscreened Thread that vanished falls back to the grid"
             );
             assert_eq!(view.panes.len(), 1, "with the surviving Thread on it");
+        });
+    }
+
+    /// The ongoing tier holds still. Two Threads streaming at once keep
+    /// trading the "most recent" crown as their deltas land; before this,
+    /// each update re-raced them and the rows swapped under the operator's
+    /// cursor. Now every ongoing row shares one rank, so the stable sort
+    /// leaves them exactly where they were.
+    #[gpui::test]
+    fn ongoing_threads_hold_their_place_while_they_stream(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("nav-ongoing-stable", 2);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        tick(cx);
+
+        // Both Threads start a turn, oldest first, so they are both Working.
+        for index in [0, 1] {
+            fake.streams.borrow()[index]
+                .send(SessionEvent::TextDelta {
+                    text: "thinking".into(),
+                })
+                .unwrap();
+        }
+        tick(cx);
+
+        let before = view.read_with(cx, |view, _| {
+            let state = view.nav_state();
+            assert!(
+                state
+                    .solos
+                    .iter()
+                    .all(|row| row.status == nav::RowStatus::Working),
+                "both Threads are mid-turn"
+            );
+            state
+                .ordered_solos()
+                .iter()
+                .map(|row| row.thread)
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(before.len(), 2);
+
+        // The one at the bottom speaks again — repeatedly. Its recency now
+        // beats the other's, and the old sort would have lifted it.
+        for _ in 0..3 {
+            fake.streams.borrow()[1]
+                .send(SessionEvent::TextDelta {
+                    text: "more".into(),
+                })
+                .unwrap();
+            tick(cx);
+        }
+
+        view.read_with(cx, |view, _| {
+            let after: Vec<ThreadId> = view
+                .nav_state()
+                .ordered_solos()
+                .iter()
+                .map(|row| row.thread)
+                .collect();
+            assert_eq!(
+                after, before,
+                "an ongoing Thread's own updates must not move it"
+            );
         });
     }
 
