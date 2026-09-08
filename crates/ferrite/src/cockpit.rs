@@ -114,6 +114,10 @@ fn pump_interval() -> Duration {
     Duration::from_millis(ms)
 }
 
+/// The one branch every project is assumed to have: the workspace menu's
+/// second choice, and the label for a checkout git cannot name.
+const MAIN_BRANCH: &str = "main";
+
 const PUMP_MS: u64 = 8;
 const NAV_OPEN_MS: u64 = 260;
 const NAV_CLOSE_MS: u64 = 190;
@@ -136,6 +140,11 @@ pub struct CockpitView {
     swept: std::time::Instant,
     /// One checkout-label refresh at a time, always off the UI thread.
     branch_refreshing: bool,
+    /// The branch a draft's chosen project checkout is on, cached by
+    /// project: the band chip names it every frame, and git must not be
+    /// asked every frame. Cleared whenever a band popover opens, so the
+    /// menu always answers about the checkout as it stands now.
+    checked_out: std::cell::RefCell<Option<(ProjectId, SharedString)>>,
     /// Stable text-run identities; selection itself belongs to GPUI.
     selection: TranscriptText,
     native_copy: Option<String>,
@@ -721,6 +730,7 @@ impl CockpitView {
             pending_files: None,
             pending_discovery: None,
             launch_project,
+            checked_out: std::cell::RefCell::new(None),
             rename: None,
             context_menu: None,
             context_usage: None,
@@ -2410,10 +2420,7 @@ impl CockpitView {
             .cli_versions
             .clone()
             .unwrap_or_else(|| ("checking…".into(), "checking…".into()));
-        let mut about = vec![prefs::fact(
-            "Version",
-            env!("CARGO_PKG_VERSION").into(),
-        )];
+        let mut about = vec![prefs::fact("Version", env!("CARGO_PKG_VERSION").into())];
         if crate::titlebar::DEV {
             about.push(prefs::fact("Development build", "Yes".into()));
         }
@@ -4586,6 +4593,7 @@ impl CockpitView {
             return;
         }
         let identity = pane.identity;
+        self.checked_out.replace(None);
         let rows = self.band_rows(draft, chip, cx);
         // The arrows start on the standing choice — bare ↵ re-picks it.
         let selected = rows.iter().position(|row| row.active).unwrap_or(0);
@@ -4598,9 +4606,28 @@ impl CockpitView {
         cx.notify();
     }
 
+    /// What `project`'s checkout is actually on right now, cached so the
+    /// chip can name it every frame. A project git cannot answer for is
+    /// named `main` — the branch a fresh clone would be sitting on.
+    fn checked_out_branch(&self, project: ProjectId) -> SharedString {
+        if let Some((cached, branch)) = self.checked_out.borrow().as_ref() {
+            if *cached == project {
+                return branch.clone();
+            }
+        }
+        let branch = self
+            .cockpit
+            .registry()
+            .project(project)
+            .and_then(|project| ferrite_core::workspace::checkout_branch(&project.root))
+            .map_or_else(|| SharedString::from(MAIN_BRANCH), SharedString::from);
+        self.checked_out.replace(Some((project, branch.clone())));
+        branch
+    }
+
     /// One chip's rows for the focused draft. The workspace chip is scoped
-    /// to the chosen project alone: `main`, that project's registered
-    /// worktrees, `new worktree` — no global list anywhere.
+    /// to the chosen project alone: its checked-out branch, `main`, and the
+    /// two ways to start a fresh branch — no global list anywhere.
     fn band_rows(
         &self,
         draft: &pane::DraftBinding,
@@ -4700,27 +4727,40 @@ impl CockpitView {
                 rows
             }
             pane::BandChip::Workspace => {
+                // Four choices, always the same four: stay where the
+                // checkout already is, move to `main`, or start fresh —
+                // beside the operator, or off in an isolated worktree.
+                let checked_out = self.checked_out_branch(draft.binding.project());
                 let mut rows = vec![band_row(
-                    SharedString::from("main"),
-                    SharedString::from("the project checkout"),
+                    checked_out.clone(),
+                    SharedString::from("checked out"),
                     *draft.binding.target() == DraftTarget::Main,
                     BandChoice::Target(DraftTarget::Main),
                 )];
-                for entry in self.cockpit.registry().worktrees(draft.binding.project()) {
-                    let branch = entry.branch.clone();
+                // On `main` the two would be one row twice; the honest
+                // name of the checkout is the one that survives.
+                if checked_out.as_ref() != MAIN_BRANCH {
                     rows.push(band_row(
-                        SharedString::from(branch.clone()),
-                        SharedString::from("worktree"),
+                        SharedString::from(MAIN_BRANCH),
+                        SharedString::from("existing branch"),
                         matches!(
                             draft.binding.target(),
-                            DraftTarget::Existing { branch: chosen } if *chosen == branch
+                            DraftTarget::Branch { name } if name == MAIN_BRANCH
                         ),
-                        BandChoice::Target(DraftTarget::Existing { branch }),
+                        BandChoice::Target(DraftTarget::Branch {
+                            name: MAIN_BRANCH.to_string(),
+                        }),
                     ));
                 }
                 rows.push(band_row(
-                    SharedString::from("new worktree"),
-                    SharedString::from("created at first send"),
+                    SharedString::from("New branch"),
+                    SharedString::from("in the project checkout"),
+                    *draft.binding.target() == DraftTarget::NewBranch,
+                    BandChoice::Target(DraftTarget::NewBranch),
+                ));
+                rows.push(band_row(
+                    SharedString::from("New branch + worktree"),
+                    SharedString::from("in an isolated checkout"),
                     *draft.binding.target() == DraftTarget::New,
                     BandChoice::Target(DraftTarget::New),
                 ));
@@ -4976,7 +5016,9 @@ impl CockpitView {
             .map(|project| project.title.clone())
             .unwrap_or_else(|| "project".into());
         let workspace_label = match draft.binding.target() {
-            DraftTarget::Main => SharedString::from("main"),
+            DraftTarget::Main => self.checked_out_branch(draft.binding.project()),
+            DraftTarget::Branch { name } => SharedString::from(name.clone()),
+            DraftTarget::NewBranch => SharedString::from("new branch"),
             DraftTarget::Existing { branch } => SharedString::from(branch.clone()),
             DraftTarget::New => SharedString::from("new worktree"),
         };
@@ -8083,14 +8125,12 @@ impl CockpitView {
                 state.thread_list_order == ThreadListOrder::ByProject,
                 state.order_open,
             )
-            .on_click(
-                cx.listener(|view, _: &ClickEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.nav_filter_open = false;
-                    view.nav_order_open = !view.nav_order_open;
-                    cx.notify();
-                }),
-            ),
+            .on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
+                cx.stop_propagation();
+                view.nav_filter_open = false;
+                view.nav_order_open = !view.nav_order_open;
+                cx.notify();
+            })),
         );
         let head = head.child(nav::add_thread_button().on_click(cx.listener(
             |view, _: &ClickEvent, _, cx| {
@@ -9658,7 +9698,10 @@ mod tests {
             .unwrap();
         tick(cx);
         let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-        assert_eq!(view.read_with(cx, |view, _| view.thread_row(thread).subagents), 1);
+        assert_eq!(
+            view.read_with(cx, |view, _| view.thread_row(thread).subagents),
+            1
+        );
 
         let button = cx
             .debug_bounds("thread-list-order")
@@ -9722,8 +9765,7 @@ mod tests {
         let row = cx
             .debug_bounds(target)
             .expect("the grouped Thread appears in the Project section");
-        let membership: &'static str =
-            format!("nav-group-membership-{}", threads[1].get()).leak();
+        let membership: &'static str = format!("nav-group-membership-{}", threads[1].get()).leak();
         assert!(
             cx.debug_bounds(membership).is_some(),
             "Project order marks Threads that retain Group membership"
@@ -9733,7 +9775,11 @@ mod tests {
 
         view.read_with(cx, |view, _| {
             assert_eq!(view.cockpit.roster().view(), View::Group(group));
-            assert_eq!(view.visible_indices().len(), 2, "every Group Pane is visible");
+            assert_eq!(
+                view.visible_indices().len(),
+                2,
+                "every Group Pane is visible"
+            );
             assert_eq!(view.panes.len(), 2, "every Group Pane has been restored");
             assert_eq!(view.focused_thread(), Some(threads[1]));
         });
@@ -11086,6 +11132,57 @@ mod tests {
         });
     }
 
+    /// The branch selector names the checkout honestly and offers the two
+    /// ways to start fresh: beside the operator or in an isolated worktree.
+    #[gpui::test]
+    fn the_branch_chip_offers_the_checked_out_branch_main_and_both_new_branch_modes(
+        cx: &mut TestAppContext,
+    ) {
+        let base = scratch("branch-menu");
+        let repo = repo_in(&base);
+        let switched = std::process::Command::new("git")
+            .args(["switch", "-q", "-c", "feature/checked-out"])
+            .current_dir(&repo)
+            .output()
+            .expect("git switch");
+        assert!(switched.status.success(), "git switch: {switched:?}");
+        let fake = Fake::default();
+        let store = Store::open(base.join("threads")).unwrap();
+        let core = Cockpit::new(store, Box::new(fake));
+        bind_band_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, _| view.aim_launch(&repo));
+        tick(cx);
+
+        cx.simulate_keystrokes("tab");
+        cx.simulate_keystrokes("tab");
+        cx.simulate_keystrokes("tab");
+        cx.simulate_keystrokes("tab");
+        cx.simulate_keystrokes("enter");
+
+        view.read_with(cx, |view, _| {
+            let popover = view.popover.as_ref().expect("the branch popover is open");
+            assert!(matches!(
+                popover.kind,
+                Kind::Band(pane::BandChip::Workspace)
+            ));
+            let rows: Vec<(&str, &str, bool)> = popover
+                .rows
+                .iter()
+                .map(|row| (row.name.as_ref(), row.detail.as_ref(), row.active))
+                .collect();
+            assert_eq!(
+                rows,
+                vec![
+                    ("feature/checked-out", "checked out", true),
+                    ("main", "existing branch", false),
+                    ("New branch", "in the project checkout", false),
+                    ("New branch + worktree", "in an isolated checkout", false),
+                ]
+            );
+        });
+    }
+
     /// AC (#29): the workspace chip is scoped to the chosen project's repo
     /// alone. Driven entirely at the keyboard — tab to the project chip, ↵
     /// opens its popover, arrows pick the other project — and the workspace
@@ -11178,8 +11275,8 @@ mod tests {
             draft.binding.project()
         });
 
-        // tab: the workspace chip; ↵ opens its popover, scoped to the
-        // chosen project only — its one worktree between main and new.
+        // tab: the workspace chip; ↵ opens its popover, naming the chosen
+        // project's own checkout and the two ways to start fresh.
         cx.simulate_keystrokes("tab");
         cx.simulate_keystrokes("enter");
         view.read_with(cx, |view, _| {
@@ -11191,8 +11288,8 @@ mod tests {
             let labels: Vec<&str> = band.rows.iter().map(|row| row.name.as_ref()).collect();
             assert_eq!(
                 labels,
-                vec!["main", "ferrite/wt-1", "new worktree"],
-                "scoped to the chosen repo"
+                vec!["master", "main", "New branch", "New branch + worktree"],
+                "the chosen repo's checkout, then main and the fresh starts"
             );
         });
 
@@ -11219,8 +11316,8 @@ mod tests {
             let labels: Vec<&str> = band.rows.iter().map(|row| row.name.as_ref()).collect();
             assert_eq!(
                 labels,
-                vec!["main", "new worktree"],
-                "no worktree row leaks in from the other repo"
+                vec!["master", "main", "New branch", "New branch + worktree"],
+                "the other repo's own checkout, and nothing from the first"
             );
         });
     }
@@ -14701,15 +14798,21 @@ mod tests {
             assert!(!names.contains(&"worktree-only.txt"), "rows: {names:?}");
         });
 
-        // Pick the existing worktree through its band row, complete its
-        // unique file, and send: the resulting Thread keeps that same
-        // directory, not the Project checkout.
+        // Back on the existing worktree: complete its unique file and
+        // send. The resulting Thread keeps that same directory, not the
+        // Project checkout.
         view.update(cx, |view, cx| {
             view.panes[view.focused()]
                 .composer
                 .update(cx, |composer, cx| composer.set(String::new(), cx));
-            view.open_band_popover(pane::BandChip::Workspace, cx);
-            view.pick(1, cx);
+            let focused = view.focused();
+            let project = view.panes[focused].draft().unwrap().binding.project();
+            let branch = view.cockpit.registry().worktrees(project)[0].branch.clone();
+            view.panes[focused]
+                .draft_mut()
+                .unwrap()
+                .binding
+                .choose_target(DraftTarget::Existing { branch });
         });
         cx.simulate_input("@worktree-only");
         cx.run_until_parked();
