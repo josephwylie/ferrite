@@ -20,6 +20,23 @@ use ferrite_core::groups::{Drag, DropTarget, GroupChange, GroupId, Groups, Plan}
 use ferrite_core::layout::{self, Edge, SeamId, Tree, Zone};
 use ferrite_core::roster::{PaneIdentity, View};
 use ferrite_core::settings::ThreadListOrder;
+
+/// Where a nav row sits in the default order. `Ongoing` carries no clock:
+/// every Thread that is currently working ranks identically, so the stable
+/// sort behind it preserves their gathered order instead of re-racing them
+/// on each activity update. Quiet rows fall back to newest-used-first.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum NavRank {
+    Ongoing,
+    Quiet(std::cmp::Reverse<std::time::SystemTime>),
+}
+
+/// Is this row mid-flight? Working and Failing are both live inference —
+/// the states whose recency churns. Attention and Blocked wait on a human,
+/// so they age like any other quiet row.
+fn ongoing(status: nav::RowStatus) -> bool {
+    matches!(status, nav::RowStatus::Working | nav::RowStatus::Failing)
+}
 use ferrite_core::settings::UsageMeterStyle;
 use ferrite_core::store::Provider;
 use ferrite_core::workspace::registry::ProjectId;
@@ -175,9 +192,10 @@ pub struct CockpitView {
     discovery_request: u64,
     pending_files: Option<PendingFileSearch>,
     pending_discovery: Option<PendingDiscovery>,
-    /// The launch directory's registered project (#29) — every draft's
-    /// starting choice.
-    launch_project: ProjectId,
+    /// The Project new drafts fall back to. Startup only selects an already
+    /// registered Project; it must never turn the app's process directory
+    /// into user workspace state.
+    launch_project: Option<ProjectId>,
     /// The inline title rename in flight, if any: what is being renamed,
     /// and the one-line Composer standing in for its title. At most one —
     /// the title cell *is* the editor, so two at once would need two rows
@@ -678,13 +696,15 @@ impl CockpitView {
         })
         .detach();
 
-        let repo = here();
-
-        // The registry's seed (#29): the directory Ferrite launched from is
-        // always a project, and every draft's starting choice.
-        let launch_project = cockpit
-            .register_project(&repo)
-            .expect("the launch directory registers as a project");
+        // A packaged app's process directory belongs to the app, not the
+        // operator. Start drafts on the newest Project they explicitly
+        // registered, and leave a new installation genuinely empty.
+        let launch_project = startup_project(cockpit.registry());
+        // The existing GPUI fixtures assume construction supplies a draft.
+        // Keep their synthetic seed out of production; `startup_project` is
+        // tested directly against an empty registry below.
+        #[cfg(test)]
+        let launch_project = launch_project.or_else(|| cockpit.register_project(&here()).ok());
         let mut view = Self {
             cockpit,
             panes: Vec::new(),
@@ -748,7 +768,11 @@ impl CockpitView {
         // Nothing revived: the cockpit starts as one draft Pane (#29) —
         // nothing spawns before the operator's choice.
         if view.panes.is_empty() {
-            view.open_draft_with_provider(DraftTarget::Main, launch_provider, cx);
+            if view.launch_project.is_some() {
+                view.open_draft_with_provider(DraftTarget::Main, launch_provider, cx);
+            } else {
+                view.open_project_creator(cx);
+            }
         }
         view
     }
@@ -2397,7 +2421,7 @@ impl CockpitView {
             .clone()
             .unwrap_or_else(|| ("checking…".into(), "checking…".into()));
         let mut about = vec![prefs::fact("Version", env!("CARGO_PKG_VERSION").into())];
-        if cfg!(debug_assertions) {
+        if crate::titlebar::DEV {
             about.push(prefs::fact("Development build", "Yes".into()));
         }
         about.extend([
@@ -2552,7 +2576,15 @@ impl CockpitView {
             Ok(project) => {
                 // The Project the operator just described is the one they
                 // want to look at, and to work in.
+                self.launch_project = Some(project);
                 self.choose_nav_filter(Some(project), cx);
+                if self.panes.is_empty() {
+                    self.open_draft_with_provider(
+                        DraftTarget::Main,
+                        self.prefs.settings.default_provider,
+                        cx,
+                    );
+                }
                 self.group_error = None;
                 self.refresh_names();
             }
@@ -4496,12 +4528,11 @@ impl CockpitView {
         // on the launch project. `All Projects` names nothing, and the
         // draft falls back to a Group's own Project.
         let project = match self.nav_filter {
-            Some(project) => project,
+            Some(project) => Some(project),
             None => match placement {
-                DraftPlacement::NewGroupWith(thread) => self
-                    .cockpit
-                    .project_id(thread)
-                    .unwrap_or(self.launch_project),
+                DraftPlacement::NewGroupWith(thread) => {
+                    self.cockpit.project_id(thread).or(self.launch_project)
+                }
                 _ => match self.cockpit.roster().view() {
                     View::Group(group) => self
                         .cockpit
@@ -4515,10 +4546,14 @@ impl CockpitView {
                                 .and_then(|group| group.members.first())
                                 .and_then(|thread| self.cockpit.project_id(*thread))
                         })
-                        .unwrap_or(self.launch_project),
+                        .or(self.launch_project),
                     View::Solo => self.launch_project,
                 },
             },
+        };
+        let Some(project) = project else {
+            self.open_project_creator(cx);
+            return;
         };
         let binding = pane::DraftBinding {
             binding: ferrite_core::draft::DraftBinding::new(provider, project, target),
@@ -5080,13 +5115,16 @@ impl CockpitView {
     /// registers `here()` once at construction, which tests cannot sit in.
     #[cfg(test)]
     fn aim_launch(&mut self, root: &std::path::Path) {
-        self.launch_project = self
-            .cockpit
-            .register_project(root)
-            .expect("the scratch repo registers");
+        self.launch_project = Some(
+            self.cockpit
+                .register_project(root)
+                .expect("the scratch repo registers"),
+        );
         for pane in &mut self.panes {
             if let Some(draft) = pane.draft_mut() {
-                draft.binding.choose_project(self.launch_project);
+                draft
+                    .binding
+                    .choose_project(self.launch_project.expect("the test aimed it"));
             }
         }
     }
@@ -5255,29 +5293,39 @@ impl CockpitView {
         // recent as its most recently used member; its own members keep the
         // operator's order, because that order *is* the Group.
         //
-        // `sort_by_key` is stable, so items sharing a second keep the order
+        // `sort_by_key` is stable, so items sharing a rank keep the order
         // they were gathered in: Groups in the roster's order, Threads in
         // pane-then-park order.
-        let mut order: Vec<(std::time::SystemTime, nav::NavItem)> = groups
+        //
+        // Ongoing Threads sit above the rest and share *one* rank, so their
+        // recency — which ticks with every streamed token — never reorders
+        // them against each other. A row the operator is watching work must
+        // hold still; only leaving the ongoing tier moves it.
+        let mut order: Vec<(NavRank, nav::NavItem)> = groups
             .iter()
             .enumerate()
             .map(|(index, block)| {
-                let recency = block
-                    .members
-                    .iter()
-                    .map(|row| self.last_used(row.thread))
-                    .max()
-                    .unwrap_or(std::time::UNIX_EPOCH);
-                (recency, nav::NavItem::Group(index))
+                let rank = if block.members.iter().any(|row| ongoing(row.status)) {
+                    NavRank::Ongoing
+                } else {
+                    let recency = block
+                        .members
+                        .iter()
+                        .map(|row| self.last_used(row.thread))
+                        .max()
+                        .unwrap_or(std::time::UNIX_EPOCH);
+                    NavRank::Quiet(std::cmp::Reverse(recency))
+                };
+                (rank, nav::NavItem::Group(index))
             })
             .chain(
                 solos
                     .iter()
                     .enumerate()
-                    .map(|(index, row)| (self.last_used(row.thread), nav::NavItem::Solo(index))),
+                    .map(|(index, row)| (self.nav_rank(row), nav::NavItem::Solo(index))),
             )
             .collect();
-        order.sort_by_key(|(recency, _)| std::cmp::Reverse(*recency));
+        order.sort_by_key(|(rank, _)| *rank);
         let order = order.into_iter().map(|(_, item)| item).collect();
 
         // Project sections are a second projection of the same rows, not a
@@ -5289,7 +5337,7 @@ impl CockpitView {
             .flat_map(|group| group.members.iter().cloned())
             .chain(solos.iter().cloned())
             .collect();
-        rows.sort_by_key(|row| std::cmp::Reverse(self.last_used(row.thread)));
+        rows.sort_by_key(|row| self.nav_rank(row));
         rows.dedup_by_key(|row| row.thread);
         let mut project_sections: Vec<nav::ProjectSection> = Vec::new();
         for row in rows {
@@ -5388,6 +5436,18 @@ impl CockpitView {
     /// When a Thread was last used, for the nav's default order. A Thread
     /// whose log cannot be stat'd sorts to the bottom rather than to the
     /// top: an unknown time is not a recent one.
+    /// A row's place in the nav's default order: ongoing first, then the
+    /// rest newest-first. Every ongoing row shares [`NavRank::Ongoing`], so
+    /// a stable sort leaves them in the order they were gathered rather
+    /// than shuffling them each time one of them speaks.
+    fn nav_rank(&self, row: &nav::ThreadRow) -> NavRank {
+        if ongoing(row.status) {
+            NavRank::Ongoing
+        } else {
+            NavRank::Quiet(std::cmp::Reverse(self.last_used(row.thread)))
+        }
+    }
+
     fn last_used(&self, thread: ThreadId) -> std::time::SystemTime {
         self.facts
             .last_used(thread)
@@ -8505,11 +8565,6 @@ impl CockpitView {
     }
 }
 
-/// Where Ferrite was started: the launch project every draft begins on.
-pub(crate) fn here() -> std::path::PathBuf {
-    std::env::current_dir().unwrap_or_else(|_| ".".into())
-}
-
 /// A typed path with `~` spelled out — the type-a-path row accepts what an
 /// operator would type at a shell.
 /// A draft's stand-in leaf in a Group's tree: drafts are no Threads and
@@ -8534,6 +8589,16 @@ fn cli_version(provider: Provider) -> String {
         Some(found) => format!("{} · {}", found.version, found.path.display()),
         None => "not found on PATH or in the usual install directories".to_string(),
     }
+}
+
+/// Where Ferrite was started. Demo fixtures use this as their checkout;
+/// production startup must not register it as a Project implicitly.
+pub(crate) fn here() -> std::path::PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| ".".into())
+}
+
+fn startup_project(registry: &ferrite_core::workspace::registry::Registry) -> Option<ProjectId> {
+    registry.projects().last().map(|project| project.id)
 }
 
 fn expand_home(typed: &str) -> std::path::PathBuf {
@@ -8616,6 +8681,19 @@ mod tests {
     use ferrite_core::workspace::WorkspaceBinding;
     use ferrite_core::{Decision, SessionEvent};
     use gpui::{KeyBinding, TestAppContext};
+
+    #[test]
+    fn startup_does_not_make_the_app_directory_a_project() {
+        let dir =
+            std::env::temp_dir().join(format!("ferrite-startup-project-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let registry = ferrite_core::workspace::registry::Registry::open(&dir).unwrap();
+
+        assert_eq!(startup_project(&registry), None);
+        assert!(registry.projects().is_empty());
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     struct Scripted {
         tx: Sender<SessionEvent>,
@@ -9157,6 +9235,36 @@ mod tests {
         );
     }
 
+    /// The band says which build this is, and only while it is not a
+    /// release one: the badge is compiled out of a shipped Ferrite.
+    #[gpui::test]
+    fn the_titlebar_marks_a_development_build(cx: &mut TestAppContext) {
+        let (core, _fake) = cockpit("titlebar-dev-badge", 1);
+        let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        tick(cx);
+
+        let badge = cx.debug_bounds("titlebar-dev-badge");
+        assert_eq!(
+            badge.is_some(),
+            crate::titlebar::DEV,
+            "the dev badge shows in development builds and nowhere else"
+        );
+        if let Some(badge) = badge {
+            let add = cx
+                .debug_bounds("titlebar-add-thread")
+                .expect("the titlebar add button is visible");
+            assert!(
+                badge.right() <= add.origin.x,
+                "the badge stays left of the titlebar's trailing controls"
+            );
+            assert_eq!(
+                badge.center().y,
+                add.center().y,
+                "the badge is vertically centered in the titlebar"
+            );
+        }
+    }
+
     /// Pressing new-thread with a draft already up re-aims that draft
     /// rather than stacking a second one.
     #[gpui::test]
@@ -9330,7 +9438,9 @@ mod tests {
             assert!(
                 rows.iter().any(|row| row.active
                     && row.consequence
-                        == Consequence::Band(BandChoice::Project(view.launch_project))),
+                        == Consequence::Band(BandChoice::Project(
+                            view.launch_project.expect("a launch Project"),
+                        ))),
                 "the draft's own Project is the ticked row"
             );
 
@@ -9491,7 +9601,7 @@ mod tests {
                     .unwrap()
                     .binding
                     .project(),
-                view.launch_project,
+                view.launch_project.expect("a launch Project"),
                 "with no filter the draft starts where Ferrite was launched"
             );
         });
@@ -9527,7 +9637,10 @@ mod tests {
         view.update(cx, |view, cx| {
             view.open_draft(DraftTarget::Main, cx);
             let draft = view.panes[view.focused()].draft().unwrap();
-            assert_eq!(draft.binding.project(), view.launch_project);
+            assert_eq!(
+                draft.binding.project(),
+                view.launch_project.expect("a launch Project")
+            );
 
             view.choose_nav_filter(Some(chosen), cx);
 
@@ -13828,6 +13941,69 @@ mod tests {
         });
     }
 
+    /// The ongoing tier holds still. Two Threads streaming at once keep
+    /// trading the "most recent" crown as their deltas land; before this,
+    /// each update re-raced them and the rows swapped under the operator's
+    /// cursor. Now every ongoing row shares one rank, so the stable sort
+    /// leaves them exactly where they were.
+    #[gpui::test]
+    fn ongoing_threads_hold_their_place_while_they_stream(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("nav-ongoing-stable", 2);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        tick(cx);
+
+        // Both Threads start a turn, oldest first, so they are both Working.
+        for index in [0, 1] {
+            fake.streams.borrow()[index]
+                .send(SessionEvent::TextDelta {
+                    text: "thinking".into(),
+                })
+                .unwrap();
+        }
+        tick(cx);
+
+        let before = view.read_with(cx, |view, _| {
+            let state = view.nav_state();
+            assert!(
+                state
+                    .solos
+                    .iter()
+                    .all(|row| row.status == nav::RowStatus::Working),
+                "both Threads are mid-turn"
+            );
+            state
+                .ordered_solos()
+                .iter()
+                .map(|row| row.thread)
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(before.len(), 2);
+
+        // The one at the bottom speaks again — repeatedly. Its recency now
+        // beats the other's, and the old sort would have lifted it.
+        for _ in 0..3 {
+            fake.streams.borrow()[1]
+                .send(SessionEvent::TextDelta {
+                    text: "more".into(),
+                })
+                .unwrap();
+            tick(cx);
+        }
+
+        view.read_with(cx, |view, _| {
+            let after: Vec<ThreadId> = view
+                .nav_state()
+                .ordered_solos()
+                .iter()
+                .map(|row| row.thread)
+                .collect();
+            assert_eq!(
+                after, before,
+                "an ongoing Thread's own updates must not move it"
+            );
+        });
+    }
+
     /// #21 AC1: the nav lists every Thread — most recently used first,
     /// open and parked alike — each row naming its Project, its checkout
     /// and its provider. There is no section header between them: one
@@ -16207,7 +16383,7 @@ mod tests {
         );
         assert_eq!(
             cx.debug_bounds("settings-fact-Development build").is_some(),
-            cfg!(debug_assertions),
+            crate::titlebar::DEV,
             "About identifies development builds without labeling releases"
         );
         assert!(

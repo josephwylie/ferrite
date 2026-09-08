@@ -13,6 +13,10 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # This is the shipped build, so the titlebar's DEV badge stays out of it
+  # (`titlebar::DEV`). Every other build — including a local `--release`
+  # one — is a dev build and says so.
+  FERRITE_RELEASE: "1"
   # Spelled once: the build jobs package these names and the fan-in job
   # attaches them, so a rename cannot drift between the two.
   MACOS_INSTALLER: ferrite-${{ github.ref_name }}-aarch64-apple-darwin.dmg
