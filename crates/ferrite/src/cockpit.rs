@@ -2386,7 +2386,14 @@ impl CockpitView {
             .cli_versions
             .clone()
             .unwrap_or_else(|| ("checking…".into(), "checking…".into()));
-        let about = vec![
+        let mut about = vec![prefs::fact(
+            "Version",
+            env!("CARGO_PKG_VERSION").into(),
+        )];
+        if cfg!(debug_assertions) {
+            about.push(prefs::fact("Development build", "Yes".into()));
+        }
+        about.extend([
             prefs::fact("Claude CLI", claude),
             prefs::fact("Codex CLI", codex),
             prefs::fact(
@@ -2402,7 +2409,7 @@ impl CockpitView {
                     .to_string()
                     .into(),
             ),
-        ];
+        ]);
         let groups = vec![
             SettingGroup::new().title("New Threads").items(defaults),
             SettingGroup::new().title("Permissions").items(permissions),
@@ -16091,6 +16098,15 @@ mod tests {
         let about = cx
             .debug_bounds("settings-fact-Settings file")
             .expect("About navigation reveals stored paths");
+        assert!(
+            cx.debug_bounds("settings-fact-Version").is_some(),
+            "About shows the Ferrite version"
+        );
+        assert_eq!(
+            cx.debug_bounds("settings-fact-Development build").is_some(),
+            cfg!(debug_assertions),
+            "About identifies development builds without labeling releases"
+        );
         assert!(
             about.bottom() <= card.bottom(),
             "About must scroll into the panel"
