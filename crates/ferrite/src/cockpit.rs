@@ -10160,6 +10160,18 @@ mod tests {
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1280.), px(800.)));
         let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+        cx.simulate_input("Set up the question form");
+        cx.simulate_keystrokes("enter");
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TextDelta {
+                text: "I need one choice before I continue.".into(),
+            })
+            .unwrap();
+        tick(cx);
+        assert!(
+            cx.debug_bounds("transcript-prompt").is_some(),
+            "the fixture must show transcript text before the question arrives"
+        );
         fake.streams.borrow()[0].send(question("q_01")).unwrap();
         tick(cx);
         cx.simulate_keystrokes("y");
@@ -10168,7 +10180,20 @@ mod tests {
         assert!(fake.answered.borrow().is_empty());
         let choice = cx.debug_bounds("question-choice-0-1").unwrap();
         let island = cx.debug_bounds("question-island").unwrap();
+        let (transcript_bounds, first_row_visible) = view.read_with(cx, |view, cx| {
+            let scroll = view.panes[0].transcript().unwrap().read(cx).scroll();
+            (scroll.bounds(), scroll.item_is_visible(0))
+        });
+        let composer = cx.debug_bounds("focused-prompt-editor").unwrap();
         assert!(choice.right() <= island.right());
+        assert!(
+            first_row_visible && island.top() - transcript_bounds.top() > px(100.),
+            "the pending question must leave the transcript mounted and readable above it"
+        );
+        assert!(
+            composer.top() - island.bottom() <= px(16.),
+            "the pending question must dock directly above the Composer"
+        );
         cx.simulate_click(choice.center(), gpui::Modifiers::none());
         cx.run_until_parked();
         let serial = view.read_with(cx, |view, _| {

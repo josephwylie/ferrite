@@ -770,7 +770,9 @@ pub fn init_components(cx: &mut gpui::App) {
     theme.sidebar_accent = rgb(HOVER).into();
     theme.sidebar_accent_foreground = rgb(TEXT_STRONG).into();
     theme.sidebar_border = rgba(TRANSPARENT).into();
-    theme.input = rgb(RAISED).into();
+    // Native checkbox/radio indicators use `input` for their resting edge.
+    // Matching it to the raised surface made every unchecked control vanish.
+    theme.input = rgb(SEP).into();
     theme.switch = rgb(RAISED).into();
     theme.switch_thumb = rgb(TEXT_STRONG).into();
     // No track: Soft draws no lines, so only the thumb is ever ink, and

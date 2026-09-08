@@ -814,21 +814,35 @@ impl CockpitView {
         if requests.is_empty() {
             return None;
         }
+        let multiple_requests = requests.len() > 1;
         let mut cards = div()
             .id(("subject-requests", thread.get()))
-            .max_h(px(
-                (f32::from(window.viewport_size().height) * 0.55).min(440.)
-            ))
-            .overflow_y_scroll()
             .w_full()
             .min_w_0()
             .flex()
+            .flex_shrink_0()
             .flex_col()
             .gap(px(8.));
         for request in requests {
             cards = cards.child(self.request_card(index, thread, request, window, cx));
         }
-        Some(native_keys(cards).into_any_element())
+        if multiple_requests {
+            Some(
+                native_keys(
+                    cards
+                        .max_h(px(
+                            (f32::from(window.viewport_size().height) * 0.55).min(440.)
+                        ))
+                        .overflow_y_scrollbar(),
+                )
+                .into_any_element(),
+            )
+        } else {
+            // A single request owns its own bounded content viewport. Giving
+            // its surrounding stack another scroll container makes that
+            // stack consume the transcript's flex space instead of docking.
+            Some(native_keys(cards).into_any_element())
+        }
     }
 
     pub(super) fn request_card(
@@ -1429,7 +1443,8 @@ impl CockpitView {
             .max_h(px(
                 (f32::from(window.viewport_size().height) * 0.4).min(320.)
             ))
-            .overflow_y_scroll()
+            .overflow_y_scrollbar()
+            .pr(px(4.))
             .flex()
             .flex_col()
             .gap(px(20.));
@@ -1461,12 +1476,17 @@ impl CockpitView {
                             .min_w_0()
                             .rounded(px(theme::R_CONTROL))
                             .border_1()
-                            .border_color(rgba(theme::TRANSPARENT))
+                            .border_color(if checked {
+                                rgb(theme::FOCUS)
+                            } else {
+                                rgba(theme::TRANSPARENT)
+                            })
+                            .when(checked, |row| row.bg(rgb(theme::FILL)))
                             .when(!request.submitting, |row| {
                                 row.hover(|style| {
                                     style
-                                        .bg(rgb(theme::HOVER))
-                                        .border_color(rgb(theme::FILL_HOVER))
+                                        .bg(rgb(theme::FILL_HOVER))
+                                        .border_color(rgb(theme::SEP))
                                 })
                             })
                             .child(
@@ -1504,11 +1524,26 @@ impl CockpitView {
                         .selected_index(selected)
                         .disabled(request.submitting)
                         .children(question.options.iter().enumerate().map(|(oi, option)| {
+                            let checked = selected == Some(oi);
                             Radio::new(oi)
                                 .w_full()
                                 .min_w_0()
                                 .group("question-option")
                                 .rounded(px(theme::R_CONTROL))
+                                .border_1()
+                                .border_color(if checked {
+                                    rgb(theme::FOCUS)
+                                } else {
+                                    rgba(theme::TRANSPARENT)
+                                })
+                                .when(checked, |row| row.bg(rgb(theme::FILL)))
+                                .when(!request.submitting, |row| {
+                                    row.hover(|style| {
+                                        style
+                                            .bg(rgb(theme::FILL_HOVER))
+                                            .border_color(rgb(theme::SEP))
+                                    })
+                                })
                                 .px(px(10.))
                                 .py(px(6.))
                                 .accessibility_label(option.label.clone())
@@ -1865,8 +1900,6 @@ fn question_choice(choice: &ferrite_core::questions::Choice) -> impl IntoElement
         .flex()
         .flex_col()
         .gap(px(3.))
-        .rounded(px(theme::R_CONTROL))
-        .group_hover("question-option", |style| style.bg(rgb(theme::HOVER)))
         .text_size(px(theme::FS_MD))
         .line_height(gpui::relative(theme::LINE_BODY))
         .child(
