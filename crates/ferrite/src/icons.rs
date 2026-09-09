@@ -65,6 +65,8 @@ icons![
     "window-maximize",
     "window-restore",
     "window-close",
+    "copy",
+    "resend",
 ];
 
 #[allow(dead_code)]
@@ -112,6 +114,8 @@ pub const WINDOW_MAXIMIZE: &str = "icons/window-maximize.svg";
 pub const WINDOW_RESTORE: &str = "icons/window-restore.svg";
 #[allow(dead_code)]
 pub const WINDOW_CLOSE: &str = "icons/window-close.svg";
+pub const COPY: &str = "icons/copy.svg";
+pub const RESEND: &str = "icons/resend.svg";
 
 pub struct Assets;
 
@@ -309,6 +313,8 @@ mod tests {
             WINDOW_MAXIMIZE,
             WINDOW_RESTORE,
             WINDOW_CLOSE,
+            COPY,
+            RESEND,
         ] {
             let bytes = Assets
                 .load(key)
@@ -320,7 +326,7 @@ mod tests {
         }
         assert_eq!(
             ICONS.len(),
-            22,
+            24,
             "the prototype and app controls, including disclosure and close,              and the four Windows caption glyphs"
         );
     }
@@ -342,6 +348,8 @@ mod tests {
             LIST_FILTER,
             GROUP,
             SUBAGENTS,
+            COPY,
+            RESEND,
         ] {
             let bytes = Assets.load(key).unwrap().unwrap();
             let svg = std::str::from_utf8(&bytes).unwrap();
@@ -370,7 +378,7 @@ mod tests {
     #[test]
     fn an_unknown_key_is_absent_rather_than_an_error() {
         assert!(Assets.load("icons/nope.svg").unwrap().is_none());
-        assert_eq!(Assets.list("icons/").unwrap().len(), 21);
+        assert_eq!(Assets.list("icons/").unwrap().len(), 24);
     }
 
     #[test]

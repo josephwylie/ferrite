@@ -78,6 +78,8 @@ impl TranscriptInput {
 #[derive(Clone, Debug)]
 pub(crate) enum TranscriptEvent {
     ToggleDisclosure(DisclosureId),
+    CopyPrompt(String),
+    ResendPrompt(String),
 }
 
 /// A stable GPUI entity for one Pane Subject's heavy transcript subtree.
@@ -383,7 +385,29 @@ impl TranscriptView {
             pane::signal_color(self.input.signal_status),
             None,
             &self.input.preview,
+            view.map(|view| self.prompt_actions(block, view)),
         )
+    }
+
+    fn prompt_actions(&self, block: &Block, view: Entity<Self>) -> gpui::AnyElement {
+        let Body::Prompt(prompt) = &block.body else {
+            return div().into_any_element();
+        };
+        let copy = prompt.clone();
+        let resend = prompt.clone();
+        let copy_view = view.clone();
+        pane::prompt_actions(block.id)
+            .on_copy(move |_, _, cx| {
+                cx.stop_propagation();
+                copy_view.update(cx, |_, cx| {
+                    cx.emit(TranscriptEvent::CopyPrompt(copy.clone()))
+                });
+            })
+            .on_resend(move |_, _, cx| {
+                cx.stop_propagation();
+                view.update(cx, |_, cx| cx.emit(TranscriptEvent::ResendPrompt(resend.clone())));
+            })
+            .into_any_element()
     }
 
     fn render_turn_diff(
@@ -398,12 +422,13 @@ impl TranscriptView {
         let disclosure = view
             .as_ref()
             .map(|view| self.control(&call, view.clone(), cx));
-        let gutter = div()
-            .relative()
-            .flex_shrink_0()
-            .w(px(theme::GUTTER_W))
-            .children(disclosure);
+        let gutter = div().flex_shrink_0().w(px(theme::GUTTER_W));
         let header = div()
+            .id(SharedString::from(format!(
+                "turn-diff-row-{}",
+                diff.turn_id
+            )))
+            .relative()
             .flex()
             .items_baseline()
             .min_w_0()
@@ -412,8 +437,11 @@ impl TranscriptView {
             .text_size(px(theme::FS_MD))
             .line_height(relative(theme::LINE_BODY))
             .text_color(gpui::rgb(theme::TEXT_MUTED))
+            .hover(|style| style.text_color(gpui::rgb(theme::TEXT)))
+            .active(|style| style.text_color(gpui::rgb(theme::TEXT_STRONG)))
             .child(gutter)
-            .child(selection.line(BlockId::TURN_DIFF, "Turn changes", Vec::new()));
+            .child(selection.line(BlockId::TURN_DIFF, "Turn changes", Vec::new()))
+            .children(disclosure);
         let mut card = gpui::component::collapsible::Collapsible::new()
             .w_full()
             .open(expanded)
@@ -459,9 +487,8 @@ impl TranscriptView {
             self.tool_targeted(&call),
             &self.input.disclosure_focus,
         )
-        // The disclosure itself is absolutely positioned in the row gutter.
-        // Keep its handler on that sized element: a measurement wrapper has
-        // no layout box and cannot receive the operator's click.
+        // The disclosure overlay fills the rendered header. Keep the handler
+        // on it so the arrow, label, and trailing row text share one target.
         .on_mouse_down(MouseButton::Left, move |_, window, cx| {
             cx.stop_propagation();
             gpui::base::TextSelection::clear(window, cx);

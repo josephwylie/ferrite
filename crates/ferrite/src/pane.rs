@@ -52,7 +52,7 @@ use crate::theme;
 use crate::theme::{
     ATTENTION, ATTENTION_EDGE, ATTENTION_WASH, BLOCKED, BLOCKED_WASH, COMPOSER_EDGE,
     DIFF_ADDED_INK, DIFF_REMOVED_INK, FOCUS, HOVER, IDLE, INLINE_CODE_INK, LINK_INK, METER_OFF,
-    PANE, PANE_HEAD, PANE_HEAD_EDGE, RAISED, RUNNING, RUNNING_WASH, SELECTION, SEP, SYN_KEYWORD,
+    PANE, PANE_HEAD, PANE_HEAD_EDGE, RAISED, RUNNING, RUNNING_WASH, SEP, SYN_KEYWORD,
     SYN_NUMBER, SYN_STRING, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG, TRANSPARENT,
 };
 
@@ -4110,6 +4110,7 @@ pub(crate) fn render_block(
     signal: u32,
     _provider: Option<Provider>,
     preview: &crate::attachment_preview::Preview,
+    prompt_actions: Option<AnyElement>,
 ) -> AnyElement {
     let row = div().w_full().min_w_0().flex_shrink_0();
     match &block.body {
@@ -4118,6 +4119,7 @@ pub(crate) fn render_block(
             let (text, files) = ferrite_core::prompt_files::split(line.clone());
             let row = paragraph(row, TEXT_STRONG)
                 .debug_selector(|| "transcript-prompt".into())
+                .group("sent-prompt")
                 .relative()
                 .px(px(theme::INDENT))
                 .py(px(theme::PROMPT_PAD_Y))
@@ -4134,9 +4136,23 @@ pub(crate) fn render_block(
                         .text_color(rgb(SEP))
                         .child("❯"),
                 )
-                .when(!text.is_empty(), |row| {
-                    row.child(selection.line(block.id, text, Vec::new()))
-                })
+                .child(
+                    div()
+                        .flex()
+                        .items_start()
+                        .w_full()
+                        .min_w_0()
+                        .gap(px(theme::KEYS_GAP))
+                        .when(!text.is_empty(), |line| {
+                            line.child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(selection.line(block.id, text, Vec::new())),
+                            )
+                        })
+                        .children(prompt_actions),
+                )
                 .when(!files.is_empty(), |row| {
                     row.debug_selector(|| "sent-prompt-attachments".into())
                         .child(crate::attachments::Attachments::new(
@@ -4195,11 +4211,21 @@ pub(crate) fn render_block(
                     .into_any_element();
             };
             let header = div()
+                .id(SharedString::from(format!("reasoning-row-{:?}", block.id)))
+                .relative()
                 .flex()
                 .items_center()
                 .min_w_0()
                 .gap(px(theme::EVENT_GAP))
                 .font_family(theme::FONT_UI)
+                .hover(|style| style.text_color(rgb(TEXT)))
+                .active(|style| style.text_color(rgb(TEXT_STRONG)))
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .w(px(theme::GUTTER_W))
+                        .h(px(theme::FS_MD * theme::LINE_BODY)),
+                )
                 .child(
                     div()
                         .debug_selector(|| "reasoning-summary".into())
@@ -4207,14 +4233,7 @@ pub(crate) fn render_block(
                         .truncate()
                         .child(SharedString::from(summary)),
                 )
-                .child(
-                    div()
-                        .relative()
-                        .flex_shrink_0()
-                        .w(px(theme::GUTTER_W))
-                        .h(px(theme::FS_MD * theme::LINE_BODY))
-                        .children(disclosure),
-                );
+                .children(disclosure);
             let mut reasoning = gpui::component::collapsible::Collapsible::new()
                 .w_full()
                 .open(expanded)
@@ -4393,13 +4412,13 @@ fn render_tool(
     // still carries status colour; the glyph now explains the interaction.
     let has_disclosure = disclosure.is_some();
     let gutter = div()
-        .relative()
         .flex_shrink_0()
         .w(px(theme::GUTTER_W))
         .text_color(rgb(glyph_ink))
-        .child(if has_disclosure { "" } else { glyph })
-        .children(disclosure);
+        .child(if has_disclosure { "" } else { glyph });
     let mut line = div()
+        .id(SharedString::from(format!("tool-row-{}", tool.call)))
+        .relative()
         .flex()
         .flex_row()
         .items_baseline()
@@ -4409,8 +4428,11 @@ fn render_tool(
         .text_size(px(theme::FS_MD))
         .line_height(relative(theme::LINE_BODY))
         .text_color(rgb(TEXT_MUTED))
+        .hover(|style| style.text_color(rgb(TEXT)))
+        .active(|style| style.text_color(rgb(TEXT_STRONG)))
         .child(gutter)
-        .child(call);
+        .child(call)
+        .children(disclosure);
     // A settled call's clock, where the cockpit stamped one; running calls
     // tick on the activity line instead. Only a settled *tool* call carries
     // a time — the prototype ends each non-task trail with one and gives a
@@ -4623,6 +4645,8 @@ where
         summary.into_any_element()
     };
     let mut header = div()
+        .id(SharedString::from(format!("tool-group-row-{call}")))
+        .relative()
         .min_w_0()
         .flex()
         .flex_wrap()
@@ -4638,15 +4662,16 @@ where
         } else {
             TEXT_MUTED
         }))
+        .hover(|style| style.text_color(rgb(TEXT)))
+        .active(|style| style.text_color(rgb(TEXT_STRONG)))
         .child(
             div()
-                .relative()
                 .flex_shrink_0()
                 .w(px(theme::GUTTER_W))
-                .h(px(theme::FS_MD * theme::LINE_BODY))
-                .children(disclosure),
+                .h(px(theme::FS_MD * theme::LINE_BODY)),
         )
-        .child(summary);
+        .child(summary)
+        .children(disclosure);
     if activity.failed > 0 {
         let key = call.clone();
         header = header.child(
@@ -4883,27 +4908,35 @@ fn tool_verdicts(tool: &ToolBlock) -> Vec<ToolVerdict> {
     verdicts
 }
 
-/// The only clickable part of a tool row. Its pointer role and pressed
-/// treatment make the chevron's hit target honest while the row stays text.
+/// A disclosure row's click target. The overlay fills its relative header so
+/// the label and trailing metadata toggle it too; the visible button remains
+/// anchored wholly inside the header edge instead of centering a 20px target
+/// in the narrower glyph gutter and clipping it out of the Pane.
 pub fn tool_disclosure_control(
     call: &DisclosureId,
     expanded: bool,
     targeted: bool,
     focus: &FocusHandle,
 ) -> Div {
-    let control = crate::components::button(SharedString::from(format!("tool-button-{call}")))
+    let tooltip = match (call, expanded) {
+        (DisclosureId::Reasoning(_), false) => "Show reasoning",
+        (DisclosureId::Reasoning(_), true) => "Hide reasoning",
+        (DisclosureId::Group(_), false) => "Show tool calls",
+        (DisclosureId::Group(_), true) => "Hide tool calls",
+        (DisclosureId::TurnDiff(_), false) => "Show turn changes",
+        (DisclosureId::TurnDiff(_), true) => "Hide turn changes",
+        (_, false) => "Show tool details",
+        (_, true) => "Hide tool details",
+    };
+    let control = div()
+        .id(SharedString::from(format!("tool-button-{call}")))
+        .flex()
+        .items_center()
+        .justify_center()
         .w(px(theme::TOOL_DISCLOSURE_HIT))
         .h(px(theme::TOOL_DISCLOSURE_HIT))
-        .p_0()
-        .tooltip(match (call, expanded) {
-            (DisclosureId::Reasoning(_), false) => "Show reasoning",
-            (DisclosureId::Reasoning(_), true) => "Hide reasoning",
-            (DisclosureId::Group(_), false) => "Show tool calls",
-            (DisclosureId::Group(_), true) => "Hide tool calls",
-            (DisclosureId::TurnDiff(_), false) => "Show turn changes",
-            (DisclosureId::TurnDiff(_), true) => "Hide turn changes",
-            (_, false) => "Show tool details",
-            (_, true) => "Hide tool details",
+        .tooltip(move |window, cx| {
+            gpui::component::tooltip::Tooltip::new(tooltip).build(window, cx)
         })
         .child(icon(
             if expanded {
@@ -4916,21 +4949,111 @@ pub fn tool_disclosure_control(
         ));
     div()
         .absolute()
-        .left(px((theme::GUTTER_W - theme::TOOL_DISCLOSURE_HIT) / 2.))
-        .top(px(-1.))
-        .w(px(theme::TOOL_DISCLOSURE_HIT))
-        .h(px(theme::TOOL_DISCLOSURE_HIT))
-        .rounded(px(theme::R_TIGHT))
+        .inset_0()
+        .flex()
+        .items_center()
+        .cursor_pointer()
         // Keyboard cycling is the one time the target has to be visible:
         // without a ground the operator cannot see which row `tab` is on.
         // The pointer never triggers it.
         .when(targeted, |control| {
-            control
-                .bg(rgb(SELECTION))
-                .track_focus(focus)
-                .key_context("ToolDisclosure")
+            control.track_focus(focus).key_context("ToolDisclosure")
         })
-        .child(control)
+        .child(
+            div()
+                .flex_shrink_0()
+                .w(px(theme::TOOL_DISCLOSURE_HIT))
+                .h(px(theme::TOOL_DISCLOSURE_HIT))
+                .child(control),
+        )
+}
+
+pub struct PromptActions {
+    root: Stateful<Div>,
+    block: BlockId,
+}
+
+impl PromptActions {
+    pub fn on_copy(
+        mut self,
+        listener: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
+    ) -> Self {
+        self.root = self
+            .root
+            .child(
+                prompt_action(
+                    "Copy prompt",
+                    icons::COPY,
+                    format!("copy-{:?}", self.block),
+                )
+                .on_click(listener),
+            );
+        self
+    }
+
+    pub fn on_resend(
+        mut self,
+        listener: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
+    ) -> Self {
+        self.root = self.root.child(
+            prompt_action(
+                "Resend prompt",
+                icons::RESEND,
+                format!("resend-{:?}", self.block),
+            )
+            .on_click(listener),
+        );
+        self
+    }
+}
+
+impl IntoElement for PromptActions {
+    type Element = Stateful<Div>;
+
+    fn into_element(self) -> Self::Element {
+        self.root
+    }
+}
+
+pub fn prompt_actions(block: BlockId) -> PromptActions {
+    PromptActions {
+        block,
+        root: div()
+            .id(SharedString::from(format!("prompt-actions-{block:?}")))
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(px(theme::KEYS_GAP))
+            .invisible()
+            .group_hover("sent-prompt", |style| style.visible()),
+    }
+}
+
+fn prompt_action(
+    tooltip: &'static str,
+    icon_key: &'static str,
+    id: impl Into<gpui::ElementId>,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .debug_selector(move || {
+            format!(
+                "prompt-action-{}",
+                tooltip.split_whitespace().next().unwrap_or_default().to_ascii_lowercase()
+            )
+        })
+        .flex()
+        .items_center()
+        .justify_center()
+        .w(px(theme::TOOL_DISCLOSURE_HIT))
+        .h(px(theme::TOOL_DISCLOSURE_HIT))
+        .rounded(px(theme::R_TIGHT))
+        .hover_control()
+        .press_control()
+        .tooltip(move |window, cx| {
+            gpui::component::tooltip::Tooltip::new(tooltip).build(window, cx)
+        })
+        .child(icon(icon_key, theme::ICON_CHEVRON, TEXT_MUTED))
 }
 
 /// `.hunk` (§E.13): no card, no filename header — the event above already

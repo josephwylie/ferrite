@@ -950,6 +950,30 @@ impl CockpitView {
                 self.panes[index].toggle_tool(call);
                 cx.notify();
             }
+            crate::transcript::TranscriptEvent::CopyPrompt(prompt) => {
+                cx.write_to_clipboard(ClipboardItem::new_string(prompt.clone()));
+            }
+            crate::transcript::TranscriptEvent::ResendPrompt(prompt) => {
+                if !self.panes[index].is_main() {
+                    return;
+                }
+                let Some(thread) = self.panes[index].thread() else {
+                    return;
+                };
+                self.focus_pane(index);
+                if self
+                    .cockpit
+                    .thread(thread)
+                    .is_some_and(|open| open.needs_queue())
+                {
+                    self.cockpit.queue(thread, prompt.clone());
+                } else {
+                    self.cockpit.send(thread, prompt.clone());
+                    self.scroll_transcript_to_bottom(index, cx);
+                }
+                self.facts.acted(&self.cockpit, thread);
+                cx.notify();
+            }
         }
     }
 
@@ -12396,6 +12420,40 @@ mod tests {
     }
 
     #[gpui::test]
+    fn sent_prompt_actions_appear_on_hover_copy_and_resend(cx: &mut TestAppContext) {
+        let (mut core, fake) = cockpit("sent-prompt-actions", 1);
+        let thread = core.threads()[0];
+        core.send(thread, "Run the focused checks".into());
+        let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TurnEnded {
+                outcome: ferrite_core::TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+        tick(cx);
+
+        let copy = "prompt-action-copy";
+        let resend = "prompt-action-resend";
+        assert!(cx.debug_bounds(copy).is_none(), "actions start hidden");
+
+        let prompt = cx.debug_bounds("transcript-prompt").unwrap();
+        cx.simulate_mouse_move(prompt.center(), None, gpui::Modifiers::none());
+        tick(cx);
+        let copy_bounds = cx.debug_bounds(copy).expect("copy appears over the prompt");
+        let resend_bounds = cx.debug_bounds(resend).expect("resend appears over the prompt");
+
+        cx.simulate_click(copy_bounds.center(), gpui::Modifiers::none());
+        assert_eq!(clipboard(cx).as_deref(), Some("Run the focused checks"));
+        cx.simulate_click(resend_bounds.center(), gpui::Modifiers::none());
+        assert_eq!(
+            fake.sent.borrow().as_slice(),
+            ["Run the focused checks", "Run the focused checks"]
+        );
+    }
+
+    #[gpui::test]
     fn reasoning_discloses_body_without_repeating_its_heading(cx: &mut TestAppContext) {
         let (core, fake) = cockpit("reasoning-details", 1);
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
@@ -12418,12 +12476,8 @@ mod tests {
                 .blocks()[0]
                 .id
         });
-        let control = view.read_with(cx, |view, _| {
-            view.panes[0]
-                .tool_bounds(pane::DisclosureId::Reasoning(id))
-                .unwrap()
-        });
-        cx.simulate_click(control.center(), gpui::Modifiers::none());
+        let summary = cx.debug_bounds("reasoning-summary").unwrap();
+        cx.simulate_click(summary.center(), gpui::Modifiers::none());
         tick(cx);
         view.read_with(cx, |view, _| {
             let text = view.selection.registered(view.panes[0].thread().unwrap());
@@ -12444,8 +12498,10 @@ mod tests {
                 "a short summary must size to its text: {summary:?}"
             );
             assert!(
-                (control.left() - summary.right()).abs() <= px(12.),
-                "chevron must immediately follow the text: {summary:?} / {control:?}"
+                control.left() < summary.left()
+                    && (summary.left() - control.left() - px(crate::theme::INDENT)).abs()
+                        <= px(1.),
+                "chevron must stay inside the Pane beside the text: {summary:?} / {control:?}"
             );
         }
 
