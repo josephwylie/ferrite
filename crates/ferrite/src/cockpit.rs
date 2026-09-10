@@ -1143,6 +1143,10 @@ impl CockpitView {
             self.facts.tick(&self.cockpit);
             self.refresh_branches(cx);
             branch_tick = true;
+        } else if self.cockpit.wants_worktree_listing() {
+            // A Main just finished making a worktree: ask git now, not in
+            // up to two seconds, so the header follows without a pause.
+            self.refresh_branches(cx);
         }
         // A restart writes a Notice even when no Session streamed this frame —
         // and a failed respawn will never stream again, so this notify is that
@@ -1206,7 +1210,10 @@ impl CockpitView {
     }
 
     /// Refresh checkout labels and their branch status without ever waiting
-    /// for Git — or `gh` — in GPUI's pump.
+    /// for Git — or `gh` — in GPUI's pump. The same trip asks git which
+    /// worktrees each Thread's repo has, and hands the answer to the core:
+    /// that is how a binding follows the agent into a worktree it made
+    /// (`workspace::follow`), and the labels re-read on the very next pass.
     fn refresh_branches(&mut self, cx: &mut Context<Self>) {
         if self.branch_refreshing {
             return;
@@ -1217,6 +1224,7 @@ impl CockpitView {
             .into_iter()
             .filter_map(|thread| {
                 let open = self.cockpit.thread(thread)?;
+                let repo = open.workspace().map(|binding| binding.repo().to_path_buf());
                 let cwd = ferrite_core::workspace::effective_cwd(
                     open.session_project_root(),
                     open.workspace(),
@@ -1243,7 +1251,7 @@ impl CockpitView {
                             .collect::<Vec<_>>()
                     })
                     .unwrap_or_default();
-                Some((thread, cwd.to_path_buf(), directories))
+                Some((thread, cwd.to_path_buf(), directories, repo))
             })
             .collect();
         if targets.is_empty() {
@@ -1251,12 +1259,30 @@ impl CockpitView {
         }
         self.branch_refreshing = true;
         cx.spawn(async move |this, cx| {
-            let branches = cx
+            let (branches, listings) = cx
                 .background_executor()
                 .spawn(async move {
-                    targets
+                    // One `git worktree list` per repo, however many
+                    // Threads share it.
+                    let mut listed: std::collections::HashMap<
+                        std::path::PathBuf,
+                        Option<Vec<std::path::PathBuf>>,
+                    > = std::collections::HashMap::new();
+                    let mut listings = Vec::new();
+                    let branches = targets
                         .into_iter()
-                        .map(|(thread, cwd, directories)| {
+                        .map(|(thread, cwd, directories, repo)| {
+                            if let Some(repo) = repo {
+                                let listing = listed
+                                    .entry(repo.clone())
+                                    .or_insert_with(|| {
+                                        ferrite_core::workspace::worktree_paths(&repo).ok()
+                                    })
+                                    .clone();
+                                if let Some(listing) = listing {
+                                    listings.push((thread, listing));
+                                }
+                            }
                             let status = ferrite_core::workspace::branch_status(&cwd);
                             let project_branches = directories
                                 .into_iter()
@@ -1267,7 +1293,8 @@ impl CockpitView {
                                 .collect();
                             (thread, status, project_branches)
                         })
-                        .collect::<Vec<_>>()
+                        .collect::<Vec<_>>();
+                    (branches, listings)
                 })
                 .await;
             this.update(cx, |view, cx| {
@@ -1284,7 +1311,16 @@ impl CockpitView {
                         .map(|(thread, _, project_branches)| (thread, project_branches))
                         .collect(),
                 );
+                let mut moved = false;
+                for (thread, listing) in listings {
+                    moved |= view.cockpit.worktrees_listed(thread, listing);
+                }
                 cx.notify();
+                if moved {
+                    // The labels above were read for the old cwd; go
+                    // straight back for the new one.
+                    view.refresh_branches(cx);
+                }
             })
             .ok();
         })

@@ -210,10 +210,15 @@ impl Facts {
             // main checkout is asked `git` exactly once, ever.
             if facts.branch.is_none() {
                 facts.branch = match meta.workspace.as_ref() {
+                    // A worktree the agent made (followed into, never
+                    // registered) is asked git, once, like a main checkout.
                     Some(WorkspaceBinding::Worktree { path, .. }) => cockpit
                         .registry()
                         .branch_for(path)
-                        .map(|branch| SharedString::from(branch.to_string())),
+                        .map(|branch| SharedString::from(branch.to_string()))
+                        .or_else(|| {
+                            ferrite_core::workspace::checkout_branch(path).map(SharedString::from)
+                        }),
                     Some(WorkspaceBinding::Main { checkout }) => {
                         ferrite_core::workspace::checkout_branch(checkout).map(SharedString::from)
                     }

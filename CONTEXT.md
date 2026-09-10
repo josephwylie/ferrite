@@ -120,7 +120,10 @@ Claude Code's own UI sends.
 
 **Workspace binding**
 The checkout a Thread works in: a per-Thread worktree or the main checkout —
-chosen at Thread creation. Nothing else in v1.
+chosen at Thread creation, and following Main after it: into a worktree of
+the same repo its agent makes, enters, or works in for a run of tool calls,
+and back to the main checkout when it leaves or the worktree is gone. The
+Pane's checkout label reads the binding; nothing else moves it.
 
 **Notice**
 Ferrite's own record that a Thread's Main finished for good: its turn ended

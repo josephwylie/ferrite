@@ -27,6 +27,7 @@ use crate::session::SessionLifecycle;
 use crate::store::{LoadError, Provider, Store, ThreadWriter};
 use crate::suggest::Suggestion;
 use crate::transcript::{BlockId, Input, Transcript, Update};
+use crate::workspace::follow::{self, Follow, Move};
 use crate::workspace::registry::{self, ProjectId, Registry};
 use crate::workspace::{self, WorkspaceBinding, WorkspaceChoice};
 use crate::{Decision, DecisionAnswer, ModelInfo, SessionEvent, ThreadId};
@@ -378,6 +379,9 @@ struct Thread {
     /// `None` — today's behavior — means work in the binding itself. Never
     /// changes under a live Session: the setter ends the Session first.
     session_project_root: Option<PathBuf>,
+    /// What Main has been seen doing that bears on where it works: the
+    /// binding follows it (`workspace::follow`).
+    follow: Follow,
     /// Armed whenever a Session is constructed or attached (open, revive,
     /// send-respawn, sweep-respawn); taken by the first prompt that goes
     /// out, which is the one that carries the hidden session-context
@@ -452,6 +456,7 @@ impl Thread {
             resume,
             workspace,
             session_project_root,
+            follow: Follow::default(),
             preface_pending: true,
             carry: None,
             commands: Vec::new(),
@@ -1401,7 +1406,24 @@ impl Cockpit {
     pub fn revive(&mut self, thread: ThreadId) -> Result<(), LoadError> {
         let snapshot = self.store.load(thread)?;
         let provider = snapshot.provider();
-        let workspace = snapshot.workspace();
+        let mut workspace = snapshot.workspace();
+        // A worktree the agent made and the Thread followed into is the
+        // agent's, not Ferrite's: gone while parked, the Thread goes back
+        // to main rather than rebuilding somebody else's tree. Ferrite's
+        // own (registered, or pre-registry under the store) are recreated
+        // below as ever.
+        if let Some(WorkspaceBinding::Worktree { repo, path }) = &workspace {
+            if !path.exists()
+                && self.registry.branch_for(path).is_none()
+                && !path.starts_with(self.store.dir())
+            {
+                let main = WorkspaceBinding::Main {
+                    checkout: repo.clone(),
+                };
+                self.store.set_workspace(thread, &main, None)?;
+                workspace = Some(main);
+            }
+        }
         // On demand also means back on demand: a worktree deleted while the
         // Thread was parked is recreated on its own branch before anything
         // spawns into it.
@@ -1765,6 +1787,40 @@ impl Cockpit {
             .into_iter()
             .filter(|id| !self.threads.contains_key(id))
             .collect())
+    }
+
+    /// Whether some Thread's Main just finished making a worktree and is
+    /// waiting on a fresh listing to name it — the driver's cue to list
+    /// now rather than on its next tick.
+    pub fn wants_worktree_listing(&self) -> bool {
+        self.threads
+            .values()
+            .any(|state| state.follow.wants_listing())
+    }
+
+    /// Git's worktree list for a Thread's repo (`workspace::worktree_paths`
+    /// of the binding's `repo`), as the driver read it off the frame — the
+    /// cockpit never runs git in its pump. Answers whether the Thread's
+    /// binding moved: into a worktree its agent made or has been working
+    /// in, or back to main when a worktree the agent adopted is gone. A
+    /// worktree Ferrite minted is never abandoned for vanishing — revive
+    /// recreates those on their branch.
+    pub fn worktrees_listed(&mut self, thread: ThreadId, listed: Vec<PathBuf>) -> bool {
+        let Some(state) = self.threads.get_mut(&thread) else {
+            return false;
+        };
+        let adopted = match &state.workspace {
+            Some(WorkspaceBinding::Worktree { path, .. })
+                if self.registry.branch_for(path).is_none() =>
+            {
+                Some(path.clone())
+            }
+            _ => None,
+        };
+        let Some(moved) = state.follow.observe_listing(listed, adopted.as_deref()) else {
+            return false;
+        };
+        apply_move(&self.store, thread, state, moved)
     }
 
     /// Header-only facts about a Thread the store holds — what a nav row
@@ -2178,6 +2234,11 @@ impl Cockpit {
                 };
                 let completion = completion_observation(thread, &event);
                 fold(thread, &event);
+                if let Some(moved) = follow_move(thread, &event) {
+                    if apply_move(&self.store, *id, thread, moved) {
+                        update.activity_changed = true;
+                    }
+                }
                 let content_changed = event_changes_content(&event);
                 let applied = match &event {
                     SessionEvent::Activity(event) => {
@@ -3897,6 +3958,62 @@ fn completion_observation(thread: &Thread, event: &SessionEvent) -> Option<(Subj
     ))
 }
 
+/// Main's tool calls, as `follow` wants to see them: a start with its
+/// input, or a finish with its verdict. Subagents never move the Thread —
+/// they may well be working somewhere else on purpose.
+fn follow_move(state: &mut Thread, event: &SessionEvent) -> Option<Move> {
+    use crate::activity::ExecutionEvent;
+    let binding = state.workspace.as_ref()?;
+    let current = workspace::effective_cwd(state.session_project_root.as_deref(), Some(binding))?
+        .to_path_buf();
+    match event {
+        SessionEvent::ToolStarted { id, name, input }
+        | SessionEvent::Activity(ActivityEvent::MainContent {
+            event: ExecutionEvent::ToolStarted { id, name, input },
+            ..
+        }) => state.follow.observe_started(id, name, input, &current),
+        SessionEvent::ToolCompleted { id, is_error, .. }
+        | SessionEvent::Activity(ActivityEvent::MainContent {
+            event: ExecutionEvent::ToolCompleted { id, is_error, .. },
+            ..
+        }) => state.follow.observe_completed(id, *is_error),
+        _ => None,
+    }
+}
+
+/// Rebind a live Thread where `follow` says its agent went. The header is
+/// rewritten first, so a Thread parked a moment later revives there too;
+/// a refused rewrite leaves the binding as it was — the log and the live
+/// state never disagree. The live Session is not restarted: the agent
+/// already works there by its own paths, and the next spawn (revive,
+/// watchdog restart) lands in the new cwd through the one cwd chain.
+fn apply_move(store: &Store, id: ThreadId, state: &mut Thread, moved: Move) -> bool {
+    let Some(binding) = state.workspace.clone() else {
+        return false;
+    };
+    let repo = binding.repo().to_path_buf();
+    let next = match moved {
+        Move::ToMain => WorkspaceBinding::Main { checkout: repo },
+        Move::Into(path) if follow::canonical(&path) == follow::canonical(&repo) => {
+            WorkspaceBinding::Main { checkout: repo }
+        }
+        Move::Into(path) => WorkspaceBinding::Worktree { repo, path },
+    };
+    if next == binding {
+        return false;
+    }
+    if let Err(error) = store.set_workspace(id, &next, Some(&mut state.writer)) {
+        state.report_store_error(match error {
+            LoadError::Io(error) => error,
+            other => io::Error::other(other.to_string()),
+        });
+        return false;
+    }
+    state.workspace = Some(next);
+    state.follow.reset();
+    true
+}
+
 /// Only Session-level metadata belongs here; execution state lives in Activity.
 fn fold(state: &mut Thread, event: &SessionEvent) {
     match event {
@@ -4184,6 +4301,252 @@ mod tests {
             "base",
         ]);
         repo
+    }
+
+    /// Drive a Thread's Main through making `worktree` — the command it
+    /// runs, the tree git really adds, the finish — and the listing that
+    /// names what it made. Answers the worktree's path as git prints it.
+    fn follow_into(
+        cockpit: &mut Cockpit,
+        fake: &Fake,
+        thread: ThreadId,
+        repo: &Path,
+        worktree: &Path,
+    ) -> PathBuf {
+        // Git's list as it stood before the command — what a sweep hands in.
+        cockpit.worktrees_listed(thread, crate::workspace::worktree_paths(repo).unwrap());
+        let stream = fake.streams.borrow().last().unwrap().clone();
+        let leaf = worktree.file_name().unwrap().to_str().unwrap();
+        stream
+            .send(SessionEvent::ToolStarted {
+                id: "wt".into(),
+                name: "Bash".into(),
+                input: serde_json::json!({
+                    "command": format!("git worktree add -b {leaf} {}", worktree.display())
+                }),
+            })
+            .unwrap();
+        cockpit.pump();
+        crate::workspace::git_for_tests(
+            repo,
+            &["worktree", "add", "-b", leaf, worktree.to_str().unwrap()],
+        );
+        stream
+            .send(SessionEvent::ToolCompleted {
+                id: "wt".into(),
+                output: String::new(),
+                is_error: false,
+                result: crate::ToolResult::Opaque,
+            })
+            .unwrap();
+        cockpit.pump();
+        assert!(
+            cockpit.wants_worktree_listing(),
+            "a finished creation asks for a listing now, not next tick"
+        );
+        assert!(cockpit.worktrees_listed(thread, crate::workspace::worktree_paths(repo).unwrap()));
+        assert!(!cockpit.wants_worktree_listing());
+        crate::workspace::follow::canonical(worktree)
+    }
+
+    /// The whole follow flow at the cockpit's seam (`workspace::follow`):
+    /// Main runs `git worktree add`, git's next listing names what it
+    /// made, and the binding moves there — persisted in the header, so a
+    /// park and revive spawns the next Session inside the worktree the
+    /// agent chose for itself.
+    #[test]
+    fn a_thread_follows_the_worktree_its_main_creates() {
+        let root = scratch("follow-create");
+        let (mut cockpit, fake) = cockpit("follow-create-store");
+        let repo = init_repo(&root);
+        let thread = cockpit
+            .open(
+                Provider::Claude,
+                WorkspaceChoice::Main {
+                    checkout: repo.clone(),
+                },
+            )
+            .unwrap();
+
+        let path = follow_into(&mut cockpit, &fake, thread, &repo, &root.join("wt-a"));
+
+        let bound = cockpit.thread(thread).unwrap().workspace().cloned();
+        assert_eq!(
+            bound,
+            Some(WorkspaceBinding::Worktree {
+                repo: repo.clone(),
+                path: path.clone(),
+            })
+        );
+        assert_eq!(
+            cockpit.peek(thread).unwrap().workspace,
+            bound,
+            "the header says so without the live Thread"
+        );
+
+        cockpit.park(thread).unwrap();
+        cockpit.revive(thread).unwrap();
+        assert_eq!(fake.cwds.borrow().last().cloned().flatten(), Some(path));
+    }
+
+    /// Claude's `ExitWorktree` finishing puts Main back in the main
+    /// checkout, and the binding goes with it.
+    #[test]
+    fn exiting_a_worktree_returns_the_thread_to_main() {
+        let root = scratch("follow-exit");
+        let (mut cockpit, fake) = cockpit("follow-exit-store");
+        let repo = init_repo(&root);
+        let thread = cockpit
+            .open(
+                Provider::Claude,
+                WorkspaceChoice::Main {
+                    checkout: repo.clone(),
+                },
+            )
+            .unwrap();
+        follow_into(&mut cockpit, &fake, thread, &repo, &root.join("wt-exit"));
+
+        let stream = fake.streams.borrow()[0].clone();
+        stream
+            .send(SessionEvent::ToolStarted {
+                id: "x".into(),
+                name: "ExitWorktree".into(),
+                input: serde_json::json!({}),
+            })
+            .unwrap();
+        stream
+            .send(SessionEvent::ToolCompleted {
+                id: "x".into(),
+                output: "Exited worktree".into(),
+                is_error: false,
+                result: crate::ToolResult::Opaque,
+            })
+            .unwrap();
+        cockpit.pump();
+
+        let main = Some(WorkspaceBinding::Main {
+            checkout: repo.clone(),
+        });
+        assert_eq!(cockpit.thread(thread).unwrap().workspace().cloned(), main);
+        assert_eq!(cockpit.peek(thread).unwrap().workspace, main);
+    }
+
+    /// A worktree the agent made is the agent's, not Ferrite's: removed
+    /// while the Thread is live, the next listing sends the Thread back to
+    /// main; removed while it is parked, revive does the same rather than
+    /// rebuilding somebody else's tree. Only registered worktrees self-heal.
+    #[test]
+    fn a_followed_worktree_that_vanishes_returns_the_thread_to_main() {
+        let root = scratch("follow-vanish");
+        let (mut cockpit, fake) = cockpit("follow-vanish-store");
+        let repo = init_repo(&root);
+        let thread = cockpit
+            .open(
+                Provider::Claude,
+                WorkspaceChoice::Main {
+                    checkout: repo.clone(),
+                },
+            )
+            .unwrap();
+        let main = Some(WorkspaceBinding::Main {
+            checkout: repo.clone(),
+        });
+        let git = |args: &[&str]| crate::workspace::git_for_tests(&repo, args);
+
+        // Live: gone from git's list, gone from the binding.
+        let live = follow_into(&mut cockpit, &fake, thread, &repo, &root.join("wt-live"));
+        git(&["worktree", "remove", "--force", live.to_str().unwrap()]);
+        assert!(cockpit.worktrees_listed(thread, crate::workspace::worktree_paths(&repo).unwrap()));
+        assert_eq!(cockpit.thread(thread).unwrap().workspace().cloned(), main);
+
+        // Parked: revive finds it missing and spawns in the main checkout.
+        let parked = follow_into(&mut cockpit, &fake, thread, &repo, &root.join("wt-parked"));
+        cockpit.park(thread).unwrap();
+        git(&["worktree", "remove", "--force", parked.to_str().unwrap()]);
+        cockpit.revive(thread).unwrap();
+        assert_eq!(
+            fake.cwds.borrow().last().cloned().flatten(),
+            Some(repo.clone())
+        );
+        assert_eq!(cockpit.thread(thread).unwrap().workspace().cloned(), main);
+        assert_eq!(cockpit.peek(thread).unwrap().workspace, main);
+        assert!(
+            !parked.exists(),
+            "an adopted worktree is never rebuilt on revive"
+        );
+    }
+
+    /// A run of Main's edits inside a worktree that already stood moves
+    /// the Thread there — but a Subagent's never do, however many: it may
+    /// well be working somewhere else on purpose.
+    #[test]
+    fn only_mains_own_work_moves_the_thread() {
+        use crate::activity::{ActivityEvent, AgentKey, ExecutionEvent};
+        let root = scratch("follow-evidence");
+        let (mut cockpit, fake) = cockpit("follow-evidence-store");
+        let repo = init_repo(&root);
+        let worktree = root.join("wt-standing");
+        crate::workspace::git_for_tests(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "standing",
+                worktree.to_str().unwrap(),
+            ],
+        );
+        let thread = cockpit
+            .open(
+                Provider::Claude,
+                WorkspaceChoice::Main {
+                    checkout: repo.clone(),
+                },
+            )
+            .unwrap();
+        cockpit.worktrees_listed(thread, crate::workspace::worktree_paths(&repo).unwrap());
+        let stream = fake.streams.borrow()[0].clone();
+        let edit = |n: usize| ExecutionEvent::ToolStarted {
+            id: format!("e{n}"),
+            name: "Edit".into(),
+            input: serde_json::json!({ "file_path": worktree.join("file.txt") }),
+        };
+
+        let child = AgentKey::new(Provider::Claude, "root", "child");
+        for n in 0..crate::workspace::follow::EVIDENCE_CALLS as usize + 2 {
+            stream
+                .send(SessionEvent::Activity(ActivityEvent::Content {
+                    key: child.clone(),
+                    id: Some(format!("c{n}")),
+                    event: edit(n),
+                }))
+                .unwrap();
+        }
+        cockpit.pump();
+        assert_eq!(
+            cockpit.thread(thread).unwrap().workspace().cloned(),
+            Some(WorkspaceBinding::Main {
+                checkout: repo.clone(),
+            }),
+            "a Subagent's work never moves the Thread"
+        );
+
+        for n in 0..crate::workspace::follow::EVIDENCE_CALLS as usize {
+            stream
+                .send(SessionEvent::Activity(ActivityEvent::MainContent {
+                    id: Some(format!("m{n}")),
+                    event: edit(n),
+                }))
+                .unwrap();
+        }
+        cockpit.pump();
+        assert_eq!(
+            cockpit.thread(thread).unwrap().workspace().cloned(),
+            Some(WorkspaceBinding::Worktree {
+                repo: repo.clone(),
+                path: crate::workspace::follow::canonical(&worktree),
+            })
+        );
     }
 
     /// Choosing an existing branch moves the project checkout itself onto
