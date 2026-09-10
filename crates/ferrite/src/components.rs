@@ -196,3 +196,40 @@ pub fn scrollbar(
                 .scrollbar_show(gpui::component::scroll::ScrollbarMode::Hover),
         )
 }
+
+/// A content-sized viewport with a height cap and a draggable scrollbar.
+/// Unlike the kit's `Scrollable`, neither container requests `size_full`:
+/// that circular height makes wrapped text under-measure in auto-height cards.
+#[derive(IntoElement)]
+pub struct BoundedScroll {
+    pub id: SharedString,
+    pub max_height: gpui::Pixels,
+    pub content: gpui::AnyElement,
+}
+
+impl gpui::RenderOnce for BoundedScroll {
+    fn render(self, window: &mut gpui::Window, cx: &mut gpui::App) -> impl IntoElement {
+        let scroll = window
+            .use_keyed_state(self.id.clone(), cx, |_, _| gpui::ScrollHandle::new())
+            .read(cx)
+            .clone();
+        div()
+            .id(self.id.clone())
+            .debug_selector(move || self.id.to_string())
+            .relative()
+            .w_full()
+            .min_w_0()
+            .flex_shrink_0()
+            .child(
+                div()
+                    .id("viewport")
+                    .w_full()
+                    .min_w_0()
+                    .max_h(self.max_height)
+                    .overflow_y_scroll()
+                    .track_scroll(&scroll)
+                    .child(self.content),
+            )
+            .child(scrollbar("scrollbar", &scroll))
+    }
+}

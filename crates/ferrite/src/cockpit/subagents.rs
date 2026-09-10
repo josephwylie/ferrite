@@ -892,7 +892,10 @@ impl CockpitView {
             .gap(px(12.))
             .child(
                 div()
-                    .debug_selector(|| "request-title".into())
+                    .debug_selector({
+                        let serial = handle.serial;
+                        move || format!("request-title-{}-{serial}", thread.get())
+                    })
                     .text_size(px(theme::FS_MD))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(rgb(theme::TEXT))
@@ -1115,16 +1118,17 @@ impl CockpitView {
             let cancel_handle = handle.clone();
             return request_island(
                 &handle,
-                card.child(
-                    div()
-                        .max_h(px(
-                            (f32::from(window.viewport_size().height) * 0.45).min(360.)
-                        ))
-                        .flex()
-                        .flex_col()
-                        .overflow_y_scrollbar()
-                        .child(body),
-                )
+                card.child(components::BoundedScroll {
+                    id: format!(
+                        "form-content-{}-{}-{}",
+                        thread.get(),
+                        handle.generation,
+                        handle.serial
+                    )
+                    .into(),
+                    max_height: px((f32::from(window.viewport_size().height) * 0.45).min(360.)),
+                    content: body.into_any_element(),
+                })
                 .child(
                     div()
                         .flex()
@@ -1366,6 +1370,10 @@ impl CockpitView {
                         .tab_stop(true)
                         .label("Deny")
                         .disabled(!request.decision.policy.deny || request.submitting)
+                        .debug_selector({
+                            let serial = handle.serial;
+                            move || format!("request-deny-{}-{serial}", thread.get())
+                        })
                         .on_click(cx.listener({
                             let handle = handle.clone();
                             move |view, _, _, cx| {
@@ -1446,10 +1454,6 @@ impl CockpitView {
             .id(("question-content", handle.serial as usize))
             .w_full()
             .min_w_0()
-            .max_h(px(
-                (f32::from(window.viewport_size().height) * 0.4).min(320.)
-            ))
-            .overflow_y_scrollbar()
             .pr(px(4.))
             .flex()
             .flex_col()
@@ -1641,7 +1645,17 @@ impl CockpitView {
                     theme::TEXT_2,
                 ))
             })
-            .child(content);
+            .child(components::BoundedScroll {
+                id: format!(
+                    "question-content-{}-{}-{}",
+                    thread.get(),
+                    handle.generation,
+                    handle.serial
+                )
+                .into(),
+                max_height: px((f32::from(window.viewport_size().height) * 0.4).min(320.)),
+                content: content.into_any_element(),
+            });
         if let Some(error) = request.reply_error.as_ref().or_else(|| {
             self.panes[index]
                 .request_error

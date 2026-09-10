@@ -134,13 +134,11 @@ fn wrapped_question_retains_exact_picks_and_note_through_rejection_and_ack(
     assert!(first.right() <= island.right() && second.top() >= first.bottom());
     cx.simulate_click(first.center(), gpui::Modifiers::none());
     cx.simulate_click(second.center(), gpui::Modifiers::none());
-    let other = Box::leak(format!("request-other-{}-{serial}-0", thread.get()).into_boxed_str());
-    let other_point = cx.debug_bounds(other).unwrap().center();
+    let other_point = bounds(cx, format!("request-other-{}-{serial}-0", thread.get())).center();
     cx.simulate_click(other_point, gpui::Modifiers::none());
     let note = "  keep  two   spaces  ";
     cx.simulate_input(note);
-    let submit = Box::leak(format!("request-submit-{}-{serial}", thread.get()).into_boxed_str());
-    let submit_point = cx.debug_bounds(submit).unwrap().center();
+    let submit_point = bounds(cx, format!("request-submit-{}-{serial}", thread.get())).center();
     cx.simulate_click(submit_point, gpui::Modifiers::none());
     tick(cx);
     assert!(
@@ -164,7 +162,7 @@ fn wrapped_question_retains_exact_picks_and_note_through_rejection_and_ack(
         .unwrap();
     tick(cx);
     assert!(cx.debug_bounds("question-island").is_some());
-    let submit_point = cx.debug_bounds(submit).unwrap().center();
+    let submit_point = bounds(cx, format!("request-submit-{}-{serial}", thread.get())).center();
     cx.simulate_click(submit_point, gpui::Modifiers::none());
     tick(cx);
     assert_eq!(fake.answered.borrow().len(), 2);
@@ -496,12 +494,13 @@ fn pending_approval_exposes_exact_selectable_command_before_answering(cx: &mut T
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(740.), px(900.)));
     let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
-    let command = "printf 'one  two\\n'\n  cat formatting.md\n";
+    let command = "printf 'one  two\\n'\n  cat formatting.md\n".repeat(12);
     let key = AgentKey::new(Provider::Claude, "root", "approval-child");
     for (id, subject) in [
         ("main-approval", Subject::Main),
         ("child-approval", Subject::Subagent(key.clone())),
     ] {
+        let is_main = subject == Subject::Main;
         if let Subject::Subagent(key) = &subject {
             fake.streams.borrow()[0]
                 .send(SessionEvent::Activity(ActivityEvent::Content {
@@ -541,16 +540,67 @@ fn pending_approval_exposes_exact_selectable_command_before_answering(cx: &mut T
             .expect("the command must be inspectable before an approval is sent");
         assert!(input.size.height > px(30.));
         assert!(input.right() <= px(740.));
+        assert_eq!(
+            input.size.height,
+            px(160.),
+            "long commands have a bounded viewport"
+        );
+        let text_id = view.read_with(cx, |view, _| {
+            if is_main {
+                format!("approval-input-{}-{id}", view.panes[0].text_namespace())
+            } else {
+                let handle = &view
+                    .cockpit
+                    .thread(thread)
+                    .unwrap()
+                    .activity()
+                    .pending_decisions()
+                    .iter()
+                    .find(|request| request.decision.id == id)
+                    .unwrap()
+                    .handle;
+                format!(
+                    "approval-input-request-{}-{}-{}",
+                    thread.get(),
+                    handle.generation,
+                    handle.serial
+                )
+            }
+        });
+        let command_top = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|_, cx| crate::rich::testing::bounds(&text_id, 0, cx).unwrap().top())
+        };
+        let initial_top = command_top(cx);
+        let from = gpui::point(input.right() - px(3.), input.top() + px(10.));
+        let to = from + gpui::point(px(0.), px(60.));
+        cx.simulate_mouse_down(from, MouseButton::Left, gpui::Modifiers::none());
+        // The scrollbar throttles dragging using a wall-clock 120 Hz limit.
+        std::thread::sleep(Duration::from_millis(12));
+        cx.simulate_mouse_move(to, MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_mouse_up(to, MouseButton::Left, gpui::Modifiers::none());
+        tick(cx);
+        let scrolled_top = command_top(cx);
+        assert!(
+            scrolled_top < initial_top,
+            "the command scrollbar thumb must drag in {id}"
+        );
+        view.update(cx, |_, cx| cx.notify());
+        tick(cx);
+        assert_eq!(
+            command_top(cx),
+            scrolled_top,
+            "repainting must retain the scroll position"
+        );
         cx.update(|_, cx| crate::rich::testing::select_all(cx));
         cx.simulate_keystrokes("cmd-c");
         assert!(
-            clipboard(cx).unwrap().contains(command),
+            clipboard(cx).unwrap().contains(&command),
             "approval copies the exact supplied command including trailing newline"
         );
         tick(cx);
         cx.simulate_keystrokes("cmd-c");
         assert!(
-            clipboard(cx).unwrap().contains(command),
+            clipboard(cx).unwrap().contains(&command),
             "a repaint retains the selected command"
         );
         assert!(
@@ -612,19 +662,26 @@ fn long_subagent_approval_keeps_allow_and_deny_inside_the_island(cx: &mut TestAp
             .handle
             .serial
     });
-    let allow = Box::leak(format!("request-allow-{}-{serial}", thread.get()).into_boxed_str());
-    let allow = cx.debug_bounds(allow).unwrap();
-    let title = cx.debug_bounds("request-title").unwrap();
+    let allow = bounds(cx, format!("request-allow-{}-{serial}", thread.get()));
+    let deny = bounds(cx, format!("request-deny-{}-{serial}", thread.get()));
+    let title = bounds(cx, format!("request-title-{}-{serial}", thread.get()));
+    assert!(
+        title.size.height >= px(crate::theme::FS_MD * crate::theme::LINE_UI * 3.),
+        "the repro must retain a title spanning at least three lines: {title:?}"
+    );
     assert!(
         title.bottom() <= input.top(),
         "the title wraps above the command: title={title:?} input={input:?}"
     );
-    assert!(
-        allow.bottom() <= island.bottom(),
-        "Allow must sit inside the island: allow={allow:?} island={island:?}"
-    );
-    assert!(
-        allow.top() - input.bottom() < px(40.),
-        "no phantom gap between the command and the buttons: input={input:?} allow={allow:?}"
-    );
+    for (label, button) in [("Allow", allow), ("Deny", deny)] {
+        assert!(
+            island.contains(&button.origin) && island.contains(&button.bottom_right()),
+            "{label} must sit inside the island: button={button:?} island={island:?}"
+        );
+        let gap = button.top() - input.bottom();
+        assert!(
+            gap >= px(0.) && gap <= px(16.),
+            "the command-to-{label} gap must stay near the 12px design gap: {gap:?}"
+        );
+    }
 }

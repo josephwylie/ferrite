@@ -10068,6 +10068,17 @@ mod tests {
         (view, cx)
     }
 
+    fn debug_bounds(
+        cx: &mut gpui::VisualTestContext,
+        id: String,
+    ) -> Option<gpui::Bounds<gpui::Pixels>> {
+        cx.debug_bounds(Box::leak(id.into_boxed_str()))
+    }
+
+    fn bounds(cx: &mut gpui::VisualTestContext, id: String) -> gpui::Bounds<gpui::Pixels> {
+        debug_bounds(cx, id.clone()).unwrap_or_else(|| panic!("missing {id}"))
+    }
+
     /// Let the pump's timer fire: the test clock does not move on its own.
     fn tick(cx: &mut gpui::VisualTestContext) {
         cx.executor()
