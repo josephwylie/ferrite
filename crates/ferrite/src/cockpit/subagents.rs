@@ -892,6 +892,7 @@ impl CockpitView {
             .gap(px(12.))
             .child(
                 div()
+                    .debug_selector(|| "request-title".into())
                     .text_size(px(theme::FS_MD))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(rgb(theme::TEXT))

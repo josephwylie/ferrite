@@ -559,3 +559,72 @@ fn pending_approval_exposes_exact_selectable_command_before_answering(cx: &mut T
         );
     }
 }
+
+#[gpui::test]
+fn long_subagent_approval_keeps_allow_and_deny_inside_the_island(cx: &mut TestAppContext) {
+    use ferrite_core::activity::{ActivityEvent, AgentKey, ExecutionEvent, Subject};
+    let (core, fake) = cockpit("approval-long-command-island", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(900.), px(600.)));
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    let command = "/bin/zsh -lc 'rm -rf /Users/example/.agents/skills/pane-browser /Users/example/.claude/skills/pane-browser\n test ! -e /Users/example/.agents/skills/pane-browser && test ! -L /Users/example/.claude/skills/pane-browser && test ! -e /Users/example/.codex/skills/pane-browser && printf '\"'\"'Verified: shared skill and Claude link removed; no Codex-specific copy exists.\\n'\"'\"''";
+    let key = AgentKey::new(Provider::Claude, "root", "approval-long");
+    fake.streams.borrow()[0]
+        .send(SessionEvent::Activity(ActivityEvent::Content {
+            key: key.clone(),
+            id: None,
+            event: ExecutionEvent::Text {
+                text: "Ready to clean up".into(),
+            },
+        }))
+        .unwrap();
+    tick(cx);
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.select_subject(thread, Subject::Subagent(key.clone()), window, cx)
+        })
+    });
+    fake.streams.borrow()[0]
+        .send(SessionEvent::Activity(ActivityEvent::Decision {
+            subject: Some(Subject::Subagent(key)),
+            decision: Decision {
+                kind: Default::default(),
+                policy: Default::default(),
+                delivery: Default::default(),
+                id: "long-approval".into(),
+                tool_use_id: "long-approval".into(),
+                tool_name: "commandExecution".into(),
+                description: command.into(),
+                suggestions: vec![],
+                input: serde_json::json!({"command":command}),
+            },
+        }))
+        .unwrap();
+    tick(cx);
+    let island = cx.debug_bounds("question-island").unwrap();
+    let input = cx.debug_bounds("approval-input").unwrap();
+    let serial = view.read_with(cx, |view, _| {
+        view.cockpit
+            .thread(thread)
+            .unwrap()
+            .activity()
+            .pending_decisions()[0]
+            .handle
+            .serial
+    });
+    let allow = Box::leak(format!("request-allow-{}-{serial}", thread.get()).into_boxed_str());
+    let allow = cx.debug_bounds(allow).unwrap();
+    let title = cx.debug_bounds("request-title").unwrap();
+    assert!(
+        title.bottom() <= input.top(),
+        "the title wraps above the command: title={title:?} input={input:?}"
+    );
+    assert!(
+        allow.bottom() <= island.bottom(),
+        "Allow must sit inside the island: allow={allow:?} island={island:?}"
+    );
+    assert!(
+        allow.top() - input.bottom() < px(40.),
+        "no phantom gap between the command and the buttons: input={input:?} allow={allow:?}"
+    );
+}

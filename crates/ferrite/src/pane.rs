@@ -3121,8 +3121,6 @@ pub(crate) fn approval_input(
     cache: &crate::rich::TextCache,
     id: SharedString,
 ) -> Option<AnyElement> {
-    use gpui::component::scroll::ScrollableElement as _;
-
     if question_of(decision).is_some() {
         return None;
     }
@@ -3138,14 +3136,19 @@ pub(crate) fn approval_input(
                     .expect("decision input is serializable")
             })
         })?;
+    // gpui's own overflow scroll, not the component kit's `Scrollable`
+    // wrapper: that wrapper sizes its root `size_full`, and inside an
+    // auto-height card the wrapped text then measures shorter than it
+    // paints, pushing Allow/Deny out through the island's bottom edge.
     Some(
         div()
+            .id(SharedString::from(format!("{id}-scroll")))
             .debug_selector(|| "approval-input".into())
             .w_full()
             .min_w_0()
             .flex_shrink_0()
             .max_h(px(160.))
-            .overflow_y_scrollbar()
+            .overflow_y_scroll()
             .child(crate::rich::Literal {
                 id,
                 document: None,
