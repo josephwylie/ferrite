@@ -171,6 +171,12 @@ pub struct CockpitView {
     /// The nav tree's scroll, shared with the hand-drawn scrollbar beside
     /// it — gpui 0.2.2 paints none of its own.
     nav_scroll: ScrollHandle,
+    /// Whether the Parked section at the foot of the nav is unfolded. Shut
+    /// on every launch: the tree is for what runs, and the fold is how the
+    /// parked history stays out of the way until it is wanted.
+    nav_parked_open: bool,
+    /// The Parked list's own scroll — it must not share the tree's.
+    nav_parked_scroll: ScrollHandle,
     /// The one popover in the Composer's slot, or None: the `/`/`@` menu
     /// (#23), a picker (#11, #25) or a band chip (#29). Always on the
     /// focused Pane's Composer; render self-heals it shut when the operator
@@ -359,6 +365,8 @@ enum MenuTarget {
     /// A Pane — the same Thread, but the rename opens in the head.
     Pane(ThreadId),
     Group(GroupId),
+    /// The Parked section's header at the foot of the nav.
+    Parked,
 }
 
 /// One thing a context-menu row does.
@@ -368,6 +376,11 @@ enum MenuVerb {
     Focus,
     Fullscreen,
     Close,
+    /// Unfold or fold the Parked section.
+    ToggleParked,
+    /// Delete every Thread the Parked section lists — exactly those rows,
+    /// so what the menu erases is what the operator can see.
+    DeleteAllParked,
     /// Drop the Session of a Thread that is open but not on screen (Solo
     /// view shows one Pane; the rest still run). `Close` is the on-screen
     /// Pane's own door, with its Group semantics.
@@ -724,6 +737,8 @@ impl CockpitView {
             nav_filter_open: false,
             nav_order_open: false,
             nav_scroll: ScrollHandle::new(),
+            nav_parked_open: false,
+            nav_parked_scroll: ScrollHandle::new(),
             popover: None,
             menu_muted: false,
             draft_commands: None,
@@ -1707,8 +1722,61 @@ impl CockpitView {
                     MenuVerb::DissolveGroup,
                 )));
             }
+            // The Parked header: the fold, and the one bulk act the
+            // section exists for — clearing the parked history it lists.
+            MenuTarget::Parked => {
+                rows.push(Some((
+                    menu::Item::new(if self.nav_parked_open {
+                        "Hide Parked Threads"
+                    } else {
+                        "Show Parked Threads"
+                    }),
+                    MenuVerb::ToggleParked,
+                )));
+                rows.push(None);
+                rows.push(Some((
+                    menu::Item::new("Delete Parked Threads")
+                        .destructive()
+                        .disabled(self.parked_threads().is_empty()),
+                    MenuVerb::DeleteAllParked,
+                )));
+            }
         }
         rows
+    }
+
+    /// The Threads the Parked section lists: parked, in no Group, and
+    /// admitted by the Project filter — the nav's own definition, shared
+    /// by the rows it draws and the menu that deletes them, so the two can
+    /// never disagree about what "all parked" means.
+    fn parked_threads(&self) -> Vec<ThreadId> {
+        let grouped = self.grouped_threads();
+        self.facts
+            .parked()
+            .iter()
+            .copied()
+            .filter(|thread| self.pane_for(*thread).is_none())
+            .filter(|thread| !grouped.contains(thread))
+            .filter(|thread| self.admitted(*thread))
+            .collect()
+    }
+
+    /// The Threads some Group claims, as the nav sees it: a member whose
+    /// leave waits on a pending draft has already left, here exactly as
+    /// in `visible_indices`.
+    fn grouped_threads(&self) -> std::collections::HashSet<ThreadId> {
+        self.cockpit
+            .groups()
+            .iter()
+            .flat_map(|group| {
+                let pending_leave = self.cockpit.roster().pending_leave(group.id);
+                group
+                    .members
+                    .iter()
+                    .copied()
+                    .filter(move |thread| Some(*thread) != pending_leave)
+            })
+            .collect()
     }
 
     /// Whether any Thread, open or parked, records this Project.
@@ -1724,7 +1792,7 @@ impl CockpitView {
     fn target_path(&self, target: MenuTarget) -> Option<std::path::PathBuf> {
         match target {
             MenuTarget::Thread(thread) | MenuTarget::Pane(thread) => self.thread_path(thread),
-            MenuTarget::Group(_) => None,
+            MenuTarget::Group(_) | MenuTarget::Parked => None,
         }
     }
 
@@ -1758,6 +1826,9 @@ impl CockpitView {
             return;
         }
         let verb = *verb;
+        // The single-Thread setting is honoured for a single Thread. The
+        // bulk delete always asks: one press must never erase a dozen
+        // transcripts, whatever the preference says about one.
         let confirm = self.prefs.settings.confirm_delete || verb != MenuVerb::Delete;
         if item.destructive && confirm && open.armed != Some(index) {
             open.armed = Some(index);
@@ -1830,6 +1901,12 @@ impl CockpitView {
                 self.sync_panes(cx);
             }
             (MenuTarget::Group(group), MenuVerb::EnterGroup) => self.enter_group(group, cx),
+            (MenuTarget::Parked, MenuVerb::ToggleParked) => {
+                self.nav_parked_open = !self.nav_parked_open;
+            }
+            (MenuTarget::Parked, MenuVerb::DeleteAllParked) => {
+                self.delete_parked_threads(cx);
+            }
             (MenuTarget::Group(group), MenuVerb::DissolveGroup) => {
                 // Members leave one by one; the Group dissolves under two.
                 let members = self
@@ -1860,6 +1937,7 @@ impl CockpitView {
                         .get(group)
                         .and_then(|group| group.members.first().copied())
                         .and_then(|thread| self.cockpit.project_id(thread)),
+                    MenuTarget::Parked => None,
                 };
                 self.open_draft(DraftTarget::Main, cx);
                 if let (Some(project), Some(draft)) = (project, self.focused_draft_mut()) {
@@ -1896,6 +1974,32 @@ impl CockpitView {
             }
             _ => {}
         }
+    }
+
+    /// Delete every Thread the Parked section lists. Each is its own act
+    /// against the core, so one that refuses (a dirty legacy worktree, an
+    /// unreadable log) does not stop the rest; the refusals are counted
+    /// into the nav's banner, with the last reason, and the survivors stay
+    /// listed where the operator can deal with them one at a time.
+    fn delete_parked_threads(&mut self, cx: &mut Context<Self>) {
+        let parked = self.parked_threads();
+        let mut refused = 0usize;
+        let mut reason = None;
+        for thread in parked {
+            if let Err(error) = self.cockpit.delete(thread) {
+                refused += 1;
+                reason = Some(error.to_string());
+            }
+        }
+        self.group_error = match (refused, reason) {
+            (0, _) | (_, None) => None,
+            (1, Some(reason)) => Some(format!("1 parked Thread not deleted: {reason}").into()),
+            (count, Some(reason)) => {
+                Some(format!("{count} parked Threads not deleted, last: {reason}").into())
+            }
+        };
+        self.sync_panes(cx);
+        self.facts.parked_changed(&self.cockpit);
     }
 
     /// The context menu, floated at the pointer and clamped inside the
@@ -5317,35 +5421,23 @@ impl CockpitView {
 
         // ...and so it lands in the solos below, which is where a Thread on
         // its way out of a Group belongs.
-        let grouped: std::collections::HashSet<ThreadId> = self
-            .cockpit
-            .groups()
-            .iter()
-            .flat_map(|group| {
-                let pending_leave = self.cockpit.roster().pending_leave(group.id);
-                group
-                    .members
-                    .iter()
-                    .copied()
-                    .filter(move |thread| Some(*thread) != pending_leave)
-            })
-            .collect();
-        // Open Panes' Threads first, in pane order, then the park order.
+        let grouped = self.grouped_threads();
+        // The open solos, in pane order. A parked solo is not in the tree:
+        // it waits in the Parked section at the foot of the column, in the
+        // park order, so a fresh park lands at the bottom of that list.
         let mut solos: Vec<nav::ThreadRow> = self
             .panes
             .iter()
             .filter_map(PaneView::thread)
-            .chain(
-                self.facts
-                    .parked()
-                    .iter()
-                    .copied()
-                    .filter(|thread| self.pane_for(*thread).is_none()),
-            )
             .filter(|thread| !grouped.contains(thread) && self.admitted(*thread))
             .map(|thread| self.thread_row(thread))
             .collect();
         solos.dedup_by_key(|row| row.thread);
+        let parked: Vec<nav::ThreadRow> = self
+            .parked_threads()
+            .into_iter()
+            .map(|thread| self.thread_row(thread))
+            .collect();
 
         // The nav's default order (#21): most recently used first, across
         // open and parked alike, and across Groups and solo Threads alike —
@@ -5427,6 +5519,8 @@ impl CockpitView {
             filter,
             groups,
             solos,
+            parked,
+            parked_open: self.nav_parked_open,
             order,
             project_sections,
             thread_list_order: self.prefs.settings.thread_list_order,
@@ -8143,16 +8237,19 @@ impl CockpitView {
         let content = if state.collapsed {
             content.child(self.rail(&state, cx))
         } else {
-            content.child(self.nav_head(&state, cx)).child(
-                div()
-                    .relative()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_h_0()
-                    .child(self.nav_tree(&state, cx))
-                    .child(nav::scrollbar(&self.nav_scroll)),
-            )
+            content
+                .child(self.nav_head(&state, cx))
+                .child(
+                    div()
+                        .relative()
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .min_h_0()
+                        .child(self.nav_tree(&state, cx))
+                        .child(nav::scrollbar(&self.nav_scroll)),
+                )
+                .children(self.nav_parked(&state, cx))
         };
         if !self.nav_has_toggled {
             return nav::shell(state.collapsed)
@@ -8323,7 +8420,10 @@ impl CockpitView {
                 }
             }
             if state.project_sections.is_empty() {
-                tree = tree.child(nav::empty_filter(&state.filter.label));
+                tree = tree.child(nav::empty_filter(
+                    &state.filter.label,
+                    !state.parked.is_empty(),
+                ));
             }
             return tree;
         }
@@ -8379,9 +8479,59 @@ impl CockpitView {
             ),
         );
         if state.order.is_empty() {
-            tree = tree.child(nav::empty_filter(&state.filter.label));
+            tree = tree.child(nav::empty_filter(
+                &state.filter.label,
+                !state.parked.is_empty(),
+            ));
         }
         tree
+    }
+
+    /// The Parked section under the tree, or nothing when nothing is
+    /// parked — an empty fold would be a heading for a list that does not
+    /// exist. The header's press toggles the fold; its right press opens
+    /// the section's menu. Unfolded, the rows are the tree's own row
+    /// shape in the current order's voice, with every verb a tree row has:
+    /// a press revives, a drag regroups, a right press opens the row's
+    /// menu.
+    fn nav_parked(&self, state: &nav::NavState, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if state.parked.is_empty() {
+            return None;
+        }
+        let header = nav::parked_header(state.parked.len(), state.parked_open)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|view, _: &MouseDownEvent, _, cx| {
+                    view.nav_parked_open = !view.nav_parked_open;
+                    cx.notify();
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|view, event: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    view.open_context_menu(MenuTarget::Parked, event.position, cx);
+                }),
+            );
+        let mut section = nav::parked_section().child(header);
+        if state.parked_open {
+            let compact = state.thread_list_order == ThreadListOrder::ByProject;
+            let mut list = nav::parked_list(&self.nav_parked_scroll);
+            for row in &state.parked {
+                list = list.child(self.thread_element_with_style(row, None, compact, cx));
+            }
+            section = section.child(
+                div()
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .child(list)
+                    .child(nav::parked_scrollbar(&self.nav_parked_scroll)),
+            );
+        }
+        Some(section.into_any_element())
     }
 
     /// One run of solo rows, which is also a `LooseZone`. `after_group` is
@@ -8622,7 +8772,14 @@ impl CockpitView {
     /// dropdown, and this is how a 56px column reaches it.
     fn rail(&self, state: &nav::NavState, cx: &mut Context<Self>) -> Div {
         let mut items = nav::rail_items();
-        for row in state.ordered_rows() {
+        // The rail has no fold to press, so it follows the column's: the
+        // parked marks trail the tree's only while the section is open.
+        let parked: &[nav::ThreadRow] = if state.parked_open {
+            &state.parked
+        } else {
+            &[]
+        };
+        for row in state.ordered_rows().into_iter().chain(parked) {
             let current = row.current;
             let thread = row.thread;
             let open = self.pane_for(thread).is_some();
@@ -14213,12 +14370,13 @@ mod tests {
         });
     }
 
-    /// #21 AC1: the nav lists every Thread — most recently used first,
-    /// open and parked alike — each row naming its Project, its checkout
-    /// and its provider. There is no section header between them: one
-    /// list, split only by Group membership.
+    /// #21 AC1, amended: the tree lists every **open** Thread — most
+    /// recently used first, each row naming its Project and its provider.
+    /// A parked solo is not a tree row any more: it waits in the Parked
+    /// section at the foot of the column, folded shut, its provider still
+    /// peeked off the log rather than loaded.
     #[gpui::test]
-    fn the_nav_lists_every_thread_most_recently_used_first(cx: &mut TestAppContext) {
+    fn the_nav_lists_open_threads_in_the_tree_and_parked_ones_below(cx: &mut TestAppContext) {
         let (core, _fake) = cockpit("nav-order", 3);
         cx.update(|cx| {
             cx.bind_keys([KeyBinding::new("cmd-w", CloseThread, None)]);
@@ -14243,14 +14401,25 @@ mod tests {
             assert!(state.groups.is_empty(), "no Group claims these Threads");
             let ordered = state.ordered_solos();
             let rows: Vec<ThreadId> = ordered.iter().map(|row| row.thread).collect();
-            let mut expected: Vec<ThreadId> = grid_order.to_vec();
+            let mut expected: Vec<ThreadId> = grid_order
+                .iter()
+                .copied()
+                .filter(|thread| *thread != parked_thread)
+                .collect();
             // The nav's default order, and the only one it has: last used
-            // first. Parking does not move a row — using it does.
+            // first, over the Threads that are open.
             expected.sort_by_key(|thread| std::cmp::Reverse(view.last_used(*thread)));
             assert_eq!(rows, expected, "most recently used first");
             assert!(
-                rows.contains(&parked_thread),
-                "a parked Thread is a row like any other"
+                !rows.contains(&parked_thread),
+                "a parked Thread is not a tree row"
+            );
+            assert!(
+                state
+                    .ordered_rows()
+                    .iter()
+                    .all(|row| row.thread != parked_thread),
+                "nor is it in the sequence the rail folds to"
             );
             assert_eq!(
                 ordered[0].name.as_ref(),
@@ -14266,14 +14435,275 @@ mod tests {
                 Some(Provider::Claude),
                 "the provider is the logomark's own value, never a `cl` tag"
             );
-            let parked: Vec<ThreadId> = view.facts.parked().to_vec();
-            assert_eq!(parked, vec![parked_thread], "the parked Thread moved below");
+            let parked: Vec<ThreadId> = state.parked.iter().map(|row| row.thread).collect();
             assert_eq!(
-                ordered.last().unwrap().provider,
+                parked,
+                vec![parked_thread],
+                "the parked Thread waits in the Parked section"
+            );
+            assert!(!state.parked_open, "folded shut until the operator asks");
+            assert_eq!(state.parked[0].status, nav::RowStatus::Parked);
+            assert_eq!(
+                state.parked[0].provider,
                 Some(Provider::Claude),
                 "a parked row still names its provider — peeked, not loaded"
             );
+            assert!(state.parked[0].last_used.is_some());
         });
+    }
+
+    /// A parked Group member is not "parked" as far as the nav is
+    /// concerned: its Group is its place, and opening the Group revives it
+    /// there. The Parked section lists only the solos — so the menu that
+    /// clears the section can never dissolve a Group behind the operator's
+    /// back.
+    #[gpui::test]
+    fn a_parked_group_member_stays_under_its_group(cx: &mut TestAppContext) {
+        let (mut core, _) = cockpit("parked-member", 3);
+        let threads = core.threads();
+        core.apply_group(GroupChange::Create {
+            first: threads[0],
+            second: threads[1],
+        })
+        .unwrap();
+        core.park(threads[0]).unwrap();
+        core.park(threads[2]).unwrap();
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        tick(cx);
+
+        view.read_with(cx, |view, _| {
+            let state = view.nav_state();
+            assert_eq!(state.groups.len(), 1);
+            let members: Vec<ThreadId> = state.groups[0]
+                .members
+                .iter()
+                .map(|row| row.thread)
+                .collect();
+            assert_eq!(
+                members,
+                vec![threads[0], threads[1]],
+                "the parked member keeps its seat in the Group"
+            );
+            assert_eq!(state.groups[0].members[0].status, nav::RowStatus::Parked);
+            let parked: Vec<ThreadId> = state.parked.iter().map(|row| row.thread).collect();
+            assert_eq!(
+                parked,
+                vec![threads[2]],
+                "only the parked solo is in the section"
+            );
+            assert_eq!(
+                view.parked_threads(),
+                vec![threads[2]],
+                "and that is exactly what the menu would delete"
+            );
+        });
+    }
+
+    /// The Parked header is the fold's handle: a press unfolds the rows
+    /// under it, and a right press opens the section's own menu. Its
+    /// delete arms on the first press and, on the second, erases every
+    /// Thread the section lists — and only those: the open Threads stay,
+    /// and with nothing left to list the section itself is gone.
+    #[gpui::test]
+    fn the_parked_header_folds_and_its_menu_deletes_every_parked_thread(cx: &mut TestAppContext) {
+        let (mut core, _fake) = cockpit("parked-fold", 4);
+        let threads = core.threads();
+        core.park(threads[0]).unwrap();
+        core.park(threads[1]).unwrap();
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        tick(cx);
+
+        let first_parked: &'static str = format!("nav-thread-{}", threads[0].get()).leak();
+        let live: &'static str = format!("nav-thread-{}", threads[2].get()).leak();
+        let header = cx
+            .debug_bounds("nav-parked")
+            .expect("the Parked header is drawn under the tree");
+        assert!(
+            cx.debug_bounds(first_parked).is_none(),
+            "folded: no parked row is drawn"
+        );
+        assert!(cx.debug_bounds("nav-parked-list").is_none());
+        let live_row = cx.debug_bounds(live).expect("an open Thread is a tree row");
+        assert!(
+            header.origin.y >= live_row.bottom(),
+            "the section sits under the tree: {header:?} vs {live_row:?}"
+        );
+
+        cx.simulate_click(header.center(), gpui::Modifiers::none());
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert!(view.nav_parked_open, "the press unfolds")
+        });
+        let row = cx
+            .debug_bounds(first_parked)
+            .expect("unfolded: the parked rows are drawn");
+        let header = cx.debug_bounds("nav-parked").unwrap();
+        assert!(
+            row.origin.y >= header.bottom(),
+            "the rows hang under the header: {row:?} vs {header:?}"
+        );
+        cx.simulate_click(header.center(), gpui::Modifiers::none());
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert!(!view.nav_parked_open, "a second press folds")
+        });
+        assert!(cx.debug_bounds(first_parked).is_none());
+
+        // Folded, the header is back at the foot of the column.
+        let header = cx.debug_bounds("nav-parked").unwrap();
+        cx.simulate_mouse_down(
+            header.center(),
+            gpui::MouseButton::Right,
+            gpui::Modifiers::none(),
+        );
+        cx.run_until_parked();
+        let delete = view.read_with(cx, |view, _| {
+            let menu = view
+                .context_menu
+                .as_ref()
+                .expect("a right press opens the section's menu");
+            assert_eq!(menu.target, MenuTarget::Parked);
+            let labels: Vec<&str> = menu
+                .rows
+                .iter()
+                .flatten()
+                .map(|(item, _)| item.label.as_ref())
+                .collect();
+            assert_eq!(labels, vec!["Show Parked Threads", "Delete Parked Threads"]);
+            menu.rows
+                .iter()
+                .position(|row| matches!(row, Some((_, MenuVerb::DeleteAllParked))))
+                .unwrap()
+        });
+        view.update(cx, |view, cx| {
+            view.press_menu_row(delete, cx);
+            let menu = view.context_menu.as_ref().expect("armed, still up");
+            assert_eq!(menu.armed, Some(delete), "the first press only arms");
+            assert_eq!(view.facts.parked().len(), 2, "and deletes nothing");
+            view.press_menu_row(delete, cx);
+            assert!(
+                view.context_menu.is_none(),
+                "the second press runs and closes"
+            );
+            assert!(
+                view.facts.parked().is_empty(),
+                "every parked Thread is gone from the nav"
+            );
+            assert!(
+                view.cockpit.parked().unwrap().is_empty(),
+                "and from the store"
+            );
+            assert_eq!(
+                view.cockpit.threads().len(),
+                2,
+                "the open Threads are untouched"
+            );
+            assert!(view.group_error.is_none(), "nothing refused");
+        });
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("nav-parked").is_none(),
+            "nothing parked, no section"
+        );
+    }
+
+    /// The single-Thread "confirm before deleting" setting is about one
+    /// Thread. The bulk delete always asks: with the setting off, one
+    /// press still only arms.
+    #[gpui::test]
+    fn deleting_every_parked_thread_always_asks_first(cx: &mut TestAppContext) {
+        let (mut core, _) = cockpit("parked-confirm", 2);
+        let threads = core.threads();
+        core.park(threads[0]).unwrap();
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        tick(cx);
+
+        view.update(cx, |view, cx| {
+            view.prefs.settings.confirm_delete = false;
+            view.open_context_menu(MenuTarget::Parked, gpui::point(px(100.), px(600.)), cx);
+            let delete = view
+                .context_menu
+                .as_ref()
+                .unwrap()
+                .rows
+                .iter()
+                .position(|row| matches!(row, Some((_, MenuVerb::DeleteAllParked))))
+                .unwrap();
+            view.press_menu_row(delete, cx);
+            let menu = view
+                .context_menu
+                .as_ref()
+                .expect("still up: one press only arms, whatever the setting says");
+            assert_eq!(menu.armed, Some(delete));
+            assert_eq!(
+                view.facts.parked(),
+                &[threads[0]],
+                "nothing was deleted yet"
+            );
+            view.press_menu_row(delete, cx);
+            assert!(view.context_menu.is_none());
+            assert!(view.facts.parked().is_empty());
+        });
+    }
+
+    /// Unfolded, the section takes at most half the column: forty parked
+    /// Threads scroll inside it, on the section's own scroll, and the
+    /// running tree above keeps its room.
+    #[gpui::test]
+    fn a_long_parked_list_scrolls_inside_half_the_column(cx: &mut TestAppContext) {
+        let (mut core, _) = cockpit("parked-cap", 41);
+        let threads = core.threads();
+        for thread in &threads[1..] {
+            core.park(*thread).unwrap();
+        }
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(600.)));
+        view.update(cx, |view, cx| {
+            view.nav_parked_open = true;
+            cx.notify();
+        });
+        tick(cx);
+
+        let list = cx.debug_bounds("nav-parked-list").expect("unfolded");
+        assert!(
+            list.size.height <= px(300.),
+            "capped at half the 600px column: {list:?}"
+        );
+        let live: &'static str = format!("nav-thread-{}", threads[0].get()).leak();
+        let live_row = cx
+            .debug_bounds(live)
+            .expect("the open Thread is still in the tree");
+        assert!(
+            live_row.bottom() <= list.origin.y,
+            "the tree keeps its room above the list: {live_row:?} vs {list:?}"
+        );
+        let last: &'static str = format!("nav-thread-{}", threads[40].get()).leak();
+        let before = cx
+            .debug_bounds(last)
+            .expect("drawn, clipped, inside the list");
+        assert!(
+            before.origin.y > list.bottom(),
+            "the last parked row starts below the list's fold: {before:?}"
+        );
+
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: list.center(),
+            delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-40_000.))),
+            modifiers: gpui::Modifiers::none(),
+            touch_phase: gpui::TouchPhase::default(),
+        });
+        cx.run_until_parked();
+        let after = cx.debug_bounds(last).unwrap();
+        assert!(
+            after.center().y < list.bottom(),
+            "scrolling the list exposes the last parked row: {after:?}"
+        );
+        let live_after = cx.debug_bounds(live).unwrap();
+        assert_eq!(
+            live_after.origin, live_row.origin,
+            "the tree did not scroll with the list"
+        );
     }
 
     /// #21 AC2: clicking a running nav row lands the operator on that Pane —
@@ -14334,7 +14764,8 @@ mod tests {
 
     /// #21 AC2: clicking a parked nav row revives that Thread — a Pane,
     /// focus, and the park order forgetting it so cmd-o cannot revive it a
-    /// second time.
+    /// second time. The row lives in the Parked section, so the fold is
+    /// opened first.
     #[gpui::test]
     fn clicking_a_parked_nav_row_revives_that_thread(cx: &mut TestAppContext) {
         let (core, _fake) = cockpit("nav-revive", 2);
@@ -14345,6 +14776,7 @@ mod tests {
             ]);
         });
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         tick(cx);
         let parked = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
         cx.simulate_keystrokes("cmd-w");
@@ -14353,16 +14785,16 @@ mod tests {
             assert_eq!(view.facts.parked().len(), 1, "the parked Thread got a row");
         });
 
-        // The parked row sits second in one undivided list: the 42px window
-        // band, the 42px nav head, the tree's 8px inset, one 56.5px row and
-        // the 2px between siblings, then halfway down its own row.
-        cx.simulate_click(
-            gpui::point(
-                px(104.),
-                px(42. + 42. + 8. + crate::theme::THREAD_ROW_H + 2. + 28.),
-            ),
-            gpui::Modifiers::none(),
-        );
+        let fold = cx
+            .debug_bounds("nav-parked")
+            .expect("the parked Thread put the Parked section under the tree");
+        cx.simulate_click(fold.center(), gpui::Modifiers::none());
+        cx.run_until_parked();
+        let row_id: &'static str = format!("nav-thread-{}", parked.get()).leak();
+        let row = cx
+            .debug_bounds(row_id)
+            .expect("unfolded, the parked Thread's row is drawn");
+        cx.simulate_click(row.center(), gpui::Modifiers::none());
 
         view.read_with(cx, |view, _| {
             assert_eq!(view.panes.len(), 2, "the revived Thread got a Pane");
