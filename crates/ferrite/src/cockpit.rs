@@ -5474,6 +5474,19 @@ impl CockpitView {
                 }
             }
         };
+        // A Thread that finished while the operator was elsewhere holds an
+        // unread Notice: its Pane rings, but from the tree a quiet Idle dot
+        // is indistinguishable from a Thread that never ran. Lift it to
+        // Attention so the tree names the Thread the toast was about. Only
+        // an Idle row is lifted — Working, Failing and Blocked are the
+        // louder truth, and a Decision is already Attention.
+        let status = if status == nav::RowStatus::Idle
+            && self.cockpit.notifications().attention(thread)
+        {
+            nav::RowStatus::Attention
+        } else {
+            status
+        };
         let now = std::time::SystemTime::now();
         nav::ThreadRow {
             thread,
@@ -17800,6 +17813,44 @@ mod tests {
                 notifications.notices().count(),
                 1,
                 "the bell still lists it"
+            );
+        });
+    }
+
+    /// The tree names the Thread the toast was about: an unread finish
+    /// lifts its nav row's dot from Idle to Attention, and landing on the
+    /// Pane — which reads the Notice — puts it back.
+    #[gpui::test]
+    fn a_finished_thread_marks_its_nav_row_until_it_is_read(cx: &mut TestAppContext) {
+        let (mut core, fake) = cockpit("finished-nav-row", 2);
+        let group = group_all(&mut core);
+        cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-]", NextPane, None)]));
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, cx| view.enter_group(group, cx));
+        let threads = view.read_with(cx, |view, _| view.cockpit.threads());
+        fake.streams.borrow()[1]
+            .send(SessionEvent::TurnEnded {
+                outcome: ferrite_core::TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+        tick(cx);
+        view.read_with(cx, |view, _| {
+            assert_eq!(
+                view.thread_row(threads[1]).status,
+                nav::RowStatus::Attention,
+                "the unfocused Thread that finished is marked in the tree"
+            );
+            assert_eq!(view.thread_row(threads[0]).status, nav::RowStatus::Idle);
+        });
+
+        cx.simulate_keystrokes("cmd-]");
+        tick(cx);
+        view.read_with(cx, |view, _| {
+            assert_eq!(
+                view.thread_row(threads[1]).status,
+                nav::RowStatus::Idle,
+                "landing on the Pane reads the Notice and clears the mark"
             );
         });
     }
