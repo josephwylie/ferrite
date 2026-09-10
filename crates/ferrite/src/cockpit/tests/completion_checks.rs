@@ -124,6 +124,72 @@ fn wrapped_question_retains_exact_picks_and_note_through_rejection_and_ack(
                 .serial,
         )
     });
+    let mut previous = None;
+    for width in [1100., 740., 1100., 740.] {
+        cx.simulate_resize(gpui::size(px(width), px(1200.)));
+        tick(cx);
+        let island = cx.debug_bounds("question-island").unwrap();
+        let other = bounds(cx, format!("request-other-{}-{serial}-0", thread.get()));
+        let submit = bounds(cx, format!("request-submit-{}-{serial}", thread.get()));
+        assert!(
+            island.contains(&submit.origin) && island.contains(&submit.bottom_right()),
+            "the answer button must move with the question bar: {submit:?} / {island:?}"
+        );
+        let gap = submit.top() - other.bottom();
+        assert!(
+            gap >= px(0.) && gap <= px(20.),
+            "the answer row must follow the form with consistent spacing: {gap:?}"
+        );
+        if let Some((previous_width, previous_island)) = previous {
+            let previous_island: gpui::Bounds<gpui::Pixels> = previous_island;
+            assert!(
+                (island.bottom() - previous_island.bottom()).abs() <= px(1.),
+                "the question bar stays anchored above the composer"
+            );
+            if width < previous_width {
+                assert!(island.top() < previous_island.top(),
+                    "wrapped questions must expand the bar upward: {island:?} / {previous_island:?}");
+            } else {
+                assert!(island.top() > previous_island.top(),
+                    "unwrapped questions must let the bar shrink back down: {island:?} / {previous_island:?}");
+            }
+        }
+        previous = Some((width, island));
+    }
+    let before_island = cx.debug_bounds("question-island").unwrap();
+    let before_composer = cx.debug_bounds("focused-prompt-editor").unwrap();
+    view.update(cx, |view, cx| {
+        view.panes[0].composer.update(cx, |composer, cx| {
+            composer.set("draft  untouched\nsecond line\nthird line".into(), cx)
+        })
+    });
+    tick(cx);
+    let grown_island = cx.debug_bounds("question-island").unwrap();
+    let grown_composer = cx.debug_bounds("focused-prompt-editor").unwrap();
+    assert!(grown_composer.size.height > before_composer.size.height);
+    assert!(
+        grown_island.bottom() < before_island.bottom(),
+        "the entire question bar moves up when the composer grows"
+    );
+    assert!(
+        (grown_island.bottom()
+            - before_island.bottom()
+            - (grown_composer.top() - before_composer.top()))
+        .abs()
+            <= px(1.),
+        "the question bar and composer must move together"
+    );
+    view.update(cx, |view, cx| {
+        view.panes[0].composer.update(cx, |composer, cx| {
+            composer.set("draft  untouched".into(), cx)
+        })
+    });
+    tick(cx);
+    assert_eq!(
+        cx.debug_bounds("question-island").unwrap(),
+        before_island,
+        "the bar returns when the composer shrinks"
+    );
     let first = cx.debug_bounds("question-choice-0-0").unwrap();
     let second = cx.debug_bounds("question-choice-0-1").unwrap();
     let island = cx.debug_bounds("question-island").unwrap();
@@ -134,13 +200,11 @@ fn wrapped_question_retains_exact_picks_and_note_through_rejection_and_ack(
     assert!(first.right() <= island.right() && second.top() >= first.bottom());
     cx.simulate_click(first.center(), gpui::Modifiers::none());
     cx.simulate_click(second.center(), gpui::Modifiers::none());
-    let other = Box::leak(format!("request-other-{}-{serial}-0", thread.get()).into_boxed_str());
-    let other_point = cx.debug_bounds(other).unwrap().center();
+    let other_point = bounds(cx, format!("request-other-{}-{serial}-0", thread.get())).center();
     cx.simulate_click(other_point, gpui::Modifiers::none());
     let note = "  keep  two   spaces  ";
     cx.simulate_input(note);
-    let submit = Box::leak(format!("request-submit-{}-{serial}", thread.get()).into_boxed_str());
-    let submit_point = cx.debug_bounds(submit).unwrap().center();
+    let submit_point = bounds(cx, format!("request-submit-{}-{serial}", thread.get())).center();
     cx.simulate_click(submit_point, gpui::Modifiers::none());
     tick(cx);
     assert!(
@@ -164,7 +228,7 @@ fn wrapped_question_retains_exact_picks_and_note_through_rejection_and_ack(
         .unwrap();
     tick(cx);
     assert!(cx.debug_bounds("question-island").is_some());
-    let submit_point = cx.debug_bounds(submit).unwrap().center();
+    let submit_point = bounds(cx, format!("request-submit-{}-{serial}", thread.get())).center();
     cx.simulate_click(submit_point, gpui::Modifiers::none());
     tick(cx);
     assert_eq!(fake.answered.borrow().len(), 2);
@@ -557,5 +621,105 @@ fn pending_approval_exposes_exact_selectable_command_before_answering(cx: &mut T
             fake.answered.borrow().is_empty(),
             "inspection must not approve execution"
         );
+    }
+}
+
+#[gpui::test]
+fn long_subagent_approval_keeps_allow_and_deny_inside_the_island(cx: &mut TestAppContext) {
+    use ferrite_core::activity::{ActivityEvent, AgentKey, ExecutionEvent, Subject};
+    let (core, fake) = cockpit("approval-long-command-island", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(900.), px(600.)));
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+    let command = "/bin/zsh -lc 'rm -rf /Users/example/.agents/skills/pane-browser /Users/example/.claude/skills/pane-browser\n test ! -e /Users/example/.agents/skills/pane-browser && test ! -L /Users/example/.claude/skills/pane-browser && test ! -e /Users/example/.codex/skills/pane-browser && printf '\"'\"'Verified: shared skill and Claude link removed; no Codex-specific copy exists.\\n'\"'\"''";
+    let key = AgentKey::new(Provider::Claude, "root", "approval-long");
+    fake.streams.borrow()[0]
+        .send(SessionEvent::Activity(ActivityEvent::Content {
+            key: key.clone(),
+            id: None,
+            event: ExecutionEvent::Text {
+                text: "Ready to clean up".into(),
+            },
+        }))
+        .unwrap();
+    tick(cx);
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.select_subject(thread, Subject::Subagent(key.clone()), window, cx)
+        })
+    });
+    fake.streams.borrow()[0]
+        .send(SessionEvent::Activity(ActivityEvent::Decision {
+            subject: Some(Subject::Subagent(key)),
+            decision: Decision {
+                kind: Default::default(),
+                policy: Default::default(),
+                delivery: Default::default(),
+                id: "long-approval".into(),
+                tool_use_id: "long-approval".into(),
+                tool_name: "commandExecution".into(),
+                description: command.into(),
+                suggestions: vec![],
+                input: serde_json::json!({"command":command}),
+            },
+        }))
+        .unwrap();
+    tick(cx);
+    let serial = view.read_with(cx, |view, _| {
+        view.cockpit
+            .thread(thread)
+            .unwrap()
+            .activity()
+            .pending_decisions()[0]
+            .handle
+            .serial
+    });
+    let mut previous = None;
+    for width in [900., 740., 900.] {
+        cx.simulate_resize(gpui::size(px(width), px(600.)));
+        tick(cx);
+        let island = cx.debug_bounds("question-island").unwrap();
+        let input = cx.debug_bounds("approval-input").unwrap();
+        let allow = bounds(cx, format!("request-allow-{}-{serial}", thread.get()));
+        let deny = bounds(cx, format!("request-deny-{}-{serial}", thread.get()));
+        let title = bounds(cx, format!("request-title-{}-{serial}", thread.get()));
+        assert!(
+            title.size.height >= px(crate::theme::FS_MD * crate::theme::LINE_UI * 3.),
+            "the repro must retain a title spanning at least three lines: {title:?}"
+        );
+        assert!(
+            title.bottom() <= input.top(),
+            "the title wraps above the command: title={title:?} input={input:?}"
+        );
+        for (label, button) in [("Allow", allow), ("Deny", deny)] {
+            assert!(
+                island.contains(&button.origin) && island.contains(&button.bottom_right()),
+                "{label} must sit inside the island: button={button:?} island={island:?}"
+            );
+            let gap = button.top() - input.bottom();
+            assert!(
+                gap >= px(0.) && gap <= px(16.),
+                "the command-to-{label} gap must stay near the 12px design gap: {gap:?}"
+            );
+        }
+        if let Some((previous_width, previous_island)) = previous {
+            let previous_island: gpui::Bounds<gpui::Pixels> = previous_island;
+            assert!(
+                (island.bottom() - previous_island.bottom()).abs() <= px(1.),
+                "resizing keeps the bar's bottom edge anchored"
+            );
+            if width < previous_width {
+                assert!(
+                    island.top() < previous_island.top(),
+                    "wrapping expands the entire bar upward: {island:?} / {previous_island:?}"
+                );
+            } else {
+                assert!(
+                    island.top() > previous_island.top(),
+                    "unwrapping lets the bar shrink down: {island:?} / {previous_island:?}"
+                );
+            }
+        }
+        previous = Some((width, island));
     }
 }

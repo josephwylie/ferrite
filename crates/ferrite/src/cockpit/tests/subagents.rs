@@ -43,15 +43,6 @@ fn emit(fake: &Fake, event: ActivityEvent) {
         .send(SessionEvent::Activity(event))
         .unwrap();
 }
-fn bounds(cx: &mut gpui::VisualTestContext, id: String) -> gpui::Bounds<gpui::Pixels> {
-    cx.debug_bounds(Box::leak(id.clone().into_boxed_str()))
-        .unwrap_or_else(|| {
-            panic!(
-                "missing {id}, strip {:?}",
-                cx.debug_bounds("subject-strip-1")
-            )
-        })
-}
 fn tab(cx: &mut gpui::VisualTestContext, name: &str) -> gpui::Point<gpui::Pixels> {
     bounds(cx, format!("subject-agent-1-{}", key(name).as_str())).center()
 }
@@ -536,10 +527,7 @@ fn native_tab_overflow_follows_measured_header_width_and_keeps_discovery_order(
         "narrow header exposes overflow"
     );
     assert!(
-        cx.debug_bounds(Box::leak(
-            format!("subject-agent-1-{}", key("Rowan").as_str()).into_boxed_str()
-        ))
-        .is_none(),
+        debug_bounds(cx, format!("subject-agent-1-{}", key("Rowan").as_str())).is_none(),
         "selected hidden agent is not promoted ahead of discovery order"
     );
     assert_eq!(
@@ -746,11 +734,7 @@ fn an_open_overflow_menu_resolves_a_subject_alias_before_selecting_its_request(
             .handle
             .serial
     });
-    assert!(cx
-        .debug_bounds(Box::leak(
-            format!("request-allow-1-{serial}").into_boxed_str()
-        ))
-        .is_some());
+    assert!(debug_bounds(cx, format!("request-allow-1-{serial}")).is_some());
 }
 
 #[gpui::test]

@@ -57,10 +57,7 @@ fn contract_typed_question_renders_and_returns_normalized_picks(cx: &mut TestApp
             .serial
     });
     assert!(
-        cx.debug_bounds(Box::leak(
-            format!("request-other-1-{serial}-0").into_boxed_str()
-        ))
-        .is_none(),
+        debug_bounds(cx, format!("request-other-1-{serial}-0")).is_none(),
         "provider disallows custom text"
     );
     let choice = cx
@@ -68,11 +65,7 @@ fn contract_typed_question_renders_and_returns_normalized_picks(cx: &mut TestApp
         .expect("typed kind must drive UI even with unknown tool name and null input");
     cx.simulate_click(choice.center(), gpui::Modifiers::none());
     cx.run_until_parked();
-    let submit = cx
-        .debug_bounds(Box::leak(
-            format!("request-submit-1-{serial}").into_boxed_str(),
-        ))
-        .unwrap();
+    let submit = debug_bounds(cx, format!("request-submit-1-{serial}")).unwrap();
     cx.simulate_click(submit.center(), gpui::Modifiers::none());
     cx.run_until_parked();
     let answers = fake.answered.borrow();
@@ -191,10 +184,7 @@ fn contract_mcp_form_defaults_submit_typed_values(cx: &mut TestAppContext) {
             .handle
             .serial
     });
-    let submit = cx
-        .debug_bounds(Box::leak(
-            format!("request-submit-1-{serial}").into_boxed_str(),
-        ))
+    let submit = debug_bounds(cx, format!("request-submit-1-{serial}"))
         .expect("MCP uses shared form submit");
     cx.simulate_click(submit.center(), gpui::Modifiers::none());
     cx.run_until_parked();
@@ -268,11 +258,7 @@ fn contract_mcp_required_input_without_default_is_editable_and_validated(cx: &mu
     cx.run_until_parked();
     cx.simulate_input("9");
     cx.run_until_parked();
-    let submit = cx
-        .debug_bounds(Box::leak(
-            format!("request-submit-1-{serial}").into_boxed_str(),
-        ))
-        .unwrap();
+    let submit = debug_bounds(cx, format!("request-submit-1-{serial}")).unwrap();
     cx.simulate_click(submit.center(), gpui::Modifiers::none());
     cx.run_until_parked();
     assert!(fake.answered.borrow().is_empty());

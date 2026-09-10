@@ -3155,6 +3155,9 @@ pub(crate) fn approval_input(
             .w_full()
             .min_w_0()
             .flex_shrink_0()
+            // Let the bar measure this row's content height; an unspecified
+            // height inherits the toolkit wrapper's full-height default.
+            .h_auto()
             .max_h(px(160.))
             .overflow_y_scrollbar()
             .child(crate::rich::Literal {

@@ -287,9 +287,7 @@ fn the_composer_mode_chip_opens_a_native_mode_menu_while_idle(cx: &mut TestAppCo
         })
         .unwrap();
     tick(cx);
-    let selector: &'static str = Box::leak(format!("mode-picker-{}", thread.get()).into_boxed_str());
-    let chip = cx
-        .debug_bounds(selector)
+    let chip = debug_bounds(cx, format!("mode-picker-{}", thread.get()))
         .expect("the mode chip rides an idle Pane, not only a streaming one");
     cx.simulate_click(chip.center(), gpui::Modifiers::none());
     cx.run_until_parked();

@@ -892,6 +892,10 @@ impl CockpitView {
             .gap(px(12.))
             .child(
                 div()
+                    .debug_selector({
+                        let serial = handle.serial;
+                        move || format!("request-title-{}-{serial}", thread.get())
+                    })
                     .text_size(px(theme::FS_MD))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(rgb(theme::TEXT))
@@ -1365,6 +1369,10 @@ impl CockpitView {
                         .tab_stop(true)
                         .label("Deny")
                         .disabled(!request.decision.policy.deny || request.submitting)
+                        .debug_selector({
+                            let serial = handle.serial;
+                            move || format!("request-deny-{}-{serial}", thread.get())
+                        })
                         .on_click(cx.listener({
                             let handle = handle.clone();
                             move |view, _, _, cx| {

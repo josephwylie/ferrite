@@ -318,10 +318,7 @@ fn retained_transcript_relative_file_links_use_the_thread_workspace_and_copy_tex
         .unwrap();
     tick(cx);
 
-    let card = cx
-        .debug_bounds(Box::leak(
-            format!("file-attachment-{}", file.display()).into_boxed_str(),
-        ))
+    let card = debug_bounds(cx, format!("file-attachment-{}", file.display()))
         .expect("the retained transcript resolves the relative link from its Thread workspace");
     cx.simulate_click(card.center(), gpui::Modifiers::none());
     assert_eq!(
