@@ -1,7 +1,10 @@
 //! The left navigation column (#21): one Project filter, then the Groups
 //! with their member Threads indented under a rail, then the solo Threads
-//! at root. It is a view, never the only door: everything a row does
-//! (focus, revive, regroup) stays reachable from the keyboard.
+//! at root — and, at the foot of the column, the **Parked** section: every
+//! parked Thread no Group claims, folded shut by default so the tree above
+//! holds only what is running. It is a view, never the only door:
+//! everything a row does (focus, revive, regroup) stays reachable from the
+//! keyboard.
 //!
 //! Drawing only, like `pane.rs`: the cockpit assembles a `NavState` per
 //! frame from O(1) reads plus its project/branch/parked caches —
@@ -90,6 +93,7 @@ const FILTER_OPTION_GROUP: &str = "nav-filter-option";
 const ORDER_GROUP: &str = "nav-order";
 const PROJECT_SECTION_GROUP: &str = "nav-project-section";
 const PROJECT_ADD_GROUP: &str = "nav-project-add";
+const PARKED_GROUP: &str = "nav-parked";
 
 // The handful of nav metrics `theme.rs` does not name, kept here rather
 // than written inline so each one is said once and explained once.
@@ -110,14 +114,31 @@ const RAIL_PAD_Y: f32 = 7.0;
 /// 12px — the gap between the rail's filter button and its first item, and
 /// the empty-filter message's block margin.
 const RAIL_ITEMS_TOP: f32 = 12.0;
+/// 30px — a section heading's row: the Project headings in Project order,
+/// and the Parked section's header at the foot of the column.
+const SECTION_H: f32 = 30.0;
+/// The most of the column the open Parked section may take. Its list
+/// scrolls past this, so a hundred parked Threads never push the running
+/// tree out of sight.
+const PARKED_MAX_SHARE: f32 = 0.5;
 
 /// What the nav draws this frame: one filter, then Groups with their
-/// members, then the solos. Nothing here is a store read — the cockpit
-/// assembles it from O(1) reads plus its project/branch caches.
+/// members, then the solos, then the Parked section. Nothing here is a
+/// store read — the cockpit assembles it from O(1) reads plus its
+/// project/branch caches.
 pub struct NavState {
     pub filter: FilterState,
     pub groups: Vec<GroupBlock>,
+    /// The solo Threads that are open: a parked solo is in `parked`, not
+    /// here.
     pub solos: Vec<ThreadRow>,
+    /// The Parked section's rows: parked Threads no Group claims, in the
+    /// park order. A parked Group member stays under its Group — the Group
+    /// is its place, and opening the Group revives it there.
+    pub parked: Vec<ThreadRow>,
+    /// Whether the Parked section is unfolded. Shut by default: the tree
+    /// is for what is running, and the section is where the rest wait.
+    pub parked_open: bool,
     /// The one order the tree draws in — Groups and solo Threads
     /// interleaved, most recently used first. The two lists above are the
     /// membership; this is the sequence.
@@ -139,8 +160,9 @@ pub struct ProjectSection {
 
 impl NavState {
     /// Every row in the order the tree draws it: a Group's members where
-    /// their Group sits, a solo where it sits. The rail folds to exactly
-    /// this sequence, and tests read the tree's order from it.
+    /// their Group sits, a solo where it sits. The Parked section is not
+    /// the tree, so its rows are not here. The rail folds to exactly this
+    /// sequence, and tests read the tree's order from it.
     pub fn ordered_rows(&self) -> Vec<&ThreadRow> {
         self.order
             .iter()
@@ -497,7 +519,7 @@ pub fn project_section(label: SharedString, count: usize, first: bool) -> Div {
         .group(PROJECT_SECTION_GROUP)
         .flex()
         .items_center()
-        .h(px(30.))
+        .h(px(SECTION_H))
         .when(!first, |section| section.mt(px(SOLOS_TOP)))
         .px(px(ROW_PAD_X))
         .gap(px(ROW_ICON_GAP))
@@ -1124,17 +1146,106 @@ pub fn loose_ground(index: usize) -> Stateful<Div> {
         .min_h(px(SOLOS_TOP))
 }
 
-/// What a Project filter that matches nothing says. It names the Project
-/// rather than shrugging, so the way out is obvious.
-pub fn empty_filter(project: &str) -> Div {
+/// What an empty tree says. It names the Project rather than shrugging,
+/// so the way out is obvious — and when the Parked section below holds
+/// Threads the filter admits, it says *open*, so the operator is not told
+/// a Project is empty while its Threads sit one fold away.
+pub fn empty_filter(project: &str, parked_below: bool) -> Div {
+    let message = if parked_below {
+        format!("No open Groups or Threads in {project}.")
+    } else {
+        format!("No Groups or Threads in {project}.")
+    };
     div()
         .my(px(RAIL_ITEMS_TOP))
         .mx(px(ROW_PAD_X))
         .text_size(px(FS_MD))
         .text_color(rgb(TEXT_MUTED))
-        .child(SharedString::from(format!(
-            "No Groups or Threads in {project}."
-        )))
+        .child(SharedString::from(message))
+}
+
+/// The Parked section at the foot of the column, under the scrolling tree
+/// rather than inside it: its header stays in reach however long the tree
+/// grows. It takes the tree's inline inset so its rows line up with the
+/// tree's, and it is capped at half the column — the list inside scrolls
+/// past that, so unfolding it never hides the running Threads above.
+pub fn parked_section() -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .flex_shrink_0()
+        .max_h(relative(PARKED_MAX_SHARE))
+        .px(px(NAV_TREE_PAD))
+        .pb(px(NAV_TREE_PAD))
+}
+
+/// The Parked section's header: a chevron saying which way it is folded,
+/// the word, and how many wait. A heading in the Project headings' voice,
+/// but a control — the press toggles the fold, and a right press offers
+/// the section's own menu. The cockpit wires both.
+pub fn parked_header(count: usize, open: bool) -> Stateful<Div> {
+    let chevron = if open {
+        icons::CHEVRON_DOWN
+    } else {
+        icons::CHEVRON_RIGHT
+    };
+    div()
+        .id(("nav-parked", 0usize))
+        .debug_selector(|| "nav-parked".into())
+        .group(PARKED_GROUP)
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .h(px(SECTION_H))
+        .px(px(ROW_PAD_X))
+        .gap(px(ROW_ICON_GAP))
+        .rounded(px(R_CONTROL))
+        .text_size(px(FS_SM))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(rgb(TEXT_2))
+        .hover_row()
+        .press_row()
+        .child(
+            icon(chevron, ROW_ICON, TEXT_MUTED)
+                .group_hover(PARKED_GROUP, |style| style.text_color(rgb(TEXT))),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .group_hover(PARKED_GROUP, |style| style.text_color(rgb(TEXT_STRONG)))
+                .child("Parked"),
+        )
+        .child(
+            div()
+                .font_weight(FontWeight::NORMAL)
+                .text_color(rgb(TEXT_MUTED))
+                .child(count.to_string()),
+        )
+}
+
+/// The unfolded Parked list. It scrolls on its own handle — the tree's
+/// scroll must not move when the operator wheels through parked rows —
+/// and shrinks to the section's cap rather than growing past it.
+pub fn parked_list(scroll: &ScrollHandle) -> Stateful<Div> {
+    div()
+        .id(("nav-parked-list", 0usize))
+        .debug_selector(|| "nav-parked-list".into())
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll()
+        .track_scroll(scroll)
+        .gap(px(MEMBER_GAP))
+        .pt(px(MEMBER_GAP))
+}
+
+/// The Parked list's scrollbar — its own id, because the toolkit keys a
+/// bar's state off it and the tree's bar is already `nav-scrollbar`.
+pub fn parked_scrollbar(scroll: &ScrollHandle) -> Div {
+    components::scrollbar("nav-parked-scrollbar", scroll)
 }
 
 /// The badge that follows the pointer while a row is being dragged into a
@@ -1471,6 +1582,37 @@ mod tests {
         assert_eq!(subagent_label(0), None);
         assert_eq!(subagent_label(1).as_deref(), Some("1"));
         assert_eq!(subagent_label(3).as_deref(), Some("3"));
+    }
+
+    /// The Parked header is a control in a heading's clothes: it is
+    /// pressed like a row, and it is the same 30px box the Project
+    /// headings are, folded or not — unfolding must not move the tree's
+    /// bottom edge by a pixel.
+    #[test]
+    fn the_parked_header_is_a_row_sized_heading() {
+        let mut shut = parked_header(3, false);
+        assert_eq!(shut.style().mouse_cursor, Some(CursorStyle::PointingHand));
+        assert_eq!(shut.style().size.height, Some(px(SECTION_H).into()));
+        let mut open = parked_header(3, true);
+        assert_eq!(open.style().size.height, shut.style().size.height);
+    }
+
+    /// The section is capped at half the column and its list scrolls,
+    /// so a long parked history can never push the running tree out.
+    #[test]
+    fn the_parked_section_is_capped_and_its_list_scrolls() {
+        let mut section = parked_section();
+        assert_eq!(
+            section.style().max_size.height,
+            Some(relative(PARKED_MAX_SHARE).into())
+        );
+        let scroll = ScrollHandle::new();
+        let mut list = parked_list(&scroll);
+        assert_eq!(
+            list.style().overflow.y,
+            Some(gpui::Overflow::Scroll),
+            "the list scrolls on its own handle"
+        );
     }
 
     /// The nav column draws no border on any edge: Soft separates the
