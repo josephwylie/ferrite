@@ -365,6 +365,11 @@ struct Thread {
     /// A prompt the operator wrote while the turn was still running.
     queued: Option<String>,
     native_queue: queue::Queue,
+    /// An interrupt was sent while prompts were mirrored: when the turn
+    /// ends, everything held goes out as one prompt — Escape means "stop,
+    /// and do what I queued now". Claude's CLI does this itself; Codex
+    /// drops un-consumed steers on interrupt, so Ferrite resends them.
+    resend_held_on_turn_end: bool,
     prompt_history: PromptHistory,
     /// The provider-native id a replacement Session resumes from — the latest
     /// the provider announced. Held here rather than read back from the log,
@@ -448,6 +453,7 @@ impl Thread {
             title: None,
             queued: None,
             native_queue: queue::Queue::open(queue_path),
+            resend_held_on_turn_end: false,
             prompt_history: PromptHistory::new(Vec::new()),
             resume,
             workspace,
@@ -1614,8 +1620,17 @@ impl Cockpit {
             .as_mut()
             .and_then(SessionLifecycle::session_mut)
         {
-            if let Err(e) = session.interrupt() {
-                state.apply(Input::Notice(format!("interrupt failed: {e}")));
+            match session.interrupt() {
+                Ok(()) => {
+                    // Escape with prompts held means "stop, then do these":
+                    // Claude's CLI runs its surviving queue itself; Codex
+                    // discards un-consumed steers, so the resend is ours.
+                    state.resend_held_on_turn_end =
+                        state.provider == Provider::Codex && state.native_queue.pending();
+                }
+                Err(e) => {
+                    state.apply(Input::Notice(format!("interrupt failed: {e}")));
+                }
             }
         }
     }
@@ -2271,7 +2286,14 @@ impl Cockpit {
                 closed |= matches!(&event, SessionEvent::Closed { .. });
                 update.absorb(applied, content_changed);
             }
+            if turn_ended && std::mem::take(&mut thread.resend_held_on_turn_end) {
+                if let Some(applied) = resend_held(thread, self.suggestions_enabled) {
+                    update.dirty.extend(applied.dirty);
+                    update.activity_changed = true;
+                }
+            }
             if closed {
+                thread.resend_held_on_turn_end = false;
                 if let Some(notice) = thread
                     .native_queue
                     .disconnect(thread.provider == Provider::Codex)
@@ -3020,7 +3042,8 @@ impl<'a> ThreadView<'a> {
             .map(|pending| &pending.decision)
     }
 
-    /// A prompt held back while the turn runs.
+    /// The prompt held back while the turn runs — the latest, which is
+    /// the one `⌫ unqueue` and Up act on.
     pub fn queued(&self) -> Option<&'a str> {
         self.state
             .native_queue
@@ -3028,6 +3051,19 @@ impl<'a> ThreadView<'a> {
             .last()
             .map(|item| item.text.as_str())
             .or(self.state.queued.as_deref())
+    }
+
+    /// Every prompt held back, newest first: the latest sits on top of the
+    /// pile and what was said before it reads underneath.
+    pub fn queued_all(&self) -> Vec<&'a str> {
+        self.state
+            .native_queue
+            .items
+            .iter()
+            .rev()
+            .map(|item| item.text.as_str())
+            .chain(self.state.queued.as_deref())
+            .collect()
     }
 
     /// Is a turn running? A prompt written now has to wait for it.
@@ -3720,6 +3756,38 @@ fn deliver(state: &mut Thread, text: String, suggestions_enabled: bool) -> io::R
     }
     state.prompt_history.append(text.clone());
     Ok(state.apply(Input::Prompt(text)))
+}
+
+/// Everything the mirror held goes back to the provider as one prompt,
+/// oldest first — what Escape promised. Each native id is cancelled first
+/// so the provider's own queue cannot run it a second time; a steer has no
+/// handle to cancel, and that refusal is not news.
+fn resend_held(state: &mut Thread, suggestions_enabled: bool) -> Option<Update> {
+    let held = state.native_queue.flush();
+    if held.is_empty() {
+        return None;
+    }
+    if let Some(session) = state
+        .session
+        .as_mut()
+        .and_then(SessionLifecycle::session_mut)
+    {
+        for item in &held {
+            let _ = session.cancel_queued(&item.id);
+        }
+    }
+    let text = held
+        .iter()
+        .map(|item| item.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    match deliver(state, text.clone(), suggestions_enabled) {
+        Ok(applied) => Some(applied),
+        Err(error) => {
+            state.queued = Some(text);
+            Some(state.apply(Input::Notice(format!("send failed: {error}"))))
+        }
+    }
 }
 
 /// How much of the earlier conversation a Provider switch hands over:
@@ -6375,6 +6443,96 @@ mod tests {
             cockpit.thread(thread).unwrap().queued(),
             Some("and then run the tests")
         );
+    }
+
+    /// Two prompts held at once both show, the latest on top; Escape on a
+    /// Codex turn stops it and sends everything held as one prompt, oldest
+    /// first — a late start notice for a resent id inserts nothing twice.
+    #[test]
+    fn escape_on_codex_resends_the_whole_pile_as_one_prompt() {
+        let (mut cockpit, fake) = cockpit("codex-escape-resend");
+        let thread = cockpit.open(Provider::Codex, main_choice()).unwrap();
+        cockpit.send(thread, "start".into());
+        fake.streams.borrow()[0].send(text("working")).unwrap();
+        cockpit.pump();
+        assert!(cockpit.queue(thread, "first".into()));
+        assert!(cockpit.queue(thread, "second".into()));
+        cockpit.pump();
+        let open = cockpit.thread(thread).unwrap();
+        assert_eq!(open.queued_all(), ["second", "first"], "newest on top");
+        assert_eq!(open.queued(), Some("second"));
+
+        cockpit.interrupt(thread);
+        cockpit.pump();
+        assert_eq!(
+            fake.sent.borrow().as_slice(),
+            ["start"],
+            "nothing goes out until the turn has actually stopped"
+        );
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TurnEnded {
+                outcome: crate::TurnOutcome::Interrupted,
+                cost_usd: None,
+            })
+            .unwrap();
+        cockpit.pump();
+        assert_eq!(
+            fake.sent.borrow().as_slice(),
+            ["start", "first\n\nsecond"],
+            "the pile goes out as one prompt, oldest first"
+        );
+        assert!(cockpit.thread(thread).unwrap().queued_all().is_empty());
+
+        // A resent id that the provider still reports as started is not a
+        // second prompt; nor does its cancellation receipt say anything.
+        let id = fake.native.borrow()[0].0.clone();
+        fake.streams.borrow()[0]
+            .send(SessionEvent::Queue(crate::QueueEvent::Started {
+                historical: false,
+                client_id: id,
+                text: Some("first".into()),
+            }))
+            .unwrap();
+        cockpit.pump();
+        let blocks = cockpit.thread(thread).unwrap().transcript().blocks();
+        let firsts = blocks
+            .iter()
+            .filter(|block| matches!(&block.body, Body::Prompt(text) if text == "first"))
+            .count();
+        assert_eq!(
+            firsts, 0,
+            "the resend carries it; a late start adds nothing"
+        );
+        assert!(
+            !blocks
+                .iter()
+                .any(|block| matches!(&block.body, Body::Notice(_))),
+            "Ferrite's own cancellations are not the operator's news"
+        );
+        assert_eq!(cockpit.take_retrieved_prompt(thread), None);
+    }
+
+    /// Claude's CLI keeps and runs its own queue across an interrupt, so
+    /// Escape there sends nothing from Ferrite.
+    #[test]
+    fn escape_on_claude_leaves_the_native_queue_to_the_provider() {
+        let (mut cockpit, fake) = cockpit("claude-escape-native");
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        cockpit.send(thread, "start".into());
+        fake.streams.borrow()[0].send(text("working")).unwrap();
+        cockpit.pump();
+        assert!(cockpit.queue(thread, "held".into()));
+        cockpit.pump();
+        cockpit.interrupt(thread);
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TurnEnded {
+                outcome: crate::TurnOutcome::Interrupted,
+                cost_usd: None,
+            })
+            .unwrap();
+        cockpit.pump();
+        assert_eq!(fake.sent.borrow().as_slice(), ["start"]);
+        assert_eq!(cockpit.thread(thread).unwrap().queued(), Some("held"));
     }
 
     #[test]

@@ -10872,6 +10872,44 @@ mod tests {
         });
     }
 
+    /// Two prompts sent while the turn runs both stay visible: they pile up
+    /// above the line, the latest on top, and only the top row carries
+    /// the take-back key.
+    #[gpui::test]
+    fn queued_prompts_pile_up_with_the_latest_on_top(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("queued-pile", 1);
+        cx.update(|cx| {
+            cx.bind_keys([KeyBinding::new("enter", Submit, None)]);
+        });
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        tick(cx);
+        let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TextDelta {
+                text: "working".into(),
+            })
+            .unwrap();
+        tick(cx);
+        cx.simulate_input("first thing");
+        cx.simulate_keystrokes("enter");
+        tick(cx);
+        cx.simulate_input("second thing");
+        cx.simulate_keystrokes("enter");
+        tick(cx);
+        view.read_with(cx, |view, _| {
+            let open = view.cockpit.thread(thread).unwrap();
+            assert_eq!(open.queued_all(), ["second thing", "first thing"]);
+            assert_eq!(open.queued(), Some("second thing"));
+        });
+        let top = cx.debug_bounds("queued-0").expect("the latest prompt is drawn");
+        let below = cx.debug_bounds("queued-1").expect("the earlier prompt is drawn too");
+        assert!(
+            top.origin.y < below.origin.y,
+            "the latest sits on top: {top:?} above {below:?}"
+        );
+        assert!(cx.debug_bounds("queued-2").is_none());
+    }
+
     /// The queued row's `⌫ unqueue` hint is a real key: Backspace on an
     /// empty Composer line clears the held prompt, while with text on the
     /// line it stays an editing key and the queue survives.

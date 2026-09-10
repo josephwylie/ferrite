@@ -545,8 +545,12 @@ impl CodexSession {
     /// `@path` tokens naming real files ride as `{"type":"mention"}` items —
     /// the server never intercepts slash text, so this seam is where the
     /// Composer's picks become real.
+    /// Input written while Main is busy. With a turn running it steers that
+    /// turn — the server folds it in at the next tool boundary, as the
+    /// Codex CLI's Enter does — and otherwise it joins the after-turn queue.
     pub fn enqueue(&mut self, client_id: &str, text: &str) -> io::Result<()> {
         let input = wire::input_items(text, &lock(&self.skills), self.cwd.as_deref());
+        let turn = lock(&self.requests).current_turn.clone();
         let request = {
             let mut queue = lock(&self.queue);
             if !queue.supported {
@@ -555,13 +559,16 @@ impl CodexSession {
                     "Codex has not confirmed native queue support",
                 ));
             }
-            queue.add(client_id, serde_json::json!(input))
+            match turn {
+                Some(turn) => queue.steer(client_id, serde_json::json!(input), &turn),
+                None => queue.add(client_id, serde_json::json!(input)),
+            }
         };
         self.write_line(&request)
     }
 
     pub fn cancel_queued(&mut self, id: &str) -> io::Result<()> {
-        let request = lock(&self.queue).delete(id);
+        let request = lock(&self.queue).delete(id)?;
         self.write_line(&request)
     }
 

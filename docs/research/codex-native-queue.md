@@ -10,6 +10,27 @@ Use the app-server queue as the authority. Ferrite should submit through
 and edit methods. It must not drain a local FIFO with `turn/start` after each
 completion. The existing provider input conversion remains the correct seam.
 
+### Amendment 2026-09-10: steer while a turn runs
+
+`thread/queue/add` only dispatches when the thread is idle, so a prompt sent
+mid-turn waited for the whole turn. The Codex CLI's own Enter during a turn is
+`turn/steer` (`codex-rs/tui/src/chatwidget/input_flow.rs` at rust-v0.153.4):
+the server folds the input into the running turn at its next tool boundary.
+Ferrite now steers whenever it knows the active turn id, and falls back to
+`thread/queue/add` when the steer is refused for "no active turn" or an
+expected-turn mismatch — the queue then starts it as soon as the thread idles.
+
+`turn/steer {threadId, expectedTurnId, clientUserMessageId, input}` answers
+`{turnId}`; consumption is observed as a `userMessage` item carrying `clientId`,
+the same correlation the queue path uses. A steer has no server handle and
+cannot be deleted; Ferrite mirrors it under the id `steer:<clientUserMessageId>`.
+
+On interrupt the server discards un-consumed steers (the TUI's
+`input_restore.rs` says so and restores them locally). Ferrite instead does
+what Claude Code's Escape does: when the interrupted turn ends, everything still
+mirrored is resent as one `turn/start`, oldest first. Native queue entries in
+that pile are deleted first so the server's queue cannot run them again.
+
 ## Evidence
 
 - Installed `codex app-server generate-json-schema --experimental --out <scratch>`
