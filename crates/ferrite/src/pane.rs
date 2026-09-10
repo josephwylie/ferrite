@@ -591,8 +591,9 @@ pub struct PaneFacts<'a> {
     pub thread: Option<ThreadView<'a>>,
     /// The actual git checkout of the Thread's cwd (#29), cached by the
     /// cockpit and refreshed on turn end and the watchdog cadence — the L1
-    /// header's binding slot. Display-only, never a control: post-lock the
-    /// CWD is immutable, and nothing may look otherwise.
+    /// header's binding slot. Display-only, never a control: the CWD moves
+    /// only when the binding follows the agent (`workspace::follow`), and
+    /// nothing here may look like a way to move it.
     pub branch: Option<SharedString>,
     /// What the header's second line says about that checkout (#29): its
     /// drift from the upstream, its dirt, and its PR and CI when `gh` can

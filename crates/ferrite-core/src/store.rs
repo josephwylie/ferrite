@@ -1525,6 +1525,37 @@ impl Store {
         Ok(())
     }
 
+    /// Record the checkout this Thread now works in — the binding moving
+    /// after the agent it follows (`workspace::follow`). The same header
+    /// rewrite as `set_provider`, with the same writer contract: the
+    /// Thread's open writer, if one exists, is flushed before and swapped
+    /// onto the new file after, and on any error it is untouched and still
+    /// valid on the old one. Every path that later reads the binding —
+    /// revive, respawn, the header — sees the new one from here.
+    pub fn set_workspace(
+        &self,
+        id: ThreadId,
+        binding: &WorkspaceBinding,
+        mut writer: Option<&mut ThreadWriter>,
+    ) -> Result<(), LoadError> {
+        if let Some(w) = writer.as_mut() {
+            w.flush()?;
+        }
+        let mut snapshot = self.load(id)?;
+        snapshot.workspace = Some(PersistedBinding::from_live(binding));
+        let file = self.rewrite(&snapshot)?;
+        if let Some(w) = writer {
+            *w = ThreadWriter {
+                file,
+                buffer: Vec::new(),
+                flush_interval: self.flush_interval,
+                buffered_since: None,
+                pending_flush: None,
+            };
+        }
+        Ok(())
+    }
+
     /// Commit the new header and its Handover together. Before the rename,
     /// every refusal leaves the old log and writer authoritative; afterwards
     /// no fallible read remains between persistence and Session adoption.

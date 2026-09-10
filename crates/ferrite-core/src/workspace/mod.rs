@@ -1,8 +1,9 @@
 //! Workspace binding: the checkout a Thread works in — a per-Thread worktree
-//! Ferrite creates, or the main checkout — chosen at Thread creation
-//! (CONTEXT.md). This module holds the binding vocabulary and the `git
-//! worktree` operations behind the worktree half, spoken to the operator's
-//! own `git` via `std::process::Command`.
+//! Ferrite creates, or the main checkout — chosen at Thread creation and
+//! following the agent after it (CONTEXT.md; `follow`). This module holds
+//! the binding vocabulary and the `git worktree` operations behind the
+//! worktree half, spoken to the operator's own `git` via
+//! `std::process::Command`.
 //!
 //! Probed against real git in a scratch repo before anything here was
 //! written; every behavior a function leans on is named where it is used.
@@ -21,6 +22,7 @@ use std::process::Command;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+pub mod follow;
 pub mod registry;
 
 /// The checkout a Thread works in. Persisted by the store (as its own
@@ -30,7 +32,8 @@ pub enum WorkspaceBinding {
     /// The repo's main checkout — the directory itself, shared with the
     /// operator and any other Thread bound the same way.
     Main { checkout: PathBuf },
-    /// A dedicated worktree of `repo`, created by Ferrite for this Thread.
+    /// A dedicated worktree of `repo` — created by Ferrite for this Thread,
+    /// or one the Thread's own agent made and moved into (`follow`).
     Worktree { repo: PathBuf, path: PathBuf },
 }
 
@@ -40,6 +43,16 @@ impl WorkspaceBinding {
         match self {
             WorkspaceBinding::Main { checkout } => checkout,
             WorkspaceBinding::Worktree { path, .. } => path,
+        }
+    }
+
+    /// The repository this binding is a checkout of — the main checkout
+    /// itself, or the repo a worktree was added from. What `git worktree
+    /// list` is asked about.
+    pub fn repo(&self) -> &Path {
+        match self {
+            WorkspaceBinding::Main { checkout } => checkout,
+            WorkspaceBinding::Worktree { repo, .. } => repo,
         }
     }
 }
@@ -596,8 +609,9 @@ pub fn branches(repo: &Path) -> Result<Vec<String>, GitError> {
 
 /// The worktree paths git itself registers for `repo` — the first line of
 /// each `git worktree list --porcelain` stanza, main checkout included.
-/// The adoption conflict check's ground truth (#29).
-pub(crate) fn worktree_paths(repo: &Path) -> Result<Vec<PathBuf>, GitError> {
+/// The adoption conflict check's ground truth (#29), and what a Thread's
+/// `follow` is handed to learn where its agent may have moved.
+pub fn worktree_paths(repo: &Path) -> Result<Vec<PathBuf>, GitError> {
     let listed = git(repo, &["worktree", "list", "--porcelain"])?;
     Ok(listed
         .lines()
