@@ -1118,17 +1118,16 @@ impl CockpitView {
             let cancel_handle = handle.clone();
             return request_island(
                 &handle,
-                card.child(components::BoundedScroll {
-                    id: format!(
-                        "form-content-{}-{}-{}",
-                        thread.get(),
-                        handle.generation,
-                        handle.serial
-                    )
-                    .into(),
-                    max_height: px((f32::from(window.viewport_size().height) * 0.45).min(360.)),
-                    content: body.into_any_element(),
-                })
+                card.child(
+                    div()
+                        .max_h(px(
+                            (f32::from(window.viewport_size().height) * 0.45).min(360.)
+                        ))
+                        .flex()
+                        .flex_col()
+                        .overflow_y_scrollbar()
+                        .child(body),
+                )
                 .child(
                     div()
                         .flex()
@@ -1454,6 +1453,10 @@ impl CockpitView {
             .id(("question-content", handle.serial as usize))
             .w_full()
             .min_w_0()
+            .max_h(px(
+                (f32::from(window.viewport_size().height) * 0.4).min(320.)
+            ))
+            .overflow_y_scrollbar()
             .pr(px(4.))
             .flex()
             .flex_col()
@@ -1645,17 +1648,7 @@ impl CockpitView {
                     theme::TEXT_2,
                 ))
             })
-            .child(components::BoundedScroll {
-                id: format!(
-                    "question-content-{}-{}-{}",
-                    thread.get(),
-                    handle.generation,
-                    handle.serial
-                )
-                .into(),
-                max_height: px((f32::from(window.viewport_size().height) * 0.4).min(320.)),
-                content: content.into_any_element(),
-            });
+            .child(content);
         if let Some(error) = request.reply_error.as_ref().or_else(|| {
             self.panes[index]
                 .request_error

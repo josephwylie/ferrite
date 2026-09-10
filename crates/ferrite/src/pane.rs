@@ -3121,6 +3121,8 @@ pub(crate) fn approval_input(
     cache: &crate::rich::TextCache,
     id: SharedString,
 ) -> Option<AnyElement> {
+    use gpui::component::scroll::ScrollableElement as _;
+
     if question_of(decision).is_some() {
         return None;
     }
@@ -3142,17 +3144,17 @@ pub(crate) fn approval_input(
             .w_full()
             .min_w_0()
             .flex_shrink_0()
-            .child(components::BoundedScroll {
-                id: format!("{id}-scroll").into(),
-                max_height: px(160.),
-                content: crate::rich::Literal {
-                    id,
-                    document: None,
-                    text: source.into(),
-                    highlights: Vec::new(),
-                    cache: cache.clone(),
-                }
-                .into_any_element(),
+            // Let the bar measure this row's content height; an unspecified
+            // height inherits the toolkit wrapper's full-height default.
+            .h_auto()
+            .max_h(px(160.))
+            .overflow_y_scrollbar()
+            .child(crate::rich::Literal {
+                id,
+                document: None,
+                text: source.into(),
+                highlights: Vec::new(),
+                cache: cache.clone(),
             })
             .into_any_element(),
     )
