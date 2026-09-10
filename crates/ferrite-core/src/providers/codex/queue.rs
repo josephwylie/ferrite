@@ -1,7 +1,33 @@
 //! Native queue RPC correlation and serialized, all-page reconciliation.
+//!
+//! Input written while a turn runs is *steered* (`turn/steer`): the server
+//! folds it into the running turn at its next tool boundary, as the Codex
+//! CLI's own Enter does. Only input with no turn to steer goes through the
+//! after-turn queue (`thread/queue/add`). Both are mirrored the same way;
+//! a steer's mirror id carries the `steer:` prefix because the server never
+//! names it and cannot take it back.
 use crate::{QueueEvent, QueuedPrompt, SessionEvent};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+
+/// The mirror id of a steered prompt: the server names only the turn.
+fn steer_id(client_id: &str) -> String {
+    format!("steer:{client_id}")
+}
+
+fn is_steer_id(id: &str) -> bool {
+    id.starts_with("steer:")
+}
+
+/// The server's refusals that mean "nothing is running any more", from its
+/// turn/steer handler: no active turn, or the expected turn is not the
+/// active one.
+fn steer_missed_turn(error: &str) -> bool {
+    let error = error.to_ascii_lowercase();
+    error.contains("no active turn")
+        || error.contains("expected turn")
+        || error.contains("mismatch")
+}
 
 #[derive(Default)]
 pub(super) struct Queue {
@@ -18,6 +44,7 @@ pub(super) struct Queue {
 enum Request {
     List,
     Add(String),
+    Steer { client_id: String, input: Value },
     Delete(String),
     Start,
 }
@@ -77,12 +104,31 @@ impl Queue {
             Request::Add(client.into()),
         )
     }
-    pub fn delete(&mut self, id: &str) -> Value {
+    /// Fold `input` into the running turn `turn` at its next tool boundary.
+    pub fn steer(&mut self, client: &str, input: Value, turn: &str) -> Value {
         self.request(
+            "turn/steer",
+            json!({"threadId":self.thread,"expectedTurnId":turn,"clientUserMessageId":client,"input":input}),
+            Request::Steer {
+                client_id: client.into(),
+                input,
+            },
+        )
+    }
+    /// A steer has no server-side handle: once submitted it belongs to the
+    /// turn, and only an interrupt gets it back.
+    pub fn delete(&mut self, id: &str) -> std::io::Result<Value> {
+        if is_steer_id(id) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "Codex cannot take back input already steering the running turn; Escape interrupts and resends it",
+            ));
+        }
+        Ok(self.request(
             "thread/queue/delete",
             json!({"threadId":self.thread,"queuedSubmissionId":id}),
             Request::Delete(id.into()),
-        )
+        ))
     }
     pub fn observe(&mut self, frame: &Value) -> (Vec<SessionEvent>, Vec<Value>) {
         let mut events = Vec::new();
@@ -165,6 +211,23 @@ impl Queue {
                     }));
                 }
             }
+            Some(Request::Steer { client_id, input }) => {
+                if let Some(error) = error {
+                    // The turn ended under the steer: the after-turn queue
+                    // starts it as soon as the thread is idle.
+                    if steer_missed_turn(&error) {
+                        requests.push(self.add(&client_id, input));
+                    } else {
+                        events.push(SessionEvent::Queue(QueueEvent::Failed { client_id, error }));
+                    }
+                } else {
+                    events.push(SessionEvent::Queue(QueueEvent::Accepted(QueuedPrompt {
+                        id: steer_id(&client_id),
+                        client_id,
+                        text: input_text(&input),
+                    })));
+                }
+            }
             Some(Request::Delete(id)) => {
                 events.push(SessionEvent::Queue(QueueEvent::Cancelled {
                     id,
@@ -217,19 +280,27 @@ impl Queue {
     }
 }
 fn prompt(value: &Value) -> Option<QueuedPrompt> {
+    value["input"].as_array()?;
     Some(QueuedPrompt {
         id: value["id"].as_str()?.into(),
         client_id: value["clientUserMessageId"]
             .as_str()
             .unwrap_or_default()
             .into(),
-        text: value["input"]
-            .as_array()?
-            .iter()
-            .filter_map(|v| v["text"].as_str())
-            .collect::<Vec<_>>()
-            .join("\n"),
+        text: input_text(&value["input"]),
     })
+}
+fn input_text(input: &Value) -> String {
+    input
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|v| v["text"].as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -262,5 +333,36 @@ mod tests {
         assert!(
             matches!(&events[..], [SessionEvent::Queue(QueueEvent::Failed { client_id, .. })] if client_id == "client")
         );
+    }
+
+    /// Mid-turn input steers the running turn; a steer that finds the turn
+    /// already gone falls through to the after-turn queue instead of being
+    /// lost, and a steer can never be deleted.
+    #[test]
+    fn a_steer_mirrors_by_client_id_and_falls_back_when_the_turn_is_gone() {
+        let mut queue = Queue::default();
+        queue.initialize("root");
+        let input = json!([{"type":"text","text":"also run the tests"}]);
+        let steer = queue.steer("c1", input.clone(), "turn-1");
+        assert_eq!(steer["method"], "turn/steer");
+        assert_eq!(steer["params"]["expectedTurnId"], "turn-1");
+        assert_eq!(steer["params"]["clientUserMessageId"], "c1");
+        let (events, requests) =
+            queue.observe(&json!({"id":steer["id"],"result":{"turnId":"turn-1"}}));
+        assert!(requests.is_empty());
+        assert!(
+            matches!(&events[..], [SessionEvent::Queue(QueueEvent::Accepted(item))]
+                if item.id == "steer:c1" && item.client_id == "c1" && item.text == "also run the tests")
+        );
+        assert!(queue.delete("steer:c1").is_err());
+
+        let late = queue.steer("c2", input.clone(), "turn-1");
+        let (events, requests) =
+            queue.observe(&json!({"id":late["id"],"error":{"message":"no active turn to steer"}}));
+        assert!(events.is_empty());
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0]["method"], "thread/queue/add");
+        assert_eq!(requests[0]["params"]["clientUserMessageId"], "c2");
+        assert_eq!(requests[0]["params"]["input"], input);
     }
 }

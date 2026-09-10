@@ -823,7 +823,7 @@ pub fn render_pane(
     } else {
         None
     };
-    let queued = thread.and_then(|thread| thread.queued());
+    let queued = thread.map(|thread| thread.queued_all()).unwrap_or_default();
     let workspace = thread.and_then(|thread| thread.workspace());
     let permission_mode = thread.and_then(|thread| {
         thread
@@ -1194,7 +1194,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
                 ComposerStack {
                     decision: None,
                     requests: None,
-                    queued: None,
+                    queued: Vec::new(),
                     running: false,
                     empty: composer_empty,
                     attachments,
@@ -2558,7 +2558,9 @@ struct ComposerStack<'a> {
     /// Rich provider requests dock above the Composer as a shrink-to-content
     /// island, sharing the same stable bottom stack as attachments.
     requests: Option<AnyElement>,
-    queued: Option<&'a str>,
+    /// Prompts held back while the turn runs, newest first: they pile up
+    /// above the line, the latest on top.
+    queued: Vec<&'a str>,
     running: bool,
     empty: bool,
     attachments: Option<AnyElement>,
@@ -2653,8 +2655,10 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
                 .child(div().min_w_0().whitespace_normal().child(error)),
         );
     }
-    if let Some(held) = queued {
-        region = region.child(queued_line(held));
+    // The pile: newest on top, and only the top row advertises the key,
+    // since `⌫ unqueue` takes back the latest.
+    for (index, held) in queued.iter().enumerate() {
+        region = region.child(queued_line(held, index));
     }
     // The one line that grows: the Composer's element is `COMPOSER_ROW_H`
     // per visual row, so the line height here IS the row pitch. The idle
@@ -3017,8 +3021,12 @@ pub fn menu_row(row: &MenuRow, selected: bool) -> Div {
 }
 
 /// A prompt written while the agent was still working — the ⏳ queued row.
-fn queued_line(held: &str) -> impl IntoElement {
+/// `index` counts down the pile from the top; only the top row (0, the
+/// latest) shows the take-back key.
+fn queued_line(held: &str, index: usize) -> impl IntoElement {
+    let latest = index == 0;
     div()
+        .debug_selector(move || format!("queued-{index}"))
         .flex()
         .flex_shrink_0()
         .items_center()
@@ -3040,13 +3048,15 @@ fn queued_line(held: &str) -> impl IntoElement {
                 .child(SharedString::from(format!("queued — \"{held}\""))),
         )
         .child(div().flex_1())
-        .child(
-            div()
-                .flex_shrink_0()
-                .text_size(px(theme::FS_MONO))
-                .text_color(rgb(TEXT_MUTED))
-                .child("⌫ unqueue"),
-        )
+        .when(latest, |row| {
+            row.child(
+                div()
+                    .flex_shrink_0()
+                    .text_size(px(theme::FS_MONO))
+                    .text_color(rgb(TEXT_MUTED))
+                    .child("⌫ unqueue"),
+            )
+        })
 }
 
 /// The Decision card (§D.5): a sibling of the body, not a child of it.

@@ -17,6 +17,9 @@ pub(super) struct Queue {
     path: PathBuf,
     cancel: Option<(String, String, bool, bool)>,
     pub recovered: Vec<(String, bool)>,
+    /// Native ids Ferrite let go of itself (an interrupt's resend); their
+    /// late cancellation receipts are not the operator's news.
+    dropped: HashSet<String>,
 }
 pub(super) struct Change {
     pub prompt: Option<String>,
@@ -59,8 +62,28 @@ impl Queue {
     pub fn cancel_failed(&mut self) {
         self.cancel = None;
     }
+    /// Take every mirrored prompt back from the provider, oldest first, so
+    /// the caller can resend them as one: an interrupt's "send what I
+    /// queued, now". Their client ids are marked consumed, so a late start
+    /// notice for one of them cannot insert it a second time; the caller
+    /// still owes the provider a cancellation per native id.
+    pub fn flush(&mut self) -> Vec<QueuedPrompt> {
+        self.cancel = None;
+        let items = std::mem::take(&mut self.items);
+        for item in &items {
+            self.metadata.pending.remove(&item.client_id);
+            self.metadata.consumed.push(item.client_id.clone());
+            self.dropped.insert(item.id.clone());
+        }
+        while self.metadata.consumed.len() > 4096 {
+            self.metadata.consumed.remove(0);
+        }
+        let _ = self.save();
+        items
+    }
     pub fn disconnect(&mut self, durable: bool) -> Option<String> {
         self.cancel = None;
+        self.dropped.clear();
         self.admitting.clear();
         self.items.clear();
         if durable || self.metadata.pending.is_empty() {
@@ -148,6 +171,9 @@ impl Queue {
                 cancelled,
                 error,
             } => {
+                if self.dropped.remove(&id) {
+                    return change;
+                }
                 if let Some((pending, text, restore, prepend)) = self.cancel.take() {
                     if pending == id && cancelled {
                         if restore {
