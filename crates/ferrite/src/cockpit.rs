@@ -1218,6 +1218,9 @@ impl CockpitView {
         if self.branch_refreshing {
             return;
         }
+        // Before anything is read: a creation that finishes from here on
+        // is judged by the next pass, not by this one.
+        let taken_at = std::time::Instant::now();
         let targets: Vec<_> = self
             .cockpit
             .threads()
@@ -1313,7 +1316,7 @@ impl CockpitView {
                 );
                 let mut moved = false;
                 for (thread, listing) in listings {
-                    moved |= view.cockpit.worktrees_listed(thread, listing);
+                    moved |= view.cockpit.worktrees_listed(thread, listing, taken_at);
                 }
                 cx.notify();
                 if moved {

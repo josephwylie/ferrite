@@ -16,13 +16,18 @@
 //! 3. **Evidence.** Tool inputs name paths (`cwd`, `file_path`, …). A run of
 //!    [`EVIDENCE_CALLS`] consecutive Main calls inside one other worktree of
 //!    the same repo, with none in the current checkout between them, moves
-//!    the Thread there. A single read elsewhere for comparison never does.
+//!    the Thread there. A single read elsewhere for comparison never does,
+//!    and a command whose location is unknown (Claude's Bash reports no
+//!    cwd) breaks the run: it may well have run at home.
 //!
 //! Nothing here runs git or parses shell: the listing is handed in, and the
-//! only text check is whether a command mentions a worktree's name.
+//! only text check is whether a command mentions a worktree's name. A
+//! listing carries when it was taken, so one read before a creation
+//! finished can never stand in for the one that would have named it.
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use serde_json::Value;
 
@@ -45,7 +50,12 @@ enum Watched {
     Creation {
         before: Vec<PathBuf>,
         hint: String,
-        completed: bool,
+        /// When the call finished without error — only a listing taken
+        /// after this can name what it made.
+        completed: Option<Instant>,
+        /// For `EnterWorktree`: where Main was, becoming `origin` once the
+        /// entry succeeds and not before.
+        entered_from: Option<PathBuf>,
     },
     Exit,
 }
@@ -86,19 +96,24 @@ impl Follow {
                     .or(input["name"].as_str())
                     .unwrap_or_default()
                     .to_string();
-                self.origin = Some(canonical(current));
-                self.watch_creation(id, hint);
+                self.watch_creation(id, hint, Some(canonical(current)));
                 None
             }
             _ => {
                 if let Some(command) = command_text(input) {
                     if command.contains("worktree add") {
-                        self.watch_creation(id, command);
+                        self.watch_creation(id, command.clone(), None);
                     }
                     // A command's own cwd is evidence; its text never is.
-                    return input["cwd"]
-                        .as_str()
-                        .and_then(|cwd| self.evidence(Path::new(cwd), current));
+                    // No cwd at all is a command that ran somewhere
+                    // unknown — it breaks any run in progress.
+                    return match input["cwd"].as_str() {
+                        Some(cwd) => self.evidence(Path::new(cwd), current),
+                        None => {
+                            self.evidence = None;
+                            None
+                        }
+                    };
                 }
                 let path = ["file_path", "notebook_path", "path"]
                     .iter()
@@ -122,8 +137,15 @@ impl Follow {
                 self.evidence = None;
                 Some(self.origin.take().map_or(Move::ToMain, Move::Into))
             }
-            Watched::Creation { completed, .. } => {
-                *completed = true;
+            Watched::Creation {
+                completed,
+                entered_from,
+                ..
+            } => {
+                *completed = Some(Instant::now());
+                if let Some(from) = entered_from.take() {
+                    self.origin = Some(from);
+                }
                 None
             }
         }
@@ -137,17 +159,25 @@ impl Follow {
             matches!(
                 watched,
                 Watched::Creation {
-                    completed: true,
+                    completed: Some(_),
                     ..
                 }
             )
         })
     }
 
-    /// Git's current worktree list for the Thread's repo. `bound` is the
-    /// worktree the Thread is bound to, when it is one that Ferrite did not
-    /// mint: gone from the list, the Thread returns to main.
-    pub fn observe_listing(&mut self, listed: Vec<PathBuf>, bound: Option<&Path>) -> Option<Move> {
+    /// Git's worktree list for the Thread's repo, read at `taken_at`. Only
+    /// a creation that finished before then is judged by it: a listing
+    /// read while the command was still running cannot name what it made,
+    /// and must not use up the chance to. `bound` is the worktree the
+    /// Thread is bound to, when it is one that Ferrite did not mint: gone
+    /// from the list, the Thread returns to main.
+    pub fn observe_listing(
+        &mut self,
+        listed: Vec<PathBuf>,
+        taken_at: Instant,
+        bound: Option<&Path>,
+    ) -> Option<Move> {
         let listed: Vec<PathBuf> = listed.iter().map(|path| canonical(path)).collect();
         self.known = listed.clone();
         if let Some(bound) = bound {
@@ -162,12 +192,17 @@ impl Follow {
             let Watched::Creation {
                 before,
                 hint,
-                completed: true,
+                completed: Some(completed),
+                ..
             } = &self.watched[index].1
             else {
                 index += 1;
                 continue;
             };
+            if taken_at < *completed {
+                index += 1;
+                continue;
+            }
             let named: Vec<&PathBuf> = listed
                 .iter()
                 .filter(|path| !before.contains(path) && mentions(hint, path))
@@ -190,13 +225,14 @@ impl Follow {
         self.evidence = None;
     }
 
-    fn watch_creation(&mut self, id: &str, hint: String) {
+    fn watch_creation(&mut self, id: &str, hint: String, entered_from: Option<PathBuf>) {
         self.watched.push((
             id.to_string(),
             Watched::Creation {
                 before: self.known.clone(),
                 hint,
-                completed: false,
+                completed: None,
+                entered_from,
             },
         ));
     }
@@ -296,7 +332,7 @@ mod tests {
     fn a_worktree_the_command_made_and_named_moves_the_thread() {
         let (main, before) = layout("creation", &[]);
         let mut follow = Follow::default();
-        assert_eq!(follow.observe_listing(before, None), None);
+        assert_eq!(follow.observe_listing(before, Instant::now(), None), None);
 
         let started = follow.observe_started(
             "t1",
@@ -314,7 +350,7 @@ mod tests {
 
         let (_, after) = layout("creation", &["feat-a"]);
         assert_eq!(
-            follow.observe_listing(after.clone(), None),
+            follow.observe_listing(after.clone(), Instant::now(), None),
             Some(Move::Into(after[1].clone()))
         );
         assert!(!follow.wants_listing());
@@ -324,7 +360,7 @@ mod tests {
     fn a_worktree_another_thread_made_does_not_move_this_one() {
         let (main, before) = layout("other-thread", &[]);
         let mut follow = Follow::default();
-        follow.observe_listing(before, None);
+        follow.observe_listing(before, Instant::now(), None);
         follow.observe_started(
             "t1",
             "Bash",
@@ -336,14 +372,14 @@ mod tests {
         // Only somebody else's appeared: this Thread's own must have failed
         // silently or landed elsewhere — either way, stay.
         let (_, after) = layout("other-thread", &["theirs"]);
-        assert_eq!(follow.observe_listing(after, None), None);
+        assert_eq!(follow.observe_listing(after, Instant::now(), None), None);
     }
 
     #[test]
     fn two_new_worktrees_both_named_is_ambiguous_and_stays() {
         let (main, before) = layout("ambiguous", &[]);
         let mut follow = Follow::default();
-        follow.observe_listing(before, None);
+        follow.observe_listing(before, Instant::now(), None);
         follow.observe_started(
             "t1",
             "Bash",
@@ -352,14 +388,14 @@ mod tests {
         );
         follow.observe_completed("t1", false);
         let (_, after) = layout("ambiguous", &["a", "b"]);
-        assert_eq!(follow.observe_listing(after, None), None);
+        assert_eq!(follow.observe_listing(after, Instant::now(), None), None);
     }
 
     #[test]
     fn a_failed_creation_is_forgotten() {
         let (main, before) = layout("failed", &[]);
         let mut follow = Follow::default();
-        follow.observe_listing(before, None);
+        follow.observe_listing(before, Instant::now(), None);
         follow.observe_started(
             "t1",
             "Bash",
@@ -369,14 +405,14 @@ mod tests {
         assert_eq!(follow.observe_completed("t1", true), None);
         assert!(!follow.wants_listing());
         let (_, after) = layout("failed", &["x"]);
-        assert_eq!(follow.observe_listing(after, None), None);
+        assert_eq!(follow.observe_listing(after, Instant::now(), None), None);
     }
 
     #[test]
     fn codex_argv_commands_count_too() {
         let (main, before) = layout("argv", &[]);
         let mut follow = Follow::default();
-        follow.observe_listing(before, None);
+        follow.observe_listing(before, Instant::now(), None);
         follow.observe_started(
             "c1",
             "commandExecution",
@@ -386,7 +422,7 @@ mod tests {
         follow.observe_completed("c1", false);
         let (_, after) = layout("argv", &["argv-wt"]);
         assert_eq!(
-            follow.observe_listing(after.clone(), None),
+            follow.observe_listing(after.clone(), Instant::now(), None),
             Some(Move::Into(after[1].clone()))
         );
     }
@@ -395,12 +431,12 @@ mod tests {
     fn claude_entering_a_worktree_by_name_moves_the_thread() {
         let (main, before) = layout("enter", &[]);
         let mut follow = Follow::default();
-        follow.observe_listing(before, None);
+        follow.observe_listing(before, Instant::now(), None);
         follow.observe_started("e1", "EnterWorktree", &json!({ "name": "spike" }), &main);
         follow.observe_completed("e1", false);
         let (_, after) = layout("enter", &["spike"]);
         assert_eq!(
-            follow.observe_listing(after.clone(), None),
+            follow.observe_listing(after.clone(), Instant::now(), None),
             Some(Move::Into(after[1].clone()))
         );
     }
@@ -410,12 +446,12 @@ mod tests {
         let (_, listed) = layout("exit", &["home"]);
         let home = listed[1].clone();
         let mut follow = Follow::default();
-        follow.observe_listing(listed, None);
+        follow.observe_listing(listed, Instant::now(), None);
         follow.observe_started("e1", "EnterWorktree", &json!({ "name": "spike" }), &home);
         follow.observe_completed("e1", false);
         let (_, after) = layout("exit", &["home", "spike"]);
         assert_eq!(
-            follow.observe_listing(after.clone(), None),
+            follow.observe_listing(after.clone(), Instant::now(), None),
             Some(Move::Into(after[2].clone()))
         );
         follow.reset();
@@ -443,9 +479,12 @@ mod tests {
         let (_, listed) = layout("vanished", &["gone"]);
         let bound = listed[1].clone();
         let mut follow = Follow::default();
-        assert_eq!(follow.observe_listing(listed.clone(), Some(&bound)), None);
         assert_eq!(
-            follow.observe_listing(vec![listed[0].clone()], Some(&bound)),
+            follow.observe_listing(listed.clone(), Instant::now(), Some(&bound)),
+            None
+        );
+        assert_eq!(
+            follow.observe_listing(vec![listed[0].clone()], Instant::now(), Some(&bound)),
             Some(Move::ToMain)
         );
     }
@@ -455,7 +494,7 @@ mod tests {
         let (main, listed) = layout("evidence", &["wt"]);
         let worktree = listed[1].clone();
         let mut follow = Follow::default();
-        follow.observe_listing(listed, None);
+        follow.observe_listing(listed, Instant::now(), None);
         let edit = |follow: &mut Follow, id: &str, path: &Path| {
             follow.observe_started(
                 id,
@@ -477,7 +516,7 @@ mod tests {
         let (main, listed) = layout("reset", &["wt"]);
         let worktree = listed[1].clone();
         let mut follow = Follow::default();
-        follow.observe_listing(listed, None);
+        follow.observe_listing(listed, Instant::now(), None);
         let edit = |follow: &mut Follow, id: &str, path: &Path| {
             follow.observe_started(
                 id,
@@ -503,7 +542,7 @@ mod tests {
         let (main, listed) = layout("outside", &["wt"]);
         let elsewhere = scratch("outside-elsewhere");
         let mut follow = Follow::default();
-        follow.observe_listing(listed, None);
+        follow.observe_listing(listed, Instant::now(), None);
         for id in ["1", "2", "3", "4"] {
             assert_eq!(
                 follow.observe_started(
@@ -522,7 +561,7 @@ mod tests {
         let (main, listed) = layout("relative", &["wt"]);
         let worktree = listed[1].clone();
         let mut follow = Follow::default();
-        follow.observe_listing(listed, None);
+        follow.observe_listing(listed, Instant::now(), None);
         for id in ["1", "2"] {
             follow.observe_started(
                 id,
@@ -543,11 +582,99 @@ mod tests {
     }
 
     #[test]
+    fn a_listing_taken_before_the_creation_finished_does_not_use_it_up() {
+        let (main, before) = layout("stale-listing", &[]);
+        let mut follow = Follow::default();
+        follow.observe_listing(before, Instant::now(), None);
+        follow.observe_started(
+            "t1",
+            "Bash",
+            &json!({ "command": "git worktree add .worktrees/late -b late" }),
+            &main,
+        );
+        // A sweep read git while the command was still running…
+        let stale = Instant::now();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        follow.observe_completed("t1", false);
+        // …and its answer lands after the finish: it cannot name the
+        // worktree, and must not spend the finished creation.
+        let (_, after) = layout("stale-listing", &["late"]);
+        assert_eq!(follow.observe_listing(after.clone(), stale, None), None);
+        assert!(follow.wants_listing(), "still waiting on a fresh listing");
+        assert_eq!(
+            follow.observe_listing(after.clone(), Instant::now(), None),
+            Some(Move::Into(after[1].clone()))
+        );
+        assert!(!follow.wants_listing());
+    }
+
+    #[test]
+    fn a_command_of_unknown_location_breaks_the_run() {
+        let (main, listed) = layout("unknown-cwd", &["alpha"]);
+        let alpha = listed[1].clone();
+        let mut follow = Follow::default();
+        follow.observe_listing(listed, Instant::now(), None);
+        let read = |follow: &mut Follow, id: &str| {
+            follow.observe_started(
+                id,
+                "Read",
+                &json!({ "file_path": alpha.join("README.md") }),
+                &main,
+            )
+        };
+        // Claude's Bash carries no cwd: each one may have run at home.
+        for round in 0..3 {
+            assert_eq!(read(&mut follow, &format!("r{round}")), None);
+            assert_eq!(
+                follow.observe_started(
+                    &format!("b{round}"),
+                    "Bash",
+                    &json!({ "command": "cargo test" }),
+                    &main
+                ),
+                None
+            );
+        }
+        assert_eq!(
+            read(&mut follow, "r-last"),
+            None,
+            "no run of three survived the commands"
+        );
+    }
+
+    #[test]
+    fn a_failed_entry_keeps_the_origin_of_the_one_that_succeeded() {
+        let (main, before) = layout("failed-entry", &[]);
+        let mut follow = Follow::default();
+        follow.observe_listing(before, Instant::now(), None);
+        follow.observe_started("e1", "EnterWorktree", &json!({ "name": "alpha" }), &main);
+        follow.observe_completed("e1", false);
+        let (_, after) = layout("failed-entry", &["alpha"]);
+        let alpha = after[1].clone();
+        assert_eq!(
+            follow.observe_listing(after, Instant::now(), None),
+            Some(Move::Into(alpha.clone()))
+        );
+        follow.reset();
+
+        // A second entry, from alpha, that fails: Main is still in alpha,
+        // and it still got there from main.
+        follow.observe_started("e2", "EnterWorktree", &json!({ "name": "beta" }), &alpha);
+        assert_eq!(follow.observe_completed("e2", true), None);
+
+        follow.observe_started("x1", "ExitWorktree", &json!({}), &alpha);
+        assert_eq!(
+            follow.observe_completed("x1", false),
+            Some(Move::Into(main))
+        );
+    }
+
+    #[test]
     fn a_codex_command_cwd_is_evidence_but_its_text_is_not() {
         let (main, listed) = layout("codex-cwd", &["wt"]);
         let worktree = listed[1].clone();
         let mut follow = Follow::default();
-        follow.observe_listing(listed, None);
+        follow.observe_listing(listed, Instant::now(), None);
         // Text mentioning the worktree moves nothing on its own.
         for id in ["1", "2", "3"] {
             assert_eq!(

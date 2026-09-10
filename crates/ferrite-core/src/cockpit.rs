@@ -1800,12 +1800,20 @@ impl Cockpit {
 
     /// Git's worktree list for a Thread's repo (`workspace::worktree_paths`
     /// of the binding's `repo`), as the driver read it off the frame — the
-    /// cockpit never runs git in its pump. Answers whether the Thread's
+    /// cockpit never runs git in its pump — and `taken_at`, the driver's
+    /// clock from before it asked git, so a listing that was already being
+    /// read when a creation finished is not mistaken for one that could
+    /// name it. Answers whether the Thread's
     /// binding moved: into a worktree its agent made or has been working
     /// in, or back to main when a worktree the agent adopted is gone. A
     /// worktree Ferrite minted is never abandoned for vanishing — revive
     /// recreates those on their branch.
-    pub fn worktrees_listed(&mut self, thread: ThreadId, listed: Vec<PathBuf>) -> bool {
+    pub fn worktrees_listed(
+        &mut self,
+        thread: ThreadId,
+        listed: Vec<PathBuf>,
+        taken_at: Instant,
+    ) -> bool {
         let Some(state) = self.threads.get_mut(&thread) else {
             return false;
         };
@@ -1817,7 +1825,10 @@ impl Cockpit {
             }
             _ => None,
         };
-        let Some(moved) = state.follow.observe_listing(listed, adopted.as_deref()) else {
+        let Some(moved) = state
+            .follow
+            .observe_listing(listed, taken_at, adopted.as_deref())
+        else {
             return false;
         };
         apply_move(&self.store, thread, state, moved)
@@ -4002,6 +4013,10 @@ fn apply_move(store: &Store, id: ThreadId, state: &mut Thread, moved: Move) -> b
     if next == binding {
         return false;
     }
+    // The header rewrite moves every byte after it: a child-history read
+    // in flight holds a checkpoint into the old log and would land short
+    // (ADR 0002 — header changes invalidate obsolete loads).
+    state.history.clear();
     if let Err(error) = store.set_workspace(id, &next, Some(&mut state.writer)) {
         state.report_store_error(match error {
             LoadError::Io(error) => error,
@@ -4314,7 +4329,11 @@ mod tests {
         worktree: &Path,
     ) -> PathBuf {
         // Git's list as it stood before the command — what a sweep hands in.
-        cockpit.worktrees_listed(thread, crate::workspace::worktree_paths(repo).unwrap());
+        cockpit.worktrees_listed(
+            thread,
+            crate::workspace::worktree_paths(repo).unwrap(),
+            Instant::now(),
+        );
         let stream = fake.streams.borrow().last().unwrap().clone();
         let leaf = worktree.file_name().unwrap().to_str().unwrap();
         stream
@@ -4344,7 +4363,11 @@ mod tests {
             cockpit.wants_worktree_listing(),
             "a finished creation asks for a listing now, not next tick"
         );
-        assert!(cockpit.worktrees_listed(thread, crate::workspace::worktree_paths(repo).unwrap()));
+        assert!(cockpit.worktrees_listed(
+            thread,
+            crate::workspace::worktree_paths(repo).unwrap(),
+            Instant::now()
+        ));
         assert!(!cockpit.wants_worktree_listing());
         crate::workspace::follow::canonical(worktree)
     }
@@ -4456,7 +4479,11 @@ mod tests {
         // Live: gone from git's list, gone from the binding.
         let live = follow_into(&mut cockpit, &fake, thread, &repo, &root.join("wt-live"));
         git(&["worktree", "remove", "--force", live.to_str().unwrap()]);
-        assert!(cockpit.worktrees_listed(thread, crate::workspace::worktree_paths(&repo).unwrap()));
+        assert!(cockpit.worktrees_listed(
+            thread,
+            crate::workspace::worktree_paths(&repo).unwrap(),
+            Instant::now()
+        ));
         assert_eq!(cockpit.thread(thread).unwrap().workspace().cloned(), main);
 
         // Parked: revive finds it missing and spawns in the main checkout.
@@ -4473,6 +4500,58 @@ mod tests {
         assert!(
             !parked.exists(),
             "an adopted worktree is never rebuilt on revive"
+        );
+    }
+
+    /// The move rewrites the header, and a longer header shifts every
+    /// byte after it: a child-history read already in flight holds a
+    /// checkpoint into the old log and would land short. It is dropped
+    /// before the rewrite (ADR 0002), like the model and effort setters do.
+    #[test]
+    fn a_move_drops_child_history_reads_in_flight() {
+        use crate::activity::{ActivityEvent, ActivityInput, AgentKey, ExecutionEvent, Subject};
+        let root = scratch("follow-history");
+        let (mut cockpit, fake) = cockpit("follow-history-store");
+        let repo = init_repo(&root);
+        let thread = cockpit
+            .open(
+                Provider::Claude,
+                WorkspaceChoice::Main {
+                    checkout: repo.clone(),
+                },
+            )
+            .unwrap();
+        let key = AgentKey::new(Provider::Claude, "root", "child");
+        let subject = Subject::Subagent(key.clone());
+        fake.streams.borrow()[0]
+            .send(SessionEvent::Activity(ActivityEvent::Content {
+                key,
+                id: Some("start".into()),
+                event: ExecutionEvent::Text {
+                    text: "Working".into(),
+                },
+            }))
+            .unwrap();
+        cockpit.pump();
+        cockpit
+            .threads
+            .get_mut(&thread)
+            .unwrap()
+            .activity
+            .apply(ActivityInput::Evict(subject.clone()));
+        let (loader, _finish) = history::gated_loader();
+        cockpit.history_loader = Some(loader);
+        assert!(cockpit.ensure_subject_history(thread, &subject).unwrap());
+        assert!(
+            !cockpit.threads[&thread].history.is_empty(),
+            "a read is pending against the old log"
+        );
+
+        follow_into(&mut cockpit, &fake, thread, &repo, &root.join("wt-history"));
+
+        assert!(
+            cockpit.threads[&thread].history.is_empty(),
+            "the pending read was invalidated before the header rewrite"
         );
     }
 
@@ -4504,7 +4583,11 @@ mod tests {
                 },
             )
             .unwrap();
-        cockpit.worktrees_listed(thread, crate::workspace::worktree_paths(&repo).unwrap());
+        cockpit.worktrees_listed(
+            thread,
+            crate::workspace::worktree_paths(&repo).unwrap(),
+            Instant::now(),
+        );
         let stream = fake.streams.borrow()[0].clone();
         let edit = |n: usize| ExecutionEvent::ToolStarted {
             id: format!("e{n}"),
