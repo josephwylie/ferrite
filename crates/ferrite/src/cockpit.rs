@@ -1413,8 +1413,8 @@ impl CockpitView {
             || self.bell.open
     }
 
-    /// How much of the window the nav holds right now: the 208px column, or
-    /// the 40px rail cmd-b folds it to.
+    /// How much of the window the nav holds right now: the full column, or
+    /// the platform rail cmd-b folds it to.
     fn nav_width(&self) -> f32 {
         if self.nav_collapsed {
             nav::RAIL_WIDTH
@@ -8233,16 +8233,16 @@ impl CockpitView {
             cx.stop_propagation();
             view.toggle_settings(cx);
         }));
-        let mut chrome =
-            nav::win_chrome(state.collapsed).child(nav::collapse_button().on_mouse_down(
+        let mut chrome = nav::win_chrome(state.collapsed).child(
+            nav::collapse_button(state.collapsed).on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|view, _: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();
                     view.set_nav_collapsed(!view.nav_collapsed, cx);
                 }),
-            ));
-        // The gear sits hard right of the band; folded, it stacks under
-        // the collapse button. The stretch between the two is the window's
+            ),
+        );
+        // The gear sits hard right of the expanded band. The stretch is the window's
         // where the app draws its own titlebar: the band reads as a
         // titlebar, so it drags like one (`titlebar.rs`).
         if !state.collapsed {
@@ -8259,9 +8259,11 @@ impl CockpitView {
                 div().flex_1()
             });
         }
-        // The bell sits beside the gear: both are the app's, not the
-        // tree's. Folded, the two stack under the collapse button.
-        chrome = chrome.child(self.bell_element(cx)).child(gear);
+        // In the rail, utilities move to its foot; titlebar controls should
+        // never become the navigation hierarchy.
+        if !state.collapsed {
+            chrome = chrome.child(self.bell_element(cx)).child(gear);
+        }
         let content = div()
             .flex()
             .flex_col()
@@ -8805,10 +8807,10 @@ impl CockpitView {
             .into_any_element()
     }
 
-    /// The 56px rail cmd-b folds the column to: the filter button, then one
+    /// The compact rail cmd-b folds the column to: the filter button, then one
     /// logomark per Thread in the same order the tree draws them. The
     /// filter button unfolds the column and drops the menu — there is one
-    /// dropdown, and this is how a 56px column reaches it.
+    /// dropdown, and this is how the rail reaches it.
     fn rail(&self, state: &nav::NavState, cx: &mut Context<Self>) -> Div {
         let mut items = nav::rail_items();
         // The rail has no fold to press, so it follows the column's: the
@@ -8822,9 +8824,8 @@ impl CockpitView {
             let current = row.current;
             let thread = row.thread;
             let open = self.pane_for(thread).is_some();
-            items = items.child(nav::rail_item(row, current).on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+            items = items.child(nav::rail_item(row, current).on_click(
+                cx.listener(move |view, _: &ClickEvent, _, cx| {
                     if open {
                         view.focus_thread(thread, cx);
                     } else {
@@ -8833,7 +8834,13 @@ impl CockpitView {
                 }),
             ));
         }
-        nav::rail(self.nav_filter.is_some())
+        let primary = nav::rail_actions()
+            .child(nav::rail_add_thread_button().on_click(cx.listener(
+                |view, _: &ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    view.open_draft(DraftTarget::Main, cx);
+                },
+            )))
             .child(nav::rail_filter(self.nav_filter.is_some()).on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|view, _: &MouseDownEvent, _, cx| {
@@ -8842,8 +8849,19 @@ impl CockpitView {
                     view.nav_filter_open = true;
                     cx.notify();
                 }),
-            ))
+            ));
+        let utilities = nav::rail_utilities()
+            .child(self.bell_element(cx))
+            .child(prefs::gear_button().on_click(cx.listener(
+                |view, _: &ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    view.toggle_settings(cx);
+                },
+            )));
+        nav::rail(self.nav_filter.is_some())
+            .child(primary)
             .child(items)
+            .child(utilities)
     }
 }
 
@@ -14949,8 +14967,8 @@ mod tests {
     }
 
     /// #21: the nav's width is part of the zoom input — cmd-b folding it to
-    /// the 40px rail hands the cells 168px back, so a Pane that could not
-    /// hold a transcript beside the full nav can beside the rail. cmd-b
+    /// the compact rail hands width back, so a Pane that could not hold a
+    /// transcript beside the full nav can beside the rail. cmd-b
     /// again takes the width back.
     #[gpui::test]
     fn cmd_b_collapses_the_nav_and_the_cells_grow_a_level(cx: &mut TestAppContext) {
@@ -14961,7 +14979,7 @@ mod tests {
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         // Sized so the Transcript threshold sits between the two nav
         // widths: Instruments beside the 208px column (330px cell),
-        // Transcript beside the 40px rail (498px cell).
+        // Transcript beside the compact rail.
         cx.simulate_resize(gpui::size(px(560.), px(700.)));
         tick(cx);
         let expanded = cx.update(|window, cx| view.read(cx).level_now(window));
@@ -14974,6 +14992,24 @@ mod tests {
         cx.simulate_keystrokes("cmd-b");
         let collapsed = cx.update(|window, cx| view.read(cx).level_now(window));
         assert_eq!(collapsed, Level::Transcript, "the rail hands width back");
+        tick(cx);
+        let add = cx
+            .debug_bounds("rail-add-thread")
+            .expect("the collapsed rail keeps New Thread visible");
+        let filter = cx
+            .debug_bounds("nav-rail-filter")
+            .expect("the collapsed rail keeps Project filtering visible");
+        let gear = cx
+            .debug_bounds("settings-gear")
+            .expect("the collapsed rail keeps Settings visible");
+        assert!(
+            add.origin.y >= px(crate::theme::WIN_CHROME_H),
+            "rail actions stay below the macOS titlebar controls"
+        );
+        assert!(
+            add.origin.y < filter.origin.y && filter.origin.y < gear.origin.y,
+            "primary actions lead and utilities stay at the rail's foot"
+        );
 
         cx.simulate_keystrokes("cmd-b");
         let reopened = cx.update(|window, cx| view.read(cx).level_now(window));

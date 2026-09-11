@@ -262,13 +262,20 @@ pub const MONO_ADVANCE: f32 = 0.6;
 
 // --------------------------------------------------------- geometry: shell
 
-/// 286px — the navigation column, and 56px for the rail ⌘B folds it to.
+/// 286px — the navigation column. The collapsed rail is 77px on macOS so
+/// it owns the same horizontal reserve as the native traffic-light group;
+/// the project title therefore starts beyond the window controls. Other
+/// platforms keep the conventional compact 56px rail.
 /// `CockpitView::cell()` subtracts whichever is live, so the nav stays part
 /// of the semantic-zoom input.
 #[allow(dead_code)]
 pub const NAV_WIDTH: f32 = 286.0;
 #[allow(dead_code)]
-pub const NAV_RAIL_WIDTH: f32 = 56.0;
+pub const NAV_RAIL_WIDTH: f32 = if cfg!(target_os = "macos") {
+    TRAFFIC_RESERVE
+} else {
+    56.0
+};
 /// 42px — the window-chrome band at the top of the nav (traffic lights and
 /// the collapse button). **The Cockpit has no band of any kind above it:**
 /// the Pane grid starts at y = 0.
