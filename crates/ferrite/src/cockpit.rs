@@ -8233,14 +8233,15 @@ impl CockpitView {
             cx.stop_propagation();
             view.toggle_settings(cx);
         }));
-        let mut chrome =
-            nav::win_chrome(state.collapsed).child(nav::collapse_button().on_mouse_down(
+        let mut chrome = nav::win_chrome(state.collapsed).child(
+            nav::collapse_button(state.collapsed).on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|view, _: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();
                     view.set_nav_collapsed(!view.nav_collapsed, cx);
                 }),
-            ));
+            ),
+        );
         // The gear sits hard right of the expanded band. The stretch is the window's
         // where the app draws its own titlebar: the band reads as a
         // titlebar, so it drags like one (`titlebar.rs`).
@@ -8834,7 +8835,7 @@ impl CockpitView {
             ));
         }
         let primary = nav::rail_actions()
-            .child(nav::add_thread_button().on_click(cx.listener(
+            .child(nav::rail_add_thread_button().on_click(cx.listener(
                 |view, _: &ClickEvent, _, cx| {
                     cx.stop_propagation();
                     view.open_draft(DraftTarget::Main, cx);
@@ -14993,7 +14994,7 @@ mod tests {
         assert_eq!(collapsed, Level::Transcript, "the rail hands width back");
         tick(cx);
         let add = cx
-            .debug_bounds("add-thread")
+            .debug_bounds("rail-add-thread")
             .expect("the collapsed rail keeps New Thread visible");
         let filter = cx
             .debug_bounds("nav-rail-filter")

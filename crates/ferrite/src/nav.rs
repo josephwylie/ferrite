@@ -115,6 +115,18 @@ const RAIL_CHROME_PAD_T: f32 = if cfg!(target_os = "macos") {
 const RAIL_CHROME_PAD_B: f32 = 4.0;
 /// 7px — the collapsed rail's own block padding.
 const RAIL_PAD_Y: f32 = 7.0;
+/// The wider macOS rail earns larger, easier targets instead of leaving a
+/// 28px control floating in 77px of chrome. Windows keeps the denser size.
+const RAIL_CONTROL: f32 = if cfg!(target_os = "macos") {
+    36.0
+} else {
+    ICON_BUTTON
+};
+const RAIL_ITEM_GAP: f32 = if cfg!(target_os = "macos") {
+    5.0
+} else {
+    MEMBER_GAP
+};
 /// 12px — the gap between the rail's filter button and its first item, and
 /// the empty-filter message's block margin.
 const RAIL_ITEMS_TOP: f32 = 12.0;
@@ -383,9 +395,10 @@ pub fn win_chrome(collapsed: bool) -> Div {
     band.child(div().flex_shrink_0().w(px(TRAFFIC_RESERVE)))
 }
 
-/// The 28×28 collapse button and its 16px sidebar glyph. The cockpit wires
-/// cmd-b and the click; the button only says what it looks like.
-pub fn collapse_button() -> Stateful<Div> {
+/// The collapse button and its 16px sidebar glyph. It grows with the macOS
+/// rail while the expanded column keeps the compact 28px titlebar control.
+pub fn collapse_button(collapsed: bool) -> Stateful<Div> {
+    let size = if collapsed { RAIL_CONTROL } else { ICON_BUTTON };
     div()
         .id(("nav-collapse", 0usize))
         .group(COLLAPSE_GROUP)
@@ -393,8 +406,8 @@ pub fn collapse_button() -> Stateful<Div> {
         .flex_shrink_0()
         .items_center()
         .justify_center()
-        .w(px(ICON_BUTTON))
-        .h(px(ICON_BUTTON))
+        .w(px(size))
+        .h(px(size))
         .rounded(px(R_CONTROL))
         .hover_control()
         .press_control()
@@ -427,6 +440,18 @@ pub fn add_thread_button() -> Button {
         .debug_selector(|| "add-thread".into())
         .w(px(ICON_BUTTON))
         .h(px(ICON_BUTTON))
+        .p_0()
+        .tooltip("New Thread")
+        .child(icon(icons::PLUS, ICON_BUTTON_GLYPH, TEXT_MUTED))
+}
+
+/// The rail's primary creation door gets the same generous target as its
+/// Thread avatars; the expanded header retains its denser 28px control.
+pub fn rail_add_thread_button() -> Button {
+    components::button("rail-add-thread")
+        .debug_selector(|| "rail-add-thread".into())
+        .w(px(RAIL_CONTROL))
+        .h(px(RAIL_CONTROL))
         .p_0()
         .tooltip("New Thread")
         .child(icon(icons::PLUS, ICON_BUTTON_GLYPH, TEXT_MUTED))
@@ -1313,7 +1338,7 @@ pub fn rail_actions() -> Div {
         .flex_col()
         .flex_shrink_0()
         .items_center()
-        .gap(px(MEMBER_GAP))
+        .gap(px(RAIL_ITEM_GAP))
 }
 
 /// Utilities stay pinned to the bottom rather than competing with Threads.
@@ -1340,8 +1365,8 @@ pub fn rail_filter(filtered: bool) -> Stateful<Div> {
         .flex_shrink_0()
         .items_center()
         .justify_center()
-        .w(px(ICON_BUTTON))
-        .h(px(ICON_BUTTON))
+        .w(px(RAIL_CONTROL))
+        .h(px(RAIL_CONTROL))
         .rounded(px(R_CONTROL))
         .hover_control()
         .press_control()
@@ -1351,8 +1376,8 @@ pub fn rail_filter(filtered: bool) -> Stateful<Div> {
         )
 }
 
-/// The rail's item column. It scrolls, and it shows no thumb: 28px marks
-/// are already the coarsest possible index, and a bar beside them would be
+/// The rail's item column. It scrolls, and it shows no thumb: compact marks
+/// are already a coarse index, and a bar beside them would be
 /// the second line in a system that draws none.
 pub fn rail_items() -> Div {
     div()
@@ -1361,7 +1386,7 @@ pub fn rail_items() -> Div {
         .flex_1()
         .min_h_0()
         .items_center()
-        .gap(px(MEMBER_GAP))
+        .gap(px(RAIL_ITEM_GAP))
         .mt(px(RAIL_ITEMS_TOP))
         // The prototype scrolls this column; gpui can only scroll a
         // `Stateful`, and the pinned signature is a plain `Div`, so the
@@ -1380,8 +1405,8 @@ pub fn rail_item(row: &ThreadRow, current: bool) -> Button {
     let monogram = rail_monogram(&row.name);
     components::button(("nav-rail-item", row.thread.get() as usize))
         .debug_selector(move || format!("nav-rail-item-{}", row.thread.get()))
-        .w(px(ICON_BUTTON))
-        .h(px(ICON_BUTTON))
+        .w(px(RAIL_CONTROL))
+        .h(px(RAIL_CONTROL))
         .p_0()
         .tooltip(title.clone())
         .accessibility_label(title)
@@ -1392,17 +1417,17 @@ pub fn rail_item(row: &ThreadRow, current: bool) -> Button {
                 .flex()
                 .items_center()
                 .justify_center()
-                .w(px(ICON_BUTTON))
-                .h(px(ICON_BUTTON))
-                .text_size(px(FS_SM))
+                .w(px(RAIL_CONTROL))
+                .h(px(RAIL_CONTROL))
+                .text_size(px(if cfg!(target_os = "macos") { FS_MD } else { FS_SM }))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(rgb(TEXT_2))
                 .child(monogram)
                 .child(
                     div()
                         .absolute()
-                        .right(px(3.0))
-                        .bottom(px(3.0))
+                        .right(px(4.0))
+                        .bottom(px(4.0))
                         .child(rail_status_dot(row.status)),
                 ),
         )
@@ -1700,6 +1725,10 @@ mod tests {
     #[test]
     fn the_mac_rail_owns_the_full_traffic_light_reserve() {
         assert_eq!(RAIL_WIDTH, TRAFFIC_RESERVE);
+        let mut item = rail_item(&thread(Some(Provider::Codex)), true);
+        assert_eq!(item.style().size.width, Some(px(36.0).into()));
+        let mut filter = rail_filter(false);
+        assert_eq!(filter.style().size.width, Some(px(36.0).into()));
     }
 
     #[test]
