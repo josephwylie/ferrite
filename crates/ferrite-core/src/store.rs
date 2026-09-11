@@ -69,6 +69,12 @@ const SCHEMA_VERSION: u32 = 11;
 /// this much preamble is named by its number instead.
 const FIRST_PROMPT_SCAN: usize = 64 * 1024;
 
+/// Presence means the Thread had an open Pane when Ferrite last ran. Session
+/// processes are deliberately not durable, but the operator's open/parked
+/// choice is.
+const OPEN_MARKER: &str = ".open";
+const OPEN_STATE_MARKER: &str = ".open-state-v1";
+
 /// Which agent backend serves this Thread — persisted so a restart knows
 /// which provider to revive the Thread on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1342,6 +1348,38 @@ impl Store {
         }
         ids.sort_unstable();
         Ok(ids)
+    }
+
+    /// Remember that the operator has this Thread open. The tiny sidecar is
+    /// separate from history because opening a Pane is cockpit state, not a
+    /// conversation event.
+    pub fn mark_open(&self, id: ThreadId) -> io::Result<()> {
+        File::create(self.dir.join(OPEN_STATE_MARKER))?.sync_data()?;
+        File::create(self.dir.join(id.to_string()).join(OPEN_MARKER))?.sync_data()
+    }
+
+    /// Remember an explicit park. Missing markers are also the legacy format,
+    /// in which Threads were all considered parked on startup.
+    pub fn mark_parked(&self, id: ThreadId) -> io::Result<()> {
+        File::create(self.dir.join(OPEN_STATE_MARKER))?.sync_data()?;
+        match fs::remove_file(self.dir.join(id.to_string()).join(OPEN_MARKER)) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Threads whose Panes were open when the previous process ended.
+    pub fn open_threads(&self) -> io::Result<Vec<ThreadId>> {
+        Ok(self
+            .thread_ids()?
+            .into_iter()
+            .filter(|id| self.dir.join(id.to_string()).join(OPEN_MARKER).is_file())
+            .collect())
+    }
+
+    pub fn tracks_open_state(&self) -> bool {
+        self.dir.join(OPEN_STATE_MARKER).is_file()
     }
 
     /// Header-only read of one Thread: what wrote it, for what provider,
