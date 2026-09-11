@@ -53,7 +53,8 @@ use crate::theme::{
     THREAD_ROW_H, TRAFFIC_RESERVE, WIN_CHROME_H,
 };
 
-/// The nav's two widths — 286px, and the 56px rail cmd-b folds it to.
+/// The nav's two widths—286px, and the platform rail cmd-b folds it to.
+/// macOS uses the traffic-light reserve; other platforms use 56px.
 /// `CockpitView::cell()` subtracts whichever is live, so the nav stays part
 /// of the semantic-zoom input rather than a special case.
 pub use crate::theme::{NAV_RAIL_WIDTH as RAIL_WIDTH, NAV_WIDTH as WIDTH};
@@ -1326,7 +1327,7 @@ pub fn rail_utilities() -> Div {
         .pt(px(RAIL_PAD_Y))
 }
 
-/// The rail's filter button: the one affordance a 56px column has room for.
+/// The rail's filter button: the compact column's Project affordance.
 /// Its glyph brightens to `--text` when a Project filter is active — the
 /// only way the collapsed nav can admit it is hiding Threads.
 pub fn rail_filter(filtered: bool) -> Stateful<Div> {
@@ -1693,6 +1694,12 @@ mod tests {
         assert_eq!(style.size.width, Some(px(WIDTH).into()));
         let mut rail = shell(true);
         assert_eq!(rail.style().size.width, Some(px(RAIL_WIDTH).into()));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_mac_rail_owns_the_full_traffic_light_reserve() {
+        assert_eq!(RAIL_WIDTH, TRAFFIC_RESERVE);
     }
 
     #[test]

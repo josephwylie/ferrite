@@ -1413,8 +1413,8 @@ impl CockpitView {
             || self.bell.open
     }
 
-    /// How much of the window the nav holds right now: the 208px column, or
-    /// the 40px rail cmd-b folds it to.
+    /// How much of the window the nav holds right now: the full column, or
+    /// the platform rail cmd-b folds it to.
     fn nav_width(&self) -> f32 {
         if self.nav_collapsed {
             nav::RAIL_WIDTH
@@ -8806,10 +8806,10 @@ impl CockpitView {
             .into_any_element()
     }
 
-    /// The 56px rail cmd-b folds the column to: the filter button, then one
+    /// The compact rail cmd-b folds the column to: the filter button, then one
     /// logomark per Thread in the same order the tree draws them. The
     /// filter button unfolds the column and drops the menu — there is one
-    /// dropdown, and this is how a 56px column reaches it.
+    /// dropdown, and this is how the rail reaches it.
     fn rail(&self, state: &nav::NavState, cx: &mut Context<Self>) -> Div {
         let mut items = nav::rail_items();
         // The rail has no fold to press, so it follows the column's: the
@@ -14966,8 +14966,8 @@ mod tests {
     }
 
     /// #21: the nav's width is part of the zoom input — cmd-b folding it to
-    /// the 40px rail hands the cells 168px back, so a Pane that could not
-    /// hold a transcript beside the full nav can beside the rail. cmd-b
+    /// the compact rail hands width back, so a Pane that could not hold a
+    /// transcript beside the full nav can beside the rail. cmd-b
     /// again takes the width back.
     #[gpui::test]
     fn cmd_b_collapses_the_nav_and_the_cells_grow_a_level(cx: &mut TestAppContext) {
@@ -14978,7 +14978,7 @@ mod tests {
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         // Sized so the Transcript threshold sits between the two nav
         // widths: Instruments beside the 208px column (330px cell),
-        // Transcript beside the 40px rail (498px cell).
+        // Transcript beside the compact rail.
         cx.simulate_resize(gpui::size(px(560.), px(700.)));
         tick(cx);
         let expanded = cx.update(|window, cx| view.read(cx).level_now(window));
