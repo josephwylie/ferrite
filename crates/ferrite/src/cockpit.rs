@@ -8241,8 +8241,7 @@ impl CockpitView {
                     view.set_nav_collapsed(!view.nav_collapsed, cx);
                 }),
             ));
-        // The gear sits hard right of the band; folded, it stacks under
-        // the collapse button. The stretch between the two is the window's
+        // The gear sits hard right of the expanded band. The stretch is the window's
         // where the app draws its own titlebar: the band reads as a
         // titlebar, so it drags like one (`titlebar.rs`).
         if !state.collapsed {
@@ -8259,9 +8258,11 @@ impl CockpitView {
                 div().flex_1()
             });
         }
-        // The bell sits beside the gear: both are the app's, not the
-        // tree's. Folded, the two stack under the collapse button.
-        chrome = chrome.child(self.bell_element(cx)).child(gear);
+        // In the rail, utilities move to its foot; titlebar controls should
+        // never become the navigation hierarchy.
+        if !state.collapsed {
+            chrome = chrome.child(self.bell_element(cx)).child(gear);
+        }
         let content = div()
             .flex()
             .flex_col()
@@ -8822,9 +8823,8 @@ impl CockpitView {
             let current = row.current;
             let thread = row.thread;
             let open = self.pane_for(thread).is_some();
-            items = items.child(nav::rail_item(row, current).on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+            items = items.child(nav::rail_item(row, current).on_click(
+                cx.listener(move |view, _: &ClickEvent, _, cx| {
                     if open {
                         view.focus_thread(thread, cx);
                     } else {
@@ -8833,7 +8833,13 @@ impl CockpitView {
                 }),
             ));
         }
-        nav::rail(self.nav_filter.is_some())
+        let primary = nav::rail_actions()
+            .child(nav::add_thread_button().on_click(cx.listener(
+                |view, _: &ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    view.open_draft(DraftTarget::Main, cx);
+                },
+            )))
             .child(nav::rail_filter(self.nav_filter.is_some()).on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|view, _: &MouseDownEvent, _, cx| {
@@ -8842,8 +8848,19 @@ impl CockpitView {
                     view.nav_filter_open = true;
                     cx.notify();
                 }),
-            ))
+            ));
+        let utilities = nav::rail_utilities()
+            .child(self.bell_element(cx))
+            .child(prefs::gear_button().on_click(cx.listener(
+                |view, _: &ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    view.toggle_settings(cx);
+                },
+            )));
+        nav::rail(self.nav_filter.is_some())
+            .child(primary)
             .child(items)
+            .child(utilities)
     }
 }
 
@@ -14974,6 +14991,24 @@ mod tests {
         cx.simulate_keystrokes("cmd-b");
         let collapsed = cx.update(|window, cx| view.read(cx).level_now(window));
         assert_eq!(collapsed, Level::Transcript, "the rail hands width back");
+        tick(cx);
+        let add = cx
+            .debug_bounds("add-thread")
+            .expect("the collapsed rail keeps New Thread visible");
+        let filter = cx
+            .debug_bounds("nav-rail-filter")
+            .expect("the collapsed rail keeps Project filtering visible");
+        let gear = cx
+            .debug_bounds("settings-gear")
+            .expect("the collapsed rail keeps Settings visible");
+        assert!(
+            add.origin.y >= px(crate::theme::WIN_CHROME_H),
+            "rail actions stay below the macOS titlebar controls"
+        );
+        assert!(
+            add.origin.y < filter.origin.y && filter.origin.y < gear.origin.y,
+            "primary actions lead and utilities stay at the rail's foot"
+        );
 
         cx.simulate_keystrokes("cmd-b");
         let reopened = cx.update(|window, cx| view.read(cx).level_now(window));

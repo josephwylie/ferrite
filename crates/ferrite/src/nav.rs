@@ -104,10 +104,13 @@ const TRIGGER_GAP: f32 = 7.0;
 /// 9px — a filter option's leading inset. One more than a row's, so the
 /// option's label hangs under the trigger's label rather than under its box.
 const MENU_ROW_PAD_L: f32 = 9.0;
-/// The collapsed window-chrome band's block padding, 10px above and 4px
-/// below: the host traffic lights are gone at 56px, so the button carries
-/// the whole band and sits lower in it than centred.
-const RAIL_CHROME_PAD_T: f32 = 10.0;
+/// The collapsed rail begins below the native macOS titlebar controls.
+/// Other platforms keep the compact inset used by the expanded column.
+const RAIL_CHROME_PAD_T: f32 = if cfg!(target_os = "macos") {
+    WIN_CHROME_H
+} else {
+    7.0
+};
 const RAIL_CHROME_PAD_B: f32 = 4.0;
 /// 7px — the collapsed rail's own block padding.
 const RAIL_PAD_Y: f32 = 7.0;
@@ -353,8 +356,9 @@ pub fn shell(collapsed: bool) -> Div {
 /// with every nav row under it. The caption buttons sit at the *window's*
 /// corner, not the column's — `titlebar.rs` draws them.
 ///
-/// Collapsed the band becomes a vertical stack. The button is the caller's
-/// to append: its click lives where the view state does.
+/// Collapsed the band becomes the rail's single expand control. On macOS
+/// its top padding is a full titlebar band, keeping it clear of the native
+/// traffic lights; rail actions follow below in the content column.
 pub fn win_chrome(collapsed: bool) -> Div {
     if collapsed {
         return div()
@@ -1288,9 +1292,9 @@ pub fn drag_badge(label: SharedString) -> Div {
         .child(label)
 }
 
-/// The collapsed rail. `filtered` reaches `rail_filter`, not the column —
-/// the parameter is kept so callers pass the one fact the rail's contents
-/// need through a single door.
+/// The collapsed rail. Primary navigation actions sit at the top, recent
+/// Threads occupy the scrolling middle, and utilities are supplied by the
+/// caller at the bottom—the familiar desktop navigation-rail hierarchy.
 pub fn rail(_filtered: bool) -> Div {
     div()
         .flex()
@@ -1301,6 +1305,27 @@ pub fn rail(_filtered: bool) -> Div {
         .py(px(RAIL_PAD_Y))
 }
 
+/// A compact cluster for the rail's primary actions.
+pub fn rail_actions() -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(MEMBER_GAP))
+}
+
+/// Utilities stay pinned to the bottom rather than competing with Threads.
+pub fn rail_utilities() -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(MEMBER_GAP))
+        .pt(px(RAIL_PAD_Y))
+}
+
 /// The rail's filter button: the one affordance a 56px column has room for.
 /// Its glyph brightens to `--text` when a Project filter is active — the
 /// only way the collapsed nav can admit it is hiding Threads.
@@ -1308,6 +1333,7 @@ pub fn rail_filter(filtered: bool) -> Stateful<Div> {
     let resting = if filtered { TEXT } else { TEXT_MUTED };
     div()
         .id(("nav-rail-filter", 0usize))
+        .debug_selector(|| "nav-rail-filter".into())
         .group(RAIL_FILTER_GROUP)
         .flex()
         .flex_shrink_0()
@@ -1343,26 +1369,73 @@ pub fn rail_items() -> Div {
         .overflow_y_hidden()
 }
 
-/// One rail item: a Thread reduced to its provider logomark. `current` is
-/// the Group's, not the Thread's — the same fill, carried by the same
-/// selection, at the same strength as the expanded tree.
-pub fn rail_item(row: &ThreadRow, current: bool) -> Stateful<Div> {
+/// One rail item: a Thread reduced to a two-letter monogram plus its live
+/// status dot. Provider logos made every Codex or Claude Thread identical;
+/// this keeps the rail scannable while the tooltip preserves the full name.
+/// `current` is the Group's, not the Thread's—the expanded tree uses the
+/// same selection ownership.
+pub fn rail_item(row: &ThreadRow, current: bool) -> Button {
     let title = row.name.clone();
-    let cell = div()
-        .id(("nav-rail-item", row.thread.get() as usize))
-        .tooltip(move |window, cx| Tooltip::new(title.clone()).build(window, cx))
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .justify_center()
+    let monogram = rail_monogram(&row.name);
+    components::button(("nav-rail-item", row.thread.get() as usize))
+        .debug_selector(move || format!("nav-rail-item-{}", row.thread.get()))
         .w(px(ICON_BUTTON))
         .h(px(ICON_BUTTON))
-        .rounded(px(R_CONTROL))
-        .child(provider_mark(row.provider, PROVIDER_MARK));
-    if current {
-        return cell.bg(rgb(FILL)).hover_carried().press_row();
+        .p_0()
+        .tooltip(title.clone())
+        .accessibility_label(title)
+        .when(current, |button| button.bg(rgb(FILL)))
+        .child(
+            div()
+                .relative()
+                .flex()
+                .items_center()
+                .justify_center()
+                .w(px(ICON_BUTTON))
+                .h(px(ICON_BUTTON))
+                .text_size(px(FS_SM))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(TEXT_2))
+                .child(monogram)
+                .child(
+                    div()
+                        .absolute()
+                        .right(px(3.0))
+                        .bottom(px(3.0))
+                        .child(rail_status_dot(row.status)),
+                ),
+        )
+}
+
+/// The expanded row's breathing halo needs more room than a 28px avatar.
+/// Rail state stays still so it cannot clip into duplicate marks.
+fn rail_status_dot(status: RowStatus) -> Div {
+    let dot = div()
+        .w(px(STATUS_DOT))
+        .h(px(STATUS_DOT))
+        .rounded_full();
+    match status {
+        RowStatus::Working => dot.bg(rgb(RUNNING)),
+        RowStatus::Failing => dot.bg(rgb(RUNNING)).border_1().border_color(rgb(BLOCKED)),
+        RowStatus::Attention => dot.bg(rgb(ATTENTION)),
+        RowStatus::Blocked => dot.bg(rgb(BLOCKED)),
+        RowStatus::Idle => dot.bg(rgb(IDLE)),
+        RowStatus::Parked => dot.border_1().border_color(rgb(SEP)),
     }
-    cell.hover_row().press_row()
+}
+
+fn rail_monogram(name: &str) -> String {
+    let monogram: String = name
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .take(2)
+        .flat_map(char::to_uppercase)
+        .collect();
+    if monogram.is_empty() {
+        "?".into()
+    } else {
+        monogram
+    }
 }
 
 /// The frame both row kinds share: the 6px-radius box, its padding, the
@@ -1493,11 +1566,10 @@ mod tests {
         );
     }
 
-    /// Every row is a drag source before it is a button, so it wears the
-    /// open hand — and it wears it whether or not it is the current row
-    /// (#26's skip rule is about the wash, never about the cursor).
+    /// Every expanded row is a drag source before it is a button, so it
+    /// wears the open hand whether or not it is current.
     #[test]
-    fn every_row_and_rail_item_advertises_its_grab() {
+    fn every_draggable_row_advertises_its_grab() {
         let cursor = |mut drawn: Stateful<Div>| drawn.style().mouse_cursor;
         assert_eq!(
             cursor(thread_row(&thread(None))),
@@ -1507,11 +1579,6 @@ mod tests {
         assert_eq!(
             cursor(group_row(&group(false))),
             Some(CursorStyle::OpenHand)
-        );
-        assert_eq!(
-            cursor(rail_item(&thread(Some(Provider::Codex)), true)),
-            Some(CursorStyle::PointingHand),
-            "a rail item is a jump, not a drag handle"
         );
     }
 
@@ -1626,5 +1693,12 @@ mod tests {
         assert_eq!(style.size.width, Some(px(WIDTH).into()));
         let mut rail = shell(true);
         assert_eq!(rail.style().size.width, Some(px(RAIL_WIDTH).into()));
+    }
+
+    #[test]
+    fn rail_monograms_identify_threads_instead_of_repeating_provider_marks() {
+        assert_eq!(rail_monogram("fix sidebar"), "FI");
+        assert_eq!(rail_monogram("éclair polish"), "ÉC");
+        assert_eq!(rail_monogram("---"), "?");
     }
 }
