@@ -869,6 +869,10 @@ impl Cockpit {
                 return Err(error);
             }
         };
+        if let Err(error) = self.store.mark_open(id) {
+            let _ = self.store.delete(id);
+            return Err(error);
+        }
         if let Err(e) = ensure_workspace(&self.registry, &binding, id) {
             if fresh_branch.is_some() {
                 let _ = self.registry.remove_worktree(binding.cwd());
@@ -1394,6 +1398,7 @@ impl Cockpit {
             state.report_store_error(io::Error::new(error.kind(), error.to_string()));
             return Err(error);
         }
+        self.store.mark_parked(thread)?;
         let mut state = self.threads.remove(&thread).expect("checked");
         self.notifications.disconnect(thread);
         self.visible_subjects.remove(&thread);
@@ -1492,6 +1497,7 @@ impl Cockpit {
             generation: state.generation,
         });
 
+        self.store.mark_open(thread)?;
         self.threads.insert(thread, state);
         self.roster.insert_thread(thread);
         Ok(())
@@ -1802,6 +1808,15 @@ impl Cockpit {
             .into_iter()
             .filter(|id| !self.threads.contains_key(id))
             .collect())
+    }
+
+    /// Threads whose Panes were open when the previous Ferrite process ended.
+    pub fn previously_open(&self) -> io::Result<Vec<ThreadId>> {
+        self.store.open_threads()
+    }
+
+    pub fn tracks_open_state(&self) -> bool {
+        self.store.tracks_open_state()
     }
 
     /// Whether some Thread's Main just finished making a worktree and is

@@ -194,10 +194,11 @@ fn main() {
                         demo::seed_load_group(&mut core);
                     }
                 } else {
-                    // The default launch revives the most recently used
-                    // parked Thread; an empty store starts as a draft Pane
-                    // (#29) — nothing spawns before the operator's choice.
-                    revive_latest(&mut core);
+                    // Restore exactly the Panes that were open. A legacy
+                    // store has no open-state marker, so its most recently
+                    // used Thread remains the one-time migration fallback.
+                    // An empty store starts as a draft Pane (#29).
+                    revive_launch_threads(&mut core);
                 }
             }
 
@@ -278,11 +279,20 @@ fn adopt(store: &Store, paths: &[String]) -> (Vec<ThreadId>, Vec<String>) {
     (adopted, refused)
 }
 
-/// Revive the most recently used parked Thread for launch, if the store holds
-/// any. Creation order breaks ties, including logs whose timestamp cannot be
-/// read. An empty store starts as a draft Pane instead (#29): nothing spawns
-/// before the operator's choice.
-fn revive_latest(cockpit: &mut Cockpit) {
+/// Restore the Threads whose Panes were open when Ferrite stopped. Stores from
+/// before open-state persistence fall back once to their most recently used
+/// Thread; creation order breaks ties. An intentionally all-parked store opens
+/// no Session and the window supplies a draft Pane instead (#29).
+fn revive_launch_threads(cockpit: &mut Cockpit) {
+    let previously_open = cockpit.previously_open().unwrap_or_default();
+    if cockpit.tracks_open_state() {
+        for thread in previously_open {
+            if let Err(e) = cockpit.revive(thread) {
+                eprintln!("ferrite: thread {thread} could not be revived: {e:?}");
+            }
+        }
+        return;
+    }
     let Some(thread) = cockpit
         .parked()
         .unwrap_or_default()
@@ -469,7 +479,7 @@ mod tests {
     // would capture the `#[test]` this macro expands to and recurse.
     use super::{
         adopt, demo, dock_launch_dir, keep_mouse_cursor_visible, keymap, load_bindings,
-        revive_latest,
+        revive_launch_threads,
     };
     use ferrite_core::cockpit::Cockpit;
     use ferrite_core::store::{Provider, Store};
@@ -541,7 +551,7 @@ mod tests {
     }
 
     #[test]
-    fn the_default_thread_is_the_one_the_operator_used_most_recently() {
+    fn manually_parked_threads_stay_parked_after_restart() {
         let dir = std::env::temp_dir().join(format!(
             "ferrite-launch-{}-recent-thread",
             std::process::id()
@@ -565,9 +575,44 @@ mod tests {
         core.send(older, "worked here last".into());
         core.park(older).unwrap();
         core.park(newer).unwrap();
-        revive_latest(&mut core);
+        revive_launch_threads(&mut core);
 
-        assert_eq!(core.roster().focused_thread(), Some(older));
+        assert!(core.threads().is_empty());
+    }
+
+    #[test]
+    fn restarting_preserves_every_open_thread() {
+        let dir = std::env::temp_dir().join(format!(
+            "ferrite-launch-{}-open-threads",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let checkout = std::env::current_dir().unwrap();
+        let mut core = Cockpit::new(
+            Store::open(&dir).unwrap(),
+            Box::new(demo::Spawn::new(false)),
+        );
+        let first = core
+            .open(
+                Provider::Claude,
+                WorkspaceChoice::Main {
+                    checkout: checkout.clone(),
+                },
+            )
+            .unwrap();
+        let second = core
+            .open(Provider::Codex, WorkspaceChoice::Main { checkout })
+            .unwrap();
+        core.halt_sessions();
+        drop(core);
+
+        let mut restarted = Cockpit::new(
+            Store::open(&dir).unwrap(),
+            Box::new(demo::Spawn::new(false)),
+        );
+        revive_launch_threads(&mut restarted);
+
+        assert_eq!(restarted.threads(), vec![first, second]);
     }
 
     /// Leg 3: a file that is not a session file is refused in the operator's
