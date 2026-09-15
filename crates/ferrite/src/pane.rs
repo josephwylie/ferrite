@@ -893,6 +893,7 @@ pub fn render_pane(
                 view,
                 Some(transcript),
                 ComposerStack {
+                    compact: true,
                     decision,
                     requests: None,
                     queued,
@@ -1026,6 +1027,7 @@ pub fn render_pane(
                     view,
                     Some(transcript),
                     ComposerStack {
+                        compact: false,
                         decision,
                         requests: None,
                         queued,
@@ -1228,6 +1230,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
                 view,
                 None,
                 ComposerStack {
+                    compact: false,
                     decision: None,
                     requests: None,
                     queued: Vec::new(),
@@ -2654,6 +2657,7 @@ fn parked_body() -> Div {
 /// The Composer stack's slice of `PaneState`, bundled so `composer_region`
 /// stays readable as the states grow.
 struct ComposerStack<'a> {
+    compact: bool,
     decision: Option<&'a Decision>,
     /// Rich provider requests dock above the Composer as a shrink-to-content
     /// island, sharing the same stable bottom stack as attachments.
@@ -2703,13 +2707,14 @@ struct ComposerStack<'a> {
 /// Composer (#23).
 fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: ComposerStack) -> Div {
     let ComposerStack {
+        compact,
         decision,
         requests,
         queued,
         needs_queue,
         empty,
         attachments,
-        actions,
+        mut actions,
         history_available,
         menu,
         mode,
@@ -2825,7 +2830,10 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
             .when(focused, |mark| mark.opacity(0.))
             .child("\u{203a}"),
     );
-    input = input.child(line).children(actions);
+    input = input.child(line);
+    if !compact {
+        input = input.children(actions.take());
+    }
     region = region.child(input);
     // The popover paints above the stack — deferred, so it escapes the
     // Pane's clip and draws over the transcript (#24).
@@ -2877,7 +2885,9 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
             .whitespace_nowrap()
             .text_size(px(theme::FS_MONO))
             .text_color(rgb(TEXT_MUTED))
-            .child(if !empty && needs_queue {
+            .child(if compact && empty {
+                "@ files · /"
+            } else if !empty && needs_queue {
                 "Enter send / queue"
             } else if !empty {
                 "Enter send · ⇧Enter newline"
@@ -2894,7 +2904,11 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
     // `margin-inline-start: auto` on the picker. It renders in every Pane,
     // before and after the first-prompt lock — there is no plain-label
     // fallback and no second model surface anywhere.
-    if model_picker.is_some() || usage_meter.is_some() || session_controls.is_some() {
+    if model_picker.is_some()
+        || usage_meter.is_some()
+        || session_controls.is_some()
+        || actions.is_some()
+    {
         controls = controls.child(div().flex_1().min_w_0());
     }
     if let Some(meter) = usage_meter {
@@ -2906,6 +2920,9 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
     if let Some(picker) = model_picker {
         controls = controls.child(div().flex_shrink_0().child(picker));
     }
+    // L2 has no model/usage controls. Use their row for actions so every
+    // line of a small Pane's draft keeps the full editor width.
+    controls = controls.children(actions);
     div()
         .relative()
         .flex()

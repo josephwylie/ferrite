@@ -100,6 +100,18 @@ fn composer_pointer_actions_target_their_own_pane(cx: &mut TestAppContext) {
         assert_eq!(view.focused_thread(), Some(threads[1]));
         assert_eq!(view.panes[0].composer.read(cx).text(), "keep this draft");
     });
+
+    // At instrument size, actions share the metadata row so they do not
+    // narrow every line of a draft or force extra wrapped rows.
+    cx.simulate_resize(gpui::size(px(860.), px(500.)));
+    tick(cx);
+    let editor = cx.debug_bounds("focused-prompt-editor").unwrap();
+    let send = bounds(
+        cx,
+        format!("composer-send-{:?}", PaneIdentity::Thread(threads[1])),
+    );
+    assert!(editor.right() >= send.right() - px(1.));
+    assert!(editor.bottom() <= send.top());
 }
 
 #[gpui::test]
@@ -175,7 +187,7 @@ fn composer_busy_tuning_choices_explain_and_preserve_selection(cx: &mut TestAppC
         view.cockpit.send(thread, "work".into());
         view.cockpit.apply_input(
             thread,
-            ferrite_core::Input::Event(SessionEvent::RunState {
+            ferrite_core::transcript::Input::Event(SessionEvent::RunState {
                 state: ferrite_core::RunState::Running,
             }),
         );
