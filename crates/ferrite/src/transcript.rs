@@ -47,6 +47,7 @@ pub(crate) struct TranscriptInput {
     pub signal_status: Option<Status>,
     pub timings: HashMap<String, ToolTiming>,
     pub focused: bool,
+    pub reading_size: ferrite_core::settings::SoloReadingSize,
     pub selection_scope: gpui::base::TextSelectionScopeId,
     pub preview: Preview,
     pub expanded: HashSet<DisclosureId>,
@@ -65,12 +66,21 @@ impl TranscriptInput {
         )
     }
 
-    fn display_key(&self) -> (u64, bool, gpui::base::TextSelectionScopeId, Option<Status>) {
+    fn display_key(
+        &self,
+    ) -> (
+        u64,
+        bool,
+        gpui::base::TextSelectionScopeId,
+        Option<Status>,
+        ferrite_core::settings::SoloReadingSize,
+    ) {
         (
             self.display_revision,
             self.focused,
             self.selection_scope,
             self.signal_status,
+            self.reading_size,
         )
     }
 }
@@ -90,6 +100,7 @@ pub(crate) struct TranscriptView {
     rich: TextCache,
     selection_source: TranscriptText,
     transcript_focus: FocusHandle,
+    controls_end: FocusHandle,
     document: gpui::base::TextSelectionDocument,
 }
 
@@ -114,6 +125,7 @@ impl TranscriptView {
                 signal_status: None,
                 timings: HashMap::new(),
                 focused: false,
+                reading_size: Default::default(),
                 selection_scope: gpui::base::TextSelectionScopeId::new(),
                 preview,
                 expanded: HashSet::new(),
@@ -149,6 +161,7 @@ impl TranscriptView {
             rich,
             selection_source,
             transcript_focus: cx.focus_handle(),
+            controls_end: cx.focus_handle(),
             document: gpui::base::TextSelectionDocument::new(scope, cx),
         };
         view.sync_members(cx);
@@ -166,6 +179,7 @@ impl TranscriptView {
         let content_changed = self.input.content_key() != input.content_key();
         let display_changed = self.input.display_key() != input.display_key();
         let disclosure_changed = self.input.expanded != input.expanded;
+        let reading_changed = self.input.reading_size != input.reading_size;
         self.input = input;
         self.selection_source = selection_source;
         if content_changed {
@@ -175,7 +189,7 @@ impl TranscriptView {
             self.scroll.reconcile(&delta);
         }
         if content_changed || display_changed {
-            if disclosure_changed {
+            if disclosure_changed || reading_changed {
                 self.scroll.remeasure_all();
             }
             let scope = if self.input.focused {
@@ -205,16 +219,56 @@ impl TranscriptView {
         disclosure_revision: u64,
         focused: bool,
         signal_status: Option<Status>,
+        reading_size: ferrite_core::settings::SoloReadingSize,
     ) -> bool {
         self.input.namespace == namespace
             && self.input.content_revision == content_revision
             && self.input.display_revision == disclosure_revision
             && self.input.focused == focused
             && self.input.signal_status == signal_status
+            && self.input.reading_size == reading_size
     }
     pub(crate) fn transcript_focus(&self) -> FocusHandle {
         self.transcript_focus.clone()
     }
+    /// Enter or advance the mounted native controls using GPUI's rendered tab
+    /// order. The non-tab-stop boundaries keep this walk inside one Subject.
+    pub(crate) fn cycle_controls(
+        &self,
+        reverse: bool,
+        from_edge: bool,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        if from_edge {
+            window.focus(
+                if reverse {
+                    &self.controls_end
+                } else {
+                    &self.transcript_focus
+                },
+                cx,
+            );
+        }
+        loop {
+            let before = window.focused(cx);
+            if reverse {
+                window.focus_prev(cx);
+            } else {
+                window.focus_next(cx);
+            }
+            let Some(focus) = window.focused(cx) else {
+                return false;
+            };
+            if Some(&focus) == before.as_ref() || !self.transcript_focus.contains(&focus, window) {
+                return false;
+            }
+            if crate::rich::code_actions_focused(window) {
+                return true;
+            }
+        }
+    }
+
     pub(crate) fn tool_focus(&self) -> FocusHandle {
         self.input.disclosure_focus.clone()
     }
@@ -312,8 +366,14 @@ impl TranscriptView {
                 .flex_shrink_0()
                 .flex()
                 .gap(px(theme::ANSWER_GAP))
-                .py(px(theme::ANSWER_PAD_Y))
-                .text_size(px(theme::FS_ANSWER))
+                .py(px(
+                    if blocks.len() == 1 && matches!(&blocks[0].body, Body::Paragraph { .. }) {
+                        theme::COMMENTARY_PAD_Y
+                    } else {
+                        theme::ANSWER_PAD_Y
+                    },
+                ))
+                .text_size(px(theme::answer_text_size(self.input.reading_size)))
                 .child(
                     // The answer wears Ferrite's mark where Claude Code's
                     // transcript puts its `●`, at rest. The gutter cell keeps
@@ -329,7 +389,11 @@ impl TranscriptView {
                             div()
                                 .absolute()
                                 .left(px(0.))
-                                .top(px(theme::ANSWER_MARK_TOP))
+                                .top(px(theme::ANSWER_MARK_TOP
+                                    + (theme::answer_text_size(self.input.reading_size)
+                                        - theme::FS_ANSWER)
+                                        * theme::LINE_BODY
+                                        / 2.))
                                 .child(icons::ferrite_icon(theme::ANSWER_MARK)),
                         ),
                 )
@@ -574,6 +638,11 @@ impl Render for TranscriptView {
             .hover_text()
             .track_focus(&self.transcript_focus)
             .child(list)
+            .child(
+                div()
+                    .id("transcript-controls-end")
+                    .track_focus(&self.controls_end),
+            )
             .text_selection_scope(if self.input.focused {
                 gpui::base::TextSelectionScopeId::default()
             } else {

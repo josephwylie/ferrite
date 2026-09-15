@@ -869,6 +869,13 @@ impl CockpitView {
         let transcript = subject_view.transcript();
         let revision = subject_view.presentation_revision();
         let status = subagents::transcript_status(subject_view.status(), subject_view.fresh());
+        let reading_size = if self.cockpit.roster().view() == View::Solo
+            || self.cockpit.roster().fullscreen().is_some()
+        {
+            self.prefs.settings.solo_reading_size
+        } else {
+            ferrite_core::settings::SoloReadingSize::Standard
+        };
         let entity = self.panes[index]
             .ensure_transcript(cx)
             .expect("thread Pane has a transcript entity");
@@ -881,6 +888,7 @@ impl CockpitView {
             disclosure_revision,
             focused,
             Some(status),
+            reading_size,
         ) {
             return;
         }
@@ -897,6 +905,7 @@ impl CockpitView {
             signal_status: Some(status),
             timings: subject_view.timings().clone(),
             focused,
+            reading_size,
             selection_scope,
             preview,
             expanded: disclosure.0,
@@ -3599,9 +3608,39 @@ impl CockpitView {
         }
         let focused = self.focused();
         let calls = self.expandable_tools(focused, Level::Transcript);
-        let targeted = self.panes[focused].cycle_tools(&calls, reverse).is_some();
+        let transcript = self.panes[focused].transcript();
+        let tool_focus = self.panes[focused].tool_focus();
+        let in_controls = crate::rich::code_actions_focused(window);
+        let cycle_controls = |from_edge, window: &mut Window, cx: &mut gpui::App| {
+            transcript.as_ref().is_some_and(|transcript| {
+                transcript.update(cx, |transcript, cx| {
+                    transcript.cycle_controls(reverse, from_edge, window, cx)
+                })
+            })
+        };
+        // Preserve the existing disclosure walk, then include native actions
+        // such as fenced-code Copy/Preview before returning to the composer.
+        if in_controls && cycle_controls(false, window, cx) {
+            return;
+        }
+        if reverse
+            && !in_controls
+            && !tool_focus.is_focused(window)
+            && cycle_controls(true, window, cx)
+        {
+            return;
+        }
+        let targeted = if in_controls && !reverse {
+            false
+        } else {
+            self.panes[focused].cycle_tools(&calls, reverse).is_some()
+        };
+        if !targeted && !reverse && !in_controls && cycle_controls(true, window, cx) {
+            cx.notify();
+            return;
+        }
         let focus = if targeted {
-            self.panes[focused].tool_focus()
+            tool_focus
         } else {
             self.panes[focused].composer.focus_handle(cx)
         };
@@ -6627,15 +6666,15 @@ impl Render for CockpitView {
             })
             .unwrap_or_else(|| self.focus.clone());
         use gpui::component::WindowExt as _;
-        let native_text_focused = (gpui::base::TextSelection::has_selection(window, cx)
-            || self
-                .panes
-                .get(self.focused())
-                .is_some_and(|pane| pane.rich.output_focused(&pane.text_namespace(), window, cx)))
-            && self
-                .panes
-                .get(self.focused())
-                .is_some_and(|pane| pane.transcript_focus.contains_focused(window, cx));
+        let native_text_focused = self
+            .panes
+            .get(self.focused())
+            .is_some_and(|pane| pane.transcript_focus.contains_focused(window, cx))
+            && (crate::rich::code_actions_focused(window)
+                || gpui::base::TextSelection::has_selection(window, cx)
+                || self.panes.get(self.focused()).is_some_and(|pane| {
+                    pane.rich.output_focused(&pane.text_namespace(), window, cx)
+                }));
         let pane_control_focused = self.panes.get(self.focused()).is_some_and(|pane| {
             let controls = pane
                 .thread()

@@ -4563,6 +4563,9 @@ fn render_tool(
         && tool.result_line.as_deref().and_then(passed_count).is_some();
     let verdicts: Vec<AnyElement> = tool_verdicts(tool)
         .into_iter()
+        // A failed group already supplies the count; keep the child error and
+        // red verb without repeating the same badge beside it.
+        .filter(|verdict| !(in_group && matches!(verdict, ToolVerdict::Failed)))
         .map(|verdict| match verdict {
             ToolVerdict::Diff(added, removed) => diff_stat(added, removed).into_any_element(),
             // `failed` has no prototype form (R-09): the `.pass` chip
@@ -5260,7 +5263,7 @@ fn render_diff(block: BlockId, diff: &Diff, selection: &TextRuns) -> impl IntoEl
                         .flex_shrink_0()
                         .w(px(theme::DIFF_NUM_W))
                         .text_right()
-                        .text_color(rgb(SEP))
+                        .text_color(rgb(TEXT_MUTED))
                         .child(SharedString::from(number.to_string())),
                 ))
                 .child(
@@ -5297,7 +5300,7 @@ fn render_diff(block: BlockId, diff: &Diff, selection: &TextRuns) -> impl IntoEl
                     div()
                         .min_w_0()
                         .truncate()
-                        .text_color(rgb(SEP))
+                        .text_color(rgb(TEXT_MUTED))
                         .child(SharedString::from(format!("… {omitted} more lines"))),
                 ),
         );
@@ -5704,6 +5707,7 @@ mod tests {
                 signal_status: Some(Status::Idle),
                 timings: HashMap::new(),
                 focused: true,
+                reading_size: Default::default(),
                 selection_scope: gpui::base::TextSelectionScopeId::new(),
                 preview: crate::attachment_preview::Preview::new(cx),
                 expanded,
@@ -5734,6 +5738,7 @@ mod tests {
                     signal_status: Some(Status::Idle),
                     timings: HashMap::new(),
                     focused: true,
+                    reading_size: Default::default(),
                     selection_scope: gpui::base::TextSelectionScopeId::new(),
                     preview: crate::attachment_preview::Preview::new(cx),
                     expanded: HashSet::new(),

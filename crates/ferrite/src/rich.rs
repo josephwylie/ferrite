@@ -7,6 +7,22 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use crate::theme;
 
+pub fn init(cx: &mut App) {
+    cx.bind_keys([gpui::KeyBinding::new(
+        "enter",
+        gpui::NoAction {},
+        Some("TranscriptCodeActions"),
+    )]);
+}
+
+/// Code controls form a native keyboard island inside the transcript.
+pub(crate) fn code_actions_focused(window: &Window) -> bool {
+    window
+        .context_stack()
+        .iter()
+        .any(|context| context.contains("TranscriptCodeActions"))
+}
+
 #[derive(Clone)]
 enum NativeText {
     Rich(Entity<TextViewState>),
@@ -217,11 +233,14 @@ impl gpui::RenderOnce for Markdown {
             window.text_style().clone(),
             cx,
         );
+        let heading_size = window.text_style().font_size.to_pixels(window.rem_size());
         let text_style = if self.muted {
             style(window.rem_size()).with_foreground(rgb(theme::TEXT_2).into())
         } else {
             style(window.rem_size()).with_foreground(rgb(theme::TEXT).into())
         };
+        let text_style = text_style.with_heading_base_font_size(heading_size);
+        let actions_namespace = self.id.clone();
         let (cwd, preview) = self.cache.1.borrow().clone();
         let link_cwd = cwd.clone();
         TextView::new(&state)
@@ -262,19 +281,68 @@ impl gpui::RenderOnce for Markdown {
                     cx.open_url(url);
                 }
             })
-            .code_block_actions(|block, _, _| {
-                if !block
-                    .lang()
-                    .is_some_and(|lang| lang.eq_ignore_ascii_case("html"))
-                {
-                    return gpui::Empty.into_any_element();
-                };
-                let html = block.code();
+            .code_block_actions(move |block, window, cx| {
+                let id: SharedString =
+                    format!("code-actions-{actions_namespace}-{:?}", block.span).into();
+                let code = block.code();
+                let language = block.lang();
+                let actions = window.use_keyed_state(id, cx, |_, _| CodeActions {
+                    code: code.clone(),
+                    language: language.clone(),
+                    copied: false,
+                });
+                actions.update(cx, |actions, cx| {
+                    if actions.code != code || actions.language != language {
+                        actions.code = code;
+                        actions.language = language;
+                        actions.copied = false;
+                        cx.notify();
+                    }
+                });
+                actions
+            })
+            .into_any_element()
+    }
+}
+
+/// Each fenced block retains its own copy confirmation while the answer streams.
+/// The source comes directly from the native code node, never rendered labels.
+struct CodeActions {
+    code: SharedString,
+    language: Option<SharedString>,
+    copied: bool,
+}
+
+impl gpui::Render for CodeActions {
+    fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        let code = self.code.clone();
+        let mut header = gpui::div()
+            .key_context("TranscriptCodeActions")
+            .flex()
+            .items_center()
+            .w_full()
+            .min_w_0()
+            .h(px(theme::CODE_HEADER_H))
+            .gap(px(theme::EVENT_GAP))
+            .font_family(theme::FONT_UI)
+            .text_size(px(theme::FS_SM))
+            .text_color(rgb(theme::TEXT_MUTED))
+            .when_some(self.language.clone(), |header, language| {
+                header.child(gpui::div().min_w_0().truncate().child(language))
+            })
+            .child(gpui::div().flex_1());
+        if self
+            .language
+            .as_ref()
+            .is_some_and(|lang| lang.eq_ignore_ascii_case("html"))
+        {
+            header = header.child(
                 crate::components::button("preview-html")
-                    .child(crate::components::label("Preview", theme::TEXT_2))
+                    .tab_stop(true)
+                    .label("Preview")
                     .on_click(move |_, window, cx| {
                         use gpui::component::WindowExt as _;
-                        let html = html.clone();
+                        let html = code.clone();
                         window.open_dialog(cx, move |dialog, window, _| {
                             dialog
                                 .title("HTML preview")
@@ -292,10 +360,25 @@ impl gpui::RenderOnce for Markdown {
                                         ),
                                 )
                         });
-                    })
-                    .into_any_element()
-            })
-            .into_any_element()
+                    }),
+            );
+        }
+        header.child(
+            crate::components::button("copy-code")
+                .tab_stop(true)
+                .debug_selector(|| "copy-code".into())
+                .accessibility_label("Copy code")
+                .label(if self.copied { "Copied" } else { "Copy" })
+                .when(self.copied, |button| {
+                    button.debug_selector(|| "code-copied".into())
+                })
+                .on_click(cx.listener(|view, _, _, cx| {
+                    cx.stop_propagation();
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(view.code.to_string()));
+                    view.copied = true;
+                    cx.notify();
+                })),
+        )
     }
 }
 
@@ -307,8 +390,13 @@ pub fn style(rem_size: gpui::Pixels) -> TextViewStyle {
         .with_muted_foreground(rgb(theme::TEXT_2).into())
         .with_link(rgb(theme::LINK_INK).into())
         .with_selection(rgba(theme::TEXT_SELECTION_WASH).into())
-        .with_code_background(rgb(theme::PANE).into())
-        .with_code_block(gpui::StyleRefinement::default().p_0())
+        .with_code_background(rgb(theme::PANE_HEAD).into())
+        .with_code_block(
+            gpui::StyleRefinement::default()
+                .p(px(theme::CODE_PAD))
+                .rounded(px(theme::R_CHIP))
+                .text_size(px(theme::FS_MD)),
+        )
         .with_inline_code(gpui::HighlightStyle {
             color: Some(rgb(theme::INLINE_CODE_INK).into()),
             ..Default::default()
@@ -332,7 +420,10 @@ pub fn style(rem_size: gpui::Pixels) -> TextViewStyle {
             base * match level {
                 1 => 1.5,
                 2 => 1.3,
-                _ => 1.15,
+                3 => 1.15,
+                4 => 1.1,
+                5 => 1.05,
+                _ => 1.,
             }
         })
 }
@@ -517,6 +608,22 @@ pub mod testing {
         Some(state.read(cx).selected_text())
     }
 
+    pub fn selected_text(prefix: &str, cx: &App) -> Option<String> {
+        cx.global::<Views>()
+            .0
+            .iter()
+            .find(|(id, _)| id.starts_with(prefix))
+            .map(|(_, (state, _))| state.read(cx).selected_text())
+    }
+
+    pub fn font_size(prefix: &str, cx: &App) -> Option<gpui::Pixels> {
+        cx.global::<Views>()
+            .0
+            .iter()
+            .find(|(id, _)| id.starts_with(prefix))
+            .map(|(_, (_, style))| style.font_size.to_pixels(px(theme::FS_MD)))
+    }
+
     pub fn record(
         id: SharedString,
         state: Entity<TextViewState>,
@@ -690,6 +797,81 @@ mod file_link_tests {
             .into_boxed_str(),
         ))
         .unwrap()
+    }
+
+    #[gpui::test]
+    fn fenced_code_copy_preserves_source_and_confirms_without_copying_chrome(
+        cx: &mut TestAppContext,
+    ) {
+        let code = "    first  line\n\tλ🙂 with spaces  \n\nlast";
+        let (view, cx) = fixture(cx, &format!("Before\n\n```rust\n{code}\n```\n\nAfter"));
+        cx.simulate_resize(gpui::size(px(420.), px(520.)));
+        cx.run_until_parked();
+        let copy = cx
+            .debug_bounds("copy-code")
+            .expect("fenced blocks expose Copy");
+        cx.simulate_click(copy.center(), Modifiers::default());
+        cx.run_until_parked();
+        assert_eq!(
+            cx.update(|_, cx| cx.read_from_clipboard().unwrap().text())
+                .as_deref(),
+            Some(code)
+        );
+        assert!(
+            cx.debug_bounds("code-copied").is_some(),
+            "copy has local confirmation"
+        );
+        cx.update(|window, cx| {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string("stale".into()));
+            window.focus_next(cx);
+        });
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter");
+        cx.simulate_event(gpui::KeyUpEvent {
+            keystroke: gpui::Keystroke::parse("enter").unwrap(),
+        });
+        assert_eq!(
+            cx.update(|_, cx| cx.read_from_clipboard().unwrap().text())
+                .as_deref(),
+            Some(code)
+        );
+        let before = cx.update(|_, cx| testing::first_entity("file-link-fixture", cx).unwrap());
+        view.update(cx, |view, cx| {
+            view.source.push_str(" more prose");
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            assert_eq!(testing::first_entity("file-link-fixture", cx), Some(before));
+            let selected = testing::full_text("file-link-fixture", cx).unwrap();
+            assert!(selected.contains(code));
+            assert!(!selected.contains("Copied"), "header is not source content");
+        });
+        assert!(
+            cx.debug_bounds("code-copied").is_some(),
+            "appending prose retains block feedback"
+        );
+    }
+
+    #[gpui::test]
+    fn code_copy_uses_the_new_source_after_a_stream_update(cx: &mut TestAppContext) {
+        let (view, cx) = fixture(cx, "```\n    before\n```");
+        cx.run_until_parked();
+        let copy = cx.debug_bounds("copy-code").unwrap().center();
+        cx.simulate_click(copy, Modifiers::default());
+        view.update(cx, |view, cx| {
+            view.source = "```\n    after\n\tnew line\n```".into();
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("code-copied").is_none());
+        let copy = cx.debug_bounds("copy-code").unwrap().center();
+        cx.simulate_click(copy, Modifiers::default());
+        assert_eq!(
+            cx.update(|_, cx| cx.read_from_clipboard().unwrap().text())
+                .as_deref(),
+            Some("    after\n\tnew line")
+        );
     }
 
     #[gpui::test]

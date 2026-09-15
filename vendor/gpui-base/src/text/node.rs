@@ -1313,6 +1313,17 @@ impl CodeBlock {
                     .text_size(cx.theme().tokens.typography.mono_md.size)
                     .relative()
                     .refine_style(&style.code_block())
+                    // Actions occupy a header row rather than covering the first
+                    // source line. Literal blocks without actions keep their layout.
+                    .when_some(node_cx.code_block_actions.clone(), |this, actions| {
+                        this.child(
+                            div()
+                                .id("actions")
+                                .w_full()
+                                .mb_1()
+                                .child(actions(&self, window, cx)),
+                        )
+                    })
                     .child(Inline::new(
                         "code",
                         self.state.clone(),
@@ -1323,19 +1334,7 @@ impl CodeBlock {
                             .map(|highlighter| self.highlighted_styles(highlighter))
                             .unwrap_or_default(),
                         node_cx.link_click_handler.clone(),
-                    ))
-                    .when_some(node_cx.code_block_actions.clone(), |this, actions| {
-                        this.child(
-                            div()
-                                .id("actions")
-                                .absolute()
-                                .top_2()
-                                .right_2()
-                                .bg(style.code_background())
-                                .rounded(cx.theme().tokens.radius.md)
-                                .child(actions(&self, window, cx)),
-                        )
-                    }),
+                    )),
             )
             .into_any_element()
     }
@@ -2422,7 +2421,6 @@ impl BlockNode {
                     .whitespace_normal()
                     .text_size(text_size)
                     .font_weight(font_weight)
-                    .when(*level == 1, |heading| heading.italic().underline())
                     .child(children.render(node_cx, window, cx))
                     .into_any_element()
             }

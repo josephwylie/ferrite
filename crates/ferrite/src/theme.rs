@@ -230,6 +230,20 @@ pub const FS_MD: f32 = 12.0;
 /// the model's own words are what an operator reads at length, and the mark
 /// beside them gives the row the room to carry the extra pixel.
 pub const FS_ANSWER: f32 = 13.0;
+
+/// Solo's optional reading scale affects prose, not execution or chrome.
+pub fn answer_text_size(size: ferrite_core::settings::SoloReadingSize) -> f32 {
+    use ferrite_core::settings::SoloReadingSize;
+    match size {
+        SoloReadingSize::Standard => FS_ANSWER,
+        SoloReadingSize::Comfortable => 15.,
+        SoloReadingSize::Large => 17.,
+    }
+}
+
+/// A restrained fenced-code inset; the header and source share one edge.
+pub const CODE_PAD: f32 = 8.;
+pub const CODE_HEADER_H: f32 = 22.;
 /// 11px — `--fs-sm`: the Project and checkout lines, the tasks strip, tool
 /// events, the pass chip, the Composer and its controls.
 pub const FS_SM: f32 = 11.0;
@@ -592,13 +606,10 @@ pub const CHOICE_LABEL_LIFT: f32 = 1.3;
 /// the tool rows use: an answer's prose is indented off the mark rather than
 /// held on the tool rows' text edge, and the gap clears the mark's overhang.
 pub const ANSWER_GAP: f32 = 14.0;
-/// 12px — the answer row's own block padding, on top of the transcript
-/// stack's 10px `BLOCK_GAP`: the model's prose gets more air than the
-/// events around it, so an answer reads as its own passage. It pads rather
-/// than margins so the mark, laid out inside the row, moves with the prose.
-/// Doubled from 6px: at 6 the passage still read as one more event in the
-/// run, and the answer is what the operator is looking for.
-pub const ANSWER_PAD_Y: f32 = 12.0;
+/// Structured answers retain a passage boundary without isolating every update.
+pub const ANSWER_PAD_Y: f32 = 8.0;
+/// A single prose paragraph sits closer to the work it introduces.
+pub const COMMENTARY_PAD_Y: f32 = 4.0;
 #[allow(dead_code)]
 pub const EVENT_GAP: f32 = 8.0;
 pub const INDENT: f32 = 17.0;
@@ -749,6 +760,7 @@ pub fn init_components(cx: &mut gpui::App) {
     gpui::component::init(cx);
     Theme::change(ThemeMode::Dark, None, cx);
     crate::attachments::init(cx);
+    crate::rich::init(cx);
     let theme = Theme::global_mut(cx);
     theme.font_family = FONT_UI.into();
     theme.font_size = px(FS_MD);
