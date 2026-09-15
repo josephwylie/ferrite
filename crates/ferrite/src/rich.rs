@@ -416,16 +416,7 @@ pub fn style(rem_size: gpui::Pixels) -> TextViewStyle {
         )
         .with_paragraph_gap(rems(theme::BLOCK_GAP / f32::from(rem_size)))
         .with_heading_base_font_size(px(theme::FS_MD))
-        .with_heading_font_size(|level, base| {
-            base * match level {
-                1 => 1.5,
-                2 => 1.3,
-                3 => 1.15,
-                4 => 1.1,
-                5 => 1.05,
-                _ => 1.,
-            }
-        })
+        .with_heading_font_size(|level, base| base * theme::heading_scale(level))
 }
 
 /// Literal provider output shares Markdown's selection engine and keeps

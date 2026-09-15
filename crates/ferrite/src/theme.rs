@@ -241,6 +241,18 @@ pub fn answer_text_size(size: ferrite_core::settings::SoloReadingSize) -> f32 {
     }
 }
 
+/// The native Markdown hierarchy and its answer mark use the same size scale.
+pub fn heading_scale(level: u8) -> f32 {
+    match level {
+        1 => 1.5,
+        2 => 1.3,
+        3 => 1.15,
+        4 => 1.1,
+        5 => 1.05,
+        _ => 1.,
+    }
+}
+
 /// A restrained fenced-code inset; the header and source share one edge.
 pub const CODE_PAD: f32 = 8.;
 pub const CODE_HEADER_H: f32 = 22.;

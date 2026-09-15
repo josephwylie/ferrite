@@ -355,6 +355,11 @@ impl TranscriptView {
                 .expect("markdown row has a block")
                 .markdown_run
                 .unwrap_or(blocks[0].id);
+            let answer_size = theme::answer_text_size(self.input.reading_size);
+            let first_line_size = match &blocks[0].body {
+                Body::Heading { level, .. } => answer_size * theme::heading_scale(*level),
+                _ => answer_size,
+            };
             return div()
                 .id(SharedString::from(format!(
                     "answer-{}-{first:?}",
@@ -373,7 +378,7 @@ impl TranscriptView {
                         theme::ANSWER_PAD_Y
                     },
                 ))
-                .text_size(px(theme::answer_text_size(self.input.reading_size)))
+                .text_size(px(answer_size))
                 .child(
                     // The answer wears Ferrite's mark where Claude Code's
                     // transcript puts its `●`, at rest. The gutter cell keeps
@@ -390,10 +395,7 @@ impl TranscriptView {
                                 .absolute()
                                 .left(px(0.))
                                 .top(px(theme::ANSWER_MARK_TOP
-                                    + (theme::answer_text_size(self.input.reading_size)
-                                        - theme::FS_ANSWER)
-                                        * theme::LINE_BODY
-                                        / 2.))
+                                    + (first_line_size - theme::FS_ANSWER) * theme::LINE_BODY / 2.))
                                 .child(icons::ferrite_icon(theme::ANSWER_MARK)),
                         ),
                 )
