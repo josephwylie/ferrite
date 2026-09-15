@@ -3484,7 +3484,7 @@ impl CockpitView {
     /// The condition is `followup::suggest` itself, the same call the idle
     /// line renders from, so the key and the ghost text can never disagree
     /// about whether there is something to accept.
-    fn accept_suggestion(&mut self, cx: &mut Context<Self>) -> bool {
+    fn accept_suggestion(&mut self, window: &Window, cx: &mut Context<Self>) -> bool {
         if self.settings_open
             || self.project_editor.is_some()
             || self.rename.is_some()
@@ -3513,10 +3513,9 @@ impl CockpitView {
         else {
             return false;
         };
-        // Only ever onto an empty line: Tab is the disclosure walk once the
-        // operator has started typing, and overwriting their draft would be
-        // the worst possible reading of the key.
-        if !composer.read(cx).is_empty() {
+        // Only Tab from the empty input accepts its suggestion. Tab from a
+        // transcript action or attachment continues that control's focus walk.
+        if !composer.focus_handle(cx).is_focused(window) || !composer.read(cx).is_empty() {
             return false;
         }
         composer.update(cx, |composer, cx| composer.set(text, cx));
@@ -3525,7 +3524,7 @@ impl CockpitView {
     }
 
     fn band_cycle(&mut self, _: &BandCycle, window: &mut Window, cx: &mut Context<Self>) {
-        if self.accept_suggestion(cx) {
+        if self.accept_suggestion(window, cx) {
             return;
         }
         if self.settings_open

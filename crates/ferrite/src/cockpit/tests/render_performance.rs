@@ -911,3 +911,61 @@ fn keyboard_reaches_code_actions_after_disclosures_and_returns_to_the_draft(
     });
     assert_eq!(fake.sent.borrow().as_slice(), ["prior prompt"]);
 }
+
+#[gpui::test]
+fn code_copy_traversal_does_not_accept_an_empty_composers_followup(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("code-copy-offered-followup", 1);
+    let thread = core.threads()[0];
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TextDelta {
+            text: "```rust\n    first();\n```".into(),
+        })
+        .unwrap();
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    core.pump();
+    core.deliver_suggestion(thread, "Run the tests".into());
+    core.pump();
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    tick(cx);
+    cx.update(|_, cx| {
+        cx.write_to_clipboard(ClipboardItem::new_string("preserved clipboard".into()))
+    });
+
+    cx.simulate_keystrokes("shift-tab");
+    assert!(cx.update(|window, _| crate::rich::code_actions_focused(window)));
+    cx.simulate_keystrokes("tab");
+    cx.update(|window, cx| {
+        let view = view.read(cx);
+        let composer = &view.panes[0].composer;
+        assert!(
+            composer.focus_handle(cx).is_focused(window),
+            "Tab leaves Copy for the input"
+        );
+        assert!(
+            composer.read(cx).is_empty(),
+            "leaving Copy cannot accept ghost text"
+        );
+        assert_eq!(
+            view.cockpit.thread(thread).unwrap().suggestion(),
+            Some("Run the tests")
+        );
+    });
+    assert_eq!(clipboard(cx).as_deref(), Some("preserved clipboard"));
+    assert!(fake.sent.borrow().is_empty());
+
+    // The next Tab is actually from the input, so the offered text remains
+    // available to accept through its intended interaction.
+    cx.simulate_keystrokes("tab");
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.panes[0].composer.read(cx).text(), "Run the tests");
+    });
+    assert_eq!(clipboard(cx).as_deref(), Some("preserved clipboard"));
+    assert!(fake.sent.borrow().is_empty(), "accepting is still unsent");
+}
