@@ -3538,6 +3538,29 @@ impl CockpitView {
                             .any(|request| pane::question_of(&request.decision).is_some())
                 })
         {
+            // Composer is the end of the pane's native tab order. Start its
+            // Subject walk at Main instead of wrapping to a sidebar control,
+            // which the pane's focus keeper would return to Composer.
+            if !self.settings_open && self.project_editor.is_none() {
+                if let Some(pane) = self.panes.get(self.focused()) {
+                    let has_children = pane
+                        .thread()
+                        .and_then(|thread| self.cockpit.thread(thread))
+                        .is_some_and(|thread| !thread.activity().children().is_empty());
+                    if has_children
+                        && pane
+                            .composer
+                            .read(cx)
+                            .focus_target(window, cx)
+                            .contains_focused(window, cx)
+                    {
+                        if let Some(focus) = pane.tab_interaction.main_focus() {
+                            window.focus(&focus, cx);
+                            return;
+                        }
+                    }
+                }
+            }
             window.focus_next(cx);
             return;
         }
@@ -17631,15 +17654,15 @@ mod tests {
         cx.simulate_resize(gpui::size(px(1000.), px(800.)));
         let directory = scratch("original-image-path");
         std::fs::create_dir_all(directory.join("nested")).unwrap();
-        let image = directory.join("résumé #50%.svg");
+        let image = directory.join("résumé #50%.png");
         std::fs::write(
             &image,
-            r#"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect width="100" height="100" fill="white"/></svg>"#,
+            include_bytes!("../assets/app-icon.png"),
         )
         .unwrap();
         // Include a parent component so the route must canonicalize, not
         // concatenate a file:// prefix or hand the OS the unresolved path.
-        let unresolved = directory.join("nested/../résumé #50%.svg");
+        let unresolved = directory.join("nested/../résumé #50%.png");
         view.update_in(cx, |view, window, cx| {
             view.panes[0]
                 .preview

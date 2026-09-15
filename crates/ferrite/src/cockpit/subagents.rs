@@ -35,6 +35,12 @@ struct TabInteractionState {
     keyboard: Option<Subject>,
 }
 
+impl TabInteraction {
+    pub(super) fn main_focus(&self) -> Option<FocusHandle> {
+        self.0.borrow().focus.get(&Subject::Main).cloned()
+    }
+}
+
 /// Pending handles can share a destination. Visit each destination once,
 /// retaining request discovery order and wrapping after the current one.
 pub(super) fn next_request<T: Clone + Eq>(
