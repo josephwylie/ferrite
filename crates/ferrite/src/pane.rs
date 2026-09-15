@@ -661,6 +661,10 @@ pub struct PaneWiring {
     pub ci: Option<AnyElement>,
     pub activity_attention: Option<AnyElement>,
     pub activity_decisions: Option<AnyElement>,
+    /// Questions without enough body space open via a fixed-header action. The
+    /// action must remain reachable even when the Composer fills the body.
+    pub expand_question: Option<AnyElement>,
+    pub question_measurement: Option<AnyElement>,
     pub child_footer: Option<AnyElement>,
 }
 
@@ -817,9 +821,11 @@ pub fn render_pane(
         ci,
         activity_attention,
         mut activity_decisions,
+        expand_question,
+        question_measurement,
         child_footer,
     } = wiring;
-    let has_activity_decisions = activity_decisions.is_some();
+    let has_activity_decisions = activity_decisions.is_some() || expand_question.is_some();
     let subject = thread.and_then(|thread| thread.activity().subject(&view.selected));
     let transcript = subject.as_ref().map(|subject| subject.transcript());
     let decision = if view.is_main() {
@@ -927,7 +933,8 @@ pub fn render_pane(
                 decide,
                 title,
                 composer.or_else(|| child_footer.map(|footer| div().child(footer))),
-                activity_decisions,
+                activity_decisions.filter(|_| expand_question.is_none()),
+                expand_question,
             )),
             focused,
             pulse,
@@ -951,7 +958,7 @@ pub fn render_pane(
             agents,
             ci,
             attention: activity_attention,
-            action: None,
+            action: expand_question,
         },
     ));
     match transcript {
@@ -975,6 +982,7 @@ pub fn render_pane(
                     .child(
                         retained_transcript.expect("L1 transcript entity is wired by CockpitView"),
                     )
+                    .children(question_measurement)
                     .when_some(docked_requests, |body, requests| {
                         body.child(deferred(requests_overlay(requests)))
                     }),
@@ -1493,7 +1501,9 @@ fn l2_cell(
     title: Option<AnyElement>,
     composer: Option<Div>,
     requests: Option<AnyElement>,
+    expand_question: Option<AnyElement>,
 ) -> Div {
+    let compact_question = expand_question.is_some();
     let hot = matches!(
         state,
         WallState::Working | WallState::Failing | WallState::Decision | WallState::Blocked
@@ -1529,24 +1539,28 @@ fn l2_cell(
         .child(div().flex_1());
     // The amber ring is the chip (#22 D17): a Decision cell's right meta
     // keeps the binding like every other cell.
-    header = match state {
-        WallState::Done => header.child(
-            div()
-                .flex_shrink_0()
-                .text_size(px(theme::FS_MONO))
-                .text_color(rgb(RUNNING))
-                .child("done"),
-        ),
-        // The comp's right-meta slot carries the Thread's id; the name is
-        // already the id here, so the slot names the Workspace binding —
-        // what an operator running many Threads actually needs.
-        _ => header.child(
-            div()
-                .flex_shrink_0()
-                .text_size(px(theme::FS_MONO))
-                .text_color(rgb(TEXT_MUTED))
-                .child(binding_label(workspace)),
-        ),
+    header = if let Some(expand) = expand_question {
+        header.child(div().flex_shrink_0().child(expand))
+    } else {
+        match state {
+            WallState::Done => header.child(
+                div()
+                    .flex_shrink_0()
+                    .text_size(px(theme::FS_MONO))
+                    .text_color(rgb(RUNNING))
+                    .child("done"),
+            ),
+            // The comp's right-meta slot carries the Thread's id; the name is
+            // already the id here, so the slot names the Workspace binding —
+            // what an operator running many Threads actually needs.
+            _ => header.child(
+                div()
+                    .flex_shrink_0()
+                    .text_size(px(theme::FS_MONO))
+                    .text_color(rgb(TEXT_MUTED))
+                    .child(binding_label(workspace)),
+            ),
+        }
     };
 
     let cell = div().flex().flex_col().flex_1().min_h_0();
@@ -1568,7 +1582,7 @@ fn l2_cell(
     }
 
     // A Decision's cell body is the card, keyed like the in-Pane card.
-    if let Some(decision) = decision {
+    if let Some(decision) = decision.filter(|_| !compact_question) {
         return cell.child(header).child(
             l2_decision_body(decision, decide)
                 .key_context("Decision")

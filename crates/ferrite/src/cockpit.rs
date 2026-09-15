@@ -6633,7 +6633,30 @@ impl Render for CockpitView {
         // The open popover widens its Composer's own key context to
         // ComposerMenu: the focused node, where enter and escape can win
         // their tie against Submit and Interrupt.
-        for pane in &self.panes {
+        for (index, pane) in self.panes.iter().enumerate() {
+            // Derive this every frame so answering, leaving fullscreen, or
+            // changing Subjects restores the full draft viewport automatically.
+            let answering_expanded_question = fullscreen == Some(index)
+                && pane
+                    .thread()
+                    .and_then(|thread| self.cockpit.thread(thread))
+                    .is_some_and(|open| {
+                        open.activity().pending_decisions().iter().any(|request| {
+                            (request.subject.as_ref() == Some(&pane.selected)
+                                || (request.subject.is_none() && pane.is_main()))
+                                && pane::question_of(&request.decision).is_some()
+                        })
+                    });
+            pane.composer.update(cx, |composer, cx| {
+                composer.set_visible_row_limit(
+                    if answering_expanded_question {
+                        2
+                    } else {
+                        crate::composer::MAX_ROWS
+                    },
+                    cx,
+                )
+            });
             let open = self
                 .popover
                 .as_ref()
@@ -7227,6 +7250,12 @@ impl CockpitView {
             activity_attention: self.activity_attention(index, cx),
             activity_decisions: (level != Level::Wall)
                 .then(|| self.activity_decisions(index, window, cx))
+                .flatten(),
+            expand_question: (level != Level::Wall)
+                .then(|| self.activity_question_expander(index, level == Level::Instruments, cx))
+                .flatten(),
+            question_measurement: l1
+                .then(|| self.activity_question_measurement(index, cx))
                 .flatten(),
             child_footer: self.child_footer(index, cx),
         };

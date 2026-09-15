@@ -103,7 +103,10 @@ pub struct Composer {
     history_available: bool,
     last_layout: Option<Layout>,
     last_bounds: Option<Bounds<Pixels>>,
-    /// The first visual row painted. Zero until the text passes `MAX_ROWS`;
+    /// Temporary viewport cap while an expanded Question needs answering.
+    /// The full draft and shaped rows stay intact for caret scrolling.
+    visible_row_limit: usize,
+    /// The first visual row painted. Zero until the text passes the visible cap;
     /// then prepaint slides it so the caret's row stays in view.
     scroll: usize,
     /// The x a row step keeps aiming at across successive ↑/↓ presses —
@@ -140,6 +143,7 @@ impl Composer {
             history_available: false,
             last_layout: None,
             last_bounds: None,
+            visible_row_limit: MAX_ROWS,
             scroll: 0,
             goal_x: None,
             dragging: false,
@@ -227,6 +231,14 @@ impl Composer {
     pub fn set_history_available(&mut self, available: bool, cx: &mut Context<Self>) {
         if self.history_available != available {
             self.history_available = available;
+            cx.notify();
+        }
+    }
+
+    pub fn set_visible_row_limit(&mut self, rows: usize, cx: &mut Context<Self>) {
+        let rows = rows.clamp(1, MAX_ROWS);
+        if self.visible_row_limit != rows {
+            self.visible_row_limit = rows;
             cx.notify();
         }
     }
@@ -1139,7 +1151,7 @@ impl Element for LineElement {
                     Layout::shape(composer.read(cx), &text_style, line_height, width, window);
                 size(
                     width.unwrap_or_else(|| layout.width()),
-                    line_height * layout.rows().min(MAX_ROWS),
+                    line_height * layout.rows().min(composer.read(cx).visible_row_limit),
                 )
             });
         (layout_id, ())
