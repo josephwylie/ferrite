@@ -1,5 +1,5 @@
-//! One image preview per Pane. The kit owns dialog focus and dismissal;
-//! this module supplies the owning Pane's bounds instead of the window's.
+//! Pane-owned file previews: images use a focused overlay and Markdown uses
+//! a reading rail beside the live transcript.
 
 use std::{
     path::PathBuf,
@@ -12,13 +12,23 @@ use gpui::component::{
     IconName, Sizable, Theme, ThemeStyled,
 };
 use gpui::{
-    canvas, div, prelude::*, relative, rems, App, Bounds, Div, FocusHandle, IntoElement, Pixels,
-    Window,
+    canvas, div, prelude::*, px, relative, rems, rgb, AnyElement, App, Bounds, Div, FocusHandle,
+    IntoElement, Pixels, Window,
 };
+
+use crate::theme;
+
+#[derive(Clone)]
+pub struct Document {
+    pub path: PathBuf,
+    pub title: String,
+    pub source: String,
+}
 
 #[derive(Default)]
 struct State {
     image: Option<(PathBuf, String)>,
+    document: Option<Document>,
     return_focus: Option<FocusHandle>,
 }
 
@@ -60,6 +70,30 @@ impl Preview {
         window.refresh();
     }
 
+    pub fn open_document(&self, path: PathBuf, title: String, window: &mut Window, cx: &mut App) {
+        use gpui::component::{notification::Notification, WindowExt as _};
+        let source = match std::fs::read_to_string(&path) {
+            Ok(source) => source,
+            Err(error) => {
+                window.push_notification(
+                    Notification::error(format!("Could not open {}: {error}", path.display())),
+                    cx,
+                );
+                return;
+            }
+        };
+        self.state.lock().unwrap().document = Some(Document {
+            path,
+            title,
+            source,
+        });
+        window.refresh();
+    }
+
+    pub fn document(&self) -> Option<Document> {
+        self.state.lock().unwrap().document.clone()
+    }
+
     fn close(&self, window: &mut Window, cx: &mut App) {
         let mut state = self.state.lock().unwrap();
         state.image = None;
@@ -71,9 +105,110 @@ impl Preview {
         window.refresh();
     }
 
-    pub fn mount(&self, pane: Div) -> Div {
+    fn close_document(&self, window: &mut Window) {
+        self.state.lock().unwrap().document = None;
+        window.refresh();
+    }
+
+    pub fn mount(&self, pane: Div, document_body: Option<AnyElement>) -> Div {
+        let Some(document) = self.document() else {
+            let preview = self.clone();
+            return pane
+                .child(
+                    canvas(
+                        move |bounds, window, cx| {
+                            if {
+                                let mut prior = preview.bounds.lock().unwrap();
+                                let changed = *prior != bounds;
+                                *prior = bounds;
+                                changed
+                            } && preview.state.lock().unwrap().image.is_some()
+                            {
+                                window.defer(cx, |window, _| window.refresh());
+                            }
+                        },
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .inset_0(),
+                )
+                .child(PreviewLayer(self.clone()));
+        };
+        let Some(body) = document_body else {
+            return pane;
+        };
         let preview = self.clone();
-        pane.child(
+        let mut mounted = div()
+            .relative()
+            .flex()
+            .size_full()
+            .min_w_0()
+            .min_h_0()
+            .child(pane.flex_1().min_w_0());
+        {
+            let close = self.clone();
+            mounted = mounted.child(
+                div()
+                    .debug_selector(|| "markdown-reader".into())
+                    .flex()
+                    .flex_col()
+                    .w(relative(0.48))
+                    .max_w(rems(52.))
+                    .min_h_0()
+                    .bg(rgb(theme::PANE))
+                    .border_l_1()
+                    .border_color(rgb(theme::PANE_HEAD_EDGE))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .h(px(theme::PANE_HEAD_H))
+                            .flex_shrink_0()
+                            .gap_2()
+                            .px(px(theme::PANE_PAD_X))
+                            .bg(rgb(theme::PANE_HEAD))
+                            .border_b_1()
+                            .border_color(rgb(theme::PANE_HEAD_EDGE))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .font_family(theme::FONT_UI)
+                                    .text_size(px(theme::FS_MD))
+                                    .text_color(rgb(theme::TEXT_STRONG))
+                                    .child(document.title),
+                            )
+                            .child(
+                                div()
+                                    .debug_selector(|| "close-markdown-reader".into())
+                                    .child(
+                                        Button::new("close-markdown-reader")
+                                            .ghost()
+                                            .xsmall()
+                                            .icon(IconName::Close)
+                                            .accessibility_label("Close document reader")
+                                            .tooltip("Close document reader")
+                                            .on_click(move |_, window, cx| {
+                                                cx.stop_propagation();
+                                                close.close_document(window);
+                                            }),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id("markdown-reader-scroll")
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_y_scroll()
+                            .px(px(theme::PANE_PAD_X))
+                            .py(px(14.))
+                            .child(body),
+                    ),
+            );
+        }
+        mounted.child(
             canvas(
                 move |bounds, window, cx| {
                     if {

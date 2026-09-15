@@ -6743,10 +6743,24 @@ impl CockpitView {
         cx: &mut Context<Self>,
     ) -> Div {
         let content = self.pane_content(index, level, window, cx);
-        if self.settings_open || self.project_editor.is_some() || !self.panes[index].is_main() {
+        if self.settings_open || self.project_editor.is_some() {
             return content;
         }
-        let content = self.panes[index].preview.mount(content);
+        let document_body = self.panes[index].preview.document().map(|document| {
+            self.panes[index]
+                .document_rich
+                .file_context(document.path.parent(), &self.panes[index].preview);
+            crate::rich::Markdown::new(
+                format!("document-{}", document.path.display()),
+                document.source,
+                self.panes[index].document_rich.clone(),
+            )
+            .into_any_element()
+        });
+        let content = self.panes[index].preview.mount(content, document_body);
+        if !self.panes[index].is_main() {
+            return content;
+        }
         let composer = self.panes[index].composer.clone();
         let identity = self.panes[index].identity;
         let view = cx.entity().downgrade();
