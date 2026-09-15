@@ -836,6 +836,8 @@ pub(super) fn parse_models(result: &Value) -> Vec<ModelInfo> {
 /// - a leading `/name` naming a listed skill becomes a typed
 ///   `{"type":"skill","name","path"}` item (exact, case-sensitive match —
 ///   mirroring the Claude CLI's own dispatch rules) and leaves the items;
+/// - listed skills elsewhere in the prompt also attach typed skill items,
+///   keeping their inline references and surrounding prose intact;
 /// - every whitespace-delimited `@path` token that names a file under the
 ///   Session's cwd rides as a `{"type":"mention","name","path"}` item —
 ///   decoration and persistence; the model reads the file itself;
@@ -859,6 +861,40 @@ pub(super) fn input_items(text: &str, skills: &[SessionCommand], cwd: Option<&Pa
             }));
             rest = after[name.len()..].trim_start();
         }
+    }
+    for (start, _) in rest.match_indices('/') {
+        // Match the composer's file-completion precedence: @paths are files,
+        // even when the final path component happens to name a skill.
+        if rest[..start]
+            .rsplit(char::is_whitespace)
+            .next()
+            .is_some_and(|token| token.starts_with('@'))
+        {
+            continue;
+        }
+        let name = rest[start + 1..]
+            .split(char::is_whitespace)
+            .next()
+            .unwrap_or("");
+        let Some(skill) = skills
+            .iter()
+            .find(|skill| skill.name == name && skill.path.is_some())
+        else {
+            continue;
+        };
+        // Several references to one skill need only one attachment, including
+        // a skill already consumed from the leading command.
+        if items
+            .iter()
+            .any(|item| item["type"] == "skill" && item["name"] == skill.name)
+        {
+            continue;
+        }
+        items.push(serde_json::json!({
+            "type": "skill",
+            "name": skill.name,
+            "path": skill.path.as_deref().expect("filtered on is_some"),
+        }));
     }
     for path in crate::prompt_files::paths(rest, cwd) {
         if !path.is_file() {
@@ -1833,18 +1869,41 @@ mod tests {
         );
     }
 
-    /// Everything that is not a listed leading skill stays plain text — the
-    /// same rules the Claude CLI applies to its own dispatch (leading token
-    /// only, case-sensitive, whole name).
+    #[test]
+    fn inline_skills_become_typed_items_with_the_surrounding_prompt_preserved() {
+        let skills = parse_skills(&skills_result());
+        for text in [
+            "Please use /probe-body for this review",
+            "First review this.\nThen /probe-body",
+            "Please/probe-body now",
+            "Use /probe-body and /probe-body again",
+        ] {
+            assert_eq!(
+                input_items(text, &skills, None),
+                [
+                    serde_json::json!({
+                        "type": "skill",
+                        "name": "probe-body",
+                        "path": "/workspace/.codex/skills/probe-body/SKILL.md",
+                    }),
+                    serde_json::json!({"type": "text", "text": text}),
+                ],
+                "{text}"
+            );
+        }
+    }
+
+    /// Unlisted or malformed skills stay plain text (case-sensitive, whole name).
     #[test]
     fn unlisted_or_malformed_slash_text_stays_plain_text() {
         let skills = parse_skills(&skills_result());
         for text in [
             "/definitely-not-a-command foo",
-            "/PROBE-BODY shout",        // case-sensitive
-            "/probe-bod short",         // whole-token match only
-            "/ probe-body spaced",      // `"/ name"` names nothing
-            "say ok about /probe-body", // leading token only
+            "/PROBE-BODY shout",         // case-sensitive
+            "/probe-bod short",          // whole-token match only
+            "/ probe-body spaced",       // `"/ name"` names nothing
+            "say ok about / probe-body", // whitespace after the slash
+            "read @src/probe-body",      // an active file mention
         ] {
             assert_eq!(
                 input_items(text, &skills, None),
