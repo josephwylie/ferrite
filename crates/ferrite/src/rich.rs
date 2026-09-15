@@ -747,6 +747,7 @@ mod file_link_tests {
 
     struct LinkFixture {
         cache: TextCache,
+        document_cache: TextCache,
         source: String,
         cwd: std::path::PathBuf,
         preview: crate::attachment_preview::Preview,
@@ -755,6 +756,16 @@ mod file_link_tests {
     impl Render for LinkFixture {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
             self.cache.file_context(Some(&self.cwd), &self.preview);
+            let document_body = self.preview.document().map(|document| {
+                self.document_cache
+                    .file_context(document.path.parent(), &self.preview);
+                Markdown::new(
+                    format!("document-{}", document.path.display()),
+                    document.source,
+                    self.document_cache.clone(),
+                )
+                .into_any_element()
+            });
             use gpui::base::ElementExt;
             self.preview.mount(
                 div().size_full().child(
@@ -767,6 +778,7 @@ mod file_link_tests {
                         ))
                         .text_selection_scope(gpui::base::TextSelectionScopeId::default()),
                 ),
+                document_body,
             )
         }
     }
@@ -780,6 +792,7 @@ mod file_link_tests {
             let preview = crate::attachment_preview::Preview::new(cx);
             let view = cx.new(|_| LinkFixture {
                 cache: TextCache::default(),
+                document_cache: TextCache::default(),
                 source: source.into(),
                 cwd: std::env::temp_dir(),
                 preview,
@@ -943,17 +956,28 @@ mod file_link_tests {
     }
 
     #[gpui::test]
-    fn local_file_click_opens_a_file_url_without_line_suffix(cx: &mut TestAppContext) {
+    fn markdown_file_click_opens_the_native_reader(cx: &mut TestAppContext) {
         let path = std::env::temp_dir().join("ferrite-report.md");
         std::fs::write(&path, "fixture").unwrap();
         let source = format!("[report]({}:12)", path.display());
-        let (_, cx) = fixture(cx, &source);
+        let (view, cx) = fixture(cx, &source);
         let target = card(cx, "ferrite-report.md").center();
         cx.simulate_click(target, Modifiers::default());
-        assert_eq!(
-            cx.opened_url(),
-            Some(url::Url::from_file_path(&path).unwrap().to_string())
-        );
+        assert_eq!(cx.opened_url(), None);
+        let document = view
+            .read_with(cx, |view, _| view.preview.document())
+            .expect("the Markdown document is retained by its Pane");
+        assert_eq!(document.path, path);
+        assert_eq!(document.source, "fixture");
+        let reader = cx
+            .debug_bounds("markdown-reader")
+            .expect("the reader is rendered beside the transcript");
+        assert!(reader.left() > px(0.) && reader.size.width < px(800.));
+        let close = cx
+            .debug_bounds("close-markdown-reader")
+            .expect("the reader has an explicit close control");
+        cx.simulate_click(close.center(), Modifiers::default());
+        assert!(view.read_with(cx, |view, _| view.preview.document().is_none()));
     }
 
     #[gpui::test]

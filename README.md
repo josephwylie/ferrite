@@ -142,6 +142,10 @@ their task finishes, and the tray goes with the last one.
 directories, or delete the project. The directory it was created from stays
 primary, and you can't delete a project that still has Threads.
 
+**Click a Markdown file card** in the transcript to open the native document
+reader beside the live Thread. Relative links resolve from the document's
+folder, and opening another Markdown document replaces the reader.
+
 **Right-click** a Thread or Group in the sidebar for: rename, open or resume,
 fullscreen, new Thread in the same project, reveal in Finder, copy path, park,
 leave or dissolve a Group, and delete (press twice). Right-click a transcript
