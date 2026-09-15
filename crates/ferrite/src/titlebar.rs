@@ -117,18 +117,26 @@ pub fn strip(
 /// The titlebar's contextual creation door. It is a sibling of the Windows
 /// drag region, never a child, so its click reaches the app instead of the
 /// non-client frame. macOS receives the same control in its transparent band.
-pub fn add_thread_button(tooltip: &'static str) -> Button {
+pub fn add_thread_button(label: &'static str, tooltip: &'static str) -> Button {
     crate::components::button("titlebar-add-thread")
         .debug_selector(|| "titlebar-add-thread".into())
-        .w(px(ICON_BUTTON))
+        .flex_shrink_0()
         .h(px(ICON_BUTTON))
-        .p_0()
+        .px(px(8.))
         // Windows follows this control with its caption buttons. macOS has
         // no trailing sibling, so keep the creation door inside the same
         // shell inset as the Pane board instead of flush with the window.
         .when(cfg!(target_os = "macos"), |button| button.mr(px(GRID_PAD)))
         .tooltip(tooltip)
-        .child(icon(icons::PLUS, ICON_BUTTON_GLYPH, TEXT_MUTED))
+        .accessibility_label(tooltip)
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(5.))
+                .child(icon(icons::PLUS, ICON_BUTTON_GLYPH, TEXT_MUTED))
+                .child(crate::components::label(label, TEXT)),
+        )
 }
 
 /// An empty stretch Windows drags the window by. The tagged part starts
@@ -328,7 +336,7 @@ mod tests {
                 project: Some("Ferrite".into()),
                 group: Some("Group Alpha".into()),
             },
-            add_thread_button("New Thread in Group"),
+            add_thread_button("Add Thread", "New Thread in Group"),
             true,
             false,
         );

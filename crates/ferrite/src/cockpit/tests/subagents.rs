@@ -1,4 +1,5 @@
 use super::*;
+use crate::theme;
 use ferrite_core::activity::{
     ActivityEvent, AgentInfo, AgentKey, AgentStatus, ExecutionEvent, Subject, TranscriptCoverage,
 };
@@ -498,7 +499,7 @@ fn next_child_request_leaves_another_group_and_opens_its_root(cx: &mut TestAppCo
 }
 
 #[gpui::test]
-fn native_tab_overflow_follows_measured_header_width_and_keeps_discovery_order(
+fn native_tab_overflow_keeps_main_and_selected_subject_visible_in_child_order(
     cx: &mut TestAppContext,
 ) {
     let (core, fake) = cockpit("subagents-responsive-tabs", 1);
@@ -527,13 +528,43 @@ fn native_tab_overflow_follows_measured_header_width_and_keeps_discovery_order(
         "narrow header exposes overflow"
     );
     assert!(
-        debug_bounds(cx, format!("subject-agent-1-{}", key("Rowan").as_str())).is_none(),
-        "selected hidden agent is not promoted ahead of discovery order"
+        debug_bounds(cx, format!("subject-agent-1-{}", key("Rowan").as_str())).is_some(),
+        "the selected child stays visible when other children overflow"
     );
     assert_eq!(
         view.read_with(cx, |view, _| view.panes[0].selected.clone()),
         Subject::Subagent(key("Rowan"))
     );
+    let main = cx.debug_bounds("subject-main-1").unwrap();
+    let main_label = cx.debug_bounds("subject-main-label-1").unwrap();
+    let expected_main_width = cx.update(|window, _| {
+        window
+            .text_system()
+            .shape_line(
+                "Main".into(),
+                px(theme::FS_SM),
+                &[gpui::TextRun {
+                    len: "Main".len(),
+                    font: gpui::font(theme::FONT_UI),
+                    color: rgb(theme::TEXT).into(),
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                }],
+                None,
+            )
+            .width
+    });
+    assert!(
+        main_label.size.width >= expected_main_width,
+        "the Main label fits its shaped text width"
+    );
+    assert!(main_label.left() >= main.left() && main_label.right() <= main.right());
+    let selected = bounds(cx, format!("subject-agent-1-{}", key("Rowan").as_str()));
+    let overflow = cx.debug_bounds("subject-overflow-1").unwrap();
+    let strip = cx.debug_bounds("subject-strip-1").unwrap();
+    assert!(main.right() <= selected.left() && selected.right() <= overflow.left());
+    assert!(strip.contains(&main.origin) && strip.contains(&overflow.bottom_right()));
     emit(
         &fake,
         ActivityEvent::Status {

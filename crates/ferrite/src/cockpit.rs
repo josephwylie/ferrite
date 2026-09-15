@@ -6679,34 +6679,31 @@ impl Render for CockpitView {
                         .project(project)
                         .map(|project| SharedString::from(project.title.clone()))
                 });
-                let add_tooltip = match self.cockpit.roster().view() {
-                    View::Group(_) => "New Thread in Group",
+                let (add_label, add_tooltip, placement) = match self.cockpit.roster().view() {
+                    View::Group(_) => (
+                        "Add Thread",
+                        "New Thread in Group",
+                        DraftPlacement::CurrentGroup,
+                    ),
                     View::Solo
                         if self
                             .focused_thread()
                             .is_some_and(|thread| self.cockpit.groups().of(thread).is_none()) =>
                     {
-                        "New Group with New Thread"
+                        (
+                            "New Group",
+                            "New Group with New Thread",
+                            DraftPlacement::NewGroupWith(
+                                self.focused_thread().expect("the guard names a Thread"),
+                            ),
+                        )
                     }
-                    View::Solo => "New Thread",
+                    View::Solo => ("New Thread", "New Thread", DraftPlacement::CurrentGroup),
                 };
-                let add_thread = crate::titlebar::add_thread_button(add_tooltip).on_click(
-                    cx.listener(|view, _: &ClickEvent, _, cx| {
+                let add_thread = crate::titlebar::add_thread_button(add_label, add_tooltip).on_click(
+                    cx.listener(move |view, _: &ClickEvent, _, cx| {
                         cx.stop_propagation();
-                        match view.cockpit.roster().view() {
-                            View::Group(_) => {
-                                view.open_draft_in_current_view(DraftTarget::Main, cx)
-                            }
-                            View::Solo => match view.focused_thread() {
-                                Some(thread) if view.cockpit.groups().of(thread).is_none() => view
-                                    .open_draft_with_placement(
-                                        DraftTarget::Main,
-                                        DraftPlacement::NewGroupWith(thread),
-                                        cx,
-                                    ),
-                                _ => view.open_draft_in_current_view(DraftTarget::Main, cx),
-                            },
-                        }
+                        view.open_draft_with_placement(DraftTarget::Main, placement, cx);
                     }),
                 );
                 root.child(crate::titlebar::strip(
@@ -9470,6 +9467,34 @@ mod tests {
                 .expect("the new Thread belongs to a Group");
             assert_eq!(group.members, [original, focused]);
             assert_eq!(view.cockpit.roster().view(), View::Group(group.id));
+        });
+    }
+
+    #[gpui::test]
+    fn titlebar_add_in_a_group_keeps_the_draft_in_that_group(cx: &mut TestAppContext) {
+        let (mut core, _fake) = cockpit("titlebar-add-in-group", 2);
+        let threads = core.threads();
+        let group = core
+            .apply_group(GroupChange::Create {
+                first: threads[0],
+                second: threads[1],
+            })
+            .unwrap()
+            .group
+            .unwrap();
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, cx| view.enter_group(group, cx));
+        tick(cx);
+        let add = cx.debug_bounds("titlebar-add-thread").unwrap();
+        cx.simulate_click(add.center(), gpui::Modifiers::none());
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            let draft = view.cockpit.roster().focused().unwrap().draft().unwrap();
+            let scope = view.cockpit.roster().draft_scope(draft).unwrap();
+            assert_eq!(scope.group, Some(group));
+            assert_eq!(scope.new_group_with, None);
+            assert_eq!(view.cockpit.roster().view(), View::Group(group));
+            assert_eq!(view.cockpit.visible().len(), 3);
         });
     }
 
@@ -17261,6 +17286,54 @@ mod tests {
             assert!(view.cockpit.thread(thread).is_none(), "gone on one press");
         });
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[gpui::test]
+    fn image_preview_opens_the_canonical_original_without_sending_or_closing(
+        cx: &mut TestAppContext,
+    ) {
+        let (core, fake) = cockpit("open-original-image", 1);
+        bind_production_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(800.)));
+        let directory = scratch("original-image-path");
+        std::fs::create_dir_all(directory.join("nested")).unwrap();
+        let image = directory.join("résumé #50%.svg");
+        std::fs::write(
+            &image,
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect width="100" height="100" fill="white"/></svg>"#,
+        )
+        .unwrap();
+        // Include a parent component so the route must canonicalize, not
+        // concatenate a file:// prefix or hand the OS the unresolved path.
+        let unresolved = directory.join("nested/../résumé #50%.svg");
+        view.update_in(cx, |view, window, cx| {
+            view.panes[0]
+                .preview
+                .open(unresolved, "Screenshot".into(), window, cx);
+        });
+        tick(cx);
+        let open = cx
+            .debug_bounds("open-original-attachment")
+            .expect("the preview exposes its original image");
+        cx.simulate_click(open.center(), gpui::Modifiers::none());
+        cx.run_until_parked();
+        let opened = url::Url::parse(&cx.opened_url().expect("the OS received a file URL"))
+            .unwrap();
+        assert_eq!(opened.scheme(), "file");
+        assert_eq!(
+            opened.to_file_path().unwrap().canonicalize().unwrap(),
+            image.canonicalize().unwrap()
+        );
+        assert!(opened.fragment().is_none() && opened.query().is_none());
+        assert!(
+            fake.sent.borrow().is_empty(),
+            "inspection never submits a prompt"
+        );
+        assert!(cx.debug_bounds("attachment-preview-content").is_some());
+        cx.simulate_keystrokes("escape");
+        tick(cx);
+        assert!(cx.debug_bounds("attachment-preview-content").is_none());
     }
 
     #[gpui::test]

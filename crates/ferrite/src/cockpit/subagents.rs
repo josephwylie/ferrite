@@ -343,27 +343,43 @@ impl CockpitView {
             .collect();
         // The slot is laid out after the real title, branch, attention and usage
         // controls. Match native Underline/XSmall's 10px inter-tab gap exactly.
-        let available = pane.subject_strip_width;
-        let mut visible_count = widths.len();
-        let all_width = 24. + widths.iter().sum::<f32>() + widths.len() as f32 * 10.;
+        let main_width = measure("Main").ceil() + 2.;
+        let selected = children
+            .iter()
+            .position(|agent| agent.subject() == pane.selected);
+        let overflow_width = |hidden: usize| {
+            if hidden == 0 {
+                0.
+            } else {
+                10. + measure(&format!("+{hidden}")) + 8.
+            }
+        };
+        // Main and the selected Subject are navigation anchors. Reserve their
+        // room first so resizing never hides the transcript being read.
+        let minimum = main_width
+            + selected.map_or(0., |at| 10. + widths[at])
+            + overflow_width(children.len() - usize::from(selected.is_some()));
+        let available = pane.subject_strip_width.max(minimum);
+        let mut visible_indices: Vec<usize> = (0..children.len()).collect();
+        let all_width = main_width + widths.iter().sum::<f32>() + widths.len() as f32 * 10.;
         if all_width > available {
-            visible_count = 0;
-            let mut used = 24.;
+            visible_indices = selected.into_iter().collect();
+            let mut used = main_width + selected.map_or(0., |at| 10. + widths[at]);
             for (at, width) in widths.iter().enumerate() {
-                let remaining = widths.len() - at - 1;
-                let overflow = if remaining > 0 {
-                    10. + measure(&format!("+{remaining}")) + 8.
-                } else {
-                    0.
-                };
+                if selected == Some(at) {
+                    continue;
+                }
+                let overflow = overflow_width(children.len() - visible_indices.len() - 1);
                 if used + 10. + width + overflow > available {
                     break;
                 }
                 used += 10. + width;
-                visible_count = at + 1;
+                visible_indices.push(at);
             }
+            // Priority changes visibility, not the Provider's child order.
+            visible_indices.sort_unstable();
         }
-        let visible = &children[..visible_count];
+        let visible: Vec<_> = visible_indices.iter().map(|at| &children[*at]).collect();
         let mut order = vec![Subject::Main];
         order.extend(visible.iter().map(|agent| agent.subject()));
         let nav = Rc::new(order);
@@ -382,18 +398,18 @@ impl CockpitView {
             .tooltip(|window, cx| {
                 gpui::component::tooltip::Tooltip::new("Main transcript").build(window, cx)
             })
-            .w(px(24.))
+            .w(px(main_width))
             .debug_selector(move || format!("subject-main-{}", thread.get()))
             .child(
                 div()
-                    .w(px(17.))
-                    .h(px(2.))
-                    .rounded_full()
-                    .bg(rgb(if pane.is_main() {
+                    .debug_selector(move || format!("subject-main-label-{}", thread.get()))
+                    .text_size(px(theme::FS_SM))
+                    .text_color(rgb(if pane.is_main() {
                         theme::TEXT_STRONG
                     } else {
                         theme::TEXT_MUTED
-                    })),
+                    }))
+                    .child("Main"),
             );
         tabs = tabs.child(self.subject_tab(
             main,
@@ -437,7 +453,7 @@ impl CockpitView {
             let tooltip = format!("{name} — {}", status_label(agent.status(), agent.fresh()));
             let tab = Tab::new()
                 .aria_label(tooltip.clone())
-                .w(px(widths[at]))
+                .w(px(widths[visible_indices[at]]))
                 .debug_selector(move || selector.clone())
                 .child(content)
                 .tooltip(move |window, cx| {
@@ -460,12 +476,17 @@ impl CockpitView {
             .flex()
             .items_center()
             .flex_1()
-            .min_w(px(58.))
+            .min_w(px(minimum))
             .h(px(26.))
             .debug_selector(move || format!("subject-strip-{}", thread.get()))
             .child(tabs);
-        if visible_count < children.len() {
-            let hidden = &children[visible_count..];
+        if visible_indices.len() < children.len() {
+            let hidden: Vec<_> = children
+                .iter()
+                .enumerate()
+                .filter(|(at, _)| !visible_indices.contains(at))
+                .map(|(_, agent)| agent)
+                .collect();
             let choices = hidden
                 .iter()
                 .map(|agent| components::Choice {
