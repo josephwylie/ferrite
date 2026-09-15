@@ -50,12 +50,12 @@ fn composer_pointer_actions_target_their_own_pane(cx: &mut TestAppContext) {
     cx.simulate_resize(gpui::size(px(1600.), px(900.)));
     tick(cx);
     view.update(cx, |view, cx| {
-        view.panes[0]
-            .composer
-            .update(cx, |composer, cx| composer.set("keep this draft", cx));
-        view.panes[1]
-            .composer
-            .update(cx, |composer, cx| composer.set("send from pane two", cx));
+        view.panes[0].composer.update(cx, |composer, cx| {
+            composer.set("keep this draft".into(), cx)
+        });
+        view.panes[1].composer.update(cx, |composer, cx| {
+            composer.set("send from pane two".into(), cx)
+        });
         cx.notify();
     });
     cx.run_until_parked();
@@ -215,7 +215,7 @@ fn composer_pointer_action_does_not_confirm_another_surface(cx: &mut TestAppCont
     view.update_in(cx, |view, window, cx| {
         view.panes[0]
             .composer
-            .update(cx, |composer, cx| composer.set("must stay", cx));
+            .update(cx, |composer, cx| composer.set("must stay".into(), cx));
         let identity = PaneIdentity::Thread(threads[0]);
         view.settings_open = true;
         view.composer_action(identity, false, window, cx);
