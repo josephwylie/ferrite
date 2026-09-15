@@ -7,7 +7,7 @@
 //! 24px tasks strip, the transcript body, the Decision card and the 58px
 //! Composer — all on `--pane`, inside an
 //! always-in-layout 1px border that only changes colour, with the focus
-//! ring 2px OUTSIDE it so attention and focus are independent channels.
+//! neutral focus ring inset on alert Panes so both signals remain visible.
 //! Tools inherit JetBrains Mono; assistant prose uses the native UI face.
 //! L2 (Instruments) and L3 (Wall) keep the metrics they have — the
 //! prototype specifies only L1 — and take the new palette and scale.
@@ -673,7 +673,7 @@ pub enum WallState {
     Decision,
     /// The Session closed under the Thread: red dot, red ring, alert.
     Blocked,
-    /// Turn complete: dimmed cell, green `✓ done`.
+    /// Turn complete: quiet history, active Composer and green `done`.
     Done,
     Idle,
     /// No transcript in memory at all — the cockpit could not open it.
@@ -851,8 +851,8 @@ pub fn render_pane(
     // Attention and focus are two independent channels, and they no longer
     // nest (§D.1): the state edge is the Pane's own 1px border — always in
     // layout, only ever recoloured, so nothing reflows when a Decision
-    // arrives — and focus is a 2px neutral ring 2px OUTSIDE it, painted by
-    // `focus_wrapper` below.
+    // arrives. On alert Panes the neutral focus ring sits inside that edge,
+    // painted separately by `focus_wrapper` below.
     let attention_pending =
         thread.is_some_and(|thread| !thread.activity().pending_decisions().is_empty());
     let edge: gpui::Hsla = if attention_pending {
@@ -862,6 +862,7 @@ pub fn render_pane(
     } else {
         rgba(TRANSPARENT).into()
     };
+    let alert = attention_pending || state == WallState::Blocked;
     let mut shell = pane_shell(edge);
     let mut activity_attention = activity_attention;
     if level != Level::Transcript {
@@ -879,6 +880,7 @@ pub fn render_pane(
             shell.child(wall_cell(view, wall, state, focused, title)),
             focused,
             pulse,
+            alert,
         );
     }
 
@@ -913,30 +915,29 @@ pub fn render_pane(
             )
         });
         return focus_wrapper(
-            shell
-                .child(l2_cell(
-                    view,
-                    transcript,
-                    decision,
-                    workspace,
-                    branch.as_ref(),
-                    state,
-                    timings,
-                    decide,
-                    title,
-                    composer.or_else(|| child_footer.map(|footer| div().child(footer))),
-                ))
-                .children(activity_decisions),
+            shell.child(l2_cell(
+                view,
+                transcript,
+                decision,
+                workspace,
+                branch.as_ref(),
+                state,
+                timings,
+                decide,
+                title,
+                composer.or_else(|| child_footer.map(|footer| div().child(footer))),
+                activity_decisions,
+            )),
             focused,
             pulse,
+            alert,
         );
     }
 
-    let docked_requests = if decision.is_some_and(|decision| question_of(decision).is_some()) {
-        activity_decisions.take()
-    } else {
-        None
-    };
+    // Requests occupy the space below this Thread's header and above its
+    // actual Composer. Keeping the overlay in that flex slot makes it follow
+    // multiline drafts and split resizing without escaping into other Panes.
+    let docked_requests = activity_decisions.take();
 
     let mut pane = shell.child(pane_head(
         view,
@@ -962,8 +963,21 @@ pub fn render_pane(
             }
             view.rich
                 .file_context(workspace.map(WorkspaceBinding::cwd), &view.preview);
-            pane = pane
-                .child(retained_transcript.expect("L1 transcript entity is wired by CockpitView"));
+            pane = pane.child(
+                div()
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .min_w_0()
+                    .child(
+                        retained_transcript.expect("L1 transcript entity is wired by CockpitView"),
+                    )
+                    .when_some(docked_requests, |body, requests| {
+                        body.child(deferred(requests_overlay(requests)))
+                    }),
+            );
             if transcript.status() == Status::Streaming {
                 pane = pane.child(
                     div()
@@ -1013,7 +1027,7 @@ pub fn render_pane(
                     Some(transcript),
                     ComposerStack {
                         decision,
-                        requests: docked_requests,
+                        requests: None,
                         queued,
                         running,
                         empty: composer_empty,
@@ -1037,7 +1051,7 @@ pub fn render_pane(
             pane = pane.child(parked_body());
         }
     }
-    focus_wrapper(pane, focused, pulse)
+    focus_wrapper(pane, focused, pulse, alert)
 }
 
 /// The Pane box (§D.1): `--pane` ground, 8px radius, and a 1px border that
@@ -1062,20 +1076,22 @@ fn pane_shell(edge: gpui::Hsla) -> Div {
         .overflow_hidden()
 }
 
-/// The Pane, plus its focus ring. The ring is **not** offset: it lands
-/// exactly on the Pane's own border box, same rectangle and same 8px
-/// radius, so a focused Pane is the same size and shape as an unfocused
-/// one and the board's gaps stay clean. A ring painted inside the shell's
+/// The Pane, plus its neutral focus ring. At rest it follows the border;
+/// on an alert Pane it moves two pixels inward, leaving the amber/red edge
+/// intact. Both are overlays, so focus never changes layout or board gaps.
+/// A ring painted inside the shell's
 /// `overflow_hidden()` would be clipped away, so it still lives in a
 /// non-clipping wrapper as an absolute overlay. `pulse` names a Thread
 /// that finished while the operator looked elsewhere: the same ring
 /// breathes until they land on it.
-fn focus_wrapper(shell: Div, focused: bool, pulse: Option<ThreadId>) -> Div {
+fn focus_wrapper(shell: Div, focused: bool, pulse: Option<ThreadId>, alert: bool) -> Div {
     let ring = || {
         div()
             .absolute()
-            .inset_0()
-            .rounded(px(theme::R_SURFACE))
+            .inset(px(if alert { theme::FOCUS_RING_W * 2. } else { 0. }))
+            .rounded(px(
+                theme::R_SURFACE - if alert { theme::FOCUS_RING_W * 2. } else { 0. }
+            ))
             .border(px(theme::FOCUS_RING_W))
             .border_color(rgb(FOCUS))
     };
@@ -1098,6 +1114,21 @@ fn focus_wrapper(shell: Div, focused: bool, pulse: Option<ThreadId>) -> Div {
                 )
                 .into_any_element()
         }))
+}
+
+/// This overlay's containing block is the Pane's remaining body slot, not
+/// the window. Its complete card (heading, scrollable content and actions)
+/// must fit here; it never covers the owning header or the Composer.
+fn requests_overlay(requests: AnyElement) -> Div {
+    div()
+        .absolute()
+        .inset_0()
+        .flex()
+        .flex_col()
+        .justify_end()
+        .min_h_0()
+        .overflow_hidden()
+        .child(requests)
 }
 
 /// The Decision card's `inset 0 0 0 1px` ring — gpui has no inset
@@ -1176,6 +1207,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
                 .child(div().absolute().top(px(2.)).right(px(2.)).child(discard)),
             focused,
             None,
+            false,
         );
     }
 
@@ -1215,6 +1247,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
             )),
         focused,
         None,
+        false,
     )
 }
 
@@ -1452,6 +1485,7 @@ fn l2_cell(
     decide: Option<AnyElement>,
     title: Option<AnyElement>,
     composer: Option<Div>,
+    requests: Option<AnyElement>,
 ) -> Div {
     let hot = matches!(
         state,
@@ -1513,6 +1547,19 @@ fn l2_cell(
         return cell.child(header).child(parked_body());
     };
 
+    if let Some(requests) = requests {
+        return cell
+            .child(header)
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .child(deferred(requests_overlay(requests))),
+            )
+            .children(composer);
+    }
+
     // A Decision's cell body is the card, keyed like the in-Pane card.
     if let Some(decision) = decision {
         return cell.child(header).child(
@@ -1548,6 +1595,7 @@ fn l2_cell(
         body = body.child(
             div()
                 .w_full()
+                .flex_shrink_0()
                 .truncate()
                 .text_size(px(theme::FS_MONO))
                 .text_color(rgb(TEXT_MUTED))
@@ -1558,7 +1606,7 @@ fn l2_cell(
     if state == WallState::Idle {
         // Idle still shows the tail of the conversation: where the Thread
         // stopped, in its own words, newest at the bottom.
-        body = body.child(l2_tail(transcript));
+        body = body.child(l2_tail(transcript, view.text_namespace()));
         body = body.child(
             div()
                 .flex()
@@ -1570,15 +1618,6 @@ fn l2_cell(
                 .child("❯ idle — waiting for work"),
         );
         return cell.child(header).child(body).children(composer);
-    }
-
-    if state == WallState::Done {
-        body = body.child(
-            div()
-                .text_size(px(theme::FS_MONO))
-                .text_color(rgb(TEXT_MUTED))
-                .child("turn complete"),
-        );
     }
 
     if let Some(todos) = read.todos {
@@ -1593,6 +1632,7 @@ fn l2_cell(
         body = body.child(
             div()
                 .w_full()
+                .flex_shrink_0()
                 .truncate()
                 .text_size(px(theme::FS_MONO))
                 .text_color(rgb(fill))
@@ -1600,7 +1640,7 @@ fn l2_cell(
         );
     }
 
-    let mut badges = div().flex().items_center().gap(px(6.));
+    let mut badges = div().flex().flex_shrink_0().items_center().gap(px(6.));
     let mut any_badge = false;
     match read.tests {
         Some(Tests::Passed { count }) => {
@@ -1651,23 +1691,21 @@ fn l2_cell(
     // The tail of the conversation fills what is left: prompts, answers
     // and tool rows in one compact column, newest at the bottom — what
     // the Thread is saying, not only that it is saying something.
-    body = body.child(l2_tail(transcript));
-    if state == WallState::Done {
+    body = body.child(l2_tail(transcript, view.text_namespace()));
+    if transcript.status() == Status::Streaming {
         body = body.child(
             div()
-                .text_size(px(theme::FS_MONO))
-                .text_color(rgb(TEXT_MUTED))
-                .child("❯ idle"),
+                .flex_shrink_0()
+                .child(working_line(transcript, true, false)),
         );
-    } else if transcript.status() == Status::Streaming {
-        body = body.child(working_line(transcript, true, false));
     }
 
-    let mut content = cell.child(header).child(body).children(composer);
+    // Completion quiets historical content; the editable Composer stays at
+    // its normal contrast. The header's "done" is the one completion label.
     if state == WallState::Done {
-        content = content.opacity(theme::DONE_CELL_OPACITY);
+        body = body.opacity(theme::DONE_CELL_OPACITY);
     }
-    content
+    cell.child(header).child(body).children(composer)
 }
 
 /// How many Blocks an L2 tail reaches back for.
@@ -1678,27 +1716,19 @@ const L2_TAIL_LINES: usize = 4;
 /// The compact tail of a transcript for an L2 cell: the newest Blocks as
 /// single runs — a prompt on its raised ground, prose in the reading ink,
 /// a tool row as its glyph and call, a Notice in its signal weight — each
-/// clamped to a few lines, the column anchored to its bottom and clipped
-/// at the top, so whatever height the cell has shows the newest words.
-fn l2_tail(transcript: &Transcript) -> Div {
+/// clamped to a few lines. Native layout measures each candidate in the
+/// actual remaining slot, then paints only complete rows, newest at bottom.
+fn l2_tail(transcript: &Transcript, namespace: SharedString) -> Div {
     let blocks = transcript.blocks();
     let tail = &blocks[blocks.len().saturating_sub(L2_TAIL_BLOCKS)..];
-    let mut column = div()
-        .flex()
-        .flex_col()
-        .flex_1()
-        .min_h_0()
-        .w_full()
-        .justify_end()
-        .overflow_hidden()
-        .gap(px(4.))
-        .text_size(px(theme::FS_MONO))
-        .line_height(relative(theme::LINE_BODY));
+    let mut rows = Vec::new();
     for block in tail {
         let line = |text: String, ink: u32| {
             div()
                 .w_full()
-                .line_clamp(L2_TAIL_LINES)
+                .flex_shrink_0()
+                .text_size(px(theme::FS_MONO))
+                .line_height(relative(theme::LINE_BODY))
                 .text_color(rgb(ink))
                 .child(SharedString::from(text))
         };
@@ -1754,9 +1784,77 @@ fn l2_tail(transcript: &Transcript) -> Div {
                 line(ferrite_core::progress::headline(text), TEXT_2).line_clamp(1)
             }
         };
-        column = column.child(drawn);
+        let padding = if matches!(block.body, Body::Prompt(_)) {
+            theme::CHIP_PAD_Y * 2.
+        } else {
+            0.
+        };
+        let lines = if matches!(block.body, Body::Tool(_) | Body::Thinking(_)) {
+            1
+        } else {
+            L2_TAIL_LINES
+        };
+        rows.push((block.id, drawn, padding, lines));
     }
-    column
+    let selector = format!("l2-tail-{namespace}");
+    div()
+        .debug_selector(move || selector.clone())
+        .flex()
+        .flex_1()
+        .min_h_0()
+        .w_full()
+        .child(
+            canvas(
+                move |bounds, window, cx| {
+                    let mut remaining = bounds.size.height;
+                    let mut visible = Vec::new();
+                    for (id, row, padding, limit) in rows.into_iter().rev() {
+                        let available_lines = ((f32::from(remaining) - padding)
+                            / (theme::FS_MONO * theme::LINE_BODY))
+                            .floor()
+                            .max(0.) as usize;
+                        if available_lines == 0 {
+                            break;
+                        }
+                        // Only the newest row may use a smaller line clamp. Older
+                        // rows are either drawn whole (up to the normal L2 limit)
+                        // or omitted. No clipping through a glyph baseline.
+                        let lines = if visible.is_empty() {
+                            limit.min(available_lines)
+                        } else {
+                            limit
+                        };
+                        let selector = format!("l2-tail-row-{namespace}-{id:?}");
+                        let mut row = row
+                            .line_clamp(lines)
+                            .debug_selector(move || selector.clone())
+                            .into_any_element();
+                        let size = row.layout_as_root(
+                            gpui::size(
+                                gpui::AvailableSpace::Definite(bounds.size.width),
+                                gpui::AvailableSpace::MinContent,
+                            ),
+                            window,
+                            cx,
+                        );
+                        if size.height > remaining {
+                            break;
+                        }
+                        let origin = point(bounds.left(), bounds.top() + remaining - size.height);
+                        row.prepaint_at(origin, window, cx);
+                        visible.push(row);
+                        remaining -= size.height + px(4.);
+                    }
+                    visible
+                },
+                |_, rows, window, cx| {
+                    for mut row in rows {
+                        row.paint(window, cx);
+                    }
+                },
+            )
+            .size_full(),
+        )
 }
 
 /// The Cockpit board's Decision cell body: the command, who wants it, and
@@ -4967,11 +5065,18 @@ pub fn tool_disclosure_control(
         .flex()
         .items_center()
         .cursor_pointer()
-        // Keyboard cycling is the one time the target has to be visible:
-        // without a ground the operator cannot see which row `tab` is on.
+        // Keyboard cycling outlines the complete disclosure header so the
+        // operator can see which row Enter will toggle.
         // The pointer never triggers it.
         .when(targeted, |control| {
-            control.track_focus(focus).key_context("ToolDisclosure")
+            control
+                .track_focus(focus)
+                .key_context("ToolDisclosure")
+                .child(
+                    ring_overlay(FOCUS, theme::R_CONTROL)
+                        .border_color(rgb(FOCUS))
+                        .debug_selector(|| "tool-disclosure-keyboard-target".into()),
+                )
         })
         .child(
             div()

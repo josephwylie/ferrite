@@ -9006,6 +9006,7 @@ fn transcript_text(blocks: &[ferrite_core::transcript::Block]) -> String {
 #[cfg(test)]
 mod tests {
     mod completion_checks;
+    mod layout_polish;
     mod provider_controls;
     mod provider_forms;
     mod provider_navigation;

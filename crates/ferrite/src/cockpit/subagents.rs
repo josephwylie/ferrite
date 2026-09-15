@@ -91,6 +91,9 @@ fn request_island(
     cx: &mut gpui::App,
 ) -> AnyElement {
     let radius = gpui::component::Theme::global(cx).radius_2xl();
+    // Clip flex ancestors instead of forcing zero minimum heights: the
+    // native Scrollable must contribute its intrinsic size until the pane
+    // runs out of space, then shrink only its content viewport.
     let surface = div()
         .bg(rgb(theme::RAISED))
         .border_1()
@@ -99,12 +102,14 @@ fn request_island(
         .p(px(16.))
         .w_full()
         .min_w_0()
+        .overflow_hidden()
         .style()
         .clone();
     native_keys(
         div()
             .w_full()
             .min_w_0()
+            .overflow_hidden()
             .flex()
             .justify_center()
             .px(radius)
@@ -114,6 +119,8 @@ fn request_island(
                     .id(("question-island", handle.serial as usize))
                     .debug_selector(|| "question-island".into())
                     .relative()
+                    .flex()
+                    .flex_col()
                     // The island floats over the transcript, whose prose is
                     // selectable and so paints an I-beam. Without a hitbox of
                     // its own the card inherits that cursor everywhere the
@@ -122,12 +129,14 @@ fn request_island(
                     .w_full()
                     .max_w(px(680.))
                     .min_w_0()
+                    .overflow_hidden()
                     .font_family(theme::FONT_UI)
                     .child(
                         GroupBox::new()
                             .id("question-surface")
                             .fill()
                             .min_w_0()
+                            .overflow_hidden()
                             .content_style(surface)
                             .child(body),
                     ),
@@ -846,23 +855,15 @@ impl CockpitView {
             .w_full()
             .min_w_0()
             .flex()
-            .flex_shrink_0()
+            .min_h_0()
+            .max_h_full()
             .flex_col()
             .gap(px(8.));
         for request in requests {
             cards = cards.child(self.request_card(index, thread, request, window, cx));
         }
         if multiple_requests {
-            Some(
-                native_keys(
-                    cards
-                        .max_h(px(
-                            (f32::from(window.viewport_size().height) * 0.55).min(440.)
-                        ))
-                        .overflow_y_scrollbar(),
-                )
-                .into_any_element(),
-            )
+            Some(native_keys(cards.max_h_full().overflow_y_scrollbar()).into_any_element())
         } else {
             // A single request owns its own bounded content viewport. Giving
             // its surrounding stack another scroll container makes that
@@ -1472,11 +1473,11 @@ impl CockpitView {
         }
         let mut content = div()
             .id(("question-content", handle.serial as usize))
+            .debug_selector(|| "question-scroll-content".into())
             .w_full()
             .min_w_0()
-            .max_h(px(
-                (f32::from(window.viewport_size().height) * 0.4).min(320.)
-            ))
+            .flex_shrink_1()
+            .max_h(px(320.))
             .overflow_y_scrollbar()
             .pr(px(4.))
             .flex()
@@ -1484,6 +1485,7 @@ impl CockpitView {
             .gap(px(20.));
         for (qi, question) in questions.iter().enumerate() {
             let mut section = div()
+                .flex_shrink_0()
                 .w_full()
                 .min_w_0()
                 .flex()
@@ -1638,6 +1640,7 @@ impl CockpitView {
             status.into_any_element()
         };
         let mut body = div()
+            .overflow_hidden()
             .w_full()
             .min_w_0()
             .flex()
@@ -1645,6 +1648,7 @@ impl CockpitView {
             .gap(px(16.))
             .child(
                 div()
+                    .flex_shrink_0()
                     .flex()
                     .flex_wrap()
                     .items_center()
@@ -1684,6 +1688,7 @@ impl CockpitView {
         let selector = format!("request-submit-{}-{}", thread.get(), handle.serial);
         body = body.child(
             div()
+                .flex_shrink_0()
                 .flex()
                 .justify_end()
                 .items_center()
