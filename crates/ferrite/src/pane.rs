@@ -3342,7 +3342,7 @@ pub fn keycap_allow() -> Stateful<Div> {
     keycap("y allow", "y", " allow", TEXT_2)
 }
 pub fn keycap_deny() -> Stateful<Div> {
-    keycap("n deny", "n", " deny", TEXT_2)
+    keycap("n deny", "n", " deny", TEXT_2).debug_selector(|| "decision-deny".into())
 }
 pub fn keycap_always() -> Stateful<Div> {
     keycap("a always", "a", " always", TEXT_2)

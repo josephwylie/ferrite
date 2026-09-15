@@ -3216,9 +3216,11 @@ impl CockpitView {
         if stop {
             if !starting
                 && !identity.thread().is_some_and(|thread| {
-                    self.cockpit
-                        .thread(thread)
-                        .is_some_and(|open| open.busy() || open.pending().is_some())
+                    self.cockpit.thread(thread).is_some_and(|open| {
+                        open.busy()
+                            || open.activity().main_operator_turn()
+                            || open.pending().is_some()
+                    })
                 })
             {
                 return;
@@ -3255,10 +3257,12 @@ impl CockpitView {
             .is_some_and(|id| self.cockpit.draft_starting(id));
         let can_send = pane.composer.read(cx).can_submit() && !starting;
         let queued = open.as_ref().is_some_and(|open| open.needs_queue());
+        // Submission precedes the provider's Running event. Keep Stop
+        // available during that admission interval as well as the live turn.
         let can_stop = starting
-            || open
-                .as_ref()
-                .is_some_and(|open| open.busy() || open.pending().is_some());
+            || open.as_ref().is_some_and(|open| {
+                open.busy() || open.activity().main_operator_turn() || open.pending().is_some()
+            });
         let has_queue = open.as_ref().is_some_and(|open| open.queued().is_some());
         let send =
             crate::components::button(SharedString::from(format!("composer-send-{identity:?}")))
@@ -11201,9 +11205,8 @@ mod tests {
     /// #26: the mouse presses the keycap it depicts — a real click on the
     /// card's rightmost keycap runs its exact decide verb (`n deny`), even
     /// with text on the Composer line, where the n KEY would type instead.
-    /// The sweep hunts the card band so the test does not encode the
-    /// keycap's exact position, and the first click that answers must have
-    /// denied — allow sits further left.
+    /// Use the keycap's actual bounds: the Composer also has real pointer
+    /// actions, so a coordinate sweep would click unrelated controls first.
     #[gpui::test]
     fn clicking_a_keycap_runs_its_own_decide_verb(cx: &mut TestAppContext) {
         let (core, fake) = cockpit("keycap-click", 1);
@@ -11227,28 +11230,12 @@ mod tests {
             );
         });
 
-        // Sweep the card band right to left until a click answers; misses
-        // land on the card's own dead space and change nothing.
-        let mut answered = false;
-        'sweep: for row in 0..12 {
-            let y = 838. - row as f32 * 4.;
-            for step in 0..45 {
-                let x = 1430. - step as f32 * 6.;
-                cx.simulate_click(gpui::point(px(x), px(y)), gpui::Modifiers::none());
-                cx.run_until_parked();
-                if view.read_with(cx, |view, _| {
-                    view.cockpit
-                        .thread(thread)
-                        .and_then(|open| open.pending())
-                        .is_none()
-                }) {
-                    answered = true;
-                    break 'sweep;
-                }
-            }
-        }
-        assert!(answered, "the sweep never found a keycap");
+        cx.run_until_parked();
+        let deny = cx.debug_bounds("decision-deny").expect("the Deny keycap");
+        cx.simulate_click(deny.center(), gpui::Modifiers::none());
+        cx.run_until_parked();
         view.read_with(cx, |view, cx| {
+            assert!(view.cockpit.thread(thread).unwrap().pending().is_none());
             let answered_as = view
                 .cockpit
                 .thread(thread)

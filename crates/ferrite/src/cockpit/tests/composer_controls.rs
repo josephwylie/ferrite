@@ -42,14 +42,20 @@ fn composer_followup_stays_inside_the_editor_beside_send(cx: &mut TestAppContext
 #[gpui::test]
 fn composer_pointer_actions_target_their_own_pane(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("composer-pointer-panes", 2);
-    let threads = core.threads();
-    group_all(&mut core);
-    core.focus(PaneIdentity::Thread(threads[0]));
+    let group = group_all(&mut core);
+    core.enter_group(group).unwrap();
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let threads = view.read_with(cx, |view, _| {
+        view.panes
+            .iter()
+            .map(|pane| pane.thread().unwrap())
+            .collect::<Vec<_>>()
+    });
     cx.simulate_resize(gpui::size(px(1600.), px(900.)));
     tick(cx);
     view.update(cx, |view, cx| {
+        view.focus_pane(0);
         view.panes[0].composer.update(cx, |composer, cx| {
             composer.set("keep this draft".into(), cx)
         });
@@ -167,6 +173,12 @@ fn composer_busy_tuning_choices_explain_and_preserve_selection(cx: &mut TestAppC
             .unwrap();
         // A click from the menu's previous frame also observes current busy state.
         view.cockpit.send(thread, "work".into());
+        view.cockpit.apply_input(
+            thread,
+            ferrite_core::Input::Event(SessionEvent::RunState {
+                state: ferrite_core::RunState::Running,
+            }),
+        );
         view.pick(pick, cx);
         let menu = view.popover.as_ref().expect("explanation stays open");
         assert_eq!(menu.rows[0].name, TUNING_BUSY_HINT);
@@ -209,14 +221,13 @@ fn composer_busy_tuning_choices_explain_and_preserve_selection(cx: &mut TestAppC
 #[gpui::test]
 fn composer_pointer_action_does_not_confirm_another_surface(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("composer-modal-guard", 2);
-    let threads = core.threads();
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
     view.update_in(cx, |view, window, cx| {
         view.panes[0]
             .composer
             .update(cx, |composer, cx| composer.set("must stay".into(), cx));
-        let identity = PaneIdentity::Thread(threads[0]);
+        let identity = view.panes[0].identity;
         view.settings_open = true;
         view.composer_action(identity, false, window, cx);
         assert!(view.settings_open);
