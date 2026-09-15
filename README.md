@@ -117,8 +117,9 @@ With the pointer:
   directories assigned to it or remove it. Its original directory always
   remains primary; Projects with Threads cannot be removed.
 - **Click a Markdown file card** in the transcript to open Ferrite's native
-  document reader beside the live Thread. Relative links resolve from the
-  document's folder, and opening another Markdown document replaces the reader.
+  document reader as a docked Pane beside the live Thread. Drag the seam to
+  resize it. Relative links resolve from the document's folder, and opening
+  another Markdown document replaces the reader.
 - **Right-click** a Thread or Group in the nav for its menu:
   rename, open or resume, fullscreen, new Thread in the same Project,
   reveal in Finder, copy path, park, leave or dissolve a Group, delete
