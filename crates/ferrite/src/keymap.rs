@@ -191,8 +191,8 @@ pub fn bindings(platform: Platform) -> Vec<(String, &'static str, Option<&'stati
         // Shift: the same draft, aimed straight at "new worktree" instead
         // of the checkout the operator is sitting in.
         (with_primary("shift-n"), "cockpit::NewWorktreeThread", None),
-        // Tab keeps #29's draft-band walk; on a Thread Pane the same action
-        // walks L1 tool disclosures. Shift-Tab is the reverse Thread walk.
+        // Tab accepts a highlighted command first, then keeps #29's draft-band
+        // walk or L1 tool disclosure walk. Shift-Tab is the reverse Thread walk.
         ("tab".into(), "cockpit::BandCycle", Some("Ferrite")),
         (
             "shift-tab".into(),

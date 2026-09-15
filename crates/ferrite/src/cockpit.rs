@@ -613,7 +613,7 @@ impl DraftCommands {
 /// other pick is Ferrite's own act, never a prompt.
 #[derive(PartialEq)]
 enum Consequence {
-    /// Replace the whole `/filter` with `/name ` — sent later as plain text
+    /// Replace the active `/filter` with `/name ` — sent later as plain text
     /// on Claude and translated to the typed skill item inside the Codex
     /// Session.
     Command(SharedString),
@@ -1019,7 +1019,8 @@ impl CockpitView {
         {
             draft.error = None;
         }
-        if slash_filter(composer.read(cx).text()).is_none() {
+        let state = composer.read(cx);
+        if slash_token(state.text(), state.cursor()).is_none() {
             self.draft_commands = None;
         }
         // A picker or a band chip is not text-derived (#11, #25, #29):
@@ -3330,6 +3331,15 @@ impl CockpitView {
     }
 
     fn band_cycle(&mut self, _: &BandCycle, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(at) = self
+            .popover
+            .as_ref()
+            .filter(|open| matches!(open.kind, Kind::Commands))
+            .map(|open| open.selected)
+        {
+            self.pick(at, cx);
+            return;
+        }
         if self.accept_suggestion(cx) {
             return;
         }
@@ -3636,7 +3646,7 @@ impl CockpitView {
     // --------------------------------------------------- Composer menus (#23)
 
     /// Re-derive the text-derived popover from the focused line's own text.
-    /// Nothing else opens or closes a menu: `/` at the start opens commands,
+    /// Nothing else opens or closes a menu: `/filter` at the caret opens commands,
     /// an `@token` under the caret opens files, anything else closes. A
     /// picker or a band chip holds the slot while it is up and is left
     /// alone here.
@@ -3662,7 +3672,14 @@ impl CockpitView {
             let composer = pane.composer.read(cx);
             (composer.text().to_string(), composer.cursor())
         };
-        if let Some(filter) = slash_filter(&text) {
+        let mention = mention_token(&text, cursor);
+        // A slash inside an active @path belongs to file completion.
+        if let Some((token_start, filter)) =
+            slash_token(&text, cursor).filter(|_| mention.is_none())
+        {
+            // Local actions consume the entire command line. Inside prose,
+            // offer provider skills only so a pick cannot discard the draft.
+            let standalone = token_start == 0 && cursor == text.len();
             let Some(thread) = thread else {
                 let identity = pane.identity;
                 let draft = pane.draft()?;
@@ -3673,6 +3690,9 @@ impl CockpitView {
                         // Import remains available when a workspace was removed.
                         // Never reuse commands from the previous valid binding.
                         self.draft_commands = None;
+                        if !standalone {
+                            return None;
+                        }
                         let row = local_row(filter, "import", "adopt a CLI session file", false)?;
                         return Some(Popover {
                             pane: identity,
@@ -3710,7 +3730,10 @@ impl CockpitView {
                         active: false,
                     })
                     .collect();
-                if let Some(row) = local_row(filter, "import", "adopt a CLI session file", false) {
+                if let Some(row) = standalone
+                    .then(|| local_row(filter, "import", "adopt a CLI session file", false))
+                    .flatten()
+                {
                     rows.retain(|existing| existing.row.name != row.name);
                     rows.insert(
                         0,
@@ -3775,7 +3798,7 @@ impl CockpitView {
                 rows.insert(0, row);
                 rows.truncate(MENU_ROWS_MAX);
             };
-            if pane::offers_import(Some(open.transcript())) {
+            if standalone && pane::offers_import(Some(open.transcript())) {
                 if let Some(row) = local_row(filter, "import", "adopt a CLI session file", false) {
                     push_local(
                         &mut rows,
@@ -3796,7 +3819,10 @@ impl CockpitView {
             } else {
                 "switch provider / model"
             };
-            if let Some(row) = local_row(filter, "effort", "switch reasoning effort", false) {
+            if let Some(row) = standalone
+                .then(|| local_row(filter, "effort", "switch reasoning effort", false))
+                .flatten()
+            {
                 push_local(
                     &mut rows,
                     Row {
@@ -3806,7 +3832,10 @@ impl CockpitView {
                     },
                 );
             }
-            if let Some(row) = local_row(filter, "model", detail, false) {
+            if let Some(row) = standalone
+                .then(|| local_row(filter, "model", detail, false))
+                .flatten()
+            {
                 push_local(
                     &mut rows,
                     Row {
@@ -3827,7 +3856,7 @@ impl CockpitView {
                 selected: 0,
             });
         }
-        let (token_start, filter) = mention_token(&text, cursor)?;
+        let (token_start, filter) = mention?;
         // No binding → nothing to walk → no popover.
         let root = match (thread, pane.draft()) {
             (Some(thread), _) => self
@@ -4067,7 +4096,7 @@ impl CockpitView {
         else {
             return;
         };
-        // Every command pick replaces the whole line.
+        // Local command actions consume a standalone command line.
         let splice_line = |cx: &mut Context<Self>, text: &str| {
             composer.update(cx, |composer, cx| {
                 let whole = 0..composer.text().len();
@@ -4075,7 +4104,25 @@ impl CockpitView {
             });
         };
         match &row.consequence {
-            Consequence::Command(name) => splice_line(cx, &format!("/{name} ")),
+            Consequence::Command(name) => {
+                composer.update(cx, |composer, cx| {
+                    let cursor = composer.cursor();
+                    let text = composer.text();
+                    let Some((start, _)) = slash_token(text, cursor) else {
+                        return;
+                    };
+                    // Complete the whole token even when editing its middle.
+                    let mut end = cursor
+                        + text[cursor..]
+                            .find(char::is_whitespace)
+                            .unwrap_or(text.len() - cursor);
+                    // Reuse an existing separator instead of inserting two spaces.
+                    if text[end..].starts_with(' ') {
+                        end += 1;
+                    }
+                    composer.splice(start..end, &format!("/{name} "), cx);
+                });
+            }
             Consequence::Inert => {}
             Consequence::OpenProviderPicker => {
                 if let Some(thread) = open.pane.thread() {
@@ -5372,13 +5419,28 @@ impl CockpitView {
                     row.inert,
                 ),
             };
-            popover = popover.child(drawn.on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |view, _: &MouseDownEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.pick(at, cx);
-                }),
-            ));
+            popover = popover.child(
+                drawn
+                    .debug_selector(move || format!("composer-menu-row-{at}"))
+                    .on_mouse_move(cx.listener(move |view, _: &gpui::MouseMoveEvent, _, cx| {
+                        if let Some(open) = &mut view.popover {
+                            if matches!(open.kind, Kind::Commands)
+                                && open.selected != at
+                                && open.rows.get(at).is_some_and(|row| !row.inert)
+                            {
+                                open.selected = at;
+                                cx.notify();
+                            }
+                        }
+                    }))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |view, _: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            view.pick(at, cx);
+                        }),
+                    ),
+            );
         }
         popover = popover.child(pane::popover_footer(open.kind.hints()));
         Some(popover.into_any_element())
@@ -5921,11 +5983,21 @@ const MENU_ROWS_MAX: usize = 8;
 /// the walk runs when the menu opens and keystrokes only re-filter it.
 const MENTION_FILE_CAP: usize = 2000;
 
-/// The `/` menu's filter: the whole line after a leading `/`, while it is
-/// still one token — the first whitespace ends the command and the menu.
-fn slash_filter(text: &str) -> Option<&str> {
-    let after = text.strip_prefix('/')?;
-    (!after.contains(char::is_whitespace)).then_some(after)
+/// The slash and filter immediately before the caret, anywhere in a draft.
+/// Whitespace ends the filter; a letter must directly follow the slash.
+/// A lone leading slash keeps the existing full-command discovery shortcut.
+fn slash_token(text: &str, cursor: usize) -> Option<(usize, &str)> {
+    let head = text.get(..cursor)?;
+    let start = head.rfind('/')?;
+    let filter = &head[start + 1..];
+    if filter.contains(char::is_whitespace) {
+        return None;
+    }
+    let valid = filter
+        .chars()
+        .next()
+        .map_or(start == 0, char::is_alphabetic);
+    valid.then_some((start, filter))
 }
 
 /// The `@` token the caret sits in: the `@`'s byte offset and the filter
@@ -15234,18 +15306,40 @@ mod tests {
         assert_eq!(composer_text(&view, cx), "draft", "Decision owns its state");
     }
 
-    /// The line's triggers, parsed exactly as the wire reads them: `/` only
-    /// as a leading single token, `@` only opening a token under the caret.
+    /// Slash completion follows the caret anywhere; mentions still require
+    /// a token boundary so an email address cannot open file completion.
     #[test]
     fn the_slash_and_mention_triggers_parse_the_line() {
-        assert_eq!(slash_filter("/"), Some(""));
-        assert_eq!(slash_filter("/co"), Some("co"));
+        assert_eq!(slash_token("/", 1), Some((0, "")));
+        assert_eq!(slash_token("/co", 3), Some((0, "co")));
         assert_eq!(
-            slash_filter("/compact now"),
+            slash_token("/compact now", 12),
             None,
             "a space ends the command"
         );
-        assert_eq!(slash_filter("say /compact"), None, "leading token only");
+        assert_eq!(slash_token("say /compact", 12), Some((4, "compact")));
+        assert_eq!(slash_token("say/co", 6), Some((3, "co")));
+        assert_eq!(slash_token("🦀\n/co", 8), Some((5, "co")));
+        assert_eq!(slash_token("say /co later", 7), Some((4, "co")));
+        assert_eq!(slash_token("/commit and /co", 15), Some((12, "co")));
+        assert_eq!(
+            slash_token("/browser:control", 16),
+            Some((0, "browser:control"))
+        );
+        for text in [
+            "say /",
+            "/ ",
+            "/ co",
+            "/co ",
+            "/co\t",
+            "/co\n",
+            "/co\u{a0}",
+            "/1",
+            "/-co",
+        ] {
+            assert_eq!(slash_token(text, text.len()), None, "{text:?}");
+        }
+        assert_eq!(slash_token("🦀 /co", 1), None, "invalid UTF-8 cursor");
 
         assert_eq!(mention_token("@", 1), Some((0, "")));
         assert_eq!(mention_token("fix @Xte", 8), Some((4, "Xte")));
@@ -15367,6 +15461,126 @@ mod tests {
         });
     }
 
+    #[gpui::test]
+    fn skill_picker_opens_after_prose_and_preserves_it_when_picking(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("skill-picker-inline", 1);
+        bind_production_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        fake.streams.borrow()[0]
+            .send(SessionEvent::Commands {
+                commands: menu_commands(),
+            })
+            .unwrap();
+        tick(cx);
+
+        cx.simulate_input("Please review this with /co");
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            let menu = view.popover.as_ref().expect("/co after prose opens skills");
+            assert_eq!(menu.rows[menu.selected].name.as_ref(), "/code-review");
+        });
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(
+            composer_text(&view, cx),
+            "Please review this with /code-review "
+        );
+        view.read_with(cx, |view, _| assert!(view.popover.is_none()));
+        assert!(
+            fake.sent.borrow().is_empty(),
+            "picking must not send a prompt"
+        );
+    }
+
+    #[gpui::test]
+    fn skill_picker_tab_inserts_the_highlighted_skill(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("skill-picker-tab", 1);
+        bind_production_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        fake.streams.borrow()[0]
+            .send(SessionEvent::Commands {
+                commands: menu_commands(),
+            })
+            .unwrap();
+        tick(cx);
+
+        cx.simulate_input("/co");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("down tab");
+        cx.run_until_parked();
+        assert_eq!(composer_text(&view, cx), "/commit ");
+        view.read_with(cx, |view, _| assert!(view.popover.is_none()));
+        assert!(fake.sent.borrow().is_empty(), "Tab must not send a prompt");
+    }
+
+    #[gpui::test]
+    fn skill_picker_tab_inserts_the_hovered_skill(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("skill-picker-hover-tab", 1);
+        bind_production_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        fake.streams.borrow()[0]
+            .send(SessionEvent::Commands {
+                commands: menu_commands(),
+            })
+            .unwrap();
+        tick(cx);
+        cx.simulate_input("/co");
+        cx.run_until_parked();
+
+        let row = cx.debug_bounds("composer-menu-row-2").expect("compact row");
+        cx.simulate_mouse_move(row.center(), None, gpui::Modifiers::none());
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.popover.as_ref().unwrap().selected, 2)
+        });
+        cx.simulate_keystrokes("tab");
+        cx.run_until_parked();
+        assert_eq!(composer_text(&view, cx), "/compact ");
+        view.read_with(cx, |view, _| assert!(view.popover.is_none()));
+        assert!(fake.sent.borrow().is_empty());
+    }
+
+    #[gpui::test]
+    fn skill_picker_follows_the_caret_and_closes_on_whitespace(cx: &mut TestAppContext) {
+        let (core, fake) = cockpit("skill-picker-caret", 1);
+        bind_production_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        fake.streams.borrow()[0]
+            .send(SessionEvent::Commands {
+                commands: menu_commands(),
+            })
+            .unwrap();
+        tick(cx);
+
+        cx.simulate_input("🦀 Review /cod carefully");
+        cx.simulate_keystrokes("alt-left left left");
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| assert!(view.popover.is_some()));
+        cx.simulate_keystrokes("tab");
+        cx.run_until_parked();
+        assert_eq!(composer_text(&view, cx), "🦀 Review /code-review carefully");
+        view.read_with(cx, |view, _| assert!(view.popover.is_none()));
+
+        cx.simulate_keystrokes("cmd-a");
+        cx.simulate_input("Please /co");
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| assert!(view.popover.is_some()));
+        cx.simulate_input(" ");
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| assert!(view.popover.is_none()));
+        cx.simulate_input("more");
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| assert!(view.popover.is_none()));
+        cx.simulate_input(" /co");
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| assert!(view.popover.is_some()));
+        assert!(fake.sent.borrow().is_empty());
+    }
+
     /// Escape closes the menu and only the menu: the text stays, escape's
     /// Interrupt meaning waits for the next press, and more typing reopens.
     #[gpui::test]
@@ -15433,7 +15647,7 @@ mod tests {
             );
         });
 
-        cx.simulate_input("li");
+        cx.simulate_input("src/li");
         cx.run_until_parked();
         view.read_with(cx, |view, _| {
             let menu = view.popover.as_ref().expect("open");
@@ -16427,7 +16641,7 @@ mod tests {
         let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
         tick(cx);
-        cx.simulate_input("/code");
+        cx.simulate_input("Please use /code");
         cx.run_until_parked();
         view.read_with(cx, |view, _| {
             assert_eq!(
@@ -16486,9 +16700,13 @@ mod tests {
             );
         });
         assert_eq!(fake.command_requests.borrow()[1].0, Provider::Codex);
-        view.update(cx, |view, cx| view.pick(0, cx));
+        cx.simulate_keystrokes("tab");
+        cx.run_until_parked();
         view.read_with(cx, |view, cx| {
-            assert_eq!(view.panes[0].composer.read(cx).text(), "/code-codex ")
+            assert_eq!(
+                view.panes[0].composer.read(cx).text(),
+                "Please use /code-codex "
+            )
         });
         assert!(
             fake.spawned.borrow().is_empty(),
