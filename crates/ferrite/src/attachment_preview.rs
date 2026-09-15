@@ -9,11 +9,12 @@ use std::{
 use gpui::component::{
     button::{Button, ButtonVariants},
     dialog::{DialogContent, DialogHeader, DialogTitle},
-    IconName, Sizable, Theme, ThemeStyled,
+    scroll::ScrollableElement,
+    Icon, IconName, Sizable, Theme, ThemeStyled,
 };
 use gpui::{
-    canvas, div, prelude::*, px, relative, rems, rgb, AnyElement, App, Bounds, Div, FocusHandle,
-    IntoElement, Pixels, Window,
+    canvas, div, prelude::*, px, relative, rems, rgb, rgba, AnyElement, App, Bounds, Div,
+    FocusHandle, IntoElement, Pixels, Window,
 };
 
 use crate::theme;
@@ -138,76 +139,119 @@ impl Preview {
             return pane;
         };
         let preview = self.clone();
-        let mut mounted = div()
+        let available = f32::from(self.bounds.lock().unwrap().size.width);
+        let document_width = px((available * 0.46).clamp(280., 640.));
+        let handle = std::rc::Rc::new(
+            |handle: &gpui::base::ResizeHandleContext, _: &mut Window, _: &mut App| {
+                Some(
+                    div()
+                        .h_full()
+                        .w(px(2.))
+                        .rounded(px(1.))
+                        .bg(rgb(if handle.is_active() {
+                            theme::FOCUS
+                        } else {
+                            theme::GROUND
+                        }))
+                        .group_hover("handle", |line| line.bg(rgb(theme::FOCUS)))
+                        .into_any_element(),
+                )
+            },
+        );
+        let document_pane = {
+            let close = self.clone();
+            div()
+                .debug_selector(|| "markdown-reader".into())
+                .relative()
+                .flex()
+                .flex_col()
+                .size_full()
+                .min_w_0()
+                .min_h_0()
+                .overflow_hidden()
+                .rounded(px(theme::R_SURFACE))
+                .border_1()
+                .border_color(rgba(theme::TRANSPARENT))
+                .bg(rgb(theme::PANE))
+                .font_family(theme::FONT_MONO)
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .h(px(theme::PANE_HEAD_H))
+                        .flex_shrink_0()
+                        .gap_2()
+                        .px(px(theme::PANE_PAD_X))
+                        .bg(rgb(theme::PANE_HEAD))
+                        .child(
+                            Icon::new(IconName::FileText)
+                                .size(px(theme::ROW_ICON))
+                                .text_color(rgb(theme::TEXT_2)),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .font_family(theme::FONT_UI)
+                                .text_size(px(theme::FS_MD))
+                                .text_color(rgb(theme::TEXT_STRONG))
+                                .child(document.title),
+                        )
+                        .child(
+                            div()
+                                .debug_selector(|| "close-markdown-reader".into())
+                                .child(
+                                    Button::new("close-markdown-reader")
+                                        .ghost()
+                                        .xsmall()
+                                        .icon(IconName::Close)
+                                        .accessibility_label("Close document reader")
+                                        .tooltip("Close document reader")
+                                        .on_click(move |_, window, cx| {
+                                            cx.stop_propagation();
+                                            close.close_document(window);
+                                        }),
+                                ),
+                        ),
+                )
+                .child(
+                    div()
+                        .id("markdown-reader-scroll")
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scrollbar()
+                        .child(
+                            div()
+                                .w_full()
+                                .max_w(rems(52.))
+                                .mx_auto()
+                                .px(px(theme::PANE_PAD_X))
+                                .pt(px(theme::BODY_PAD_T))
+                                .pb(px(theme::BODY_PAD_B))
+                                .child(body),
+                        ),
+                )
+        };
+        let mounted = div()
             .relative()
             .flex()
             .size_full()
             .min_w_0()
             .min_h_0()
-            .child(pane.flex_1().min_w_0());
-        {
-            let close = self.clone();
-            mounted = mounted.child(
-                div()
-                    .debug_selector(|| "markdown-reader".into())
-                    .flex()
-                    .flex_col()
-                    .w(relative(0.48))
-                    .max_w(rems(52.))
-                    .min_h_0()
-                    .bg(rgb(theme::PANE))
-                    .border_l_1()
-                    .border_color(rgb(theme::PANE_HEAD_EDGE))
+            .child(
+                gpui::base::h_resizable("markdown-reader-dock")
+                    .with_handle_appearance(handle)
+                    .child(gpui::base::resizable_panel().child(pane))
                     .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .h(px(theme::PANE_HEAD_H))
-                            .flex_shrink_0()
-                            .gap_2()
-                            .px(px(theme::PANE_PAD_X))
-                            .bg(rgb(theme::PANE_HEAD))
-                            .border_b_1()
-                            .border_color(rgb(theme::PANE_HEAD_EDGE))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    .font_family(theme::FONT_UI)
-                                    .text_size(px(theme::FS_MD))
-                                    .text_color(rgb(theme::TEXT_STRONG))
-                                    .child(document.title),
-                            )
-                            .child(
-                                div()
-                                    .debug_selector(|| "close-markdown-reader".into())
-                                    .child(
-                                        Button::new("close-markdown-reader")
-                                            .ghost()
-                                            .xsmall()
-                                            .icon(IconName::Close)
-                                            .accessibility_label("Close document reader")
-                                            .tooltip("Close document reader")
-                                            .on_click(move |_, window, cx| {
-                                                cx.stop_propagation();
-                                                close.close_document(window);
-                                            }),
-                                    ),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .id("markdown-reader-scroll")
-                            .flex_1()
-                            .min_h_0()
-                            .overflow_y_scroll()
-                            .px(px(theme::PANE_PAD_X))
-                            .py(px(14.))
-                            .child(body),
+                        gpui::base::resizable_panel()
+                            .size(document_width)
+                            .size_range(px(260.)..px(900.))
+                            .flex_none()
+                            .ml(px(theme::GRID_GAP))
+                            .child(document_pane),
                     ),
             );
-        }
         mounted.child(
             canvas(
                 move |bounds, window, cx| {
