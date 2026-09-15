@@ -1,0 +1,20 @@
+[
+  {
+    "screenshot": "prose-desktop",
+    "framebuffer": [
+      2880,
+      1800
+    ],
+    "manual_first_paragraph_first_line": "The importer now keeps the original reference beside each row, so you can compare an incoming payment with the matching invoice before accepting it. Existing records stay",
+    "characters_including_spaces": 170
+  },
+  {
+    "screenshot": "prose-compact",
+    "framebuffer": [
+      2000,
+      1600
+    ],
+    "manual_first_paragraph_first_line": "The importer now keeps the original reference beside each row, so you can compare an incoming",
+    "characters_including_spaces": 93
+  }
+]

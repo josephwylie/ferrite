@@ -1,0 +1,22 @@
+[
+  {
+    "antipattern": "flat-type-hierarchy",
+    "name": "Flat type hierarchy",
+    "description": "Font sizes are too close together — no clear visual hierarchy. Use fewer sizes with more contrast (aim for at least a 1.25 ratio between steps).",
+    "severity": "warning",
+    "category": "slop",
+    "file": "/Users/josephwylie/Desktop/Projects/ferrite/.worktrees/ux-audit-2026-09-14/crates/ferrite/src/nav-project-sections.prototype.html",
+    "line": 38,
+    "snippet": "Sizes: 8.5px, 9px, 10px, 10.5px, 11px, 12px (ratio 1.4:1)"
+  },
+  {
+    "antipattern": "monotonous-spacing",
+    "name": "Monotonous spacing",
+    "description": "The same spacing value used everywhere — no rhythm, no variation. Use tight groupings for related items and generous separations between sections.",
+    "severity": "warning",
+    "category": "slop",
+    "file": "/Users/josephwylie/Desktop/Projects/ferrite/.worktrees/ux-audit-2026-09-14/crates/ferrite/src/nav-project-sections.prototype.html",
+    "line": 0,
+    "snippet": "~8px used 19/30 times (63%)"
+  }
+]

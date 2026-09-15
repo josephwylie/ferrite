@@ -1,5 +1,7 @@
 # Ferrite full UX audit — 14 September 2026
 
+**UI polish extension:** The [15 September UI quality audit](../2026-09-15-ui-quality/README.md) adds 22 visual and interaction-state findings, a screenshot gallery and native measurement evidence. It retains the audit-only scope and the same five-reviewer team.
+
 Ferrite has a coherent desktop cockpit and substantial interaction infrastructure, but users cannot consistently trust what typing, parking, project navigation, or reviewing a change will do. The largest problems are operational: actions can target the wrong surface or repository, instructions can disappear, and review information can be misleading or inaccessible.
 
 **42 distinct findings: 23 P1 major, 19 P2 minor.** No P0 claim and no P3 polish backlog. The priority order below favors unintended actions, lost work, and routine multi-agent supervision over appearance preferences. A narrow required form can be blocked even though the whole application is not unusable; P1 includes those workflow failures.
