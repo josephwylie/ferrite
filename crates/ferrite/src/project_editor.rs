@@ -11,9 +11,10 @@ use gpui::{div, point, px, rgb, rgba, App, BoxShadow, Div, FontWeight, SharedStr
 use crate::components;
 use crate::icons::{self, icon};
 use crate::theme::{
-    BLOCKED, FONT_MONO, FONT_UI, FS_LG, FS_MD, FS_MONO, GROUND, ICON_BUTTON, ICON_BUTTON_GLYPH,
-    MENU, RAISED, R_CONTROL, R_MENU, SHADOW_FAR, SHADOW_FAR_BLUR, SHADOW_FAR_SPREAD, SHADOW_FAR_Y,
-    SHADOW_NEAR, SHADOW_NEAR_BLUR, SHADOW_NEAR_Y, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG,
+    BLOCKED, FILL, FONT_MONO, FONT_UI, FS_LG, FS_MD, FS_MONO, GROUND, ICON_BUTTON,
+    ICON_BUTTON_GLYPH, MENU, PANE, RAISED, R_CONTROL, R_MENU, SHADOW_FAR, SHADOW_FAR_BLUR,
+    SHADOW_FAR_SPREAD, SHADOW_FAR_Y, SHADOW_NEAR, SHADOW_NEAR_BLUR, SHADOW_NEAR_Y, TEXT, TEXT_2,
+    TEXT_MUTED, TEXT_STRONG,
 };
 
 const WIDTH: f32 = 640.;
@@ -142,8 +143,8 @@ pub fn section_label(title: &'static str, hint: &'static str) -> Div {
         )
 }
 
-/// The Project name row: a label above the live editor, boxed like every
-/// other control on the card so the caret has somewhere to sit.
+/// The Project name row: a label above a bounded input that remains
+/// recognizable before the live editor contains any text.
 pub fn name_field(editor: impl IntoElement) -> Div {
     div()
         .flex()
@@ -164,7 +165,9 @@ pub fn name_field(editor: impl IntoElement) -> Div {
                 .min_h(px(34.))
                 .px(px(10.))
                 .rounded(px(R_CONTROL))
-                .bg(rgb(RAISED))
+                .border_1()
+                .border_color(rgb(FILL))
+                .bg(rgb(PANE))
                 .child(div().min_w_0().flex_1().child(editor)),
         )
 }
