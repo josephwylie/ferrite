@@ -6,13 +6,13 @@ use gpui::component::{
     Disableable,
 };
 use gpui::prelude::*;
-use gpui::{div, point, px, rgb, rgba, BoxShadow, Div, FontWeight, SharedString};
+use gpui::{div, point, px, rgb, rgba, App, BoxShadow, Div, FontWeight, SharedString};
 
 use crate::components;
 use crate::icons::{self, icon};
 use crate::theme::{
-    BLOCKED, FONT_MONO, FONT_UI, FS_LG, FS_MD, FS_MONO, ICON_BUTTON, ICON_BUTTON_GLYPH, MENU,
-    RAISED, R_CONTROL, R_MENU, SHADOW_FAR, SHADOW_FAR_BLUR, SHADOW_FAR_SPREAD, SHADOW_FAR_Y,
+    BLOCKED, FONT_MONO, FONT_UI, FS_LG, FS_MD, FS_MONO, GROUND, ICON_BUTTON, ICON_BUTTON_GLYPH,
+    MENU, RAISED, R_CONTROL, R_MENU, SHADOW_FAR, SHADOW_FAR_BLUR, SHADOW_FAR_SPREAD, SHADOW_FAR_Y,
     SHADOW_NEAR, SHADOW_NEAR_BLUR, SHADOW_NEAR_Y, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG,
 };
 
@@ -95,9 +95,8 @@ pub fn head(title: SharedString, close: impl IntoElement) -> Div {
         .child(close)
 }
 
-pub fn close_button() -> Button {
-    components::button("project-editor-close")
-        .tab_stop(true)
+pub fn close_button(cx: &App) -> Button {
+    components::form_button("project-editor-close", cx)
         .w(px(ICON_BUTTON))
         .h(px(ICON_BUTTON))
         .p_0()
@@ -202,15 +201,15 @@ pub fn primary_button(
     id: impl Into<gpui::ElementId>,
     label: &'static str,
     disabled: bool,
+    cx: &App,
 ) -> Button {
-    components::button(id)
-        .tab_stop(true)
-        .disabled(disabled)
+    components::primary_button(id, disabled, cx)
+        .debug_selector(|| "project-confirm".into())
         .h(px(28.))
         .px(px(11.))
         .child(components::label(
             label,
-            if disabled { TEXT_MUTED } else { TEXT_STRONG },
+            if disabled { TEXT_MUTED } else { GROUND },
         ))
 }
 
@@ -249,9 +248,8 @@ pub fn directory_row(path: SharedString, role: &'static str, actions: impl IntoE
         .child(actions)
 }
 
-pub fn action_button(id: impl Into<gpui::ElementId>, label: &'static str) -> Button {
-    components::button(id)
-        .tab_stop(true)
+pub fn action_button(id: impl Into<gpui::ElementId>, label: &'static str, cx: &App) -> Button {
+    components::form_button(id, cx)
         .debug_selector(move || format!("project-{label}"))
         .h(px(28.))
         .px(px(9.))
@@ -262,10 +260,11 @@ pub fn destructive_button(
     id: impl Into<gpui::ElementId>,
     label: &'static str,
     disabled: bool,
+    cx: &App,
 ) -> Button {
-    components::button(id)
-        .tab_stop(true)
+    components::form_button(id, cx)
         .disabled(disabled)
+        .when(disabled, |button| button.cursor_default())
         .h(px(28.))
         .px(px(9.))
         .child(components::label(

@@ -5,16 +5,19 @@ use gpui::prelude::*;
 use gpui::{div, point, px, rgb, rgba, App, Axis, BoxShadow, Div, FontWeight, SharedString};
 
 use gpui::component::button::Button;
+use gpui::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui::component::setting::{SettingField, SettingGroup, SettingItem, SettingPage, Settings};
-use gpui::component::{switch::Switch, Sizable};
+use gpui::component::{ActiveTheme, Selectable, Sizable};
+use gpui_base::{spring, Switch, SwitchThumb, SwitchTrack};
 use std::rc::Rc;
 
 use crate::components;
 use crate::icons::{self, icon};
 use crate::theme::{
-    FILL, FONT_MONO, FONT_UI, FS_LG, FS_MD, FS_MONO, ICON_BUTTON, ICON_BUTTON_GLYPH, MENU,
-    MENU_PAD, RAISED, R_CHIP, R_MENU, SHADOW_FAR, SHADOW_FAR_BLUR, SHADOW_FAR_SPREAD, SHADOW_FAR_Y,
-    SHADOW_NEAR, SHADOW_NEAR_BLUR, SHADOW_NEAR_Y, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG,
+    FILL, FILL_HOVER, FONT_MONO, FONT_UI, FS_LG, FS_MD, FS_MONO, ICON_BUTTON, ICON_BUTTON_GLYPH,
+    MENU, MENU_PAD, PANE, R_CHIP, R_CONTROL, R_MENU, SHADOW_FAR, SHADOW_FAR_BLUR,
+    SHADOW_FAR_SPREAD, SHADOW_FAR_Y, SHADOW_NEAR, SHADOW_NEAR_BLUR, SHADOW_NEAR_Y, TEXT, TEXT_2,
+    TEXT_MUTED, TEXT_STRONG,
 };
 
 /// The card's width; tall enough sections scroll inside it.
@@ -22,7 +25,7 @@ pub const WIDTH: f32 = 820.0;
 const HEAD_H: f32 = 44.0;
 const PAD: f32 = 16.0;
 const ROW_GAP: f32 = 8.0;
-const CHIP_H: f32 = 22.0;
+const CHIP_H: f32 = 26.0;
 
 /// The dim veil over the Cockpit while the panel is up: a press on it
 /// closes the panel (the cockpit wires that).
@@ -107,8 +110,8 @@ pub fn head(close: impl IntoElement) -> Div {
 }
 
 /// The 28px close button.
-pub fn close_button() -> Button {
-    components::button("settings-close")
+pub fn close_button(cx: &App) -> Button {
+    components::form_button("settings-close", cx)
         .debug_selector(|| "settings-close".into())
         .w(px(ICON_BUTTON))
         .h(px(ICON_BUTTON))
@@ -119,24 +122,24 @@ pub fn close_button() -> Button {
 
 /// Categories are native Settings pages, so navigation changes pages without
 /// relying on estimated positions in a virtualized list. Search spans them all.
-pub fn body(groups: Vec<SettingGroup>) -> Div {
-    let mut sidebar = gpui::StyleRefinement::default();
-    sidebar.background = Some(rgb(MENU).into());
+pub fn body(pages: Vec<SettingPage>) -> Div {
+    // The sidebar paints its own background, so it must own this corner too:
+    // GPUI's overflow mask alone does not clip descendants to rounded corners.
+    let sidebar = gpui::StyleRefinement::default()
+        .bg(rgb(MENU))
+        .rounded_bl(px(R_MENU));
     let settings = Settings::new("ferrite-settings")
         .small()
         .sidebar_width(px(172.))
         .sidebar_style(&sidebar);
-    let settings = groups
+    let settings = pages
         .into_iter()
-        .zip(["New Threads", "Permissions", "Behaviour", "About"])
-        .fold(settings, |settings, (group, title)| {
-            settings.page(
-                SettingPage::new(title)
-                    .resettable(false)
-                    .groups(vec![group]),
-            )
-        });
+        .fold(settings, |settings, page| settings.page(page));
     div().flex_1().min_h_0().child(settings)
+}
+
+pub fn page(title: &'static str, groups: Vec<SettingGroup>) -> SettingPage {
+    SettingPage::new(title).resettable(false).groups(groups)
 }
 
 pub fn choices<T: Clone + 'static>(
@@ -147,13 +150,19 @@ pub fn choices<T: Clone + 'static>(
     change: impl Fn(T, &mut App) + 'static,
 ) -> SettingItem {
     let change = Rc::new(change);
+    let keywords: Vec<_> = options.iter().map(|(label, _, _)| label.clone()).collect();
     SettingItem::new(
         title,
-        SettingField::render(move |_, _, _| {
+        SettingField::render(move |_, _, cx| {
             div()
                 .flex()
                 .flex_wrap()
-                .gap(px(6.))
+                .gap(px(2.))
+                .p(px(3.))
+                .rounded(px(R_CONTROL))
+                .border_1()
+                .border_color(rgb(FILL))
+                .bg(rgb(PANE))
                 .children(
                     options
                         .iter()
@@ -161,16 +170,100 @@ pub fn choices<T: Clone + 'static>(
                         .map(|(at, (label, selected, value))| {
                             let value = value.clone();
                             let change = change.clone();
-                            chip((id, at), label.clone(), *selected).on_click(move |_, _, cx| {
-                                cx.stop_propagation();
-                                change(value.clone(), cx);
-                            })
+                            chip((id, at), label.clone(), *selected, cx).on_click(
+                                move |_, _, cx| {
+                                    cx.stop_propagation();
+                                    change(value.clone(), cx);
+                                },
+                            )
                         }),
                 )
         }),
     )
     .description(detail.into())
+    .keywords(keywords)
     .layout(Axis::Vertical)
+}
+
+/// A model catalog exposes its current value first; the menu retains every
+/// available value, and the Settings search also indexes the hidden labels.
+pub fn chooser<T: Clone + 'static>(
+    id: &'static str,
+    title: &'static str,
+    detail: impl Into<SharedString>,
+    options: Vec<(SharedString, bool, T)>,
+    change: impl Fn(T, &mut App) + 'static,
+) -> SettingItem {
+    let change = Rc::new(change);
+    let keywords: Vec<_> = options.iter().map(|(label, _, _)| label.clone()).collect();
+    let selected = options
+        .iter()
+        .find(|(_, selected, _)| *selected)
+        .map(|(label, _, _)| label.clone())
+        .unwrap_or_else(|| "Choose a model".into());
+    SettingItem::new(
+        title,
+        SettingField::render(move |_, _, cx| {
+            let options = options.clone();
+            let change = change.clone();
+            components::form_button(id, cx)
+                .debug_selector(move || id.into())
+                .accessibility_label(format!("{title}: {selected}"))
+                .h(px(30.))
+                .w_full()
+                .max_w(px(320.))
+                .px(px(9.))
+                .bg(rgb(PANE))
+                .border_1()
+                .border_color(rgb(FILL))
+                .dropdown_caret(true)
+                .child(components::label(selected.clone(), TEXT_STRONG))
+                .dropdown_menu(move |menu, _, _| {
+                    options.iter().fold(
+                        menu.min_w(px(240.))
+                            .max_w(px(360.))
+                            .max_h(px(320.))
+                            .scrollable(true),
+                        |menu, (label, selected, value)| {
+                            let value = value.clone();
+                            let change = change.clone();
+                            menu.item(
+                                PopupMenuItem::new(label.clone())
+                                    .checked(*selected)
+                                    .on_click(move |_, _, cx| {
+                                        cx.stop_propagation();
+                                        change(value.clone(), cx);
+                                    }),
+                            )
+                        },
+                    )
+                })
+        }),
+    )
+    .description(detail.into())
+    .keywords(keywords)
+    .layout(Axis::Vertical)
+}
+
+/// Keep the effective selected value represented even when it is an alias or
+/// absent from the current catalog. No choice is silently made for the user.
+pub fn model_options(
+    catalog: Vec<ferrite_core::ModelInfo>,
+    chosen: Option<&str>,
+) -> Vec<(SharedString, bool, Option<String>)> {
+    let chosen = chosen.filter(|value| *value != "default");
+    let mut represented = chosen.is_none();
+    let mut options = vec![("CLI default".into(), represented, None)];
+    for model in catalog.into_iter().filter(|model| model.value != "default") {
+        let selected = !represented && chosen.is_some_and(|chosen| model.is(chosen));
+        represented |= selected;
+        options.push((model.display.into(), selected, Some(model.value)));
+    }
+    if !represented {
+        let chosen = chosen.expect("the default always has a row");
+        options.push((chosen.to_string().into(), true, Some(chosen.to_string())));
+    }
+    options
 }
 
 pub fn toggle(
@@ -183,31 +276,76 @@ pub fn toggle(
     let change = Rc::new(change);
     SettingItem::new(
         title,
-        SettingField::render(move |_, _, _| {
+        SettingField::render(move |_, window, cx| {
             let change = change.clone();
+            let thumb_x = spring(
+                (id, "thumb"),
+                px(if checked { 12. } else { 0. }),
+                cx.theme().motion_tokens().spring_move,
+                window,
+                cx,
+            );
             div().id(id).debug_selector(move || id.into()).child(
                 Switch::new(id)
-                    .small()
                     .checked(checked)
-                    .on_click(move |value, _, cx| {
+                    .accessibility_label(title)
+                    .p(px(4.))
+                    .rounded(px(R_CONTROL))
+                    .cursor_pointer()
+                    .focus_visible(components::control_focus)
+                    .hover(|style| style.bg(rgb(FILL)))
+                    .on_change(move |value, _, _, cx| {
                         cx.stop_propagation();
-                        change(*value, cx);
-                    }),
+                        change(value, cx);
+                    })
+                    .child(
+                        SwitchTrack::new((id, "track"))
+                            .checked(checked)
+                            .w(px(28.))
+                            .h(px(16.))
+                            .rounded_full()
+                            .flex()
+                            .items_center()
+                            .border(px(2.))
+                            .border_color(rgba(crate::theme::TRANSPARENT))
+                            .bg(rgb(if checked { FILL_HOVER } else { PANE }))
+                            .child(
+                                SwitchThumb::new(checked)
+                                    .rounded_full()
+                                    .size(px(12.))
+                                    .left(thumb_x)
+                                    .bg(rgb(TEXT_STRONG)),
+                            ),
+                    ),
             )
         }),
     )
     .description(detail.into())
 }
 
-/// One choice chip: the selected one carries the fill and the strong ink.
-pub fn chip(id: (&'static str, usize), label: SharedString, selected: bool) -> Button {
-    components::button(id)
-        .tab_stop(true)
+/// The stable check slot keeps neighboring choices still when selection moves.
+pub fn chip(id: (&'static str, usize), label: SharedString, selected: bool, cx: &App) -> Button {
+    components::form_button(id, cx)
+        .selected(selected)
+        .toggled(selected)
         .debug_selector(move || format!("{}-{}", id.0, id.1))
         .h(px(CHIP_H))
         .px(px(9.))
         .rounded(px(R_CHIP))
-        .bg(rgb(if selected { FILL } else { RAISED }))
+        .bg(rgb(if selected { FILL } else { PANE }))
+        .when(selected, |button| {
+            button.hover(|style| style.bg(rgb(FILL_HOVER)))
+        })
+        .child(
+            div()
+                .flex_shrink_0()
+                .w(px(12.))
+                .h(px(12.))
+                .mr(px(4.))
+                .when(selected, |slot| {
+                    slot.child(icon(icons::CHECK, 12., TEXT_STRONG))
+                }),
+        )
         .child(components::label(
             label,
             if selected { TEXT_STRONG } else { TEXT_2 },
@@ -247,10 +385,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_selected_chip_carries_the_fill_and_the_rest_the_raised_ground() {
-        let mut on = chip(("chip", 0), "Claude".into(), true);
-        assert_eq!(on.style().background, Some(rgb(FILL).into()));
-        let mut off = chip(("chip", 1), "Codex".into(), false);
-        assert_eq!(off.style().background, Some(rgb(RAISED).into()));
+    fn model_choices_keep_default_alias_and_custom_values_selected() {
+        use ferrite_core::{providers::models::fallback, store::Provider};
+        for provider in [Provider::Claude, Provider::Codex] {
+            let options = model_options(fallback(provider), None);
+            assert_eq!(options.iter().filter(|(_, on, _)| *on).count(), 1);
+            assert_eq!(options[0], ("CLI default".into(), true, None));
+        }
+        let options = model_options(fallback(Provider::Claude), Some("claude-sonnet-5"));
+        let selected: Vec<_> = options.iter().filter(|(_, on, _)| *on).collect();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].2.as_deref(), Some("sonnet"));
+        let options = model_options(fallback(Provider::Codex), Some("private-model"));
+        assert_eq!(
+            options.last().unwrap(),
+            &("private-model".into(), true, Some("private-model".into()))
+        );
+        assert_eq!(options.iter().filter(|(_, on, _)| *on).count(), 1);
     }
 }

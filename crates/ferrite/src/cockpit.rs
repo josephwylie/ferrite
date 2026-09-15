@@ -2412,7 +2412,7 @@ impl CockpitView {
             return None;
         }
         let settings = &self.prefs.settings;
-        let mut defaults = vec![prefs::choices(
+        let defaults = vec![prefs::choices(
             "settings-provider",
             "Provider",
             "What a new Thread starts on",
@@ -2430,15 +2430,10 @@ impl CockpitView {
                 settings.default_provider = provider
             }),
         )];
+        let mut new_thread_groups = vec![SettingGroup::new().items(defaults)];
         for provider in [Provider::Claude, Provider::Codex] {
             let chosen = settings.model_for(provider).map(str::to_string);
-            let mut catalog = self.cockpit.model_catalog(provider);
-            if let Some(chosen) = &chosen {
-                if !catalog.iter().any(|row| row.is(chosen)) {
-                    catalog.push(ferrite_core::ModelInfo::bare(chosen));
-                }
-            }
-            defaults.push(prefs::choices(
+            let model = prefs::chooser(
                 if provider == Provider::Claude {
                     "settings-claude-model"
                 } else {
@@ -2449,25 +2444,26 @@ impl CockpitView {
                 } else {
                     "Codex model"
                 },
-                "Default uses the CLI's own choice",
-                catalog
-                    .into_iter()
-                    .map(|model| {
-                        let value = Some(model.value).filter(|v| v != "default");
-                        (model.display.into(), chosen == value, value)
-                    })
-                    .collect(),
+                "The model new Threads use. CLI default follows the Provider's own choice.",
+                prefs::model_options(self.cockpit.model_catalog(provider), chosen.as_deref()),
                 self.setting_change(cx, move |settings, value| {
                     settings.set_model_for(provider, value)
                 }),
-            ));
+            );
             let effort = settings.effort_for(provider).map(str::to_string);
-            let ladder = ferrite_core::providers::models::efforts_for(
+            let mut ladder = ferrite_core::providers::models::efforts_for(
                 provider,
                 chosen.as_deref(),
                 &self.cockpit.announced_models(provider),
             );
-            defaults.push(prefs::choices(
+            // A saved value remains visible even if the current model's
+            // announcement no longer includes it; presentation never rewrites it.
+            if let Some(effort) = &effort {
+                if !ladder.contains(effort) {
+                    ladder.push(effort.clone());
+                }
+            }
+            let effort = prefs::choices(
                 if provider == Provider::Claude {
                     "settings-claude-effort"
                 } else {
@@ -2492,7 +2488,12 @@ impl CockpitView {
                 self.setting_change(cx, move |settings, value| {
                     settings.set_effort_for(provider, value)
                 }),
-            ));
+            );
+            new_thread_groups.push(
+                SettingGroup::new()
+                    .title(provider_title(provider))
+                    .items([model, effort]),
+            );
         }
         let modes = |options: &[(&str, Option<&str>)], selected: Option<&str>| {
             options
@@ -2586,6 +2587,32 @@ impl CockpitView {
                 self.setting_change(cx, |settings, style| settings.usage_meter_style = style),
             ),
         ];
+        let reading = vec![prefs::choices(
+            "settings-solo-answer-size",
+            "Solo answer size",
+            "Answer text in Solo and fullscreen. Group panes keep their compact size.",
+            [
+                (
+                    "Standard",
+                    ferrite_core::settings::SoloReadingSize::Standard,
+                ),
+                (
+                    "Comfortable",
+                    ferrite_core::settings::SoloReadingSize::Comfortable,
+                ),
+                ("Large", ferrite_core::settings::SoloReadingSize::Large),
+            ]
+            .into_iter()
+            .map(|(label, size)| {
+                (
+                    SharedString::from(label),
+                    settings.solo_reading_size == size,
+                    size,
+                )
+            })
+            .collect(),
+            self.setting_change(cx, |settings, size| settings.solo_reading_size = size),
+        )];
         let (claude, codex) = self
             .cli_versions
             .clone()
@@ -2611,11 +2638,19 @@ impl CockpitView {
                     .into(),
             ),
         ]);
-        let groups = vec![
-            SettingGroup::new().title("New Threads").items(defaults),
-            SettingGroup::new().title("Permissions").items(permissions),
-            SettingGroup::new().title("Behaviour").items(behaviour),
-            SettingGroup::new().title("About").items(about),
+        let pages = vec![
+            prefs::page("New Threads", new_thread_groups),
+            prefs::page("Permissions", vec![SettingGroup::new().items(permissions)]),
+            prefs::page(
+                "Behaviour",
+                vec![
+                    SettingGroup::new().title("Reading").items(reading),
+                    SettingGroup::new()
+                        .title("Threads and navigation")
+                        .items(behaviour),
+                ],
+            ),
+            prefs::page("About", vec![SettingGroup::new().items(about)]),
         ];
 
         let card = prefs::card()
@@ -2626,14 +2661,14 @@ impl CockpitView {
                 MouseButton::Left,
                 cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
             )
-            .child(prefs::head(prefs::close_button().on_click(cx.listener(
+            .child(prefs::head(prefs::close_button(cx).on_click(cx.listener(
                 |view, _: &ClickEvent, _, cx| {
                     cx.stop_propagation();
                     view.settings_open = false;
                     cx.notify();
                 },
             ))))
-            .child(prefs::body(groups));
+            .child(prefs::body(pages));
         Some(
             deferred(
                 prefs::veil()
@@ -2871,12 +2906,13 @@ impl CockpitView {
         };
         let editing = editor.target;
 
-        let close =
-            project_editor::close_button().on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
+        let close = project_editor::close_button(cx).on_click(cx.listener(
+            |view, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
                 view.project_editor = None;
                 cx.notify();
-            }));
+            },
+        ));
         let mut body = project_editor::body()
             .child(project_editor::name_field(editor.name.clone()))
             .child(project_editor::section_label(
@@ -2897,6 +2933,7 @@ impl CockpitView {
                         ("remove-project-directory", index),
                         "Remove",
                         false,
+                        cx,
                     )
                     .on_click(cx.listener(
                         move |view, _: &ClickEvent, _, cx| {
@@ -2930,12 +2967,11 @@ impl CockpitView {
                 actions,
             ));
         }
-        let add = project_editor::action_button("add-project-directory", "Add Directory").on_click(
-            cx.listener(move |view, _: &ClickEvent, _, cx| {
+        let add = project_editor::action_button("add-project-directory", "Add Directory", cx)
+            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
                 view.browse_for_project_directory(cx);
-            }),
-        );
+            }));
         let mut right = div().flex().items_center().gap(px(8.));
         if let Some(project) = editing {
             let in_use = self.project_in_use(project);
@@ -2948,6 +2984,7 @@ impl CockpitView {
                         "Remove Project"
                     },
                     in_use,
+                    cx,
                 )
                 .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                     cx.stop_propagation();
@@ -2978,6 +3015,7 @@ impl CockpitView {
                 "confirm-project",
                 if editing.is_some() { "Done" } else { "Create" },
                 !ready,
+                cx,
             )
             .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
@@ -16638,16 +16676,36 @@ mod tests {
             cx.notify();
         });
         tick(cx);
+        let card = cx.debug_bounds("settings-card").unwrap();
+        cx.simulate_click(
+            card.origin + gpui::point(px(80.), px(66.)),
+            gpui::Modifiers::none(),
+        );
+        cx.simulate_input("Future Model");
+        tick(cx);
         let choice = cx
-            .debug_bounds("settings-codex-model-0")
-            .expect("Settings renders the discovered model")
+            .debug_bounds("settings-codex-model")
+            .expect("Settings search indexes models inside the chooser")
             .center();
         cx.simulate_click(choice, gpui::Modifiers::none());
+        cx.run_until_parked();
+        cx.simulate_keystrokes("down down enter");
         cx.run_until_parked();
         view.read_with(cx, |view, _| {
             assert_eq!(
                 view.prefs.settings.codex_model.as_deref(),
                 Some("gpt-future-model")
+            );
+        });
+        let choice = cx.debug_bounds("settings-codex-model").unwrap().center();
+        cx.simulate_click(choice, gpui::Modifiers::none());
+        cx.run_until_parked();
+        cx.simulate_keystrokes("down enter");
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert_eq!(
+                view.prefs.settings.codex_model, None,
+                "CLI default is an explicit reversible choice"
             );
         });
     }
@@ -17202,6 +17260,33 @@ mod tests {
             card.origin + gpui::point(px(80.), px(66.)),
             gpui::Modifiers::none(),
         );
+        cx.simulate_input("Solo answer size");
+        tick(cx);
+        let comfortable = cx
+            .debug_bounds("settings-solo-answer-size-1")
+            .unwrap()
+            .center();
+        cx.simulate_click(comfortable, gpui::Modifiers::none());
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert_eq!(
+                view.prefs.settings.solo_reading_size,
+                ferrite_core::settings::SoloReadingSize::Comfortable
+            );
+            assert_eq!(
+                ferrite_core::settings::Settings::load(&view.prefs.dir).solo_reading_size,
+                ferrite_core::settings::SoloReadingSize::Comfortable
+            );
+        });
+        cx.simulate_click(
+            card.origin + gpui::point(px(80.), px(66.)),
+            gpui::Modifiers::none(),
+        );
+        cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+            "cmd-a backspace"
+        } else {
+            "ctrl-a backspace"
+        });
         cx.simulate_input("Confirm before deleting");
         tick(cx);
         let toggle = cx.debug_bounds("settings-confirm-delete").unwrap().center();

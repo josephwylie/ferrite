@@ -1,10 +1,10 @@
 //! Longbridge controls in Ferrite's visual language. The toolkit owns the
 //! control mechanics; the existing theme remains the only token source.
 
-use gpui::component::button::{Button, ButtonVariants};
-use gpui::component::Sizable;
+use gpui::component::button::{Button, ButtonCustomVariant, ButtonVariants};
+use gpui::component::{FocusableExt, Sizable};
 use gpui::prelude::*;
-use gpui::{div, px, rgb, ElementId, SharedString};
+use gpui::{div, point, px, rgb, App, BoxShadow, ElementId, SharedString, StyleRefinement};
 
 use crate::theme;
 
@@ -15,10 +15,57 @@ pub fn button(id: impl Into<ElementId>) -> Button {
         .ghost()
         .xsmall()
         .tab_stop(false)
+        .focus_ring(false)
         .border_0()
+        .focus_visible(control_focus)
         .rounded(px(theme::R_CONTROL))
         .font_family(theme::FONT_UI)
         .cursor_pointer()
+}
+
+/// The inset outline survives hover's border/background refinements and
+/// stays inside clipped forms without taking any layout space.
+pub fn control_focus(style: StyleRefinement) -> StyleRefinement {
+    focus_outline(style, theme::TEXT_2)
+}
+
+fn focus_outline(style: StyleRefinement, ink: u32) -> StyleRefinement {
+    style.shadow(vec![BoxShadow {
+        inset: true,
+        color: rgb(ink).into(),
+        offset: point(px(0.), px(0.)),
+        blur_radius: px(0.),
+        spread_radius: px(2.),
+    }])
+}
+
+/// Form actions need an opaque hover face on the modal's raised ground.
+/// Use the toolkit's variant API: its renderer owns hover/press handlers.
+pub fn form_button(id: impl Into<ElementId>, cx: &App) -> Button {
+    button(id)
+        .custom(
+            ButtonCustomVariant::new(cx)
+                .foreground(rgb(theme::TEXT).into())
+                .hover(rgb(theme::FILL).into())
+                .active(rgb(theme::FILL_HOVER).into()),
+        )
+        .tab_stop(true)
+}
+
+/// A neutral completing action, with a separate disabled presentation.
+pub fn primary_button(id: impl Into<ElementId>, disabled: bool, cx: &App) -> Button {
+    use gpui::component::Disableable;
+    form_button(id, cx)
+        .custom(
+            ButtonCustomVariant::new(cx)
+                .foreground(rgb(theme::GROUND).into())
+                .hover(rgb(theme::TEXT_STRONG).into())
+                .active(rgb(theme::TEXT_2).into()),
+        )
+        .bg(rgb(if disabled { theme::FILL } else { theme::TEXT }))
+        .focus_visible(|style| focus_outline(style, theme::GROUND))
+        .disabled(disabled)
+        .when(disabled, |button| button.cursor_default())
 }
 
 pub fn label(text: impl Into<SharedString>, ink: u32) -> impl IntoElement {
