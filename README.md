@@ -69,8 +69,10 @@ See [docs/release-signing.md](docs/release-signing.md) to set signing up.
 Run `ferrite`. You get one Thread on Claude. Type in the box at the bottom and
 press `enter`.
 
-If you send a prompt while the agent is still working, Ferrite holds it and
-sends it when the turn finishes. Send another and it replaces the held one.
+Prompts sent while the agent is working stack above the prompt box, newest
+first. The provider controls when they run; Codex can use a follow-up during
+the current turn. Use `↑` to retrieve the latest queued prompt for editing,
+or `backspace` on an empty prompt box to remove it.
 
 Shortcuts below use `cmd`; on Windows use `ctrl`.
 
