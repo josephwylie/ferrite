@@ -1,0 +1,418 @@
+   Compiling gpui-base v0.6.0 (/Users/josephwylie/Desktop/Projects/ferrite/.worktrees/ui-polish-2026-09-15/vendor/gpui-base)
+   Compiling ferrite-core v0.3.0 (/Users/josephwylie/Desktop/Projects/ferrite/.worktrees/ui-polish-2026-09-15/crates/ferrite-core)
+   Compiling gpui-component v0.6.0
+   Compiling gpui-kit v0.6.0
+   Compiling ferrite v0.3.0 (/Users/josephwylie/Desktop/Projects/ferrite/.worktrees/ui-polish-2026-09-15/crates/ferrite)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 33.84s
+warning: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/main.rs (/Users/josephwylie/Desktop/Projects/ferrite/target/debug/deps/ferrite-97c6c8b36e1fdb9c)
+
+running 369 tests
+test cockpit::tests::a_draft_pane_shows_the_usage_meter_and_its_card ... ok
+test cockpit::tests::a_finish_on_the_focused_pane_is_read_at_once_and_never_toasts ... ok
+test cockpit::tests::a_draft_close_button_discards_it_and_restores_the_original_thread ... ok
+test cockpit::tests::a_drag_selects_characters_and_the_copy_key_takes_exactly_them ... ok
+test cockpit::tests::a_drag_in_a_scrolled_back_transcript_selects_the_rows_under_the_pointer ... ok
+test cockpit::tests::a_finished_thread_marks_its_nav_row_until_it_is_read ... ok
+test cockpit::tests::a_draft_inherits_the_focused_provider_model_and_only_announced_models ... ok
+test cockpit::tests::a_foreign_file_pick_surfaces_the_refusal_in_the_transcript ... ok
+test cockpit::tests::a_launch_that_opens_nothing_still_lists_the_parked_threads ... ok
+test cockpit::tests::a_fullscreened_thread_parked_externally_falls_back_to_the_grid ... ok
+test cockpit::tests::a_finished_thread_rings_the_bell_and_pulses_until_focused ... ok
+test cockpit::tests::a_fresh_thread_lists_the_local_import_entry_atop_the_slash_menu ... ok
+test cockpit::tests::a_draft_starts_on_the_filtered_project ... ok
+test cockpit::tests::a_pending_decision_changes_nothing_in_the_nav ... ok
+test cockpit::tests::a_parked_group_member_stays_under_its_group ... ok
+test cockpit::tests::a_pr_without_checks_offers_no_ci_control ... ok
+test cockpit::tests::a_press_on_the_transcript_dismisses_the_open_menu ... ok
+test cockpit::tests::a_press_on_the_transcript_dismisses_the_open_picker ... ok
+test cockpit::tests::a_failed_bootstrap_keeps_the_draft_and_the_prompt ... ok
+test cockpit::tests::a_plain_transcript_click_does_not_move_the_viewport ... ok
+test cockpit::tests::a_pending_decision_keeps_the_composer_live_and_an_empty_line_answers ... ok
+test cockpit::tests::a_second_new_thread_reuses_the_standing_draft ... ok
+test cockpit::tests::a_standing_draft_is_re_aimed_at_the_new_group ... ok
+test cockpit::tests::a_right_click_summons_the_menu_and_delete_takes_two_presses ... ok
+test cockpit::tests::a_new_thread_binds_to_the_main_checkout ... ok
+test cockpit::tests::a_reopened_thread_opens_at_the_bottom_and_keeps_following_the_tail ... ok
+test cockpit::tests::a_sweep_across_a_tool_row_copies_its_text_and_never_its_chrome ... ok
+test cockpit::tests::a_thread_without_a_binding_opens_no_file_menu ... ok
+test cockpit::tests::a_question_decision_is_answered_by_its_form ... ok
+test cockpit::tests::a_titlers_answer_names_only_an_untitled_thread ... ok
+test cockpit::tests::add_thread_button_opens_a_loose_draft_even_from_a_group ... ok
+test cockpit::tests::a_stale_draft_workspace_neither_completes_nor_sends_from_main ... ok
+test cockpit::tests::a_typed_line_answers_a_question_in_the_operators_words ... ok
+test cockpit::tests::announced_models_ride_the_picker_and_a_pick_reaims_the_model ... ok
+test cockpit::tests::an_evicted_native_selection_clears_instead_of_sliding_onto_later_blocks ... ok
+test cockpit::tests::clicking_a_keycap_runs_its_own_decide_verb ... ok
+test cockpit::tests::clicking_a_pane_focuses_it_and_the_keyboard_follows ... ok
+test cockpit::tests::clicking_a_parked_nav_row_revives_that_thread ... ok
+test cockpit::tests::clicking_a_running_nav_row_focuses_its_pane_and_reaims_fullscreen ... ok
+test cockpit::tests::a_thread_can_be_opened_in_its_own_worktree ... ok
+test cockpit::tests::clicking_the_footer_chip_opens_the_provider_picker ... ok
+test cockpit::tests::backspace_on_an_empty_line_unqueues_the_held_prompt ... ok
+test cockpit::tests::choosing_a_project_moves_the_standing_draft ... ok
+test cockpit::tests::closing_a_pane_parks_the_thread_rather_than_losing_it ... ok
+test cockpit::tests::cmd_b_collapses_the_nav_and_the_cells_grow_a_level ... ok
+test cockpit::tests::closing_the_fullscreened_thread_fullscreens_the_survivor ... ok
+test cockpit::tests::command_rows_filter_and_highlight_by_fuzzy_match ... ok
+test cockpit::tests::cmd_t_opens_a_new_thread_and_cmd_n_still_does ... ok
+test cockpit::tests::clicking_the_tool_chevron_replaces_the_compact_line_with_selectable_output ... ok
+test cockpit::tests::completion_checks::long_subagent_approval_keeps_allow_and_deny_inside_the_island ... ok
+test cockpit::tests::completion_checks::pending_approval_exposes_exact_selectable_command_before_answering ... ok
+test cockpit::tests::completion_checks::reading_anchor_survives_expanding_earlier_tool_details ... ok
+test cockpit::tests::completion_checks::received_reasoning_is_shown_once_during_live_to_settled_handoff ... ok
+test cockpit::tests::cmd_f_reaches_a_draft_from_a_dense_grid ... ok
+test cockpit::tests::always_does_nothing_at_the_wall_when_nothing_was_offered ... ok
+test cockpit::tests::completion_checks::small_tool_output_copies_blank_lines_and_trailing_spaces_exactly ... ok
+test cockpit::tests::completion_checks::reading_anchor_survives_streaming_disclosure_and_narrower_window ... ok
+test cockpit::tests::cmd_f_fullscreens_the_focused_pane_and_toggles_back ... ok
+test cockpit::tests::completion_checks::typed_and_pasted_question_marks_remain_literal_composer_text ... ok
+test cockpit::tests::composer_controls::composer_busy_tuning_choices_explain_and_preserve_selection ... ok
+test cockpit::tests::completion_checks::streamed_markdown_keeps_its_native_document_and_selected_prose ... ok
+test cockpit::tests::composer_controls::composer_followup_stays_inside_the_editor_beside_send ... ok
+test cockpit::tests::composer_controls::composer_pointer_action_does_not_confirm_another_surface ... ok
+test cockpit::tests::a_long_parked_list_scrolls_inside_half_the_column ... ok
+test cockpit::tests::composer_usage_lines_show_context_and_subscription_windows ... ok
+test cockpit::tests::composer_controls::composer_pointer_actions_target_their_own_pane ... ok
+test cockpit::tests::composer_controls::composer_pointer_send_preserves_busy_queue_behavior ... ok
+test cockpit::tests::consecutive_mixed_tools_share_one_disclosure_and_keep_failures_visible ... ok
+test cockpit::tests::contract_request_attention_toasts_once_and_cancellation_removes_it ... ok
+test cockpit::tests::deleting_every_parked_thread_always_asks_first ... ok
+test cockpit::tests::disabled_placeholder_suggestions_are_hidden_and_tab_does_not_accept_them ... ok
+test cockpit::tests::contract_request_notice_opens_its_owning_child ... ok
+test cockpit::tests::a_wall_flagged_decision_is_answered_without_focusing_its_pane ... ok
+test cockpit::tests::draft_command_discovery_discards_old_workspace_replies_and_shows_failures ... ok
+test cockpit::tests::draft_commands_arrive_before_first_send_and_follow_provider_changes ... ok
+test cockpit::tests::double_click_selects_the_word_and_triple_click_the_line ... ok
+test cockpit::tests::delayed_bootstrap_preserves_edited_composer_focus_and_another_drafts_picker ... ok
+test cockpit::tests::draft_mentions_are_scoped_to_the_selected_project ... ok
+test cockpit::tests::draft_import_replaces_the_draft_and_focuses_the_imported_thread ... ok
+test cockpit::tests::drag_from_a_pair_tracks_the_origin_and_focuses_the_survivor ... ok
+test cockpit::tests::completion_checks::wrapped_question_retains_exact_picks_and_note_through_rejection_and_ack ... ok
+test cockpit::tests::focused_placeholder_starts_immediately_after_the_caret ... ok
+test cockpit::tests::enter_adopts_the_picked_session_and_the_blank_thread_goes ... ok
+test cockpit::tests::escape_dismisses_the_menu_keeps_the_text_and_typing_reopens ... ok
+test cockpit::tests::fullscreen_forces_transcript_level_even_in_a_tiny_window ... ok
+test cockpit::tests::groups_and_solo_threads_share_one_recency_order ... ok
+test cockpit::tests::group_scope_is_one_view_and_cmd_w_makes_the_focused_thread_live_and_solo ... ok
+test cockpit::tests::discovery_updates_an_open_draft_picker_without_starting_a_session ... ok
+test cockpit::tests::dragging_filtered_members_uses_the_full_group_order ... ok
+test cockpit::tests::inline_title_rename_disarms_the_thread_composer_history_context_and_hint ... ok
+test cockpit::tests::launch_provider_seeds_the_first_empty_store_draft ... ok
+test cockpit::tests::draft_mentions_follow_the_selected_workspace ... ok
+test cockpit::tests::ferrites_effort_row_replaces_the_providers_and_a_typed_level_is_honoured ... ok
+test cockpit::tests::history_arrows_only_replace_the_composer_and_restore_the_exact_draft ... ok
+test cockpit::tests::image_preview_opens_the_canonical_original_without_sending_or_closing ... ok
+test cockpit::tests::local_render_probe_slow ... ignored, local performance probe
+test cockpit::tests::local_render_probe_small ... ignored, local performance probe
+test cockpit::tests::mention_rows_split_name_from_directory ... ok
+test cockpit::tests::menu_and_decision_states_disarm_history_before_their_arrows_dispatch ... ok
+test cockpit::tests::layout_polish::keyboard_disclosure_target_is_visible_across_three_targets_and_reverse ... ok
+test cockpit::tests::keyboard_cycles_tool_controls_and_enter_toggles_without_submitting ... ok
+test cockpit::tests::layout_polish::compact_group_paints_complete_latest_rows_after_composer_growth ... ok
+test cockpit::tests::multiline_tool_input_is_compact_and_disclosable_while_running ... ok
+test cockpit::tests::multi_project_groups_keep_bindings_and_filter_only_navigation ... ok
+test cockpit::tests::notifications_keep_focus_until_escape_dismisses_the_bell ... ok
+test cockpit::tests::layout_polish::group_question_stays_between_its_thread_header_and_growing_composer ... ok
+test cockpit::tests::native_progress_stays_visible_while_scrolling_and_metadata_refreshes_the_wall ... ok
+test cockpit::tests::one_keystroke_answers_the_card ... ok
+test cockpit::tests::new_thread_shortcut_from_a_group_adds_the_thread_to_that_group ... ok
+test cockpit::tests::ongoing_threads_hold_their_place_while_they_stream ... ok
+test cockpit::tests::one_key_jumps_to_the_pane_that_needs_answering ... ok
+test cockpit::tests::parking_the_last_fullscreened_thread_falls_back_to_the_grid ... ok
+test cockpit::tests::layout_polish::group_question_uses_measured_space_and_restores_inline_form ... ok
+test cockpit::tests::paging_while_fullscreen_moves_the_fullscreen_to_the_next_thread ... ok
+test cockpit::tests::picking_a_mention_on_a_codex_thread_stages_the_pill ... ok
+test cockpit::tests::opening_a_notice_lands_on_its_pane_and_reads_it ... ok
+test cockpit::tests::layout_polish::compact_group_question_expands_and_retains_answer_and_draft ... ok
+test cockpit::tests::notifications_scroll_to_and_open_the_oldest_row ... ok
+test cockpit::tests::picking_import_opens_the_file_picker_and_sends_the_provider_nothing ... ok
+test cockpit::tests::presses_on_chrome_select_nothing_and_a_drag_out_the_bottom_clamps ... ok
+test cockpit::tests::project_heading_plus_opens_a_draft_in_that_project ... ok
+test cockpit::tests::provider_controls::contract_context_card_refreshes_and_shows_native_details ... ok
+test cockpit::tests::provider_controls::contract_native_accounting_and_cost_are_visible ... ok
+test cockpit::tests::provider_controls::contract_native_turn_diff_is_disclosed_without_a_fake_tool ... ok
+test cockpit::tests::project_order_group_member_opens_the_whole_group ... ok
+test cockpit::tests::a_hundred_member_group_remains_reachable_through_nav_scroll ... ok
+test cockpit::tests::provider_forms::contract_denied_allow_policy_disables_mouse_and_keyboard_approval ... ok
+test cockpit::tests::provider_controls::the_composer_mode_chip_opens_a_native_mode_menu_while_idle ... ok
+test cockpit::tests::provider_controls::contract_permission_and_mcp_auth_controls_are_native ... ok
+test cockpit::tests::provider_controls::contract_session_controls_use_shared_native_handles ... ok
+test cockpit::tests::pointer_opens_a_group_and_renames_parked_thread_and_group_titles ... ok
+test cockpit::tests::provider_forms::contract_live_claude_base_branch_question_renders ... ok
+test cockpit::tests::provider_forms::contract_every_native_approval_choice_is_selectable ... ok
+test cockpit::tests::pointer_drag_joins_then_reorders_to_the_after_last_target ... ok
+test cockpit::tests::provider_forms::contract_mcp_form_defaults_submit_typed_values ... ok
+test cockpit::tests::provider_navigation::contract_native_file_menu_excludes_git_metadata_and_duplicate_paths ... ok
+test cockpit::tests::provider_forms::contract_typed_question_renders_and_returns_normalized_picks ... ok
+test cockpit::tests::provider_navigation::contract_native_files_keep_provider_order_and_ignore_old_queries ... ok
+test cockpit::tests::provider_forms::contract_mcp_required_input_without_default_is_editable_and_validated ... ok
+test cockpit::tests::provider_navigation::contract_native_discovery_dismissal_does_not_reopen_picker ... ok
+test cockpit::tests::provider_navigation::contract_native_session_picker_shows_titles_without_spawning ... ok
+test cockpit::tests::refused_draft_import_preserves_the_draft_and_command ... ok
+test cockpit::tests::recalling_a_slash_prompt_does_not_open_its_menu_until_a_real_edit ... ok
+test cockpit::tests::reasoning_discloses_body_without_repeating_its_heading ... ok
+test cockpit::tests::render_performance::code_copy_traversal_does_not_accept_an_empty_composers_followup ... ok
+test cockpit::tests::render_performance::dragging_across_virtualized_thinking_rows_copies_the_logical_range ... ok
+test cockpit::tests::render_performance::native_transcript_rows_stay_bounded_by_a_fixed_viewport_as_history_grows ... ok
+test cockpit::tests::render_performance::retained_transcript_relative_file_links_use_the_thread_workspace_and_copy_text ... FAILED
+test cockpit::tests::native_file_drops_follow_the_pointer_across_panes_and_groups ... FAILED
+test cockpit::tests::queued_prompts_pile_up_with_the_latest_on_top ... ok
+test cockpit::tests::render_performance::partial_thinking_selection_survives_a_wrapping_resize ... ok
+test cockpit::tests::render_performance::replacing_an_offscreen_selected_thinking_row_clears_only_that_selection ... ok
+test cockpit::tests::render_performance::solo_reading_size_reflows_without_replacing_text_or_selection ... ok
+test cockpit::tests::reopening_brings_a_parked_thread_back_with_its_history ... ok
+test cockpit::tests::render_performance::keyboard_reaches_code_actions_after_disclosures_and_returns_to_the_draft ... ok
+test cockpit::tests::reopening_again_walks_the_park_order_backwards ... ok
+test cockpit::tests::resizing_the_window_cannot_leave_text_selection_dragging ... ok
+test cockpit::tests::reopening_falls_back_to_creation_order_for_threads_parked_before_launch ... ok
+test cockpit::tests::reopening_revives_the_thread_parked_most_recently ... ok
+test cockpit::tests::resizing_the_window_changes_every_panes_level ... ok
+test cockpit::tests::reopening_the_picker_and_pressing_enter_keeps_the_standing_choice ... ok
+test cockpit::tests::startup_does_not_make_the_app_directory_a_project ... ok
+test cockpit::tests::sent_prompt_actions_appear_on_hover_copy_and_resend ... ok
+test cockpit::tests::short_reasoning_has_no_empty_disclosure ... ok
+test cockpit::tests::startup_starts_on_the_last_project_worked_in ... ok
+test cockpit::tests::render_performance::typing_in_a_focused_composer_does_not_render_sibling_native_transcripts ... ok
+test cockpit::tests::subagents::a_status_reorder_between_pointer_down_and_up_cannot_select_the_new_occupant ... ok
+test cockpit::tests::render_performance::streaming_one_pane_does_not_render_sibling_native_transcripts ... ok
+test cockpit::tests::singleton_tool_disclosure_keeps_the_users_choice_when_it_settles ... ok
+test cockpit::tests::subagents::an_open_overflow_menu_resolves_a_subject_alias_before_selecting_its_request ... ok
+test cockpit::tests::subagents::child_tabs_switch_transcripts_preserve_main_draft_and_survive_reorder ... ok
+test cockpit::tests::streaming_output_preserves_native_selection_scroll_and_command_identity ... ok
+test cockpit::tests::subagents::hidden_child_requests_jump_and_reply_only_to_their_captured_handle ... ok
+test cockpit::tests::subagents::attention_and_global_navigation_visit_every_distinct_pending_subject_then_wrap ... ok
+test cockpit::tests::subagents::native_child_progress_uses_the_shared_pinned_row_and_selected_wall_cache ... ok
+test cockpit::tests::subagents::core_eviction_releases_a_hidden_retained_transcript_entity ... ok
+test cockpit::tests::subagents::keyboard_focus_and_a_held_space_press_follow_the_agent_across_status_reorder ... ok
+test cockpit::tests::subagents::child_scroll_disclosure_and_native_text_entity_survive_switching ... ok
+test cockpit::tests::solo_group_draft_and_close_follow_the_persisted_view_state_machine ... ok
+test cockpit::tests::subagents::native_selection_clears_on_subject_navigation_without_leaking_into_another_agent ... ok
+test cockpit::tests::the_age_label_rounds_to_the_operator_scale ... ok
+test cockpit::tests::subagents::native_tab_press_cannot_jump_to_an_overflow_slot_after_resize ... ok
+test cockpit::tests::tab_accepts_the_predicted_follow_up_without_sending_it ... ok
+test cockpit::tests::the_age_hangs_under_the_provider_mark ... ok
+test cockpit::tests::subagents::native_tab_overflow_keeps_main_and_selected_subject_visible_in_child_order ... ok
+test cockpit::tests::subagents::next_child_request_leaves_another_group_and_opens_its_root ... ok
+test cockpit::tests::the_announced_permission_mode_reaches_the_meta_row_state ... ok
+test cockpit::tests::the_answer_keys_are_letters_when_nothing_is_blocked ... ok
+test cockpit::tests::the_answer_keys_stay_letters_while_the_line_holds_text ... ok
+test cockpit::tests::the_ci_mark_opens_the_checks_it_counts ... ok
+test cockpit::tests::the_grid_follows_the_groups_own_membership ... ok
+test cockpit::tests::the_effort_chip_starts_the_thread_on_its_pick ... ok
+test cockpit::tests::the_effort_picker_lists_the_models_ladder_and_a_pick_reaims_it ... ok
+test cockpit::tests::the_branch_chip_offers_the_checked_out_branch_main_and_both_new_branch_modes ... ok
+test cockpit::tests::the_first_prompt_fixes_the_provider_but_the_model_picker_stays_open ... ok
+test cockpit::tests::the_group_board_resizes_by_its_seam_and_reorders_by_drop ... ok
+test cockpit::tests::the_nav_lists_open_threads_in_the_tree_and_parked_ones_below ... ok
+test cockpit::tests::the_project_card_draws_its_body ... ok
+test cockpit::tests::the_project_card_stages_directories_and_registers_on_confirm ... ok
+test cockpit::tests::the_project_pencil_sits_right_of_the_dropdown ... ok
+test cockpit::tests::the_slash_and_mention_triggers_parse_the_line ... ok
+test cockpit::tests::the_parked_header_folds_and_its_menu_deletes_every_parked_thread ... ok
+test cockpit::tests::subagents::unattributed_question_keeps_native_input_focus_across_repaint_and_sends_exact_answer ... ok
+test cockpit::tests::the_first_send_bootstraps_the_thread_and_drops_the_band ... ok
+test cockpit::tests::the_project_card_edits_an_existing_project ... ok
+test cockpit::tests::the_project_chip_picks_a_project_or_adds_one ... ok
+test cockpit::tests::the_titlebar_marks_a_development_build ... ok
+test cockpit::tests::the_thread_header_shows_every_project_directory_branch ... ok
+test cockpit::tests::the_usage_meter_can_be_drawn_as_rings ... ok
+test cockpit::tests::the_slash_provider_row_opens_the_picker_and_picks_codex ... ok
+test cockpit::tests::the_locked_pane_caches_the_actual_checkout_branch ... ok
+test cockpit::tests::a_crowded_board_drags_every_seam_and_every_title ... ok
+test cockpit::tests::thread_order_is_changed_from_the_main_nav_menu ... ok
+test cockpit::tests::transcript_spacing_separates_prompts_tools_and_answers ... ok
+test cockpit::tests::titlebar_add_in_a_group_keeps_the_draft_in_that_group ... ok
+test composer::tests::overlapping_pill_candidates_keep_the_first ... ok
+test composer::tests::paste_attaches_a_clipboard_image_as_a_file ... ok
+test composer::tests::paste_attaches_clipboard_files_without_inserting_their_paths ... ok
+test composer::tests::paste_keeps_the_existing_text_behavior ... ok
+test composer::tests::pill_ranges_cover_whole_tokens_only ... ok
+test composer::tests::runs_split_at_pill_and_marked_boundaries ... ok
+test composer::tests::selected_runs_take_the_strong_ink ... ok
+test composer::tests::shift_enter_breaks_the_line_and_enter_still_submits ... ok
+test composer::tests::the_box_grows_with_its_text_and_scrolls_past_eight_rows ... ok
+test composer::tests::the_caret_is_solid_on_focus_then_blinks_and_typing_resets_it ... FAILED
+test composer::tests::the_pointer_places_and_selects_across_wrapped_rows ... ok
+test composer::tests::up_walks_rows_before_it_recalls_history ... ok
+test demo::tests::a_cancelled_playback_ends_the_turn_interrupted ... ok
+test cockpit::tests::typing_at_completes_files_from_the_workspace_binding ... ok
+test cockpit::tests::typing_slash_opens_the_command_menu_and_enter_inserts_the_pick ... ok
+test cockpit::tests::with_no_session_files_found_the_pick_says_so ... ok
+test demo::tests::replaying_the_demo_script_leaves_a_paid_turn_and_a_thread_on_the_operator ... ok
+test demo::tests::the_demo_script_opens_a_session_and_stops_on_a_decision ... ok
+test facts::tests::a_future_stamp_reads_now ... ok
+test facts::tests::the_shorthand_climbs_one_unit_at_a_time ... ok
+test file_links::tests::paths_are_encoded_and_source_locations_do_not_reach_the_os ... ok
+test file_links::tests::relative_paths_use_the_threads_checkout ... ok
+test demo::tests::the_demo_seeds_deal_the_wall_census ... ok
+test fuzzy::tests::a_subsequence_matches_and_a_non_subsequence_does_not ... ok
+test fuzzy::tests::an_empty_needle_matches_everything_with_no_highlight ... ok
+test fuzzy::tests::contiguous_and_early_matches_outscore_scattered_ones ... ok
+test fuzzy::tests::matching_is_case_insensitive ... ok
+test fuzzy::tests::multibyte_candidates_neither_panic_nor_misalign ... ok
+test fuzzy::tests::the_ranges_cover_exactly_the_matched_bytes_merged_where_adjacent ... ok
+test icons::tests::every_icon_key_loads_an_svg ... ok
+test icons::tests::an_unknown_key_is_absent_rather_than_an_error ... ok
+test icons::tests::ferrite_snap_matches_the_supplied_animation_timeline ... ok
+test keymap::tests::both_platforms_bind_the_same_actions_in_the_same_contexts ... ok
+test icons::tests::line_icons_bake_the_stroke_class_and_logomarks_do_not ... ok
+test keymap::tests::close_remains_and_the_invented_group_shortcuts_are_absent ... ok
+test keymap::tests::every_keystroke_in_the_table_parses ... ok
+test keymap::tests::primary_shortcuts_are_cmd_on_mac_and_ctrl_on_windows ... ok
+test keymap::tests::prompt_history_arrows_are_scoped_and_menu_arrows_stay_later ... ok
+test keymap::tests::row_arrows_sit_between_history_and_the_menu ... ok
+test keymap::tests::tab_cycles_the_band_on_both_platforms ... ok
+test keymap::tests::the_composer_menu_keys_are_scoped_to_its_context_on_both_platforms ... ok
+test keymap::tests::word_editing_follows_each_platforms_text_field_grammar ... ok
+test line::tests::a_hard_newline_is_held_and_sent_as_typed ... ok
+test keymap::tests::windows_never_binds_the_cmd_modifier ... ok
+test line::tests::a_line_can_be_handed_back_with_the_cursor_at_the_end ... ok
+test line::tests::a_word_is_selected_under_a_double_click ... ok
+test line::tests::backspace_removes_the_character_before_the_cursor ... ok
+test line::tests::an_ime_composition_replaces_its_marked_range_until_it_is_committed ... ok
+test line::tests::delete_removes_the_character_after_the_cursor ... ok
+test line::tests::delete_to_start_and_end_clear_either_side_of_the_caret ... ok
+test line::tests::delete_word_left_removes_one_word_at_a_time ... ok
+test line::tests::delete_word_right_mirrors_it ... ok
+test line::tests::home_and_end_jump_to_the_ends_of_the_line ... ok
+test line::tests::shift_motions_extend_a_selection_from_the_anchor ... ok
+test line::tests::take_hands_over_the_line_and_clears_it ... ok
+test line::tests::the_cursor_steps_over_whole_characters_not_bytes ... ok
+test line::tests::typing_inserts_at_the_cursor ... ok
+test line::tests::undo_takes_back_a_word_of_typing_and_redo_returns_it ... ok
+test line::tests::utf16_offsets_round_trip_through_astral_characters ... ok
+test line::tests::word_motions_step_the_caret_by_words ... ok
+test menu::tests::a_live_row_is_a_button_and_a_disabled_one_is_not ... ok
+test menu::tests::an_armed_destructive_row_wears_the_wash ... ok
+test menu::tests::the_floating_shell_masks_the_cursor_beneath_it ... ok
+test nav::tests::a_working_row_is_the_same_box_as_a_quiet_one ... ok
+test nav::tests::an_unresolved_row_keeps_its_height ... ok
+test nav::tests::every_draggable_row_advertises_its_grab ... ok
+test menu::tests::the_context_menu_blocks_hover_on_the_card_beneath_it ... ok
+test nav::tests::rail_monograms_identify_threads_instead_of_repeating_provider_marks ... ok
+test nav::tests::subagent_count_is_hidden_at_zero_and_uses_compact_numeric_copy ... ok
+test nav::tests::only_the_current_row_carries_the_selected_fill ... ok
+test nav::tests::the_column_has_no_edge ... ok
+test nav::tests::the_mac_rail_owns_the_full_traffic_light_reserve ... ok
+test nav::tests::the_order_button_is_clear_at_rest_and_filled_while_open ... ok
+test nav::tests::the_parked_header_is_a_row_sized_heading ... ok
+test nav::tests::the_parked_section_is_capped_and_its_list_scrolls ... ok
+test notifications::tests::a_rows_detail_names_the_outcome_and_the_project ... ok
+test pane::tests::a_fenced_block_paints_every_syntax_class ... ok
+test pane::tests::a_hunk_card_draws_a_bounded_number_of_rows_and_says_what_it_left ... ok
+test pane::tests::a_hunk_row_colours_its_code_by_which_way_it_went ... ok
+test pane::tests::a_tool_row_reads_its_outcome_from_the_verb_and_the_result ... ok
+test pane::tests::contract_multi_file_tool_verdict_counts_all_native_hunks ... ok
+test pane::tests::contract_structured_tool_result_is_visible_in_shared_disclosure ... ok
+test pane::tests::durations_read_at_the_comps_grammar ... ok
+test pane::tests::a_blocked_thread_paints_its_decision_card ... ok
+test cockpit::tests::transcript_details_wrap_to_the_pane ... ok
+test pane::tests::every_decision_surface_shares_one_subject_derivation ... ok
+test pane::tests::footer_advertises_history_only_when_the_context_is_armed ... ok
+test pane::tests::footer_advertises_the_accept_key_while_a_prediction_shows ... ok
+test pane::tests::import_is_offered_only_while_the_thread_has_no_conversation ... ok
+test pane::tests::inline_code_and_links_carry_their_own_ink ... ok
+test pane::tests::progress_metadata_sits_below_reasoning_without_a_duplicate_command ... ok
+test pane::tests::progress_token_counts_stay_compact ... ok
+test pane::tests::rate_limit_resets_read_as_compact_countdowns ... ok
+test pane::tests::rows_advertise_their_click_with_the_cursor_and_inert_rows_do_not ... ok
+test pane::tests::the_chrome_names_the_workspace_a_thread_works_in ... ok
+test pane::tests::the_mode_chip_uses_provider_supplied_labels ... ok
+test pane::tests::the_model_label_strips_the_provider_the_logomark_already_names ... ok
+test pane::tests::the_placeholder_says_what_the_pane_is_waiting_on ... ok
+test pane::tests::the_todo_meter_caps_its_glyph_run ... ok
+test pane::tests::the_wall_card_folds_progress_result_and_context_lines ... ok
+test pane::tests::the_wall_reads_turn_completion_without_a_cost ... ok
+test pane::tests::the_wall_state_matrix_reads_exactly_as_the_glance_spec ... ok
+test pointer::tests::each_role_pairs_its_token_with_the_pointer ... ok
+test prefs::tests::model_choices_keep_default_alias_and_custom_values_selected ... ok
+test rich::file_link_tests::code_copy_uses_the_new_source_after_a_stream_update ... ok
+test rich::file_link_tests::custom_inline_link_preserves_source_selection ... ok
+test rich::file_link_tests::drag_selection_across_file_card_copies_the_original_sentence ... ok
+test pane::tests::every_block_kind_paints ... ok
+test rich::file_link_tests::fenced_code_copy_preserves_source_and_confirms_without_copying_chrome ... ok
+test rich::file_link_tests::image_file_card_uses_the_existing_pane_preview ... ok
+test rich::file_link_tests::keyboard_can_open_a_file_card ... ok
+test rich::file_link_tests::file_cards_wrap_inline_and_preserve_markdown_and_copying ... ok
+test pane::tests::every_block_kind_registers_its_selectable_text ... ok
+test rich::file_link_tests::local_file_click_opens_a_file_url_without_line_suffix ... ok
+test rich::file_link_tests::missing_file_does_not_reach_the_os ... ok
+test rich::spacing_tests::markdown_spacing_preserves_hard_breaks_and_ignores_definitions ... ok
+test rich::spacing_tests::narrow_table_uses_the_native_overflow_track ... ok
+test cockpit::tests::wheel_scroll_detaches_from_the_tail_and_scrolling_back_reattaches ... ok
+test rich::spacing_tests::native_markdown_preserves_literal_bytes_and_link_destinations ... ok
+test demo::tests::a_revived_demo_thread_announces_its_mode_and_replays_nothing ... ok
+test scrollbar::tests::thumb_hover_bounds_stay_inside_click_and_cursor_gutter ... ok
+test session::tests::default_effort_reads_current_settings_for_the_ready_sessions_provider ... ok
+test rich::spacing_tests::ordered_list_start_controls_the_native_marker_width ... ok
+test rich::spacing_tests::markdown_spacing_nested_lists_and_zero_gap ... ok
+test session::tests::production_wrapper_exposes_native_modes_and_routes_controls ... ok
+test session::tests::the_settings_effort_is_the_default_when_the_thread_chose_none ... ok
+test session::tests::the_rss_sampler_reads_this_very_process ... ok
+test session::tests::the_watchdog_never_waits_for_process_measurement ... ok
+test shell::unix::tests::no_marker_means_nothing_is_adopted ... ok
+test shell::unix::tests::the_listing_after_the_marker_is_adopted_and_the_shells_own_lines_are_not ... ok
+test scrollbar::tests::thumb_padding_drags_without_jumping ... ok
+test tests::an_unimportable_file_is_refused_and_adopted_by_nobody ... ok
+test tests::every_table_entry_builds_for_both_platforms ... ok
+test shell::unix::tests::a_real_login_shell_reports_its_path ... ok
+test tests::a_dock_launch_stands_where_the_newest_thread_works ... ok
+test tests::typing_does_not_hide_the_mouse_cursor ... ok
+test titlebar::tests::a_caption_button_is_the_platform_width_and_square ... ok
+test titlebar::tests::a_restored_window_keeps_its_top_resize_edge ... ok
+test titlebar::tests::the_strip_is_an_overlay_of_the_band_the_board_reserves ... ok
+test transcript::rows::tests::adjacent_tools_merge_into_the_leaders_stable_activity_row ... ok
+test transcript::rows::tests::append_keeps_prior_row_rcs_and_splices_the_tail ... ok
+test transcript::rows::tests::blank_thinking_is_not_a_row ... ok
+test transcript::rows::tests::contiguous_markdown_blocks_share_one_native_answer_row ... ok
+test transcript::rows::tests::front_eviction_deletes_the_head_before_appending_the_tail ... ok
+test transcript::rows::tests::prepend_preserves_the_existing_suffix_rows ... ok
+test cockpit::tests::the_workspace_chip_scopes_to_the_chosen_project ... FAILED
+test tests::manually_parked_threads_stay_parked_after_restart ... ok
+test tests::restarting_preserves_every_open_thread ... ok
+test session::tests::production_wrapper_changes_model_without_replacing_the_conversation ... ok
+test cockpit::tests::titlebar_add_from_a_loose_thread_scopes_the_draft_to_a_new_group ... ok
+test demo::tests::answering_the_demo_decision_plays_the_rest_of_the_turn ... ok
+test rich::spacing_tests::markdown_spacing_between_all_block_kinds ... ok
+test cockpit::tests::settings_open_on_cmd_comma_and_every_change_saves ... ok
+test cockpit::tests::completion_checks::multiline_composer_keeps_its_lower_edge_and_end_caret_on_resize ... ok
+
+failures:
+
+---- cockpit::tests::render_performance::retained_transcript_relative_file_links_use_the_thread_workspace_and_copy_text stdout ----
+
+thread 'cockpit::tests::render_performance::retained_transcript_relative_file_links_use_the_thread_workspace_and_copy_text' (4108235) panicked at crates/ferrite/src/cockpit/tests/render_performance.rs:360:5:
+assertion `left == right` failed: the native file card remains selectable as its rendered link label
+  left: Some("Before guide after reading the detailed notes about this change and the next s")
+ right: Some("Before guide after reading the detailed notes about this change and the next steps")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- cockpit::tests::native_file_drops_follow_the_pointer_across_panes_and_groups stdout ----
+
+thread 'cockpit::tests::native_file_drops_follow_the_pointer_across_panes_and_groups' (4106957) panicked at crates/ferrite/src/cockpit.rs:17893:13:
+sent files remain cards in the transcript
+
+---- composer::tests::the_caret_is_solid_on_focus_then_blinks_and_typing_resets_it stdout ----
+
+thread 'composer::tests::the_caret_is_solid_on_focus_then_blinks_and_typing_resets_it' (4110102) panicked at crates/ferrite/src/composer.rs:1640:9:
+the caret must blink off after half a cycle
+
+---- cockpit::tests::the_workspace_chip_scopes_to_the_chosen_project stdout ----
+
+thread 'cockpit::tests::the_workspace_chip_scopes_to_the_chosen_project' (4109856) panicked at crates/ferrite/src/cockpit.rs:12078:13:
+assertion `left == right` failed: the chosen repo's checkout, then main and the fresh starts
+  left: ["main", "New branch", "New branch + worktree"]
+ right: ["master", "main", "New branch", "New branch + worktree"]
+
+
+failures:
+    cockpit::tests::native_file_drops_follow_the_pointer_across_panes_and_groups
+    cockpit::tests::render_performance::retained_transcript_relative_file_links_use_the_thread_workspace_and_copy_text
+    cockpit::tests::the_workspace_chip_scopes_to_the_chosen_project
+    composer::tests::the_caret_is_solid_on_focus_then_blinks_and_typing_resets_it
+
+test result: FAILED. 363 passed; 4 failed; 2 ignored; 0 measured; 0 filtered out; finished in 14.72s
+
+error: test failed, to rerun pass `-p ferrite --bin ferrite`

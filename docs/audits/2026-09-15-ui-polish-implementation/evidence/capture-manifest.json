@@ -1,0 +1,117 @@
+{
+  "product_commit": "ba6ffd34015b42ad71d5753ad5018e2dfd16c115",
+  "screenshots": [
+    {
+      "file": "screenshots/code-copied-compact.png",
+      "sha256": "6804cbae599273f3b5a3022b5a9c9097243b0a6215fc285dee18924c87a37ea2"
+    },
+    {
+      "file": "screenshots/diff-metadata-compact.png",
+      "sha256": "8386450eb1c081c0bf2233cb3f015ea7e4af45954ef6256354d269e1db577fa2"
+    },
+    {
+      "file": "screenshots/draft-1000x800.png",
+      "sha256": "cc555dc0b2b77782b1f8cd50389b65c431530f4efa1a108ca37e108852e320c3"
+    },
+    {
+      "file": "screenshots/group-l1-1200x800.png",
+      "sha256": "3747df603ccc3d88d6927851fb9e4364f3f72f6a23bd5f7f7501260b3d4643de"
+    },
+    {
+      "file": "screenshots/group-l2-860x500.png",
+      "sha256": "1dee94c9a533e897aad8da155ad322ee2be3e0d94f2bf854fa2ddf2a933e4bb7"
+    },
+    {
+      "file": "screenshots/headings-compact.png",
+      "sha256": "68c1d215deb2dc793b787eb9565d7ff73b1093cafbd5066ab20a1d680841b0ef"
+    },
+    {
+      "file": "screenshots/new-project-1000x800.png",
+      "sha256": "6b0a5eab76094d0e1c309c67da0c0c3596bf83d1135e62735a07da543da843a6"
+    },
+    {
+      "file": "screenshots/new-project-create-keyboard-1000x800.png",
+      "sha256": "3b9ab3569de216985b77b92faa3a99abc24df0fa1bdc606d07a9cebf40417b70"
+    },
+    {
+      "file": "screenshots/new-project-enabled-1000x800.png",
+      "sha256": "9d33c02b97a41f0e5e537055497fcc2ec2dee9ff90781e297a536b80121d29fe"
+    },
+    {
+      "file": "screenshots/preview-1000x800.png",
+      "sha256": "8f894b9714238a614a2a1014fd0787ff5e19816e260a631da06f29f7ac0e10af"
+    },
+    {
+      "file": "screenshots/preview-group-1200x800.png",
+      "sha256": "161393e437c2cd972e02381ae706c700fe478638396353ff2ace8dae33fc8a2f"
+    },
+    {
+      "file": "screenshots/prose-comfortable-compact.png",
+      "sha256": "d6ef2a81051369d7432f326595f904185b39cb0367d28130d21e7727e0dfbf27"
+    },
+    {
+      "file": "screenshots/prose-compact.png",
+      "sha256": "d436b37b7b290a4e2c7993d29b16e7414c0b28f1dcc9821fa9931bdbef181a37"
+    },
+    {
+      "file": "screenshots/prose-desktop.png",
+      "sha256": "f857622327ff892a7b6bd83b57608a89449a2c9d81498aef21ad918745c4c81f"
+    },
+    {
+      "file": "screenshots/prose-large-compact.png",
+      "sha256": "caf6ad306132d73efa03924e24ad61a6d6372f44038ca8566bc6a90b2a964f0c"
+    },
+    {
+      "file": "screenshots/question-expanded-draft-860x500.png",
+      "sha256": "ff00cc4bb9e816ff549771cadca766006af58b2ad58398f461442488363e5e2a"
+    },
+    {
+      "file": "screenshots/question-group-1200x800.png",
+      "sha256": "566b61676a596eca393fe5e9a68a93d82b0c6e90697efd2a9aea541b577d1091"
+    },
+    {
+      "file": "screenshots/question-group-860x500.png",
+      "sha256": "fc00b60318807ef4a58b4381bb2c689cce338eaea76c03249f0a066636176949"
+    },
+    {
+      "file": "screenshots/question-multiline-1200x800.png",
+      "sha256": "1e118d983d504377cc1405b8ff5b4291d8aaf9a2c3183abaf83df3d8df75f81c"
+    },
+    {
+      "file": "screenshots/question-multiline-860x500.png",
+      "sha256": "689a8accd2df48cc2eaa4dd24ffe25331c5fac40fa08a9ef59a8de82accf2c38"
+    },
+    {
+      "file": "screenshots/selected-child-1000x800.png",
+      "sha256": "eba0d30e5088f74644b79f653fbfb38b91ae59f791a2d8ceaf8b3757bf104868"
+    },
+    {
+      "file": "screenshots/selected-child-640x800.png",
+      "sha256": "1c7973e760e197a60d5f8f270c283b79f1c18ce7bcb282afcc1bf07ccfaf7f6d"
+    },
+    {
+      "file": "screenshots/settings-choice-keyboard-compact.png",
+      "sha256": "8790b4f9de24fb9f0be7deb2b04c64e64cc8fd1cadd0e660988fa948bfc9d9ff"
+    },
+    {
+      "file": "screenshots/settings-compact.png",
+      "sha256": "1120b338a81739708a0bf3bec640243e0189325ca21e30645daf706358f881ad"
+    },
+    {
+      "file": "screenshots/settings-desktop.png",
+      "sha256": "dbffbf77c2860fa04a4777139d4da91901afbeb47ecdba6f717d37f182814b0e"
+    },
+    {
+      "file": "screenshots/settings-hover-compact.png",
+      "sha256": "4a87d24e834e192fa291ada8c74b8bb81564c42bf53455aafa27db6c37583b27"
+    },
+    {
+      "file": "screenshots/settings-keyboard-compact.png",
+      "sha256": "843fa520dc79bffaee30fb1d8426f2bc43e9fed32edc4d98a9debc5e21deadf5"
+    },
+    {
+      "file": "screenshots/subagents-1000x800.png",
+      "sha256": "9be1eaf93df7b818d795cf21f322b41f4dea3066681c19b173877011c8fae741"
+    }
+  ]
+}

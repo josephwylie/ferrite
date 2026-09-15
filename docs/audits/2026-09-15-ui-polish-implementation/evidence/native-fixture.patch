@@ -1,0 +1,982 @@
+diff --git a/crates/ferrite/src/visual_reference.rs b/crates/ferrite/src/visual_reference.rs
+index 5b63390..0975c2b 100644
+--- a/crates/ferrite/src/visual_reference.rs
++++ b/crates/ferrite/src/visual_reference.rs
+@@ -1,23 +1,19 @@
+-//! Native framebuffer artifacts using the real Cockpit renderer.
+-//! No live providers or operator store. Opt in with `visual-reference`.
+-
++//! Disposable audit fixtures: real renderer, no live providers or user data.
+ use ferrite_core::{
+     cockpit::{Cockpit, SpawnRequest, Spawner},
++    groups::GroupChange,
+     providers::Session,
+     store::{Provider, Store},
+     workspace::WorkspaceChoice,
+     DecisionAnswer, SessionEvent,
+ };
+-use gpui::{AppContext, HeadlessAppContext};
+-use std::{io, path::PathBuf, sync::mpsc};
+-
+-struct Fixture(Option<mpsc::Receiver<SessionEvent>>);
++use gpui::{AppContext, Focusable, HeadlessAppContext};
++use std::{collections::VecDeque, io, path::PathBuf, sync::mpsc};
++struct Fixture(VecDeque<mpsc::Receiver<SessionEvent>>);
+ struct FixtureSession(mpsc::Receiver<SessionEvent>);
+ impl Spawner for Fixture {
+     fn spawn(&mut self, _: SpawnRequest) -> io::Result<Box<dyn Session>> {
+-        Ok(Box::new(FixtureSession(
+-            self.0.take().expect("one fixture Session"),
+-        )))
++        Ok(Box::new(FixtureSession(self.0.pop_front().unwrap())))
+     }
+ }
+ impl Session for FixtureSession {
+@@ -34,59 +30,479 @@ impl Session for FixtureSession {
+         Ok(())
+     }
+ }
+-
+-pub fn capture(output: String) {
++fn capture_interactions(output: String) {
+     let output = PathBuf::from(output);
+-    std::fs::create_dir_all(&output).expect("create artifact directory");
++    std::fs::create_dir_all(&output).unwrap();
+     let platform = gpui::platform::current_platform(true);
+-    for (label, width) in [("narrow", 720.), ("wide", 1000.)] {
+-        for state in [
+-            "formatting",
+-            "edges",
+-            "live",
+-            "decision",
+-            "approval",
+-            "expanded",
+-            "interrupted",
+-        ] {
+-            let store_path = std::env::temp_dir().join(format!(
+-                "ferrite-reference-{}-{label}-{state}",
+-                std::process::id()
+-            ));
+-            let (sender, receiver) = mpsc::channel();
+-            let mut core = Cockpit::new(
+-                Store::open(&store_path).unwrap(),
+-                Box::new(Fixture(Some(receiver))),
+-            );
+-            core.set_suggestions_enabled(false);
++    for (state, width, height) in [
++        ("group-l1", 1200., 800.),
++        ("group-l2", 860., 500.),
++        ("question-group", 1200., 800.),
++        ("question-group", 860., 500.),
++        ("question-multiline", 1200., 800.),
++        ("question-multiline", 860., 500.),
++        ("question-expanded-draft", 860., 500.),
++        ("draft", 1000., 800.),
++        ("new-project", 1000., 800.),
++        ("new-project-enabled", 1000., 800.),
++        ("new-project-create-keyboard", 1000., 800.),
++        ("subagents", 1000., 800.),
++        ("selected-child", 1000., 800.),
++        ("selected-child", 640., 800.),
++        ("preview", 1000., 800.),
++        ("preview-group", 1200., 800.),
++    ] {
++        let store_path = std::env::temp_dir().join(format!(
++            "ferrite-ui-fixture-{}-{state}-{width}",
++            std::process::id()
++        ));
++        let count = if state == "draft" || state.starts_with("new-project") {
++            0
++        } else if matches!(state, "subagents" | "selected-child" | "preview") {
++            1
++        } else {
++            4
++        };
++        let mut senders = Vec::new();
++        let mut receivers = VecDeque::new();
++        for _ in 0..count {
++            let (s, r) = mpsc::channel();
++            senders.push(s);
++            receivers.push_back(r);
++        }
++        let mut core = Cockpit::new(
++            Store::open(&store_path).unwrap(),
++            Box::new(Fixture(receivers)),
++        );
++        core.set_suggestions_enabled(false);
++        if state == "draft" {
++            core.register_project(&std::env::current_dir().unwrap())
++                .unwrap();
++        }
++        let mut threads = Vec::new();
++        for i in 0..count {
+             let thread = core
+                 .open(
+-                    Provider::Claude,
++                    if i == 1 {
++                        Provider::Codex
++                    } else {
++                        Provider::Claude
++                    },
+                     WorkspaceChoice::Main {
+                         checkout: std::env::current_dir().unwrap(),
+                     },
+                 )
+                 .unwrap();
++            let names = [
++                "Review authentication",
++                "Improve search results",
++                "Check keyboard navigation",
++                "Update account settings",
++            ];
++            core.rename_thread(thread, names[i]).unwrap();
+             core.send(
+                 thread,
+-                "Review the formatting fixture.  Preserve its spacing.".into(),
++                [
++                    "Review the sign-in flow and identify any practical UX problems.",
++                    "Check search ranking and show the next steps.",
++                    "Run the keyboard navigation checks.",
++                    "Review the account settings page.",
++                ][i]
++                    .into(),
+             );
+-            sender
++            senders[i].send(SessionEvent::TextDelta{text:["The sign-in flow is clear. I am checking how the interface behaves when a session expires and the user returns to an unfinished form. Their draft should remain available, with a clear next step to sign in again.","Search returns the expected records. The remaining issue is the empty state: it does not explain whether the query had no matches or the selected filters excluded them.","The navigation checks passed. Tab reaches each action in the expected order, and focus returns to the trigger when the menu closes.","The settings changes are ready for review. The preview below shows the current behavior."][i].into()}).unwrap();
++            senders[i]
+                 .send(SessionEvent::ToolStarted {
+-                    id: "read".into(),
+-                    name: "Read".into(),
+-                    input: serde_json::json!({"file_path": "formatting.md"}),
++                    id: format!("check-{i}"),
++                    name: "Bash".into(),
++                    input: serde_json::json!({"command":"cargo test --lib"}),
+                 })
+                 .unwrap();
+-            sender
++            senders[i]
+                 .send(SessionEvent::ToolCompleted {
+-                    id: "read".into(),
+-                    output: "Read the formatting fixture.".into(),
+-                    is_error: false,
++                    id: format!("check-{i}"),
++                    output: if i == 3 {
++                        "error: account settings assertion failed"
++                    } else {
++                        "test result: ok. 24 passed; 0 failed"
++                    }
++                    .into(),
++                    is_error: i == 3,
+                     result: ferrite_core::ToolResult::Opaque,
+                 })
+                 .unwrap();
+-            let source = match state {
++            if i == 0 || i == 1 {
++                senders[i]
++                    .send(SessionEvent::ReasoningSummaryPart {
++                        item_id: "reasoning".into(),
++                        summary_index: 0,
++                        snapshot: true,
++                        text: "Checking the remaining interactions".into(),
++                    })
++                    .unwrap();
++            } else {
++                senders[i]
++                    .send(SessionEvent::TurnEnded {
++                        outcome: if i == 3 {
++                            ferrite_core::TurnOutcome::Error("The settings check failed".into())
++                        } else {
++                            ferrite_core::TurnOutcome::Completed
++                        },
++                        cost_usd: None,
++                    })
++                    .unwrap();
++            }
++            threads.push(thread);
++        }
++        if state.starts_with("question-") {
++            let input = serde_json::json!({"questions":[{"question":"How should an expired session affect an unfinished form?","header":"Session expiry","multiSelect":false,"options":[{"label":"Keep the draft (Recommended)","description":"Return to the form after sign-in with the entered values preserved."},{"label":"Start a new form","description":"Discard the previous values and show an empty form after sign-in."}]}]});
++            senders[0]
++                .send(SessionEvent::DecisionRequested {
++                    decision: ferrite_core::Decision {
++                        delivery: Default::default(),
++                        kind: ferrite_core::DecisionKind::Questions(
++                            ferrite_core::questions::parse(&input).unwrap(),
++                        ),
++                        policy: Default::default(),
++                        id: "audit-question".into(),
++                        tool_use_id: "question".into(),
++                        tool_name: "AskUserQuestion".into(),
++                        description: String::new(),
++                        suggestions: vec![],
++                        input,
++                    },
++                })
++                .unwrap();
++        }
++        if matches!(state, "subagents" | "selected-child") {
++            use ferrite_core::activity::{
++                ActivityEvent, AgentInfo, AgentKey, AgentStatus, Subject, TranscriptCoverage,
++            };
++            let agents = if state == "selected-child" {
++                vec![
++                    ("Atlas", AgentStatus::Idle),
++                    ("Cedar", AgentStatus::Idle),
++                    ("Finch", AgentStatus::Idle),
++                    ("Juniper", AgentStatus::Idle),
++                    ("Rowan", AgentStatus::Idle),
++                ]
++            } else {
++                vec![
++                    ("Navigation", AgentStatus::Working),
++                    ("Forms", AgentStatus::Idle),
++                    ("Error states", AgentStatus::Working),
++                ]
++            };
++            for (name, status) in agents {
++                let key = AgentKey::new(Provider::Claude, "audit-ui", name);
++                let mut info = AgentInfo::new(key.clone());
++                info.name = Some(name.into());
++                info.parent = Some(Subject::Main);
++                info.coverage = TranscriptCoverage::Live;
++                senders[0]
++                    .send(SessionEvent::Activity(ActivityEvent::Discovered(info)))
++                    .unwrap();
++                senders[0].send(SessionEvent::Activity(ActivityEvent::Content{key:key.clone(),id:Some(format!("{name}-text")),event:ferrite_core::activity::ExecutionEvent::Text{text:format!("## {name} review\n\nThe form keeps the current values while validation runs. Keyboard focus returns to the first field that needs attention. The next step is to confirm the error message and retry the form.")}})).unwrap();
++                senders[0]
++                    .send(SessionEvent::Activity(ActivityEvent::Status {
++                        key,
++                        state: status,
++                    }))
++                    .unwrap();
++            }
++        }
++        core.pump();
++        let group = if count == 4 {
++            let group = core
++                .apply_group(GroupChange::Create {
++                    first: threads[0],
++                    second: threads[1],
++                })
++                .unwrap()
++                .group
++                .unwrap();
++            for t in &threads[2..] {
++                core.apply_group(GroupChange::Join {
++                    thread: *t,
++                    group,
++                    index: None,
++                })
++                .unwrap();
++            }
++            core.enter_group(group).unwrap();
++            Some(group)
++        } else {
++            None
++        };
++        core.clear_notices();
++        let mut cx = HeadlessAppContext::with_platform(
++            platform.text_system(),
++            std::sync::Arc::new(crate::icons::Assets),
++            gpui::platform::current_headless_renderer,
++        );
++        cx.update(|cx| {
++            crate::theme::init_components(cx);
++            crate::rich::init(cx);
++            cx.text_system()
++                .add_fonts(vec![
++                    std::borrow::Cow::Borrowed(crate::JBM_REGULAR),
++                    std::borrow::Cow::Borrowed(crate::JBM_MEDIUM),
++                    std::borrow::Cow::Borrowed(crate::JBM_SEMIBOLD),
++                    std::borrow::Cow::Borrowed(crate::JBM_BOLD),
++                ])
++                .unwrap();
++        });
++        let preview_image = if state.starts_with("preview") {
++            let target = store_path.join("review screenshot #50%.png");
++            let source = std::env::var_os("FERRITE_POLISH_IMAGE")
++                .map(PathBuf::from)
++                .unwrap_or_else(|| {
++                    std::env::current_dir()
++                        .unwrap()
++                        .join("crates/ferrite/assets/app-icon.png")
++                });
++            std::fs::copy(source, &target).unwrap();
++            Some(target)
++        } else {
++            None
++        };
++        let mut captured_interaction_view = None;
++        let window = cx
++            .open_window(
++                gpui::size(gpui::px(width), gpui::px(height)),
++                |window, cx| {
++                    let view = cx.new(|cx| {
++                        let mut view =
++                            super::CockpitView::new_with_provider(core, Provider::Claude, cx);
++                        if let Some(group) = group {
++                            view.enter_group(group, cx);
++                        }
++                        if matches!(state,"new-project-enabled"|"new-project-create-keyboard") {
++                            let directory = store_path.join("Application");
++                            std::fs::create_dir_all(&directory).unwrap();
++                            view.adopt_editor_directory(directory, cx);
++                            let name = view.project_editor.as_ref().unwrap().name.clone();
++                            name.update(cx, |name,cx| name.set("Application".into(),cx));
++                        }
++                        if state == "question-multiline" {
++                            view.panes[0].composer.update(cx, |composer,cx| composer.set("Keep the draft after sign-in.\nPreserve the attachment too.\nFocus the first field that needs attention.\nShow the next step beside the form.".into(),cx));
++                        }
++                        if state == "question-expanded-draft" {
++                            // Same pending Question and retained draft as the Group case;
++                            // use the existing fullscreen action's core transition for its owner.
++                            view.panes[0].composer.update(cx, |composer,cx| composer.set(
++                                "Keep the existing form values.\nPreserve the attached screenshot.\nReturn to this form after sign-in.\nFocus the first field needing attention.\nShow the retry action beside that field.\nKeep the current search filters.\nRetain the selected record.\nConfirm that all eight draft lines remain.".into(),cx));
++                            view.cockpit.focus_thread(threads[0]);
++                            view.cockpit.toggle_fullscreen();
++                        }
++                        if state == "selected-child" {
++                            let subject = ferrite_core::activity::Subject::Subagent(
++                                ferrite_core::activity::AgentKey::new(
++                                    Provider::Claude,
++                                    "audit-ui",
++                                    "Rowan",
++                                ),
++                            );
++                            let revision = view
++                                .cockpit
++                                .thread(threads[0])
++                                .unwrap()
++                                .activity()
++                                .subject(&subject)
++                                .unwrap()
++                                .revision();
++                            view.panes[0].select_subject(subject, revision, cx);
++                            if width < 800. {
++                                view.cockpit.toggle_fullscreen();
++                            }
++                        }
++                        if let Some(path) = preview_image.clone() {
++                            view.panes[0].preview.open(
++                                path,
++                                "review screenshot #50%.png".into(),
++                                window,
++                                cx,
++                            );
++                        }
++                        view
++                    });
++                    captured_interaction_view = Some(view.clone());
++                    cx.new(|cx| gpui::component::Root::new(view, window, cx))
++                },
++            )
++            .unwrap();
++        cx.run_until_parked();
++        cx.update_window(window.into(), |_, window, cx| {
++            let _ = window.draw(cx);
++        })
++        .unwrap();
++        if state.starts_with("question-") {
++            // Question fit publishes measured chrome after prepaint. Settle two
++            // further native draw/park passes before recording its steady state.
++            for _ in 0..2 {
++                cx.update_window(window.into(), |_, window, cx| {
++                    let _ = window.draw(cx);
++                })
++                .unwrap();
++                cx.run_until_parked();
++            }
++        }
++        if state == "new-project-create-keyboard" {
++            let view = captured_interaction_view.as_ref().unwrap();
++            cx.update_window(window.into(), |_, window, cx| {
++                let name_focus = view
++                    .read(cx)
++                    .project_editor
++                    .as_ref()
++                    .unwrap()
++                    .name
++                    .read(cx)
++                    .focus_handle(cx);
++                // Native key dispatch establishes keyboard modality. Reset to the actual
++                // Name input, then traverse Remove -> Add Directory -> enabled Create.
++                let key = gpui::Keystroke::parse("tab").unwrap();
++                window.dispatch_keystroke(key.clone(), cx);
++                window.dispatch_event(
++                    gpui::PlatformInput::KeyUp(gpui::KeyUpEvent { keystroke: key }),
++                    cx,
++                );
++                window.focus(&name_focus, cx);
++                for _ in 0..3 {
++                    window.focus_next(cx);
++                }
++                assert!(view.read(cx).project_editor_ready());
++                assert!(window.last_input_was_keyboard());
++                let _ = window.draw(cx);
++            })
++            .unwrap();
++            cx.run_until_parked();
++            cx.update_window(window.into(), |_, window, cx| {
++                let _ = window.draw(cx);
++            })
++            .unwrap();
++        }
++        let path = output.join(format!(
++            "{state}-{}x{}.png",
++            width as usize, height as usize
++        ));
++        cx.capture_screenshot(window.into())
++            .unwrap()
++            .save(&path)
++            .unwrap();
++        println!("CAPTURE {}", path.display());
++        drop(captured_interaction_view);
++        drop(cx);
++        std::fs::remove_dir_all(store_path).unwrap();
++    }
++}
++
++use super::CockpitView;
++pub fn capture(output: String) {
++    daily::capture(output.clone());
++    capture_interactions(output);
++}
++mod daily {
++    // Native framebuffer artifacts using the real Cockpit renderer.
++    // No live providers or operator store. Opt in with `visual-reference`.
++
++    use ferrite_core::{
++        cockpit::{Cockpit, SpawnRequest, Spawner},
++        providers::Session,
++        store::{Provider, Store},
++        workspace::WorkspaceChoice,
++        DecisionAnswer, SessionEvent,
++    };
++    use gpui::{AppContext, HeadlessAppContext};
++    use std::{io, path::PathBuf, sync::mpsc};
++
++    struct Fixture(Option<mpsc::Receiver<SessionEvent>>);
++    struct FixtureSession(mpsc::Receiver<SessionEvent>);
++    impl Spawner for Fixture {
++        fn spawn(&mut self, _: SpawnRequest) -> io::Result<Box<dyn Session>> {
++            Ok(Box::new(FixtureSession(
++                self.0.take().expect("one fixture Session"),
++            )))
++        }
++    }
++    impl Session for FixtureSession {
++        fn events(&self) -> &mpsc::Receiver<SessionEvent> {
++            &self.0
++        }
++        fn send(&mut self, _: &str) -> io::Result<()> {
++            Ok(())
++        }
++        fn interrupt(&mut self) -> io::Result<()> {
++            Ok(())
++        }
++        fn respond_to_decision(&mut self, _: &str, _: DecisionAnswer) -> io::Result<()> {
++            Ok(())
++        }
++    }
++
++    pub fn capture(output: String) {
++        let output = PathBuf::from(output);
++        std::fs::create_dir_all(&output).expect("create artifact directory");
++        let platform = gpui::platform::current_platform(true);
++        for (label, width) in [("desktop", 1440.), ("compact", 1000.)] {
++            for state in [
++                "prose",
++                "settings",
++                "prose-comfortable",
++                "prose-large",
++                "headings",
++                "diff-metadata",
++                "code-copied",
++                "settings-keyboard",
++                "settings-choice-keyboard",
++                "settings-hover",
++            ] {
++                // Keep extra interaction/typography frames at the everyday compact size.
++                if label == "desktop" && !matches!(state, "prose" | "settings") {
++                    continue;
++                }
++                let store_path = std::env::temp_dir().join(format!(
++                    "ferrite-reference-{}-{label}-{state}",
++                    std::process::id()
++                ));
++                let (sender, receiver) = mpsc::channel();
++                let mut core = Cockpit::new(
++                    Store::open(&store_path).unwrap(),
++                    Box::new(Fixture(Some(receiver))),
++                );
++                core.set_suggestions_enabled(false);
++                let thread = core
++                    .open(
++                        Provider::Claude,
++                        WorkspaceChoice::Main {
++                            checkout: std::env::current_dir().unwrap(),
++                        },
++                    )
++                    .unwrap();
++                core.send(
++                    thread,
++                    "Review the formatting fixture.  Preserve its spacing.".into(),
++                );
++                if !matches!(state, "code-copied" | "headings" | "diff-metadata") {
++                    sender
++                        .send(SessionEvent::ToolStarted {
++                            id: "read".into(),
++                            name: "Read".into(),
++                            input: serde_json::json!({"file_path": "formatting.md"}),
++                        })
++                        .unwrap();
++                    sender
++                        .send(SessionEvent::ToolCompleted {
++                            id: "read".into(),
++                            output: "Read the formatting fixture.".into(),
++                            is_error: false,
++                            result: ferrite_core::ToolResult::Opaque,
++                        })
++                        .unwrap();
++                }
++                let source = match state {
++            "prose" | "settings" | "prose-comfortable" | "prose-large" | "code-copied" | "settings-keyboard" | "settings-choice-keyboard" | "settings-hover" => "## Review the proposed change\n\nThe importer now keeps the original reference beside each row, so you can compare an incoming payment with the matching invoice before accepting it. Existing records stay visible while the update runs. If a record cannot be matched, it remains in the review list with a short explanation and a link to its source. The next step is to check the remaining unmatched items and confirm the result before continuing.\n\n### What changed\n\n- Retained the source reference beside each payment.\n- Added a clear message when no invoice matches.\n- Kept the review list available during background work.\n\n```rust\nfn summarize(rows: &[Row]) -> Summary {\n    Summary::from_rows(rows)\n}\n```\n\nThe checks passed. You can now review the sample data and decide whether the matching behavior is ready to use.".into(),
++            "diff-metadata" => "The session timeout change is ready to review.".into(),
++            "headings" => "# Plain heading one\n\n# *Authored italic heading*\n\n## Heading two\n\n### Heading three\n\n#### Heading four\n\n##### Heading five\n\n###### Heading six\n\nA [link](https://example.com) and **bold** / *italic* keep authored treatments.".into(),
+             "formatting" => include_str!("../../../docs/research/cli-capture-2026-09-06/model-source/claude-formatting.md").to_string(),
+             "edges" => format!("# Heading emphasis\n\n## Second heading\n\n**bold**, *italic*; `one  two` [label](https://example.com/exact?q=a%20b).\n\n9. Nine\n10. Ten with a wrapped continuation of several words\n\nSeparate list:\n\n100. One hundred with a wrapped continuation\n\n> First quote line\n> Second quote line\n>\n> > Nested quote\n\n```text\n    one  two\n\n\tthree   four  \n```\n\n```python\nprint(\"one  two\") # comment\nvalue = 42\n```\n\n| Name | Number | Long token |\n| :--- | ---: | :--- |\n| double  space | 12 | {} |\n| CJK 漢字 | 100 | é NBSP text |\n\n{}", "X".repeat(80), "W".repeat(124)),
+             "live" => "I am checking the supplied fixture.\n\n## Streaming heading\n\n- First item\n- Second item\n\n```rust\nlet count = 2;".into(),
+@@ -95,42 +511,73 @@ pub fn capture(output: String) {
+                 "expanded" => "Tool details remain independently inspectable.".into(),
+             _ => "Earlier work remains available after interruption.".into(),
+         };
+-            sender
+-                .send(SessionEvent::TextDelta { text: source })
+-                .unwrap();
+-            for (id, error, result) in [
+-                ("ok", false, "one  two\nthree   four"),
+-                ("error", true, "Example failure\nAdditional detail"),
+-            ] {
+                 sender
+-                    .send(SessionEvent::ToolStarted {
+-                        id: id.into(),
+-                        name: "Bash".into(),
+-                        input: serde_json::json!({"command": "printf 'fixture'"}),
+-                    })
++                    .send(SessionEvent::TextDelta { text: source })
+                     .unwrap();
+-                sender
+-                    .send(SessionEvent::ToolCompleted {
+-                        id: id.into(),
+-                        output: result.into(),
+-                        is_error: error,
+-                        result: ferrite_core::ToolResult::Opaque,
+-                    })
+-                    .unwrap();
+-            }
+-            match state {
+-                "live" => {
++                if !matches!(state, "code-copied" | "headings" | "diff-metadata") {
++                    for (id, error, result) in [
++                        ("ok", false, "one  two\nthree   four"),
++                        ("error", true, "Example failure\nAdditional detail"),
++                    ] {
++                        sender
++                            .send(SessionEvent::ToolStarted {
++                                id: id.into(),
++                                name: "Bash".into(),
++                                input: serde_json::json!({"command": "printf 'fixture'"}),
++                            })
++                            .unwrap();
++                        sender
++                            .send(SessionEvent::ToolCompleted {
++                                id: id.into(),
++                                output: result.into(),
++                                is_error: error,
++                                result: ferrite_core::ToolResult::Opaque,
++                            })
++                            .unwrap();
++                    }
++                }
++                if state == "diff-metadata" {
++                    let mut lines = vec![
++                        " fn session_timeout() {".into(),
++                        "-    let timeout = 30;".into(),
++                        "+    let timeout = 60;".into(),
++                    ];
++                    for index in 0..28 {
++                        lines.push(format!("     check_step_{index}(timeout);"));
++                    }
++                    lines.push(" }".into());
++                    sender.send(SessionEvent::ToolStarted{id:"edit".into(),name:"Edit".into(),input:serde_json::json!({"file_path":"src/session.rs","old_string":"timeout = 30","new_string":"timeout = 60"})}).unwrap();
+                     sender
+-                        .send(SessionEvent::ReasoningSummaryPart {
+-                            item_id: "reasoning".into(),
+-                            summary_index: 0,
+-                            snapshot: true,
+-                            text: "Checking the supplied spacing and tool results".into(),
++                        .send(SessionEvent::ToolCompleted {
++                            id: "edit".into(),
++                            output: "Updated session timeout.".into(),
++                            is_error: false,
++                            result: ferrite_core::ToolResult::FileEdit {
++                                path: "src/session.rs".into(),
++                                hunks: vec![ferrite_core::Hunk {
++                                    old_start: 120,
++                                    old_lines: 31,
++                                    new_start: 120,
++                                    new_lines: 31,
++                                    lines,
++                                }],
++                            },
+                         })
+                         .unwrap();
+                 }
+-                "approval" => {
+-                    sender
++                match state {
++                    "live" => {
++                        sender
++                            .send(SessionEvent::ReasoningSummaryPart {
++                                item_id: "reasoning".into(),
++                                summary_index: 0,
++                                snapshot: true,
++                                text: "Checking the supplied spacing and tool results".into(),
++                            })
++                            .unwrap();
++                    }
++                    "approval" => {
++                        sender
+                         .send(SessionEvent::DecisionRequested {
+                             decision: ferrite_core::Decision {
+                                 delivery: Default::default(),
+@@ -145,95 +592,125 @@ pub fn capture(output: String) {
+                             },
+                         })
+                         .unwrap();
++                    }
++                    "decision" => {
++                        let input = serde_json::json!({"questions":[{"question":"Which details should remain visible?", "multiSelect":true,"options":[{"label":"Keep the existing implementation and its meaningful suffix (Recommended)","description":"Preserve existing controls and all the spacing in their wrapped descriptions."},{"label":"Include detailed output", "description":"Keep disclosure available for inspection."}]}]});
++                        sender
++                            .send(SessionEvent::DecisionRequested {
++                                decision: ferrite_core::Decision {
++                                    delivery: Default::default(),
++                                    kind: ferrite_core::DecisionKind::Questions(
++                                        ferrite_core::questions::parse(&input)
++                                            .expect("fixture questions"),
++                                    ),
++                                    policy: Default::default(),
++                                    id: "fixture-question".into(),
++                                    tool_use_id: "question".into(),
++                                    tool_name: "AskUserQuestion".into(),
++                                    description: String::new(),
++                                    suggestions: vec![],
++                                    input,
++                                },
++                            })
++                            .unwrap();
++                    }
++                    "interrupted" => {
++                        sender
++                            .send(SessionEvent::TurnEnded {
++                                outcome: ferrite_core::TurnOutcome::Interrupted,
++                                cost_usd: None,
++                            })
++                            .unwrap();
++                        core.pump();
++                        core.send(
++                            thread,
++                            "Start a new turn; keep earlier tools inspectable.".into(),
++                        );
++                        sender
++                            .send(SessionEvent::TextDelta {
++                                text: "New turn in progress.".into(),
++                            })
++                            .unwrap();
++                    }
++                    _ => {
++                        sender
++                            .send(SessionEvent::TurnEnded {
++                                outcome: ferrite_core::TurnOutcome::Completed,
++                                cost_usd: None,
++                            })
++                            .unwrap();
++                    }
+                 }
+-                "decision" => {
+-                    let input = serde_json::json!({"questions":[{"question":"Which details should remain visible?", "multiSelect":true,"options":[{"label":"Keep the existing implementation and its meaningful suffix (Recommended)","description":"Preserve existing controls and all the spacing in their wrapped descriptions."},{"label":"Include detailed output", "description":"Keep disclosure available for inspection."}]}]});
+-                    sender
+-                        .send(SessionEvent::DecisionRequested {
+-                            decision: ferrite_core::Decision {
+-                                delivery: Default::default(),
+-                                kind: ferrite_core::DecisionKind::Questions(
+-                                    ferrite_core::questions::parse(&input).expect("fixture questions"),
+-                                ),
+-                                policy: Default::default(),
+-                                id: "fixture-question".into(),
+-                                tool_use_id: "question".into(),
+-                                tool_name: "AskUserQuestion".into(),
+-                                description: String::new(),
+-                                suggestions: vec![],
+-                                input,
+-                            },
+-                        })
+-                        .unwrap();
+-                }
+-                "interrupted" => {
+-                    sender
+-                        .send(SessionEvent::TurnEnded {
+-                            outcome: ferrite_core::TurnOutcome::Interrupted,
+-                            cost_usd: None,
+-                        })
+-                        .unwrap();
+-                    core.pump();
+-                    core.send(
+-                        thread,
+-                        "Start a new turn; keep earlier tools inspectable.".into(),
+-                    );
+-                    sender
+-                        .send(SessionEvent::TextDelta {
+-                            text: "New turn in progress.".into(),
+-                        })
+-                        .unwrap();
+-                }
+-                _ => {
+-                    sender
+-                        .send(SessionEvent::TurnEnded {
+-                            outcome: ferrite_core::TurnOutcome::Completed,
+-                            cost_usd: None,
+-                        })
+-                        .unwrap();
+-                }
+-            }
+-            core.pump();
++                core.pump();
+ 
+-            let mut cx = HeadlessAppContext::with_platform(
+-                platform.text_system(),
+-                std::sync::Arc::new(crate::icons::Assets),
+-                gpui::platform::current_headless_renderer,
+-            );
+-            cx.update(|cx| {
+-                crate::theme::init_components(cx);
+-                cx.text_system()
+-                    .add_fonts(vec![
+-                        std::borrow::Cow::Borrowed(crate::JBM_REGULAR),
+-                        std::borrow::Cow::Borrowed(crate::JBM_MEDIUM),
+-                        std::borrow::Cow::Borrowed(crate::JBM_SEMIBOLD),
+-                        std::borrow::Cow::Borrowed(crate::JBM_BOLD),
+-                    ])
+-                    .unwrap();
+-            });
+-            let window = cx
+-                .open_window(
+-                    gpui::size(gpui::px(width), gpui::px(1400.)),
+-                    |window, cx| {
+-                        let view = cx.new(|cx| {
+-                            let mut view =
+-                                super::CockpitView::new_with_provider(core, Provider::Claude, cx);
+-                            if state == "expanded" {
+-                                for id in ["read", "ok"] {
+-                                    view.panes[0]
+-                                        .toggle_tool(&crate::pane::DisclosureId::Group(id.into()));
+-                                    view.panes[0]
+-                                        .toggle_tool(&crate::pane::DisclosureId::Tool(id.into()));
++                let mut cx = HeadlessAppContext::with_platform(
++                    platform.text_system(),
++                    std::sync::Arc::new(crate::icons::Assets),
++                    gpui::platform::current_headless_renderer,
++                );
++                cx.update(|cx| {
++                    crate::theme::init_components(cx);
++                    crate::rich::init(cx);
++                    cx.text_system()
++                        .add_fonts(vec![
++                            std::borrow::Cow::Borrowed(crate::JBM_REGULAR),
++                            std::borrow::Cow::Borrowed(crate::JBM_MEDIUM),
++                            std::borrow::Cow::Borrowed(crate::JBM_SEMIBOLD),
++                            std::borrow::Cow::Borrowed(crate::JBM_BOLD),
++                        ])
++                        .unwrap();
++                });
++                let mut captured_view = None;
++                let window = cx
++                    .open_window(
++                        gpui::size(
++                            gpui::px(width),
++                            gpui::px(if label == "desktop" { 900. } else { 800. }),
++                        ),
++                        |window, cx| {
++                            let view = cx.new(|cx| {
++                                let mut view = super::CockpitView::new_with_provider(
++                                    core,
++                                    Provider::Claude,
++                                    cx,
++                                );
++                                if state.starts_with("settings") {
++                                    view.settings_open = true;
+                                 }
+-                            }
+-                            view
+-                        });
+-                        cx.new(|cx| gpui::component::Root::new(view, window, cx))
+-                    },
+-                )
+-                .unwrap();
+-            cx.run_until_parked();
+-            cx.update_window(window.into(), |_, window, cx| {
++                                view.prefs.settings.solo_reading_size = match state {
++                                    "prose-comfortable" => {
++                                        ferrite_core::settings::SoloReadingSize::Comfortable
++                                    }
++                                    "prose-large" => ferrite_core::settings::SoloReadingSize::Large,
++                                    _ => ferrite_core::settings::SoloReadingSize::Standard,
++                                };
++                                if state == "diff-metadata" {
++                                    view.panes[0].toggle_tool(&crate::pane::DisclosureId::Group(
++                                        "edit".into(),
++                                    ));
++                                    view.panes[0].toggle_tool(&crate::pane::DisclosureId::Tool(
++                                        "edit".into(),
++                                    ));
++                                }
++                                if state == "expanded" {
++                                    for id in ["read", "ok"] {
++                                        view.panes[0].toggle_tool(
++                                            &crate::pane::DisclosureId::Group(id.into()),
++                                        );
++                                        view.panes[0].toggle_tool(
++                                            &crate::pane::DisclosureId::Tool(id.into()),
++                                        );
++                                    }
++                                }
++                                view
++                            });
++                            captured_view = Some(view.clone());
++                            cx.new(|cx| gpui::component::Root::new(view, window, cx))
++                        },
++                    )
++                    .unwrap();
++                cx.run_until_parked();
++                cx.update_window(window.into(), |_, window, cx| {
+             let _ = window.draw(cx);
+             if label == "wide" && state == "edges" {
+                 let measurements: Vec<_> = ["\tb", "a\tb", "aaaa\tb", "        b"].into_iter().map(|text| {
+@@ -246,13 +723,111 @@ pub fn capture(output: String) {
+             }
+         })
+         .unwrap();
+-            cx.capture_screenshot(window.into())
+-                .unwrap()
+-                .save(output.join(format!("{state}-{label}.png")))
++                if state == "code-copied" {
++                    let view = captured_view.as_ref().unwrap();
++                    cx.update_window(window.into(), |_, window, cx| {
++                        let transcript = view.read(cx).panes[0].transcript().unwrap().clone();
++                        let entered = transcript.update(cx, |transcript, cx| {
++                            transcript.cycle_controls(false, true, window, cx)
++                        });
++                        assert!(entered, "fixture enters the mounted native code action");
++                        let _ = window.draw(cx);
++                        let key = gpui::Keystroke::parse("enter").unwrap();
++                        window.dispatch_keystroke(key.clone(), cx);
++                        window.dispatch_event(
++                            gpui::PlatformInput::KeyUp(gpui::KeyUpEvent { keystroke: key }),
++                            cx,
++                        );
++                    })
++                    .unwrap();
++                    cx.run_until_parked();
++                    cx.update_window(window.into(),|_,window,cx| {
++                        let _=window.draw(cx);
++                        assert_eq!(cx.read_from_clipboard().and_then(|item|item.text()).as_deref(),Some("fn summarize(rows: &[Row]) -> Summary {\n    Summary::from_rows(rows)\n}"));
++                    }).unwrap();
++                }
++                if state == "settings-keyboard" {
++                    let view = captured_view.as_ref().unwrap();
++                    cx.update_window(window.into(), |_, window, cx| {
++                        // Enter the first real form control (Close Settings) by native Tab order.
++                        window.focus(&view.read(cx).settings_focus.clone(), cx);
++                        window.dispatch_event(
++                            gpui::PlatformInput::KeyDown(gpui::KeyDownEvent {
++                                keystroke: gpui::Keystroke::parse("tab").unwrap(),
++                                is_held: false,
++                                prefer_character_input: false,
++                            }),
++                            cx,
++                        );
++                        window.focus_next(cx);
++                        let _ = window.draw(cx);
++                    })
++                    .unwrap();
++                    cx.run_until_parked();
++                }
++                if state == "settings-choice-keyboard" {
++                    let view = captured_view.as_ref().unwrap();
++                    cx.update_window(window.into(), |_, window, cx| {
++                        let focus = view.read(cx).settings_focus.clone();
++                        let key = gpui::Keystroke::parse("tab").unwrap();
++                        window.dispatch_keystroke(key.clone(), cx);
++                        window.dispatch_event(
++                            gpui::PlatformInput::KeyUp(gpui::KeyUpEvent { keystroke: key }),
++                            cx,
++                        );
++                        window.focus(&focus, cx);
++                        // Current native Settings order: Close, Search, New Threads
++                        // caret, Behaviour caret, selected Claude provider choice.
++                        for _ in 0..5 {
++                            window.focus_next(cx);
++                        }
++                        assert!(window.last_input_was_keyboard());
++                        assert_eq!(
++                            view.read(cx).prefs.settings.default_provider,
++                            Provider::Claude
++                        );
++                        let _ = window.draw(cx);
++                    })
++                    .unwrap();
++                    cx.run_until_parked();
++                }
++                if state == "settings-hover" {
++                    cx.update_window(window.into(), |_, window, cx| {
++                        // Existing card geometry: 820x680, centered; header close control at its right edge.
++                        let card_width = crate::prefs::WIDTH.min(width * 0.94);
++                        let height: f32 = if label == "desktop" { 900. } else { 800. };
++                        let card_height = 680.0_f32.min(height * 0.86);
++                        let position = gpui::point(
++                            gpui::px((width + card_width) / 2. - 22.),
++                            gpui::px((height - card_height) / 2. + 22.),
++                        );
++                        window.dispatch_event(
++                            gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
++                                position,
++                                pressed_button: None,
++                                modifiers: gpui::Modifiers::none(),
++                            }),
++                            cx,
++                        );
++                        let _ = window.draw(cx);
++                    })
++                    .unwrap();
++                    cx.run_until_parked();
++                }
++                cx.update_window(window.into(), |_, window, cx| {
++                    let _ = window.draw(cx);
++                })
+                 .unwrap();
+-            // Only our fresh disposable store; never the operator's store.
+-            drop(cx);
+-            std::fs::remove_dir_all(store_path).expect("remove disposable reference store");
++                cx.capture_screenshot(window.into())
++                    .unwrap()
++                    .save(output.join(format!("{state}-{label}.png")))
++                    .unwrap();
++                // Release the helper's retained handle before the test App's leak check.
++                drop(captured_view);
++                // Only our fresh disposable store; never the operator's store.
++                drop(cx);
++                std::fs::remove_dir_all(store_path).expect("remove disposable reference store");
++            }
+         }
+     }
+ }

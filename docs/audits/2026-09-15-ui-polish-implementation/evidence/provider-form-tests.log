@@ -1,0 +1,15 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
+warning: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/main.rs (/Users/josephwylie/Desktop/Projects/ferrite/target/debug/deps/ferrite-97c6c8b36e1fdb9c)
+
+running 6 tests
+test cockpit::tests::provider_forms::contract_denied_allow_policy_disables_mouse_and_keyboard_approval ... ok
+test cockpit::tests::provider_forms::contract_mcp_form_defaults_submit_typed_values ... ok
+test cockpit::tests::provider_forms::contract_live_claude_base_branch_question_renders ... ok
+test cockpit::tests::provider_forms::contract_every_native_approval_choice_is_selectable ... ok
+test cockpit::tests::provider_forms::contract_typed_question_renders_and_returns_normalized_picks ... ok
+test cockpit::tests::provider_forms::contract_mcp_required_input_without_default_is_editable_and_validated ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 362 filtered out; finished in 0.15s
+

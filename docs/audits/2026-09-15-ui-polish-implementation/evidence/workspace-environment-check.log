@@ -1,0 +1,10 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.99s
+warning: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/main.rs (/Users/josephwylie/Desktop/Projects/ferrite/target/debug/deps/ferrite-97c6c8b36e1fdb9c)
+
+running 1 test
+test cockpit::tests::the_workspace_chip_scopes_to_the_chosen_project ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 368 filtered out; finished in 0.44s
+

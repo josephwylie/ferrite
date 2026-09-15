@@ -1,0 +1,386 @@
+Diff in /Users/josephwylie/Desktop/Projects/ferrite/.worktrees/ui-polish-2026-09-15/crates/ferrite/src/cockpit.rs:5613:
+         // Attention so the tree names the Thread the toast was about. Only
+         // an Idle row is lifted — Working, Failing and Blocked are the
+         // louder truth, and a Decision is already Attention.
+-        let status = if status == nav::RowStatus::Idle
+-            && self.cockpit.notifications().attention(thread)
+-        {
+-            nav::RowStatus::Attention
+-        } else {
+-            status
+-        };
++        let status =
++            if status == nav::RowStatus::Idle && self.cockpit.notifications().attention(thread) {
++                nav::RowStatus::Attention
++            } else {
++                status
++            };
+         let now = std::time::SystemTime::now();
+         nav::ThreadRow {
+             thread,
+Diff in /Users/josephwylie/Desktop/Projects/ferrite/.worktrees/ui-polish-2026-09-15/crates/ferrite/src/cockpit.rs:8439:
+         }
+         if state.thread_list_order == ThreadListOrder::ByProject {
+             for (index, section) in state.project_sections.iter().enumerate() {
+-                let heading = nav::project_section(
+-                    section.label.clone(),
+-                    section.rows.len(),
+-                    index == 0,
+-                );
++                let heading =
++                    nav::project_section(section.label.clone(), section.rows.len(), index == 0);
+                 // `Other` gathers Threads whose Project cannot be read, so
+                 // it names none to start a Thread in and gets no `+`.
+                 let heading = match section.project {
+Diff in /Users/josephwylie/Desktop/Projects/ferrite/.worktrees/ui-polish-2026-09-15/crates/ferrite/src/cockpit.rs:8824:
+             let current = row.current;
+             let thread = row.thread;
+             let open = self.pane_for(thread).is_some();
+-            items = items.child(nav::rail_item(row, current).on_click(
+-                cx.listener(move |view, _: &ClickEvent, _, cx| {
++            items = items.child(nav::rail_item(row, current).on_click(cx.listener(
++                move |view, _: &ClickEvent, _, cx| {
+                     if open {
+                         view.focus_thread(thread, cx);
+                     } else {
+Diff in /Users/josephwylie/Desktop/Projects/ferrite/.worktrees/ui-polish-2026-09-15/crates/ferrite/src/cockpit.rs:8832:
+                         view.revive_thread(thread, cx);
+                     }
+-                }),
+-            ));
++                },
++            )));
+         }
+         let primary = nav::rail_actions()
+             .child(nav::rail_add_thread_button().on_click(cx.listener(
+Diff in /Users/josephwylie/Desktop/Projects/ferrite/.worktrees/ui-polish-2026-09-15/crates/ferrite/src/cockpit.rs:8850:
+                     cx.notify();
+                 }),
+             ));
+-        let utilities = nav::rail_utilities()
+-            .child(self.bell_element(cx))
+-            .child(prefs::gear_button().on_click(cx.listener(
+-                |view, _: &ClickEvent, _, cx| {
+-                    cx.stop_propagation();
+-                    view.toggle_settings(cx);
+-                },
+-            )));
++        let utilities = nav::rail_utilities().child(self.bell_element(cx)).child(
++            prefs::gear_button().on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
++                cx.stop_propagation();
++                view.toggle_settings(cx);
++            })),
++        );
+         nav::rail(self.nav_filter.is_some())
+             .child(primary)
+             .child(items)
+Diff in /Users/josephwylie/Desktop/Projects/ferrite/.worktrees/ui-polish-2026-09-15/crates/ferrite/src/cockpit.rs:8903:
+ /// is the fallback for a store whose Threads name nothing the registry
+ /// still knows.
+ fn startup_project(cockpit: &ferrite_core::cockpit::Cockpit) -> Option<ProjectId> {
+-    cockpit
+-        .last_worked_project()
+-        .or_else(|| cockpit.registry().projects().last().map(|project| project.id))
++    cockpit.last_worked_project().or_else(|| {
++        cockpit
++            .registry()
++            .projects()
++            .last()
++            .map(|project| project.id)
++    })
+ }
+ 
+ fn expand_home(typed: &str) -> std::path::PathBuf {
+Diff in /Users/josephwylie/Desktop/Projects/ferrite/.worktrees/ui-polish-2026-09-15/crates/ferrite/src/cockpit.rs:10969:
+             assert_eq!(open.queued_all(), ["second thing", "first thing"]);
+             assert_eq!(open.queued(), Some("second thing"));
+         });
+-        let top = cx.debug_bounds("queued-0").expect("the latest prompt is drawn");
+-        let below = cx.debug_bounds("queued-1").expect("the earlier prompt is drawn too");
++        let top = cx
++            .debug_bounds("queued-0")
++            .expect("the latest prompt is drawn");
++        let below = cx
++            .debug_bounds("queued-1")
++            .expect("the earlier prompt is drawn too");
+         assert!(
+             top.origin.y < below.origin.y,
+             "the latest sits on top: {top:?} above {below:?}"
+Diff in /Users/josephwylie/Desktop/Projects/ferrite/.worktrees/ui-polish-2026-09-15/crates/ferrite/src/cockpit.rs:12718:
+         cx.simulate_mouse_move(prompt.center(), None, gpui::Modifiers::none());
+         tick(cx);
+         let copy_bounds = cx.debug_bounds(copy).expect("copy appears over the prompt");
+-        let resend_bounds = cx.debug_bounds(resend).expect("resend appears over the prompt");
++        let resend_bounds = cx
++            .debug_bounds(resend)
++            .expect("resend appears over the prompt");
+ 
+         cx.simulate_click(copy_bounds.center(), gpui::Modifiers::none());
+         assert_eq!(clipboard(cx).as_deref(), Some("Run the focused checks"));
+Diff in /Users/josephwylie/Desktop/Projects/ferrite/.worktrees/ui-polish-2026-09-15/crates/ferrite/src/cockpit.rs:12775:
+             );
+             assert!(
+                 control.left() < summary.left()
+-                    && (summary.left() - control.left() - px(crate::theme::INDENT)).abs()
+-                        <= px(1.),
++                    && (summary.left() - control.left() - px(crate::theme::INDENT)).abs() <= px(1.),
+                 "chevron must stay inside the Pane beside the text: {summary:?} / {control:?}"
+             );
+         }
+Diff in /Users/josephwylie/Desktop/Projects/ferrite/.worktrees/ui-polish-2026-09-15/crates/ferrite/src/composer.rs:1155:
+         // frame, so a click that lands anywhere else — or on another app —
+         // retires the cycle on that same frame. A background window shows no
+         // caret: nothing typed would land here until it comes forward.
+-        let focused = self.composer.read(cx).focus_handle.is_focused(window)
+-            && window.is_window_active();
++        let focused =
++            self.composer.read(cx).focus_handle.is_focused(window) && window.is_window_active();
+         let caret_visible = self.composer.update(cx, |composer, cx| {
+             composer.sync_caret_blink(focused, cx);
+             composer.caret_visible
+Diff in /Users/josephwylie/Desktop/Projects/ferrite/.worktrees/ui-polish-2026-09-15/crates/ferrite/src/nav.rs:46:
+     ICON_BUTTON, ICON_BUTTON_GLYPH, ICON_CHEVRON_LG, IDLE, LINE_TIGHT, MEMBERS_TOP, MEMBER_GAP,
+     MEMBER_INDENT, MENU, MENU_PAD, MENU_ROW_H, MENU_TOP, NAV, NAV_HEAD_H, NAV_TREE_PAD,
+     NAV_TREE_PAD_B, PROVIDER_CLAUDE, PROVIDER_CODEX, PROVIDER_MARK, PULSE_MIN, RAIL_INSET,
+-    RAIL_OFFSET, ROW_GAP, ROW_ICON, ROW_ICON_GAP, ROW_PAD_X, ROW_PAD_Y, ROW_TEXT_W,
+-    RUNNING, RUNNING_HALO, R_CONTROL, R_MENU, R_TIGHT, SEP, SHADOW_FAR, SHADOW_FAR_BLUR,
+-    SHADOW_FAR_SPREAD, SHADOW_FAR_Y, SHADOW_NEAR, SHADOW_NEAR_BLUR, SHADOW_NEAR_Y, SOLOS_TOP,
+-    STATUS_DOT, STATUS_HALO_INSET, STATUS_PULSE_MS, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG,
+-    THREAD_ROW_H, TRAFFIC_RESERVE, WIN_CHROME_H,
++    RAIL_OFFSET, ROW_GAP, ROW_ICON, ROW_ICON_GAP, ROW_PAD_X, ROW_PAD_Y, ROW_TEXT_W, RUNNING,
++    RUNNING_HALO, R_CONTROL, R_MENU, R_TIGHT, SEP, SHADOW_FAR, SHADOW_FAR_BLUR, SHADOW_FAR_SPREAD,
++    SHADOW_FAR_Y, SHADOW_NEAR, SHADOW_NEAR_BLUR, SHADOW_NEAR_Y, SOLOS_TOP, STATUS_DOT,
++    STATUS_HALO_INSET, STATUS_PULSE_MS, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG, THREAD_ROW_H,
++    TRAFFIC_RESERVE, WIN_CHROME_H,
+ };
+ 
+ /// The nav's two widths—286px, and the platform rail cmd-b folds it to.
+Diff in /Users/josephwylie/Desktop/Projects/ferrite/.worktrees/ui-polish-2026-09-15/crates/ferrite/src/nav.rs:881:
+             .flex_col()
+             .gap(px(ROW_GAP))
+             .child(
+-                div()
+-                    .h(px(TITLE_LG_H))
+-                    .overflow_hidden()
+-                    .child(
+-                        div()
+-                            .flex()
+-                            .flex_col()
+-                            .min_w(px(
+-                                ROW_TEXT_W - GROUP_MARK_LG - ROW_PAD_X + TRUNCATE_SLOP,
+-                            ))
+-                            .max_w(px(
+-                                ROW_TEXT_W - GROUP_MARK_LG - ROW_PAD_X + TRUNCATE_SLOP,
+-                            ))
+-                            .truncate()
+-                            .h(px(TITLE_LG_H))
+-                            .text_size(px(FS_LG))
+-                            .font_weight(FontWeight::SEMIBOLD)
+-                            .line_height(relative(LINE_TIGHT))
+-                            .text_color(rgb(if row.current { TEXT_STRONG } else { TEXT }))
+-                            .child(title),
+-                    ),
++                div().h(px(TITLE_LG_H)).overflow_hidden().child(
++                    div()
++                        .flex()
++                        .flex_col()
++                        .min_w(px(ROW_TEXT_W - GROUP_MARK_LG - ROW_PAD_X + TRUNCATE_SLOP))
++                        .max_w(px(ROW_TEXT_W - GROUP_MARK_LG - ROW_PAD_X + TRUNCATE_SLOP))
++                        .truncate()
++                        .h(px(TITLE_LG_H))
++                        .text_size(px(FS_LG))
++                        .font_weight(FontWeight::SEMIBOLD)
++                        .line_height(relative(LINE_TIGHT))
++                        .text_color(rgb(if row.current { TEXT_STRONG } else { TEXT }))
++                        .child(title),
++                ),
+             )
+             .child(meta_line(icons::FOLDER, row.projects.clone(), TEXT_2)),
+     )
+Diff in /Users/josephwylie/Desktop/Projects/ferrite/.worktrees/ui-polish-2026-09-15/crates/ferrite/src/nav.rs:1419:
+                 .justify_center()
+                 .w(px(RAIL_CONTROL))
+                 .h(px(RAIL_CONTROL))
+-                .text_size(px(if cfg!(target_os = "macos") { FS_MD } else { FS_SM }))
++                .text_size(px(if cfg!(target_os = "macos") {
++                    FS_MD
++                } else {
++                    FS_SM
++                }))
+                 .font_weight(FontWeight::SEMIBOLD)
+                 .text_color(rgb(TEXT_2))
+                 .child(monogram)
+Diff in /Users/josephwylie/Desktop/Projects/ferrite/.worktrees/ui-polish-2026-09-15/crates/ferrite/src/nav.rs:1436:
+ /// The expanded row's breathing halo needs more room than a 28px avatar.
+ /// Rail state stays still so it cannot clip into duplicate marks.
+ fn rail_status_dot(status: RowStatus) -> Div {
+-    let dot = div()
+-        .w(px(STATUS_DOT))
+-        .h(px(STATUS_DOT))
+-        .rounded_full();
++    let dot = div().w(px(STATUS_DOT)).h(px(STATUS_DOT)).rounded_full();
+     match status {
+         RowStatus::Working => dot.bg(rgb(RUNNING)),
+         RowStatus::Failing => dot.bg(rgb(RUNNING)).border_1().border_color(rgb(BLOCKED)),
+Diff in /Users/josephwylie/Desktop/Projects/ferrite/.worktrees/ui-polish-2026-09-15/crates/ferrite/src/pane.rs:52:
+ use crate::theme::{
+     ATTENTION, ATTENTION_EDGE, ATTENTION_WASH, BLOCKED, BLOCKED_WASH, COMPOSER_EDGE,
+     DIFF_ADDED_INK, DIFF_REMOVED_INK, FOCUS, HOVER, IDLE, INLINE_CODE_INK, LINK_INK, METER_OFF,
+-    PANE, PANE_HEAD, PANE_HEAD_EDGE, RAISED, RUNNING, RUNNING_WASH, SEP, SYN_KEYWORD,
+-    SYN_NUMBER, SYN_STRING, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG, TRANSPARENT,
++    PANE, PANE_HEAD, PANE_HEAD_EDGE, RAISED, RUNNING, RUNNING_WASH, SEP, SYN_KEYWORD, SYN_NUMBER,
++    SYN_STRING, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG, TRANSPARENT,
+ };
+ 
+ /// One Pane's view state: what the window owns per Pane. Everything it
+Diff in /Users/josephwylie/Desktop/Projects/ferrite/.worktrees/ui-polish-2026-09-15/crates/ferrite/src/pane.rs:4158:
+                         .min_w_0()
+                         .gap(px(theme::KEYS_GAP))
+                         .when(!text.is_empty(), |line| {
+-                            line.child(
+-                                div()
+-                                    .flex_1()
+-                                    .min_w_0()
+-                                    .child(selection.line(block.id, text, Vec::new())),
+-                            )
++                            line.child(div().flex_1().min_w_0().child(selection.line(
++                                block.id,
++                                text,
++                                Vec::new(),
++                            )))
+                         })
+                         .children(prompt_actions),
+                 )
+Diff in /Users/josephwylie/Desktop/Projects/ferrite/.worktrees/ui-polish-2026-09-15/crates/ferrite/src/pane.rs:4992:
+         mut self,
+         listener: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
+     ) -> Self {
+-        self.root = self
+-            .root
+-            .child(
+-                prompt_action(
+-                    "Copy prompt",
+-                    icons::COPY,
+-                    format!("copy-{:?}", self.block),
+-                )
++        self.root = self.root.child(
++            prompt_action("Copy prompt", icons::COPY, format!("copy-{:?}", self.block))
+                 .on_click(listener),
+-            );
++        );
+         self
+     }
+ 
+Diff in /Users/josephwylie/Desktop/Projects/ferrite/.worktrees/ui-polish-2026-09-15/crates/ferrite/src/pane.rs:5053:
+         .debug_selector(move || {
+             format!(
+                 "prompt-action-{}",
+-                tooltip.split_whitespace().next().unwrap_or_default().to_ascii_lowercase()
++                tooltip
++                    .split_whitespace()
++                    .next()
++                    .unwrap_or_default()
++                    .to_ascii_lowercase()
+             )
+         })
+         .flex()
+Diff in /Users/josephwylie/Desktop/Projects/ferrite/.worktrees/ui-polish-2026-09-15/crates/ferrite/src/transcript.rs:405:
+             })
+             .on_resend(move |_, _, cx| {
+                 cx.stop_propagation();
+-                view.update(cx, |_, cx| cx.emit(TranscriptEvent::ResendPrompt(resend.clone())));
++                view.update(cx, |_, cx| {
++                    cx.emit(TranscriptEvent::ResendPrompt(resend.clone()))
++                });
+             })
+             .into_any_element()
+     }
+Diff in /Users/josephwylie/Desktop/Projects/ferrite/.worktrees/ui-polish-2026-09-15/crates/ferrite/src/transcript.rs:539:
+                 // carries none, so the stack ends on the body padding.
+                 div()
+                     .w_full()
+-                    .when(index + 1 < row_count, |row| {
+-                        row.pb(px(theme::BLOCK_GAP))
+-                    })
++                    .when(index + 1 < row_count, |row| row.pb(px(theme::BLOCK_GAP)))
+                     .child(row)
+                     .into_any_element()
+             },
+Diff in /Users/josephwylie/Desktop/Projects/ferrite/.worktrees/ui-polish-2026-09-15/crates/ferrite/src/visual_reference.rs:153:
+                             decision: ferrite_core::Decision {
+                                 delivery: Default::default(),
+                                 kind: ferrite_core::DecisionKind::Questions(
+-                                    ferrite_core::questions::parse(&input).expect("fixture questions"),
++                                    ferrite_core::questions::parse(&input)
++                                        .expect("fixture questions"),
+                                 ),
+                                 policy: Default::default(),
+                                 id: "fixture-question".into(),
+Diff in /Users/josephwylie/Desktop/Projects/ferrite/.worktrees/ui-polish-2026-09-15/crates/ferrite-core/src/cockpit.rs:1918:
+             .collect();
+         // Newest first, and a Thread whose log cannot be stat'd sorts last
+         // rather than counting as the epoch's most recent.
+-        threads.sort_by_key(|(used, thread)| (std::cmp::Reverse(*used), std::cmp::Reverse(*thread)));
++        threads
++            .sort_by_key(|(used, thread)| (std::cmp::Reverse(*used), std::cmp::Reverse(*thread)));
+         threads.into_iter().find_map(|(_, thread)| {
+             let project = self.project_id(thread)?;
+             self.registry.project(project).map(|_| project)
+Diff in /Users/josephwylie/Desktop/Projects/ferrite/.worktrees/ui-polish-2026-09-15/crates/ferrite-core/src/providers/codex/activity.rs:687:
+             // The metadata step. A server that hydrated anyway (an older
+             // CLI, or a capture of one) has already said everything.
+             let thread = frame["result"]["thread"].clone();
+-            let hydrated = thread["turns"].as_array().is_some_and(|turns| !turns.is_empty());
++            let hydrated = thread["turns"]
++                .as_array()
++                .is_some_and(|turns| !turns.is_empty());
+             if failed || hydrated {
+                 self.read_result(read, &thread, failed, false, update);
+                 return;
+Diff in /Users/josephwylie/Desktop/Projects/ferrite/.worktrees/ui-polish-2026-09-15/crates/ferrite-core/src/providers/codex/activity.rs:1796:
+         let discovered = router.observe(spawn("main", "child"));
+         assert_eq!(discovered.requests.len(), 1);
+         assert_eq!(discovered.requests[0]["method"], "thread/read");
+-        assert!(discovered.requests[0]["params"].get("includeTurns").is_none());
++        assert!(discovered.requests[0]["params"]
++            .get("includeTurns")
++            .is_none());
+ 
+         let paged = router.observe(metadata(read_id(&router, "child"), "child", "main"));
+         assert_eq!(paged.requests.len(), 1);
+Diff in /Users/josephwylie/Desktop/Projects/ferrite/.worktrees/ui-polish-2026-09-15/crates/ferrite-core/src/providers/codex/activity.rs:1843:
+             router.children["child"].info.coverage,
+             TranscriptCoverage::Complete
+         );
+-        assert_eq!(
+-            router.children["child"].info.name.as_deref(),
+-            Some("Plato")
+-        );
++        assert_eq!(router.children["child"].info.name.as_deref(), Some("Plato"));
+     }
+ 
+     /// A read that outruns its page budget stops asking and stays Partial,
+Diff in /Users/josephwylie/Desktop/Projects/ferrite/.worktrees/ui-polish-2026-09-15/crates/ferrite-core/src/providers/codex/activity.rs:1900:
+         let spawned = spawn("main", "child")["params"]["item"].clone();
+         let done = router.observe(page(
+             read_id(&router, "main"),
+-            vec![json!({"id":"main-turn-2","status":"completed","itemsView":"full",
+-                "items":[spawned]})],
++            vec![
++                json!({"id":"main-turn-2","status":"completed","itemsView":"full",
++                "items":[spawned]}),
++            ],
+             None,
+         ));
+         assert!(router.children.contains_key("child"));
+Diff in /Users/josephwylie/Desktop/Projects/ferrite/.worktrees/ui-polish-2026-09-15/crates/ferrite-core/tests/live_codex.rs:344:
+     }
+     assert_eq!(init.as_deref(), Some(thread.as_str()));
+     assert!(
+-        !notices.iter().any(|text| text.contains("hydration is deprecated")),
++        !notices
++            .iter()
++            .any(|text| text.contains("hydration is deprecated")),
+         "deprecated hydration was requested: {notices:?}"
+     );
+     println!("{discovered} subagents discovered from paged history");
