@@ -626,6 +626,8 @@ pub struct PaneWiring {
     /// row layout; the Pane only places the allocated viewport.
     pub transcript: Option<AnyElement>,
     pub attachments: Option<AnyElement>,
+    /// Pointer equivalents of the owning Composer's send and interrupt keys.
+    pub composer_actions: Option<AnyElement>,
     /// The retained transcript reports whether its received-reasoning row is
     /// mounted; this keeps the pinned live progress caption singular.
     pub received_reasoning_visible: bool,
@@ -802,6 +804,7 @@ pub fn render_pane(
     let PaneWiring {
         transcript: retained_transcript,
         attachments,
+        composer_actions,
         received_reasoning_visible,
         menu,
         model_picker,
@@ -836,13 +839,9 @@ pub fn render_pane(
     let status = subject.as_ref().map(|subject| {
         crate::cockpit::subagents::transcript_status(subject.status(), subject.fresh())
     });
-    // `esc interrupt` (§D.7): running **and** focused. The head's dot reads
-    // the transcript's own status, not the turn-in-flight flag — a revived
-    // Thread mid-turn shows the green dot with `busy` false — so the hint
-    // reads the same predicate the dot does, or the Pane looks running and
-    // offers no way out. The focus half is here because the prototype's
-    // running-but-unfocused Pane draws no hint.
-    let running = focused && status == Some(Status::Streaming);
+    // Submission guidance follows the same predicate as Submit, including
+    // startup and held prompts, independently of this Pane's focus.
+    let needs_queue = thread.is_some_and(|thread| thread.needs_queue());
     let state = wall_state(
         transcript,
         decision.is_some_and(Decision::blocks_execution),
@@ -897,9 +896,10 @@ pub fn render_pane(
                     decision,
                     requests: None,
                     queued,
-                    running,
+                    needs_queue,
                     empty: composer_empty,
                     attachments,
+                    actions: composer_actions,
                     history_available,
                     menu: None,
                     mode: permission_mode.as_deref(),
@@ -1029,9 +1029,10 @@ pub fn render_pane(
                         decision,
                         requests: None,
                         queued,
-                        running,
+                        needs_queue,
                         empty: composer_empty,
                         attachments,
+                        actions: composer_actions,
                         history_available,
                         menu,
                         mode: permission_mode.as_deref(),
@@ -1152,6 +1153,7 @@ fn ring_overlay(color: u32, radius: f32) -> Div {
 /// clicks are wired — the Pane only lays it out.
 pub struct DraftState<'a> {
     pub attachments: Option<AnyElement>,
+    pub composer_actions: Option<AnyElement>,
     /// The draft-only close control in the Pane header.
     pub discard: AnyElement,
     /// The draft's setup chips — project and workspace — riding the left
@@ -1179,6 +1181,7 @@ pub struct DraftState<'a> {
 pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> impl IntoElement {
     let DraftState {
         attachments,
+        composer_actions,
         discard,
         band,
         picker,
@@ -1228,9 +1231,10 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
                     decision: None,
                     requests: None,
                     queued: Vec::new(),
-                    running: false,
+                    needs_queue: false,
                     empty: composer_empty,
                     attachments,
+                    actions: composer_actions,
                     history_available: false,
                     menu,
                     mode: None,
@@ -2546,9 +2550,6 @@ fn working_line(
     if tokens > 0 && !compact {
         facts.push(format!("↓ {} tokens", tokens_label(tokens)));
     }
-    if !compact {
-        facts.push("esc to interrupt".into());
-    }
     let progress = transcript.progress();
     let caption = progress.caption().map(|caption| {
         if !compact && received_reasoning_is_visible {
@@ -2660,9 +2661,10 @@ struct ComposerStack<'a> {
     /// Prompts held back while the turn runs, newest first: they pile up
     /// above the line, the latest on top.
     queued: Vec<&'a str>,
-    running: bool,
+    needs_queue: bool,
     empty: bool,
     attachments: Option<AnyElement>,
+    actions: Option<AnyElement>,
     history_available: bool,
     menu: Option<AnyElement>,
     mode: Option<&'a str>,
@@ -2704,9 +2706,10 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         decision,
         requests,
         queued,
-        running,
+        needs_queue,
         empty,
         attachments,
+        actions,
         history_available,
         menu,
         mode,
@@ -2777,23 +2780,25 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         .flex_1()
         .min_w_0()
         .line_height(px(theme::COMPOSER_ROW_H))
+        .text_color(rgb(TEXT))
         .child(view.composer.clone());
     if empty {
         // Focused too, not only at rest: a follow-up the operator cannot
         // read while their cursor is in the box is a suggestion they never
         // see. The Composer paints its own caret at the line origin, so the
-        // focused ghost starts immediately after its width; the unfocused
-        // ghost keeps the origin it has always had.
-        let inset = if focused { theme::CARET_W } else { 0. };
+        // ghost reserves the same caret inset in either focus state.
         line = line.child(
             div()
                 .debug_selector(|| "prompt-placeholder".into())
                 .absolute()
-                .left(px(inset))
+                .left(px(theme::CARET_W))
+                .right_0()
                 .top_0()
                 .h(px(theme::COMPOSER_ROW_H))
                 .flex()
                 .items_center()
+                .overflow_hidden()
+                .whitespace_nowrap()
                 .text_color(rgb(TEXT_2))
                 .child(placeholder(decision.is_some(), transcript, suggestion)),
         );
@@ -2809,18 +2814,18 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         .gap(px(theme::EVENT_GAP))
         .min_h(px(theme::COMPOSER_ROW_H))
         .min_w_0();
-    if !focused {
-        input = input.child(
-            div()
-                .flex()
-                .flex_shrink_0()
-                .items_center()
-                .h(px(theme::COMPOSER_ROW_H))
-                .text_color(rgb(TEXT_MUTED))
-                .child("\u{203a}"),
-        );
-    }
-    input = input.child(line);
+    input = input.child(
+        div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .h(px(theme::COMPOSER_ROW_H))
+            .text_color(rgb(TEXT_MUTED))
+            // Keep the text origin fixed when the caret replaces the mark.
+            .when(focused, |mark| mark.opacity(0.))
+            .child("\u{203a}"),
+    );
+    input = input.child(line).children(actions);
     region = region.child(input);
     // The popover paints above the stack — deferred, so it escapes the
     // Pane's clip and draws over the transcript (#24).
@@ -2859,41 +2864,32 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
             None => mode_chip(mode),
         });
     }
-    let escape = if blocking {
-        Some("esc dismiss")
-    } else if running {
-        Some("esc interrupt")
-    } else {
-        None
-    };
-    if let Some(escape) = escape {
-        controls = controls.child(
-            div()
-                .flex_shrink_0()
-                .text_size(px(theme::FS_MONO))
-                .text_color(rgb(TEXT_MUTED))
-                .child(escape),
-        );
-    }
     // The `@`/`/` hints ride the controls row rather than the text row: the
     // line is free to grow across its full width, and every key the Composer
     // offers reads on one bottom edge.
     controls = controls.child(
         div()
             .flex()
-            .flex_shrink_0()
+            .min_w_0()
+            .overflow_hidden()
             .items_center()
             .h(px(theme::COMPOSER_ROW_H))
             .whitespace_nowrap()
             .text_size(px(theme::FS_MONO))
             .text_color(rgb(TEXT_MUTED))
-            .child(composer_hints(
-                is_draft,
-                history_available,
-                followup::suggest(decision.is_some(), transcript, suggestion)
-                    .acceptable()
-                    .is_some(),
-            )),
+            .child(if !empty && needs_queue {
+                "Enter send / queue"
+            } else if !empty {
+                "Enter send · ⇧Enter newline"
+            } else {
+                composer_hints(
+                    is_draft,
+                    history_available,
+                    followup::suggest(decision.is_some(), transcript, suggestion)
+                        .acceptable()
+                        .is_some(),
+                )
+            }),
     );
     // `margin-inline-start: auto` on the picker. It renders in every Pane,
     // before and after the first-prompt lock — there is no plain-label

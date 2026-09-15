@@ -43,6 +43,7 @@ use ferrite_core::workspace::registry::ProjectId;
 #[cfg(test)]
 use ferrite_core::workspace::WorkspaceChoice;
 use ferrite_core::{DecisionAnswer, ThreadId};
+use gpui::component::Disableable;
 use gpui::prelude::*;
 use gpui::{
     actions, anchored, deferred, div, ease_out_quint, px, rgb, rgba, Animation, AnimationExt,
@@ -121,6 +122,7 @@ const MAIN_BRANCH: &str = "main";
 const PUMP_MS: u64 = 8;
 const NAV_OPEN_MS: u64 = 260;
 const NAV_CLOSE_MS: u64 = 190;
+const TUNING_BUSY_HINT: &str = "Available when this turn finishes";
 
 pub struct CockpitView {
     cockpit: Cockpit,
@@ -1129,7 +1131,19 @@ impl CockpitView {
             }
         }
         let models_changed = self.cockpit.take_models_changed();
-        if models_changed {
+        let tuning_availability_changed = self.popover.as_ref().is_some_and(|open| {
+            matches!(open.kind, Kind::Provider | Kind::Effort)
+                && open.pane.thread().is_some_and(|thread| {
+                    self.cockpit
+                        .thread(thread)
+                        .is_some_and(|thread| thread.busy())
+                        != open
+                            .rows
+                            .first()
+                            .is_some_and(|row| row.name == TUNING_BUSY_HINT)
+                })
+        });
+        if models_changed || tuning_availability_changed {
             self.refresh_model_picker(cx);
         }
         let completions = self.cockpit.take_bootstrap_results();
@@ -3163,6 +3177,136 @@ impl CockpitView {
         self.panes.get_mut(focused).and_then(PaneView::draft_mut)
     }
 
+    /// A pointer action belongs to its Pane, regardless of keyboard focus.
+    /// Modal editors retain their own confirmation semantics; a stale click
+    /// must never confirm one of those or send from a hidden Pane.
+    fn composer_action(
+        &mut self,
+        identity: PaneIdentity,
+        stop: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.settings_open || self.project_editor.is_some() || self.rename.is_some() {
+            return;
+        }
+        let Some(index) = self.index_of(identity) else {
+            return;
+        };
+        let level = self.level_of(index, window);
+        if !self.panes[index].is_main()
+            || !self.pane_rects(window).iter().any(|(at, _)| *at == index)
+            || level == Level::Wall
+            || (identity.draft().is_some() && level != Level::Transcript)
+        {
+            return;
+        }
+        let starting = identity
+            .draft()
+            .is_some_and(|id| self.cockpit.draft_starting(id));
+        if stop {
+            if !starting
+                && !identity.thread().is_some_and(|thread| {
+                    self.cockpit
+                        .thread(thread)
+                        .is_some_and(|open| open.busy() || open.pending().is_some())
+                })
+            {
+                return;
+            }
+        } else if starting || !self.panes[index].composer.read(cx).can_submit() {
+            return;
+        }
+        self.focus_pane(index);
+        self.popover = None;
+        self.context_checks = None;
+        self.context_usage = None;
+        self.session_controls = None;
+        self.context_menu = None;
+        if let Some(draft) = self.focused_draft_mut() {
+            draft.band_focus = None;
+        }
+        window.focus(&self.panes[index].composer.focus_handle(cx), cx);
+        if stop {
+            self.interrupt(&Interrupt, window, cx);
+        } else {
+            self.submit(&Submit, window, cx);
+        }
+    }
+
+    fn composer_actions(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let pane = &self.panes[index];
+        if !pane.is_main() {
+            return None;
+        }
+        let identity = pane.identity;
+        let open = pane.thread().and_then(|thread| self.cockpit.thread(thread));
+        let starting = identity
+            .draft()
+            .is_some_and(|id| self.cockpit.draft_starting(id));
+        let can_send = pane.composer.read(cx).can_submit() && !starting;
+        let queued = open.as_ref().is_some_and(|open| open.needs_queue());
+        let can_stop = starting
+            || open
+                .as_ref()
+                .is_some_and(|open| open.busy() || open.pending().is_some());
+        let has_queue = open.as_ref().is_some_and(|open| open.queued().is_some());
+        let send =
+            crate::components::button(SharedString::from(format!("composer-send-{identity:?}")))
+                .debug_selector(move || format!("composer-send-{identity:?}"))
+                .h(px(crate::theme::COMPOSER_ROW_H))
+                .px(px(crate::theme::MODE_CHIP_PAD_X))
+                .bg(rgb(crate::theme::FILL))
+                .disabled(!can_send)
+                .tooltip(if starting {
+                    "Starting this Thread"
+                } else if queued {
+                    "Send or queue input (Enter). Shift+Enter inserts a newline."
+                } else {
+                    "Send (Enter). Shift+Enter inserts a newline."
+                })
+                .child(crate::components::label(
+                    if starting { "Starting…" } else { "Send" },
+                    if can_send {
+                        crate::theme::TEXT
+                    } else {
+                        crate::theme::TEXT_MUTED
+                    },
+                ))
+                .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
+                    cx.stop_propagation();
+                    view.composer_action(identity, false, window, cx);
+                }));
+        let stop = can_stop.then(|| {
+            crate::components::button(SharedString::from(format!("composer-stop-{identity:?}")))
+                .debug_selector(move || format!("composer-stop-{identity:?}"))
+                .h(px(crate::theme::COMPOSER_ROW_H))
+                .px(px(crate::theme::MODE_CHIP_PAD_X))
+                .tooltip(if starting {
+                    "Cancel startup (Esc); keep the draft"
+                } else if has_queue {
+                    "Interrupt Main (Esc). Queued prompts remain and may run next."
+                } else {
+                    "Interrupt Main (Esc)"
+                })
+                .child(crate::components::label("Stop · Esc", crate::theme::TEXT_2))
+                .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
+                    cx.stop_propagation();
+                    view.composer_action(identity, true, window, cx);
+                }))
+        });
+        Some(
+            div()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .gap(px(crate::theme::KEYS_GAP))
+                .children(stop)
+                .child(send)
+                .into_any_element(),
+        )
+    }
+
     fn submit(&mut self, _: &Submit, _window: &mut Window, cx: &mut Context<Self>) {
         // The card's ↵ is its confirm: the only line on it is the name.
         if self.project_editor.is_some() {
@@ -4093,6 +4237,21 @@ impl CockpitView {
     /// dispatched. The popover closes either way — a door it opens (the
     /// pickers) is a fresh popover in its place.
     fn pick(&mut self, at: usize, cx: &mut Context<Self>) {
+        // The native menu can outlive the frame in which it opened. A turn
+        // that started meanwhile must not turn a visible choice into a
+        // guaranteed refusal in the transcript.
+        if let Some(open) = self.popover.as_ref() {
+            if matches!(open.kind, Kind::Provider | Kind::Effort)
+                && open.pane.thread().is_some_and(|thread| {
+                    self.cockpit
+                        .thread(thread)
+                        .is_some_and(|thread| thread.busy())
+                })
+            {
+                self.refresh_model_picker(cx);
+                return;
+            }
+        }
         let Some(open) = self.popover.take() else {
             return;
         };
@@ -4419,10 +4578,8 @@ impl CockpitView {
     /// The model picker in the Composer slot: one section per Provider —
     /// its logomark row, then its models under the names the Provider's
     /// own menu shows — with the ✓ on what is serving. Claude's rows come
-    /// from its handshake; Codex's from the catalog. Opens before and after
-    /// the first prompt: the model can always change (the conversation is
-    /// resumed under the new one), and once the prompt has gone out the
-    /// other Provider's section is drawn inert and says why.
+    /// from its handshake; Codex's from the catalog. The catalog stays
+    /// inspectable during a turn, with unavailable choices and their reason.
     fn open_provider_picker(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
         let Some(open) = self.cockpit.thread(thread) else {
             return;
@@ -4431,13 +4588,17 @@ impl CockpitView {
         let chosen = open.model().map(str::to_string);
         let serving = open.transcript().model().map(str::to_string);
         let locked = open.first_prompt_sent();
-        let (rows, selected) = self.provider_rows(
+        let busy = open.busy();
+        let (mut rows, mut selected) = self.provider_rows(
             current,
             chosen.as_deref(),
             serving.as_deref(),
             locked,
             |choice| Consequence::Provision(choice),
         );
+        if busy {
+            Self::unavailable_tuning_rows(&mut rows, &mut selected);
+        }
         // The `/` menu the pick came through is already closed; a chip
         // click replaces whatever the slot held outright.
         self.popover = Some(Popover {
@@ -4447,6 +4608,30 @@ impl CockpitView {
             selected,
         });
         cx.notify();
+    }
+
+    /// Keep the current checkmark and catalog inspectable while choices
+    /// cannot be applied. The reason is a visible, inert menu row.
+    fn unavailable_tuning_rows(rows: &mut Vec<Row>, selected: &mut usize) {
+        for row in rows.iter_mut() {
+            row.row.inert = true;
+        }
+        rows.insert(
+            0,
+            Row {
+                row: pane::MenuRow {
+                    insert: SharedString::default(),
+                    name: TUNING_BUSY_HINT.into(),
+                    matched: Vec::new(),
+                    detail: SharedString::default(),
+                    prose_detail: true,
+                    inert: true,
+                },
+                active: false,
+                consequence: Consequence::Inert,
+            },
+        );
+        *selected += 1;
     }
 
     /// The sectioned rows every model picker shows — the Composer's and
@@ -6884,6 +7069,7 @@ impl CockpitView {
                 pane,
                 pane::DraftState {
                     attachments: Composer::attachments(&pane.composer, &pane.preview, cx),
+                    composer_actions: self.composer_actions(index, cx),
                     discard: pane::draft_close_button(draft_id)
                         .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                             cx.stop_propagation();
@@ -6954,6 +7140,9 @@ impl CockpitView {
             transcript: retained_transcript,
             received_reasoning_visible,
             attachments: Composer::attachments(&pane.composer, &pane.preview, cx),
+            composer_actions: (level != Level::Wall)
+                .then(|| self.composer_actions(index, cx))
+                .flatten(),
             menu: l1.then(|| self.popover_element(index, cx)).flatten(),
             model_picker: l1.then(|| self.model_picker(index, cx)).flatten(),
             usage_meter: l1.then(|| self.usage_meter(index, cx)).flatten(),
@@ -7888,13 +8077,13 @@ impl CockpitView {
 
     /// The Composer's model picker (#25): the provider logomark, the bare
     /// model name, and a chevron — on **every** L1 Pane, not only pre-lock.
-    /// Its click still opens the provider picker, which is what the old
-    /// provider chip was for; a locked Thread's picker refuses the swap
-    /// itself rather than the control vanishing.
+    /// Its click opens the catalog even while working; the current choice
+    /// stays visible and availability follows the Thread's busy state.
     fn model_picker(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
         let thread = self.panes[index].thread()?;
         let open = self.cockpit.thread(thread)?;
         let provider = open.provider();
+        let busy = open.busy();
         // The standing choice names the chip; else what the Session's own
         // Init said is serving; until either, the Provider's own name —
         // and always the name a person says, never the id on the wire.
@@ -7910,7 +8099,10 @@ impl CockpitView {
             crate::components::button(("model-picker", thread.get() as usize))
                 .p_0()
                 .h_auto()
-                .child(pane::model_picker(Some(provider), label)),
+                .tooltip(if busy { TUNING_BUSY_HINT } else { "Model" })
+                .child(
+                    pane::model_picker(Some(provider), label).when(busy, |chip| chip.opacity(0.8)),
+                ),
             cx,
         );
         // The effort chip beside it — only when the model takes one; a
@@ -7931,7 +8123,12 @@ impl CockpitView {
                 crate::components::button(("effort-picker", thread.get() as usize))
                     .p_0()
                     .h_auto()
-                    .child(pane::effort_picker(label)),
+                    .tooltip(if busy {
+                        TUNING_BUSY_HINT
+                    } else {
+                        "Reasoning effort"
+                    })
+                    .child(pane::effort_picker(label).when(busy, |chip| chip.opacity(0.8))),
                 cx,
             )
         });
@@ -7993,8 +8190,14 @@ impl CockpitView {
             .unwrap_or_default();
         let weak = cx.entity().downgrade();
         let picker = weak.clone();
+        let busy = identity.thread().is_some_and(|thread| {
+            self.cockpit
+                .thread(thread)
+                .is_some_and(|thread| thread.busy())
+        });
         crate::components::ChoiceMenu {
-            id: format!("choice-{identity:?}-{effort}").into(),
+            // Rebuild the retained native menu when availability changes.
+            id: format!("choice-{identity:?}-{effort}-{busy}").into(),
             trigger,
             choices,
             open: open.is_some(),
@@ -8047,6 +8250,7 @@ impl CockpitView {
             return;
         };
         let provider = open.provider();
+        let busy = open.busy();
         let chosen = open.effort().map(str::to_string);
         let default = self.prefs.settings.effort_for(provider).map(str::to_string);
         let ladder =
@@ -8081,7 +8285,10 @@ impl CockpitView {
                 consequence: Consequence::Effort(Some(effort)),
             });
         }
-        let selected = rows.iter().position(|row| row.active).unwrap_or(0);
+        let mut selected = rows.iter().position(|row| row.active).unwrap_or(0);
+        if busy {
+            Self::unavailable_tuning_rows(&mut rows, &mut selected);
+        }
         self.popover = Some(Popover {
             pane: PaneIdentity::Thread(thread),
             kind: Kind::Effort,
@@ -9006,6 +9213,7 @@ fn transcript_text(blocks: &[ferrite_core::transcript::Block]) -> String {
 #[cfg(test)]
 mod tests {
     mod completion_checks;
+    mod composer_controls;
     mod layout_polish;
     mod provider_controls;
     mod provider_forms;

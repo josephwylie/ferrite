@@ -258,6 +258,11 @@ impl Composer {
         self.line.text().is_empty() && self.files.is_empty()
     }
 
+    /// A pointer Send is available for actual input, including attached files.
+    pub fn can_submit(&self) -> bool {
+        !self.line.text().trim().is_empty() || !self.files.is_empty()
+    }
+
     pub fn prompt(&self) -> String {
         prompt_files::compose(self.line.text(), &self.files)
     }
