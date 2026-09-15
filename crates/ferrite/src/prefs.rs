@@ -299,7 +299,7 @@ pub fn toggle(
                         change(value, cx);
                     })
                     .child(
-                        SwitchTrack::new((id, "track"))
+                        SwitchTrack::new((gpui::ElementId::from(id), "track"))
                             .checked(checked)
                             .w(px(28.))
                             .h(px(16.))
