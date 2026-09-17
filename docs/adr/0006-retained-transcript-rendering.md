@@ -1,9 +1,7 @@
 # 0006 — Retained transcript rendering
 
 Status: accepted 2026-09-06; implemented and validated in the isolated worktree
-2026-09-07.
-See [validation](../research/ui-lag-2026-09-06/validation.md). Not installed into
-the running app during this investigation.
+2026-09-07. Not installed into the running app during this investigation.
 
 ## Context
 
@@ -11,7 +9,6 @@ The running macOS app lagged in a Group and recovered when one Pane was
 fullscreen. Passive samples put 96–97% of its main thread in drawing, with
 substantial time in text-selection registration and layout. Metal draws the
 result; it does not eliminate the CPU work that constructs that result.
-See [captures and reproduction](../research/ui-lag-2026-09-06/README.md).
 
 The Cockpit reconstructed every visible transcript after a Composer edit or
 an event in any Thread. Cached native parsers avoided parsing the same text,
