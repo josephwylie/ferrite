@@ -329,6 +329,28 @@ fn compact_queue_scrolls_without_covering_context_or_composer_actions(cx: &mut T
     let (namespace, other_namespace) = view.read_with(cx, |view, _| {
         (view.panes[0].text_namespace(), view.panes[1].text_namespace())
     });
+    // Reproduce the actual compact surface: checkout metadata, a passed-test
+    // badge, live reasoning and elapsed time, queue, and an eight-line draft.
+    fake.streams.borrow()[0].send(SessionEvent::ToolStarted {
+        id: "queue-test-run".into(),
+        name: "Bash".into(),
+        input: serde_json::json!({"command": "cargo test --lib"}),
+    }).unwrap();
+    fake.streams.borrow()[0].send(SessionEvent::ToolCompleted {
+        id: "queue-test-run".into(),
+        output: "test result: ok. 24 passed; 0 failed; 0 ignored".into(),
+        is_error: false,
+        result: ferrite_core::ToolResult::Opaque,
+    }).unwrap();
+    fake.streams.borrow()[0].send(SessionEvent::ReasoningSummaryDelta {
+        text: "Checking the remaining interactions".into(),
+        summary_index: 0,
+    }).unwrap();
+    view.update(cx, |view, cx| {
+        view.panes[0].composer.update(cx, |composer, cx| {
+            composer.set("One\nTwo\nThree\nFour\nFive\nSix\nSeven\nEight".into(), cx);
+        });
+    });
     for (width, height) in [(860., 500.), (1000., 520.)] {
         cx.simulate_resize(gpui::size(px(width), px(height)));
         tick(cx);
@@ -347,6 +369,14 @@ fn compact_queue_scrolls_without_covering_context_or_composer_actions(cx: &mut T
         assert!(queue.size.height <= px(crate::theme::CELL_HEADER_H + 1.));
         assert!(latest.top() >= queue.top() && latest.bottom() <= queue.bottom());
         assert!(queue.bottom() <= editor.top());
+        if width == 860. {
+            let progress = cx.debug_bounds("progress-caption-Checking the remaining interactions").unwrap();
+            assert!(
+                progress.bottom() <= queue.top() - px(crate::theme::COMPOSER_PAD_T + 1.),
+                "the complete live status stays above the Composer rule: {progress:?} / {queue:?}"
+            );
+            assert!(progress.size.height <= px(crate::theme::COMPOSER_ROW_H));
+        }
         assert!(editor.bottom() <= send.top() || (editor.top() - send.top()).abs() <= px(1.));
         cx.simulate_event(gpui::ScrollWheelEvent {
             position: queue.center(),
@@ -363,6 +393,10 @@ fn compact_queue_scrolls_without_covering_context_or_composer_actions(cx: &mut T
         assert_eq!(unaffected, other_latest, "another Pane keeps its own scroll position");
         assert!(unaffected.top() >= other_queue.top() && unaffected.bottom() <= other_queue.bottom());
     }
+    view.update(cx, |view, cx| {
+        view.panes[0].composer.update(cx, |composer, cx| composer.set(String::new(), cx));
+    });
+    tick(cx);
     cx.simulate_keystrokes("backspace");
     tick(cx);
     view.read_with(cx, |view, cx| {

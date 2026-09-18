@@ -2557,9 +2557,9 @@ pub fn turn_diff_disclosure(transcript: &Transcript, level: Level) -> Option<Dis
         .map(|diff| DisclosureId::TurnDiff(diff.turn_id.clone()))
 }
 
-/// The provider's live caption, followed by a quieter metadata line.
-/// Elapsed time and output tokens belong to the turn; command details stay
-/// in their tool disclosures.
+/// The provider's live caption, followed by quieter turn metadata. L2 keeps
+/// elapsed time beside its caption to leave compact Panes room for context;
+/// L1 gives the richer metadata its own line. Command details stay in tools.
 fn working_line(
     transcript: &Transcript,
     compact: bool,
@@ -2595,14 +2595,17 @@ fn working_line(
         row = row.child(
             div()
                 .flex()
-                .flex_col()
-                .items_start()
-                .gap(px(theme::EVENT_PAD_Y))
+                .min_w_0()
+                .when(compact, |row| row.items_center().gap(px(theme::GRID_GAP)))
+                .when(!compact, |row| {
+                    row.flex_col().items_start().gap(px(theme::EVENT_PAD_Y))
+                })
                 .child(
                     div()
                         .debug_selector(|| "progress-reasoning".into())
                         .min_w_0()
-                        .w_full()
+                        .when(compact, |caption| caption.flex_1())
+                        .when(!compact, |caption| caption.w_full())
                         .flex()
                         .items_center()
                         .gap(px(theme::EVENT_GAP))
@@ -2628,7 +2631,8 @@ fn working_line(
                     div()
                         .debug_selector(|| "progress-metadata".into())
                         .min_w_0()
-                        .w_full()
+                        .when(compact, |facts| facts.flex_shrink_0().whitespace_nowrap())
+                        .when(!compact, |facts| facts.w_full())
                         .text_size(px(theme::FS_SM))
                         .text_color(rgb(TEXT_MUTED))
                         .child(SharedString::from(facts.join(" · "))),
