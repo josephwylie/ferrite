@@ -235,6 +235,7 @@ pub fn directory_row(path: SharedString, role: &'static str, actions: impl IntoE
         .to_string()
         .into();
     let tooltip = path.clone();
+    let selector: SharedString = format!("project-directory:{path}").into();
     div()
         .flex()
         .items_center()
@@ -247,7 +248,8 @@ pub fn directory_row(path: SharedString, role: &'static str, actions: impl IntoE
         .child(icon(icons::FOLDER, 14., TEXT_MUTED))
         .child(
             div()
-                .id(SharedString::from(format!("project-directory:{path}")))
+                .id(selector.clone())
+                .debug_selector(move || selector.to_string())
                 .flex()
                 .flex_col()
                 .flex_1()
