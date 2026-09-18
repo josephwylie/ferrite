@@ -2928,6 +2928,7 @@ impl CockpitView {
                 .collect(),
             None => editor.staged.clone(),
         };
+        let directory_count = directories.len();
         let editing = editor.target;
 
         let close = project_editor::close_button(cx).on_click(cx.listener(
@@ -3048,12 +3049,12 @@ impl CockpitView {
                 }
             })),
         );
-        body = body.child(project_editor::footer(add, right));
+        let footer = project_editor::footer(add, right);
         if let Some(error) = editor.error.clone() {
             body = body.child(project_editor::error_line(error));
         }
 
-        let card = project_editor::card()
+        let card = project_editor::card(directory_count)
             .id("project-editor-card")
             .debug_selector(|| "project-editor-card".into())
             .track_focus(&self.project_editor_focus)
@@ -3062,7 +3063,8 @@ impl CockpitView {
                 cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
             )
             .child(project_editor::head(title, close))
-            .child(body);
+            .child(body)
+            .child(footer);
         Some(
             deferred(
                 project_editor::veil()
