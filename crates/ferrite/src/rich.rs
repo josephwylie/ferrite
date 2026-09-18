@@ -227,14 +227,12 @@ impl gpui::RenderOnce for Markdown {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let state = self.cache.state(self.id.clone(), &self.source, window, cx);
         #[cfg(test)]
-        {
-            // Markdown explicitly changes the Pane's inherited mono face to
-            // the UI font below. Native caret measurements must shape with
-            // that same face, including text beside inline file cards.
-            let mut text_style = window.text_style().clone();
-            text_style.font_family = theme::FONT_UI.into();
-            testing::record(self.id.clone(), state.clone(), text_style, cx);
-        }
+        testing::record(
+            self.id.clone(),
+            state.clone(),
+            window.text_style().clone(),
+            cx,
+        );
         let heading_size = window.text_style().font_size.to_pixels(window.rem_size());
         let text_style = if self.muted {
             style(window.rem_size()).with_foreground(rgb(theme::TEXT_2).into())
