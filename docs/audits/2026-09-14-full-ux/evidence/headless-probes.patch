@@ -1,0 +1,215 @@
+--- a/crates/ferrite/src/cockpit/tests/provider_forms.rs
++++ b/crates/ferrite/src/cockpit/tests/provider_forms.rs
+@@ -314,3 +314,187 @@
+         "opaque native choices survive UI unchanged even when plain Allow is forbidden"
+     );
+ }
++
++#[gpui::test]
++fn audit_mcp_can_enter_valid_value(cx: &mut TestAppContext) {
++    let (core, fake) = cockpit("mcp-edit-contract", 1);
++    bind_production_keys(cx);
++    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
++    cx.simulate_resize(gpui::size(px(1100.), px(800.)));
++    fake.streams.borrow()[0]
++        .send(typed_decision(DecisionKind::Form {
++            fields: vec![FormField {
++                id: "count".into(),
++                label: "Count".into(),
++                description: "Enter 1 to 3".into(),
++                required: true,
++                kind: FormFieldKind::Integer {
++                    minimum: Some(1),
++                    maximum: Some(3),
++                    default: None,
++                },
++            }],
++        }))
++        .unwrap();
++    tick(cx);
++    let serial = view.read_with(cx, |v, _| {
++        v.cockpit
++            .thread(v.panes[0].thread().unwrap())
++            .unwrap()
++            .activity()
++            .pending_decisions()[0]
++            .handle
++            .serial
++    });
++    let field = cx
++        .debug_bounds("form-field-count")
++        .expect("fields without defaults still need an editable input");
++    cx.simulate_click(gpui::point(field.center().x, field.bottom()-px(12.)), gpui::Modifiers::none());
++    cx.run_until_parked();
++    cx.simulate_input("2");
++    cx.run_until_parked();
++    let submit = debug_bounds(cx, format!("request-submit-1-{serial}")).unwrap();
++    cx.simulate_click(submit.center(), gpui::Modifiers::none());
++    cx.run_until_parked();
++    let sent = fake.answered.borrow();
++    assert!(matches!(sent.last().map(|x| &x.1), Some(DecisionAnswer::Form {values}) if *values==serde_json::json!({"count":2})), "valid MCP form entry should submit count=2; got {:?}; composer={}", &*sent, view.read_with(cx, |view,cx| view.panes[0].composer.read(cx).text().to_owned()));
++}
++
++#[gpui::test]
++    fn audit_custom_single_answer_replaces_choice(cx: &mut TestAppContext) {
++        let (core, fake) = cockpit("question-typed", 1);
++        bind_production_keys(cx);
++        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
++        cx.simulate_resize(gpui::size(px(1000.), px(800.)));
++        let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap());
++        fake.streams.borrow()[0].send(question("q_02")).unwrap();
++        tick(cx);
++        let serial = view.read_with(cx, |view, _| {
++            view.cockpit
++                .thread(thread)
++                .unwrap()
++                .activity()
++                .pending_decisions()[0]
++                .handle
++                .serial
++        });
++        let choice = cx.debug_bounds("question-choice-0-0").unwrap();
++        cx.simulate_click(choice.center(), gpui::Modifiers::none());
++        cx.run_until_parked();
++        let input = cx
++            .debug_bounds(Box::leak(
++                format!("request-other-1-{serial}-0").into_boxed_str(),
++            ))
++            .unwrap();
++        cx.simulate_click(input.center(), gpui::Modifiers::none());
++        cx.run_until_parked();
++        cx.simulate_input("neither, wait 2 days");
++        cx.run_until_parked();
++        let submit = cx
++            .debug_bounds(Box::leak(
++                format!("request-submit-1-{serial}").into_boxed_str(),
++            ))
++            .unwrap();
++        cx.simulate_click(submit.center(), gpui::Modifiers::none());
++        cx.run_until_parked();
++        let answered = fake.answered.borrow();
++        let DecisionAnswer::Questions { answers } = &answered.last().unwrap().1 else {
++            panic!("answer");
++        };
++        assert_eq!(answers[0].other.as_deref(), Some("neither, wait 2 days"));
++        assert!(answers[0].picks.is_empty(), "custom alternative must replace radio pick; got {:?}", answers);
++    }
++
++#[gpui::test]
++fn audit_l2_approval_keeps_advertised_keys_working(cx: &mut TestAppContext) {
++    let (mut core, fake) = cockpit("audit-l2-approval", 4);
++    let group = group_all(&mut core);
++    bind_production_keys(cx);
++    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
++    view.update(cx, |view,cx| view.enter_group(group,cx));
++    cx.simulate_resize(gpui::size(px(860.),px(500.)));
++    tick(cx);
++    view.update_in(cx, |view,window,_| assert_eq!(view.level_now(window),Level::Instruments));
++    fake.streams.borrow()[0].send(decision("audit-l2-perm")).unwrap();
++    tick(cx);
++    cx.simulate_keystrokes("y");
++    cx.run_until_parked();
++    let answered = !fake.answered.borrow().is_empty();
++    cx.simulate_keystrokes("cmd-f");
++    cx.run_until_parked();
++    let fullscreen = view.read_with(cx, |view,_|view.cockpit.roster().fullscreen().is_some());
++    assert!(answered && fullscreen, "L2 pending approval: y answered={answered}; cmd-f fullscreen={fullscreen}");
++}
++
++#[gpui::test]
++fn audit_crashed_background_thread_notifies_operator(cx: &mut TestAppContext) {
++    let (core,fake)=cockpit("audit-crash-notice",2);
++    bind_production_keys(cx);
++    let (view,cx)=add_cockpit_window(cx,|_,cx|CockpitView::new(core,cx));
++    tick(cx);
++    fake.streams.borrow()[1].send(SessionEvent::TextDelta{text:"Working on it".into()}).unwrap();
++    tick(cx);
++    fake.streams.borrow()[1].send(SessionEvent::Closed{reason:"codex app-server exited: signal 9".into()}).unwrap();
++    tick(cx);
++    view.read_with(cx,|view,_| assert!(view.cockpit.notifications().unread()>0,"a background crash should leave an unread notice"));
++}
++
++#[gpui::test]
++fn audit_settings_enter_does_not_send_hidden_prompt(cx: &mut TestAppContext) {
++    let (core,fake)=cockpit("audit-settings-enter",1);
++    bind_production_keys(cx);
++    let (view,cx)=add_cockpit_window(cx,|_,cx|CockpitView::new(core,cx));
++    cx.simulate_resize(gpui::size(px(1000.),px(800.)));
++    view.update(cx,|view,_|view.cli_versions=Some(("fixture".into(),"fixture".into())));
++    tick(cx);
++    cx.simulate_input("Draft I have not decided to send");
++    cx.simulate_keystrokes("cmd-,");
++    cx.run_until_parked();
++    view.read_with(cx,|view,_|assert!(view.settings_open));
++    cx.simulate_keystrokes("enter");
++    cx.run_until_parked();
++    let sent=fake.sent.borrow();
++    assert!(sent.is_empty(),"Enter in Settings sent hidden Composer draft: {:?}",&*sent);
++    view.read_with(cx,|view,cx|assert_eq!(view.panes[0].composer.read(cx).text(),"Draft I have not decided to send"));
++}
++
++#[gpui::test]
++fn audit_settings_close_does_not_park_hidden_thread(cx: &mut TestAppContext) {
++    let (core,_fake)=cockpit("audit-settings-close",1);
++    bind_production_keys(cx);
++    let (view,cx)=add_cockpit_window(cx,|_,cx|CockpitView::new(core,cx));
++    cx.simulate_resize(gpui::size(px(1000.),px(800.)));
++    view.update(cx,|view,_|view.cli_versions=Some(("fixture".into(),"fixture".into())));
++    tick(cx);
++    let thread=view.read_with(cx,|view,_|view.panes[0].thread().unwrap());
++    cx.simulate_keystrokes("cmd-,");
++    cx.run_until_parked();
++    view.read_with(cx,|view,_|assert!(view.settings_open));
++    cx.simulate_keystrokes("cmd-w");
++    cx.run_until_parked();
++    view.read_with(cx,|view,_|assert!(view.cockpit.thread(thread).is_some(),"Cmd+W in Settings parked hidden Thread; settings_open={}, visible_threads={:?}",view.settings_open,view.cockpit.threads()));
++}
++
++#[gpui::test]
++fn audit_oldest_of_201_blocks_remains_in_transcript(cx: &mut TestAppContext) {
++    let (core,fake)=cockpit("audit-transcript-horizon",1);
++    bind_production_keys(cx);
++    let (view,cx)=add_cockpit_window(cx,|_,cx|CockpitView::new(core,cx));
++    cx.simulate_resize(gpui::size(px(1000.),px(800.)));
++    tick(cx);
++    for index in 0..201 {
++        fake.streams.borrow()[0].send(SessionEvent::TextDelta{text:format!("Message audit-marker-{index:03}\n\n")}).unwrap();
++        fake.streams.borrow()[0].send(SessionEvent::ContentBoundary).unwrap();
++    }
++    tick(cx);
++    tick(cx);
++    view.read_with(cx,|view,_| {
++        let thread=view.panes[0].thread().unwrap();
++        let blocks=view.cockpit.thread(thread).unwrap().transcript().blocks();
++        let core_text=transcript_text(blocks);
++        let ui_text=view.selection.registered(thread).into_iter().map(|x|x.3).collect::<String>();
++        assert!(core_text.contains("audit-marker-000"),"fixture must retain first message in core");
++        assert!(ui_text.contains("audit-marker-200"),"fixture must reach final message");
++        assert!(ui_text.contains("audit-marker-000"),"oldest message missing from entire selectable transcript document: core_blocks={}, core_contains_first={}, ui_contains_first={}, ui_contains_second={}, ui_contains_last={}",blocks.len(),core_text.contains("audit-marker-000"),ui_text.contains("audit-marker-000"),ui_text.contains("audit-marker-001"),ui_text.contains("audit-marker-200"));
++    });
++}
+--- a/crates/ferrite/src/pane.rs
++++ b/crates/ferrite/src/pane.rs
+@@ -6567,3 +6567,22 @@
+         }
+     }
+ }
++
++#[cfg(test)]
++mod audit_diff_probes {
++    use super::*;
++    #[test]
++    fn audit_diff_source_preserves_python_indent_and_make_tab() {
++        let thread=ThreadId::new(1);
++        let registry=crate::select::TranscriptText::default();
++        let runs=registry.overlay_scoped(thread,"audit-diff".into(),&[],crate::rich::TextCache::default());
++        let diff=Diff {
++            path:"example.py".into(),
++            hunks:vec![ferrite_core::Hunk {old_start:1,old_lines:2,new_start:1,new_lines:2,lines:vec![" if ready:".into(),"-    return old_value".into(),"+    return new_value".into(),"+\tmake all".into()]}],
++            added:2,removed:1,
++        };
++        runs.capture_members(|| { let _=render_diff(BlockId::TURN_DIFF,&diff,&runs); });
++        let text:Vec<_>=registry.registered(thread).into_iter().map(|x|x.3).collect();
++        assert!(text.contains(&"    return new_value".to_string()) && text.contains(&"\tmake all".to_string()),"diff display/copy sources lost indentation: {:?}",text);
++    }
++}

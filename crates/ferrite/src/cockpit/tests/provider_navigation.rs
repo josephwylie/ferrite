@@ -163,3 +163,58 @@ fn contract_native_discovery_dismissal_does_not_reopen_picker(cx: &mut TestAppCo
     tick(cx);
     view.read_with(cx, |view, _| assert!(view.popover.is_none()));
 }
+
+#[gpui::test]
+fn a_short_collapsed_rail_scrolls_to_every_thread_without_moving_its_utilities(
+    cx: &mut TestAppContext,
+) {
+    let (core, _fake) = cockpit("short-collapsed-rail", 14);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(640.), px(500.)));
+    view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
+    tick(cx);
+
+    let last = view.read_with(cx, |view, _| {
+        view.nav_state().ordered_rows().last().unwrap().thread
+    });
+    let selector = format!("nav-rail-item-{}", last.get());
+    let viewport = cx.debug_bounds("nav-rail-items").unwrap();
+    let before = bounds(cx, selector.clone());
+    let new_thread = cx.debug_bounds("rail-add-thread").unwrap();
+    let bell = cx.debug_bounds("notifications-bell").unwrap();
+    let settings = cx.debug_bounds("settings-gear").unwrap();
+    assert!(
+        before.top() >= viewport.bottom(),
+        "the last Thread needs scrolling"
+    );
+    assert!(new_thread.bottom() <= viewport.top());
+    assert!(viewport.bottom() <= bell.top());
+    assert!(settings.bottom() <= px(500.));
+
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: viewport.center(),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-10_000.))),
+        modifiers: gpui::Modifiers::none(),
+        touch_phase: gpui::TouchPhase::default(),
+    });
+    cx.run_until_parked();
+
+    let after = bounds(cx, selector);
+    assert!(
+        after.top() >= viewport.top() && after.bottom() <= viewport.bottom(),
+        "the last Thread's entire target is reachable: {after:?} in {viewport:?}"
+    );
+    assert_eq!(
+        after.size, before.size,
+        "scrolling never compresses an avatar"
+    );
+    assert_eq!(cx.debug_bounds("rail-add-thread").unwrap(), new_thread);
+    assert_eq!(cx.debug_bounds("notifications-bell").unwrap(), bell);
+    assert_eq!(cx.debug_bounds("settings-gear").unwrap(), settings);
+
+    cx.simulate_click(after.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.cockpit.roster().focused_thread(), Some(last));
+    });
+}

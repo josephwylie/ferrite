@@ -548,6 +548,7 @@ pub fn project_section(label: SharedString, count: usize, first: bool) -> Div {
     div()
         .group(PROJECT_SECTION_GROUP)
         .flex()
+        .flex_shrink_0()
         .items_center()
         .h(px(SECTION_H))
         .when(!first, |section| section.mt(px(SOLOS_TOP)))
@@ -1376,23 +1377,23 @@ pub fn rail_filter(filtered: bool) -> Stateful<Div> {
         )
 }
 
-/// The rail's item column. It scrolls, and it shows no thumb: compact marks
-/// are already a coarse index, and a bar beside them would be
-/// the second line in a system that draws none.
-pub fn rail_items() -> Div {
+/// The rail's item column scrolls independently between the pinned primary
+/// actions and utilities. A stable element id retains its scroll offset as
+/// Thread status updates arrive; the fixed-size buttons keep their targets
+/// instead of being squeezed into the available height.
+pub fn rail_items() -> Stateful<Div> {
     div()
+        .id("nav-rail-items")
+        .debug_selector(|| "nav-rail-items".into())
         .flex()
         .flex_col()
         .flex_1()
         .min_h_0()
+        .w_full()
         .items_center()
         .gap(px(RAIL_ITEM_GAP))
         .mt(px(RAIL_ITEMS_TOP))
-        // The prototype scrolls this column; gpui can only scroll a
-        // `Stateful`, and the pinned signature is a plain `Div`, so the
-        // overflow is clipped rather than smeared over the Cockpit. At
-        // 900px the rail holds 30 items before it matters.
-        .overflow_y_hidden()
+        .overflow_y_scroll()
 }
 
 /// One rail item: a Thread reduced to a two-letter monogram plus its live

@@ -1,0 +1,7 @@
+Cmd+Backspace in second line => " instruction two\nKeep instruction three"
+Windows ctrl-a: composer::SelectAll @ Some("Composer")
+Windows ctrl-a: composer::Home @ Some("Composer")
+Windows ctrl-w: composer::DeleteWordLeft @ Some("Composer")
+Windows ctrl-w: cockpit::CloseThread @ None
+Menu insertion "@docs/Design Notes.md " resolves to ["/tmp/ferrite-example/docs/Design"]
+Quoted alternative resolves to ["/tmp/ferrite-example/docs/Design Notes.md"]

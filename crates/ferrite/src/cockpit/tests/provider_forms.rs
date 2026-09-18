@@ -314,3 +314,103 @@ fn contract_every_native_approval_choice_is_selectable(cx: &mut TestAppContext) 
         "opaque native choices survive UI unchanged even when plain Allow is forbidden"
     );
 }
+
+/// A full directory list must not take the committing action off screen.
+/// Exercise both create and edit through their real footer buttons.
+#[gpui::test]
+fn project_completion_stays_visible_while_a_compact_form_scrolls(cx: &mut TestAppContext) {
+    let (core, _) = cockpit("project-fixed-footer", 1);
+    let before = core.registry().projects().len();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(640.), px(420.)));
+    let base = scratch("project-fixed-footer-folders");
+    let directories: Vec<_> = (0..8)
+        .map(|index| {
+            let path = base.join(format!("directory-{index}"));
+            std::fs::create_dir_all(&path).unwrap();
+            path.canonicalize().unwrap()
+        })
+        .collect();
+    let mut created = None;
+
+    for editing in [false, true] {
+        let title = if editing {
+            "Renamed project"
+        } else {
+            "New project"
+        };
+        view.update(cx, |view, cx| {
+            if editing {
+                view.open_project_editor(created.unwrap(), cx);
+            } else {
+                view.open_project_creator(cx);
+                for directory in &directories {
+                    view.adopt_editor_directory(directory.clone(), cx);
+                }
+            }
+            let name = view.project_editor.as_ref().unwrap().name.clone();
+            name.update(cx, |name, cx| name.set(title.into(), cx));
+        });
+        tick(cx);
+
+        let card = cx.debug_bounds("project-editor-card").unwrap();
+        let confirm = cx.debug_bounds("project-confirm").unwrap();
+        let add = cx.debug_bounds("project-Add Directory").unwrap();
+        for action in [confirm, add] {
+            assert!(
+                action.size.height > px(0.)
+                    && action.left() >= card.left()
+                    && action.top() >= card.top()
+                    && action.right() <= card.right()
+                    && action.bottom() <= card.bottom(),
+                "the full footer action must be inside the compact card: {action:?}, {card:?}"
+            );
+        }
+        let first_id = format!("project-directory:{}", directories[0].display());
+        let first = debug_bounds(cx, first_id.clone()).unwrap();
+        assert!(first.top() >= card.top() && first.bottom() < confirm.top());
+
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: card.center(),
+            delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-2000.))),
+            ..Default::default()
+        });
+        tick(cx);
+        assert_eq!(cx.debug_bounds("project-confirm").unwrap(), confirm);
+        assert_eq!(cx.debug_bounds("project-Add Directory").unwrap(), add);
+        let last = debug_bounds(
+            cx,
+            format!(
+                "project-directory:{}",
+                directories.last().unwrap().display()
+            ),
+        )
+        .expect("scrolling reveals the last directory");
+        assert!(last.top() >= card.top() && last.bottom() < confirm.top());
+        if let Some(scrolled_first) = debug_bounds(cx, first_id) {
+            assert!(
+                scrolled_first.top() < first.top(),
+                "the body actually scrolled"
+            );
+        }
+
+        cx.simulate_click(confirm.center(), gpui::Modifiers::none());
+        tick(cx);
+        created = Some(view.read_with(cx, |view, _| {
+            assert!(
+                view.project_editor.is_none(),
+                "the visible footer completes the form"
+            );
+            assert_eq!(view.cockpit.registry().projects().len(), before + 1);
+            let project = view.nav_filter.expect("the completed Project is selected");
+            if let Some(created) = created {
+                assert_eq!(project, created, "Done must edit the same Project");
+            }
+            let record = view.cockpit.registry().project(project).unwrap();
+            assert_eq!(record.title, title);
+            assert_eq!(record.root, directories[0]);
+            assert_eq!(record.additional_roots, directories[1..]);
+            project
+        }));
+    }
+}

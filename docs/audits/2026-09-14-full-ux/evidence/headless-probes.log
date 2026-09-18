@@ -1,0 +1,56 @@
+   Compiling ferrite v0.3.0 (/private/var/folders/5y/hnh41b2j29z8kqxy7ftzfdn80000gn/T/ferrite-ux-decisions-kwkw0hkm/crates/ferrite)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.62s
+warning: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/main.rs (/Users/josephwylie/Desktop/Projects/ferrite/target/debug/deps/ferrite-97c6c8b36e1fdb9c)
+
+running 8 tests
+
+thread 'pane::audit_diff_probes::audit_diff_source_preserves_python_indent_and_make_tab' (1914850) panicked at crates/ferrite/src/pane.rs:6586:9:
+diff display/copy sources lost indentation: ["if ready:", "return old_value", "return new_value", "make all"]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test pane::audit_diff_probes::audit_diff_source_preserves_python_indent_and_make_tab ... FAILED
+
+thread 'cockpit::tests::provider_forms::audit_crashed_background_thread_notifies_operator' (1914843) panicked at crates/ferrite/src/cockpit/tests/provider_forms.rs:439:32:
+a background crash should leave an unread notice
+test cockpit::tests::provider_forms::audit_crashed_background_thread_notifies_operator ... FAILED
+
+thread 'cockpit::tests::provider_forms::audit_settings_close_does_not_park_hidden_thread' (1914848) panicked at crates/ferrite/src/cockpit/tests/provider_forms.rs:475:31:
+Cmd+W in Settings parked hidden Thread; settings_open=true, visible_threads=[]
+test cockpit::tests::provider_forms::audit_settings_close_does_not_park_hidden_thread ... FAILED
+
+thread 'cockpit::tests::provider_forms::audit_mcp_can_enter_valid_value' (1914846) panicked at crates/ferrite/src/cockpit/tests/provider_forms.rs:360:5:
+valid MCP form entry should submit count=2; got []; composer=2
+test cockpit::tests::provider_forms::audit_mcp_can_enter_valid_value ... FAILED
+
+thread 'cockpit::tests::provider_forms::audit_oldest_of_201_blocks_remains_in_transcript' (1914847) panicked at crates/ferrite/src/cockpit/tests/provider_forms.rs:498:9:
+oldest message missing from entire selectable transcript document: core_blocks=201, core_contains_first=true, ui_contains_first=false, ui_contains_second=true, ui_contains_last=true
+test cockpit::tests::provider_forms::audit_oldest_of_201_blocks_remains_in_transcript ... FAILED
+
+thread 'cockpit::tests::provider_forms::audit_l2_approval_keeps_advertised_keys_working' (1914845) panicked at crates/ferrite/src/cockpit/tests/provider_forms.rs:426:5:
+L2 pending approval: y answered=false; cmd-f fullscreen=false
+test cockpit::tests::provider_forms::audit_l2_approval_keeps_advertised_keys_working ... FAILED
+
+thread 'cockpit::tests::provider_forms::audit_settings_enter_does_not_send_hidden_prompt' (1914849) panicked at crates/ferrite/src/cockpit/tests/provider_forms.rs:457:5:
+Enter in Settings sent hidden Composer draft: ["Draft I have not decided to send"]
+test cockpit::tests::provider_forms::audit_settings_enter_does_not_send_hidden_prompt ... FAILED
+
+thread 'cockpit::tests::provider_forms::audit_custom_single_answer_replaces_choice' (1914844) panicked at crates/ferrite/src/cockpit/tests/provider_forms.rs:405:9:
+custom alternative must replace radio pick; got [Answer { picks: [0], other: Some("neither, wait 2 days") }]
+test cockpit::tests::provider_forms::audit_custom_single_answer_replaces_choice ... FAILED
+
+failures:
+
+failures:
+    cockpit::tests::provider_forms::audit_crashed_background_thread_notifies_operator
+    cockpit::tests::provider_forms::audit_custom_single_answer_replaces_choice
+    cockpit::tests::provider_forms::audit_l2_approval_keeps_advertised_keys_working
+    cockpit::tests::provider_forms::audit_mcp_can_enter_valid_value
+    cockpit::tests::provider_forms::audit_oldest_of_201_blocks_remains_in_transcript
+    cockpit::tests::provider_forms::audit_settings_close_does_not_park_hidden_thread
+    cockpit::tests::provider_forms::audit_settings_enter_does_not_send_hidden_prompt
+    pane::audit_diff_probes::audit_diff_source_preserves_python_indent_and_make_tab
+
+test result: FAILED. 0 passed; 8 failed; 0 ignored; 0 measured; 352 filtered out; finished in 0.37s
+
+error: test failed, to rerun pass `-p ferrite --bin ferrite`

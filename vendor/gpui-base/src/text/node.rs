@@ -1313,6 +1313,17 @@ impl CodeBlock {
                     .text_size(cx.theme().tokens.typography.mono_md.size)
                     .relative()
                     .refine_style(&style.code_block())
+                    // Actions occupy a header row rather than covering the first
+                    // source line. Literal blocks without actions keep their layout.
+                    .when_some(node_cx.code_block_actions.clone(), |this, actions| {
+                        this.child(
+                            div()
+                                .id("actions")
+                                .w_full()
+                                .mb_1()
+                                .child(actions(&self, window, cx)),
+                        )
+                    })
                     .child(Inline::new(
                         "code",
                         self.state.clone(),
@@ -1323,19 +1334,7 @@ impl CodeBlock {
                             .map(|highlighter| self.highlighted_styles(highlighter))
                             .unwrap_or_default(),
                         node_cx.link_click_handler.clone(),
-                    ))
-                    .when_some(node_cx.code_block_actions.clone(), |this, actions| {
-                        this.child(
-                            div()
-                                .id("actions")
-                                .absolute()
-                                .top_2()
-                                .right_2()
-                                .bg(style.code_background())
-                                .rounded(cx.theme().tokens.radius.md)
-                                .child(actions(&self, window, cx)),
-                        )
-                    }),
+                    )),
             )
             .into_any_element()
     }
@@ -1814,6 +1813,7 @@ impl BlockNode {
         checked: Option<bool>,
         style: &TextViewStyle,
         line_height: Pixels,
+        marker_width: Pixels,
     ) -> Div {
         h_flex()
             .w_full()
@@ -1823,12 +1823,18 @@ impl BlockNode {
             .items_start()
             .content_start()
             .when(!options.todo && checked.is_none(), |this| {
-                this.child(list_item_prefix(
-                    ix,
-                    options.ordered,
-                    options.depth,
-                    options.list_start,
-                ))
+                this.child(
+                    div()
+                        .flex_none()
+                        .w(marker_width)
+                        .text_right()
+                        .child(list_item_prefix(
+                            ix,
+                            options.ordered,
+                            options.depth,
+                            options.list_start,
+                        )),
+                )
             })
             .when_some(checked, |this, checked| {
                 // Todo list checkbox
@@ -1840,11 +1846,10 @@ impl BlockNode {
                 this.child(
                     div()
                         .flex()
-                        .mr_1p5()
+                        .w(marker_width)
                         .h(line_height)
                         .flex_none()
                         .items_center()
-                        .justify_center()
                         .child(
                             div()
                                 .flex()
@@ -1872,6 +1877,7 @@ impl BlockNode {
         item: &BlockNode,
         ix: usize,
         options: NodeRenderOptions,
+        marker_width: Pixels,
         node_cx: &NodeContext,
         window: &mut Window,
         cx: &mut App,
@@ -1891,9 +1897,6 @@ impl BlockNode {
                     for (child_ix, child) in children.iter().enumerate() {
                         match child {
                             BlockNode::Paragraph { .. } => {
-                                let last_not_list = child_ix > 0
-                                    && !matches!(children[child_ix - 1], BlockNode::List { .. });
-
                                 let text = child.render_block(
                                     NodeRenderOptions {
                                         depth: options.depth + 1,
@@ -1918,22 +1921,19 @@ impl BlockNode {
                                     cx,
                                 );
 
-                                // Continuation paragraph — stack vertically below
-                                // the previous row, indented to align with the text
-                                // column (past bullet/number prefix).
-                                if last_not_list {
-                                    if let Some(preceding_row) = items.pop() {
-                                        items.push(
-                                            v_flex().child(preceding_row).child(
-                                                div()
-                                                    .w_full()
-                                                    .pl(rems(1.))
-                                                    .overflow_hidden()
-                                                    .child(text),
-                                            ),
-                                        );
-                                        continue;
-                                    }
+                                // Only the first paragraph carries a marker.
+                                // Continuations after a nested list still belong
+                                // to this item and align with its text column.
+                                if child_ix > 0 {
+                                    items.push(
+                                        div()
+                                            .w_full()
+                                            .min_w_0()
+                                            .pl(marker_width)
+                                            .overflow_hidden()
+                                            .child(text),
+                                    );
+                                    continue;
                                 }
 
                                 items.push(Self::render_list_item_row(
@@ -1943,10 +1943,11 @@ impl BlockNode {
                                     *checked,
                                     &node_cx.style,
                                     window.line_height(),
+                                    marker_width,
                                 ));
                             }
                             BlockNode::List { .. } => {
-                                items.push(div().ml(rems(1.)).child(child.render_block(
+                                items.push(div().ml(marker_width).child(child.render_block(
                                     NodeRenderOptions {
                                         depth: options.depth + 1,
                                         todo: checked.is_some(),
@@ -1987,16 +1988,16 @@ impl BlockNode {
                                         *checked,
                                         &node_cx.style,
                                         window.line_height(),
+                                        marker_width,
                                     ));
                                 } else {
-                                    // Indent continuation blocks to align with a
-                                    // nested sub-list (`ml(rems(1.))`) and with
-                                    // continuation paragraphs.
+                                    // All continuation content starts at this list's
+                                    // shared text column, including nested lists.
                                     items.push(
                                         div()
                                             .w_full()
                                             .min_w_0()
-                                            .pl(rems(1.))
+                                            .pl(marker_width)
                                             .overflow_hidden()
                                             .child(block),
                                     );
@@ -2422,7 +2423,6 @@ impl BlockNode {
                     .whitespace_normal()
                     .text_size(text_size)
                     .font_weight(font_weight)
-                    .when(*level == 1, |heading| heading.italic().underline())
                     .child(children.render(node_cx, window, cx))
                     .into_any_element()
             }
@@ -2475,6 +2475,31 @@ impl BlockNode {
                 .min_w_0()
                 .children({
                     let mut items = Vec::with_capacity(children.len());
+                    // Share one measured marker column across the list. A new
+                    // digit (9 → 10, 99 → 100) must not move one item's body,
+                    // and larger reading type must scale nested indentation.
+                    let text_style = window.text_style();
+                    let font_size = text_style.font_size.to_pixels(window.rem_size());
+                    let mut marker_width = font_size;
+                    for (item_index, item) in children
+                        .iter()
+                        .filter(|item| item.is_list_item())
+                        .enumerate()
+                    {
+                        if matches!(item, BlockNode::ListItem { checked: Some(_), .. }) {
+                            marker_width = marker_width.max(window.rem_size() * 1.375);
+                        } else {
+                            let marker =
+                                list_item_prefix(item_index, *ordered, options.depth, *start);
+                            let run = text_style.to_run(marker.len());
+                            marker_width = marker_width.max(
+                                window
+                                    .text_system()
+                                    .layout_line(&marker, font_size, &[run], None)
+                                    .width,
+                            );
+                        }
+                    }
                     let mut item_index = 0;
                     for (ix, item) in children.into_iter().enumerate() {
                         if !item.is_list_item() {
@@ -2490,6 +2515,7 @@ impl BlockNode {
                                 list_start: *start,
                                 ..options
                             },
+                            marker_width,
                             node_cx,
                             window,
                             cx,

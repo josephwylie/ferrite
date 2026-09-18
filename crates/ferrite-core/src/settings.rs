@@ -61,6 +61,18 @@ pub struct Settings {
     /// How the Composer's usage meter draws its three windows.
     /// Default: three stacked lines.
     pub usage_meter_style: UsageMeterStyle,
+    /// Answer reading size in Solo and fullscreen. Group panes stay compact.
+    pub solo_reading_size: SoloReadingSize,
+}
+
+/// The operator's reading preference, independent of provider and Thread.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SoloReadingSize {
+    #[default]
+    Standard,
+    Comfortable,
+    Large,
 }
 
 /// The shape the Composer's usage meter takes. The three windows —
@@ -103,6 +115,7 @@ impl Default for Settings {
             auto_title: true,
             placeholder_suggestions: true,
             usage_meter_style: UsageMeterStyle::Lines,
+            solo_reading_size: SoloReadingSize::Standard,
         }
     }
 }
@@ -203,6 +216,7 @@ mod tests {
             auto_title: false,
             placeholder_suggestions: false,
             usage_meter_style: UsageMeterStyle::Rings,
+            solo_reading_size: SoloReadingSize::Large,
         }
     }
 
@@ -250,6 +264,7 @@ mod tests {
         assert!(settings.auto_title);
         assert!(settings.placeholder_suggestions);
         assert_eq!(settings.usage_meter_style, UsageMeterStyle::Lines);
+        assert_eq!(settings.solo_reading_size, SoloReadingSize::Standard);
     }
 
     /// A corrupt file loads as the defaults and stays exactly as it was:

@@ -1,0 +1,15 @@
+   Compiling ferrite v0.3.0 (/Users/josephwylie/Desktop/Projects/ferrite/.worktrees/ui-polish-layout-followup-2026-09-15/crates/ferrite)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.88s
+warning: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/main.rs (/Users/josephwylie/Desktop/Projects/ferrite/target/debug/deps/ferrite-97c6c8b36e1fdb9c)
+
+running 5 tests
+test cockpit::tests::layout_polish::keyboard_disclosure_target_is_visible_across_three_targets_and_reverse ... ok
+test cockpit::tests::layout_polish::compact_group_paints_complete_latest_rows_after_composer_growth ... ok
+test cockpit::tests::layout_polish::group_question_stays_between_its_thread_header_and_growing_composer ... ok
+test cockpit::tests::layout_polish::group_question_uses_measured_space_and_restores_inline_form ... ok
+test cockpit::tests::layout_polish::compact_group_question_expands_and_retains_answer_and_draft ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 363 filtered out; finished in 0.93s
+
