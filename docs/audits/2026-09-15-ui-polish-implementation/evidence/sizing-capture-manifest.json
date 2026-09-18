@@ -1,0 +1,202 @@
+{
+  "date": "2026-09-18",
+  "product_revision": "051ed18",
+  "renderer": "Production GPUI native renderer, synthetic sessions and disposable stores",
+  "final_frames": 20,
+  "interaction_frames": 5,
+  "baseline_frames": 7,
+  "captures": [
+    {
+      "path": "screenshots/sizing/after/code-narrow-640x800.png",
+      "product_revision": "051ed18",
+      "sha256": "cb2b2cafcba09c2071c5606a36e6cd330c1fb025684f21826515ea21b07aebf6",
+      "note": ""
+    },
+    {
+      "path": "screenshots/sizing/after/draft-grow-860x500.png",
+      "product_revision": "051ed18",
+      "sha256": "2c29bf23ad7027401f8ff31b8ff80fb784cf32abd6c5b4576c94219f3cc4326f",
+      "note": ""
+    },
+    {
+      "path": "screenshots/sizing/after/group-four-1200x800.png",
+      "product_revision": "051ed18",
+      "sha256": "68954718b8d6cbb9b96870eec92c27d871892b84c044e76685094b14003ac815",
+      "note": ""
+    },
+    {
+      "path": "screenshots/sizing/after/group-four-short-860x500.png",
+      "product_revision": "051ed18",
+      "sha256": "18cc74b89cd16b05a16ab26549fee1bf268fd552aacecedce35c1561aea34b57",
+      "note": ""
+    },
+    {
+      "path": "screenshots/sizing/after/group-six-1440x900.png",
+      "product_revision": "051ed18",
+      "sha256": "986622ce767d9b247aebfb29049dd41ac65d0aa6447d861a59fab5ad84b947b5",
+      "note": ""
+    },
+    {
+      "path": "screenshots/sizing/after/group-two-1000x800.png",
+      "product_revision": "051ed18",
+      "sha256": "5de057afe9d3f2257935f008be64f64c8329a0db5849c34a345a3bf8578c4d1c",
+      "note": ""
+    },
+    {
+      "path": "screenshots/sizing/after/lists-large-1000x800.png",
+      "product_revision": "051ed18",
+      "sha256": "5d81093573ed2618c01c61990e206bdab739f678e92cd274d143efd7aaf2e3be",
+      "note": ""
+    },
+    {
+      "path": "screenshots/sizing/after/lists-table-1000x800.png",
+      "product_revision": "051ed18",
+      "sha256": "3986cb602b6451a9c107e78bf3932b4b93026a0784e8ec50e08a883c2ff4cb46",
+      "note": ""
+    },
+    {
+      "path": "screenshots/sizing/after/lists-table-narrow-640x800.png",
+      "product_revision": "051ed18",
+      "sha256": "5461e950b9b6a1d33ce26cd3889561f08ae70be60acfe9eb8ee41aa069e50e6e",
+      "note": ""
+    },
+    {
+      "path": "screenshots/sizing/after/project-list-860x500.png",
+      "product_revision": "051ed18",
+      "sha256": "72bd3e0de0a8c4b311369c2934c9bd7c72f06f2b04e9bcbad35e58f3832393b6",
+      "note": ""
+    },
+    {
+      "path": "screenshots/sizing/after/project-many-640x500.png",
+      "product_revision": "051ed18",
+      "sha256": "a7cd48a0b27c40c65ef8d7455a96d5149af51c7f60acd2a07bd778a9b332c77b",
+      "note": ""
+    },
+    {
+      "path": "screenshots/sizing/after/project-narrow-640x500.png",
+      "product_revision": "051ed18",
+      "sha256": "e1adf56abb510a168916a2c01d33720b9c1c06e2a6eba7702f7bbb78fe7bde63",
+      "note": ""
+    },
+    {
+      "path": "screenshots/sizing/after/project-one-1000x800.png",
+      "product_revision": "051ed18",
+      "sha256": "a875836e2ed654ad87257785605fbc40b159b4582cf3f468e3dc513492a0c747",
+      "note": ""
+    },
+    {
+      "path": "screenshots/sizing/after/prose-compact-1000x800.png",
+      "product_revision": "051ed18",
+      "sha256": "5ab20d75ce0e192128234ff0791072d129ea4f0641b8c26349a8228f653111fe",
+      "note": ""
+    },
+    {
+      "path": "screenshots/sizing/after/question-draft-860x500.png",
+      "product_revision": "051ed18",
+      "sha256": "51b6ac0817a285879e0419ee96fb2abaa7607d0be7ff063680b9463929d3217f",
+      "note": ""
+    },
+    {
+      "path": "screenshots/sizing/after/question-expanded-860x500.png",
+      "product_revision": "051ed18",
+      "sha256": "8580a21acca90619ebb8128aeb6db0055e979cfe30b5c1859d34feb481c8d24a",
+      "note": ""
+    },
+    {
+      "path": "screenshots/sizing/after/question-group-1200x800.png",
+      "product_revision": "051ed18",
+      "sha256": "d994207f7813f089d7cb3d4e074a2d1e194df7d19365d88b591ab00489bda4a6",
+      "note": ""
+    },
+    {
+      "path": "screenshots/sizing/after/rail-overflow-640x500.png",
+      "product_revision": "051ed18",
+      "sha256": "a3a97c07165631f36be25d3a8626ca61514eb669eddebff40233464d67eb2552",
+      "note": ""
+    },
+    {
+      "path": "screenshots/sizing/after/settings-compact-1000x800.png",
+      "product_revision": "051ed18",
+      "sha256": "d900be5039528c8df20a4777103cba505437520eab5e6640648ffb9acc62a905",
+      "note": ""
+    },
+    {
+      "path": "screenshots/sizing/after/settings-narrow-640x500.png",
+      "product_revision": "051ed18",
+      "sha256": "e85dcf6bc0c03b7b62e6b0db9c0011cbc785f01cfdfa3ba86beb8c3c7e5f6b13",
+      "note": ""
+    },
+    {
+      "path": "screenshots/sizing/before/code-narrow-640x800.png",
+      "product_revision": "d23c3de",
+      "sha256": "71b7a064d8dcaadb4f430b6e08b157108683be3baeca741ce42f1db8053f2054",
+      "note": ""
+    },
+    {
+      "path": "screenshots/sizing/before/draft-grow-860x500.png",
+      "product_revision": "d23c3de",
+      "sha256": "76ce34cb91ee11085b3791a2605cd788a6285ae88a42f8b32557c8904c27c486",
+      "note": "Eight-line draft without an accepted queue; final fixture also has eight queued prompts."
+    },
+    {
+      "path": "screenshots/sizing/before/lists-table-narrow-640x800.png",
+      "product_revision": "d23c3de",
+      "sha256": "a265dd1e7d700428ebd4c15780e914eb6584ec22405297bedd2637ff2c02cf14",
+      "note": ""
+    },
+    {
+      "path": "screenshots/sizing/before/project-many-640x500.png",
+      "product_revision": "d23c3de",
+      "sha256": "5dddf34cedd98e592a53bec5efb78975ac2ccbebbd244ccd80f1e00be820215f",
+      "note": ""
+    },
+    {
+      "path": "screenshots/sizing/before/project-one-1000x800.png",
+      "product_revision": "d23c3de",
+      "sha256": "ed2d7a391d7c2fff4312690c3063ac7a428e4210675ebfd7cd1851c3560281bf",
+      "note": ""
+    },
+    {
+      "path": "screenshots/sizing/before/rail-overflow-640x500.png",
+      "product_revision": "d23c3de",
+      "sha256": "56ee25ac6bc0c3ae3750d04fdf596b12b83919cbc424c19d801aacc67616406b",
+      "note": ""
+    },
+    {
+      "path": "screenshots/sizing/before/settings-narrow-640x500.png",
+      "product_revision": "d23c3de",
+      "sha256": "5bb5b346a8b54bec4cd8c6a9a1949a1a814cf0faba258b5181530c880ad85f51",
+      "note": ""
+    },
+    {
+      "path": "screenshots/sizing/interaction/effort-menu/settings-narrow-640x500.png",
+      "product_revision": "051ed18",
+      "sha256": "45b8233509324f19eb323c754c8ab016ecdf154ba838fe0dde1de603362774cb",
+      "note": ""
+    },
+    {
+      "path": "screenshots/sizing/interaction/project-scrolled/project-many-640x500.png",
+      "product_revision": "051ed18",
+      "sha256": "c08eca03d58ec732a9558c3af15678fcd7cfca9b4886e8ef312ce9d9b3714a2f",
+      "note": ""
+    },
+    {
+      "path": "screenshots/sizing/interaction/question-scrolled/question-expanded-860x500.png",
+      "product_revision": "051ed18",
+      "sha256": "3a78271dbdfb612e2db8f21fce62f52c3a7970e9a6c2a9776e2e3aad96263e3d",
+      "note": ""
+    },
+    {
+      "path": "screenshots/sizing/interaction/queue-scrolled/draft-grow-860x500.png",
+      "product_revision": "051ed18",
+      "sha256": "11dce89e0ce9a954465f919ed988ec7fac0b36f827294a6d3ce062eb6eb34bdc",
+      "note": ""
+    },
+    {
+      "path": "screenshots/sizing/interaction/rail-scrolled/rail-overflow-640x500.png",
+      "product_revision": "051ed18",
+      "sha256": "0f7e704a4c0a02a1e19ad9a042a3f37d61184eb0c80a7f99319fcc291fac801a",
+      "note": ""
+    }
+  ]
+}

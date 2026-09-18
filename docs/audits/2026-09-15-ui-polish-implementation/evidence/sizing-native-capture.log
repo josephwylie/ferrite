@@ -1,0 +1,62 @@
+   Compiling gpui-base v0.6.0 (/Users/josephwylie/Desktop/Projects/ferrite/.worktrees/polish-sizing-qa-2026-09-18/vendor/gpui-base)
+   Compiling ferrite-core v0.3.0 (/Users/josephwylie/Desktop/Projects/ferrite/.worktrees/polish-sizing-qa-2026-09-18/crates/ferrite-core)
+   Compiling gpui-component v0.6.0
+   Compiling gpui-kit v0.6.0
+   Compiling ferrite v0.3.0 (/Users/josephwylie/Desktop/Projects/ferrite/.worktrees/polish-sizing-qa-2026-09-18/crates/ferrite)
+warning: method `ordered_solos` is never used
+   --> crates/ferrite/src/nav.rs:193:12
+    |
+177 | impl NavState {
+    | ------------- method in this implementation
+...
+193 |     pub fn ordered_solos(&self) -> Vec<&ThreadRow> {
+    |            ^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `model_label` is never used
+    --> crates/ferrite/src/pane.rs:2467:8
+     |
+2467 | pub fn model_label(model: &str) -> SharedString {
+     |        ^^^^^^^^^^^
+
+warning: `ferrite` (bin "ferrite") generated 2 warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 30.50s
+warning: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running `/Users/josephwylie/Desktop/Projects/ferrite/target/debug/ferrite --visual-reference /tmp/ferrite-sizing-after-2026-09-18`
+CAPTURE /tmp/ferrite-sizing-after-2026-09-18/prose-compact-1000x800.png
+CAPTURE /tmp/ferrite-sizing-after-2026-09-18/lists-large-1000x800.png
+CAPTURE /tmp/ferrite-sizing-after-2026-09-18/lists-table-1000x800.png
+CAPTURE /tmp/ferrite-sizing-after-2026-09-18/lists-table-narrow-640x800.png
+CAPTURE /tmp/ferrite-sizing-after-2026-09-18/code-narrow-640x800.png
+CAPTURE /tmp/ferrite-sizing-after-2026-09-18/group-two-1000x800.png
+CAPTURE /tmp/ferrite-sizing-after-2026-09-18/group-four-1200x800.png
+CAPTURE /tmp/ferrite-sizing-after-2026-09-18/group-four-short-860x500.png
+CAPTURE /tmp/ferrite-sizing-after-2026-09-18/group-six-1440x900.png
+CAPTURE /tmp/ferrite-sizing-after-2026-09-18/draft-grow-860x500.png
+CAPTURE /tmp/ferrite-sizing-after-2026-09-18/question-group-1200x800.png
+CAPTURE /tmp/ferrite-sizing-after-2026-09-18/question-draft-860x500.png
+CAPTURE /tmp/ferrite-sizing-after-2026-09-18/question-expanded-860x500.png
+CAPTURE /tmp/ferrite-sizing-after-2026-09-18/settings-compact-1000x800.png
+CAPTURE /tmp/ferrite-sizing-after-2026-09-18/settings-narrow-640x500.png
+CAPTURE /tmp/ferrite-sizing-after-2026-09-18/project-one-1000x800.png
+CAPTURE /tmp/ferrite-sizing-after-2026-09-18/project-narrow-640x500.png
+CAPTURE /tmp/ferrite-sizing-after-2026-09-18/project-many-640x500.png
+CAPTURE /tmp/ferrite-sizing-after-2026-09-18/rail-overflow-640x500.png
+CAPTURE /tmp/ferrite-sizing-after-2026-09-18/project-list-860x500.png
+
+INTERACTION rail-scrolled
+CAPTURE /tmp/ferrite-sizing-interaction-2026-09-18/rail-scrolled/rail-overflow-640x500.png
+
+INTERACTION project-scrolled
+CAPTURE /tmp/ferrite-sizing-interaction-2026-09-18/project-scrolled/project-many-640x500.png
+
+INTERACTION effort-menu
+CAPTURE /tmp/ferrite-sizing-interaction-2026-09-18/effort-menu/settings-narrow-640x500.png
+
+INTERACTION queue-scrolled
+CAPTURE /tmp/ferrite-sizing-interaction-2026-09-18/queue-scrolled/draft-grow-860x500.png
+
+INTERACTION question-scrolled
+CAPTURE /tmp/ferrite-sizing-interaction-2026-09-18/question-scrolled/question-expanded-860x500.png

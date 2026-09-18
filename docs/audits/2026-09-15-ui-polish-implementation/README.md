@@ -4,6 +4,8 @@ Branch: `fix/ui-polish-2026-09-15` (implementation based on `844fd36`). This wor
 
 The existing neutral desktop design remains. Prose still uses the full available width: no reading-width cap was added. Solo and fullscreen answer text now have a saved Standard / Comfortable / Large size preference; Standard preserves the existing 13px size, and Group answers retain their compact default. Code, diffs and operational metadata keep their existing scale and width.
 
+The [18 September sizing follow-up](#18-september-sizing-follow-up) extends this implementation with adaptive Composer space, scrollable queues/navigation, form proportions, and Markdown alignment. Earlier verification below is retained as the first-pass record.
+
 ## Coverage
 
 Product source was verified at `ba6ffd3`. Five subagents implemented the work; the coordinating agent reviewed, integrated and checked it. The original audit branch remains unchanged.
@@ -68,3 +70,28 @@ The selected Claude control shows the light inset focus outline; enabled Create 
 The capture-only [fixture patch](evidence/native-fixture.patch) was applied in a disposable checkout, not to product source. To reproduce, create a disposable checkout of `ba6ffd3`, apply that patch and run `cargo run -p ferrite --locked --features visual-reference -- --visual-reference /tmp/ferrite-polish-capture`. Set `FERRITE_POLISH_IMAGE` to the absolute path of `docs/audits/2026-09-15-ui-quality/screenshots/settings-desktop.png` for the representative preview. The helper lets native Question layout settle before capture; it does not alter component sizing.
 
 The screenshots use disposable stores and synthetic conversations through Ferrite's production renderer. The installed app and its real sessions were not used for this implementation pass. Open Original is tested through its canonical file-URL route; an external viewer was not launched.
+
+## 18 September sizing follow-up
+
+Five subagents reviewed and implemented this pass using the Impeccable polish workflow, with the coordinator integrating changes and checking the native application. The work follows the existing Soft theme, dense desktop layout, and full-width prose.
+
+| Root cause | Result |
+|---|---|
+| Composer sizing ignored the actual height of each Pane. | Drafts keep their full contents while their visible rows adapt to the Pane. Queues have a bounded viewport, a visible count, and independent scrolling per Pane. Stop and Send remain available in short four-Pane layouts. Compact live captions and elapsed time share one complete row above the queue. |
+| The collapsed rail had no independent overflow area. | Thread targets scroll between pinned creation and utility actions; expanded Project headers keep their height. |
+| Form sizes and modal proportions were implemented separately. | Shared 32px controls, 48px headers, 16px insets, and 12px gaps establish consistent geometry. Small Settings choices fit their contents; larger sets use the existing current-value menu. |
+| Project actions shared the directory list's scroll area. | One-directory dialogs are shorter; additional directories grow the form within the viewport. Create/Done stays fixed, and folder names lead each row above the secondary path. |
+| List markers, table headings, and code actions used inconsistent measurements. | Numbered lists share a measured gutter through digit changes, including continuations and nesting. Table headings respect column alignment. Copy/Copied has a stable padded target beside Preview. |
+
+The default sidebar width and global text scale were preserved. The compact progress row is also checked with metadata, test badges, eight queued prompts, and an eight-line draft together; isolated empty fixtures do not establish that state fits.
+
+### Follow-up validation
+
+- Full application suite at `051ed18`: **374 passed, 3 pre-existing failures, 2 ignored**. [Log](evidence/sizing-app-tests.log). The three failures remain the file-link selection endpoint, caret timer, and Git initial-branch assumption listed above.
+- Six new native regressions exercise adaptive draft geometry, queue reachability and keyboard behavior, neighboring queues' independent scroll positions, collapsed navigation reachability, fixed Project actions, list alignment, and displaying current reasoning once while preserving its history. Existing Copy checks now verify padded targets and stable confirmation bounds.
+- Fresh native screenshots cover 20 states at window widths from 640 to 1440 logical pixels, including one/two/four/six Panes, compact Settings and Projects, Questions, queues, large reading text, tables, and code. Five additional native interaction frames verify scrolling and the complete effort menu. [Gallery](gallery.md#18-september-sizing-pass).
+- A real, isolated native window was exercised through computer use at 640×500: open Settings, open the six-choice Claude effort menu, choose High, close/reopen Settings, confirm the selection remains, and scroll to the lower Codex controls. It used synthetic sessions and disposable preferences; the user's live sessions were not modified.
+
+The [independent visual review](evidence/sizing-visual-review.md) records coverage and limitations. Screenshots use the production native renderer with disposable stores. The baseline long-draft frame contains an eight-line draft; the final stress fixture additionally contains eight accepted queue items. The baseline is evidence of draft crowding, not an identical queue comparison. The large-list fixture is an added state with valid continuation indentation.
+
+Capture-only changes are archived in the [fixture patch](evidence/sizing-native-fixture.patch), with image provenance in the [manifest](evidence/sizing-capture-manifest.json). To reproduce, create a disposable checkout of `051ed18`, apply the patch, and run `cargo run -p ferrite --locked --features visual-reference -- --visual-reference /tmp/ferrite-sizing-capture`. The independent review lists the five interaction commands. No capture fixture was added to product source. Windows visual runtime and live-provider behavior remain outside this native macOS review.
