@@ -1748,8 +1748,28 @@ const L2_TAIL_LINES: usize = 4;
 fn l2_tail(transcript: &Transcript, namespace: SharedString) -> Div {
     let blocks = transcript.blocks();
     let tail = &blocks[blocks.len().saturating_sub(L2_TAIL_BLOCKS)..];
+    // The live status already presents the current reasoning headline. Keep
+    // older reasoning in the tail, and restore this row when the turn ends
+    // or progress moves to a different caption.
+    let live_reasoning = (transcript.status() == Status::Streaming)
+        .then(|| transcript.progress().caption())
+        .flatten()
+        .and_then(|caption| {
+            tail.iter()
+                .rev()
+                .take_while(|block| !matches!(block.body, Body::Prompt(_)))
+                .find_map(|block| match &block.body {
+                    Body::Thinking(text) => Some((block.id, text)),
+                    _ => None,
+                })
+                .filter(|(_, text)| ferrite_core::progress::headline(text) == caption)
+                .map(|(id, _)| id)
+        });
     let mut rows = Vec::new();
     for block in tail {
+        if live_reasoning == Some(block.id) {
+            continue;
+        }
         let line = |text: String, ink: u32| {
             div()
                 .w_full()

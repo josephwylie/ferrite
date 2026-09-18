@@ -489,3 +489,53 @@ fn group_question_uses_measured_space_and_restores_inline_form(cx: &mut TestAppC
         "the selected answer survives fallback and inline restoration"
     );
 }
+
+/// The compact status owns only the current live reasoning headline. Older
+/// observations and completed thinking remain available in the transcript.
+#[gpui::test]
+fn compact_live_reasoning_appears_once_and_returns_to_history(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("polish-l2-live-reasoning", 4);
+    let thread = core.threads()[0];
+    core.send(thread, "Review the flow".into());
+    let group = group_all(&mut core);
+    core.enter_group(group).unwrap();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(860.), px(1000.)));
+    for (item, text) in [
+        ("earlier", "The earlier observation is still relevant"),
+        ("current", "Checking the remaining interactions"),
+    ] {
+        fake.streams.borrow()[0].send(SessionEvent::ReasoningSummaryPart {
+            item_id: item.into(),
+            summary_index: 0,
+            text: text.into(),
+            snapshot: false,
+        }).unwrap();
+    }
+    tick(cx);
+    let (namespace, earlier, current) = view.read_with(cx, |view, _| {
+        let thoughts = view.cockpit.thread(thread).unwrap().transcript().blocks()
+            .iter().filter(|block| matches!(block.body, Body::Thinking(_)))
+            .map(|block| block.id).collect::<Vec<_>>();
+        (view.panes[0].text_namespace(), thoughts[0], thoughts[1])
+    });
+    let row = |id| format!("l2-tail-row-{namespace}-{id:?}");
+    assert!(debug_bounds(cx, row(earlier)).is_some(), "older reasoning remains visible");
+    assert!(debug_bounds(cx, row(current)).is_none(), "live reasoning has one presentation");
+    assert!(cx.debug_bounds("progress-caption-Checking the remaining interactions").is_some());
+    fake.streams.borrow()[0].send(SessionEvent::Progress {
+        event: ferrite_core::progress::ProgressEvent::Phase {
+            phase: ferrite_core::progress::Phase::Compacting,
+            detail: String::new(),
+        },
+    }).unwrap();
+    tick(cx);
+    assert!(debug_bounds(cx, row(current)).is_some(), "a different live caption does not hide reasoning history");
+    fake.streams.borrow()[0].send(SessionEvent::TurnEnded {
+        outcome: ferrite_core::TurnOutcome::Completed,
+        cost_usd: None,
+    }).unwrap();
+    tick(cx);
+    assert!(debug_bounds(cx, row(earlier)).is_some());
+    assert!(debug_bounds(cx, row(current)).is_some(), "completed reasoning is retained");
+}
