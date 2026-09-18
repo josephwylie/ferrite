@@ -330,7 +330,10 @@ fn compact_group_question_expands_and_retains_answer_and_draft(cx: &mut TestAppC
         assert_eq!(composer_text(&view, cx), draft);
         if iteration == 2 {
             let restored_editor = cx.debug_bounds("focused-prompt-editor").unwrap();
-            assert!(restored_editor.size.height > answering_editor.size.height);
+            assert!(
+                restored_editor.size.height <= px(pane.h * crate::theme::COMPOSER_MAX_PANE_FRACTION),
+                "returning to a compact Pane keeps the draft viewport bounded"
+            );
         }
         let expand = cx
             .debug_bounds("question-expand")

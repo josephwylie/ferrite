@@ -2776,10 +2776,32 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
                 .child(div().min_w_0().whitespace_normal().child(error)),
         );
     }
-    // The pile: newest on top, and only the top row advertises the key,
-    // since `⌫ unqueue` takes back the latest.
-    for (index, held) in queued.iter().enumerate() {
-        region = region.child(queued_line(held, index));
+    // The queue shares the Composer's height budget. Keep the latest on
+    // top and every earlier prompt reachable by scrolling; a long queue
+    // must never push the editor or the Thread's status out of its Pane.
+    if !queued.is_empty() {
+        let count = queued.len();
+        region = region.child(
+            div()
+                .id(SharedString::from(format!("composer-queue-{}", view.text_namespace())))
+                .debug_selector(|| "composer-queue".into())
+                .flex_shrink_0()
+                .h_auto()
+                .max_h(px(composer_queue_height(compact, count)))
+                .overflow_y_scrollbar()
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(theme::COMPOSER_GAP))
+                        .children(
+                            queued
+                                .iter()
+                                .enumerate()
+                                .map(|(index, held)| queued_line(held, index, count)),
+                        ),
+                ),
+        );
     }
     // The one line that grows: the Composer's element is `COMPOSER_ROW_H`
     // per visual row, so the line height here IS the row pitch. The idle
@@ -3146,10 +3168,39 @@ pub fn menu_row(row: &MenuRow, selected: bool) -> Div {
     drawn
 }
 
+/// The bounded queue viewport, shared with the editor's pane-height budget.
+pub(crate) fn composer_queue_height(compact: bool, count: usize) -> f32 {
+    let rows = count.min(if compact {
+        theme::COMPOSER_COMPACT_QUEUE_ROWS
+    } else {
+        theme::COMPOSER_QUEUE_ROWS
+    });
+    rows as f32 * theme::CELL_HEADER_H
+        + rows.saturating_sub(1) as f32 * theme::COMPOSER_GAP
+}
+
+/// Leave the majority of a Pane available for its Thread context. Only the
+/// viewport changes: the Composer keeps every character and scrolls to its
+/// caret, then reveals more rows again when the Pane grows.
+pub(crate) fn composer_row_limit(height: f32, compact: bool, queued: usize) -> usize {
+    let fixed = theme::COMPOSER_PAD_T
+        + theme::COMPOSER_PAD_B
+        + theme::COMPOSER_GAP
+        + theme::COMPOSER_ROW_H
+        + 1.; // The Composer's top rule.
+    let queue = composer_queue_height(compact, queued)
+        + if queued > 0 { theme::COMPOSER_GAP } else { 0. };
+    ((height * theme::COMPOSER_MAX_PANE_FRACTION - fixed - queue)
+        / theme::COMPOSER_ROW_H)
+        .floor()
+        .max(1.)
+        .min(crate::composer::MAX_ROWS as f32) as usize
+}
+
 /// A prompt written while the agent was still working — the ⏳ queued row.
 /// `index` counts down the pile from the top; only the top row (0, the
 /// latest) shows the take-back key.
-fn queued_line(held: &str, index: usize) -> impl IntoElement {
+fn queued_line(held: &str, index: usize, count: usize) -> impl IntoElement {
     let latest = index == 0;
     div()
         .debug_selector(move || format!("queued-{index}"))
@@ -3171,7 +3222,11 @@ fn queued_line(held: &str, index: usize) -> impl IntoElement {
                 .truncate()
                 .italic()
                 .text_color(rgb(TEXT_MUTED))
-                .child(SharedString::from(format!("queued — \"{held}\""))),
+                .child(SharedString::from(if latest && count > 1 {
+                    format!("{count} queued — \"{held}\"")
+                } else {
+                    format!("queued — \"{held}\"")
+                })),
         )
         .child(div().flex_1())
         .when(latest, |row| {

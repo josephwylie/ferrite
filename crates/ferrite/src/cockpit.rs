@@ -6705,7 +6705,21 @@ impl Render for CockpitView {
         // The open popover widens its Composer's own key context to
         // ComposerMenu: the focused node, where enter and escape can win
         // their tie against Submit and Interrupt.
+        let pane_rects = self.pane_rects(window);
         for (index, pane) in self.panes.iter().enumerate() {
+            let row_limit = pane_rects
+                .iter()
+                .find(|(at, _)| *at == index)
+                .map(|(_, rect)| {
+                    let compact = fullscreen.is_none()
+                        && Level::for_cell(Cell::new(rect.w, rect.h)) == Level::Instruments;
+                    let queued = pane
+                        .thread()
+                        .and_then(|thread| self.cockpit.thread(thread))
+                        .map_or(0, |thread| thread.queued_all().len());
+                    pane::composer_row_limit(rect.h, compact, queued)
+                })
+                .unwrap_or(crate::composer::MAX_ROWS);
             // Derive this every frame so answering, leaving fullscreen, or
             // changing Subjects restores the full draft viewport automatically.
             let answering_expanded_question = fullscreen == Some(index)
@@ -6722,9 +6736,9 @@ impl Render for CockpitView {
             pane.composer.update(cx, |composer, cx| {
                 composer.set_visible_row_limit(
                     if answering_expanded_question {
-                        2
+                        row_limit.min(2)
                     } else {
-                        crate::composer::MAX_ROWS
+                        row_limit
                     },
                     cx,
                 )
