@@ -310,41 +310,73 @@ fn multiline_drafts_keep_context_visible_across_group_sizes(cx: &mut TestAppCont
 }
 
 /// Queue growth stays inside the Composer, with older prompts still reachable
-/// by native scrolling and Backspace still retrieving the newest prompt.
+/// by native scrolling; cancellation and take-back keep their keyboard semantics.
 #[gpui::test]
 fn compact_queue_scrolls_without_covering_context_or_composer_actions(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("composer-bounded-queue", 4);
     let thread = core.threads()[0];
+    let other = core.threads()[1];
     core.send(thread, "Working".into());
+    core.send(other, "Other work".into());
     for index in 0..8 {
         assert!(core.queue(thread, format!("Queued follow-up {index}")));
+        assert!(core.queue(other, format!("Other follow-up {index}")));
     }
     let group = group_all(&mut core);
     core.enter_group(group).unwrap();
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
-    cx.simulate_resize(gpui::size(px(860.), px(500.)));
-    tick(cx);
-    let queue = cx.debug_bounds("composer-queue").unwrap();
-    let latest = cx.debug_bounds("queued-0").unwrap();
-    let editor = cx.debug_bounds("focused-prompt-editor").unwrap();
-    let send = bounds(cx, format!("composer-send-{:?}", PaneIdentity::Thread(thread)));
-    assert!(queue.size.height <= px(crate::theme::CELL_HEADER_H + 1.));
-    assert!(latest.top() >= queue.top() && latest.bottom() <= queue.bottom());
-    assert!(queue.bottom() <= editor.top() && editor.bottom() <= send.top());
-    cx.simulate_event(gpui::ScrollWheelEvent {
-        position: queue.center(),
-        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-1000.))),
-        ..Default::default()
+    let (namespace, other_namespace) = view.read_with(cx, |view, _| {
+        (view.panes[0].text_namespace(), view.panes[1].text_namespace())
     });
-    tick(cx);
-    let oldest = cx.debug_bounds("queued-7").unwrap();
-    assert!(oldest.top() >= queue.top() - px(1.) && oldest.bottom() <= queue.bottom() + px(1.));
+    for (width, height) in [(860., 500.), (1000., 520.)] {
+        cx.simulate_resize(gpui::size(px(width), px(height)));
+        tick(cx);
+        let queue = bounds(cx, format!("composer-queue-{namespace}"));
+        let other_queue = bounds(cx, format!("composer-queue-{other_namespace}"));
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: queue.center(),
+            delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(1000.))),
+            ..Default::default()
+        });
+        tick(cx);
+        let latest = bounds(cx, format!("queue-row-{namespace}-0"));
+        let other_latest = bounds(cx, format!("queue-row-{other_namespace}-0"));
+        let editor = cx.debug_bounds("focused-prompt-editor").unwrap();
+        let send = bounds(cx, format!("composer-send-{:?}", PaneIdentity::Thread(thread)));
+        assert!(queue.size.height <= px(crate::theme::CELL_HEADER_H + 1.));
+        assert!(latest.top() >= queue.top() && latest.bottom() <= queue.bottom());
+        assert!(queue.bottom() <= editor.top());
+        assert!(editor.bottom() <= send.top() || (editor.top() - send.top()).abs() <= px(1.));
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: queue.center(),
+            delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-1000.))),
+            ..Default::default()
+        });
+        tick(cx);
+        let oldest = bounds(cx, format!("queue-row-{namespace}-7"));
+        assert!(
+            oldest.top() >= queue.top() - px(1.) && oldest.bottom() <= queue.bottom() + px(1.),
+            "oldest {oldest:?} must fit queue {queue:?}"
+        );
+        let unaffected = bounds(cx, format!("queue-row-{other_namespace}-0"));
+        assert_eq!(unaffected, other_latest, "another Pane keeps its own scroll position");
+        assert!(unaffected.top() >= other_queue.top() && unaffected.bottom() <= other_queue.bottom());
+    }
     cx.simulate_keystrokes("backspace");
     tick(cx);
     view.read_with(cx, |view, cx| {
-        assert_eq!(view.panes[0].composer.read(cx).text(), "Queued follow-up 7");
+        assert!(view.panes[0].composer.read(cx).is_empty());
         assert_eq!(view.cockpit.thread(thread).unwrap().queued_all().len(), 7);
+        assert_eq!(view.cockpit.thread(thread).unwrap().queued(), Some("Queued follow-up 6"));
+        assert_eq!(view.cockpit.thread(other).unwrap().queued_all().len(), 8);
     });
-    assert_eq!(fake.sent.borrow().as_slice(), ["Working"]);
+    cx.simulate_keystrokes("enter");
+    tick(cx);
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.panes[0].composer.read(cx).text(), "Queued follow-up 6");
+        assert_eq!(view.cockpit.thread(thread).unwrap().queued_all().len(), 6);
+        assert_eq!(view.cockpit.thread(other).unwrap().queued_all().len(), 8);
+    });
+    assert_eq!(fake.sent.borrow().as_slice(), ["Working", "Other work"]);
 }

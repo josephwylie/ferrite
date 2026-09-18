@@ -7296,6 +7296,14 @@ impl CockpitView {
                 .map(|facts| facts.project_branches.as_slice())
                 .unwrap_or_default(),
             composer_empty: pane.composer.read(cx).is_empty(),
+            composer_queue_height: pane::composer_queue_height(
+                self.pane_rects(window)
+                    .into_iter()
+                    .find(|(at, _)| *at == index)
+                    .map_or(self.cell(window).height, |(_, rect)| rect.h),
+                level == Level::Instruments,
+                open.map_or(0, |thread| thread.queued_all().len()),
+            ),
             history_available: self.history_available(index, level),
             focused,
             attention: !focused && self.cockpit.notifications().attention(thread),

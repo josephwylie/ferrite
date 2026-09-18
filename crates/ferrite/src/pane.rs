@@ -605,6 +605,8 @@ pub struct PaneFacts<'a> {
     /// Whether the Composer line is empty — what decides the idle
     /// placeholder, read where the cockpit has a `cx` to read it with.
     pub composer_empty: bool,
+    /// Queue viewport derived from this Pane's actual available height.
+    pub composer_queue_height: f32,
     pub history_available: bool,
     pub focused: bool,
     /// This Thread finished while the operator looked elsewhere and they
@@ -797,6 +799,7 @@ pub fn render_pane(
         checkout,
         project_branches,
         composer_empty,
+        composer_queue_height,
         history_available,
         focused,
         attention,
@@ -903,6 +906,7 @@ pub fn render_pane(
                     decision,
                     requests: None,
                     queued,
+                    queue_height: composer_queue_height,
                     needs_queue,
                     empty: composer_empty,
                     attachments,
@@ -1039,6 +1043,7 @@ pub fn render_pane(
                         decision,
                         requests: None,
                         queued,
+                        queue_height: composer_queue_height,
                         needs_queue,
                         empty: composer_empty,
                         attachments,
@@ -1242,6 +1247,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
                     decision: None,
                     requests: None,
                     queued: Vec::new(),
+                    queue_height: 0.,
                     needs_queue: false,
                     empty: composer_empty,
                     attachments,
@@ -2679,6 +2685,7 @@ struct ComposerStack<'a> {
     /// Prompts held back while the turn runs, newest first: they pile up
     /// above the line, the latest on top.
     queued: Vec<&'a str>,
+    queue_height: f32,
     needs_queue: bool,
     empty: bool,
     attachments: Option<AnyElement>,
@@ -2725,6 +2732,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         decision,
         requests,
         queued,
+        queue_height,
         needs_queue,
         empty,
         attachments,
@@ -2781,24 +2789,34 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
     // must never push the editor or the Thread's status out of its Pane.
     if !queued.is_empty() {
         let count = queued.len();
+        let namespace = view.text_namespace();
         region = region.child(
             div()
-                .id(SharedString::from(format!("composer-queue-{}", view.text_namespace())))
-                .debug_selector(|| "composer-queue".into())
+                .debug_selector({
+                    let namespace = namespace.clone();
+                    move || format!("composer-queue-{namespace}")
+                })
                 .flex_shrink_0()
-                .h_auto()
-                .max_h(px(composer_queue_height(compact, count)))
-                .overflow_y_scrollbar()
+                .h(px(queue_height))
                 .child(
                     div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(theme::COMPOSER_GAP))
-                        .children(
-                            queued
-                                .iter()
-                                .enumerate()
-                                .map(|(index, held)| queued_line(held, index, count)),
+                        .h_full()
+                        .overflow_y_scrollbar()
+                        // Set the wrapper ID: assigning the inner Div's ID
+                        // would leave all Panes sharing call-site scroll state.
+                        .id(SharedString::from(format!("composer-queue-{namespace}")))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(theme::COMPOSER_GAP))
+                                .children(queued.iter().enumerate().map(|(index, held)| {
+                                    let namespace = namespace.clone();
+                                    div()
+                                        .flex_shrink_0()
+                                        .debug_selector(move || format!("queue-row-{namespace}-{index}"))
+                                        .child(queued_line(held, index, count))
+                                })),
                         ),
                 ),
         );
@@ -3169,8 +3187,14 @@ pub fn menu_row(row: &MenuRow, selected: bool) -> Div {
 }
 
 /// The bounded queue viewport, shared with the editor's pane-height budget.
-pub(crate) fn composer_queue_height(compact: bool, count: usize) -> f32 {
-    let rows = count.min(if compact {
+pub(crate) fn composer_queue_height(height: f32, compact: bool, count: usize) -> f32 {
+    let budget = height * theme::COMPOSER_MAX_PANE_FRACTION
+        - composer_fixed_height()
+        - theme::COMPOSER_ROW_H;
+    let fitting = (budget / (theme::CELL_HEADER_H + theme::COMPOSER_GAP))
+        .floor()
+        .max(1.) as usize;
+    let rows = count.min(fitting).min(if compact {
         theme::COMPOSER_COMPACT_QUEUE_ROWS
     } else {
         theme::COMPOSER_QUEUE_ROWS
@@ -3179,16 +3203,20 @@ pub(crate) fn composer_queue_height(compact: bool, count: usize) -> f32 {
         + rows.saturating_sub(1) as f32 * theme::COMPOSER_GAP
 }
 
+fn composer_fixed_height() -> f32 {
+    theme::COMPOSER_PAD_T
+        + theme::COMPOSER_PAD_B
+        + theme::COMPOSER_GAP
+        + theme::COMPOSER_ROW_H
+        + 1. // The Composer's top rule.
+}
+
 /// Leave the majority of a Pane available for its Thread context. Only the
 /// viewport changes: the Composer keeps every character and scrolls to its
 /// caret, then reveals more rows again when the Pane grows.
 pub(crate) fn composer_row_limit(height: f32, compact: bool, queued: usize) -> usize {
-    let fixed = theme::COMPOSER_PAD_T
-        + theme::COMPOSER_PAD_B
-        + theme::COMPOSER_GAP
-        + theme::COMPOSER_ROW_H
-        + 1.; // The Composer's top rule.
-    let queue = composer_queue_height(compact, queued)
+    let fixed = composer_fixed_height();
+    let queue = composer_queue_height(height, compact, queued)
         + if queued > 0 { theme::COMPOSER_GAP } else { 0. };
     ((height * theme::COMPOSER_MAX_PANE_FRACTION - fixed - queue)
         / theme::COMPOSER_ROW_H)
