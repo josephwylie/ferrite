@@ -338,6 +338,10 @@ impl gpui::Render for CodeActions {
         {
             header = header.child(
                 crate::components::button("preview-html")
+                    .h(px(theme::CODE_ACTION_H))
+                    .min_w(px(theme::CODE_ACTION_MIN_W))
+                    .px(px(theme::CODE_ACTION_PAD_X))
+                    .flex_shrink_0()
                     .tab_stop(true)
                     .label("Preview")
                     .on_click(move |_, window, cx| {
@@ -365,6 +369,10 @@ impl gpui::Render for CodeActions {
         }
         header.child(
             crate::components::button("copy-code")
+                .h(px(theme::CODE_ACTION_H))
+                .min_w(px(theme::CODE_ACTION_MIN_W))
+                .px(px(theme::CODE_ACTION_PAD_X))
+                .flex_shrink_0()
                 .tab_stop(true)
                 .debug_selector(|| "copy-code".into())
                 .accessibility_label("Copy code")
@@ -411,8 +419,7 @@ pub fn style(rem_size: gpui::Pixels) -> TextViewStyle {
             gpui::StyleRefinement::default()
                 .bg(rgb(theme::PANE))
                 .text_color(rgb(theme::TEXT))
-                .font_weight(gpui::FontWeight::NORMAL)
-                .text_center(),
+                .font_weight(gpui::FontWeight::SEMIBOLD),
         )
         .with_paragraph_gap(rems(theme::BLOCK_GAP / f32::from(rem_size)))
         .with_heading_base_font_size(px(theme::FS_MD))
@@ -738,6 +745,7 @@ mod file_link_tests {
         source: String,
         cwd: std::path::PathBuf,
         preview: crate::attachment_preview::Preview,
+        font_size: f32,
     }
     impl Render for LinkFixture {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
@@ -746,7 +754,7 @@ mod file_link_tests {
             self.preview.mount(
                 div().size_full().child(
                     div()
-                        .text_size(px(13.))
+                        .text_size(px(self.font_size))
                         .child(Markdown::new(
                             "file-link-fixture",
                             self.source.clone(),
@@ -770,6 +778,7 @@ mod file_link_tests {
                 source: source.into(),
                 cwd: std::env::temp_dir(),
                 preview,
+                font_size: 13.,
             });
             gpui::component::Root::new(view, window, cx).bordered(false)
         });
@@ -791,6 +800,62 @@ mod file_link_tests {
     }
 
     #[gpui::test]
+    fn list_text_columns_align_across_digits_continuations_and_reading_sizes(
+        cx: &mut TestAppContext,
+    ) {
+        let (view, cx) = fixture(cx, "");
+        cx.simulate_resize(gpui::size(px(320.), px(720.)));
+        for font_size in [13., 17.] {
+            for start in [9_u32, 99] {
+                let indent = " ".repeat(start.to_string().len() + 2);
+                let source = format!(
+                    "{start}. [first](first.md) with a description that wraps onto another line.\n\n{indent}[continued](continued.md)\n\n{indent}- [nested](nested.md)\n\n{indent}[resumed](resumed.md)\n{}. [second](second.md)",
+                    start + 1,
+                );
+                view.update(cx, |view, cx| {
+                    view.font_size = font_size;
+                    view.source = source;
+                    cx.notify();
+                });
+                cx.run_until_parked();
+                let first = card(cx, "first.md");
+                let continued = card(cx, "continued.md");
+                let second = card(cx, "second.md");
+                let resumed = card(cx, "resumed.md");
+                let nested = card(cx, "nested.md");
+                assert!(
+                    (first.left() - second.left()).abs() < px(0.5),
+                    "{start} and {} share one text column at {font_size}px: {first:?}, {second:?}",
+                    start + 1,
+                );
+                assert!(
+                    (first.left() - continued.left()).abs() < px(0.5),
+                    "continuation starts at the text column: {first:?}, {continued:?}"
+                );
+                assert!(
+                    (first.left() - resumed.left()).abs() < px(0.5),
+                    "continuation after a nested list keeps its original text column"
+                );
+                assert!(nested.left() >= first.left() + px(font_size));
+                assert!(nested.right() <= px(320.));
+                let selected = cx.update(|_, cx| testing::full_text("file-link-fixture", cx).unwrap());
+                assert_eq!(
+                    selected.trim_end(),
+                    "first with a description that wraps onto another line.\ncontinued\nnested\nresumed\nsecond"
+                );
+                cx.simulate_resize(gpui::size(px(300.), px(720.)));
+                cx.run_until_parked();
+                assert_eq!(
+                    cx.update(|_, cx| testing::selected_text("file-link-fixture", cx)),
+                    Some(selected),
+                    "resizing the measured list preserves exact selected text"
+                );
+                cx.simulate_resize(gpui::size(px(320.), px(720.)));
+            }
+        }
+    }
+
+    #[gpui::test]
     fn fenced_code_copy_preserves_source_and_confirms_without_copying_chrome(
         cx: &mut TestAppContext,
     ) {
@@ -801,8 +866,15 @@ mod file_link_tests {
         let copy = cx
             .debug_bounds("copy-code")
             .expect("fenced blocks expose Copy");
-        cx.simulate_click(copy.center(), Modifiers::default());
+        assert!(copy.size.height >= px(theme::CODE_ACTION_H));
+        assert!(copy.size.width >= px(theme::CODE_ACTION_MIN_W));
+        // The padded edge belongs to the action, not text selection behind it.
+        cx.simulate_click(
+            gpui::point(copy.left() + px(2.), copy.center().y),
+            Modifiers::default(),
+        );
         cx.run_until_parked();
+        assert_eq!(cx.debug_bounds("code-copied"), Some(copy));
         assert_eq!(
             cx.update(|_, cx| cx.read_from_clipboard().unwrap().text())
                 .as_deref(),
