@@ -255,7 +255,11 @@ pub fn heading_scale(level: u8) -> f32 {
 
 /// A restrained fenced-code inset; the header and source share one edge.
 pub const CODE_PAD: f32 = 8.;
-pub const CODE_HEADER_H: f32 = 22.;
+pub const CODE_HEADER_H: f32 = 24.;
+/// Code actions keep a stable target when Copy becomes Copied.
+pub const CODE_ACTION_H: f32 = 24.;
+pub const CODE_ACTION_MIN_W: f32 = 56.;
+pub const CODE_ACTION_PAD_X: f32 = 8.;
 /// 11px — `--fs-sm`: the Project and checkout lines, the tasks strip, tool
 /// events, the pass chip, the Composer and its controls.
 pub const FS_SM: f32 = 11.0;
@@ -425,6 +429,23 @@ pub const ROW_ICON: f32 = 12.0;
 #[allow(dead_code)]
 pub const ROW_ICON_GAP: f32 = 5.0;
 
+// -------------------------------------------------------- geometry: forms
+
+/// Form fields and segmented choices share a 32px row. Compact pane and
+/// navigation controls keep their own smaller chrome metrics.
+pub const FORM_CONTROL_H: f32 = 32.0;
+/// Selected-value controls share a comfortable measure inside wider forms.
+pub const FORM_FIELD_W: f32 = 320.0;
+/// Inset around the chips of a segmented choice control.
+pub const FORM_CHOICE_PAD: f32 = 3.0;
+/// Settings and Project editors share the same header and content insets.
+pub const MODAL_HEAD_H: f32 = 48.0;
+pub const MODAL_PAD: f32 = 16.0;
+pub const MODAL_GAP: f32 = 12.0;
+/// Editors leave an even breathing edge while making room for a scrolling
+/// form at short desktop heights.
+pub const MODAL_VIEWPORT_FRACTION: f32 = 0.92;
+
 // --------------------------------------------------------- geometry: pane
 
 /// 32px — the Pane head's title row, inside the grounded header band.
@@ -566,6 +587,12 @@ pub const COMPOSER_PAD_B: f32 = 8.0;
 pub const COMPOSER_ROW_H: f32 = 20.0;
 #[allow(dead_code)]
 pub const COMPOSER_GAP: f32 = 3.0;
+/// Multiline drafts, controls and queued prompts share a bounded part of
+/// the Pane, keeping most of its height available to the conversation.
+pub const COMPOSER_MAX_PANE_FRACTION: f32 = 0.45;
+/// The queued-prompt viewport scrolls beyond these visible row budgets.
+pub const COMPOSER_QUEUE_ROWS: usize = 3;
+pub const COMPOSER_COMPACT_QUEUE_ROWS: usize = 1;
 
 /// Clearance between the floating attachment island and the prompt's
 /// top edge, so the island reads as its own surface.
