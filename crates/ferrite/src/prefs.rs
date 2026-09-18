@@ -14,18 +14,17 @@ use std::rc::Rc;
 use crate::components;
 use crate::icons::{self, icon};
 use crate::theme::{
-    FILL, FILL_HOVER, FONT_MONO, FONT_UI, FS_LG, FS_MD, FS_MONO, ICON_BUTTON, ICON_BUTTON_GLYPH,
-    MENU, MENU_PAD, PANE, R_CHIP, R_CONTROL, R_MENU, SHADOW_FAR, SHADOW_FAR_BLUR,
+    FILL, FILL_HOVER, FONT_MONO, FONT_UI, FORM_CHOICE_PAD, FORM_CONTROL_H, FORM_FIELD_W, FS_LG,
+    FS_MD, FS_MONO, ICON_BUTTON, ICON_BUTTON_GLYPH, MENU, MODAL_HEAD_H, MODAL_PAD,
+    MODAL_VIEWPORT_FRACTION, PANE, R_CHIP, R_CONTROL, R_MENU, SHADOW_FAR, SHADOW_FAR_BLUR,
     SHADOW_FAR_SPREAD, SHADOW_FAR_Y, SHADOW_NEAR, SHADOW_NEAR_BLUR, SHADOW_NEAR_Y, TEXT, TEXT_2,
     TEXT_MUTED, TEXT_STRONG,
 };
 
 /// The card's width; tall enough sections scroll inside it.
 pub const WIDTH: f32 = 820.0;
-const HEAD_H: f32 = 44.0;
-const PAD: f32 = 16.0;
 const ROW_GAP: f32 = 8.0;
-const CHIP_H: f32 = 26.0;
+const SIDEBAR_WIDTH: f32 = 172.0;
 
 /// The dim veil over the Cockpit while the panel is up: a press on it
 /// closes the panel (the cockpit wires that).
@@ -49,9 +48,9 @@ pub fn card() -> Div {
         .flex()
         .flex_col()
         .w(px(WIDTH))
-        .max_w(gpui::relative(0.94))
+        .max_w(gpui::relative(MODAL_VIEWPORT_FRACTION))
         .h(px(680.))
-        .max_h(relative_h())
+        .max_h(gpui::relative(MODAL_VIEWPORT_FRACTION))
         .overflow_hidden()
         .text_size(px(FS_MD))
         .text_color(rgb(TEXT))
@@ -76,10 +75,6 @@ pub fn card() -> Div {
         ])
 }
 
-fn relative_h() -> gpui::DefiniteLength {
-    gpui::relative(0.86)
-}
-
 /// The head: the title, the escape hint, the close button (wired by the
 /// caller).
 pub fn head(close: impl IntoElement) -> Div {
@@ -87,9 +82,9 @@ pub fn head(close: impl IntoElement) -> Div {
         .flex()
         .flex_shrink_0()
         .items_center()
-        .h(px(HEAD_H))
-        .pl(px(PAD))
-        .pr(px(MENU_PAD + 4.))
+        .h(px(MODAL_HEAD_H))
+        .pl(px(MODAL_PAD))
+        .pr(px(MODAL_PAD))
         .gap(px(ROW_GAP))
         .child(
             div()
@@ -130,7 +125,8 @@ pub fn body(pages: Vec<SettingPage>) -> Div {
         .rounded_bl(px(R_MENU));
     let settings = Settings::new("ferrite-settings")
         .small()
-        .sidebar_width(px(172.))
+        .sidebar_width(px(SIDEBAR_WIDTH))
+        .sidebar_size_range(px(160.)..px(216.))
         .sidebar_style(&sidebar);
     let settings = pages
         .into_iter()
@@ -149,16 +145,23 @@ pub fn choices<T: Clone + 'static>(
     options: Vec<(SharedString, bool, T)>,
     change: impl Fn(T, &mut App) + 'static,
 ) -> SettingItem {
+    // Long ladders are values to choose, not a second row of navigation.
+    // The same selector as models keeps effort and permissions compact even
+    // when the Settings sidebar leaves a narrow content column.
+    if options.len() > 3 {
+        return chooser(id, title, detail, options, change);
+    }
     let change = Rc::new(change);
     let keywords: Vec<_> = options.iter().map(|(label, _, _)| label.clone()).collect();
     SettingItem::new(
         title,
         SettingField::render(move |_, _, cx| {
-            div()
+            let tray = div()
                 .flex()
                 .flex_wrap()
+                .max_w(gpui::relative(1.))
                 .gap(px(2.))
-                .p(px(3.))
+                .p(px(FORM_CHOICE_PAD))
                 .rounded(px(R_CONTROL))
                 .border_1()
                 .border_color(rgb(FILL))
@@ -177,7 +180,8 @@ pub fn choices<T: Clone + 'static>(
                                 },
                             )
                         }),
-                )
+                );
+            div().flex().child(tray)
         }),
     )
     .description(detail.into())
@@ -185,8 +189,8 @@ pub fn choices<T: Clone + 'static>(
     .layout(Axis::Vertical)
 }
 
-/// A model catalog exposes its current value first; the menu retains every
-/// available value, and the Settings search also indexes the hidden labels.
+/// A longer option list exposes its current value first; the menu retains
+/// every available value, and Settings search also indexes the hidden labels.
 pub fn chooser<T: Clone + 'static>(
     id: &'static str,
     title: &'static str,
@@ -200,7 +204,7 @@ pub fn chooser<T: Clone + 'static>(
         .iter()
         .find(|(_, selected, _)| *selected)
         .map(|(label, _, _)| label.clone())
-        .unwrap_or_else(|| "Choose a model".into());
+        .unwrap_or_else(|| "Choose an option".into());
     SettingItem::new(
         title,
         SettingField::render(move |_, _, cx| {
@@ -209,15 +213,20 @@ pub fn chooser<T: Clone + 'static>(
             components::form_button(id, cx)
                 .debug_selector(move || id.into())
                 .accessibility_label(format!("{title}: {selected}"))
-                .h(px(30.))
+                .h(px(FORM_CONTROL_H))
                 .w_full()
-                .max_w(px(320.))
-                .px(px(9.))
+                .max_w(px(FORM_FIELD_W))
+                .px(px(10.))
                 .bg(rgb(PANE))
                 .border_1()
                 .border_color(rgb(FILL))
                 .dropdown_caret(true)
-                .child(components::label(selected.clone(), TEXT_STRONG))
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .child(components::form_label(selected.clone(), TEXT_STRONG)),
+                )
                 .dropdown_menu(move |menu, _, _| {
                     options.iter().fold(
                         menu.min_w(px(240.))
@@ -329,7 +338,7 @@ pub fn chip(id: (&'static str, usize), label: SharedString, selected: bool, cx: 
         .selected(selected)
         .toggled(selected)
         .debug_selector(move || format!("{}-{}", id.0, id.1))
-        .h(px(CHIP_H))
+        .h(px(FORM_CONTROL_H - 2. * (FORM_CHOICE_PAD + 1.)))
         .px(px(9.))
         .rounded(px(R_CHIP))
         .bg(rgb(if selected { FILL } else { PANE }))
@@ -341,12 +350,11 @@ pub fn chip(id: (&'static str, usize), label: SharedString, selected: bool, cx: 
                 .flex_shrink_0()
                 .w(px(12.))
                 .h(px(12.))
-                .mr(px(4.))
                 .when(selected, |slot| {
                     slot.child(icon(icons::CHECK, 12., TEXT_STRONG))
                 }),
         )
-        .child(components::label(
+        .child(components::form_label(
             label,
             if selected { TEXT_STRONG } else { TEXT_2 },
         ))

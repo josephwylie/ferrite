@@ -76,6 +76,16 @@ pub fn label(text: impl Into<SharedString>, ink: u32) -> impl IntoElement {
         .child(text.into())
 }
 
+/// Forms use the body size so values and actions read at the same scale as
+/// their labels. Dense pane chrome continues to use `label`.
+pub fn form_label(text: impl Into<SharedString>, ink: u32) -> impl IntoElement {
+    div()
+        .text_size(px(theme::FS_MD))
+        .line_height(gpui::relative(theme::LINE_UI))
+        .text_color(rgb(ink))
+        .child(text.into())
+}
+
 /// The same menu is opened by a chip or a slash command. PopupMenu owns
 /// keyboard navigation, checked rows, scrolling and dismissal.
 #[derive(Clone)]
