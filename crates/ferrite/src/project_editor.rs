@@ -224,6 +224,17 @@ pub fn primary_button(
 }
 
 pub fn directory_row(path: SharedString, role: &'static str, actions: impl IntoElement) -> Div {
+    // The final directory component distinguishes neighboring project roots;
+    // a shared parent prefix does not. Native Path semantics also preserve
+    // Windows drive/UNC roots, which have no file name, through the fallback.
+    let name: SharedString = std::path::Path::new(path.as_ref())
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or(path.as_ref())
+        .to_string()
+        .into();
+    let tooltip = path.clone();
     div()
         .flex()
         .items_center()
@@ -236,24 +247,45 @@ pub fn directory_row(path: SharedString, role: &'static str, actions: impl IntoE
         .child(icon(icons::FOLDER, 14., TEXT_MUTED))
         .child(
             div()
+                .id(SharedString::from(format!("project-directory:{path}")))
                 .flex()
                 .flex_col()
                 .flex_1()
                 .min_w_0()
                 .gap(px(2.))
+                .tooltip(move |window, cx| {
+                    gpui::component::tooltip::Tooltip::new(tooltip.clone())
+                        .max_w(px(crate::theme::FORM_FIELD_W))
+                        .build(window, cx)
+                })
+                .child(
+                    div()
+                        .flex()
+                        .items_baseline()
+                        .gap(px(8.))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(px(FS_MD))
+                                .text_color(rgb(TEXT))
+                                .child(name),
+                        )
+                        .child(
+                            div()
+                                .flex_shrink_0()
+                                .text_size(px(FS_MONO))
+                                .text_color(rgb(TEXT_MUTED))
+                                .child(role),
+                        ),
+                )
                 .child(
                     div()
                         .font_family(FONT_MONO)
                         .text_size(px(FS_MONO))
-                        .text_color(rgb(TEXT_2))
+                        .text_color(rgb(TEXT_MUTED))
                         .truncate()
                         .child(path),
-                )
-                .child(
-                    div()
-                        .text_size(px(FS_MONO))
-                        .text_color(rgb(TEXT_MUTED))
-                        .child(role),
                 ),
         )
         .child(div().flex_shrink_0().child(actions))
