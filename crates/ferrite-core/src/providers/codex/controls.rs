@@ -16,6 +16,12 @@ enum Purpose {
     Login { server: String, completed: bool },
     Reload,
     Permission,
+    /// `thread/backgroundTerminals/terminate` for one process. Its reply
+    /// only says whether the server found the process; the terminal's own
+    /// item completing is what clears the task.
+    Terminate {
+        process: String,
+    },
 }
 
 #[derive(Default)]
@@ -81,6 +87,11 @@ impl Controls {
                 },
             ),
             SessionControl::ReloadMcp => ("config/mcpServer/reload", None, Purpose::Reload),
+            SessionControl::StopTask { id } => (
+                "thread/backgroundTerminals/terminate",
+                Some(json!({"threadId":thread,"processId":id})),
+                Purpose::Terminate { process: id },
+            ),
             SessionControl::SetPermissionMode { mode } => {
                 if !matches!(mode.as_str(), "untrusted" | "on-request" | "never") {
                     return Err(io::Error::new(
@@ -248,6 +259,17 @@ impl Controls {
                             .events
                             .push(notice("Codex MCP authorization returned no URL".into()));
                     }
+                }
+            }
+            Purpose::Terminate { process } => {
+                if let Some(error) = error {
+                    update.events.push(notice(format!(
+                        "Codex could not stop background terminal {process}: {error}"
+                    )));
+                } else if frame["result"]["terminated"] == false {
+                    update.events.push(notice(format!(
+                        "Codex has no running background terminal {process} to stop"
+                    )));
                 }
             }
             Purpose::Reload | Purpose::Permission => {

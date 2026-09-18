@@ -76,6 +76,12 @@ printf '{"id":%s,"result":{"authorizationUrl":"https://example.com/authorize"}}\
 *'"method":"thread/settings/update"'*|*'"method":"config/mcpServer/reload"'*)
 request=$(printf '%s' "$frame" | sed -n 's/.*"id":\([^,}]*\).*/\1/p')
 printf '{"id":%s,"result":{}}\n' "$request";;
+*'"method":"thread/backgroundTerminals/terminate"'*)
+request=$(printf '%s' "$frame" | sed -n 's/.*"id":\([^,}]*\).*/\1/p')
+case "$frame" in
+*'"processId":"gone"'*) printf '{"id":%s,"result":{"terminated":false}}\n' "$request";;
+*) printf '{"id":%s,"result":{"terminated":true}}\n' "$request";;
+esac;;
 *'"method":"model/list"'*)
 request=$(printf '%s' "$frame" | sed -n 's/.*"id":\([^,}]*\).*/\1/p')
 case "$frame" in

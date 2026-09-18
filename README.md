@@ -130,10 +130,11 @@ follow queued prompts and history recall too. Claude and Codex get supported
 images as real image input; anything else is passed as a file path for their
 tools to read.
 
-**Background work shows as chips** on the right of that same tray: when the
-agent sends a shell command or a subagent to the background, each running task
-gets a chip with a green pulse and its description. Hit a chip's × to stop that
-task. Chips leave when their task finishes, and the tray goes with the last one.
+**Background work shows as chips** on the right of that same tray: when Claude
+sends a shell command or a subagent to the background, or Codex leaves a command
+running as a background terminal, each running task gets a chip with a green
+pulse and its description. Hit a chip's × to stop that task. Chips leave when
+their task finishes, and the tray goes with the last one.
 
 **Click the pencil next to a Project** in the project filter to add or remove
 directories, or delete the project. The directory it was created from stays
