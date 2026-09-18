@@ -102,6 +102,9 @@ printf '{"type":"control_response","response":{"subtype":"success","request_id":
 *'"subtype":"mcp_status"'*)
 request=$(printf '%s' "$frame" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
 printf '{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{"mcpServers":[{"name":"search","status":"needs-auth","error":"Sign in to search"}]}}}\n' "$request";;
+*'"request_id":"ferrite_mcp_init_'*)
+request=$(printf '%s' "$frame" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
+printf '{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{"commands":[{"name":"compact","description":"Free up context"},{"name":"search:summarize (MCP)","description":"Summarize the results","argumentHint":""}]}}}\n' "$request";;
 *'"subtype":"stop_task"'*|*'"subtype":"background_tasks"'*|*'"subtype":"mcp_reconnect"'*|*'"subtype":"set_permission_mode"'*)
 request=$(printf '%s' "$frame" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
 printf '{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{}}}\n' "$request";;
