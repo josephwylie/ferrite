@@ -14,7 +14,7 @@ use ferrite_core::prompt_files;
 
 use gpui::prelude::*;
 use gpui::{
-    actions, div, fill, point, px, relative, rgb, size, App, AvailableSpace, Bounds,
+    actions, div, fill, point, px, relative, rgb, rgba, size, App, AvailableSpace, Bounds,
     ClipboardEntry, ClipboardItem, ContentMask, Context, DispatchPhase, Element, ElementId,
     ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable,
     GlobalElementId, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
@@ -850,14 +850,13 @@ fn pill_ranges(text: &str, mentions: &[SharedString]) -> Vec<Range<usize>> {
     ranges
 }
 
-/// The line's text runs: the base style, the @-pill (`TEXT` ink on the
-/// opaque `SELECTION` ground) over `pills`, the selection's own `TEXT_STRONG`
-/// ink over `selected` — the selection quad is opaque `#3f3f3f` and the
-/// shaped line paints straight over it — and the IME underline over `marked`.
-/// Split at every boundary so each run wears exactly its styles.
-///
-/// The prototype draws no mention pill; `TEXT` on `SELECTION` are the
-/// nearest tokens it does define, so no new value is invented here.
+/// The line's text runs: the base style, the @-pill (`MENTION_INK` on the
+/// `MENTION_WASH` ground) over `pills`, the selection's own `TEXT_STRONG`
+/// ink over `selected` — the selection quad is the app's one translucent
+/// selection wash, painted under the shaped line — and the IME underline
+/// (`TEXT_MUTED`, 1px) over `marked`. Split at every boundary so each run
+/// wears exactly its styles. A selected pill keeps its wash and takes the
+/// strong ink, so the two grounds stack and stay distinct.
 fn runs_for(
     base: &TextRun,
     len: usize,
@@ -891,8 +890,8 @@ fn runs_for(
             .iter()
             .any(|pill| pill.start <= from && to <= pill.end)
         {
-            run.color = rgb(crate::theme::TEXT).into();
-            run.background_color = Some(rgb(crate::theme::SELECTION).into());
+            run.color = rgb(crate::theme::MENTION_INK).into();
+            run.background_color = Some(rgba(crate::theme::MENTION_WASH).into());
         }
         if selected
             .as_ref()
@@ -905,7 +904,7 @@ fn runs_for(
             .is_some_and(|marked| marked.start <= from && to <= marked.end)
         {
             run.underline = Some(UnderlineStyle {
-                color: Some(rgb(crate::theme::TEXT_FAINT).into()),
+                color: Some(rgb(crate::theme::TEXT_MUTED).into()),
                 thickness: px(1.),
                 wavy: false,
             });
@@ -1203,8 +1202,8 @@ impl Element for LineElement {
 
         let (selection, cursor) = if selected.is_empty() && focused && caret_visible {
             let at = layout.position(cursor);
-            // The Soft caret: a 2 × 14 `--text-2` bar, square, no radius,
-            // centred in its row (y = row top + 3 in the 20px row). It blinks
+            // The caret: a 2 × 16 `CARET` (accent) bar, square, no radius,
+            // centred in its row (y = row top + 2 in the 20px row). It blinks
             // on the standard 500ms cycle while the line holds focus.
             let inset = (line_height - px(crate::theme::CARET_H)) / 2.;
             (
@@ -1214,7 +1213,7 @@ impl Element for LineElement {
                         point(bounds.left() + at.x, row_top(caret_row) + inset),
                         size(px(crate::theme::CARET_W), px(crate::theme::CARET_H)),
                     ),
-                    rgb(crate::theme::TEXT_2),
+                    rgb(crate::theme::CARET),
                 )),
             )
         } else {
@@ -1233,9 +1232,9 @@ impl Element for LineElement {
                             point(bounds.left() + from, row_top(index)),
                             point(bounds.left() + to, row_top(index) + line_height),
                         ),
-                        // One selection colour everywhere, whoever paints it —
-                        // opaque `#3f3f3f`, with `TEXT_STRONG` runs over it.
-                        rgb(crate::theme::SELECTION),
+                        // One selection colour everywhere, whoever paints it:
+                        // the translucent wash, with `TEXT_STRONG` runs over it.
+                        rgba(crate::theme::COMPOSER_SELECTION),
                     )
                 })
                 .collect();
@@ -1414,9 +1413,16 @@ mod tests {
         let lens: Vec<usize> = runs.iter().map(|run| run.len).collect();
         assert_eq!(lens.iter().sum::<usize>(), text.len());
         assert_eq!(lens, [5, 2, 1, 3]);
-        assert!(
-            runs[1].background_color.is_some(),
-            "the pill wears the wash"
+        assert_eq!(
+            runs[1].background_color,
+            Some(rgba(crate::theme::MENTION_WASH).into()),
+            "the pill wears the mention wash"
+        );
+        assert_eq!(runs[1].color, rgb(crate::theme::MENTION_INK).into());
+        assert_ne!(
+            crate::theme::MENTION_WASH,
+            crate::theme::COMPOSER_SELECTION,
+            "a pill never reads as a selection"
         );
         assert!(runs[0].background_color.is_none());
         assert!(runs[3].underline.is_some(), "the mark wears the underline");
@@ -1426,8 +1432,8 @@ mod tests {
         assert_eq!(runs_for(&base, 0, None, &[], None).len(), 1);
     }
 
-    /// The selection quad is opaque `#3f3f3f` and the shaped line paints over
-    /// it, so every covered run carries the strong ink instead of the base.
+    /// The selection wash is painted under the shaped line, so every covered
+    /// run carries the strong ink instead of the base.
     #[test]
     fn selected_runs_take_the_strong_ink() {
         let base = TextRun {
@@ -1632,7 +1638,19 @@ mod tests {
 
         let visible = |cx: &mut VisualTestContext| composer.read_with(cx, |c, _| c.caret_visible);
 
+        // A background window shows no caret and runs no cycle: nothing typed
+        // would land here until it comes forward. Test windows open inactive.
+        cx.executor()
+            .advance_clock(BLINK + Duration::from_millis(10));
+        cx.run_until_parked();
+        composer.read_with(cx, |composer, _| {
+            assert!(composer.caret_blink.is_none(), "no cycle while inactive");
+        });
+
+        cx.update(|window, _| window.activate_window());
+        cx.run_until_parked();
         assert!(visible(cx), "focusing the line must show the caret at once");
+        composer.read_with(cx, |composer, _| assert!(composer.caret_blink.is_some()));
 
         cx.executor()
             .advance_clock(BLINK + Duration::from_millis(10));

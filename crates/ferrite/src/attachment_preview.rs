@@ -7,13 +7,12 @@ use std::{
 };
 
 use gpui::component::{
-    button::{Button, ButtonVariants},
     dialog::{DialogContent, DialogHeader, DialogTitle},
-    IconName, Sizable, Theme, ThemeStyled,
+    Theme,
 };
 use gpui::{
-    canvas, div, prelude::*, relative, rems, App, Bounds, Div, FocusHandle, IntoElement, Pixels,
-    Window,
+    canvas, div, prelude::*, px, relative, rgb, rgba, App, Bounds, Div, FocusHandle, IntoElement,
+    Pixels, Window,
 };
 
 #[derive(Default)]
@@ -129,36 +128,52 @@ impl RenderOnce for PreviewLayer {
         let close_button = preview.clone();
         let close_dialog = preview.clone();
         let original = path.clone();
+        // A floating sheet on Ferrite's own tokens: the raised ground, the
+        // strong hairline, the block radius and the float shadow; a mono
+        // title, the sheet's ghost button for Open Original, and the image
+        // in a recessed well.
         let content = div()
             .debug_selector(|| "attachment-preview-content".into())
             .w(relative(0.9))
             .h(relative(0.85))
-            .max_w(rems(48.))
+            .max_w(px(crate::theme::PREVIEW_MAX_W))
             .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
             .child(
                 DialogContent::new()
                     .size_full()
-                    .popover_style(cx)
-                    .p_3()
-                    .gap_2()
+                    .bg(rgb(crate::theme::RAISED))
+                    .border_1()
+                    .border_color(rgba(crate::theme::HAIRLINE_STRONG))
+                    .rounded(px(crate::theme::R_BLOCK))
+                    .shadow(crate::components::float_shadow())
+                    .p(px(crate::theme::SPACE_3))
+                    .gap(px(crate::theme::SPACE_2))
                     .child(
                         DialogHeader::new()
                             .flex_row()
                             .items_center()
+                            .gap(px(crate::theme::SPACE_2))
                             .flex_shrink_0()
                             .child(
                                 DialogTitle::new()
                                     .flex_1()
                                     .min_w_0()
                                     .truncate()
+                                    .font_family(crate::theme::FONT_MONO)
+                                    .text_size(px(crate::theme::FS_UI))
+                                    .font_weight(crate::theme::W_LABEL)
+                                    .text_color(rgb(crate::theme::TEXT_STRONG))
                                     .child(title),
                             )
                             .child(
-                                Button::new("open-original-attachment")
-                                    .ghost()
-                                    .xsmall()
+                                crate::components::form_button("open-original-attachment", cx)
                                     .flex_shrink_0()
-                                    .label("Open Original")
+                                    .h(px(crate::theme::CONTROL_H))
+                                    .px(px(crate::theme::CONTROL_PAD_X))
+                                    .child(crate::components::form_label(
+                                        "Open Original",
+                                        crate::theme::TEXT_2,
+                                    ))
                                     .accessibility_label("Open original image in the default app")
                                     .tooltip("Open full-size image in the default app")
                                     .debug_selector(|| "open-original-attachment".into())
@@ -168,27 +183,38 @@ impl RenderOnce for PreviewLayer {
                                     }),
                             )
                             .child(
-                                Button::new("close-attachment-preview")
-                                    .ghost()
-                                    .xsmall()
-                                    .flex_shrink_0()
-                                    .icon(IconName::Close)
-                                    .accessibility_label("Close image preview")
-                                    .tooltip("Close image preview")
-                                    .on_click(move |_, window, cx| {
-                                        cx.stop_propagation();
-                                        close_button.close(window, cx);
-                                    }),
+                                crate::components::icon_button(
+                                    "close-attachment-preview",
+                                    crate::icons::CLOSE,
+                                    "Close image preview",
+                                    cx,
+                                )
+                                .flex_shrink_0()
+                                .on_click(move |_, window, cx| {
+                                    cx.stop_propagation();
+                                    close_button.close(window, cx);
+                                }),
                             ),
                     )
                     .child(
-                        div().relative().flex_1().min_h_0().w_full().child(
-                            gpui::img(path)
-                                .absolute()
-                                .inset_0()
-                                .size_full()
-                                .object_fit(gpui::ObjectFit::Contain),
-                        ),
+                        div()
+                            .flex()
+                            .flex_1()
+                            .min_h_0()
+                            .w_full()
+                            .p(px(crate::theme::SPACE_2))
+                            .rounded(px(crate::theme::R_CHIP))
+                            .bg(rgb(crate::theme::GROUND))
+                            .overflow_hidden()
+                            .child(
+                                div().relative().flex_1().min_h_0().min_w_0().child(
+                                    gpui::img(path)
+                                        .absolute()
+                                        .inset_0()
+                                        .size_full()
+                                        .object_fit(gpui::ObjectFit::Contain),
+                                ),
+                            ),
                     ),
             );
         gpui::base::Dialog::new(cx)
