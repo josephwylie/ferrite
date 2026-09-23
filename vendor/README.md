@@ -47,6 +47,13 @@ line. Each list measures one marker column (the widest prefix, at least the
 font size; a task checkbox is 1.375rem), so continuations and nested lists
 indent by that width and a new digit (9 → 10) never moves an item's body.
 
+`InlineFlow` (paragraphs holding a custom link element) captures the inherited
+text style and rem size in `request_layout` and measures under them, with the
+line height taken from that style. Upstream read `window.text_style()` inside
+the measured-layout closure, which Taffy runs outside the element's style
+stack, so such paragraphs were shaped at the root style while selection
+hit-tested at the real one. Remove when upstream captures the style itself.
+
 Style knobs on `TextViewStyle`, all additive, every default reproducing the
 look above (they join `PartialEq`, so a change re-keys selection layout):
 
@@ -60,7 +67,9 @@ look above (they join `PartialEq`, so a change re-keys selection layout):
 - `with_link_underline(Option<Hsla>)`: the underline's ink (default: the link's).
 - `with_inline_code_font(Option<SharedString>)` and
   `with_inline_code_wash(Option<InlineCodeWash>)`: inline code shaped in its own
-  family, on a rounded ground painted per wrapped line under the glyphs. The
+  family, on a rounded ground painted per wrapped line under the glyphs (a
+  glyph at a soft wrap is placed at the start of the next line, where it is
+  drawn, not at the end of the earlier one). The
   code highlight then carries a zero `fade_out` marker (no pixel effect; it
   survives highlight merges) that `Inline` and `InlineFlow` run builders use to
   find code runs; with a wash the square highlight background is dropped.

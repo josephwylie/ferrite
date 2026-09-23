@@ -293,9 +293,14 @@ fn code_line_bounds(
     let mut offset = range.start.min(end);
     for c in text[offset..end].chars() {
         let next = offset + c.len_utf8();
-        if let Some(pos) = text_layout.position_for_index(offset) {
-            let right = text_layout
-                .position_for_index(next)
+        if let Some(mut pos) = text_layout.position_for_index(offset) {
+            let next_pos = text_layout.position_for_index(next);
+            // At a soft wrap the index resolves to the end of the earlier
+            // line, but the glyph is drawn at the start of the next one.
+            if let Some(next_pos) = next_pos.filter(|next_pos| next_pos.y > pos.y) {
+                pos = point(text_layout.bounds().left(), next_pos.y);
+            }
+            let right = next_pos
                 .filter(|next_pos| next_pos.y == pos.y)
                 .map(|next_pos| next_pos.x)
                 .unwrap_or(pos.x + line_height.half());
