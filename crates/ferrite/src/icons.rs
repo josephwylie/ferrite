@@ -395,7 +395,7 @@ mod tests {
         }
         assert_eq!(
             ICONS.len(),
-            29,
+            30,
             "the prototype and app controls, including disclosure and close,              and the four Windows caption glyphs"
         );
     }
