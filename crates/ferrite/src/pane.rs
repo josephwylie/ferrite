@@ -1495,7 +1495,10 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
         editing,
         reduce_motion: _,
     } = state;
-    let shell = pane_shell(rgba(TRANSPARENT).into());
+    // A draft wears the live Pane's edge: the resting hairline (stepping up
+    // under the pointer) or the focus ink. It has no state to announce.
+    let edge = PaneEdge::of(focused, false, false);
+    let shell = pane_shell(edge.ink()).when(edge == PaneEdge::Rest, |shell| shell.hover_edge());
 
     if level != Level::Transcript {
         return focus_wrapper(
@@ -3236,11 +3239,14 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
     // mode to be in (its chip is None). It is not tied to a turn in
     // flight — the mode is exactly what an operator changes *between*
     // prompts.
+    // The plain chip (no menu: L2) rides the hint row's wrap, so in a
+    // narrow cell it gives way whole before Send/Stop ever would.
+    let mut plain_mode = None;
     if let Some(mode) = mode.filter(|_| !blocking) {
-        controls = controls.child(match mode_picker {
-            Some(picker) => div().flex_shrink_0().child(picker),
-            None => mode_chip(mode, false),
-        });
+        match mode_picker {
+            Some(picker) => controls = controls.child(div().flex_shrink_0().child(picker)),
+            None => plain_mode = Some(mode_chip(mode, false).mr(px(theme::SPACE_1))),
+        }
     }
     let hints = if compact && empty {
         COMPACT_HINTS
@@ -3255,7 +3261,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
                 .is_some(),
         )
     };
-    controls = controls.child(hint_row(hints));
+    controls = controls.child(hint_row(plain_mode, hints));
     if let Some(meter) = usage_meter {
         controls = controls.child(div().flex_shrink_0().child(meter));
     }
@@ -3393,8 +3399,9 @@ pub fn session_chip() -> Div {
 /// difference: each pair keeps its width, and pairs that do not fit wrap
 /// onto a second line the row's height clips away — a narrow row drops
 /// whole hints, never half of one. A zero-width lead keeps even the first
-/// pair honest: a line always takes one item, and it is the lead.
-fn hint_row(hints: &[(&'static str, &'static str)]) -> Div {
+/// pair honest: a line always takes one item, and it is the lead. `lead`
+/// (the plain mode chip) goes first and gives way the same way.
+fn hint_row(lead: Option<Div>, hints: &[(&'static str, &'static str)]) -> Div {
     components::text_meta()
         .flex()
         .flex_1()
@@ -3404,6 +3411,7 @@ fn hint_row(hints: &[(&'static str, &'static str)]) -> Div {
         .pt(px((theme::COMPOSER_ROW_H - theme::LH_META) / 2.))
         .overflow_hidden()
         .child(div().flex_shrink_0().w(px(0.)).h(px(theme::LH_META)))
+        .children(lead.map(|lead| lead.mt(px((theme::LH_META - theme::CHIP_H) / 2.))))
         .children(hints.iter().map(|(key, verb)| {
             div()
                 .flex()
