@@ -1011,7 +1011,7 @@ fn answer_gutter_and_padding_survive_wrapping_resize(cx: &mut TestAppContext) {
             crate::rich::testing::bounds(&id, 0, cx).unwrap()
         });
         for delta in [
-            text.left() - answer.left() - px(theme::GUTTER_W + theme::ANSWER_GAP),
+            text.left() - answer.left() - px(theme::EVENT_GUTTER_W + theme::ANSWER_GAP),
             // A lone paragraph is commentary and takes the tighter padding.
             text.top() - answer.top() - px(theme::COMMENTARY_PAD_Y),
             answer.bottom() - text.bottom() - px(theme::COMMENTARY_PAD_Y),

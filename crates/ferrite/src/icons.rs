@@ -67,6 +67,26 @@ icons![
     "window-close",
     "copy",
     "resend",
+    // ---- WP-A icons (append names above the end line)
+    // (end WP-A)
+
+    // ---- WP-B icons (append names above the end line)
+    // (end WP-B)
+
+    // ---- WP-C icons (append names above the end line)
+    // (end WP-C)
+
+    // ---- WP-D icons (append names above the end line)
+    // (end WP-D)
+
+    // ---- WP-E icons (append names above the end line)
+    // (end WP-E)
+
+    // ---- WP-F icons (append names above the end line)
+    // (end WP-F)
+
+    // ---- WP-G icons (append names above the end line)
+    // (end WP-G)
 ];
 
 #[allow(dead_code)]
@@ -116,6 +136,27 @@ pub const WINDOW_RESTORE: &str = "icons/window-restore.svg";
 pub const WINDOW_CLOSE: &str = "icons/window-close.svg";
 pub const COPY: &str = "icons/copy.svg";
 pub const RESEND: &str = "icons/resend.svg";
+
+// ---- WP-A icon names (append consts above the end line)
+// (end WP-A)
+
+// ---- WP-B icon names (append consts above the end line)
+// (end WP-B)
+
+// ---- WP-C icon names (append consts above the end line)
+// (end WP-C)
+
+// ---- WP-D icon names (append consts above the end line)
+// (end WP-D)
+
+// ---- WP-E icon names (append consts above the end line)
+// (end WP-E)
+
+// ---- WP-F icon names (append consts above the end line)
+// (end WP-F)
+
+// ---- WP-G icon names (append consts above the end line)
+// (end WP-G)
 
 pub struct Assets;
 

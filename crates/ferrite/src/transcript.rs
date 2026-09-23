@@ -432,7 +432,7 @@ impl TranscriptView {
                 // A fixed gutter needs no flex sizing. Giving Markdown the
                 // remaining block width avoids intrinsic-size passes over the
                 // entire growing document before its final wrapped layout.
-                .pl(px(theme::GUTTER_W + theme::ANSWER_GAP))
+                .pl(px(theme::EVENT_GUTTER_W + theme::ANSWER_GAP))
                 .py(px(pad_y))
                 .text_size(px(answer_size))
                 .line_height(px(line_height))
@@ -446,7 +446,7 @@ impl TranscriptView {
                         .top(px(pad_y
                             + theme::ANSWER_MARK_TOP
                             + (line_height - theme::LH_PROSE) / 2.))
-                        .w(px(theme::GUTTER_W))
+                        .w(px(theme::EVENT_GUTTER_W))
                         .child(icons::ferrite_icon(theme::ANSWER_MARK)),
                 )
                 .child(selection.answer(first, source.to_owned()))
@@ -535,7 +535,7 @@ impl TranscriptView {
         let disclosure = view
             .as_ref()
             .map(|view| self.control(&call, view.clone(), cx));
-        let gutter = div().flex_shrink_0().w(px(theme::GUTTER_W));
+        let gutter = div().flex_shrink_0().w(px(theme::EVENT_GUTTER_W));
         let header = div()
             .id(SharedString::from(format!(
                 "turn-diff-row-{}",

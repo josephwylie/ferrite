@@ -13815,7 +13815,7 @@ mod tests {
             let answer_start = caret(&view, cx, 3, 0).x;
             // An answer is indented off its Ferrite mark rather than held on
             // the tool summary's reading column: its gutter is the same
-            // `GUTTER_W` the tool rows use, and the extra step is the answer
+            // `EVENT_GUTTER_W` the tool rows use, and the extra step is the answer
             // row's wider gap.
             assert_eq!(
                 answer_start - prompt_start,
@@ -19701,4 +19701,25 @@ mod tests {
             assert!(!view.bell.open);
         });
     }
+
+    // ---- WP-A tests (append above the end line)
+    // (end WP-A)
+
+    // ---- WP-B tests (append above the end line)
+    // (end WP-B)
+
+    // ---- WP-C tests (append above the end line)
+    // (end WP-C)
+
+    // ---- WP-D tests (append above the end line)
+    // (end WP-D)
+
+    // ---- WP-E tests (append above the end line)
+    // (end WP-E)
+
+    // ---- WP-F tests (append above the end line)
+    // (end WP-F)
+
+    // ---- WP-G tests (append above the end line)
+    // (end WP-G)
 }

@@ -3237,7 +3237,7 @@ pub(crate) fn composer_queue_height(height: f32, compact: bool, count: usize) ->
     let budget = height * theme::COMPOSER_MAX_PANE_FRACTION
         - composer_fixed_height()
         - theme::COMPOSER_ROW_H;
-    let fitting = (budget / (theme::CELL_HEADER_H + theme::COMPOSER_GAP))
+    let fitting = (budget / (theme::QUEUE_ROW_H + theme::COMPOSER_GAP))
         .floor()
         .max(1.) as usize;
     let rows = count.min(fitting).min(if compact {
@@ -3245,7 +3245,7 @@ pub(crate) fn composer_queue_height(height: f32, compact: bool, count: usize) ->
     } else {
         theme::COMPOSER_QUEUE_ROWS
     });
-    rows as f32 * theme::CELL_HEADER_H + rows.saturating_sub(1) as f32 * theme::COMPOSER_GAP
+    rows as f32 * theme::QUEUE_ROW_H + rows.saturating_sub(1) as f32 * theme::COMPOSER_GAP
 }
 
 fn composer_fixed_height() -> f32 {
@@ -3277,7 +3277,7 @@ fn queued_line(held: &str, index: usize, count: usize) -> impl IntoElement {
         .flex_shrink_0()
         .items_center()
         .gap(px(theme::EVENT_GAP))
-        .h(px(theme::CELL_HEADER_H))
+        .h(px(theme::QUEUE_ROW_H))
         .text_size(px(theme::FS_SM))
         .child(
             div()
@@ -3475,8 +3475,8 @@ fn keycap(id: &'static str, key: &'static str, label: &'static str, ink: u32) ->
         .text_color(rgb(ink))
         .bg(rgb(RAISED))
         .rounded(px(theme::R_CHIP))
-        .px(px(theme::KBD_PAD_X))
-        .py(px(theme::KBD_PAD_Y))
+        .px(px(theme::KEYCAP_PAD_X))
+        .py(px(theme::KEYCAP_PAD_Y))
         .hover_raised()
         .press_raised()
         .child(
@@ -4395,7 +4395,7 @@ pub(crate) fn render_block(
                         .absolute()
                         .left(px(0.))
                         .top(px(theme::PROMPT_PAD_Y))
-                        .w(px(theme::GUTTER_W))
+                        .w(px(theme::EVENT_GUTTER_W))
                         .text_color(rgb(TEXT_FAINT))
                         .child("❯"),
                 )
@@ -4485,7 +4485,7 @@ pub(crate) fn render_block(
                 .child(
                     div()
                         .flex_shrink_0()
-                        .w(px(theme::GUTTER_W))
+                        .w(px(theme::EVENT_GUTTER_W))
                         .h(px(theme::LH_UI)),
                 )
                 .child(
@@ -4671,7 +4671,7 @@ fn render_tool(
     let has_disclosure = disclosure.is_some();
     let gutter = div()
         .flex_shrink_0()
-        .w(px(theme::GUTTER_W))
+        .w(px(theme::EVENT_GUTTER_W))
         .text_color(rgb(glyph_ink))
         .child(if has_disclosure { "" } else { glyph });
     let mut line = div()
@@ -4914,7 +4914,7 @@ where
         .child(
             div()
                 .flex_shrink_0()
-                .w(px(theme::GUTTER_W))
+                .w(px(theme::EVENT_GUTTER_W))
                 .h(px(theme::LH_UI)),
         )
         .child(summary)
@@ -6803,4 +6803,25 @@ mod tests {
             assert!(!line.contains("commands"), "{line}");
         }
     }
+
+    // ---- WP-A tests (append above the end line)
+    // (end WP-A)
+
+    // ---- WP-B tests (append above the end line)
+    // (end WP-B)
+
+    // ---- WP-C tests (append above the end line)
+    // (end WP-C)
+
+    // ---- WP-D tests (append above the end line)
+    // (end WP-D)
+
+    // ---- WP-E tests (append above the end line)
+    // (end WP-E)
+
+    // ---- WP-F tests (append above the end line)
+    // (end WP-F)
+
+    // ---- WP-G tests (append above the end line)
+    // (end WP-G)
 }

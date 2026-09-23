@@ -55,6 +55,13 @@
 //!     lists the non-ASCII glyphs text may use, and a test checks them against
 //!     the bundled face.
 //!
+//! **Layout of this file.** Everything down to `init_components` is the frozen
+//! shared head: values more than one work package reads, and the kit mapping.
+//! Below it, one section per work package (`WP-A` … `WP-G`), each opened by a
+//! banner and closed by an `(end WP-x)` line. A package edits values and
+//! appends tokens only inside its own section; a token two packages need is a
+//! request to the integrator, who adds it to the head.
+//!
 //! The contrast floors, the ladder order, the kit-token mapping and the
 //! derived row heights are asserted in `theme::tests`. Dark only: operators
 //! work long sessions beside dark editors and terminals.
@@ -207,10 +214,6 @@ pub const PROVIDER_CLAUDE: u32 = 0xd97757;
 
 // ------------------------------------------------------- transcript colour
 
-/// An added diff line's code: `RUNNING` lifted a step to read on its wash.
-pub const DIFF_ADDED_INK: u32 = 0xa7d9b8;
-/// A removed diff line's code: `BLOCKED` lifted the same step.
-pub const DIFF_REMOVED_INK: u32 = 0xefa89f;
 /// Syntax sits in the accent family (hue 258) so code never reads as state.
 /// Keywords.
 pub const SYN_KEYWORD: u32 = 0xa2c0eb;
@@ -228,22 +231,10 @@ pub const SYN_COMMENT: u32 = 0x818790;
 pub const SYN_PUNCT: u32 = TEXT_MUTED;
 /// Everything the highlighter leaves unclassed.
 pub const SYN_PLAIN: u32 = TEXT;
-/// Inline code's ink on its chip.
-pub const INLINE_CODE_INK: u32 = 0xe3c88f;
 /// A link's ink and its underline.
 pub const LINK_INK: u32 = ACCENT;
-/// A nav row that will accept the drag, and one that refuses it.
-#[allow(dead_code)]
-pub const DROP_VALID: u32 = ACCENT;
-#[allow(dead_code)]
-pub const DROP_REFUSED: u32 = BLOCKED;
-/// The seam's grab band under the pointer: a faint lift over the gutter.
-pub const SEAM_HOVER: u32 = 0xffffff14;
 /// The wash over the slot a dragged Pane would take.
 pub const DROP_WASH: u32 = ACCENT_WASH;
-/// A row's opacity while it is being dragged.
-#[allow(dead_code)]
-pub const DRAGGING_OPACITY: f32 = 0.4;
 
 // ---------------------------------------------------------------- shadows
 
@@ -382,7 +373,7 @@ pub const R_CHIP: f32 = 4.0;
 /// 3px — meter segments and other tiny marks only.
 pub const R_TIGHT: f32 = 3.0;
 
-// --------------------------------------------------------- geometry: shell
+// --------------------------------------------------------- shell and board
 
 /// 286px — the navigation column. The collapsed rail is 77px on macOS so
 /// it owns the same horizontal reserve as the native traffic-light group;
@@ -403,14 +394,6 @@ pub const NAV_RAIL_WIDTH: f32 = if cfg!(target_os = "macos") {
 /// the Pane grid starts at y = 0.
 #[allow(dead_code)]
 pub const WIN_CHROME_H: f32 = 42.0;
-/// 42px — the nav head band, which holds the Project filter.
-#[allow(dead_code)]
-pub const NAV_HEAD_H: f32 = 42.0;
-/// The nav tree's padding: 8px top and inline, 16px bottom.
-#[allow(dead_code)]
-pub const NAV_TREE_PAD: f32 = 8.0;
-#[allow(dead_code)]
-pub const NAV_TREE_PAD_B: f32 = 16.0;
 /// 77px — the horizontal room the window-chrome band reserves before the
 /// collapse button: the traffic lights plus the prototype's 8px flex gap
 /// and 4px button margin. Measured from the prototype (button left edge
@@ -423,27 +406,6 @@ pub const TRAFFIC_RESERVE: f32 = 77.0;
 /// window's left edge, vertically centred for a 14px button in the 42px band.
 pub const TRAFFIC_X: f32 = 13.0;
 pub const TRAFFIC_Y: f32 = 14.0;
-
-/// The Windows caption buttons (`titlebar.rs`), which exist only where the
-/// app draws its own titlebar. 46px is the width Windows gives each of its
-/// own — the snap-layout flyout aligns to it, so a narrower button would
-/// hang the flyout off-centre — and they run the band's full 42px height,
-/// flush to the window's top-right corner.
-#[allow(dead_code)]
-pub const CAPTION_W: f32 = 46.0;
-/// 10px — the caption mark inside that button. Window chrome is smaller
-/// than UI: `ICON_BUTTON_GLYPH` at 16px would read as an app control.
-#[allow(dead_code)]
-pub const CAPTION_GLYPH: f32 = 10.0;
-/// 4px — the top edge a drag region leaves untagged, so the window can
-/// still be resized from its top border. `SM_CYFRAME` is 4 logical pixels,
-/// and gpui only reaches its own `HTTOP` fallback where no control area
-/// answered first: a drag region flush to y = 0 would eat the resize edge
-/// along the whole strip. A maximized window has no such edge and insets
-/// nothing.
-#[allow(dead_code)]
-pub const CAPTION_RESIZE_EDGE: f32 = 4.0;
-
 /// The Pane board: 8px gap on both axes, 10px padding on all four sides.
 /// (The prototype's own render reserves 58px at the bottom for its
 /// mode-switcher; that is prototype-only chrome and its `data-view="window"`
@@ -455,102 +417,12 @@ pub const GRID_PAD: f32 = 10.0;
 /// corner sits directly beneath the caption buttons, and their hover face
 /// — edge-to-edge by design — reads as lying over the Pane.
 pub const BOARD_TOP: f32 = WIN_CHROME_H + GRID_PAD;
+/// 320px — a toast's width: a Thread's name, a detail line, room for the
+/// kit's icon and close button.
+pub const TOAST_W: f32 = 320.0;
 
-// ---------------------------------------------------------- geometry: nav
+// -------------------------------------------- pane body and the row column
 
-/// 28px — the collapse button, the rail's filter button, a rail item, and
-/// the Project filter trigger all share this height.
-#[allow(dead_code)]
-pub const ICON_BUTTON: f32 = 28.0;
-#[allow(dead_code)]
-pub const FILTER_TRIGGER_H: f32 = 28.0;
-/// The filter menu: 4px of padding around 30px rows, offset 38px below the
-/// nav head's top edge, inset 8px each side.
-pub const MENU_PAD: f32 = 4.0;
-pub const MENU_ROW_H: f32 = 30.0;
-#[allow(dead_code)]
-pub const MENU_TOP: f32 = 38.0;
-/// A nav row's padding — 6px block, 8px inline — and no gap between its
-/// stacked lines: their pixel line boxes already carry the air.
-#[allow(dead_code)]
-pub const ROW_PAD_X: f32 = 8.0;
-#[allow(dead_code)]
-pub const ROW_PAD_Y: f32 = 6.0;
-#[allow(dead_code)]
-pub const ROW_GAP: f32 = 0.0;
-/// 254px — the content box of a root-level nav row: the column less the
-/// tree's inline padding, less the row's own. A truncating title has to be
-/// pinned to it, because gpui only measures an ellipsis against a width it
-/// knows on the line's very first measure (see `nav::group_row`).
-#[allow(dead_code)]
-pub const ROW_TEXT_W: f32 = NAV_WIDTH - 2.0 * NAV_TREE_PAD - 2.0 * ROW_PAD_X;
-/// 44px — a Thread row: its padding around a title line over a meta line,
-/// 6 + 16 + 0 + 16 + 6. Derived from the type, never summed by hand.
-#[allow(dead_code)]
-pub const THREAD_ROW_H: f32 = 2.0 * ROW_PAD_Y + LH_TIGHT + ROW_GAP + LH_META;
-/// A Group parent row: the same two lines, so the same 44px.
-#[allow(dead_code)]
-pub const GROUP_ROW_H: f32 = THREAD_ROW_H;
-/// 16px between Group blocks; 6px between a Group row and its members;
-/// 2px between sibling rows; 24px above the solo section.
-#[allow(dead_code)]
-pub const GROUP_GAP: f32 = 16.0;
-#[allow(dead_code)]
-pub const MEMBERS_TOP: f32 = 6.0;
-#[allow(dead_code)]
-pub const MEMBER_GAP: f32 = 2.0;
-#[allow(dead_code)]
-pub const SOLOS_TOP: f32 = 24.0;
-/// The member indent: rows move 20px right, and the 1px rail sits 7px left
-/// of them (13px right of the Group row's own edge), inset 3px top and
-/// bottom of the members box.
-#[allow(dead_code)]
-pub const MEMBER_INDENT: f32 = 20.0;
-#[allow(dead_code)]
-pub const RAIL_OFFSET: f32 = 7.0;
-#[allow(dead_code)]
-pub const RAIL_INSET: f32 = 3.0;
-/// The provider logomark in a nav row (14px) and in the model picker (12px).
-#[allow(dead_code)]
-pub const PROVIDER_MARK: f32 = 14.0;
-#[allow(dead_code)]
-pub const PROVIDER_MARK_SM: f32 = 12.0;
-/// The folder and branch marks on the Project and checkout lines, and the
-/// 5px gap to their labels.
-#[allow(dead_code)]
-pub const ROW_ICON: f32 = 12.0;
-#[allow(dead_code)]
-pub const ROW_ICON_GAP: f32 = 5.0;
-
-// -------------------------------------------------------- geometry: forms
-
-/// Form fields and segmented choices share a 32px row. Compact pane and
-/// navigation controls keep their own smaller chrome metrics.
-pub const FORM_CONTROL_H: f32 = 32.0;
-/// Selected-value controls share a comfortable measure inside wider forms.
-pub const FORM_FIELD_W: f32 = 320.0;
-/// Inset around the chips of a segmented choice control.
-pub const FORM_CHOICE_PAD: f32 = 3.0;
-/// Settings and Project editors share the same header and content insets.
-pub const MODAL_HEAD_H: f32 = 48.0;
-pub const MODAL_PAD: f32 = 16.0;
-pub const MODAL_GAP: f32 = 12.0;
-/// Editors leave an even breathing edge while making room for a scrolling
-/// form at short desktop heights.
-pub const MODAL_VIEWPORT_FRACTION: f32 = 0.92;
-
-// --------------------------------------------------------- geometry: pane
-
-/// 32px — the Pane head's title row, inside the grounded header band.
-pub const PANE_HEAD_H: f32 = 32.0;
-/// The checkout line beneath the Pane head's title: 20px, sharing the
-/// head's inline padding and its ground, so the two read as one band.
-pub const PANE_CHECKOUT_H: f32 = 20.0;
-/// The gap between the checkout line's own marks — tighter than the head's
-/// gap, because these are one reading, not separate slots.
-pub const CHECKOUT_GAP: f32 = 8.0;
-/// 24px — the tasks strip.
-pub const TASKS_STRIP_H: f32 = 24.0;
 /// 16px — the inline padding every Pane strip shares.
 pub const PANE_PAD_X: f32 = SPACE_4;
 /// The Pane body's padding: 16px top, so the first line never kisses the
@@ -558,16 +430,107 @@ pub const PANE_PAD_X: f32 = SPACE_4;
 pub const BODY_PAD_T: f32 = SPACE_4;
 #[allow(dead_code)]
 pub const BODY_PAD_B: f32 = SPACE_8;
-/// 6px — the Pane head's status dot.
-pub const STATUS_DOT: f32 = 6.0;
+/// 12px — the glyph box every transcript and Composer row hangs its mark in
+/// (`❯`, a tool dot, the answer mark, an elbow).
+pub const GLYPH_BOX: f32 = 12.0;
+/// 8px — from the glyph box to the row's text.
+pub const GUTTER_GAP: f32 = 8.0;
+/// 20px — **C1**, the text column of every transcript and Composer row:
+/// `GLYPH_BOX + GUTTER_GAP`. An elbow result sits at C2 = C1 + `ELBOW_INDENT`.
+pub const GUTTER_W: f32 = GLYPH_BOX + GUTTER_GAP;
+/// C2 − C1: an elbow row indents by one gutter.
+pub const ELBOW_INDENT: f32 = GUTTER_W;
+/// 13px — a raised box's content inset (1px edge + 12px padding). Transcript
+/// rows sit the same distance inside the reading column, so the transcript `❯`
+/// and the Composer `❯` share one axis.
+pub const BOX_INSET_X: f32 = 13.0;
+/// 8px — between a row's glyph column and its text (tool rows, the working
+/// line, the turn diff, controls beside a label).
+#[allow(dead_code)]
+pub const EVENT_GAP: f32 = 8.0;
+/// 10px — between transcript blocks and Markdown siblings.
+pub const BLOCK_GAP: f32 = 10.0;
+/// 1px — the focused Pane's ring (`FOCUS_RING` ink), lying exactly on the
+/// Pane's own border box: focus changes colour and nothing else. It is an
+/// absolutely positioned overlay inside a non-clipping wrapper, since a ring
+/// drawn inside the shell's `overflow_hidden()` would be clipped.
+pub const FOCUS_RING_W: f32 = 1.0;
 
+// ------------------------------------------------ shared controls and rows
+
+/// 28px — an icon button, a rail item and the Project filter trigger.
+#[allow(dead_code)]
+pub const ICON_BUTTON: f32 = 28.0;
+/// 16px — an icon button's glyph, centred in `ICON_BUTTON`.
+#[allow(dead_code)]
+pub const ICON_BUTTON_GLYPH: f32 = 16.0;
+/// 12px — the chevron beside a picker or a disclosure.
+#[allow(dead_code)]
+pub const ICON_CHEVRON: f32 = 12.0;
+/// 28px — a text button in pane and nav chrome, decisions and footers, with
+/// 12px inline padding. Sheet controls are `FORM_CONTROL_H`.
+pub const CONTROL_H: f32 = 28.0;
+pub const CONTROL_PAD_X: f32 = SPACE_3;
+/// A keycap: 18px high (it fits inside a 20px UI row), 5px inline padding.
+pub const KBD_H: f32 = 18.0;
+pub const KBD_PAD_X: f32 = 5.0;
+/// 5px — between keycaps, and between a hint's key and its verb.
+#[allow(dead_code)]
+pub const KEYS_GAP: f32 = 5.0;
+/// A chip: 20px high, 6px inline and 1px block padding — the mode chip, the
+/// pass chip, the changed strip's file chips, background tasks.
+pub const CHIP_H: f32 = 20.0;
+#[allow(dead_code)]
+pub const CHIP_PAD_X: f32 = 6.0;
+#[allow(dead_code)]
+pub const CHIP_PAD_Y: f32 = 1.0;
+/// 4px — a floating menu's inset around its rows (`FLOAT_PAD`).
+pub const MENU_PAD: f32 = 4.0;
+/// 28px — one menu row: `LH_UI` plus 4px above and below.
+pub const MENU_ROW_H: f32 = 28.0;
+/// A nav or list row's padding — 8px inline, 6px block — and no gap between
+/// its stacked lines: their pixel line boxes already carry the air.
+#[allow(dead_code)]
+pub const ROW_PAD_X: f32 = 8.0;
+#[allow(dead_code)]
+pub const ROW_PAD_Y: f32 = 6.0;
+#[allow(dead_code)]
+pub const ROW_GAP: f32 = 0.0;
+/// 44px — a Thread row: its padding around a title line over a meta line,
+/// 6 + 16 + 0 + 16 + 6. Derived from the type, never summed by hand.
+#[allow(dead_code)]
+pub const THREAD_ROW_H: f32 = 2.0 * ROW_PAD_Y + LH_TIGHT + ROW_GAP + LH_META;
+/// A Group parent row: the same two lines, so the same 44px.
+#[allow(dead_code)]
+pub const GROUP_ROW_H: f32 = THREAD_ROW_H;
+/// The folder and branch marks on the Project and checkout lines (12px), and
+/// the 5px gap to their labels.
+#[allow(dead_code)]
+pub const ROW_ICON: f32 = 12.0;
+#[allow(dead_code)]
+pub const ROW_ICON_GAP: f32 = 5.0;
+/// 12px — the provider logomark in a picker row and the Composer's chip.
+#[allow(dead_code)]
+pub const PROVIDER_MARK_SM: f32 = 12.0;
+/// 24px — an L2 cell's header row; 10px its padding.
+pub const CELL_HEADER_H: f32 = 24.0;
+pub const CELL_PAD: f32 = 10.0;
+/// 24px — one queued prompt's row pitch in the Composer's queue viewport.
+pub const QUEUE_ROW_H: f32 = 24.0;
+
+// ------------------------------------------------------- status and motion
+
+/// 6px — the status dot: the Pane head, nav rows, the wall.
+pub const STATUS_DOT: f32 = 6.0;
 /// 4px — how far the working halo reaches past its dot on every side, so
 /// the breathing circle is 14px across.
 pub const STATUS_HALO_INSET: f32 = 4.0;
 /// 1.4s — one full breath of a working Thread's dot. Slow enough to read
 /// as breathing rather than blinking.
 pub const STATUS_PULSE_MS: u64 = 1_400;
-
+/// The dimmest the halo goes: never all the way out, so the dot keeps a
+/// ring at the bottom of the breath instead of flickering off.
+pub const PULSE_MIN: f32 = 0.15;
 /// The Ferrite progress mark follows the timing and geometry of the supplied
 /// animated logo. These are artwork tokens rather than general motion tokens:
 /// the SVG's 1254-unit viewBox is the coordinate system behind both offsets.
@@ -580,239 +543,6 @@ pub const FERRITE_HOLD_END: f32 = 0.54;
 pub const FERRITE_SNAP_END: f32 = 0.615;
 pub const FERRITE_PULL_EASING: [f32; 4] = [0.4, 0.0, 0.2, 1.0];
 pub const FERRITE_SNAP_EASING: [f32; 4] = [0.16, 1.0, 0.3, 1.0];
-/// The dimmest the halo goes: never all the way out, so the dot keeps a
-/// ring at the bottom of the breath instead of flickering off.
-pub const PULSE_MIN: f32 = 0.15;
-/// The tasks meter: 12 × 4 segments, 1px radius, 3px apart (15px pitch).
-#[allow(dead_code)]
-pub const METER_SEG_W: f32 = 12.0;
-#[allow(dead_code)]
-pub const METER_SEG_H: f32 = 4.0;
-#[allow(dead_code)]
-pub const METER_SEG_GAP: f32 = 3.0;
-#[allow(dead_code)]
-pub const METER_SEG_R: f32 = 1.0;
-/// The context ring: a 14px box, 5.4px radius, 2px stroke, sweeping
-/// clockwise from 12 o'clock with a round cap. No text, ever.
-pub const USAGE_RING_D: f32 = 14.0;
-#[allow(dead_code)]
-pub const USAGE_RING_R: f32 = 5.4;
-pub const USAGE_RING_W: f32 = 2.0;
-/// The usage meter's detail card: one column of labelled bars, sized so
-/// the three windows read at a glance without the card becoming a panel.
-pub const USAGE_CARD_W: f32 = 216.0;
-pub const USAGE_CARD_PAD: f32 = 10.0;
-/// Between one window's block and the next, and inside one block.
-pub const USAGE_CARD_GAP: f32 = 12.0;
-pub const USAGE_CARD_ROW_GAP: f32 = 5.0;
-pub const USAGE_CARD_BAR_H: f32 = 4.0;
-/// Where a usage bar turns from RUNNING to ATTENTION, and from ATTENTION
-/// to BLOCKED — a fraction of the window, not a count.
-pub const USAGE_TIGHT: f32 = 0.6;
-pub const USAGE_SPENT: f32 = 0.85;
-/// Compact context / five-hour / weekly lines beside the Composer's model.
-/// 48px, not 24: at half this length a percentage point was a third of a
-/// pixel, so the three lines read as one block rather than as three
-/// readings, and the control was smaller than the thing it opens.
-pub const USAGE_LINE_W: f32 = 48.0;
-pub const USAGE_LINE_H: f32 = 2.0;
-pub const USAGE_LINE_GAP: f32 = 2.0;
-/// Between the meter's three rings when the operator picks that mark:
-/// tight enough that the trio reads as one control, wide enough that the
-/// three readings stay separate.
-pub const USAGE_RING_GAP: f32 = 4.0;
-/// 320px — a toast's width: a Thread's name, a detail line, room for the
-/// kit's icon and close button.
-pub const TOAST_W: f32 = 320.0;
-/// The focused Pane's ring (`FOCUS_RING` ink): a 1px hairline lying exactly on
-/// the Pane's own border box — no offset, so focus changes colour and nothing else. It is
-/// an absolutely positioned overlay inside a non-clipping wrapper, since a
-/// ring drawn inside the shell's `overflow_hidden()` would be clipped.
-pub const FOCUS_RING_W: f32 = 1.0;
-/// The checks card the header's `ci` mark opens (#29): wide enough for a
-/// matrix job's own name — `test (windows-latest, stable)` — beside its
-/// state word, which is the whole reason the card exists.
-pub const CHECKS_CARD_W: f32 = 312.0;
-pub const CHECKS_CARD_PAD: f32 = 8.0;
-/// Between the card's heading and its runs.
-pub const CHECKS_CARD_GAP: f32 = 8.0;
-/// One run's line.
-pub const CHECKS_ROW_H: f32 = 22.0;
-/// A workflow's heading above the runs it owns, and the space that sets
-/// that group off from the one before it.
-pub const CHECKS_GROUP_H: f32 = 18.0;
-pub const CHECKS_GROUP_GAP: f32 = 6.0;
-/// The Decision card: 12px inline margin, 8px below, 8/10 padding, a 10px
-/// gap, and a 15px warning mark.
-#[allow(dead_code)]
-pub const DECISION_MARGIN_X: f32 = 12.0;
-#[allow(dead_code)]
-pub const DECISION_MARGIN_B: f32 = 8.0;
-#[allow(dead_code)]
-pub const DECISION_PAD_X: f32 = 10.0;
-#[allow(dead_code)]
-pub const DECISION_PAD_Y: f32 = 8.0;
-#[allow(dead_code)]
-pub const DECISION_GAP: f32 = 10.0;
-pub const ICON_WARNING: f32 = 15.0;
-/// Keycaps: 3px block, 7px inline padding, 5px apart.
-#[allow(dead_code)]
-pub const KBD_PAD_X: f32 = 7.0;
-#[allow(dead_code)]
-pub const KBD_PAD_Y: f32 = 3.0;
-#[allow(dead_code)]
-pub const KEYS_GAP: f32 = 5.0;
-/// The Composer: 7px top, 12px inline, 8px bottom padding; two 20px rows
-/// 3px apart; a 2 × 14 caret.
-#[allow(dead_code)]
-pub const COMPOSER_PAD_T: f32 = 7.0;
-#[allow(dead_code)]
-pub const COMPOSER_PAD_B: f32 = 8.0;
-pub const COMPOSER_ROW_H: f32 = 20.0;
-#[allow(dead_code)]
-pub const COMPOSER_GAP: f32 = 3.0;
-/// Multiline drafts, controls and queued prompts share a bounded part of
-/// the Pane, keeping most of its height available to the conversation.
-pub const COMPOSER_MAX_PANE_FRACTION: f32 = 0.45;
-/// The queued-prompt viewport scrolls beyond these visible row budgets.
-pub const COMPOSER_QUEUE_ROWS: usize = 3;
-pub const COMPOSER_COMPACT_QUEUE_ROWS: usize = 1;
-
-/// Clearance between the floating attachment island and the prompt's
-/// top edge, so the island reads as its own surface.
-pub const ATTACHMENT_ISLAND_GAP: f32 = 6.0;
-pub const CARET_W: f32 = 2.0;
-#[allow(dead_code)]
-pub const CARET_H: f32 = 14.0;
-/// The Composer's controls: a 20px mode chip with 7px inline padding and a
-/// 10px pencil; a 20px model picker with 6px/4px padding and a 12px chevron.
-pub const CHIP_H: f32 = 20.0;
-#[allow(dead_code)]
-pub const MODE_CHIP_PAD_X: f32 = 7.0;
-#[allow(dead_code)]
-pub const ICON_PENCIL: f32 = 10.0;
-#[allow(dead_code)]
-pub const PICKER_PAD_L: f32 = 6.0;
-#[allow(dead_code)]
-pub const PICKER_PAD_R: f32 = 4.0;
-#[allow(dead_code)]
-pub const ICON_CHEVRON: f32 = 12.0;
-#[allow(dead_code)]
-pub const ICON_CHEVRON_LG: f32 = 14.0;
-/// 16px — the collapse and rail-filter buttons' icon, centred in 28px.
-#[allow(dead_code)]
-pub const ICON_BUTTON_GLYPH: f32 = 16.0;
-
-// ---------------------------------------------- geometry: transcript body
-
-/// 9px — an event's glyph column, and 8px to the verb beside it. Their sum,
-/// 17px, is the inset a result line and a hunk share so both land under the
-/// verb's first character. Keep the relationship, not just the numbers.
-pub const GUTTER_W: f32 = 9.0;
-/// 15px — an answer's Ferrite mark. It draws wider than the `GUTTER_W`
-/// gutter it hangs in and out of the flow, so its overhang lands in the
-/// answer row's own `ANSWER_GAP` rather than moving the prose.
-pub const ANSWER_MARK: f32 = 15.0;
-/// The offset that centres that mark on the first prose line box at the
-/// Standard reading size (`LH_PROSE`). Other sizes add half their line box's
-/// difference from `LH_PROSE`.
-pub const ANSWER_MARK_TOP: f32 = (LH_PROSE - ANSWER_MARK) / 2.0;
-/// The native checkbox/radio indicator's box.
-const CHOICE_CONTROL: f32 = 16.0;
-/// The lift that drops a question choice's label onto the native
-/// checkbox/radio indicator's center. The control top-aligns with the label
-/// column, whose first line boxes `LH_PROSE_SM`, so the label rides half that
-/// difference too low. Lifting the label rather than sinking the control
-/// keeps a wrapped choice and its description flowing from the same edge.
-pub const CHOICE_LABEL_LIFT: f32 = (LH_PROSE_SM - CHOICE_CONTROL) / 2.0;
-/// 14px — the answer row's gutter-to-prose gap, wider than the `EVENT_GAP`
-/// the tool rows use: an answer's prose is indented off the mark rather than
-/// held on the tool rows' text edge, and the gap clears the mark's overhang.
-pub const ANSWER_GAP: f32 = 14.0;
-/// Structured answers retain a passage boundary without isolating every update.
-pub const ANSWER_PAD_Y: f32 = 8.0;
-/// A single prose paragraph sits closer to the work it introduces.
-pub const COMMENTARY_PAD_Y: f32 = 4.0;
-#[allow(dead_code)]
-pub const EVENT_GAP: f32 = 8.0;
-pub const INDENT: f32 = 17.0;
-/// A tool row's vertical padding. The prototype's 3px each side put 43px
-/// between consecutive calls; a run of shell commands reads as a list only
-/// when they sit as close as Claude Code's own `●`/`⎿` pairs do.
-pub const EVENT_PAD_Y: f32 = 1.0;
-/// The result line's padding: hugging its call above, a hair under.
-pub const RESULT_PAD_T: f32 = 0.0;
-pub const RESULT_PAD_B: f32 = 1.0;
-/// An invisible hit area, not a drawn thing: the tool-disclosure target.
-pub const TOOL_DISCLOSURE_HIT: f32 = 20.0;
-/// Shared 10px separation between transcript blocks and Markdown siblings.
-pub const BLOCK_GAP: f32 = 10.0;
-/// A 16px list indent, with a 4px disc 15px left of the text.
-pub const UL_INDENT: f32 = 16.0;
-#[allow(dead_code)]
-pub const BULLET_D: f32 = 4.0;
-#[allow(dead_code)]
-pub const BULLET_OFFSET: f32 = 15.0;
-/// A restrained fenced-code inset; the header and source share one edge.
-pub const CODE_PAD: f32 = 8.;
-pub const CODE_HEADER_H: f32 = 24.;
-/// Code actions keep a stable target when Copy becomes Copied.
-pub const CODE_ACTION_H: f32 = 24.;
-pub const CODE_ACTION_MIN_W: f32 = 56.;
-pub const CODE_ACTION_PAD_X: f32 = 8.;
-/// Code blocks: a language label at 5/10/0, then `pre` at 4/10/8.
-#[allow(dead_code)]
-pub const CODE_LANG_PAD_T: f32 = 5.0;
-#[allow(dead_code)]
-pub const CODE_PAD_X: f32 = 10.0;
-#[allow(dead_code)]
-pub const CODE_PRE_PAD_T: f32 = 4.0;
-#[allow(dead_code)]
-pub const CODE_PRE_PAD_B: f32 = 8.0;
-/// Inline code's own padding: 1px block, 4px inline.
-#[allow(dead_code)]
-pub const INLINE_CODE_PAD_X: f32 = 4.0;
-#[allow(dead_code)]
-pub const INLINE_CODE_PAD_Y: f32 = 1.0;
-/// 5px — the operator's prompt block's block padding: the ground the line
-/// stands on (`--raised`, or the provider's wash on a Thread), so a prompt
-/// reads apart from an answer.
-pub const PROMPT_PAD_Y: f32 = 5.0;
-/// A hunk row: 8px inline padding, a 24px right-aligned number column, a
-/// 7px sign column, 10px between columns. A hunk sits 4px below the event
-/// and 10px above what follows.
-#[allow(dead_code)]
-pub const HUNK_PAD_X: f32 = 8.0;
-pub const DIFF_NUM_W: f32 = 24.0;
-#[allow(dead_code)]
-pub const DIFF_SIGN_W: f32 = 7.0;
-#[allow(dead_code)]
-pub const DIFF_GAP: f32 = 10.0;
-#[allow(dead_code)]
-pub const HUNK_MARGIN_T: f32 = 4.0;
-/// How many rows one hunk card draws before it stops and says how many it
-/// did not. An edit's patch is a handful of lines; a written file's is
-/// however long the file is, and a card that redrew a 900-line file would
-/// be the transcript rather than a note in it.
-pub const HUNK_MAX_ROWS: usize = 24;
-/// A chip's padding — the pass chip, the changed strip's file chip: 1px
-/// block, 6px inline.
-#[allow(dead_code)]
-pub const CHIP_PAD_X: f32 = 6.0;
-#[allow(dead_code)]
-pub const CHIP_PAD_Y: f32 = 1.0;
-
-// ------------------------------------- geometry: levels below L1 (unspecified)
-
-/// The prototype specifies **only** the L1 Pane. Semantic zoom's Instruments
-/// and Wall renderings keep the metrics they have; they inherit the new
-/// palette and the new type scale through §1.1's map and are not otherwise
-/// redesigned. Do not invent a Soft L2/L3 — flag it and leave it.
-pub const CELL_HEADER_H: f32 = 24.0;
-pub const CELL_PAD: f32 = 10.0;
-pub const LED_WALL: f32 = 5.0;
-pub const DONE_CELL_OPACITY: f32 = 0.75;
-pub const DONE_WALL_OPACITY: f32 = 0.6;
 /// 120ms ease-out — every hover/press transition the prototype declares.
 /// gpui 0.2.2 refines styles without interpolation; recorded, not applied.
 #[allow(dead_code)]
@@ -953,6 +683,346 @@ pub fn init_components(cx: &mut gpui::App) {
     theme.notification.width = px(TOAST_W);
     theme.notification.max_items = 5;
 }
+
+// ======================================== end of the frozen shared head
+
+// ======================================== WP-A · transcript rows and grammar
+// Owner: WP-A (transcript.rs, pane/text.rs, the transcript rows in pane.rs, ferrite-core transcript strings.)
+// Edit values and append tokens only inside this section.
+
+/// An added diff line's code: `RUNNING` lifted a step to read on its wash.
+pub const DIFF_ADDED_INK: u32 = 0xa7d9b8;
+/// A removed diff line's code: `BLOCKED` lifted the same step.
+pub const DIFF_REMOVED_INK: u32 = 0xefa89f;
+/// 9px — the tool/event rows' glyph column today, and 8px (`EVENT_GAP`) to
+/// the verb beside it; their sum, 17px (`INDENT`), is the inset a result
+/// line and a hunk share. WP-A replaces it with the shared `GUTTER_W` (C1).
+pub const EVENT_GUTTER_W: f32 = 9.0;
+pub const INDENT: f32 = 17.0;
+/// 15px — an answer's Ferrite mark. It draws wider than the `GUTTER_W`
+/// gutter it hangs in and out of the flow, so its overhang lands in the
+/// answer row's own `ANSWER_GAP` rather than moving the prose.
+pub const ANSWER_MARK: f32 = 15.0;
+/// The offset that centres that mark on the first prose line box at the
+/// Standard reading size (`LH_PROSE`). Other sizes add half their line box's
+/// difference from `LH_PROSE`.
+pub const ANSWER_MARK_TOP: f32 = (LH_PROSE - ANSWER_MARK) / 2.0;
+/// 14px — the answer row's gutter-to-prose gap, wider than the `EVENT_GAP`
+/// the tool rows use: an answer's prose is indented off the mark rather than
+/// held on the tool rows' text edge, and the gap clears the mark's overhang.
+pub const ANSWER_GAP: f32 = 14.0;
+/// Structured answers retain a passage boundary without isolating every update.
+pub const ANSWER_PAD_Y: f32 = 8.0;
+/// A single prose paragraph sits closer to the work it introduces.
+pub const COMMENTARY_PAD_Y: f32 = 4.0;
+/// A tool row's vertical padding. The prototype's 3px each side put 43px
+/// between consecutive calls; a run of shell commands reads as a list only
+/// when they sit as close as Claude Code's own `●`/`⎿` pairs do.
+pub const EVENT_PAD_Y: f32 = 1.0;
+/// The result line's padding: hugging its call above, a hair under.
+pub const RESULT_PAD_T: f32 = 0.0;
+pub const RESULT_PAD_B: f32 = 1.0;
+/// An invisible hit area, not a drawn thing: the tool-disclosure target.
+pub const TOOL_DISCLOSURE_HIT: f32 = 20.0;
+/// A 16px list indent, with a 4px disc 15px left of the text.
+pub const UL_INDENT: f32 = 16.0;
+#[allow(dead_code)]
+pub const BULLET_D: f32 = 4.0;
+#[allow(dead_code)]
+pub const BULLET_OFFSET: f32 = 15.0;
+/// 5px — the operator's prompt block's block padding: the ground the line
+/// stands on (`--raised`, or the provider's wash on a Thread), so a prompt
+/// reads apart from an answer.
+pub const PROMPT_PAD_Y: f32 = 5.0;
+/// A hunk row: 8px inline padding, a 24px right-aligned number column, a
+/// 7px sign column, 10px between columns. A hunk sits 4px below the event
+/// and 10px above what follows.
+#[allow(dead_code)]
+pub const HUNK_PAD_X: f32 = 8.0;
+pub const DIFF_NUM_W: f32 = 24.0;
+#[allow(dead_code)]
+pub const DIFF_SIGN_W: f32 = 7.0;
+#[allow(dead_code)]
+pub const DIFF_GAP: f32 = 10.0;
+#[allow(dead_code)]
+pub const HUNK_MARGIN_T: f32 = 4.0;
+/// How many rows one hunk card draws before it stops and says how many it
+/// did not. An edit's patch is a handful of lines; a written file's is
+/// however long the file is, and a card that redrew a 900-line file would
+/// be the transcript rather than a note in it.
+pub const HUNK_MAX_ROWS: usize = 24;
+// (end WP-A) — append above this line only
+
+// ======================================== WP-B · markdown, prose, scrollbars
+// Owner: WP-B (rich.rs, scrollbar.rs, attachments::inline_file, the Markdown vendor knobs.)
+// Edit values and append tokens only inside this section.
+
+/// Inline code's ink on its chip.
+pub const INLINE_CODE_INK: u32 = 0xe3c88f;
+/// A restrained fenced-code inset; the header and source share one edge.
+pub const CODE_PAD: f32 = 8.;
+pub const CODE_HEADER_H: f32 = 24.;
+/// Code actions keep a stable target when Copy becomes Copied.
+pub const CODE_ACTION_H: f32 = 24.;
+pub const CODE_ACTION_MIN_W: f32 = 56.;
+pub const CODE_ACTION_PAD_X: f32 = 8.;
+/// Code blocks: a language label at 5/10/0, then `pre` at 4/10/8.
+#[allow(dead_code)]
+pub const CODE_LANG_PAD_T: f32 = 5.0;
+#[allow(dead_code)]
+pub const CODE_PAD_X: f32 = 10.0;
+#[allow(dead_code)]
+pub const CODE_PRE_PAD_T: f32 = 4.0;
+#[allow(dead_code)]
+pub const CODE_PRE_PAD_B: f32 = 8.0;
+/// Inline code's own padding: 1px block, 4px inline.
+#[allow(dead_code)]
+pub const INLINE_CODE_PAD_X: f32 = 4.0;
+#[allow(dead_code)]
+pub const INLINE_CODE_PAD_Y: f32 = 1.0;
+// (end WP-B) — append above this line only
+
+// ======================================== WP-C · pane frame, levels, board, titlebar
+// Owner: WP-C (the pane shell, head, L2/wall cells, board, seams, titlebar.)
+// Edit values and append tokens only inside this section.
+
+/// The seam's grab band under the pointer: a faint lift over the gutter.
+pub const SEAM_HOVER: u32 = 0xffffff14;
+/// A row's opacity while it is being dragged.
+#[allow(dead_code)]
+pub const DRAGGING_OPACITY: f32 = 0.4;
+/// The Windows caption buttons (`titlebar.rs`), which exist only where the
+/// app draws its own titlebar. 46px is the width Windows gives each of its
+/// own — the snap-layout flyout aligns to it, so a narrower button would
+/// hang the flyout off-centre — and they run the band's full 42px height,
+/// flush to the window's top-right corner.
+#[allow(dead_code)]
+pub const CAPTION_W: f32 = 46.0;
+/// 10px — the caption mark inside that button. Window chrome is smaller
+/// than UI: `ICON_BUTTON_GLYPH` at 16px would read as an app control.
+#[allow(dead_code)]
+pub const CAPTION_GLYPH: f32 = 10.0;
+/// 4px — the top edge a drag region leaves untagged, so the window can
+/// still be resized from its top border. `SM_CYFRAME` is 4 logical pixels,
+/// and gpui only reaches its own `HTTOP` fallback where no control area
+/// answered first: a drag region flush to y = 0 would eat the resize edge
+/// along the whole strip. A maximized window has no such edge and insets
+/// nothing.
+#[allow(dead_code)]
+pub const CAPTION_RESIZE_EDGE: f32 = 4.0;
+/// 32px — the Pane head's title row, inside the grounded header band.
+pub const PANE_HEAD_H: f32 = 32.0;
+/// The checkout line beneath the Pane head's title: 20px, sharing the
+/// head's inline padding and its ground, so the two read as one band.
+pub const PANE_CHECKOUT_H: f32 = 20.0;
+/// The gap between the checkout line's own marks — tighter than the head's
+/// gap, because these are one reading, not separate slots.
+pub const CHECKOUT_GAP: f32 = 8.0;
+/// 24px — the tasks strip.
+pub const TASKS_STRIP_H: f32 = 24.0;
+/// The tasks meter: 12 × 4 segments, 1px radius, 3px apart (15px pitch).
+#[allow(dead_code)]
+pub const METER_SEG_W: f32 = 12.0;
+#[allow(dead_code)]
+pub const METER_SEG_H: f32 = 4.0;
+#[allow(dead_code)]
+pub const METER_SEG_GAP: f32 = 3.0;
+#[allow(dead_code)]
+pub const METER_SEG_R: f32 = 1.0;
+/// The checks card the header's `ci` mark opens (#29): wide enough for a
+/// matrix job's own name — `test (windows-latest, stable)` — beside its
+/// state word, which is the whole reason the card exists.
+pub const CHECKS_CARD_W: f32 = 312.0;
+pub const CHECKS_CARD_PAD: f32 = 8.0;
+/// Between the card's heading and its runs.
+pub const CHECKS_CARD_GAP: f32 = 8.0;
+/// One run's line.
+pub const CHECKS_ROW_H: f32 = 22.0;
+/// A workflow's heading above the runs it owns, and the space that sets
+/// that group off from the one before it.
+pub const CHECKS_GROUP_H: f32 = 18.0;
+pub const CHECKS_GROUP_GAP: f32 = 6.0;
+pub const LED_WALL: f32 = 5.0;
+pub const DONE_CELL_OPACITY: f32 = 0.75;
+pub const DONE_WALL_OPACITY: f32 = 0.6;
+// (end WP-C) — append above this line only
+
+// ======================================== WP-D · composer, pickers, usage, draft
+// Owner: WP-D (the Composer, its pickers and usage meter, attachments, background chips, the draft.)
+// Edit values and append tokens only inside this section.
+
+/// The Composer: 7px top and 8px bottom padding, `COMPOSER_ROW_H` rows
+/// `COMPOSER_GAP` apart. Any change here must update
+/// `pane::composer_fixed_height` in the same commit.
+#[allow(dead_code)]
+pub const COMPOSER_PAD_T: f32 = 7.0;
+#[allow(dead_code)]
+pub const COMPOSER_PAD_B: f32 = 8.0;
+pub const COMPOSER_ROW_H: f32 = 20.0;
+#[allow(dead_code)]
+pub const COMPOSER_GAP: f32 = 3.0;
+/// Multiline drafts, controls and queued prompts share a bounded part of
+/// the Pane, keeping most of its height available to the conversation.
+pub const COMPOSER_MAX_PANE_FRACTION: f32 = 0.45;
+/// The queued-prompt viewport scrolls beyond these visible row budgets.
+pub const COMPOSER_QUEUE_ROWS: usize = 3;
+pub const COMPOSER_COMPACT_QUEUE_ROWS: usize = 1;
+/// Clearance between the floating attachment island and the prompt's
+/// top edge, so the island reads as its own surface.
+pub const ATTACHMENT_ISLAND_GAP: f32 = 6.0;
+/// The Composer caret: 2 × 14.
+pub const CARET_W: f32 = 2.0;
+#[allow(dead_code)]
+pub const CARET_H: f32 = 14.0;
+/// The mode chip's 7px inline padding and 10px pencil; the model picker's
+/// 6px/4px padding.
+#[allow(dead_code)]
+pub const MODE_CHIP_PAD_X: f32 = 7.0;
+#[allow(dead_code)]
+pub const ICON_PENCIL: f32 = 10.0;
+#[allow(dead_code)]
+pub const PICKER_PAD_L: f32 = 6.0;
+#[allow(dead_code)]
+pub const PICKER_PAD_R: f32 = 4.0;
+/// The context ring: a 14px box, 5.4px radius, 2px stroke, sweeping
+/// clockwise from 12 o'clock with a round cap. No text, ever.
+pub const USAGE_RING_D: f32 = 14.0;
+#[allow(dead_code)]
+pub const USAGE_RING_R: f32 = 5.4;
+pub const USAGE_RING_W: f32 = 2.0;
+/// The usage meter's detail card: one column of labelled bars, sized so
+/// the three windows read at a glance without the card becoming a panel.
+pub const USAGE_CARD_W: f32 = 216.0;
+pub const USAGE_CARD_PAD: f32 = 10.0;
+/// Between one window's block and the next, and inside one block.
+pub const USAGE_CARD_GAP: f32 = 12.0;
+pub const USAGE_CARD_ROW_GAP: f32 = 5.0;
+pub const USAGE_CARD_BAR_H: f32 = 4.0;
+/// Where a usage bar turns from RUNNING to ATTENTION, and from ATTENTION
+/// to BLOCKED — a fraction of the window, not a count.
+pub const USAGE_TIGHT: f32 = 0.6;
+pub const USAGE_SPENT: f32 = 0.85;
+/// Compact context / five-hour / weekly lines beside the Composer's model.
+/// 48px, not 24: at half this length a percentage point was a third of a
+/// pixel, so the three lines read as one block rather than as three
+/// readings, and the control was smaller than the thing it opens.
+pub const USAGE_LINE_W: f32 = 48.0;
+pub const USAGE_LINE_H: f32 = 2.0;
+pub const USAGE_LINE_GAP: f32 = 2.0;
+/// Between the meter's three rings when the operator picks that mark:
+/// tight enough that the trio reads as one control, wide enough that the
+/// three readings stay separate.
+pub const USAGE_RING_GAP: f32 = 4.0;
+// (end WP-D) — append above this line only
+
+// ======================================== WP-E · menus, popovers, sheets, notifications
+// Owner: WP-E (menus, popovers, Settings, the Project editor, notifications.)
+// Edit values and append tokens only inside this section.
+
+/// Form fields and segmented choices share a 32px row. Compact pane and
+/// navigation controls keep their own smaller chrome metrics.
+pub const FORM_CONTROL_H: f32 = 32.0;
+/// Selected-value controls share a comfortable measure inside wider forms.
+pub const FORM_FIELD_W: f32 = 320.0;
+/// Inset around the chips of a segmented choice control.
+pub const FORM_CHOICE_PAD: f32 = 3.0;
+/// Settings and Project editors share the same header and content insets.
+pub const MODAL_HEAD_H: f32 = 48.0;
+pub const MODAL_PAD: f32 = 16.0;
+pub const MODAL_GAP: f32 = 12.0;
+/// Editors leave an even breathing edge while making room for a scrolling
+/// form at short desktop heights.
+pub const MODAL_VIEWPORT_FRACTION: f32 = 0.92;
+// (end WP-E) — append above this line only
+
+// ======================================== WP-F · decisions and subagents
+// Owner: WP-F (decision.rs, subagents.rs, the Decision card and keycaps.)
+// Edit values and append tokens only inside this section.
+
+/// The Decision card: 12px inline margin, 8px below, 8/10 padding, a 10px
+/// gap, and a 15px warning mark.
+#[allow(dead_code)]
+pub const DECISION_MARGIN_X: f32 = 12.0;
+#[allow(dead_code)]
+pub const DECISION_MARGIN_B: f32 = 8.0;
+#[allow(dead_code)]
+pub const DECISION_PAD_X: f32 = 10.0;
+#[allow(dead_code)]
+pub const DECISION_PAD_Y: f32 = 8.0;
+#[allow(dead_code)]
+pub const DECISION_GAP: f32 = 10.0;
+pub const ICON_WARNING: f32 = 15.0;
+/// The Decision card's keycaps today: 3px block, 7px inline padding.
+#[allow(dead_code)]
+pub const KEYCAP_PAD_X: f32 = 7.0;
+#[allow(dead_code)]
+pub const KEYCAP_PAD_Y: f32 = 3.0;
+/// The native checkbox/radio indicator's box.
+const CHOICE_CONTROL: f32 = 16.0;
+/// The lift that drops a question choice's label onto the native
+/// checkbox/radio indicator's center. The control top-aligns with the label
+/// column, whose first line boxes `LH_PROSE_SM`, so the label rides half that
+/// difference too low. Lifting the label rather than sinking the control
+/// keeps a wrapped choice and its description flowing from the same edge.
+pub const CHOICE_LABEL_LIFT: f32 = (LH_PROSE_SM - CHOICE_CONTROL) / 2.0;
+// (end WP-F) — append above this line only
+
+// ======================================== WP-G · nav
+// Owner: WP-G (nav.rs and its cockpit wiring.)
+// Edit values and append tokens only inside this section.
+
+/// A nav row that will accept the drag.
+#[allow(dead_code)]
+pub const DROP_VALID: u32 = ACCENT;
+/// A nav row that refuses the drag.
+#[allow(dead_code)]
+pub const DROP_REFUSED: u32 = BLOCKED;
+/// 42px — the nav head band, which holds the Project filter.
+#[allow(dead_code)]
+pub const NAV_HEAD_H: f32 = 42.0;
+/// The nav tree's padding: 8px top and inline, 16px bottom.
+#[allow(dead_code)]
+pub const NAV_TREE_PAD: f32 = 8.0;
+#[allow(dead_code)]
+pub const NAV_TREE_PAD_B: f32 = 16.0;
+/// 14px — the nav filter trigger's chevron.
+#[allow(dead_code)]
+pub const ICON_CHEVRON_LG: f32 = 14.0;
+/// 28px — the Project filter trigger.
+#[allow(dead_code)]
+pub const FILTER_TRIGGER_H: f32 = 28.0;
+/// 38px — the filter menu's offset below the nav head's top edge.
+#[allow(dead_code)]
+pub const MENU_TOP: f32 = 38.0;
+/// 254px — the content box of a root-level nav row: the column less the
+/// tree's inline padding, less the row's own. A truncating title has to be
+/// pinned to it, because gpui only measures an ellipsis against a width it
+/// knows on the line's very first measure (see `nav::group_row`).
+#[allow(dead_code)]
+pub const ROW_TEXT_W: f32 = NAV_WIDTH - 2.0 * NAV_TREE_PAD - 2.0 * ROW_PAD_X;
+/// 16px between Group blocks; 6px between a Group row and its members;
+/// 2px between sibling rows; 24px above the solo section.
+#[allow(dead_code)]
+pub const GROUP_GAP: f32 = 16.0;
+#[allow(dead_code)]
+pub const MEMBERS_TOP: f32 = 6.0;
+#[allow(dead_code)]
+pub const MEMBER_GAP: f32 = 2.0;
+#[allow(dead_code)]
+pub const SOLOS_TOP: f32 = 24.0;
+/// The member indent: rows move 20px right, and the 1px rail sits 7px left
+/// of them (13px right of the Group row's own edge), inset 3px top and
+/// bottom of the members box.
+#[allow(dead_code)]
+pub const MEMBER_INDENT: f32 = 20.0;
+#[allow(dead_code)]
+pub const RAIL_OFFSET: f32 = 7.0;
+#[allow(dead_code)]
+pub const RAIL_INSET: f32 = 3.0;
+/// 14px — the provider logomark in a nav row.
+#[allow(dead_code)]
+pub const PROVIDER_MARK: f32 = 14.0;
+// (end WP-G) — append above this line only
 
 #[cfg(test)]
 mod tests {
