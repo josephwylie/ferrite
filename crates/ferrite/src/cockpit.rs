@@ -3392,7 +3392,7 @@ impl CockpitView {
                 .debug_selector(move || selector.clone())
                 .size(px(crate::theme::SEND_BUTTON))
                 .p_0()
-                .rounded_full()
+                .rounded(px(crate::theme::COMPOSER_CHIP_R))
                 .bg(rgb(if live {
                     crate::theme::SEND_GROUND
                 } else {
@@ -8510,7 +8510,7 @@ impl CockpitView {
         let modes = open.permission_modes();
         let modes_empty = modes.is_empty();
         if !modes_empty {
-            card = card.child(head("mode", errored));
+            card = card.child(head("Mode", errored));
         }
         let current = open.permission_mode().map(str::to_owned);
         for (index, mode) in modes.into_iter().enumerate() {
@@ -8536,6 +8536,10 @@ impl CockpitView {
                                     .flex_1()
                                     .min_w_0()
                                     .truncate()
+                                    // The shared button is kit-xsmall; a menu
+                                    // row reads at the UI size like every menu.
+                                    .text_size(px(crate::theme::FS_UI))
+                                    .line_height(px(crate::theme::LH_UI))
                                     .text_color(rgb(if checked {
                                         crate::theme::TEXT_STRONG
                                     } else {
@@ -8563,7 +8567,7 @@ impl CockpitView {
                     })),
             );
         }
-        card = card.child(head("mcp", errored || !modes_empty));
+        card = card.child(head("MCP servers", errored || !modes_empty));
         if transcript.mcp_servers().is_empty() {
             card = card.child(crate::components::menu_note("no MCP servers reported"));
         }
@@ -8577,7 +8581,9 @@ impl CockpitView {
                 ferrite_core::McpStatus::Disabled => ("disabled", crate::theme::TEXT_FAINT),
                 ferrite_core::McpStatus::Unknown => ("unknown", crate::theme::TEXT_FAINT),
             };
+            let connected = server.status == ferrite_core::McpStatus::Connected;
             let mut line = row()
+                .group(SharedString::from(format!("mcp-row-{index}")))
                 .child(crate::components::status_dot(dot))
                 .child(
                     div()
@@ -8591,18 +8597,22 @@ impl CockpitView {
                         .tooltip(crate::menu::tooltip(server.name.clone()))
                         .child(server.name.clone()),
                 )
-                .child(
-                    div()
-                        .debug_selector(move || format!("mcp-status-{index}-{status}"))
-                        .flex_shrink_0()
-                        .text_size(px(crate::theme::FS_SM))
-                        .text_color(rgb(if server.status == ferrite_core::McpStatus::Failed {
-                            crate::theme::BLOCKED
-                        } else {
-                            crate::theme::TEXT_MUTED
-                        }))
-                        .child(status),
-                );
+                // A connected server's green dot says so; the word appears
+                // only when the state needs reading.
+                .when(!connected, |line| {
+                    line.child(
+                        div()
+                            .debug_selector(move || format!("mcp-status-{index}-{status}"))
+                            .flex_shrink_0()
+                            .text_size(px(crate::theme::FS_SM))
+                            .text_color(rgb(if server.status == ferrite_core::McpStatus::Failed {
+                                crate::theme::BLOCKED
+                            } else {
+                                crate::theme::TEXT_MUTED
+                            }))
+                            .child(status),
+                    )
+                });
             if server.status == ferrite_core::McpStatus::NeedsAuth
                 && open.supports_control(ferrite_core::ControlKind::LoginMcp)
             {
@@ -8656,6 +8666,13 @@ impl CockpitView {
                         "reconnect",
                     )
                     .debug_selector(move || format!("mcp-reconnect-{index}"))
+                    // A healthy server's reconnect waits under the pointer,
+                    // so the name keeps the row; a troubled one shows it.
+                    .when(connected, |action| {
+                        action
+                            .invisible()
+                            .group_hover(format!("mcp-row-{index}"), |style| style.visible())
+                    })
                     .on_click(cx.listener(
                         move |view, _: &ClickEvent, _, cx| {
                             let exists = view.cockpit.thread(thread).is_some_and(|open| {
@@ -8699,7 +8716,7 @@ impl CockpitView {
         if open.supports_control(ferrite_core::ControlKind::ReloadMcp) {
             card = card.child(
                 row().child(
-                    text_action("mcp-reload".into(), "reload mcp")
+                    text_action("mcp-reload".into(), "Reload MCP servers")
                         .debug_selector(|| "mcp-reload".into())
                         .tab_stop(true)
                         .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
@@ -8715,7 +8732,7 @@ impl CockpitView {
         }
         let tasks = transcript.progress().background();
         if !tasks.is_empty() || open.supports_control(ferrite_core::ControlKind::BackgroundTasks) {
-            card = card.child(head("tasks", true));
+            card = card.child(head("Background tasks", true));
         }
         for (index, task) in tasks.iter().enumerate() {
             let working = task.status == ferrite_core::progress::TaskStatus::Working;
@@ -8769,7 +8786,7 @@ impl CockpitView {
         }
         if open.supports_control(ferrite_core::ControlKind::BackgroundTasks) {
             card = card.child(row().child(
-                text_action("background-all".into(), "run tasks in background").on_click(
+                text_action("background-all".into(), "Run tasks in background").on_click(
                     cx.listener(move |view, _: &ClickEvent, _, cx| {
                         view.run_session_control(
                             thread,

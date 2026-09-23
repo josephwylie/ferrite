@@ -1367,8 +1367,8 @@ fn meta_line(project: Option<SharedString>, branch: Option<SharedString>) -> Div
 /// `cl` / `cx` string: it holds the column open and says nothing.
 fn provider_mark(provider: Option<Provider>, size: f32) -> AnyElement {
     match provider {
-        Some(Provider::Codex) => icon(icons::CODEX, size, TEXT_FAINT).into_any_element(),
-        Some(Provider::Claude) => icon(icons::CLAUDE, size, TEXT_FAINT).into_any_element(),
+        Some(Provider::Codex) => icon(icons::CODEX, size, PROVIDER_CODEX).into_any_element(),
+        Some(Provider::Claude) => icon(icons::CLAUDE, size, PROVIDER_CLAUDE).into_any_element(),
         None => div()
             .flex_shrink_0()
             .w(px(size))

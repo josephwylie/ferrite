@@ -19,8 +19,9 @@
 //!    and ~22% (everything else), so the window reads as grey with signals.
 //! 2. **Colour is state.** `RUNNING`, `ATTENTION` and `BLOCKED` mark status
 //!    only. A failure colours the word that says so, never the whole row.
-//!    Green never means "finished". Provider logomarks are monochrome
-//!    everywhere, the picker included.
+//!    Green never means "finished". The one exception is brand, not state:
+//!    a provider's logomark wears its own colour (`PROVIDER_*`) wherever it
+//!    appears — nav rows, the model chip, picker rows — and nothing else.
 //! 3. **Opaque faces, alpha edges.** Planes and hover/fill faces are opaque
 //!    `rgb()` values (a hover must never be tinted by what lies under it, see
 //!    `pointer.rs`). Hairlines, washes, rings over content and veils are alpha
@@ -208,10 +209,10 @@ pub const BLOCKED_WASH: u32 = 0xd290891f;
 /// The idle/parked status dot: the muted ink in a dot role.
 pub const IDLE: u32 = TEXT_MUTED;
 
-/// Provider marks are monochrome: the glyph's shape tells the providers
-/// apart, so no brand colour enters the chrome.
-pub const PROVIDER_CODEX: u32 = TEXT_2;
-pub const PROVIDER_CLAUDE: u32 = TEXT_2;
+/// A provider's logomark in its own brand colour — Claude's clay, Codex's
+/// green. Only the mark wears it: never a label, a row or a state.
+pub const PROVIDER_CODEX: u32 = 0x10a37f;
+pub const PROVIDER_CLAUDE: u32 = 0xd97757;
 
 // ------------------------------------------------------- transcript colour
 
@@ -1198,7 +1199,8 @@ pub const COMPOSER_ROW_H: f32 = 20.0;
 pub const COMPOSER_GAP: f32 = SPACE_1;
 pub const COMPOSER_META_H: f32 = CHIP_H;
 pub const COMPOSER_META_GAP: f32 = SPACE_1;
-/// The send control: a `COMPOSER_ROW_H` circle, its glyph 10px. At rest it
+/// The send control: a `COMPOSER_ROW_H` square on `R_CHIP` corners, its
+/// glyph 10px. At rest it
 /// sends (↑); while a turn runs it stops (■), whatever is in the line —
 /// Enter is the key that queues a line behind the turn.
 pub const SEND_BUTTON: f32 = COMPOSER_ROW_H;
@@ -1216,16 +1218,16 @@ pub const SEND_IDLE_GROUND: u32 = FILL_HOVER;
 pub const SEND_IDLE_INK: u32 = TEXT_MUTED;
 /// The block's 1px edge, top and bottom: part of its fixed height.
 pub const COMPOSER_EDGE_W: f32 = 1.0;
-/// **Concentric radii.** Every control in and under the box is a
-/// `CHIP_H` pill (`COMPOSER_CHIP_R`, half its height — the send circle's
-/// own radius), and the box's corner is that radius plus the inset between
-/// them (`COMPOSER_CONTROL_INSET`: the edge and the vertical padding), so
-/// a one-line box is itself a pill around its send control. A setup chip's
-/// focus edge wraps its chip one `BAND_EDGE_W` out, so its radius is one
-/// more. The Subagent footer, the Composer's own block, shares the corner.
-pub const COMPOSER_CHIP_R: f32 = CHIP_H / 2.0;
+/// **A block, not a pill.** The box is a terminal line on `R_BLOCK`, like
+/// every raised block, and its controls (chips, the send square) sit on
+/// `R_CHIP`. The inset between them (`COMPOSER_CONTROL_INSET`: the edge and
+/// the vertical padding) is wider than the box's corner, so by the radius
+/// rule the controls take their own role radius. A setup chip's focus edge
+/// wraps its chip one `BAND_EDGE_W` out, so its radius is one more. The
+/// Subagent footer, the Composer's own block, shares the corner.
+pub const COMPOSER_CHIP_R: f32 = R_CHIP;
 pub const COMPOSER_CONTROL_INSET: f32 = COMPOSER_EDGE_W + COMPOSER_PAD_T;
-pub const COMPOSER_R: f32 = COMPOSER_CHIP_R + COMPOSER_CONTROL_INSET;
+pub const COMPOSER_R: f32 = R_BLOCK;
 pub const BAND_EDGE_W: f32 = 1.0;
 /// Where the meta row's ink starts and ends, as padding on the row: C1 and
 /// the send control's trailing edge, less the `PICKER_PAD_X` each chip
@@ -1278,7 +1280,7 @@ pub const USAGE_RING_W: f32 = 2.0;
 /// the three windows read at a glance without the card becoming a panel.
 /// Its padding puts the text on the same edge as a menu row's inside the
 /// floating surface (`FLOAT_PAD` + `MENU_ROW_PAD_X`).
-pub const USAGE_CARD_W: f32 = 216.0;
+pub const USAGE_CARD_W: f32 = 288.0;
 pub const USAGE_CARD_PAD: f32 = MENU_ROW_PAD_X;
 /// Between one window's block and the next, and inside one block: the
 /// blocks stand twice as far apart as their own lines.
@@ -1308,7 +1310,7 @@ pub const USAGE_READOUT_W: f32 = 4.0 * FS_SM * CODE_ADVANCE;
 /// The session-controls card: permission modes, MCP servers and background
 /// tasks as sections of menu rows, wide enough for a server's name beside
 /// its state and two quiet actions.
-pub const SESSION_CARD_W: f32 = 288.0;
+pub const SESSION_CARD_W: f32 = 320.0;
 /// 768px — the image preview sheet's widest reading; it otherwise takes
 /// 90% × 85% of its Pane.
 pub const PREVIEW_MAX_W: f32 = 768.0;

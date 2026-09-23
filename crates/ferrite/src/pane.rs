@@ -2968,17 +2968,17 @@ pub fn model_label(model: &str) -> SharedString {
 }
 
 /// The Composer's model picker: a control chip with the provider's 12px
-/// logomark (monochrome: this is a control, not a picker row), the bare
+/// logomark in its brand colour, the bare
 /// model name and a chevron. A busy Session mutes it rather than fading it.
 /// Render-only; the cockpit gives it its id and its click.
 pub fn model_picker(provider: Option<Provider>, label: SharedString, busy: bool) -> Div {
     let ink = if busy { TEXT_MUTED } else { TEXT_2 };
     let mark = provider.map(|provider| {
-        let glyph = match provider {
-            Provider::Codex => icons::CODEX,
-            Provider::Claude => icons::CLAUDE,
+        let (glyph, ink) = match provider {
+            Provider::Codex => (icons::CODEX, theme::PROVIDER_CODEX),
+            Provider::Claude => (icons::CLAUDE, theme::PROVIDER_CLAUDE),
         };
-        icon(glyph, theme::PROVIDER_MARK_SM, TEXT_MUTED)
+        icon(glyph, theme::PROVIDER_MARK_SM, ink)
     });
     control_chip(ink)
         .children(mark)
@@ -4101,7 +4101,8 @@ pub fn context_usage(
             .child(
                 div()
                     .flex_shrink_0()
-                    .text_color(rgb(TEXT_MUTED))
+                    .font_weight(theme::W_LABEL)
+                    .text_color(rgb(TEXT))
                     .child(label),
             )
             .child(value)
@@ -4143,6 +4144,7 @@ pub fn context_usage(
     let reset_value = |key: &'static str, resets_at: Option<u64>, span: Duration| {
         div()
             .id(SharedString::from(format!("reset-{key}")))
+            .text_size(px(theme::FS_SM))
             .debug_selector(move || {
                 format!(
                     "context-usage-{key}-reset-{}",
@@ -4181,6 +4183,7 @@ pub fn context_usage(
     let counts = div()
         .flex()
         .gap(px(theme::SPACE_1))
+        .text_size(px(theme::FS_SM))
         .text_color(rgb(TEXT_MUTED))
         .child(count_value("current", Some(usage.total_tokens)))
         .child("/")
@@ -4192,16 +4195,17 @@ pub fn context_usage(
         .w(px(theme::USAGE_CARD_W))
         .gap(px(theme::USAGE_CARD_GAP))
         .p(px(theme::USAGE_CARD_PAD))
-        .text_size(px(theme::FS_SM))
+        .text_size(px(theme::FS_UI))
+        .line_height(px(theme::LH_UI))
         .text_color(rgb(TEXT))
         .child(window(
-            "context",
+            "Context",
             "context",
             context_fraction,
             Some(counts.into_any_element()),
         ))
         .child(window(
-            "5-hour",
+            "5-hour limit",
             "five-hour",
             limits.five_hour.map(|limit| limit.used_fraction),
             Some(reset_value(
@@ -4211,7 +4215,7 @@ pub fn context_usage(
             )),
         ))
         .child(window(
-            "weekly",
+            "Weekly limit",
             "weekly",
             limits.weekly.map(|limit| limit.used_fraction),
             Some(reset_value(
@@ -4239,19 +4243,22 @@ pub fn context_usage(
             .child(components::tabular(div().flex_shrink_0().child(value)))
     };
     if let Some(details) = details {
-        let mut section = div().flex().flex_col();
+        let mut section = div().flex().flex_col().gap(px(theme::SPACE_0_5)).child(
+            components::menu_section("Context breakdown", None, None)
+                .mx(px(-theme::MENU_ROW_PAD_X)),
+        );
         if let Some(usable) = details.usable_window {
             section = section.child(
-                row("usable".into(), count_label(usable))
+                row("Usable".into(), count_label(usable))
                     .id(SharedString::from(format!("context-usable-{usable}")))
                     .debug_selector(move || format!("context-usable-{usable}")),
             );
         }
         if let Some(threshold) = details.auto_compact_threshold {
             let key = match details.is_auto_compact_enabled {
-                Some(true) => "compacts at",
-                Some(false) => "compaction off at",
-                None => "compaction threshold",
+                Some(true) => "Compacts at",
+                Some(false) => "Compaction off at",
+                None => "Compaction threshold",
             };
             section = section.child(
                 row(key.into(), count_label(threshold))
@@ -4264,7 +4271,7 @@ pub fn context_usage(
         for (index, category) in details.categories.iter().enumerate() {
             let tokens = category.tokens;
             section = section.child(
-                row(category.name.to_lowercase(), count_label(tokens))
+                row(sentence_case(&category.name), count_label(tokens))
                     .id(SharedString::from(format!(
                         "context-category-{index}-{tokens}"
                     )))
@@ -4275,23 +4282,22 @@ pub fn context_usage(
     }
     if let Some(details) = usage_details {
         let scope = match details.scope {
-            ferrite_core::UsageScope::Message => ("message", "this message"),
-            ferrite_core::UsageScope::Turn => ("turn", "this turn"),
-            ferrite_core::UsageScope::Session => ("session", "this session"),
+            ferrite_core::UsageScope::Message => ("message", "This message"),
+            ferrite_core::UsageScope::Turn => ("turn", "This turn"),
+            ferrite_core::UsageScope::Session => ("session", "This session"),
         };
-        let mut section = div().flex().flex_col().child(
-            div()
-                .debug_selector(move || format!("usage-scope-{}", scope.0))
-                .text_color(rgb(TEXT_2))
-                .child(scope.1),
+        let mut section = div().flex().flex_col().gap(px(theme::SPACE_0_5)).child(
+            components::menu_section(scope.1, None, None)
+                .mx(px(-theme::MENU_ROW_PAD_X))
+                .debug_selector(move || format!("usage-scope-{}", scope.0)),
         );
         for (key, label, count) in [
-            ("input", "input", details.input_tokens),
-            ("cached-input", "cached input", details.cached_input_tokens),
-            ("output", "output", details.output_tokens),
+            ("input", "Input", details.input_tokens),
+            ("cached-input", "Cached input", details.cached_input_tokens),
+            ("output", "Output", details.output_tokens),
             (
                 "reasoning-output",
-                "reasoning output",
+                "Reasoning output",
                 details.reasoning_output_tokens,
             ),
         ] {
@@ -4302,14 +4308,14 @@ pub fn context_usage(
         }
         if let Some(cost) = last_cost {
             section = section.child(
-                row("last cost".into(), format!("US${cost:.4}"))
+                row("Last cost".into(), format!("US${cost:.4}"))
                     .debug_selector(move || format!("usage-cost-{cost}")),
             );
         }
         card = card.child(section);
     } else if let Some(cost) = last_cost {
         card = card.child(
-            row("last cost".into(), format!("US${cost:.4}"))
+            row("Last cost".into(), format!("US${cost:.4}"))
                 .debug_selector(move || format!("usage-cost-{cost}")),
         );
     }
@@ -4317,6 +4323,29 @@ pub fn context_usage(
     components::tabular(card)
         .max_h(px(theme::MENU_MAX_H))
         .overflow_y_scrollbar()
+}
+
+/// A provider's category name in sentence case ("mcp tools" → "Mcp
+/// tools" is wrong, so known acronyms keep their capitals).
+fn sentence_case(name: &str) -> String {
+    let lower = name.to_lowercase();
+    let words: Vec<String> = lower
+        .split(' ')
+        .enumerate()
+        .map(|(index, word)| match word {
+            "mcp" => "MCP".to_owned(),
+            "ai" => "AI".to_owned(),
+            _ if index == 0 => {
+                let mut chars = word.chars();
+                chars
+                    .next()
+                    .map(|first| first.to_uppercase().chain(chars).collect())
+                    .unwrap_or_default()
+            }
+            _ => word.to_owned(),
+        })
+        .collect();
+    words.join(" ")
 }
 
 /// A usage reading's ink: neutral `TEXT_2` until the window runs tight,
