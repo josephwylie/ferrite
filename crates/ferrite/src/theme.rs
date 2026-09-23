@@ -1166,6 +1166,12 @@ pub const SWITCH_H: f32 = 16.0;
 pub const SWITCH_INSET: f32 = SPACE_0_5;
 pub const SWITCH_THUMB: f32 = SWITCH_H - 2.0 * SWITCH_INSET;
 pub const SWITCH_TRAVEL: f32 = SWITCH_W - 2.0 * SWITCH_INSET - SWITCH_THUMB;
+/// A sheet text button's inline padding (Add Directory, Remove, Done).
+pub const FORM_BUTTON_PAD_X: f32 = SPACE_3;
+/// A tooltip: mono `FS_SM`, 8px × 4px, at most 280px before it wraps.
+pub const TOOLTIP_PAD_X: f32 = SPACE_2;
+pub const TOOLTIP_PAD_Y: f32 = SPACE_1;
+pub const TOOLTIP_MAX_W: f32 = 280.0;
 /// A fact row's key column (About): the longest key, "Development build".
 pub const FACT_KEY_W: f32 = 136.0;
 /// Settings and Project editors share the same header and content insets.

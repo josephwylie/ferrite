@@ -72,6 +72,26 @@ fn shortcut(keys: &SharedString, ink: u32) -> Div {
     drawn
 }
 
+/// A tooltip in the floating vocabulary: mono `FS_SM`, 8px × 4px, at most
+/// `TOOLTIP_MAX_W` wide (a long path wraps), the float shadow over the kit's
+/// raised ground and strong hairline edge.
+pub fn tooltip(
+    text: impl Into<SharedString>,
+) -> impl Fn(&mut gpui::Window, &mut gpui::App) -> gpui::AnyView + 'static {
+    let text = text.into();
+    move |window, cx| {
+        gpui::component::tooltip::Tooltip::new(text.clone())
+            .font_family(FONT_MONO)
+            .text_size(px(FS_SM))
+            .line_height(px(LH_META))
+            .px(px(TOOLTIP_PAD_X))
+            .py(px(TOOLTIP_PAD_Y))
+            .max_w(px(TOOLTIP_MAX_W))
+            .shadow(components::float_shadow())
+            .build(window, cx)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -2991,8 +2991,9 @@ impl CockpitView {
                 "Directories",
                 "The first directory is the main one. Add the others one at a time.",
             ));
+        let mut rows = Vec::new();
         if directories.is_empty() {
-            body = body.child(project_editor::empty_directories());
+            rows.push(project_editor::empty_directories());
         }
         for (index, directory) in directories.into_iter().enumerate() {
             let mut actions = div().flex().items_center().gap(px(4.));
@@ -3029,7 +3030,7 @@ impl CockpitView {
                     )),
                 );
             }
-            body = body.child(project_editor::directory_row(
+            rows.push(project_editor::directory_row(
                 directory.display().to_string().into(),
                 if index == 0 {
                     "Main directory"
@@ -3039,6 +3040,7 @@ impl CockpitView {
                 actions,
             ));
         }
+        body = body.child(project_editor::directory_list(rows));
         let add = project_editor::action_button("add-project-directory", "Add Directory", cx)
             .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();

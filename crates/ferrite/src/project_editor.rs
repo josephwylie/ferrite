@@ -1,15 +1,16 @@
-//! Explicit Project editing modal.
+//! Explicit Project editing modal, on the sheet recipe (`prefs::sheet`).
 
 use gpui::component::{
-    button::Button,
+    button::{Button, ButtonCustomVariant, ButtonVariants},
     scroll::{Scrollable, ScrollableElement},
     Disableable,
 };
 use gpui::prelude::*;
-use gpui::{div, px, rgb, rgba, App, Div, FontWeight, SharedString};
+use gpui::{div, px, rgb, rgba, App, Div, SharedString};
 
 use crate::components;
 use crate::icons::{self, icon};
+use crate::prefs;
 use crate::theme::*;
 
 const WIDTH: f32 = 600.;
@@ -20,71 +21,23 @@ const DIRECTORY_H: f32 = 52.;
 const MAX_HEIGHT: f32 = 520.;
 
 pub fn veil() -> Div {
-    div()
-        .absolute()
-        .inset_0()
-        .cursor_default()
-        .occlude()
-        .flex()
-        .items_center()
-        .justify_center()
-        .bg(rgba(0x0000008c))
+    prefs::veil()
 }
 
+/// The sheet, grown by one directory row (and its rule) per additional
+/// directory until the body scrolls.
 pub fn card(directory_count: usize) -> Div {
-    let height = (BASE_HEIGHT + directory_count.saturating_sub(1) as f32 * (DIRECTORY_H + 8.))
+    let height = (BASE_HEIGHT + directory_count.saturating_sub(1) as f32 * (DIRECTORY_H + 1.))
         .min(MAX_HEIGHT);
-    div()
-        .flex()
-        .flex_col()
-        .w(px(WIDTH))
-        .max_w(gpui::relative(MODAL_VIEWPORT_FRACTION))
-        .h(px(height))
-        .max_h(gpui::relative(MODAL_VIEWPORT_FRACTION))
-        .overflow_hidden()
-        .rounded(px(R_BLOCK))
-        .bg(rgb(MENU))
-        .font_family(FONT_UI)
-        .text_size(px(FS_UI))
-        .text_color(rgb(TEXT))
-        .shadow(crate::components::float_shadow())
+    prefs::sheet(WIDTH, height)
 }
 
 pub fn head(title: SharedString, close: impl IntoElement) -> Div {
-    div()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .h(px(MODAL_HEAD_H))
-        .px(px(MODAL_PAD))
-        .gap(px(MODAL_GAP))
-        .child(
-            div()
-                .min_w_0()
-                .flex_1()
-                .truncate()
-                .text_size(px(FS_UI))
-                .font_weight(W_LABEL)
-                .text_color(rgb(TEXT_STRONG))
-                .child(title),
-        )
-        .child(
-            div()
-                .font_family(FONT_MONO)
-                .text_size(px(FS_SM))
-                .text_color(rgb(TEXT_MUTED))
-                .child("esc close"),
-        )
-        .child(close)
+    prefs::sheet_head(title, close)
 }
 
 pub fn close_button(cx: &App) -> Button {
-    components::form_button("project-editor-close", cx)
-        .w(px(ICON_BUTTON))
-        .h(px(ICON_BUTTON))
-        .p_0()
-        .tooltip("Close project editor")
-        .child(icon(icons::CLOSE, ICON_BUTTON_GLYPH, TEXT_MUTED))
+    prefs::sheet_close("project-editor-close", "Close project editor", cx)
 }
 
 /// The card's form fields scroll between its fixed head and action footer.
@@ -99,74 +52,79 @@ pub fn body() -> Scrollable<Div> {
         .min_h_0()
         .overflow_y_scrollbar()
         .px(px(MODAL_PAD))
+        .pt(px(MODAL_GAP))
         .pb(px(MODAL_PAD))
-        .gap(px(8.))
+        .gap(px(SPACE_2))
 }
 
+/// A section header: the mono section label, and its hint in prose.
 pub fn section_label(title: &'static str, hint: &'static str) -> Div {
     div()
         .flex_shrink_0()
         .flex()
         .flex_col()
-        .gap(px(3.))
-        .pt(px(4.))
-        .pb(px(2.))
+        .pt(px(SPACE_2))
+        .child(components::section_label(title).pb(px(SPACE_0_5)))
         .child(
             div()
-                .text_size(px(FS_UI))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(TEXT_STRONG))
-                .child(title),
-        )
-        .child(
-            div()
-                .text_size(px(FS_SM))
+                .font_family(FONT_PROSE)
+                .text_size(px(FS_PROSE_SM))
+                .line_height(px(LH_PROSE_SM))
                 .text_color(rgb(TEXT_MUTED))
                 .child(hint),
         )
 }
 
-/// The Project name row: a label above a bounded input that remains
-/// recognizable before the live editor contains any text.
+/// The Project name row: a section label over a field recessed into the
+/// sheet (`PANE`, the strong hairline edge), recognizable before the live
+/// editor holds any text.
 pub fn name_field(editor: impl IntoElement) -> Div {
     div()
         .flex_shrink_0()
         .flex()
         .flex_col()
-        .gap(px(6.))
-        .pt(px(4.))
-        .child(
-            div()
-                .text_size(px(FS_UI))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(TEXT_STRONG))
-                .child("Name"),
-        )
+        .child(components::section_label("Name"))
         .child(
             div()
                 .flex()
                 .items_center()
                 .h(px(FORM_CONTROL_H))
                 .flex_shrink_0()
-                .px(px(10.))
+                .px(px(FORM_FIELD_PAD_X))
                 .rounded(px(R_CONTROL))
                 .border_1()
-                .border_color(rgb(FILL))
+                .border_color(rgba(HAIRLINE_STRONG))
                 .bg(rgb(PANE))
                 .child(div().min_w_0().flex_1().child(editor)),
         )
 }
 
 /// A refusal from the registry, shown on the card that caused it rather
-/// than on the nav behind it.
+/// than on the nav behind it: the one blocked line.
 pub fn error_line(message: SharedString) -> Div {
-    div()
+    components::text_meta()
         .flex_shrink_0()
-        .pt(px(4.))
-        .font_family(FONT_MONO)
-        .text_size(px(FS_SM))
+        .pt(px(SPACE_1))
         .text_color(rgb(BLOCKED))
         .child(message)
+}
+
+/// The directory list: one edged group, its rows split by the rule weight,
+/// no slab per row.
+pub fn directory_list(rows: Vec<Div>) -> Div {
+    div()
+        .flex_shrink_0()
+        .flex()
+        .flex_col()
+        .rounded(px(R_CONTROL))
+        .border_1()
+        .border_color(rgba(HAIRLINE_STRONG))
+        .overflow_hidden()
+        .children(rows.into_iter().enumerate().map(|(index, row)| {
+            row.when(index > 0, |row| {
+                row.border_t_1().border_color(rgba(HAIRLINE))
+            })
+        }))
 }
 
 /// The create card's empty state: no directory has been picked yet, so
@@ -174,16 +132,17 @@ pub fn error_line(message: SharedString) -> Div {
 pub fn empty_directories() -> Div {
     div()
         .flex()
-        .items_center()
+        .flex_col()
+        .justify_center()
+        .gap(px(SPACE_0_5))
         .min_h(px(DIRECTORY_H))
-        .flex_shrink_0()
-        .px(px(12.))
-        .rounded(px(R_CONTROL))
-        .bg(rgb(RAISED))
-        .font_family(FONT_MONO)
-        .text_size(px(FS_SM))
-        .text_color(rgb(TEXT_MUTED))
-        .child("No directory yet — add the main directory to begin.")
+        .px(px(SPACE_3))
+        .child(
+            components::text_ui()
+                .text_color(rgb(TEXT_2))
+                .child("No directory yet"),
+        )
+        .child(components::text_meta().child("Add the main directory to begin."))
 }
 
 /// The confirming button: the one filled control on the card.
@@ -196,17 +155,15 @@ pub fn primary_button(
     components::primary_button(id, disabled, cx)
         .debug_selector(|| "project-confirm".into())
         .h(px(FORM_CONTROL_H))
-        .px(px(11.))
+        .px(px(FORM_BUTTON_PAD_X))
         .child(components::form_label(
             label,
-            if disabled {
-                TEXT_MUTED
-            } else {
-                crate::theme::ON_ACCENT
-            },
+            if disabled { TEXT_MUTED } else { ON_ACCENT },
         ))
 }
 
+/// One directory: its folder mark, its name over its role and full path
+/// (the path's tooltip holds the whole of it), and its actions.
 pub fn directory_row(path: SharedString, role: &'static str, actions: impl IntoElement) -> Div {
     // The final directory component distinguishes neighboring project roots;
     // a shared parent prefix does not. Native Path semantics also preserve
@@ -225,11 +182,9 @@ pub fn directory_row(path: SharedString, role: &'static str, actions: impl IntoE
         .items_center()
         .min_h(px(DIRECTORY_H))
         .flex_shrink_0()
-        .px(px(12.))
-        .gap(px(12.))
-        .rounded(px(R_CONTROL))
-        .bg(rgb(RAISED))
-        .child(icon(icons::FOLDER, 14., TEXT_MUTED))
+        .px(px(SPACE_3))
+        .gap(px(SPACE_3))
+        .child(icon(icons::FOLDER, ROW_ICON, TEXT_MUTED))
         .child(
             div()
                 .id(selector.clone())
@@ -238,41 +193,16 @@ pub fn directory_row(path: SharedString, role: &'static str, actions: impl IntoE
                 .flex_col()
                 .flex_1()
                 .min_w_0()
-                .gap(px(2.))
-                .tooltip(move |window, cx| {
-                    gpui::component::tooltip::Tooltip::new(tooltip.clone())
-                        .max_w(px(crate::theme::FORM_FIELD_W))
-                        .build(window, cx)
-                })
+                .tooltip(crate::menu::tooltip(tooltip))
                 .child(
                     div()
                         .flex()
                         .items_baseline()
-                        .gap(px(8.))
-                        .child(
-                            div()
-                                .min_w_0()
-                                .truncate()
-                                .text_size(px(FS_UI))
-                                .text_color(rgb(TEXT))
-                                .child(name),
-                        )
-                        .child(
-                            div()
-                                .flex_shrink_0()
-                                .text_size(px(FS_SM))
-                                .text_color(rgb(TEXT_MUTED))
-                                .child(role),
-                        ),
+                        .gap(px(SPACE_2))
+                        .child(components::text_ui().min_w_0().truncate().child(name))
+                        .child(components::text_meta().flex_shrink_0().child(role)),
                 )
-                .child(
-                    div()
-                        .font_family(FONT_MONO)
-                        .text_size(px(FS_SM))
-                        .text_color(rgb(TEXT_MUTED))
-                        .truncate()
-                        .child(path),
-                ),
+                .child(components::text_meta().truncate().child(path)),
         )
         .child(div().flex_shrink_0().child(actions))
 }
@@ -281,10 +211,12 @@ pub fn action_button(id: impl Into<gpui::ElementId>, label: &'static str, cx: &A
     components::form_button(id, cx)
         .debug_selector(move || format!("project-{label}"))
         .h(px(FORM_CONTROL_H))
-        .px(px(9.))
+        .px(px(FORM_BUTTON_PAD_X))
         .child(components::form_label(label, TEXT_2))
 }
 
+/// A destructive action: quiet at rest (colour is state), the blocked wash
+/// under the pointer. Disabled, it explains itself in `TEXT_MUTED`.
 pub fn destructive_button(
     id: impl Into<gpui::ElementId>,
     label: &'static str,
@@ -292,26 +224,23 @@ pub fn destructive_button(
     cx: &App,
 ) -> Button {
     components::form_button(id, cx)
+        .custom(
+            ButtonCustomVariant::new(cx)
+                .foreground(rgb(TEXT_2).into())
+                .hover(rgba(BLOCKED_WASH).into())
+                .active(rgba(BLOCKED_WASH).into()),
+        )
         .disabled(disabled)
         .when(disabled, |button| button.cursor_default())
         .h(px(FORM_CONTROL_H))
-        .px(px(9.))
+        .px(px(FORM_BUTTON_PAD_X))
         .child(components::form_label(
             label,
-            if disabled { TEXT_MUTED } else { BLOCKED },
+            if disabled { TEXT_MUTED } else { TEXT_2 },
         ))
 }
 
 /// Completion actions remain visible while the directory list scrolls.
 pub fn footer(left: impl IntoElement, right: impl IntoElement) -> Div {
-    div()
-        .flex()
-        .items_center()
-        .justify_between()
-        .flex_shrink_0()
-        .gap(px(MODAL_GAP))
-        .px(px(MODAL_PAD))
-        .py(px(MODAL_GAP))
-        .child(left)
-        .child(right)
+    prefs::sheet_footer(left, right)
 }
