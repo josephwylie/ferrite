@@ -5,8 +5,8 @@
 //! from there, and the cockpit wires every click back into it through one
 //! `Verb`. GPUI Kit owns the moving parts: the toast stack and its
 //! auto-hide (`Notification`), the popover's anchoring and outside-click
-//! dismissal (`Popover`), the count (`Badge`) and the bell glyph itself.
-//! Ferrite supplies the tokens.
+//! dismissal (`Popover`). Ferrite draws the bell, its count, the panel (the
+//! one floating surface) and every toast's body.
 
 use std::collections::BTreeSet;
 use std::rc::Rc;
@@ -15,17 +15,15 @@ use ferrite_core::notifications::{
     DecisionNotice, DecisionNoticeId, Notice, NoticeId, RequestKind,
 };
 use ferrite_core::{ThreadId, TurnOutcome};
-use gpui::component::badge::Badge;
 use gpui::component::button::Button;
-use gpui::component::notification::{Notification, NotificationType};
+use gpui::component::notification::Notification;
 use gpui::component::popover::Popover;
-use gpui::component::{Icon, IconName, Sizable, Size, WindowExt as _};
+use gpui::component::WindowExt as _;
 use gpui::prelude::*;
-use gpui::{
-    div, px, rgb, rgba, Anchor, AnyElement, App, Div, FontWeight, SharedString, Stateful, Window,
-};
+use gpui::{div, px, rgb, rgba, Anchor, AnyElement, App, Div, SharedString, Stateful, Window};
 
 use crate::components;
+use crate::icons;
 use crate::pointer::{Pointer, PointerPressed};
 use crate::theme::*;
 
@@ -108,8 +106,18 @@ impl Row {
         }
     }
 
-    fn failed(&self) -> bool {
-        matches!(self.kind, RowKind::Completion(TurnOutcome::Error(_)))
+    /// The detail split for drawing: its state word, that word's ink (only
+    /// a failure or a waiting Decision is coloured), and the rest.
+    fn detail_parts(&self) -> (SharedString, u32, SharedString) {
+        let detail = self.detail();
+        let (lead, ink) = match &self.kind {
+            RowKind::Completion(TurnOutcome::Error(_)) => ("Failed", BLOCKED),
+            RowKind::Completion(_) => ("Finished", TEXT_MUTED),
+            RowKind::Request(RequestKind::Question) => ("Question waiting", ATTENTION),
+            RowKind::Request(RequestKind::Permission) => ("Approval needed", ATTENTION),
+        };
+        let rest = detail.strip_prefix(lead).unwrap_or(&detail).to_string();
+        (lead.into(), ink, rest.into())
     }
 
     fn detail(&self) -> SharedString {
@@ -217,11 +225,14 @@ impl Bell {
         handle: Handle,
         on_open: impl Fn(bool, &mut Window, &mut App) + 'static,
     ) -> AnyElement {
+        let waiting = rows
+            .iter()
+            .any(|row| !row.read && matches!(row.kind, RowKind::Request(_)));
         let rows = Rc::new(rows);
         Popover::new("notifications-bell")
             .anchor(Anchor::TopLeft)
             .appearance(false)
-            .trigger(trigger(unread))
+            .trigger(trigger(unread, waiting, self.open))
             .open(self.open)
             .on_open_change(move |open, window, cx| on_open(*open, window, cx))
             .content(move |_, _, _| panel(&rows, handle.clone()))
@@ -236,25 +247,113 @@ impl Default for Bell {
 }
 
 /// The 28×28 bell button in the nav's chrome band, with the unread count
-/// riding its corner. The badge hides itself at zero.
-fn trigger(unread: usize) -> Button {
+/// riding its corner: `ATTENTION` while a Decision waits among the unread,
+/// steel otherwise, hidden at zero.
+fn trigger(unread: usize, waiting: bool, open: bool) -> Button {
+    let glyph = if open { ACCENT } else { TEXT_MUTED };
     components::button("notifications-bell")
         .debug_selector(|| "notifications-bell".into())
+        .relative()
         .w(px(ICON_BUTTON))
         .h(px(ICON_BUTTON))
         .p_0()
         .tooltip("Notifications")
+        .accessibility_label("Notifications")
+        .child(icons::icon(icons::BELL, ICON_BUTTON_GLYPH, glyph))
+        .when(unread > 0, |bell| bell.child(badge(unread, waiting)))
+}
+
+/// The unread count pill: mono, tabular, `99+` past two digits.
+fn badge(unread: usize, waiting: bool) -> Div {
+    let (ground, ink) = badge_inks(waiting);
+    let count: SharedString = if unread > 99 {
+        "99+".into()
+    } else {
+        unread.to_string().into()
+    };
+    components::tabular(
+        div()
+            .absolute()
+            .top(px(BADGE_INSET))
+            .right(px(BADGE_INSET))
+            .flex()
+            .items_center()
+            .justify_center()
+            .h(px(BADGE_H))
+            .min_w(px(BADGE_H))
+            .px(px(SPACE_1))
+            .rounded_full()
+            .bg(rgb(ground))
+            .font_family(FONT_MONO)
+            .text_size(px(FS_BADGE))
+            .line_height(px(BADGE_H))
+            .font_weight(W_LABEL)
+            .text_color(rgb(ink))
+            .child(count),
+    )
+}
+
+/// The badge's ground and ink: a waiting Decision is attention, plain
+/// completions are steel.
+fn badge_inks(waiting: bool) -> (u32, u32) {
+    if waiting {
+        (ATTENTION, GROUND)
+    } else {
+        (ACCENT_STRONG, ON_ACCENT)
+    }
+}
+
+/// A row's or toast's status mark: attention while a Decision waits, blocked
+/// for a failure, and no colour for a plain finish (green never means
+/// finished).
+fn mark_ink(row: &Row) -> u32 {
+    match &row.kind {
+        RowKind::Request(_) => ATTENTION,
+        RowKind::Completion(TurnOutcome::Error(_)) => BLOCKED,
+        RowKind::Completion(_) => TEXT_MUTED,
+    }
+}
+
+/// The detail line with only its state word coloured.
+fn detail_line(row: &Row) -> Div {
+    let (lead, ink, rest) = row.detail_parts();
+    components::text_meta()
+        .flex()
+        .min_w_0()
+        .child(div().flex_shrink_0().text_color(rgb(ink)).child(lead))
+        .child(div().min_w_0().truncate().child(rest))
+}
+
+/// A toast's body in the mono chrome voice: the status mark, the Thread's
+/// name, the detail with its state word coloured.
+fn toast_body(row: &Row) -> Div {
+    let ink = mark_ink(row);
+    let title = row.title.clone();
+    div()
+        .flex()
+        .items_start()
+        .gap(px(SPACE_2))
+        .min_w_0()
         .child(
-            Badge::new()
-                .count(unread)
-                .max(99)
-                .with_size(Size::Medium)
-                .color(rgb(ATTENTION))
+            div()
+                .flex()
+                .items_center()
+                .h(px(LH_UI))
+                .child(components::status_dot(ink)),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_w_0()
                 .child(
-                    Icon::new(IconName::Bell)
-                        .size(px(ICON_BUTTON_GLYPH))
-                        .text_color(rgb(TEXT_MUTED)),
-                ),
+                    components::text_ui()
+                        .text_color(rgb(TEXT_STRONG))
+                        .truncate()
+                        .child(title),
+                )
+                .child(detail_line(row)),
         )
 }
 
@@ -264,15 +363,12 @@ fn toast(row: &Row, handle: Handle) -> Notification {
     let RowTarget::Notice(id) = row.target else {
         unreachable!("completion toast has a completion target")
     };
+    let body = row.clone();
     Notification::new()
         .id1::<Finished>(row.thread.get() as usize)
-        .title(row.title.clone())
-        .message(row.detail())
-        .with_type(if row.failed() {
-            NotificationType::Error
-        } else {
-            NotificationType::Success
-        })
+        .content(move |_, _, _| toast_body(&body).into_any_element())
+        .px(px(SPACE_3))
+        .py(px(SPACE_3))
         .autohide(true)
         .on_click(move |_, window, cx| handle(Verb::Open(id), window, cx))
 }
@@ -286,37 +382,35 @@ fn request_key(id: &DecisionNoticeId) -> String {
     )
 }
 
+/// A live request's toast: the attention mark and word.
 fn request_toast(row: &Row, handle: Handle) -> Notification {
     let RowTarget::Decision(id) = &row.target else {
         unreachable!("request toast has a request target")
     };
     let id = id.clone();
+    let body = row.clone();
     Notification::new()
         .id1::<Request>(request_key(&id))
-        // Requests retain their toast but live below the Pane header, whose
-        // attention control must remain reachable while rows transition.
-        .placement(Anchor::BottomRight)
-        .title(row.title.clone())
-        .message(row.detail())
-        .with_type(NotificationType::Info)
+        .content(move |_, _, _| toast_body(&body).into_any_element())
+        .px(px(SPACE_3))
+        .py(px(SPACE_3))
         .autohide(true)
         .on_click(move |_, window, cx| handle(Verb::OpenDecision(id.clone()), window, cx))
 }
 
 /// The panel under the bell: a head with the clear verb, then the rows
-/// newest first, on the same floating-menu surface every other menu here
-/// stands on.
+/// newest first, on the one floating surface every menu stands on.
 fn panel(rows: &Rc<Vec<Row>>, handle: Handle) -> Div {
-    let panel = surface().child(head(!rows.is_empty(), handle.clone()));
+    let unread = rows.iter().filter(|row| !row.read).count();
+    let panel = components::floating_surface()
+        .w(px(NOTICE_PANEL_W))
+        .max_h(px(MENU_MAX_H))
+        .child(head(!rows.is_empty(), unread, handle.clone()));
     if rows.is_empty() {
-        return panel.child(
-            div()
-                .px(px(ROW_PAD_X))
-                .py(px(ROW_PAD_X))
-                .text_size(px(FS_SM))
-                .text_color(rgb(TEXT_MUTED))
-                .child("No notifications"),
-        );
+        return panel.child(div().py(px(SPACE_6)).child(components::empty_state(
+            "No notifications",
+            Some("Finished turns and waiting Decisions land here.".into()),
+        )));
     }
     panel.child(
         div()
@@ -325,7 +419,6 @@ fn panel(rows: &Rc<Vec<Row>>, handle: Handle) -> Div {
             .flex_col()
             .min_h_0()
             .overflow_y_scroll()
-            .gap(px(ROW_GAP))
             .children(
                 rows.iter()
                     .enumerate()
@@ -334,30 +427,38 @@ fn panel(rows: &Rc<Vec<Row>>, handle: Handle) -> Div {
     )
 }
 
-fn head(clearable: bool, handle: Handle) -> Div {
+fn head(clearable: bool, unread: usize, handle: Handle) -> Div {
     div()
         .flex()
         .items_center()
         .justify_between()
         .h(px(MENU_ROW_H))
         .flex_shrink_0()
-        .pl(px(ROW_PAD_X))
-        .pr(px(MENU_PAD))
+        .pl(px(MENU_ROW_PAD_X))
+        .mb(px(FLOAT_PAD))
+        .mx(px(-FLOAT_PAD))
+        .px(px(MENU_ROW_PAD_X + FLOAT_PAD))
+        .border_b_1()
+        .border_color(rgba(HAIRLINE))
         .child(
-            div()
-                .text_size(px(FS_SM))
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(rgb(TEXT_2))
-                .child("Notifications"),
+            components::text_meta()
+                .flex()
+                .gap(px(SPACE_1))
+                .child(
+                    div()
+                        .font_weight(W_LABEL)
+                        .text_color(rgb(TEXT_2))
+                        .child("Notifications"),
+                )
+                .when(unread > 0, |title| {
+                    title.child(format!("· {unread} unread"))
+                }),
         )
         .children(clearable.then(|| {
             components::button("notifications-clear")
-                .child(
-                    div()
-                        .text_size(px(FS_SM))
-                        .text_color(rgb(TEXT_MUTED))
-                        .child("Clear"),
-                )
+                .debug_selector(|| "notifications-clear".into())
+                .px(px(SPACE_1_5))
+                .child(components::text_meta().child("Clear all"))
                 .on_click(move |_, window, cx| {
                     cx.stop_propagation();
                     handle(Verb::Clear, window, cx)
@@ -369,36 +470,35 @@ fn row_element(index: usize, row: &Row, handle: Handle) -> Stateful<Div> {
     let target = row.target.clone();
     let open = handle.clone();
     let dismiss = row.target.clone();
-    let dot = div()
-        .flex_shrink_0()
-        .w(px(STATUS_DOT))
-        .h(px(STATUS_DOT))
-        .rounded_full()
-        .bg(if row.read {
-            rgba(0)
-        } else if row.failed() {
-            rgb(BLOCKED)
-        } else {
-            rgb(ATTENTION)
-        });
+    let group: SharedString = format!("notice-row-{index}").into();
     div()
         .id(("notice-row", index))
         .debug_selector(move || format!("notice-row-{index}"))
+        .group(group.clone())
         .flex()
         .items_center()
         .w_full()
-        .min_h(px(MENU_ROW_H))
-        .px(px(ROW_PAD_X))
-        .py(px(MENU_PAD))
-        .gap(px(ROW_PAD_X))
-        .rounded(px(R_CONTROL))
-        .hover_row()
-        .press_row()
+        .flex_shrink_0()
+        .min_h(px(NOTICE_ROW_H))
+        .px(px(MENU_ROW_PAD_X))
+        .py(px(SPACE_1_5))
+        .gap(px(SPACE_2))
+        .rounded(px(R_MENU_ROW))
+        .hover_raised()
+        .press_raised()
         .on_click(move |_, window, cx| {
             cx.stop_propagation();
             open(target_verb(&target), window, cx)
         })
-        .child(dot)
+        // The mark's column stays when the row is read, so titles align.
+        .child(
+            div()
+                .flex_shrink_0()
+                .w(px(STATUS_DOT))
+                .when(!row.read, |slot| {
+                    slot.child(components::status_dot(mark_ink(row)))
+                }),
+        )
         .child(
             div()
                 .flex()
@@ -406,40 +506,30 @@ fn row_element(index: usize, row: &Row, handle: Handle) -> Stateful<Div> {
                 .flex_1()
                 .min_w_0()
                 .child(
-                    div()
-                        .text_size(px(FS_UI))
-                        .line_height(px(LH_TIGHT))
+                    components::text_ui()
                         .text_color(rgb(if row.read { TEXT_2 } else { TEXT_STRONG }))
-                        .when(!row.read, |title| title.font_weight(FontWeight::MEDIUM))
                         .truncate()
                         .child(row.title.clone()),
                 )
-                .child(
-                    div()
-                        .text_size(px(FS_SM))
-                        .line_height(px(LH_META))
-                        .text_color(rgb(TEXT_MUTED))
-                        .truncate()
-                        .child(row.detail()),
-                ),
+                .child(detail_line(row)),
         )
-        .child(
-            div()
+        .child(components::tabular(
+            components::text_meta()
                 .flex_shrink_0()
-                .text_size(px(FS_SM))
-                .text_color(rgb(TEXT_MUTED))
                 .child(row.when.clone()),
-        )
+        ))
+        // The dismiss × keeps its width at rest, so the age never moves; it
+        // shows under the pointer.
         .child(
             components::button(("notice-dismiss", index))
                 .p_0()
                 .w(px(ICON_BUTTON_GLYPH))
                 .h(px(ICON_BUTTON_GLYPH))
-                .child(
-                    Icon::new(IconName::Close)
-                        .size(px(FS_SM))
-                        .text_color(rgb(TEXT_MUTED)),
-                )
+                .opacity(0.)
+                .group_hover(group, |style| style.opacity(1.))
+                .tooltip("Dismiss")
+                .accessibility_label("Dismiss")
+                .child(icons::icon(icons::CLOSE, ROW_ICON, TEXT_MUTED))
                 .on_click(move |_, window, cx| {
                     cx.stop_propagation();
                     handle(dismiss_verb(&dismiss), window, cx)
@@ -461,25 +551,6 @@ fn dismiss_verb(target: &RowTarget) -> Verb {
     }
 }
 
-/// The floating-menu ground every popover here stands on: `--menu`, the
-/// 10px radius, the far and near shadows. 340px wide, so a row holds a
-/// title, a detail line and its age without wrapping.
-fn surface() -> Div {
-    div()
-        .cursor_default()
-        .flex()
-        .flex_col()
-        .w(px(340.))
-        .max_h(px(420.))
-        .gap(px(ROW_GAP))
-        .p(px(MENU_PAD))
-        .rounded(px(R_BLOCK))
-        .bg(rgb(MENU))
-        .font_family(FONT_UI)
-        .text_color(rgb(TEXT))
-        .shadow(crate::components::float_shadow())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -497,12 +568,34 @@ mod tests {
     }
 
     #[test]
+    fn only_the_state_word_takes_a_colour() {
+        let failed = row(TurnOutcome::Error("rate limited".into()), Some("ferrite"));
+        assert_eq!(
+            failed.detail_parts(),
+            ("Failed".into(), BLOCKED, " · rate limited · ferrite".into())
+        );
+        let done = row(TurnOutcome::Completed, None);
+        assert_eq!(
+            done.detail_parts(),
+            ("Finished".into(), TEXT_MUTED, "".into())
+        );
+        assert_eq!(mark_ink(&done), TEXT_MUTED, "green never means finished");
+        assert_eq!(mark_ink(&failed), BLOCKED);
+        let waiting = Row {
+            kind: RowKind::Request(RequestKind::Permission),
+            ..done
+        };
+        assert_eq!(waiting.detail_parts().1, ATTENTION);
+        assert_eq!(mark_ink(&waiting), ATTENTION);
+        assert_eq!(badge_inks(true), (ATTENTION, GROUND));
+        assert_eq!(badge_inks(false), (ACCENT_STRONG, ON_ACCENT));
+    }
+
+    #[test]
     fn a_rows_detail_names_the_outcome_and_the_project() {
         let done = row(TurnOutcome::Completed, Some("ferrite"));
         assert_eq!(done.detail(), SharedString::from("Finished · ferrite"));
-        assert!(!done.failed());
         let failed = row(TurnOutcome::Error("rate limited".into()), None);
         assert_eq!(failed.detail(), SharedString::from("Failed · rate limited"));
-        assert!(failed.failed());
     }
 }

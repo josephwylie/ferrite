@@ -1172,6 +1172,15 @@ pub const FORM_BUTTON_PAD_X: f32 = SPACE_3;
 pub const TOOLTIP_PAD_X: f32 = SPACE_2;
 pub const TOOLTIP_PAD_Y: f32 = SPACE_1;
 pub const TOOLTIP_MAX_W: f32 = 280.0;
+/// The notifications panel: 340px holds a title, a detail line and an age
+/// without wrapping; a row is two lines in 6px of air each side.
+pub const NOTICE_PANEL_W: f32 = 340.0;
+pub const NOTICE_ROW_H: f32 = LH_UI + LH_META + 2.0 * SPACE_1_5;
+/// The bell's unread pill: 14px, 10.5px mono figures, 2px in from the
+/// button's corner.
+pub const BADGE_H: f32 = 14.0;
+pub const FS_BADGE: f32 = 10.5;
+pub const BADGE_INSET: f32 = SPACE_0_5;
 /// A fact row's key column (About): the longest key, "Development build".
 pub const FACT_KEY_W: f32 = 136.0;
 /// Settings and Project editors share the same header and content insets.
