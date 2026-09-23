@@ -68,6 +68,35 @@ pub fn primary_button(id: impl Into<ElementId>, disabled: bool, cx: &App) -> But
         .when(disabled, |button| button.cursor_default())
 }
 
+/// A small verb inside a floating card (Reconnect, Stop, Sign in): a filled
+/// face so it reads as pressable at a glance against the card's rows,
+/// with one fixed height and label size wherever it appears.
+pub fn action_button(id: impl Into<ElementId>, text: impl Into<SharedString>, cx: &App) -> Button {
+    button(id)
+        .custom(
+            ButtonCustomVariant::new(cx)
+                .foreground(rgb(theme::TEXT).into())
+                .hover(rgb(theme::FILL_HOVER).into())
+                .active(rgb(theme::PRESSED).into()),
+        )
+        .bg(rgb(theme::FILL))
+        .h(px(theme::CARD_ACTION_H))
+        .px(px(theme::CARD_ACTION_PAD_X))
+        .tab_stop(true)
+        .child(label(text, theme::TEXT))
+}
+
+/// A card section's heading: small, muted, and the same everywhere, so a
+/// glance finds the group before it reads the rows.
+pub fn section_label(text: impl Into<SharedString>) -> impl IntoElement {
+    div()
+        .text_size(px(theme::FS_SM))
+        .line_height(gpui::relative(theme::LINE_UI))
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .text_color(rgb(theme::TEXT_MUTED))
+        .child(text.into())
+}
+
 pub fn label(text: impl Into<SharedString>, ink: u32) -> impl IntoElement {
     div()
         .text_size(px(theme::FS_SM))

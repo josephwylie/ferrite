@@ -516,7 +516,32 @@ pub const USAGE_RING_R: f32 = 5.4;
 pub const USAGE_RING_W: f32 = 2.0;
 /// The usage meter's detail card: one column of labelled bars, sized so
 /// the three windows read at a glance without the card becoming a panel.
-pub const USAGE_CARD_W: f32 = 216.0;
+pub const USAGE_CARD_W: f32 = 240.0;
+/// One row of the usage card's legend, its colour square, and the share
+/// column the percentages right-align in.
+pub const USAGE_LEGEND_ROW_H: f32 = 20.0;
+pub const USAGE_SWATCH: f32 = 8.0;
+pub const USAGE_SHARE_W: f32 = 44.0;
+/// What fills the context window, one ink per category in the stacked bar
+/// and its legend. Anything else a provider reports takes `CTX_CYCLE`.
+pub const CTX_MESSAGES: u32 = 0x5b9cf0;
+pub const CTX_TOOLS: u32 = 0xe0773f;
+pub const CTX_MCP: u32 = 0x3fae7a;
+pub const CTX_SKILLS: u32 = 0xd9a13b;
+pub const CTX_PROMPT: u32 = 0xb4b4b4;
+pub const CTX_MEMORY: u32 = 0x8c8c8c;
+pub const CTX_BUFFER: u32 = 0x5f5f5f;
+pub const CTX_FREE: u32 = 0x3a3a3a;
+pub const CTX_DEFERRED: u32 = 0x4c4c4c;
+pub const CTX_CYCLE: [u32; 4] = [0xa98bf0, 0xe06c9f, 0x4fb8c9, 0xc2c25a];
+/// The floating session-controls card: wide enough for a server name, its
+/// status and a verb on one line.
+pub const SESSION_CARD_W: f32 = 280.0;
+/// A small filled verb inside a floating card.
+pub const CARD_ACTION_H: f32 = 22.0;
+pub const CARD_ACTION_PAD_X: f32 = 8.0;
+/// A selectable row inside a floating card (one permission mode).
+pub const CARD_ROW_H: f32 = 26.0;
 pub const USAGE_CARD_PAD: f32 = 10.0;
 /// Between one window's block and the next, and inside one block.
 pub const USAGE_CARD_GAP: f32 = 12.0;
