@@ -2135,7 +2135,11 @@ impl CockpitView {
                 anchored()
                     .position(open.at)
                     .snap_to_window_with_margin(px(crate::theme::GRID_PAD))
-                    .child(shell),
+                    .child(crate::motion::menu_in(
+                        "context-menu-in",
+                        shell,
+                        crate::motion::Opens::Down,
+                    )),
             )
             .with_priority(2)
             .into_any_element(),
@@ -2749,7 +2753,8 @@ impl CockpitView {
             ))
             .child(prefs::body(pages));
         Some(
-            deferred(
+            deferred(crate::motion::veil_in(
+                "settings-veil",
                 prefs::veil()
                     .on_mouse_down(
                         MouseButton::Left,
@@ -2759,8 +2764,8 @@ impl CockpitView {
                             cx.notify();
                         }),
                     )
-                    .child(card),
-            )
+                    .child(crate::motion::dialog_in("settings-card-in", card)),
+            ))
             .with_priority(3)
             .into_any_element(),
         )
@@ -3127,7 +3132,8 @@ impl CockpitView {
             .child(body)
             .child(footer);
         Some(
-            deferred(
+            deferred(crate::motion::veil_in(
+                "project-editor-veil",
                 project_editor::veil()
                     .on_mouse_down(
                         MouseButton::Left,
@@ -3137,8 +3143,8 @@ impl CockpitView {
                             cx.notify();
                         }),
                     )
-                    .child(card),
-            )
+                    .child(crate::motion::dialog_in("project-editor-card-in", card)),
+            ))
             .with_priority(3)
             .into_any_element(),
         )
@@ -3367,8 +3373,10 @@ impl CockpitView {
             )
         };
         let live = stopping || can_send;
-        let id = format!("composer-{verb}-{identity:?}");
-        let selector = id.clone();
+        // The element keeps one id across the swap, so the glyph cross-fade
+        // below survives it; the selector names the verb in force.
+        let id = format!("composer-action-{identity:?}");
+        let selector = format!("composer-{verb}-{identity:?}");
         let button = {
             use gpui::component::button::{ButtonCustomVariant, ButtonVariants};
             crate::components::button(SharedString::from(id))
@@ -3390,17 +3398,39 @@ impl CockpitView {
                 .disabled(!live)
                 .tooltip(tooltip)
                 .accessibility_label(tooltip)
-                .child(crate::icons::icon(
-                    if stopping {
-                        crate::icons::STOP
-                    } else {
-                        crate::icons::ARROW_UP
-                    },
-                    crate::theme::SEND_GLYPH,
-                    if live {
-                        crate::theme::SEND_INK
-                    } else {
-                        crate::theme::SEND_IDLE_INK
+                // ↑ and ■ both stay mounted and cross-fade (`motion::ICON_SWAP`):
+                // the arriving glyph grows from a quarter as the leaving one
+                // shrinks to it. First paint lands on the verb in force.
+                .child(crate::motion::settled(
+                    "send-stop",
+                    stopping,
+                    crate::motion::ICON_SWAP,
+                    move |stop| {
+                        let ink = if live {
+                            crate::theme::SEND_INK
+                        } else {
+                            crate::theme::SEND_IDLE_INK
+                        };
+                        let glyph = |path, shown: f32| {
+                            let scale = crate::motion::lerp(
+                                crate::theme::MOTION_ICON_SWAP_SCALE,
+                                1.0,
+                                shown,
+                            );
+                            crate::icons::icon(path, crate::theme::SEND_GLYPH, ink)
+                                .absolute()
+                                .top_0()
+                                .left_0()
+                                .opacity(shown)
+                                .with_transformation(gpui::Transformation::scale(gpui::size(
+                                    scale, scale,
+                                )))
+                        };
+                        div()
+                            .relative()
+                            .size(px(crate::theme::SEND_GLYPH))
+                            .child(glyph(crate::icons::ARROW_UP, 1.0 - stop))
+                            .child(glyph(crate::icons::STOP, stop))
                     },
                 ))
                 .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
@@ -6031,7 +6061,10 @@ impl CockpitView {
             )
             .child(rows)
             .child(pane::popover_footer(open.kind.hints()));
-        Some(popover.into_any_element())
+        Some(
+            crate::motion::menu_in("composer-menu-in", popover, crate::motion::Opens::Up)
+                .into_any_element(),
+        )
     }
 
     /// The nav's per-frame state, from caches and O(1) reads only. Nothing
@@ -8761,7 +8794,11 @@ impl CockpitView {
                     .anchor(gpui::Anchor::BottomRight)
                     .position(at - gpui::point(px(0.), px(crate::theme::FLOAT_OFFSET)))
                     .snap_to_window_with_margin(px(crate::theme::GRID_PAD))
-                    .child(card)
+                    .child(crate::motion::menu_in(
+                        "session-controls-in",
+                        card,
+                        crate::motion::Opens::Up,
+                    ))
                     .into_any_element(),
             )
             .with_priority(2)
@@ -8867,7 +8904,11 @@ impl CockpitView {
                     .anchor(gpui::Anchor::TopRight)
                     .position(at)
                     .snap_to_window_with_margin(px(crate::theme::GRID_PAD))
-                    .child(card),
+                    .child(crate::motion::menu_in(
+                        "context-checks-in",
+                        card,
+                        crate::motion::Opens::Down,
+                    )),
             )
             .with_priority(2)
             .into_any_element(),
@@ -8954,7 +8995,11 @@ impl CockpitView {
                     .anchor(gpui::Anchor::BottomLeft)
                     .position(at)
                     .snap_to_window_with_margin(px(crate::theme::GRID_PAD))
-                    .child(card),
+                    .child(crate::motion::menu_in(
+                        "context-usage-in",
+                        card,
+                        crate::motion::Opens::Up,
+                    )),
             )
             .with_priority(2)
             .into_any_element(),
@@ -9596,7 +9641,12 @@ impl CockpitView {
                     ),
                 );
             }
-            return head.child(deferred(menu));
+            return head.child(deferred(crate::motion::menu_in_at(
+                "nav-order-menu-in",
+                menu,
+                crate::motion::Opens::Down,
+                crate::theme::MENU_TOP,
+            )));
         }
         if !state.filter.open {
             return head;
@@ -9628,7 +9678,12 @@ impl CockpitView {
                 cx.notify();
             }),
         ));
-        head.child(deferred(menu))
+        head.child(deferred(crate::motion::menu_in_at(
+            "nav-filter-menu-in",
+            menu,
+            crate::motion::Opens::Down,
+            crate::theme::MENU_TOP,
+        )))
     }
 
     /// The scrolling tree: Groups with their members and solo Threads in
@@ -9754,24 +9809,49 @@ impl CockpitView {
                     view.open_context_menu(MenuTarget::Parked, event.position, cx);
                 }),
             );
-        let mut section = nav::parked_section().child(header);
-        if state.parked_open {
-            let compact = state.thread_list_order == ThreadListOrder::ByProject;
+        let section = nav::parked_section().child(header);
+        // Unfolding grows the list open over `motion::COLLAPSE` from its
+        // header, and at rest it takes its natural, capped height; folding
+        // shut is instant. One element holds the fold either way, so it
+        // knows an unfold from a first paint.
+        let compact = state.thread_list_order == ThreadListOrder::ByProject;
+        let list = state.parked_open.then(|| {
             let mut list = nav::parked_list(&self.nav_parked_scroll);
             for row in &state.parked {
                 list = list.child(self.thread_element_with_style(row, None, compact, cx));
             }
-            section = section.child(
+            (list, nav::parked_scrollbar(&self.nav_parked_scroll))
+        });
+        let row_h = if compact {
+            crate::theme::NAV_COMPACT_ROW_H
+        } else {
+            crate::theme::THREAD_ROW_H
+        };
+        let natural = state.parked.len() as f32 * (row_h + crate::theme::MEMBER_GAP)
+            + crate::theme::MEMBER_GAP;
+        let fold = crate::motion::settled(
+            "nav-parked-fold",
+            state.parked_open,
+            crate::motion::COLLAPSE,
+            move |open| {
+                let Some((list, scrollbar)) = list else {
+                    return div();
+                };
                 div()
                     .relative()
                     .flex()
                     .flex_col()
                     .flex_1()
                     .min_h_0()
+                    .when(open < 1.0, |fold| {
+                        fold.overflow_hidden().max_h(px(natural * open))
+                    })
                     .child(list)
-                    .child(nav::parked_scrollbar(&self.nav_parked_scroll)),
-            );
-        }
+                    .child(scrollbar)
+            },
+        )
+        .reveal_only();
+        let section = section.child(fold);
         Some(section.into_any_element())
     }
 

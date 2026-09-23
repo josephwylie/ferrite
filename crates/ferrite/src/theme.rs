@@ -1620,9 +1620,10 @@ pub const NAV_PARKED_MAX_SHARE: f32 = 0.5;
 // with its numbers (`motion.rs` maps each entry to the Ferrite surface
 // that wears it). The rules every animated surface follows:
 //
-// - **Ease out, and exits softer than entrances.** Entrances rise a few
-//   pixels into place; exits are shorter and move less. Nothing slides a
-//   full container height.
+// - **Ease out, and exits softer than entrances.** Entrances rise or settle
+//   a few pixels into place. A menu, a sheet or a fold that closes goes at
+//   once: dismissals are frequent, and the closed state says it all.
+//   Nothing slides a full container height.
 // - **High-frequency interactions get at most a 150ms colour or opacity
 //   blend** (`MOTION_HOVER_FADE_MS`): row hovers, selection moves, keys.
 //   Nothing on them scales, slides or staggers, and a press resolves at
@@ -1653,10 +1654,10 @@ pub const MOTION_FADE_IN_MS: u64 = 500;
 pub const MOTION_FADE_IN_RISE: f32 = 4.0;
 /// `fade-quick`: 150ms, opacity only.
 pub const MOTION_FADE_QUICK_MS: u64 = 150;
-/// `menu-in`: 140ms, dropping 2px from its opener (Zeron's 0.96 scale has
-/// no div transform here; the drop and fade carry it). `menu-out` is 100ms.
+/// `menu-in`: 140ms, settling 2px away from its opener (Zeron's 0.96 scale
+/// has no div transform here; the shift and fade carry it). A menu closes
+/// at once: no exit.
 pub const MOTION_MENU_IN_MS: u64 = 140;
-pub const MOTION_MENU_OUT_MS: u64 = 100;
 pub const MOTION_MENU_SHIFT: f32 = 2.0;
 /// The opacity a menu starts from: it is already legible on its first frame.
 pub const MOTION_MENU_FROM_OPACITY: f32 = 0.3;

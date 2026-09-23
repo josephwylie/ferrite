@@ -5622,14 +5622,19 @@ pub fn tool_disclosure_control(
                 .group_hover(DISCLOSURE_ROW, |style| style.visible())
         })
         // `▸`, turned a quarter when open: a filled mark, so a disclosure
-        // never reads as the prompt's stroked `❯` in the same gutter.
-        .child(components::glyph_box(
-            icon(icons::DISCLOSURE, theme::DISCLOSURE_MARK, TEXT_MUTED).when(expanded, |mark| {
-                mark.with_transformation(gpui::Transformation::rotate(gpui::radians(
-                    std::f32::consts::FRAC_PI_2,
-                )))
-            }),
-        ));
+        // never reads as the prompt's stroked `❯` in the same gutter. The
+        // turn eases over `motion::CHEVRON` when the operator flips it; a
+        // row drawn already open (first paint, scroll-back) is simply open.
+        .child(components::glyph_box(crate::motion::settled(
+            "disclosure-turn",
+            expanded,
+            crate::motion::CHEVRON,
+            |turn| {
+                icon(icons::DISCLOSURE, theme::DISCLOSURE_MARK, TEXT_MUTED).with_transformation(
+                    gpui::Transformation::rotate(gpui::radians(std::f32::consts::FRAC_PI_2 * turn)),
+                )
+            },
+        )));
     div()
         .absolute()
         .inset_0()

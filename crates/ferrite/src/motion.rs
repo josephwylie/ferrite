@@ -6,22 +6,28 @@
 //!
 //! # Catalog
 //!
-//! Each Zeron animation, the Ferrite surface it applies to, and whether it
-//! is on now or lands once the surface's owner has merged ("after merge").
+//! Each Zeron animation and the Ferrite surface it applies to.
 //!
-//! | Zeron | Spec | Ferrite surface | When |
-//! | --- | --- | --- | --- |
-//! | `transition-colors` hover | [`HOVER_FADE`] 150ms | nav rows: the hover wash fades in and out, the selected row's step-up likewise; a press is instant | now |
-//! | selection move | none | the nav's one `FILL` moves at once: selection is keyboard-rate, a high-frequency interaction | now (kept instant) |
-//! | sidebar width | [`RESIZE`] 200ms ease-out | nav collapse ⇄ rail: an interruptible [`Tween`] on the column's width, the content fading up from `MOTION_NAV_CONTENT_FROM` | now |
-//! | toasts | kit-owned | enter and exit are gpui-component's own (see below); the `+N` bubble fades in on [`FADE_QUICK`] | now |
-//! | working indicator | pulse clock | the working line's Ferrite mark and every breathing status dot ride [`pulse_phase`] (~30fps, one tick, parks) instead of a per-frame repeat | now |
-//! | `menu-in` / `menu-out` | [`MENU_IN`] 140ms / [`MENU_OUT`] 100ms | menus and popovers (Composer menus, pickers, context menu, nav filter and order menus) via [`menu_in`] | after merge |
-//! | `dialog-in` | [`DIALOG_IN`] 180ms | sheets (Settings, the Project editor) via [`dialog_in`] | after merge |
-//! | chevron rotate | [`CHEVRON`] 150ms | disclosure chevrons: `svg` rotation is available ([`gpui::Transformation::rotate`]) | after merge |
-//! | collapse | [`COLLAPSE`] 180ms | Group expand/collapse in the nav and tool-group disclosures, as a height [`Tween`] | after merge |
-//! | icon swap | [`ICON_SWAP`] 300ms | the Composer's send ⇄ stop: both glyphs stay mounted and cross-fade, opacity 0→1 with `svg` scale 0.25→1 | after merge |
-//! | `fade-in` | [`FADE_IN`] 500ms, 4px rise | a transcript block appended live; never on first paint or scroll-back | after merge |
+//! | Zeron | Spec | Ferrite surface |
+//! | --- | --- | --- |
+//! | `transition-colors` hover | [`HOVER_FADE`] 150ms | nav rows: the hover wash fades in and out, the selected row's step-up likewise; a press is instant |
+//! | selection move | none | the nav's one `FILL` moves at once: selection is keyboard-rate, a high-frequency interaction |
+//! | sidebar width | [`RESIZE`] 200ms ease-out | nav collapse ⇄ rail: an interruptible [`Tween`] on the column's width, the content fading up from `MOTION_NAV_CONTENT_FROM` |
+//! | toasts | kit-owned | enter and exit are gpui-component's own (see below); the `+N` bubble fades in on [`FADE_QUICK`] |
+//! | working indicator | pulse clock | the working line's Ferrite mark and every breathing status dot ride [`pulse_phase`] (~30fps, one tick, parks) instead of a per-frame repeat |
+//! | `menu-in` | [`MENU_IN`] 140ms | every Ferrite-drawn floating surface: the context menu, the nav's order and Project menus, the Composer's menus, the footer cards (session controls, context usage, checks) and the bell's panel, via [`menu_in`] / [`menu_in_at`], settling away from their opener ([`Opens`]) |
+//! | `menu-out` | none | a menu closes at once (see the rules in `theme.rs`) |
+//! | `dialog-in` | [`DIALOG_IN`] 180ms | the Settings and Project sheets via [`dialog_in`], their veil darkening in over [`FADE_QUICK`] ([`veil_in`]) |
+//! | chevron rotate | [`CHEVRON`] 150ms | the transcript's disclosure `▸` turns to `▾` as an eased `svg` rotation ([`settled`]) |
+//! | collapse | [`COLLAPSE`] 180ms | the nav's Parked fold grows open under its header ([`Settled::reveal_only`]); it folds shut at once |
+//! | icon swap | [`ICON_SWAP`] 300ms | the Composer's send ⇄ stop: both glyphs stay mounted and cross-fade, opacity with `svg` scale 0.25 → 1 |
+//! | `fade-in` | [`FADE_IN`] 500ms, 4px rise | a transcript row appended at the tail while the operator watches ([`fade_in_at`]); never first paint, a history window growing at its head, or scroll-back |
+//!
+//! Kit-drawn menus (the Composer's provider and effort pickers, gpui-kit's
+//! `PopupMenu`) keep the kit's own behaviour. A tool group's disclosure in
+//! the transcript opens without a height tween: its rows are one item of a
+//! virtualized list inside a kit `Collapsible`, and an item mid-reveal would
+//! clip rows the pointer can already reach.
 //!
 //! # What gpui here cannot do, and what stands in
 //!
@@ -189,6 +195,10 @@ impl MotionSpec {
     /// state under reduced motion.
     pub fn animation(&self) -> Animation {
         let spec = *self;
+        if !live() {
+            // Resting (see `live`): lands on its end state at once.
+            return Animation::new(Duration::from_nanos(1)).with_easing(|_| 1.0);
+        }
         Animation::new(spec.duration()).with_easing(move |raw| spec.progress(raw))
     }
 }
@@ -196,12 +206,9 @@ impl MotionSpec {
 pub const FADE_IN: MotionSpec = MotionSpec::new(theme::MOTION_FADE_IN_MS, EASE_OUT_EXPO);
 pub const FADE_QUICK: MotionSpec = MotionSpec::new(theme::MOTION_FADE_QUICK_MS, EASE);
 pub const MENU_IN: MotionSpec = MotionSpec::new(theme::MOTION_MENU_IN_MS, EASE);
-pub const MENU_OUT: MotionSpec = MotionSpec::new(theme::MOTION_MENU_OUT_MS, EASE);
 pub const DIALOG_IN: MotionSpec = MotionSpec::new(theme::MOTION_DIALOG_IN_MS, EASE);
 pub const RESIZE: MotionSpec = MotionSpec::new(theme::MOTION_RESIZE_MS, EASE_OUT);
-#[allow(dead_code)] // after merge: Group and tool-group disclosures
 pub const COLLAPSE: MotionSpec = MotionSpec::new(theme::MOTION_COLLAPSE_MS, EASE_OUT);
-#[allow(dead_code)] // after merge: disclosure chevrons
 pub const CHEVRON: MotionSpec = MotionSpec::new(theme::MOTION_CHEVRON_MS, EASE);
 pub const HOVER_FADE: MotionSpec = MotionSpec::new(theme::MOTION_HOVER_FADE_MS, EASE_STANDARD);
 pub const ICON_SWAP: MotionSpec = MotionSpec::new(theme::MOTION_ICON_SWAP_MS, EASE_ICON);
@@ -216,57 +223,107 @@ pub fn lerp(from: f32, to: f32, t: f32) -> f32 {
 // ---------------------------------------------------------------------------
 //
 // A rise or drop is a relative `top` inset: taffy applies relative insets
-// after layout, so, like a CSS transform, siblings never move. Each helper
-// plays once when its element id first mounts, so a caller mounts it only
-// for a change the operator watched (never first paint, never scroll-back).
+// after layout, so, like a CSS transform, siblings never move. The entrances
+// play once when their element id first mounts, so a caller mounts one only
+// for a change the operator watched. There are no exits: a menu or sheet
+// that closes is gone at once (an exit costs the operator a wait on every
+// dismissal and says nothing the closed state does not).
+//
+// gpui paints a surface's shadow under it and has no group compositing, so
+// a surface still fading in would show its own shadow through it as a dark
+// slab. The float entrances ramp the shadow's ink by the square of the
+// fade, which the element's own opacity takes to the cube (the kit's
+// toasts do the same).
 
-/// `fade-in`: opacity 0 → 1 rising `MOTION_FADE_IN_RISE` into place.
-#[allow(dead_code)] // after merge: live-appended transcript blocks
-pub fn fade_in<E>(id: impl Into<ElementId>, element: E) -> AnimationElement<E>
+/// Which way a floating surface opens from its opener: it starts
+/// `MOTION_MENU_SHIFT` back toward the opener and settles away from it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Opens {
+    /// Below its opener (the nav's menus, the context menu, the bell).
+    Down,
+    /// Above its opener (the Composer's menus, the footer cards).
+    Up,
+}
+
+impl Opens {
+    fn shift(self, t: f32) -> f32 {
+        let toward = match self {
+            Opens::Down => -1.0,
+            Opens::Up => 1.0,
+        };
+        toward * theme::MOTION_MENU_SHIFT * (1.0 - t)
+    }
+}
+
+fn float_face<E: Styled>(el: E, opacity: f32) -> E {
+    el.opacity(opacity)
+        .shadow(crate::components::float_shadow_faded(opacity * opacity))
+}
+
+/// `menu-in` for a floating surface in flow (inside `anchored` or a
+/// wrapper): fades up from `MOTION_MENU_FROM_OPACITY` while settling
+/// `MOTION_MENU_SHIFT` away from its opener.
+pub fn menu_in<E>(id: impl Into<ElementId>, element: E, opens: Opens) -> AnimationElement<E>
 where
     E: Styled + IntoElement + 'static,
 {
-    element.with_animation(id, FADE_IN.animation(), |el, t| {
-        el.relative()
-            .opacity(t)
-            .top(px(theme::MOTION_FADE_IN_RISE * (1.0 - t)))
+    element.with_animation(id, MENU_IN.animation(), move |el, t| {
+        float_face(el, lerp(theme::MOTION_MENU_FROM_OPACITY, 1.0, t))
+            .relative()
+            .top(px(opens.shift(t)))
     })
 }
 
-/// `fade-quick`: opacity only.
-#[allow(dead_code)] // after merge: row and chip arrivals
-pub fn fade_quick<E>(id: impl Into<ElementId>, element: E) -> AnimationElement<E>
+/// `menu-in` for a floating surface placed absolutely at `top`: the same
+/// entrance, the shift riding its own inset.
+pub fn menu_in_at<E>(
+    id: impl Into<ElementId>,
+    element: E,
+    opens: Opens,
+    top: f32,
+) -> AnimationElement<E>
 where
     E: Styled + IntoElement + 'static,
 {
-    element.with_animation(id, FADE_QUICK.animation(), |el, t| el.opacity(t))
-}
-
-/// `menu-in`: fades up from `MOTION_MENU_FROM_OPACITY` while dropping
-/// `MOTION_MENU_SHIFT` from its opener.
-#[allow(dead_code)] // after merge: menus and popovers
-pub fn menu_in<E>(id: impl Into<ElementId>, element: E) -> AnimationElement<E>
-where
-    E: Styled + IntoElement + 'static,
-{
-    element.with_animation(id, MENU_IN.animation(), |el, t| {
-        el.relative()
-            .opacity(lerp(theme::MOTION_MENU_FROM_OPACITY, 1.0, t))
-            .top(px(-theme::MOTION_MENU_SHIFT * (1.0 - t)))
+    element.with_animation(id, MENU_IN.animation(), move |el, t| {
+        float_face(el, lerp(theme::MOTION_MENU_FROM_OPACITY, 1.0, t)).top(px(top + opens.shift(t)))
     })
 }
 
-/// `dialog-in`: opacity 0 → 1 rising `MOTION_DIALOG_RISE`.
-#[allow(dead_code)] // after merge: sheets
+/// `dialog-in` for a sheet: opacity 0 → 1 rising `MOTION_DIALOG_RISE`.
 pub fn dialog_in<E>(id: impl Into<ElementId>, element: E) -> AnimationElement<E>
 where
     E: Styled + IntoElement + 'static,
 {
     element.with_animation(id, DIALOG_IN.animation(), |el, t| {
-        el.relative()
-            .opacity(t)
+        float_face(el, t)
+            .relative()
             .top(px(theme::MOTION_DIALOG_RISE * (1.0 - t)))
     })
+}
+
+/// A sheet's veil darkening in over `FADE_QUICK`: only its ground fades, so
+/// the sheet on it keeps its own entrance.
+pub fn veil_in<E>(id: impl Into<ElementId>, element: E) -> AnimationElement<E>
+where
+    E: Styled + IntoElement + 'static,
+{
+    element.with_animation(id, FADE_QUICK.animation(), |el, t| {
+        el.bg(mix(
+            gpui::transparent_black(),
+            gpui::rgba(theme::VEIL).into(),
+            t,
+        ))
+    })
+}
+
+/// `fade-in` at progress `t`: opacity with a `MOTION_FADE_IN_RISE` rise,
+/// for a caller that drives `t` itself (a live-appended transcript row).
+pub fn fade_in_at<E: Styled>(element: E, t: f32) -> E {
+    element
+        .opacity(t)
+        .relative()
+        .top(px(theme::MOTION_FADE_IN_RISE * (1.0 - t)))
 }
 
 // ---------------------------------------------------------------------------
@@ -332,6 +389,126 @@ impl Tween {
         !reduced
             && self.from != self.to
             && now.saturating_duration_since(self.started) < self.spec.duration()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Settled: a state change that eases, held in element state
+// ---------------------------------------------------------------------------
+//
+// A two-state control (a disclosure's turn, send ⇄ stop, a fold) animates
+// between its states only when the state *changes under it*: the element
+// remembers the target it last drew, and on its first mount — first paint,
+// a row scrolled back into view — it lands on the state it is given, with
+// no entrance. A flip mid-flight turns around from where it is.
+
+#[derive(Debug, Clone, Copy)]
+struct SettleState {
+    target: f32,
+    tween: Option<Tween>,
+}
+
+/// The value this element draws at, easing toward `target` whenever it
+/// changes. `reveal_only` snaps any move toward 0 (a fold that closes goes
+/// at once) and eases only the opening. Asks the painting view for another
+/// frame while it moves.
+pub fn settle(
+    id: impl Into<ElementId>,
+    target: f32,
+    spec: MotionSpec,
+    reveal_only: bool,
+    window: &mut Window,
+    cx: &mut App,
+) -> f32 {
+    let now = cx.background_executor().now();
+    let reduced = reduced_motion(cx);
+    let (value, running) = window.with_global_id(id.into(), |id, window| {
+        window.with_element_state(id, |state: Option<SettleState>, _| {
+            let mut state = state.unwrap_or(SettleState {
+                target,
+                tween: None,
+            });
+            if state.target != target {
+                let snap = reveal_only && target < state.target;
+                state.tween = (!snap).then(|| {
+                    Tween::retarget(state.tween, state.target, target, spec, now, reduced)
+                });
+                state.target = target;
+            }
+            let value = state
+                .tween
+                .map_or(target, |tween| tween.value(now, reduced));
+            let running = state.tween.is_some_and(|tween| tween.running(now, reduced));
+            ((value, running), state)
+        })
+    });
+    if running {
+        window.request_animation_frame();
+    }
+    value
+}
+
+/// An element drawn at [`settle`]'s value: `build` receives it (0..1 between
+/// the two states) and returns what to paint.
+pub struct Settled<F> {
+    id: ElementId,
+    target: f32,
+    spec: MotionSpec,
+    reveal_only: bool,
+    build: F,
+}
+
+/// Ease `build`'s element between two states (`on` is the target).
+pub fn settled<F, E>(id: impl Into<ElementId>, on: bool, spec: MotionSpec, build: F) -> Settled<F>
+where
+    F: FnOnce(f32) -> E + 'static,
+    E: IntoElement,
+{
+    Settled {
+        id: id.into(),
+        target: if on { 1.0 } else { 0.0 },
+        spec,
+        reveal_only: false,
+        build,
+    }
+}
+
+impl<F> Settled<F> {
+    /// Only the opening eases; a close lands at once.
+    pub fn reveal_only(mut self) -> Self {
+        self.reveal_only = true;
+        self
+    }
+}
+
+impl<F, E> gpui::RenderOnce for Settled<F>
+where
+    F: FnOnce(f32) -> E + 'static,
+    E: IntoElement,
+{
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let value = settle(
+            self.id,
+            self.target,
+            self.spec,
+            self.reveal_only,
+            window,
+            cx,
+        );
+        (self.build)(value)
+    }
+}
+
+impl<F, E> IntoElement for Settled<F>
+where
+    F: FnOnce(f32) -> E + 'static,
+    E: IntoElement,
+{
+    type Element = gpui::ViewElement<Self>;
+
+    #[track_caller]
+    fn into_element(self) -> Self::Element {
+        gpui::ViewElement::new(self)
     }
 }
 
@@ -405,7 +582,7 @@ pub fn pulse_phase(period: Duration, view: EntityId, cx: &mut App) -> f32 {
     let clock = cx.default_global::<PulseClock>();
     let epoch = *clock.epoch.get_or_insert(now);
     clock.leases.renew(view, now);
-    if !clock.running && drives(cx) {
+    if !clock.running {
         cx.default_global::<PulseClock>().running = true;
         cx.spawn(async move |cx| loop {
             cx.background_executor().timer(pulse_tick()).await;
@@ -437,37 +614,10 @@ pub fn pulse_phase(period: Duration, view: EntityId, cx: &mut App) -> f32 {
 }
 
 /// The clock is parked: no view holds a lease and no timer is armed.
+#[cfg(test)]
 pub fn pulse_parked(cx: &App) -> bool {
     cx.try_global::<PulseClock>()
         .is_none_or(|clock| !clock.running)
-}
-
-/// Whether leases start the clock. Always, except in unit tests, which opt
-/// in with [`testing::drive_pulse`]: gpui's test window keeps no
-/// `debug_bounds` for a cached view that a frame reuses, so a tick nobody
-/// asked for (it re-renders the cockpit, not its cached transcripts) would
-/// blank the transcript selectors other tests read. It keeps the old
-/// contract, too: a per-frame loop's frames were never delivered in a test.
-fn drives(cx: &App) -> bool {
-    #[cfg(test)]
-    return cx.has_global::<testing::DrivePulse>();
-    #[cfg(not(test))]
-    {
-        let _ = cx;
-        true
-    }
-}
-
-#[cfg(test)]
-pub mod testing {
-    /// Present: this test's leases start the pulse clock.
-    pub struct DrivePulse;
-
-    impl gpui::Global for DrivePulse {}
-
-    pub fn drive_pulse(cx: &mut gpui::App) {
-        cx.set_global(DrivePulse);
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -652,9 +802,37 @@ pub fn hover_blend(key: &str, rest: Hsla, hover: Hsla) -> Hsla {
 // ---------------------------------------------------------------------------
 
 /// The one reduced-motion switch: gpui's flag, which every `with_animation`
-/// and kit spring already honours.
+/// and kit spring already honours — and, in unit tests, the kit itself
+/// unless a test drives it ([`live`]).
 pub fn reduced_motion(cx: &App) -> bool {
-    cx.reduce_motion()
+    cx.reduce_motion() || !live()
+}
+
+/// Whether the kit animates at all. Always, except in unit tests, where it
+/// rests unless a test asks for it (`testing::drive`). The suite asserts
+/// layout and hit targets straight after a state change, on a clock it
+/// steps by hand, and gpui's `with_animation` runs on the wall clock: live
+/// entrances would make those readings depend on when they were taken. A
+/// pulse tick nobody asked for would also blank the transcripts' test
+/// selectors (gpui's test window keeps no `debug_bounds` for a cached view
+/// it reuses). Resting, the kit behaves as it does under reduced motion.
+pub(crate) fn live() -> bool {
+    #[cfg(test)]
+    return testing::DRIVE.with(std::cell::Cell::get);
+    #[cfg(not(test))]
+    true
+}
+
+#[cfg(test)]
+pub mod testing {
+    thread_local! {
+        pub(super) static DRIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    /// This test (its thread) runs the motion kit live.
+    pub fn drive() {
+        DRIVE.with(|drive| drive.set(true));
+    }
 }
 
 /// Launch: adopt the system's Reduce Motion setting. gpui reads no platform
@@ -769,8 +947,6 @@ mod tests {
         assert_eq!(HOVER_FADE.curve, CubicBezier::new(0.4, 0.0, 0.2, 1.0));
         assert_eq!(ICON_SWAP.curve, CubicBezier::new(0.2, 0.0, 0.0, 1.0));
         assert_eq!(theme::MOTION_ICON_SWAP_SCALE, 0.25);
-        // Exits are softer than entrances.
-        assert!(MENU_OUT.duration_ms < MENU_IN.duration_ms);
     }
 
     #[test]
@@ -918,7 +1094,7 @@ mod tests {
     /// the window is left with no timer and no frame.
     #[gpui::test]
     fn the_pulse_clock_ticks_while_leased_and_parks_when_unmounted(cx: &mut TestAppContext) {
-        cx.update(testing::drive_pulse);
+        testing::drive();
         let (view, cx) = cx.add_window_view(|_, _| Loop {
             painting: true,
             renders: 0,
@@ -966,10 +1142,118 @@ mod tests {
         );
     }
 
+    struct Switch {
+        on: bool,
+        reveal_only: bool,
+        drawn: std::rc::Rc<std::cell::Cell<f32>>,
+    }
+
+    impl Render for Switch {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let drawn = self.drawn.clone();
+            let fold = settled("switch", self.on, CHEVRON, move |value| {
+                drawn.set(value);
+                div().size_4()
+            });
+            div().child(if self.reveal_only {
+                fold.reveal_only()
+            } else {
+                fold
+            })
+        }
+    }
+
+    fn switch(
+        cx: &mut TestAppContext,
+        on: bool,
+        reveal_only: bool,
+    ) -> (
+        gpui::Entity<Switch>,
+        std::rc::Rc<std::cell::Cell<f32>>,
+        &mut gpui::VisualTestContext,
+    ) {
+        let drawn = std::rc::Rc::new(std::cell::Cell::new(-1.0));
+        let seen = drawn.clone();
+        let (view, cx) = cx.add_window_view(move |_, _| Switch {
+            on,
+            reveal_only,
+            drawn: seen,
+        });
+        cx.run_until_parked();
+        (view, drawn, cx)
+    }
+
+    fn flip(view: &gpui::Entity<Switch>, on: bool, cx: &mut gpui::VisualTestContext) {
+        view.update(cx, |view, cx| {
+            view.on = on;
+            cx.notify();
+        });
+        cx.run_until_parked();
+    }
+
+    fn next_frame(cx: &mut gpui::VisualTestContext) -> usize {
+        let frames = cx.update(|window, cx| window.simulate_next_frame(cx));
+        cx.run_until_parked();
+        frames
+    }
+
+    /// A settled element lands on the state it is first drawn in; a flip
+    /// eases over its spec with frames only while it moves, and a flip back
+    /// mid-flight turns around from where it is.
+    #[gpui::test]
+    fn a_settled_element_lands_on_first_paint_and_eases_a_flip(cx: &mut TestAppContext) {
+        testing::drive();
+        let (view, drawn, cx) = switch(cx, true, false);
+        assert_eq!(drawn.get(), 1.0, "first paint lands open");
+        assert_eq!(next_frame(cx), 0, "and asks for nothing");
+
+        flip(&view, false, cx);
+        cx.executor().advance_clock(Duration::from_millis(75));
+        assert!(next_frame(cx) > 0, "mid-flight asks for frames");
+        let mid = drawn.get();
+        assert!(mid > 0.0 && mid < 1.0, "mid-flight {mid}");
+
+        flip(&view, true, cx);
+        close(drawn.get(), mid, 1e-3, "turns around from where it is");
+        cx.executor()
+            .advance_clock(Duration::from_millis(theme::MOTION_CHEVRON_MS));
+        next_frame(cx);
+        assert_eq!(drawn.get(), 1.0);
+        assert_eq!(next_frame(cx), 0, "settled: no frames");
+    }
+
+    /// A reveal eases open and closes at once.
+    #[gpui::test]
+    fn a_reveal_eases_open_and_closes_at_once(cx: &mut TestAppContext) {
+        testing::drive();
+        let (view, drawn, cx) = switch(cx, false, true);
+        assert_eq!(drawn.get(), 0.0);
+        flip(&view, true, cx);
+        cx.executor().advance_clock(Duration::from_millis(50));
+        next_frame(cx);
+        let opening = drawn.get();
+        assert!(opening > 0.0 && opening < 1.0, "opening {opening}");
+        flip(&view, false, cx);
+        assert_eq!(drawn.get(), 0.0, "closed at once");
+        next_frame(cx); // the frame the opening had already asked for
+        assert_eq!(next_frame(cx), 0, "and nothing after");
+    }
+
+    /// Reduced motion lands every flip.
+    #[gpui::test]
+    fn reduced_motion_lands_a_settled_flip(cx: &mut TestAppContext) {
+        testing::drive();
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let (view, drawn, cx) = switch(cx, false, false);
+        flip(&view, true, cx);
+        assert_eq!(drawn.get(), 1.0);
+        assert_eq!(next_frame(cx), 0);
+    }
+
     /// Reduced motion holds a loop at its start and leases nothing.
     #[gpui::test]
     fn reduced_motion_holds_a_loop_at_its_start(cx: &mut TestAppContext) {
-        cx.update(testing::drive_pulse);
+        testing::drive();
         cx.update(|cx| cx.set_reduce_motion(true));
         let (view, cx) = cx.add_window_view(|_, _| Loop {
             painting: true,

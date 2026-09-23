@@ -176,6 +176,18 @@ pub fn raised_edged(edge: u32) -> Div {
     raised().border_1().border_color(rgba(edge))
 }
 
+/// `float_shadow` with its ink scaled by `k` (0..1): a floating surface's
+/// shadow while it fades in (`motion::menu_in`).
+pub fn float_shadow_faded(k: f32) -> Vec<BoxShadow> {
+    float_shadow()
+        .into_iter()
+        .map(|layer| BoxShadow {
+            color: layer.color.opacity(k.clamp(0.0, 1.0)),
+            ..layer
+        })
+        .collect()
+}
+
 /// The only shadow in the app, for floating surfaces: a far soft layer and a
 /// near contact layer.
 pub fn float_shadow() -> Vec<BoxShadow> {
