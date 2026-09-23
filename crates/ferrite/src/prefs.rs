@@ -2,7 +2,7 @@
 //! Values and persistence remain owned by the cockpit.
 
 use gpui::prelude::*;
-use gpui::{div, point, px, rgb, rgba, App, Axis, BoxShadow, Div, SharedString};
+use gpui::{div, px, rgb, rgba, App, Axis, Div, SharedString};
 
 use gpui::component::button::Button;
 use gpui::component::menu::{DropdownMenu, PopupMenuItem};
@@ -16,8 +16,7 @@ use crate::icons::{self, icon};
 use crate::theme::{
     FILL, FILL_HOVER, FONT_MONO, FONT_UI, FORM_CHOICE_PAD, FORM_CONTROL_H, FORM_FIELD_W, FS_SM,
     FS_UI, ICON_BUTTON, ICON_BUTTON_GLYPH, MENU, MODAL_HEAD_H, MODAL_PAD, MODAL_VIEWPORT_FRACTION,
-    PANE, R_BLOCK, R_CHIP, R_CONTROL, SHADOW_FAR, SHADOW_FAR_BLUR, SHADOW_FAR_SPREAD, SHADOW_FAR_Y,
-    SHADOW_NEAR, SHADOW_NEAR_BLUR, SHADOW_NEAR_Y, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG, W_LABEL,
+    PANE, R_BLOCK, R_CHIP, R_CONTROL, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG, W_LABEL,
 };
 
 /// The card's width; tall enough sections scroll inside it.
@@ -56,22 +55,7 @@ pub fn card() -> Div {
         .rounded(px(R_BLOCK))
         .bg(rgb(MENU))
         .font_family(FONT_UI)
-        .shadow(vec![
-            BoxShadow {
-                inset: false,
-                color: rgba(SHADOW_FAR).into(),
-                offset: point(px(0.), px(SHADOW_FAR_Y)),
-                blur_radius: px(SHADOW_FAR_BLUR),
-                spread_radius: px(SHADOW_FAR_SPREAD),
-            },
-            BoxShadow {
-                inset: false,
-                color: rgba(SHADOW_NEAR).into(),
-                offset: point(px(0.), px(SHADOW_NEAR_Y)),
-                blur_radius: px(SHADOW_NEAR_BLUR),
-                spread_radius: px(0.),
-            },
-        ])
+        .shadow(crate::components::float_shadow())
 }
 
 /// The head: the title, the escape hint, the close button (wired by the

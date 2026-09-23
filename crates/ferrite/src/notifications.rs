@@ -22,17 +22,15 @@ use gpui::component::popover::Popover;
 use gpui::component::{Icon, IconName, Sizable, Size, WindowExt as _};
 use gpui::prelude::*;
 use gpui::{
-    div, point, px, rgb, rgba, Anchor, AnyElement, App, BoxShadow, Div, FontWeight, SharedString,
-    Stateful, Window,
+    div, px, rgb, rgba, Anchor, AnyElement, App, Div, FontWeight, SharedString, Stateful, Window,
 };
 
 use crate::components;
 use crate::pointer::{Pointer, PointerPressed};
 use crate::theme::{
     ATTENTION, BLOCKED, FONT_UI, FS_SM, FS_UI, ICON_BUTTON, ICON_BUTTON_GLYPH, LH_META, LH_TIGHT,
-    MENU, MENU_PAD, MENU_ROW_H, ROW_GAP, ROW_PAD_X, R_BLOCK, R_CONTROL, SHADOW_FAR,
-    SHADOW_FAR_BLUR, SHADOW_FAR_SPREAD, SHADOW_FAR_Y, SHADOW_NEAR, SHADOW_NEAR_BLUR, SHADOW_NEAR_Y,
-    STATUS_DOT, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG,
+    MENU, MENU_PAD, MENU_ROW_H, ROW_GAP, ROW_PAD_X, R_BLOCK, R_CONTROL, STATUS_DOT, TEXT, TEXT_2,
+    TEXT_MUTED, TEXT_STRONG,
 };
 
 /// What a click on the bell's surfaces means. The cockpit answers each
@@ -483,22 +481,7 @@ fn surface() -> Div {
         .bg(rgb(MENU))
         .font_family(FONT_UI)
         .text_color(rgb(TEXT))
-        .shadow(vec![
-            BoxShadow {
-                inset: false,
-                color: rgba(SHADOW_FAR).into(),
-                offset: point(px(0.), px(SHADOW_FAR_Y)),
-                blur_radius: px(SHADOW_FAR_BLUR),
-                spread_radius: px(SHADOW_FAR_SPREAD),
-            },
-            BoxShadow {
-                inset: false,
-                color: rgba(SHADOW_NEAR).into(),
-                offset: point(px(0.), px(SHADOW_NEAR_Y)),
-                blur_radius: px(SHADOW_NEAR_BLUR),
-                spread_radius: px(0.),
-            },
-        ])
+        .shadow(crate::components::float_shadow())
 }
 
 #[cfg(test)]

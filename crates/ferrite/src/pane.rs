@@ -33,8 +33,8 @@ use ferrite_core::{Decision, ThreadId};
 use gpui::prelude::*;
 use gpui::{
     canvas, deferred, div, point, pulsating_between, px, relative, rgb, rgba, Animation,
-    AnimationExt, AnyElement, BoxShadow, Context, Div, Entity, FocusHandle, FontFeatures,
-    FontWeight, HighlightStyle, PathBuilder, SharedString, Stateful, Styled, StyledText,
+    AnimationExt, AnyElement, Context, Div, Entity, FocusHandle, FontWeight, HighlightStyle,
+    PathBuilder, SharedString, Stateful, Styled, StyledText,
 };
 #[cfg(test)]
 use std::cell::RefCell;
@@ -1395,9 +1395,9 @@ fn wall_cell(
                 .gap(px(5.))
                 .min_w_0()
                 .child(if hollow {
-                    hollow_dot(px(theme::LED_WALL))
+                    components::status_ring(TEXT_FAINT).size(px(theme::LED_WALL))
                 } else {
-                    led(px(theme::LED_WALL), dot_color)
+                    components::status_dot(dot_color).size(px(theme::LED_WALL))
                 })
                 .child(
                     div()
@@ -1532,7 +1532,7 @@ fn l2_cell(
         .h(px(theme::CELL_HEADER_H))
         .gap(px(6.))
         .px(px(8.))
-        .child(led(px(theme::STATUS_DOT), led_color))
+        .child(components::status_dot(led_color))
         .child(
             div()
                 .min_w_0()
@@ -1999,7 +1999,7 @@ fn pane_head(view: &PaneView, state: PaneHeadState<'_>) -> Div {
         .text_size(px(theme::FS_SM))
         .line_height(px(theme::LH_META))
         .text_color(rgb(TEXT_MUTED))
-        .child(led(px(theme::STATUS_DOT), dot_color))
+        .child(components::status_dot(dot_color))
         .child(
             div()
                 .min_w_0()
@@ -2205,7 +2205,7 @@ fn ci_face(pr: &PullRequest) -> Div {
         .px(px(theme::CHIP_PAD_X))
         .mx(px(-theme::CHIP_PAD_X))
         .rounded(px(theme::R_TIGHT))
-        .child(led(px(theme::STATUS_DOT), ink))
+        .child(components::status_dot(ink))
         .child(div().text_color(rgb(ink)).child("ci"))
         .child(
             div()
@@ -2330,7 +2330,7 @@ pub fn check_row(index: usize, run: &Check) -> Stateful<Div> {
         .h(px(theme::CHECKS_ROW_H))
         .px(px(theme::CHIP_PAD_X))
         .rounded(px(theme::R_TIGHT))
-        .child(led(px(theme::STATUS_DOT), ink))
+        .child(components::status_dot(ink))
         .child(
             div()
                 .min_w_0()
@@ -2409,7 +2409,7 @@ fn tasks_strip(todos: Todos, current: Option<&str>) -> Div {
         .line_height(px(theme::LH_META))
         .text_color(rgb(TEXT_MUTED))
         .child(meter)
-        .child(tabular(
+        .child(components::tabular(
             div()
                 .flex_shrink_0()
                 .child(SharedString::from(format!("{done}/{}", todos.total))),
@@ -2590,7 +2590,7 @@ fn working_line(
 ) -> Div {
     let mut facts: Vec<String> = Vec::new();
     if let Some(elapsed) = transcript.turn_elapsed() {
-        facts.push(format!("{} elapsed", duration_label(elapsed)));
+        facts.push(format!("{} elapsed", components::duration_label(elapsed)));
     }
     let tokens = transcript.turn_output_tokens();
     if tokens > 0 && !compact {
@@ -3530,26 +3530,6 @@ pub fn question_of(decision: &Decision) -> Option<Vec<ferrite_core::questions::Q
 
 // ------------------------------------------------------------ shared bits
 
-fn led(size: gpui::Pixels, color: u32) -> Div {
-    div()
-        .flex_shrink_0()
-        .w(size)
-        .h(size)
-        .rounded_full()
-        .bg(rgb(color))
-}
-
-/// A parked LED: the ring without the fill — present, not running.
-fn hollow_dot(size: gpui::Pixels) -> Div {
-    div()
-        .flex_shrink_0()
-        .w(size)
-        .h(size)
-        .rounded_full()
-        .border_1()
-        .border_color(rgb(TEXT_FAINT))
-}
-
 /// `+N −N` (§E.12): the added count in `--running`, **a literal space**,
 /// then the removed count in `--blocked` with a U+2212 MINUS SIGN — never a
 /// hyphen. The space is the gap; there is no flex gap here. One pair, drawn
@@ -3579,7 +3559,7 @@ fn diff_stat(added: usize, removed: usize) -> Div {
             },
         ),
     ];
-    tabular(
+    components::tabular(
         div()
             .flex()
             .flex_shrink_0()
@@ -3604,22 +3584,6 @@ fn chip(label: impl Into<SharedString>, ink: u32, ground: gpui::Hsla) -> Div {
         .px(px(theme::CHIP_PAD_X))
         .py(px(theme::CHIP_PAD_Y))
         .child(label.into())
-}
-
-/// `8.2s` under ten seconds, `42s` under a minute, `2m14s` beyond — the
-/// comps' duration grammar, shared by tool rows and activity lines. The
-/// smallest value the prototype prints is `0.1s`, so a sub-tenth call
-/// rounds up into it rather than reading `0.0s`.
-fn duration_label(elapsed: Duration) -> SharedString {
-    let secs = elapsed.as_secs_f64().max(0.1);
-    if secs < 10.0 {
-        SharedString::from(format!("{secs:.1}s"))
-    } else if secs < 60.0 {
-        SharedString::from(format!("{}s", secs as u64))
-    } else {
-        let whole = secs as u64;
-        SharedString::from(format!("{}m{:02}s", whole / 60, whole % 60))
-    }
 }
 
 /// A subscription window's plausible Unix reset instant in compact, useful
@@ -4151,22 +4115,7 @@ fn popover_shell() -> Div {
         .p(px(theme::MENU_PAD))
         .bg(rgb(theme::MENU))
         .rounded(px(theme::R_BLOCK))
-        .shadow(vec![
-            BoxShadow {
-                inset: false,
-                color: rgba(theme::SHADOW_FAR).into(),
-                offset: point(px(0.), px(theme::SHADOW_FAR_Y)),
-                blur_radius: px(theme::SHADOW_FAR_BLUR),
-                spread_radius: px(theme::SHADOW_FAR_SPREAD),
-            },
-            BoxShadow {
-                inset: false,
-                color: rgba(theme::SHADOW_NEAR).into(),
-                offset: point(px(0.), px(theme::SHADOW_NEAR_Y)),
-                blur_radius: px(theme::SHADOW_NEAR_BLUR),
-                spread_radius: px(0.),
-            },
-        ])
+        .shadow(crate::components::float_shadow())
 }
 
 /// The ✓-row recipe the pickers share — the provider picker (#25) and the
@@ -4605,15 +4554,6 @@ pub(crate) fn signal_color(status: Option<Status>) -> u32 {
     }
 }
 
-/// Tabular numerals, for every count and duration that must not jitter as
-/// digits change. JetBrains Mono is monospaced, so this is belt and braces
-/// — but the prototype declares it and the token is cheap to honour.
-fn tabular<E: Styled>(mut element: E) -> E {
-    element.text_style().font_features =
-        Some(FontFeatures(std::sync::Arc::new(vec![("tnum".into(), 1)])));
-    element
-}
-
 /// `.event` (§E.9): `▸ Verb (args)` with its `.trail` hard right, then the
 /// `└` result line beneath it and the bare hunk under that. Baseline
 /// alignment, an 8px gap, 3px of block padding; the glyph column is 9px and
@@ -4732,7 +4672,7 @@ fn render_tool(
             .gap(px(theme::EVENT_GAP))
             .children(verdicts);
         if let Some(total) = settled_clock {
-            trail = trail.child(tabular(
+            trail = trail.child(components::tabular(
                 div()
                     .flex_shrink_0()
                     .text_size(px(theme::FS_SM))
@@ -4740,7 +4680,7 @@ fn render_tool(
                     .text_color(rgb(TEXT_MUTED))
                     .child(SharedString::from(format!(
                         "{} elapsed",
-                        duration_label(total)
+                        components::duration_label(total)
                     ))),
             ));
         }
@@ -5387,7 +5327,7 @@ fn render_diff(block: BlockId, diff: &Diff, selection: &TextRuns) -> impl IntoEl
                 row = row.bg(rgba(wash));
             }
             lines = lines.child(
-                row.child(tabular(
+                row.child(components::tabular(
                     div()
                         .flex_shrink_0()
                         .w(px(theme::DIFF_NUM_W))
@@ -6659,13 +6599,22 @@ mod tests {
 
     #[test]
     fn durations_read_at_the_comps_grammar() {
-        assert_eq!(duration_label(Duration::from_millis(340)).as_ref(), "0.3s");
         assert_eq!(
-            duration_label(Duration::from_millis(8_200)).as_ref(),
+            components::duration_label(Duration::from_millis(340)).as_ref(),
+            "0.3s"
+        );
+        assert_eq!(
+            components::duration_label(Duration::from_millis(8_200)).as_ref(),
             "8.2s"
         );
-        assert_eq!(duration_label(Duration::from_secs(42)).as_ref(), "42s");
-        assert_eq!(duration_label(Duration::from_secs(134)).as_ref(), "2m14s");
+        assert_eq!(
+            components::duration_label(Duration::from_secs(42)).as_ref(),
+            "42s"
+        );
+        assert_eq!(
+            components::duration_label(Duration::from_secs(134)).as_ref(),
+            "2m14s"
+        );
     }
 
     #[test]

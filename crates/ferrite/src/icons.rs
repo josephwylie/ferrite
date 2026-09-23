@@ -67,6 +67,8 @@ icons![
     "window-close",
     "copy",
     "resend",
+    "prompt",
+    "ferrite-mono",
     // ---- WP-A icons (append names above the end line)
     // (end WP-A)
 
@@ -136,6 +138,13 @@ pub const WINDOW_RESTORE: &str = "icons/window-restore.svg";
 pub const WINDOW_CLOSE: &str = "icons/window-close.svg";
 pub const COPY: &str = "icons/copy.svg";
 pub const RESEND: &str = "icons/resend.svg";
+/// The prompt chevron `❯`, drawn: Geist Mono has no such glyph, so the mark
+/// the transcript and the Composer share is an SVG in a `GLYPH_BOX`.
+pub const PROMPT: &str = "icons/prompt.svg";
+/// Ferrite's mark as one monochrome path, for the answer gutter (the
+/// gradient mark is reserved for the animated working line).
+#[allow(dead_code)]
+pub const FERRITE_MONO: &str = "icons/ferrite-mono.svg";
 
 // ---- WP-A icon names (append consts above the end line)
 // (end WP-A)
@@ -356,6 +365,8 @@ mod tests {
             WINDOW_CLOSE,
             COPY,
             RESEND,
+            PROMPT,
+            FERRITE_MONO,
         ] {
             let bytes = Assets
                 .load(key)
@@ -367,7 +378,7 @@ mod tests {
         }
         assert_eq!(
             ICONS.len(),
-            24,
+            26,
             "the prototype and app controls, including disclosure and close,              and the four Windows caption glyphs"
         );
     }
@@ -419,7 +430,7 @@ mod tests {
     #[test]
     fn an_unknown_key_is_absent_rather_than_an_error() {
         assert!(Assets.load("icons/nope.svg").unwrap().is_none());
-        assert_eq!(Assets.list("icons/").unwrap().len(), 24);
+        assert_eq!(Assets.list("icons/").unwrap().len(), ICONS.len());
     }
 
     #[test]

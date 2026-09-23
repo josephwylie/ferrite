@@ -450,7 +450,7 @@ fn drop_feedback<E: gpui::InteractiveElement>(element: E, groups: Groups, target
         if matches!(groups.preview_drop(drag.drag, target), Plan::Refused(_)) {
             style.bg(rgba(crate::theme::BLOCKED_WASH))
         } else {
-            style.bg(rgba(crate::theme::RUNNING_WASH))
+            style.bg(rgba(crate::theme::DROP_WASH))
         }
     })
 }

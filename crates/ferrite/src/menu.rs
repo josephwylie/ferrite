@@ -8,13 +8,12 @@
 //! the second. Anything else pressed disarms it.
 
 use gpui::prelude::*;
-use gpui::{div, point, px, rgb, rgba, BoxShadow, Div, SharedString, Stateful};
+use gpui::{div, px, rgb, rgba, Div, SharedString, Stateful};
 
 use crate::pointer::{Pointer, PointerPressed};
 use crate::theme::{
-    BLOCKED, BLOCKED_WASH, FS_SM, FS_UI, MENU, MENU_PAD, MENU_ROW_H, R_BLOCK, R_CONTROL,
-    SHADOW_FAR, SHADOW_FAR_BLUR, SHADOW_FAR_SPREAD, SHADOW_FAR_Y, SHADOW_NEAR, SHADOW_NEAR_BLUR,
-    SHADOW_NEAR_Y, TEXT, TEXT_MUTED, TEXT_STRONG,
+    BLOCKED, BLOCKED_WASH, FS_SM, FS_UI, MENU, MENU_PAD, MENU_ROW_H, R_BLOCK, R_CONTROL, TEXT,
+    TEXT_MUTED, TEXT_STRONG,
 };
 
 /// The menu's width: wide enough for `Confirm delete Thread` beside a
@@ -74,22 +73,7 @@ pub fn shell() -> Div {
         .p(px(MENU_PAD))
         .rounded(px(R_BLOCK))
         .bg(rgb(MENU))
-        .shadow(vec![
-            BoxShadow {
-                inset: false,
-                color: rgba(SHADOW_FAR).into(),
-                offset: point(px(0.), px(SHADOW_FAR_Y)),
-                blur_radius: px(SHADOW_FAR_BLUR),
-                spread_radius: px(SHADOW_FAR_SPREAD),
-            },
-            BoxShadow {
-                inset: false,
-                color: rgba(SHADOW_NEAR).into(),
-                offset: point(px(0.), px(SHADOW_NEAR_Y)),
-                blur_radius: px(SHADOW_NEAR_BLUR),
-                spread_radius: px(0.),
-            },
-        ])
+        .shadow(crate::components::float_shadow())
 }
 
 /// The space between two groups of rows.

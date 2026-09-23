@@ -439,10 +439,12 @@ pub const GUTTER_GAP: f32 = 8.0;
 /// `GLYPH_BOX + GUTTER_GAP`. An elbow result sits at C2 = C1 + `ELBOW_INDENT`.
 pub const GUTTER_W: f32 = GLYPH_BOX + GUTTER_GAP;
 /// C2 − C1: an elbow row indents by one gutter.
+#[allow(dead_code)]
 pub const ELBOW_INDENT: f32 = GUTTER_W;
 /// 13px — a raised box's content inset (1px edge + 12px padding). Transcript
 /// rows sit the same distance inside the reading column, so the transcript `❯`
 /// and the Composer `❯` share one axis.
+#[allow(dead_code)]
 pub const BOX_INSET_X: f32 = 13.0;
 /// 8px — between a row's glyph column and its text (tool rows, the working
 /// line, the turn diff, controls beside a label).
@@ -488,6 +490,28 @@ pub const CHIP_PAD_Y: f32 = 1.0;
 pub const MENU_PAD: f32 = 4.0;
 /// 28px — one menu row: `LH_UI` plus 4px above and below.
 pub const MENU_ROW_H: f32 = 28.0;
+/// A floating surface's inset around its rows (the same 4px as `MENU_PAD`),
+/// and the gap it keeps from the control that opened it.
+pub const FLOAT_PAD: f32 = MENU_PAD;
+#[allow(dead_code)]
+pub const FLOAT_OFFSET: f32 = 6.0;
+/// The context menu's width, and any floating list's height cap before it
+/// scrolls.
+#[allow(dead_code)]
+pub const MENU_W: f32 = 256.0;
+#[allow(dead_code)]
+pub const MENU_MAX_H: f32 = 420.0;
+/// A menu row's inline padding and the gap between its label and trailing
+/// parts; its radius nests inside the surface (`R_BLOCK` − `FLOAT_PAD`).
+pub const MENU_ROW_PAD_X: f32 = 8.0;
+pub const MENU_ROW_GAP: f32 = SPACE_3;
+pub const R_MENU_ROW: f32 = R_CHIP;
+/// A menu section title row, and the space either side of a separator.
+pub const MENU_SECTION_H: f32 = 24.0;
+pub const MENU_SEP_Y: f32 = 4.0;
+/// An aligned name column (slash commands): clamped between these.
+pub const MENU_NAME_MIN_W: f32 = 96.0;
+pub const MENU_NAME_MAX_W: f32 = 220.0;
 /// A nav or list row's padding — 8px inline, 6px block — and no gap between
 /// its stacked lines: their pixel line boxes already carry the air.
 #[allow(dead_code)]

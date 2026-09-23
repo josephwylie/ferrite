@@ -6,15 +6,14 @@ use gpui::component::{
     Disableable,
 };
 use gpui::prelude::*;
-use gpui::{div, point, px, rgb, rgba, App, BoxShadow, Div, FontWeight, SharedString};
+use gpui::{div, px, rgb, rgba, App, Div, FontWeight, SharedString};
 
 use crate::components;
 use crate::icons::{self, icon};
 use crate::theme::{
-    BLOCKED, FILL, FONT_MONO, FONT_UI, FORM_CONTROL_H, FS_SM, FS_UI, GROUND, ICON_BUTTON,
+    BLOCKED, FILL, FONT_MONO, FONT_UI, FORM_CONTROL_H, FS_SM, FS_UI, ICON_BUTTON,
     ICON_BUTTON_GLYPH, MENU, MODAL_GAP, MODAL_HEAD_H, MODAL_PAD, MODAL_VIEWPORT_FRACTION, PANE,
-    RAISED, R_BLOCK, R_CONTROL, SHADOW_FAR, SHADOW_FAR_BLUR, SHADOW_FAR_SPREAD, SHADOW_FAR_Y,
-    SHADOW_NEAR, SHADOW_NEAR_BLUR, SHADOW_NEAR_Y, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG, W_LABEL,
+    RAISED, R_BLOCK, R_CONTROL, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG, W_LABEL,
 };
 
 const WIDTH: f32 = 600.;
@@ -52,22 +51,7 @@ pub fn card(directory_count: usize) -> Div {
         .font_family(FONT_UI)
         .text_size(px(FS_UI))
         .text_color(rgb(TEXT))
-        .shadow(vec![
-            BoxShadow {
-                inset: false,
-                color: rgba(SHADOW_FAR).into(),
-                offset: point(px(0.), px(SHADOW_FAR_Y)),
-                blur_radius: px(SHADOW_FAR_BLUR),
-                spread_radius: px(SHADOW_FAR_SPREAD),
-            },
-            BoxShadow {
-                inset: false,
-                color: rgba(SHADOW_NEAR).into(),
-                offset: point(px(0.), px(SHADOW_NEAR_Y)),
-                blur_radius: px(SHADOW_NEAR_BLUR),
-                spread_radius: px(0.),
-            },
-        ])
+        .shadow(crate::components::float_shadow())
 }
 
 pub fn head(title: SharedString, close: impl IntoElement) -> Div {
@@ -219,7 +203,11 @@ pub fn primary_button(
         .px(px(11.))
         .child(components::form_label(
             label,
-            if disabled { TEXT_MUTED } else { GROUND },
+            if disabled {
+                TEXT_MUTED
+            } else {
+                crate::theme::ON_ACCENT
+            },
         ))
 }
 

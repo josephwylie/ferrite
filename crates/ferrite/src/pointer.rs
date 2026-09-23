@@ -17,9 +17,9 @@
 //! `cx.notify` loop rides a mouse move.
 
 use gpui::prelude::*;
-use gpui::{rgb, StyleRefinement};
+use gpui::{rgb, rgba, StyleRefinement};
 
-use crate::theme::{FILL, FILL_HOVER, HOVER, PRESSED};
+use crate::theme::{FILL, FILL_HOVER, HAIRLINE_STRONG, HOVER, PRESSED};
 
 /// The hover styles, named by role. Blanket-implemented: anything styleable
 /// and interactive can say what role it plays.
@@ -49,6 +49,16 @@ pub trait Pointer: Styled + InteractiveElement + Sized {
     /// a ground stronger than itself, so it steps the ground up instead.
     fn hover_carried(self) -> Self {
         self.cursor_pointer().hover(carried_fill)
+    }
+
+    /// A surface whose resting edge is the hairline (a Pane): under the
+    /// pointer the edge steps up to `HAIRLINE_STRONG`, saying a click lands
+    /// here. No cursor change — the surface is a focus target, not a
+    /// button. Apply it only while the edge is the resting hairline: the
+    /// hover refinement would otherwise replace a state colour.
+    #[allow(dead_code)]
+    fn hover_edge(self) -> Self {
+        self.hover(edge_lift)
     }
 
     /// Selectable transcript text (#27): the I-beam says characters are
@@ -101,6 +111,11 @@ fn raised_fill(control: StyleRefinement) -> StyleRefinement {
 
 fn carried_fill(row: StyleRefinement) -> StyleRefinement {
     row.bg(rgb(FILL_HOVER))
+}
+
+#[allow(dead_code)]
+fn edge_lift(surface: StyleRefinement) -> StyleRefinement {
+    surface.border_color(rgba(HAIRLINE_STRONG))
 }
 
 fn row_press(row: StyleRefinement) -> StyleRefinement {
@@ -180,5 +195,16 @@ mod tests {
         // grabbable, nothing is a button (#27).
         let mut text = div().hover_text();
         assert_eq!(text.style().mouse_cursor, Some(CursorStyle::IBeam));
+    }
+
+    /// The edge role lifts only the border, to the strong hairline, and
+    /// leaves the cursor alone: a Pane is a focus target, not a button.
+    #[test]
+    fn the_edge_role_lifts_the_border_and_keeps_the_cursor() {
+        let edge = edge_lift(StyleRefinement::default());
+        assert_eq!(edge.border_color, Some(rgba(HAIRLINE_STRONG).into()));
+        assert_eq!(background(&edge), None);
+        let mut surface = div().hover_edge();
+        assert_eq!(surface.style().mouse_cursor, None);
     }
 }

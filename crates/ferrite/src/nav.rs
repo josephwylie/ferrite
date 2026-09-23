@@ -33,9 +33,8 @@ use gpui::component::button::Button;
 use gpui::component::tooltip::Tooltip;
 use gpui::prelude::*;
 use gpui::{
-    div, point, pulsating_between, px, radians, relative, rgb, rgba, Animation, AnimationExt,
-    AnyElement, BoxShadow, CursorStyle, Div, FontWeight, ScrollHandle, SharedString, Stateful,
-    Transformation,
+    div, pulsating_between, px, radians, relative, rgb, rgba, Animation, AnimationExt, AnyElement,
+    CursorStyle, Div, FontWeight, ScrollHandle, SharedString, Stateful, Transformation,
 };
 
 use crate::components;
@@ -47,10 +46,9 @@ use crate::theme::{
     MEMBER_GAP, MEMBER_INDENT, MENU, MENU_PAD, MENU_ROW_H, MENU_TOP, NAV, NAV_HEAD_H, NAV_TREE_PAD,
     NAV_TREE_PAD_B, PROVIDER_CLAUDE, PROVIDER_CODEX, PROVIDER_MARK, PULSE_MIN, RAIL_INSET,
     RAIL_OFFSET, ROW_GAP, ROW_ICON, ROW_ICON_GAP, ROW_PAD_X, ROW_PAD_Y, ROW_TEXT_W, RUNNING,
-    RUNNING_HALO, R_BLOCK, R_CONTROL, R_TIGHT, SHADOW_FAR, SHADOW_FAR_BLUR, SHADOW_FAR_SPREAD,
-    SHADOW_FAR_Y, SHADOW_NEAR, SHADOW_NEAR_BLUR, SHADOW_NEAR_Y, SOLOS_TOP, STATUS_DOT,
-    STATUS_HALO_INSET, STATUS_PULSE_MS, TEXT, TEXT_2, TEXT_FAINT, TEXT_MUTED, TEXT_STRONG,
-    THREAD_ROW_H, TRAFFIC_RESERVE, WIN_CHROME_H, W_LABEL,
+    RUNNING_HALO, R_BLOCK, R_CONTROL, R_TIGHT, SOLOS_TOP, STATUS_DOT, STATUS_HALO_INSET,
+    STATUS_PULSE_MS, TEXT, TEXT_2, TEXT_FAINT, TEXT_MUTED, TEXT_STRONG, THREAD_ROW_H,
+    TRAFFIC_RESERVE, WIN_CHROME_H, W_LABEL,
 };
 
 /// The nav's two widths—286px, and the platform rail cmd-b folds it to.
@@ -652,22 +650,7 @@ pub fn filter_menu() -> Div {
         .p(px(MENU_PAD))
         .rounded(px(R_BLOCK))
         .bg(rgb(MENU))
-        .shadow(vec![
-            BoxShadow {
-                inset: false,
-                color: rgba(SHADOW_FAR).into(),
-                offset: point(px(0.), px(SHADOW_FAR_Y)),
-                blur_radius: px(SHADOW_FAR_BLUR),
-                spread_radius: px(SHADOW_FAR_SPREAD),
-            },
-            BoxShadow {
-                inset: false,
-                color: rgba(SHADOW_NEAR).into(),
-                offset: point(px(0.), px(SHADOW_NEAR_Y)),
-                blur_radius: px(SHADOW_NEAR_BLUR),
-                spread_radius: px(0.),
-            },
-        ])
+        .shadow(crate::components::float_shadow())
 }
 
 /// One filter row. The selected Project carries a restrained fill as well as
