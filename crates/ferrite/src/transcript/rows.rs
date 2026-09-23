@@ -21,14 +21,76 @@ pub(crate) enum RowId {
     TurnDiff(String),
 }
 
+/// What a row is, for the gap table: derived once in `project`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RowKind {
+    Prompt,
+    /// An agent answer. `commentary` is a lone paragraph, the kind that
+    /// introduces the work under it.
+    Answer {
+        commentary: bool,
+    },
+    /// A tool call or a group of them.
+    Activity,
+    Reasoning,
+    Notice,
+    /// A decision record or a revival note.
+    Meta,
+    /// A turn's end: its stamp, or the note that it was interrupted or failed.
+    TurnEnd,
+    TurnDiff,
+    /// A fallback prose or code block.
+    Other,
+}
+
+impl RowKind {
+    fn of(block: &Block) -> Self {
+        match &block.body {
+            Body::Prompt(_) => Self::Prompt,
+            Body::Tool(_) => Self::Activity,
+            Body::Thinking(_) => Self::Reasoning,
+            Body::Notice(_) => Self::Notice,
+            Body::Meta(_) => Self::Meta,
+            Body::TurnEnd(_) => Self::TurnEnd,
+            Body::Paragraph { .. }
+            | Body::Heading { .. }
+            | Body::Bullet { .. }
+            | Body::Code { .. } => Self::Other,
+        }
+    }
+}
+
+/// The space above a row, from the row before it (`None`: the first row,
+/// which carries the body's top padding instead) and its own kind. The one
+/// table of the transcript's vertical rhythm.
+pub(crate) fn gap_before(previous: Option<RowKind>, kind: RowKind) -> f32 {
+    use RowKind::*;
+    let Some(previous) = previous else {
+        return crate::theme::BODY_PAD_T;
+    };
+    match (previous, kind) {
+        (_, Prompt) => crate::theme::GAP_TURN,
+        (_, TurnEnd | Meta) => crate::theme::GAP_STAMP,
+        (Activity, Activity) | (Answer { commentary: true }, Activity) => crate::theme::GAP_TOOL,
+        _ => crate::theme::GAP_SECTION,
+    }
+}
+
 /// One renderable transcript unit. Its blocks are owned so a list callback
 /// does not borrow the transient slice passed to [`TranscriptRows::reconcile`].
+///
+/// Everything a row draws is in its equality: its gap and whether it is the
+/// live notice included, so a row whose neighbour changed its spacing or
+/// colour is a changed row, re-measured by reconcile and never per frame.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TranscriptRow {
     id: RowId,
     blocks: Rc<[Block]>,
     source: Option<Rc<str>>,
     turn_diff: Option<TurnDiff>,
+    kind: RowKind,
+    gap: f32,
+    live_notice: bool,
 }
 
 impl TranscriptRow {
@@ -50,6 +112,22 @@ impl TranscriptRow {
 
     pub(crate) fn turn_diff(&self) -> Option<&TurnDiff> {
         self.turn_diff.as_ref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn kind(&self) -> RowKind {
+        self.kind
+    }
+
+    /// The space above this row (`gap_before`).
+    pub(crate) fn gap(&self) -> f32 {
+        self.gap
+    }
+
+    /// The transcript's most recent Notice: the only one that wears the
+    /// Pane's state colour. Older notices are history and stay neutral.
+    pub(crate) fn live_notice(&self) -> bool {
+        self.live_notice
     }
 }
 
@@ -197,6 +275,15 @@ impl RowDelta {
 
 fn project(blocks: &[Block], turn_diff: Option<&TurnDiff>) -> Vec<Rc<TranscriptRow>> {
     let mut rows = Vec::new();
+    let row = |id, blocks: &[Block], source: Option<Rc<str>>, kind| TranscriptRow {
+        id,
+        blocks: blocks.to_vec().into(),
+        source,
+        turn_diff: None,
+        kind,
+        gap: 0.,
+        live_notice: false,
+    };
     let mut index = 0;
     while index < blocks.len() {
         let block = &blocks[index];
@@ -208,44 +295,70 @@ fn project(blocks: &[Block], turn_diff: Option<&TurnDiff>) -> Vec<Rc<TranscriptR
                 source.push_str(markdown);
                 index += 1;
             }
-            rows.push(Rc::new(TranscriptRow {
-                id: RowId::Markdown(first),
-                blocks: blocks[start..index].to_vec().into(),
-                source: Some(source.into()),
-                turn_diff: None,
-            }));
+            let run = &blocks[start..index];
+            let commentary = run.len() == 1 && matches!(&run[0].body, Body::Paragraph { .. });
+            rows.push(row(
+                RowId::Markdown(first),
+                run,
+                Some(source.into()),
+                RowKind::Answer { commentary },
+            ));
             continue;
         }
         if let Some(activity) = ToolActivity::at_start(&blocks[index..]) {
             let len = activity.blocks.len();
-            rows.push(Rc::new(TranscriptRow {
-                id: RowId::ToolActivity(activity.leader().call.clone()),
-                blocks: blocks[index..index + len].to_vec().into(),
-                source: None,
-                turn_diff: None,
-            }));
+            rows.push(row(
+                RowId::ToolActivity(activity.leader().call.clone()),
+                &blocks[index..index + len],
+                None,
+                RowKind::Activity,
+            ));
             index += len;
             continue;
         }
         if !is_blank(block) {
-            rows.push(Rc::new(TranscriptRow {
-                id: RowId::Block(block.id),
-                blocks: vec![block.clone()].into(),
-                source: None,
-                turn_diff: None,
-            }));
+            rows.push(row(
+                RowId::Block(block.id),
+                std::slice::from_ref(block),
+                None,
+                RowKind::of(block),
+            ));
         }
         index += 1;
     }
     if let Some(turn_diff) = turn_diff {
-        rows.push(Rc::new(TranscriptRow {
-            id: RowId::TurnDiff(turn_diff.turn_id.clone()),
-            blocks: Vec::new().into(),
-            source: None,
-            turn_diff: Some(turn_diff.clone()),
-        }));
+        // The turn's changes precede the rows that close the turn (its stamp,
+        // a decision record, a notice), so the stamp stays the turn's last
+        // word.
+        let at = rows.len()
+            - rows
+                .iter()
+                .rev()
+                .take_while(|row| {
+                    matches!(row.kind, RowKind::TurnEnd | RowKind::Meta | RowKind::Notice)
+                })
+                .count();
+        rows.insert(
+            at,
+            TranscriptRow {
+                id: RowId::TurnDiff(turn_diff.turn_id.clone()),
+                blocks: Vec::new().into(),
+                source: None,
+                turn_diff: Some(turn_diff.clone()),
+                kind: RowKind::TurnDiff,
+                gap: 0.,
+                live_notice: false,
+            },
+        );
     }
-    rows
+    let live = rows.iter().rposition(|row| row.kind == RowKind::Notice);
+    let mut previous = None;
+    for (index, row) in rows.iter_mut().enumerate() {
+        row.gap = gap_before(previous, row.kind);
+        row.live_notice = live == Some(index);
+        previous = Some(row.kind);
+    }
+    rows.into_iter().map(Rc::new).collect()
 }
 
 fn is_blank(block: &Block) -> bool {
@@ -359,7 +472,12 @@ mod tests {
                 }
             ]
         );
-        assert!(Rc::ptr_eq(&old[2], rows.get(0).unwrap()));
+        // The new head takes the body's top padding in place of its turn
+        // gap: a changed row, re-measured, while the rest keep their Rcs.
+        assert!(!Rc::ptr_eq(&old[2], rows.get(0).unwrap()));
+        assert_eq!(rows.get(0).unwrap().gap(), crate::theme::BODY_PAD_T);
+        assert_eq!(delta.remeasure, vec![0]);
+        assert!(Rc::ptr_eq(&old[3], rows.get(1).unwrap()));
     }
 
     #[test]
@@ -371,7 +489,7 @@ mod tests {
         text(&mut transcript, "b");
 
         let mut rows = TranscriptRows::new(&transcript.blocks()[2..], None);
-        let old = rows.get(0).unwrap().clone();
+        let old = rows.rows().to_vec();
         let delta = rows.reconcile(transcript.blocks(), None);
         assert_eq!(
             delta.splices,
@@ -380,7 +498,11 @@ mod tests {
                 new_count: 2
             }]
         );
-        assert!(Rc::ptr_eq(&old, rows.get(2).unwrap()));
+        // The old head is now a later turn's prompt: its gap grew from the
+        // body padding to the turn gap, so only it is re-measured.
+        assert_eq!(rows.get(2).unwrap().gap(), crate::theme::GAP_TURN);
+        assert_eq!(delta.remeasure, vec![2]);
+        assert!(Rc::ptr_eq(&old[1], rows.get(3).unwrap()));
     }
 
     #[test]
@@ -402,6 +524,110 @@ mod tests {
                 old_range: 0..1,
                 new_count: 1
             }]
+        );
+    }
+
+    #[test]
+    fn the_gap_table_spaces_turns_sections_tool_runs_and_stamps() {
+        use crate::theme::{BODY_PAD_T, GAP_SECTION, GAP_STAMP, GAP_TOOL, GAP_TURN};
+        use RowKind::*;
+        let prose = Answer { commentary: false };
+        let commentary = Answer { commentary: true };
+        for (previous, kind, gap) in [
+            (None, Prompt, BODY_PAD_T),
+            (None, Activity, BODY_PAD_T),
+            (Some(TurnEnd), Prompt, GAP_TURN),
+            (Some(prose), Prompt, GAP_TURN),
+            (Some(Prompt), prose, GAP_SECTION),
+            (Some(Prompt), Activity, GAP_SECTION),
+            (Some(Prompt), Reasoning, GAP_SECTION),
+            (Some(Activity), Activity, GAP_TOOL),
+            (Some(commentary), Activity, GAP_TOOL),
+            (Some(prose), Activity, GAP_SECTION),
+            (Some(Activity), prose, GAP_SECTION),
+            (Some(Reasoning), Activity, GAP_SECTION),
+            (Some(Activity), Reasoning, GAP_SECTION),
+            (Some(prose), TurnEnd, GAP_STAMP),
+            (Some(Activity), TurnEnd, GAP_STAMP),
+            (Some(Activity), Meta, GAP_STAMP),
+            (Some(prose), Notice, GAP_SECTION),
+            (Some(prose), TurnDiff, GAP_SECTION),
+            (Some(Other), Other, GAP_SECTION),
+        ] {
+            assert_eq!(gap_before(previous, kind), gap, "{previous:?} → {kind:?}");
+        }
+    }
+
+    #[test]
+    fn a_row_is_classified_and_spaced_by_its_neighbour_at_projection() {
+        let mut transcript = Transcript::default();
+        prompt(&mut transcript, "go");
+        text(&mut transcript, "Looking first.");
+        transcript.apply(Input::Event(SessionEvent::ContentBoundary));
+        tool(&mut transcript, "a");
+        tool(&mut transcript, "b");
+        let rows = TranscriptRows::new(transcript.blocks(), None);
+        let kinds: Vec<_> = rows.rows().iter().map(|row| row.kind()).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                RowKind::Prompt,
+                RowKind::Answer { commentary: true },
+                RowKind::Activity
+            ]
+        );
+        let gaps: Vec<_> = rows.rows().iter().map(|row| row.gap()).collect();
+        assert_eq!(
+            gaps,
+            vec![
+                crate::theme::BODY_PAD_T,
+                crate::theme::GAP_SECTION,
+                crate::theme::GAP_TOOL
+            ]
+        );
+    }
+
+    #[test]
+    fn only_the_latest_notice_is_live_and_the_hand_off_changes_both_rows() {
+        let mut transcript = Transcript::default();
+        transcript.apply(Input::Notice("model changed".into()));
+        let mut rows = TranscriptRows::new(transcript.blocks(), None);
+        assert!(rows.get(0).unwrap().live_notice());
+        prompt(&mut transcript, "go");
+        transcript.apply(Input::Notice("send failed".into()));
+        let delta = rows.reconcile(transcript.blocks(), None);
+        let live: Vec<_> = rows.rows().iter().map(|row| row.live_notice()).collect();
+        assert_eq!(live, vec![false, false, true]);
+        assert!(
+            delta.remeasure.contains(&0),
+            "the old notice is a changed row, so its colour is redrawn"
+        );
+    }
+
+    #[test]
+    fn the_turns_changes_precede_the_rows_that_close_the_turn() {
+        let mut transcript = Transcript::default();
+        prompt(&mut transcript, "go");
+        text(&mut transcript, "done");
+        transcript.apply(Input::Event(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Interrupted,
+            cost_usd: None,
+        }));
+        let diff = TurnDiff {
+            turn_id: "t".into(),
+            diff: "+x".into(),
+            omitted_bytes: 0,
+        };
+        let rows = TranscriptRows::new(transcript.blocks(), Some(&diff));
+        let kinds: Vec<_> = rows.rows().iter().map(|row| row.kind()).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                RowKind::Prompt,
+                RowKind::Answer { commentary: true },
+                RowKind::TurnDiff,
+                RowKind::TurnEnd
+            ]
         );
     }
 

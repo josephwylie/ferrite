@@ -132,17 +132,8 @@ impl TranscriptScroll {
                 self.list.remeasure_items(index..index + 1);
             }
         }
-        if !delta.splices.is_empty() {
-            // The renderer puts the inter-row gap on every row except the
-            // final one. Structural edits can therefore change the measured
-            // height of the final survivor and its neighbour without changing
-            // either row's own content.
-            if let Some(last) = self.list.item_count().checked_sub(1) {
-                self.list.remeasure_items(last..last + 1);
-                if last > 0 {
-                    self.list.remeasure_items(last - 1..last);
-                }
-            }
-        }
+        // Nothing else moves: a row's gap is part of the row (see
+        // `rows::gap_before`), so a neighbour's arrival or eviction reaches
+        // the list as that row's own change in `remeasure`.
     }
 }

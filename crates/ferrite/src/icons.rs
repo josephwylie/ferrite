@@ -70,6 +70,7 @@ icons![
     "prompt",
     "ferrite-mono",
     // ---- WP-A icons (append names above the end line)
+    "reasoning",
     // (end WP-A)
 
     // ---- WP-B icons (append names above the end line)
@@ -148,6 +149,8 @@ pub const PROMPT: &str = "icons/prompt.svg";
 pub const FERRITE_MONO: &str = "icons/ferrite-mono.svg";
 
 // ---- WP-A icon names (append consts above the end line)
+/// `∴` (not in Geist Mono): the reasoning row's gutter mark, three dots.
+pub const REASONING: &str = "icons/reasoning.svg";
 // (end WP-A)
 
 // ---- WP-B icon names (append consts above the end line)
@@ -384,7 +387,7 @@ mod tests {
         }
         assert_eq!(
             ICONS.len(),
-            27,
+            28,
             "the prototype and app controls, including disclosure and close,              and the four Windows caption glyphs"
         );
     }
