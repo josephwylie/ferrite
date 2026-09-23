@@ -359,12 +359,13 @@ fn retained_transcript_relative_file_links_use_the_thread_workspace_and_copy_tex
     );
     let start = caret(&view, cx, 0, 0);
     // Select through the last word, leaving the final period unselected. The
-    // native card has its own width, so measure the suffix from its right edge.
+    // native card has its own width and the flow reserves its trailing
+    // `INLINE_CODE_OVERHANG` margin, so measure the suffix from there.
     let end = cx.update(|window, cx| {
         let suffix_caret =
             crate::rich::testing::caret(&id, 0, 1, suffix, suffix.len() - 1, window, cx).unwrap();
         gpui::point(
-            card.right() + suffix_caret.x - before.left(),
+            card.right() + px(crate::theme::INLINE_CODE_OVERHANG) + suffix_caret.x - before.left(),
             card.center().y,
         )
     });
@@ -380,7 +381,8 @@ fn retained_transcript_relative_file_links_use_the_thread_workspace_and_copy_tex
     );
 
     cx.update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string("stale".into())));
-    cx.simulate_resize(gpui::size(px(700.), px(600.)));
+    // The narrowest window: its column is narrower than the line.
+    cx.simulate_resize(gpui::size(px(crate::theme::WINDOW_MIN_W), px(600.)));
     cx.run_until_parked();
     let after = cx.update(|_, cx| crate::rich::testing::bounds(&id, 0, cx).unwrap());
     assert!(
