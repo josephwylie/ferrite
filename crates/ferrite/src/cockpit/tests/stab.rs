@@ -262,3 +262,56 @@ fn the_subject_strip_marks_one_active_pill_that_follows_the_pick(cx: &mut TestAp
         "the pill follows the pick"
     );
 }
+
+/// A long popover list scrolls with the keyboard: the draft's Project
+/// chip over two dozen Projects keeps every row the arrows land on inside
+/// its capped list, going down past the fold and back up.
+#[gpui::test]
+fn the_popover_keeps_its_keyboard_cursor_in_view(cx: &mut TestAppContext) {
+    let (mut core, _fake) = cockpit("popover-cursor-in-view", 1);
+    let base = scratch("popover-cursor-in-view-projects");
+    for n in 0..24 {
+        let dir = base.join(format!("project-{n:02}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        core.register_project(&dir).unwrap();
+    }
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(900.)));
+    view.update(cx, |view, cx| {
+        view.open_draft(DraftTarget::Main, cx);
+        view.open_band_popover(pane::BandChip::Project, cx);
+    });
+    tick(cx);
+    let rows = view.read_with(cx, |view, _| view.popover.as_ref().unwrap().rows.len());
+    assert!(
+        rows as f32 * crate::theme::MENU_ROW_H > crate::theme::MENU_MAX_H,
+        "the premise: {rows} rows overflow the list"
+    );
+    let visible = |cx: &mut gpui::VisualTestContext| {
+        let selected = view.read_with(cx, |view, _| view.popover.as_ref().unwrap().selected);
+        let list = cx.debug_bounds("composer-menu-rows").expect("the list");
+        let selector: &'static str =
+            Box::leak(format!("composer-menu-row-{selected}").into_boxed_str());
+        let row = cx.debug_bounds(selector).expect("the cursor row");
+        assert!(
+            row.top() >= list.top() - px(0.5) && row.bottom() <= list.bottom() + px(0.5),
+            "row {selected} {row:?} is outside the list {list:?}"
+        );
+        selected
+    };
+    let first = visible(cx);
+    for _ in 0..rows {
+        view.update(cx, |view, cx| view.step_popover(1, cx));
+        tick(cx);
+        visible(cx);
+    }
+    assert!(visible(cx) + 2 >= rows, "the cursor reached the end");
+    for _ in 0..rows {
+        view.update(cx, |view, cx| view.step_popover(-1, cx));
+        tick(cx);
+        visible(cx);
+    }
+    assert!(visible(cx) <= first.max(1));
+    let _ = std::fs::remove_dir_all(&base);
+}

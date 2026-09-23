@@ -478,6 +478,11 @@ struct Popover {
     kind: Kind,
     rows: Vec<Row>,
     selected: usize,
+    /// The row list's scroll: arrows keep the keyboard cursor in view.
+    /// A fresh popover reveals its first cursor once (`revealed`), which
+    /// may be a picker's standing choice below the fold.
+    scroll: ScrollHandle,
+    revealed: std::cell::Cell<bool>,
 }
 
 /// Which popover holds the slot. The rows, keys, dismissal, heal and paint
@@ -4019,6 +4024,8 @@ impl CockpitView {
                         }
                         let row = local_row(filter, "import", "adopt a CLI session file", false)?;
                         return Some(Popover {
+                            scroll: ScrollHandle::new(),
+                            revealed: Default::default(),
                             pane: identity,
                             kind: Kind::Commands,
                             rows: vec![Row {
@@ -4093,6 +4100,8 @@ impl CockpitView {
                     return None;
                 }
                 return Some(Popover {
+                    scroll: ScrollHandle::new(),
+                    revealed: Default::default(),
                     pane: identity,
                     kind: Kind::Commands,
                     rows,
@@ -4174,6 +4183,8 @@ impl CockpitView {
                 return None;
             }
             return Some(Popover {
+                scroll: ScrollHandle::new(),
+                revealed: Default::default(),
                 pane: pane.identity,
                 kind: Kind::Commands,
                 rows,
@@ -4214,6 +4225,8 @@ impl CockpitView {
                     fallback: None,
                 });
                 return Some(Popover {
+                    scroll: ScrollHandle::new(),
+                    revealed: Default::default(),
                     pane: pane.identity,
                     kind: Kind::Files {
                         files: std::rc::Rc::new(Vec::new()),
@@ -4263,6 +4276,8 @@ impl CockpitView {
             return None;
         }
         Some(Popover {
+            scroll: ScrollHandle::new(),
+            revealed: Default::default(),
             pane: pane.identity,
             kind: Kind::Files {
                 files,
@@ -4373,6 +4388,7 @@ impl CockpitView {
         }
         if stepped != open.selected {
             open.selected = stepped;
+            open.scroll.scroll_to_item(stepped);
             cx.notify();
         }
     }
@@ -4669,6 +4685,8 @@ impl CockpitView {
             .discover_sessions(self.session_file_roots.clone(), IMPORT_ROWS_MAX)
         {
             self.popover = Some(Popover {
+                scroll: ScrollHandle::new(),
+                revealed: Default::default(),
                 pane: from,
                 kind: Kind::ImportFile,
                 rows: vec![Row {
@@ -4738,6 +4756,8 @@ impl CockpitView {
             })
             .collect();
         self.popover = Some(Popover {
+            scroll: ScrollHandle::new(),
+            revealed: Default::default(),
             pane: from,
             kind: Kind::ImportFile,
             rows,
@@ -4791,6 +4811,8 @@ impl CockpitView {
         // The `/` menu the pick came through is already closed; a chip
         // click replaces whatever the slot held outright.
         self.popover = Some(Popover {
+            scroll: ScrollHandle::new(),
+            revealed: Default::default(),
             pane: PaneIdentity::Thread(thread),
             kind: Kind::Provider,
             rows,
@@ -5211,6 +5233,8 @@ impl CockpitView {
         // The arrows start on the standing choice — bare ↵ re-picks it.
         let selected = rows.iter().position(|row| row.active).unwrap_or(0);
         self.popover = Some(Popover {
+            scroll: ScrollHandle::new(),
+            revealed: Default::default(),
             pane: identity,
             kind: Kind::Band(chip),
             rows,
@@ -5911,12 +5935,17 @@ impl CockpitView {
                     .unwrap_or(0),
             )
         });
+        if !open.revealed.replace(true) {
+            open.scroll.scroll_to_item(open.selected);
+        }
         let mut rows = div()
             .id("composer-menu-rows")
+            .debug_selector(|| "composer-menu-rows".into())
             .flex()
             .flex_col()
             .min_h_0()
-            .overflow_y_scroll();
+            .overflow_y_scroll()
+            .track_scroll(&open.scroll);
         for (at, row) in open.rows.iter().enumerate() {
             let cursor = at == open.selected;
             let explains = row.inert
@@ -9056,6 +9085,8 @@ impl CockpitView {
             Self::unavailable_tuning_rows(&mut rows, &mut selected);
         }
         self.popover = Some(Popover {
+            scroll: ScrollHandle::new(),
+            revealed: Default::default(),
             pane: PaneIdentity::Thread(thread),
             kind: Kind::Effort,
             rows,
