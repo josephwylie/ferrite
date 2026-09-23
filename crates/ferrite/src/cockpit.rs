@@ -3276,37 +3276,59 @@ impl CockpitView {
                 open.busy() || open.activity().main_operator_turn() || open.pending().is_some()
             });
         let has_queue = open.as_ref().is_some_and(|open| open.queued().is_some());
-        let send =
-            crate::components::button(SharedString::from(format!("composer-send-{identity:?}")))
-                .debug_selector(move || format!("composer-send-{identity:?}"))
+        // Quiet mono text controls on the Composer's raised ground: no face
+        // at rest, `FILL` under the pointer. Each names its verb and its key;
+        // Stop is the one place `esc` is shown.
+        let action = |id: String, cx: &gpui::App| {
+            use gpui::component::button::{ButtonCustomVariant, ButtonVariants};
+            crate::components::button(SharedString::from(id))
+                .custom(
+                    ButtonCustomVariant::new(cx)
+                        .foreground(rgb(crate::theme::TEXT_2).into())
+                        .hover(rgb(crate::theme::FILL).into())
+                        .active(rgb(crate::theme::FILL_HOVER).into()),
+                )
                 .h(px(crate::theme::COMPOSER_ROW_H))
-                .px(px(crate::theme::MODE_CHIP_PAD_X))
-                .bg(rgb(crate::theme::FILL))
-                .disabled(!can_send)
-                .tooltip(if starting {
-                    "Starting this Thread"
-                } else if queued {
-                    "Send or queue input (Enter). Shift+Enter inserts a newline."
-                } else {
-                    "Send (Enter). Shift+Enter inserts a newline."
-                })
-                .child(crate::components::label(
-                    if starting { "Starting…" } else { "Send" },
+                .px(px(crate::theme::COMPOSER_ACTION_PAD_X))
+        };
+        let face = |verb: &'static str, key: Option<&'static str>, ink: u32| {
+            crate::components::text_meta()
+                .flex()
+                .items_center()
+                .gap(px(crate::theme::SPACE_1))
+                .child(div().text_color(rgb(ink)).child(verb))
+                .children(key)
+        };
+        let send = action(format!("composer-send-{identity:?}"), cx)
+            .debug_selector(move || format!("composer-send-{identity:?}"))
+            .disabled(!can_send)
+            .tooltip(if starting {
+                "Starting this Thread"
+            } else if queued {
+                "Send or queue input (Enter). Shift+Enter inserts a newline."
+            } else {
+                "Send (Enter). Shift+Enter inserts a newline."
+            })
+            .child(if starting {
+                face("starting…", None, crate::theme::TEXT_MUTED)
+            } else {
+                face(
+                    "send",
+                    Some("↵"),
                     if can_send {
-                        crate::theme::TEXT
+                        crate::theme::TEXT_2
                     } else {
                         crate::theme::TEXT_MUTED
                     },
-                ))
-                .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
-                    cx.stop_propagation();
-                    view.composer_action(identity, false, window, cx);
-                }));
+                )
+            })
+            .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
+                cx.stop_propagation();
+                view.composer_action(identity, false, window, cx);
+            }));
         let stop = can_stop.then(|| {
-            crate::components::button(SharedString::from(format!("composer-stop-{identity:?}")))
+            action(format!("composer-stop-{identity:?}"), cx)
                 .debug_selector(move || format!("composer-stop-{identity:?}"))
-                .h(px(crate::theme::COMPOSER_ROW_H))
-                .px(px(crate::theme::MODE_CHIP_PAD_X))
                 .tooltip(if starting {
                     "Cancel startup (Esc); keep the draft"
                 } else if has_queue {
@@ -3314,7 +3336,7 @@ impl CockpitView {
                 } else {
                     "Interrupt Main (Esc)"
                 })
-                .child(crate::components::label("Stop · Esc", crate::theme::TEXT_2))
+                .child(face("stop", Some("esc"), crate::theme::TEXT_2))
                 .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
                     cx.stop_propagation();
                     view.composer_action(identity, true, window, cx);
@@ -3325,7 +3347,7 @@ impl CockpitView {
                 .flex()
                 .flex_shrink_0()
                 .items_center()
-                .gap(px(crate::theme::KEYS_GAP))
+                .gap(px(crate::theme::SPACE_1))
                 .children(stop)
                 .child(send)
                 .into_any_element(),
@@ -5737,9 +5759,9 @@ impl CockpitView {
             None => SharedString::from(provider_title(provider)),
         };
         let effort_label = match draft.binding.effort() {
-            Some(effort) => SharedString::from(effort_title(effort)),
+            Some(effort) => effort_chip_label(effort),
             None => match self.prefs.settings.effort_for(provider) {
-                Some(effort) => SharedString::from(effort_title(effort)),
+                Some(effort) => effort_chip_label(effort),
                 None => SharedString::from("effort"),
             },
         };
@@ -5749,7 +5771,7 @@ impl CockpitView {
                 pane::draft_picker(
                     "draft-model-picker",
                     draft.band_focus == Some(pane::BandChip::Provider),
-                    pane::model_picker(Some(provider), model_label),
+                    pane::model_picker(Some(provider), model_label, false),
                 ),
             ),
             (
@@ -5757,7 +5779,7 @@ impl CockpitView {
                 pane::draft_picker(
                     "draft-effort-picker",
                     draft.band_focus == Some(pane::BandChip::Effort),
-                    pane::effort_picker(effort_label),
+                    pane::effort_picker(effort_label, false),
                 ),
             ),
         ];
@@ -5765,7 +5787,7 @@ impl CockpitView {
             .flex()
             .flex_shrink_0()
             .items_center()
-            .gap(px(crate::theme::KEYS_GAP));
+            .gap(px(crate::theme::PICKER_GAP));
         for (chip, control) in controls {
             row = row.child(self.choice_menu(index, Kind::Band(chip), control, cx));
         }
@@ -6679,6 +6701,13 @@ fn effort_title(effort: &str) -> String {
 }
 
 /// What each rung buys, in the words the providers' own menus use.
+/// An effort level as its Composer chip reads it: the title, lowercase
+/// (`high`, `extra high`) — the chip is a mono control, the menu rows keep
+/// their titles.
+fn effort_chip_label(effort: &str) -> SharedString {
+    SharedString::from(effort_title(effort).to_lowercase())
+}
+
 fn effort_detail(effort: &str) -> &'static str {
     match effort {
         "minimal" => "the least reasoning the model allows",
@@ -7754,7 +7783,7 @@ impl CockpitView {
                 let fraction = usage
                     .context_window
                     .filter(|window| *window > 0)
-                    .map_or(0., |window| usage.total_tokens as f32 / window as f32);
+                    .map(|window| usage.total_tokens as f32 / window as f32);
                 (
                     fraction,
                     open.provider(),
@@ -7766,7 +7795,7 @@ impl CockpitView {
             // half of what the operator came to check before writing a
             // prompt. The account windows beside it are already real.
             PaneIdentity::Draft(draft) => (
-                0.,
+                None,
                 self.panes[index].draft()?.binding.provider().provider,
                 format!("draft-{}", draft.get()),
                 false,
@@ -7785,7 +7814,7 @@ impl CockpitView {
                     "usage-meter-{key}"
                 ))))
                 .debug_selector(move || format!("usage-meter-{selector}"))
-                .rounded(px(crate::theme::R_CHIP))
+                .rounded(px(crate::theme::R_CONTROL))
                 .child(pane::usage_meter_body(
                     self.prefs.settings.usage_meter_style,
                     fraction,
@@ -7884,7 +7913,7 @@ impl CockpitView {
                     .p_0()
                     .h_auto()
                     .tooltip("Permission mode")
-                    .child(pane::mode_chip(&label)),
+                    .child(pane::mode_chip(&label, true)),
                 choices,
                 open: is_open,
                 return_focus: self.panes[index].composer.focus_handle(cx),
@@ -8006,7 +8035,9 @@ impl CockpitView {
             )))
             .debug_selector(move || format!("session-controls-{}", thread.get()))
             .tooltip("Session controls")
-            .child("•••")
+            .p_0()
+            .h_auto()
+            .child(pane::session_chip())
             .on_click(cx.listener(move |view, event: &ClickEvent, window, cx| {
                 cx.stop_propagation();
                 view.focus_pane(index);
@@ -8510,9 +8541,7 @@ impl CockpitView {
                 .p_0()
                 .h_auto()
                 .tooltip(if busy { TUNING_BUSY_HINT } else { "Model" })
-                .child(
-                    pane::model_picker(Some(provider), label).when(busy, |chip| chip.opacity(0.8)),
-                ),
+                .child(pane::model_picker(Some(provider), label, busy)),
             cx,
         );
         // The effort chip beside it — only when the model takes one; a
@@ -8521,9 +8550,9 @@ impl CockpitView {
             ferrite_core::providers::models::efforts_for(provider, open.model(), open.models());
         let effort_chip = (!ladder.is_empty()).then(|| {
             let label = match open.effort() {
-                Some(effort) => SharedString::from(effort_title(effort)),
+                Some(effort) => effort_chip_label(effort),
                 None => match self.prefs.settings.effort_for(provider) {
-                    Some(effort) => SharedString::from(effort_title(effort)),
+                    Some(effort) => effort_chip_label(effort),
                     None => SharedString::from("effort"),
                 },
             };
@@ -8538,7 +8567,7 @@ impl CockpitView {
                     } else {
                         "Reasoning effort"
                     })
-                    .child(pane::effort_picker(label).when(busy, |chip| chip.opacity(0.8))),
+                    .child(pane::effort_picker(label, busy)),
                 cx,
             )
         });
@@ -8547,7 +8576,7 @@ impl CockpitView {
                 .flex()
                 .flex_shrink_0()
                 .items_center()
-                .gap(px(crate::theme::KEYS_GAP))
+                .gap(px(crate::theme::PICKER_GAP))
                 .child(model_chip)
                 .children(effort_chip)
                 .into_any_element(),

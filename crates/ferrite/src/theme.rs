@@ -925,39 +925,64 @@ pub const DONE_WALL_OPACITY: f32 = 0.6;
 // Owner: WP-D (the Composer, its pickers and usage meter, attachments, background chips, the draft.)
 // Edit values and append tokens only inside this section.
 
-/// The Composer: 7px top and 8px bottom padding, `COMPOSER_ROW_H` rows
-/// `COMPOSER_GAP` apart. Any change here must update
+/// **The Composer is a raised block in the reading column.** Its outer edges
+/// are the column's edges (`reading_column`), its content inset is
+/// `BOX_INSET_X` (1px edge + `COMPOSER_PAD_X`), so its `❯` hangs in the same
+/// glyph box as the transcript's and its text starts at the same C1. It is
+/// `RAISED` with a 1px `COMPOSER_EDGE` that is always in layout; the edge
+/// turns `FOCUS_RING` only when the Pane's own edge is a state colour and
+/// the Composer holds the keyboard (otherwise the Pane ring, the accent `❯`
+/// and the caret carry focus). Rows are `COMPOSER_ROW_H`, `COMPOSER_GAP`
+/// apart: queued prompts (dim `❯` lines), the input line, the hint row.
+/// Any pad, gap, edge or inset change here must update
 /// `pane::composer_fixed_height` in the same commit.
-#[allow(dead_code)]
-pub const COMPOSER_PAD_T: f32 = 7.0;
-#[allow(dead_code)]
-pub const COMPOSER_PAD_B: f32 = 8.0;
+pub const COMPOSER_PAD_X: f32 = BOX_INSET_X - 1.0;
+pub const COMPOSER_PAD_T: f32 = SPACE_1_5;
+pub const COMPOSER_PAD_B: f32 = SPACE_1_5;
 pub const COMPOSER_ROW_H: f32 = 20.0;
-#[allow(dead_code)]
-pub const COMPOSER_GAP: f32 = 3.0;
+pub const COMPOSER_GAP: f32 = SPACE_1;
+/// The block's 1px edge, top and bottom: part of its fixed height.
+pub const COMPOSER_EDGE_W: f32 = 1.0;
+/// 8px — from the block to the Pane's bottom edge at L1 (the transcript's
+/// own bottom padding supplies the air above it), and the L2 cell's inset
+/// around its compact Composer on three sides. The block's 6px vertical
+/// padding keeps a one-line Composer at 58px + this inset.
+pub const COMPOSER_INSET_B: f32 = SPACE_2;
+pub const COMPOSER_INSET_L2: f32 = SPACE_2;
+/// The block's edge while the keyboard is in it on an alert Pane.
+pub const COMPOSER_EDGE_FOCUS: u32 = FOCUS_RING;
 /// Multiline drafts, controls and queued prompts share a bounded part of
 /// the Pane, keeping most of its height available to the conversation.
 pub const COMPOSER_MAX_PANE_FRACTION: f32 = 0.45;
 /// The queued-prompt viewport scrolls beyond these visible row budgets.
 pub const COMPOSER_QUEUE_ROWS: usize = 3;
 pub const COMPOSER_COMPACT_QUEUE_ROWS: usize = 1;
-/// Clearance between the floating attachment island and the prompt's
-/// top edge, so the island reads as its own surface.
-pub const ATTACHMENT_ISLAND_GAP: f32 = 6.0;
-/// The Composer caret: 2 × 14.
+/// 6px — between the shelf (pending files, background chips) and the block.
+pub const SHELF_GAP: f32 = SPACE_1_5;
+/// The caret: 2 × 16 in `CARET` (the accent), square, centred on integer
+/// pixels in the 20px row (16 covers Geist Mono's ascender and descender at
+/// `FS_UI`).
 pub const CARET_W: f32 = 2.0;
-#[allow(dead_code)]
-pub const CARET_H: f32 = 14.0;
-/// The mode chip's 7px inline padding and 10px pencil; the model picker's
-/// 6px/4px padding.
-#[allow(dead_code)]
-pub const MODE_CHIP_PAD_X: f32 = 7.0;
-#[allow(dead_code)]
-pub const ICON_PENCIL: f32 = 10.0;
-#[allow(dead_code)]
-pub const PICKER_PAD_L: f32 = 6.0;
-#[allow(dead_code)]
-pub const PICKER_PAD_R: f32 = 4.0;
+pub const CARET_H: f32 = 16.0;
+/// One selection colour app-wide: the Composer paints the transcript's
+/// native selection wash under its selected runs.
+pub const COMPOSER_SELECTION: u32 = TEXT_SELECTION_WASH;
+/// An `@`-mention the operator picked: accent ink on the accent wash, the
+/// inline-code ground family — visibly lighter than a selection.
+pub const MENTION_INK: u32 = ACCENT;
+pub const MENTION_WASH: u32 = ACCENT_WASH;
+/// **Composer controls are quiet mono chips** (model, effort, mode, session
+/// `•••`, the usage meter): `CHIP_H`, `PICKER_PAD_X` both sides, `R_CONTROL`,
+/// no ground at rest, `FILL` under the pointer (the hover face on `RAISED`),
+/// label `FS_SM` `TEXT_2`, a `ICON_CHEVRON_SM` chevron in `TEXT_MUTED`. A
+/// busy control reads `TEXT_MUTED`, never faded. The model and effort pair
+/// sits `PICKER_GAP` apart and reads as one unit.
+pub const PICKER_PAD_X: f32 = SPACE_1_5;
+pub const PICKER_GAP: f32 = SPACE_1;
+pub const ICON_CHEVRON_SM: f32 = 10.0;
+/// Send and Stop: quiet mono text controls, `COMPOSER_ROW_H` high with the
+/// chip's inline padding.
+pub const COMPOSER_ACTION_PAD_X: f32 = PICKER_PAD_X;
 /// The context ring: a 14px box, 5.4px radius, 2px stroke, sweeping
 /// clockwise from 12 o'clock with a round cap. No text, ever.
 pub const USAGE_RING_D: f32 = 14.0;
@@ -972,21 +997,37 @@ pub const USAGE_CARD_PAD: f32 = 10.0;
 pub const USAGE_CARD_GAP: f32 = 12.0;
 pub const USAGE_CARD_ROW_GAP: f32 = 5.0;
 pub const USAGE_CARD_BAR_H: f32 = 4.0;
-/// Where a usage bar turns from RUNNING to ATTENTION, and from ATTENTION
-/// to BLOCKED — a fraction of the window, not a count.
-pub const USAGE_TIGHT: f32 = 0.6;
-pub const USAGE_SPENT: f32 = 0.85;
-/// Compact context / five-hour / weekly lines beside the Composer's model.
-/// 48px, not 24: at half this length a percentage point was a third of a
-/// pixel, so the three lines read as one block rather than as three
-/// readings, and the control was smaller than the thing it opens.
-pub const USAGE_LINE_W: f32 = 48.0;
+/// Where a usage reading turns from neutral to ATTENTION, and from
+/// ATTENTION to BLOCKED — a fraction of the window, not a count. Below
+/// tight a meter is `TEXT_2`: colour is state, and a context half full is
+/// not a state.
+pub const USAGE_TIGHT: f32 = 0.75;
+pub const USAGE_SPENT: f32 = 0.9;
+/// Compact context / five-hour / weekly lines beside the `ctx 62%`
+/// readout. The readout carries the precision, so the lines only need to
+/// be glanceable.
+pub const USAGE_LINE_W: f32 = 32.0;
 pub const USAGE_LINE_H: f32 = 2.0;
 pub const USAGE_LINE_GAP: f32 = 2.0;
 /// Between the meter's three rings when the operator picks that mark:
 /// tight enough that the trio reads as one control, wide enough that the
 /// three readings stay separate.
 pub const USAGE_RING_GAP: f32 = 4.0;
+/// The readout's percent column: four mono cells at `FS_SM`, so 9% → 62% →
+/// 100% never shifts the marks beside it.
+pub const USAGE_READOUT_W: f32 = 4.0 * FS_SM * MONO_ADVANCE;
+/// Background task chips on the shelf above the Composer: `FILL` (not
+/// `HOVER`, which vanishes on `RAISED`), `R_CHIP`, `CHIP_H`, mono `FS_SM`
+/// `TEXT_2`, the shared pulsing `RUNNING` dot, labels cut at 240px, and a
+/// quiet `×` stop control (`BG_CHIP_STOP` square, glyph `TEXT_MUTED`).
+pub const BG_CHIP_MAX_W: f32 = 240.0;
+pub const BG_CHIP_STOP: f32 = 16.0;
+pub const BG_CHIP_STOP_GLYPH: f32 = 10.0;
+/// A pending file on the shelf: a 22px chip with a 16px thumbnail or file
+/// mark, the name cut at 200px.
+pub const ATTACH_CHIP_H: f32 = 22.0;
+pub const ATTACH_CHIP_MAX_W: f32 = 200.0;
+pub const ATTACH_THUMB: f32 = 16.0;
 // (end WP-D) — append above this line only
 
 // ======================================== WP-E · menus, popovers, sheets, notifications
