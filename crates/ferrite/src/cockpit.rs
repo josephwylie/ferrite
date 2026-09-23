@@ -245,6 +245,13 @@ pub struct CockpitView {
     /// left them. Session-only: the persisted Group layout names Threads
     /// alone, so a reader's place is remembered here until quit.
     board_layouts: std::collections::HashMap<Board, Tree>,
+    /// Every board slot's size as this frame laid it out, for the ghost a
+    /// drag of it shows. Written while the board draws.
+    slot_sizes: std::cell::RefCell<std::collections::HashMap<ThreadId, (f32, f32)>>,
+    /// The board slot being dragged, dimmed in place while its ghost moves.
+    dragging: Option<ThreadId>,
+    /// The nav row being dragged, dimmed in the tree the same way.
+    nav_dragging: Option<Drag>,
     /// The operator's settings and where they save; every change saves.
     prefs: Preferences,
     /// The Settings panel is up.
@@ -341,12 +348,162 @@ struct PaneDrag {
     leaf: ThreadId,
 }
 
-/// The badge that follows the pointer while a Pane is dragged.
-struct PaneDragPreview(SharedString);
+/// What a dragged slot's ghost draws: its name, the line under it (a
+/// Pane's branch, a reader's kind), and the size the slot has on the board.
+#[derive(Clone)]
+struct GhostFace {
+    title: SharedString,
+    detail: Option<SharedString>,
+    reader: bool,
+    size: (f32, f32),
+}
 
-impl Render for PaneDragPreview {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        nav::drag_badge(self.0.clone())
+/// The longest a ghost gets on either side: a big Pane shrinks to a card
+/// the board stays readable around, keeping the slot's proportions.
+const GHOST_MAX_W: f32 = 300.0;
+const GHOST_MAX_H: f32 = 200.0;
+/// A ghost's skeleton lines, as shares of its body's width.
+const GHOST_LINES: [f32; 4] = [0.82, 0.64, 0.74, 0.46];
+
+/// The ghost that follows the pointer while a slot is dragged: a scaled,
+/// see-through miniature of the slot, held at the point it was grabbed.
+struct PaneGhost {
+    face: GhostFace,
+    /// Where the pointer was in the grabbed handle, which gpui keeps under
+    /// the pointer. The miniature is shifted so the same point of the
+    /// scaled slot sits there instead.
+    grab: gpui::Point<Pixels>,
+    /// A nav drag's ghost folds back to its row while the pointer is over
+    /// the nav (left of this x), so it never hides the rows it is being
+    /// dropped among.
+    row_left_of: Option<(f32, NavChip)>,
+}
+
+impl PaneGhost {
+    fn scale(&self) -> f32 {
+        let (w, h) = self.face.size;
+        if w <= 0.0 || h <= 0.0 {
+            return 1.0;
+        }
+        (GHOST_MAX_W / w).min(GHOST_MAX_H / h).min(1.0)
+    }
+}
+
+impl Render for PaneGhost {
+    fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        use crate::theme;
+        if let Some((_, chip)) = self
+            .row_left_of
+            .as_ref()
+            .filter(|(edge, _)| f32::from(window.mouse_position().x) < *edge)
+        {
+            return chip.element();
+        }
+        let scale = self.scale();
+        let (w, h) = self.face.size;
+        let (w, h) = ((w * scale).max(160.0), (h * scale).max(90.0));
+        let shift = |at: Pixels| px(f32::from(at) * (1.0 - scale));
+        let mut body = div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .overflow_hidden()
+            .gap(px(7.))
+            .px(px(theme::PANE_PAD_X))
+            .py(px(10.));
+        for share in GHOST_LINES {
+            body = body.child(
+                div()
+                    .h(px(6.))
+                    .w(gpui::relative(share))
+                    .rounded(px(3.))
+                    .bg(rgb(theme::RAISED)),
+            );
+        }
+        let marker = if self.face.reader {
+            gpui::component::Icon::new(gpui::component::IconName::FileText)
+                .size(px(theme::ROW_ICON))
+                .text_color(rgb(theme::TEXT_2))
+                .into_any_element()
+        } else {
+            div()
+                .flex_shrink_0()
+                .size(px(theme::STATUS_DOT))
+                .rounded_full()
+                .bg(rgb(theme::TEXT_MUTED))
+                .into_any_element()
+        };
+        let head = div()
+            .flex()
+            .flex_col()
+            .flex_shrink_0()
+            .justify_center()
+            .gap(px(2.))
+            .px(px(theme::PANE_PAD_X))
+            .py(px(6.))
+            .bg(rgb(theme::PANE_HEAD))
+            .border_b_1()
+            .border_color(rgba(theme::PANE_HEAD_EDGE))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(theme::EVENT_GAP))
+                    .child(marker)
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .font_family(theme::FONT_MONO)
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_size(px(theme::FS_MD))
+                            .text_color(rgb(theme::TEXT_STRONG))
+                            .child(self.face.title.clone()),
+                    ),
+            )
+            .children(self.face.detail.clone().map(|detail| {
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .font_family(theme::FONT_MONO)
+                    .text_size(px(theme::FS_SM))
+                    .text_color(rgb(theme::TEXT_MUTED))
+                    .child(detail)
+            }));
+        let card = div()
+            .flex()
+            .flex_col()
+            .w(px(w))
+            .h(px(h))
+            .overflow_hidden()
+            .rounded(px(theme::R_SURFACE))
+            .border_1()
+            .border_color(rgb(theme::FOCUS))
+            .bg(rgb(theme::PANE))
+            .opacity(0.86)
+            .shadow(vec![
+                gpui::BoxShadow {
+                    inset: false,
+                    color: rgba(theme::SHADOW_FAR).into(),
+                    offset: gpui::point(px(0.), px(theme::SHADOW_FAR_Y)),
+                    blur_radius: px(theme::SHADOW_FAR_BLUR),
+                    spread_radius: px(theme::SHADOW_FAR_SPREAD),
+                },
+                gpui::BoxShadow {
+                    inset: false,
+                    color: rgba(theme::SHADOW_NEAR).into(),
+                    offset: gpui::point(px(0.), px(theme::SHADOW_NEAR_Y)),
+                    blur_radius: px(theme::SHADOW_NEAR_BLUR),
+                    spread_radius: px(0.),
+                },
+            ])
+            .child(head)
+            .child(body);
+        div()
+            .pl(shift(self.grab.x))
+            .pt(shift(self.grab.y))
+            .child(card)
     }
 }
 
@@ -441,7 +598,35 @@ struct ContextMenu {
     armed: Option<usize>,
 }
 
-struct NavDragPreview(SharedString);
+/// What rides the pointer while a nav row is dragged: that row itself, as
+/// the tree drew it — the Thread row of whichever list order is showing,
+/// or the Group's header.
+#[derive(Clone)]
+enum NavChip {
+    Thread {
+        row: nav::ThreadRow,
+        /// The by-Project list's compact row, not the grouped tree's.
+        compact: bool,
+        grouped: bool,
+    },
+    Group(nav::GroupBlock),
+}
+
+impl NavChip {
+    fn element(&self) -> Div {
+        nav::drag_row(match self {
+            NavChip::Thread {
+                row,
+                compact: true,
+                grouped,
+            } => nav::project_thread_row_with_title(row, row.name.clone(), *grouped),
+            NavChip::Thread { row, .. } => nav::thread_row_with_title(row, row.name.clone()),
+            NavChip::Group(group) => nav::group_row_with_title(group, group.title.clone()),
+        })
+    }
+}
+
+struct NavDragPreview(NavChip);
 
 /// A nav drag, plus the View it started from. The row's own mouse-down
 /// fires before the drag does — clicking a Group row enters it — so by the
@@ -457,7 +642,7 @@ struct NavDrag {
 
 impl Render for NavDragPreview {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        nav::drag_badge(self.0.clone())
+        self.0.element()
     }
 }
 
@@ -791,6 +976,9 @@ impl CockpitView {
             seam_drag: None,
             drop_preview: None,
             board_layouts: std::collections::HashMap::new(),
+            slot_sizes: Default::default(),
+            dragging: None,
+            nav_dragging: None,
             prefs,
             settings_open: false,
             project_editor: None,
@@ -2250,7 +2438,12 @@ impl CockpitView {
             ..rect
         };
         let mut board = div().relative().flex_1().min_w_0().min_h_0();
-        for (leaf, rect) in tree.rects(bounds, crate::theme::GRID_GAP) {
+        let rects = tree.rects(bounds, crate::theme::GRID_GAP);
+        *self.slot_sizes.borrow_mut() = rects
+            .iter()
+            .map(|(leaf, rect)| (*leaf, (rect.w, rect.h)))
+            .collect();
+        for (leaf, rect) in rects {
             let cell = match leaf_slot(leaf) {
                 Slot::Pane(identity) => {
                     let Some(index) = self.index_of(identity) else {
@@ -2267,6 +2460,13 @@ impl CockpitView {
                 }
             };
             let rect = local(rect);
+            // The grabbed slot stays put, dimmed, while its ghost travels:
+            // the board keeps its shape until the drop changes it.
+            let cell = if self.dragging == Some(leaf) {
+                cell.opacity(0.4)
+            } else {
+                cell
+            };
             board = board.child(
                 cell.absolute()
                     .left(px(rect.x))
@@ -2471,6 +2671,7 @@ impl CockpitView {
     /// lands beside the slot, on the edge the preview named. A member
     /// already on the board just moves there.
     fn drop_nav_on_board(&mut self, drag: Drag, target: ThreadId, cx: &mut Context<Self>) {
+        self.nav_dragging = None;
         let preview = self.drop_preview.take();
         let (Some((_, Zone::Split(edge))), Drag::Thread { thread, .. }) =
             (preview.filter(|(previewed, _)| *previewed == target), drag)
@@ -2536,6 +2737,7 @@ impl CockpitView {
     /// leaves, an edge moves the source beside the target — the tree is
     /// kept either way. Reads the preview the last move computed.
     fn drop_pane(&mut self, source: ThreadId, target: ThreadId, cx: &mut Context<Self>) {
+        self.dragging = None;
         let preview = self.drop_preview.take();
         let Some((previewed, zone)) = preview.filter(|(previewed, _)| *previewed == target) else {
             cx.notify();
@@ -3319,7 +3521,7 @@ impl CockpitView {
                     .into_any_element();
             }
         }
-        let badge = self.panes[index].name.clone();
+        let face = self.pane_ghost(index);
         let movable = self.board_is_movable();
         pane::head_title(self.panes[index].name.clone())
             .id(("pane-title", thread.get() as usize))
@@ -3329,9 +3531,13 @@ impl CockpitView {
             .when(movable, |title| {
                 title.cursor(gpui::CursorStyle::OpenHand).on_drag(
                     PaneDrag { leaf: thread },
-                    move |_, _, _, cx| {
-                        let badge = badge.clone();
-                        cx.new(|_| PaneDragPreview(badge))
+                    move |_, grab, _, cx| {
+                        let face = face.clone();
+                        cx.new(|_| PaneGhost {
+                            face,
+                            grab,
+                            row_left_of: None,
+                        })
                     },
                 )
             })
@@ -6370,6 +6576,7 @@ impl CockpitView {
     /// A nav drop: the core plans and applies it in the View the drag
     /// started from; a refusal lands in the nav's banner.
     fn apply_drop(&mut self, drag: NavDrag, target: DropTarget, cx: &mut Context<Self>) {
+        self.nav_dragging = None;
         match self.cockpit.drop(drag.drag, drag.origin, target) {
             Ok(()) => self.group_error = None,
             Err(error) => {
@@ -7337,7 +7544,21 @@ impl Render for CockpitView {
                 MouseButton::Left,
                 cx.listener(|view, _: &MouseUpEvent, _, cx| {
                     view.end_seam_drag(cx);
-                    if view.drop_preview.take().is_some() {
+                    if view.drop_preview.take().is_some()
+                        | view.dragging.take().is_some()
+                        | view.nav_dragging.take().is_some()
+                    {
+                        cx.notify();
+                    }
+                }),
+            )
+            // Every drag move reaches every listener, so the root hears a
+            // nav drag wherever the pointer is — the tree dims its row.
+            .on_drag_move(
+                cx.listener(|view, event: &gpui::DragMoveEvent<NavDrag>, _, cx| {
+                    let drag = event.drag(cx).drag;
+                    if view.nav_dragging != Some(drag) {
+                        view.nav_dragging = Some(drag);
                         cx.notify();
                     }
                 }),
@@ -7691,7 +7912,7 @@ impl CockpitView {
             child_footer: self.child_footer(index, cx),
             head_drag: self
                 .board_is_movable()
-                .then(|| head_drag(pane_leaf(pane.identity), pane.name.clone())),
+                .then(|| head_drag(pane_leaf(pane.identity), self.pane_ghost(index))),
         };
         cell.child(pane::render_pane(pane, facts, wiring, level))
     }
@@ -7717,6 +7938,10 @@ impl CockpitView {
         cell.on_drag_move(
             cx.listener(move |view, event: &gpui::DragMoveEvent<PaneDrag>, _, cx| {
                 let source = event.drag(cx).leaf;
+                if view.dragging != Some(source) {
+                    view.dragging = Some(source);
+                    cx.notify();
+                }
                 if event.bounds.contains(&event.event.position) {
                     view.preview_pane_drop(source, target, event.event.position, event.bounds, cx);
                 } else {
@@ -7742,6 +7967,43 @@ impl CockpitView {
         }))
     }
 
+    /// The size a slot was laid out at this frame, for its ghost.
+    fn slot_size(&self, leaf: ThreadId) -> (f32, f32) {
+        self.slot_sizes
+            .borrow()
+            .get(&leaf)
+            .copied()
+            .unwrap_or((GHOST_MAX_W, GHOST_MAX_H))
+    }
+
+    /// A Pane's ghost: its name, its branch, its size on the board.
+    fn pane_ghost(&self, index: usize) -> GhostFace {
+        let pane = &self.panes[index];
+        GhostFace {
+            title: pane.name.clone(),
+            detail: pane
+                .thread()
+                .and_then(|thread| self.facts.get(thread))
+                .and_then(|facts| facts.branch.clone()),
+            reader: false,
+            size: self.slot_size(pane_leaf(pane.identity)),
+        }
+    }
+
+    /// A nav row's ghost: the Thread as its Pane would look — its size on
+    /// the board when it is there, the largest ghost when it is not.
+    fn thread_ghost(&self, thread: ThreadId) -> GhostFace {
+        GhostFace {
+            title: self.facts.name(thread),
+            detail: self
+                .facts
+                .get(thread)
+                .and_then(|facts| facts.branch.clone()),
+            reader: false,
+            size: self.slot_size(thread),
+        }
+    }
+
     /// A Pane's open document as its own board slot: the reader, its head
     /// the slot's drag handle, a press anywhere in it landing on the Pane
     /// that opened it.
@@ -7755,7 +8017,16 @@ impl CockpitView {
         let document = pane.preview.document()?;
         pane.document_rich
             .file_context(document.path.parent(), &pane.preview);
-        let title: SharedString = document.title.clone().into();
+        let face = GhostFace {
+            title: document.title.clone().into(),
+            detail: Some(SharedString::from(if document.is_markdown() {
+                "MARKDOWN"
+            } else {
+                "FILE"
+            })),
+            reader: true,
+            size: self.slot_size(leaf),
+        };
         let body = if document.is_markdown() {
             crate::rich::Markdown::new(
                 format!("document-{}", document.path.display()),
@@ -7775,7 +8046,7 @@ impl CockpitView {
         };
         let reader = pane
             .preview
-            .reader(body, head_drag(leaf, title))?
+            .reader(body, head_drag(leaf, face))?
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |view, _: &MouseDownEvent, _, cx| {
@@ -9635,7 +9906,10 @@ impl CockpitView {
             group,
             self.editable_group_title(id, group.title.clone(), cx),
         );
+        let chip = NavChip::Group(group.clone());
+        let lifted = self.nav_dragging == Some(Drag::Group(id));
         let mut block = nav::group_block()
+            .when(lifted, |block| block.opacity(0.4))
             // A Group separates itself from whatever is above it: nothing
             // when it opens the tree, the 16px band from another Group —
             // prepended below, because that band is a drop target and not a
@@ -9654,7 +9928,10 @@ impl CockpitView {
                         drag: Drag::Group(id),
                         origin,
                     },
-                    move |_, _, _, cx| cx.new(|_| NavDragPreview("group".into())),
+                    move |_, _, _, cx| {
+                        let chip = chip.clone();
+                        cx.new(|_| NavDragPreview(chip))
+                    },
                 )
                 .on_drop(cx.listener(move |view, drag: &NavDrag, _, cx| {
                     view.apply_drop(*drag, DropTarget::GroupHeader(id), cx)
@@ -9782,16 +10059,34 @@ impl CockpitView {
         } else {
             nav::thread_row_with_title(row, title)
         };
-        let badge = self.facts.name(thread);
+        let face = self.thread_ghost(thread);
+        let nav_edge = self.nav_width();
+        let chip = NavChip::Thread {
+            row: row.clone(),
+            compact,
+            grouped: group.is_some(),
+        };
+        let lifted = matches!(
+            self.nav_dragging,
+            Some(Drag::Thread { thread: dragged, .. }) if dragged == thread
+        );
         drop_feedback(head, self.cockpit.groups().clone(), target)
+            // The row being dragged stays in the tree, dimmed, while its
+            // copy rides the pointer.
+            .when(lifted, |row| row.opacity(0.4))
             .on_drag(
                 NavDrag {
                     drag: Drag::Thread { thread, group },
                     origin,
                 },
-                move |_, _, _, cx| {
-                    let badge = badge.clone();
-                    cx.new(|_| NavDragPreview(badge))
+                move |_, grab, _, cx| {
+                    let face = face.clone();
+                    let chip = chip.clone();
+                    cx.new(|_| PaneGhost {
+                        face,
+                        grab,
+                        row_left_of: Some((nav_edge, chip)),
+                    })
                 },
             )
             .on_drop(
@@ -9945,14 +10240,18 @@ fn drop_geometry(
 }
 
 /// A slot's head as its drag handle: the whole band picks the slot up,
-/// with its name riding the pointer.
-fn head_drag(leaf: ThreadId, badge: SharedString) -> pane::HeadDrag {
+/// with its ghost riding the pointer.
+fn head_drag(leaf: ThreadId, face: GhostFace) -> pane::HeadDrag {
     Box::new(move |head: Div| {
         head.id(("slot-head", leaf.get() as usize))
             .cursor(gpui::CursorStyle::OpenHand)
-            .on_drag(PaneDrag { leaf }, move |_, _, _, cx| {
-                let badge = badge.clone();
-                cx.new(|_| PaneDragPreview(badge))
+            .on_drag(PaneDrag { leaf }, move |_, grab, _, cx| {
+                let face = face.clone();
+                cx.new(|_| PaneGhost {
+                    face,
+                    grab,
+                    row_left_of: None,
+                })
             })
             .into_any_element()
     })

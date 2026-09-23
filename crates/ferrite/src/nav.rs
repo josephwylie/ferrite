@@ -227,6 +227,7 @@ pub struct FilterOption {
 }
 
 /// One Group and the Threads indented under it.
+#[derive(Clone)]
 pub struct GroupBlock {
     pub id: GroupId,
     pub title: SharedString,
@@ -1308,15 +1309,34 @@ pub fn rename_target_thread(thread: ThreadId, title: SharedString) -> Stateful<D
         .child(title)
 }
 
-pub fn drag_badge(label: SharedString) -> Div {
+/// A nav row lifted off the tree while it is dragged: the same row the
+/// tree draws, at the tree's row width, on the nav's own ground and
+/// floating on the menu shadow — so what rides the pointer is recognisably
+/// the row that was picked up.
+pub fn drag_row(row: Stateful<Div>) -> Div {
     div()
-        .bg(rgb(MENU))
+        .w(px(WIDTH - NAV_TREE_PAD * 2.0))
         .rounded(px(R_CONTROL))
-        .px(px(ROW_PAD_X))
-        .py(px(ROW_PAD_Y))
-        .text_size(px(FS_SM))
-        .text_color(rgb(TEXT))
-        .child(label)
+        .bg(rgb(NAV))
+        .border_1()
+        .border_color(rgb(SEP))
+        .shadow(vec![
+            BoxShadow {
+                inset: false,
+                color: rgba(SHADOW_FAR).into(),
+                offset: point(px(0.), px(SHADOW_FAR_Y)),
+                blur_radius: px(SHADOW_FAR_BLUR),
+                spread_radius: px(SHADOW_FAR_SPREAD),
+            },
+            BoxShadow {
+                inset: false,
+                color: rgba(SHADOW_NEAR).into(),
+                offset: point(px(0.), px(SHADOW_NEAR_Y)),
+                blur_radius: px(SHADOW_NEAR_BLUR),
+                spread_radius: px(0.),
+            },
+        ])
+        .child(row)
 }
 
 /// The collapsed rail. Primary navigation actions sit at the top, recent
