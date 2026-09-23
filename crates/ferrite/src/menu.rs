@@ -16,7 +16,8 @@ use crate::icons;
 use crate::theme::*;
 
 /// One row of the menu: the shared menu row's content. Its `shortcut` is the
-/// key that does the same thing, drawn here so `⌘` can be a glyph box.
+/// key that does the same thing (`cmd-F`), drawn here so the command key can
+/// be a glyph box.
 pub type Item = MenuItem;
 
 /// The floating shell: at least `MENU_W`, and as wide as its longest verb
@@ -46,30 +47,21 @@ pub fn row(index: usize, item: &Item, armed: bool) -> Stateful<Div> {
         })
 }
 
-/// A shortcut in the menu's trailing column: mono `FS_SM`, `⌘` drawn as a
-/// glyph box because Geist Mono has no such glyph.
+/// A shortcut in the menu's trailing column: mono `FS_SM`. A `cmd-` prefix
+/// draws the command key as a glyph box, because Geist Mono has no `⌘`.
 fn shortcut(keys: &SharedString, ink: u32) -> Div {
-    let mut drawn = div()
+    let drawn = div()
         .flex()
         .flex_shrink_0()
         .items_center()
         .text_size(px(FS_SM))
         .text_color(rgb(ink));
-    let mut run = String::new();
-    for key in keys.chars() {
-        if key == '⌘' {
-            if !run.is_empty() {
-                drawn = drawn.child(std::mem::take(&mut run));
-            }
-            drawn = drawn.child(icons::icon(icons::COMMAND, MENU_KEY_GLYPH, ink));
-        } else {
-            run.push(key);
-        }
+    match keys.strip_prefix("cmd-") {
+        Some(key) => drawn
+            .child(icons::icon(icons::COMMAND, MENU_KEY_GLYPH, ink))
+            .child(key.to_string()),
+        None => drawn.child(keys.clone()),
     }
-    if !run.is_empty() {
-        drawn = drawn.child(run);
-    }
-    drawn
 }
 
 /// A tooltip in the floating vocabulary: mono `FS_SM`, 8px × 4px, at most

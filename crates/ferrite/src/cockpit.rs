@@ -1733,13 +1733,13 @@ impl CockpitView {
                 }
                 if shown {
                     rows.push(Some((
-                        menu::Item::new("Toggle Fullscreen").shortcut("⌘F"),
+                        menu::Item::new("Toggle Fullscreen").shortcut("cmd-F"),
                         MenuVerb::Fullscreen,
                     )));
                 }
                 rows.push(None);
                 rows.push(Some((
-                    menu::Item::new("New Thread in this Project").shortcut("⌘T"),
+                    menu::Item::new("New Thread in this Project").shortcut("cmd-T"),
                     MenuVerb::NewThread,
                 )));
                 rows.push(Some((
@@ -1750,7 +1750,7 @@ impl CockpitView {
                 rows.push(None);
                 if live {
                     rows.push(Some((
-                        menu::Item::new("Park Thread").shortcut(if shown { "⌘W" } else { "" }),
+                        menu::Item::new("Park Thread").shortcut(if shown { "cmd-W" } else { "" }),
                         if shown && !grouped {
                             MenuVerb::Close
                         } else {
@@ -1773,7 +1773,9 @@ impl CockpitView {
                 let grouped = self.cockpit.groups().of(thread).is_some();
                 let selected = self.native_copy.is_some();
                 rows.push(Some((
-                    menu::Item::new("Copy").shortcut("⌘C").disabled(!selected),
+                    menu::Item::new("Copy")
+                        .shortcut("cmd-C")
+                        .disabled(!selected),
                     MenuVerb::CopySelection,
                 )));
                 rows.push(Some((
@@ -1786,7 +1788,7 @@ impl CockpitView {
                     MenuVerb::Rename,
                 )));
                 rows.push(Some((
-                    menu::Item::new("Toggle Fullscreen").shortcut("⌘F"),
+                    menu::Item::new("Toggle Fullscreen").shortcut("cmd-F"),
                     MenuVerb::Fullscreen,
                 )));
                 rows.push(None);
@@ -1798,7 +1800,7 @@ impl CockpitView {
                 rows.push(None);
                 rows.push(Some((
                     menu::Item::new(if grouped { "Close Pane" } else { "Park Thread" })
-                        .shortcut("⌘W"),
+                        .shortcut("cmd-W"),
                     MenuVerb::Close,
                 )));
                 if grouped {
@@ -1812,7 +1814,7 @@ impl CockpitView {
                     rows.push(Some((menu::Item::new("Open Group"), MenuVerb::EnterGroup)));
                 }
                 rows.push(Some((
-                    menu::Item::new("New Thread in this Group").shortcut("⌘T"),
+                    menu::Item::new("New Thread in this Group").shortcut("cmd-T"),
                     MenuVerb::NewThread,
                 )));
                 rows.push(None);
