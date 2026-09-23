@@ -9944,6 +9944,7 @@ mod tests {
     mod provider_forms;
     mod provider_navigation;
     mod render_performance;
+    mod stab;
     mod subagents;
     mod ui_a;
     mod ui_b;

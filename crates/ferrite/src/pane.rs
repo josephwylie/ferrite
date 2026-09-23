@@ -1008,6 +1008,7 @@ pub fn render_pane(
             composer,
             activity_decisions.filter(|_| expand_question.is_none()),
             expand_question,
+            reduce_motion,
         )));
     }
 
@@ -1084,7 +1085,12 @@ pub fn render_pane(
 fn l1_progress(cx: &mut PaneCtx) -> Option<AnyElement> {
     let transcript = cx.transcript?;
     let line = if transcript.status() == Status::Streaming {
-        working_line(transcript, false, cx.received_reasoning_visible)
+        working_line(
+            transcript,
+            false,
+            cx.received_reasoning_visible,
+            cx.reduce_motion,
+        )
     } else if cx.starting {
         // A Session starting or being replaced, with nothing streaming yet:
         // the same line, saying so.
@@ -1119,11 +1125,7 @@ fn l1_progress(cx: &mut PaneCtx) -> Option<AnyElement> {
 /// The working line's shape while a Session starts: the Ferrite mark (still
 /// under reduced motion) and `Starting session`.
 fn starting_line(reduce_motion: bool) -> Div {
-    let mark = if reduce_motion {
-        icons::ferrite_icon(theme::GLYPH_BOX)
-    } else {
-        icons::animated_ferrite_icon(theme::GLYPH_BOX, "live-progress-indicator")
-    };
+    let mark = working_mark(reduce_motion);
     div()
         .debug_selector(|| "transcript-starting".into())
         .flex()
@@ -1767,6 +1769,7 @@ fn l2_cell(
     composer: Option<Div>,
     requests: Option<AnyElement>,
     expand_question: Option<AnyElement>,
+    reduce_motion: bool,
 ) -> Div {
     let compact_question = expand_question.is_some();
     let mut header = div()
@@ -1936,11 +1939,12 @@ fn l2_cell(
     // the Thread is saying, not only that it is saying something.
     body = body.child(l2_tail(transcript, view.text_namespace()));
     if transcript.status() == Status::Streaming {
-        body = body.child(
-            div()
-                .flex_shrink_0()
-                .child(working_line(transcript, true, false)),
-        );
+        body = body.child(div().flex_shrink_0().child(working_line(
+            transcript,
+            true,
+            false,
+            reduce_motion,
+        )));
     }
 
     // Completion quiets historical content; the editable Composer stays at
@@ -2876,8 +2880,29 @@ pub fn turn_diff_disclosure(transcript: &Transcript, level: Level) -> Option<Dis
         .map(|diff| DisclosureId::TurnDiff(diff.turn_id.clone()))
 }
 
-/// The working line: one row, the animated Ferrite mark in the gutter, the
-/// provider's live caption, then `(6s · ↓ 312 tokens)` in metadata ink —
+/// The working line's mark: the Ferrite shards snapping on their 3s
+/// timeline, or the assembled mark at rest when the operator asked for
+/// reduced motion. Its element id is a constant: the timeline has to
+/// survive every re-render of the line.
+fn working_mark(reduce_motion: bool) -> AnyElement {
+    if reduce_motion {
+        div()
+            .debug_selector(|| "progress-mark-still".into())
+            .child(icons::ferrite_icon(theme::GLYPH_BOX))
+            .into_any_element()
+    } else {
+        div()
+            .debug_selector(|| "progress-mark-live".into())
+            .child(icons::animated_ferrite_icon(
+                theme::GLYPH_BOX,
+                "live-progress-indicator",
+            ))
+            .into_any_element()
+    }
+}
+
+/// The working line: one row, the animated Ferrite mark in the gutter (at
+/// rest under reduced motion), the provider's live caption, then `(6s · ↓ 312 tokens)` in metadata ink —
 /// Claude Code's `✻ Thinking… (12s · ↓ 1.2k tokens)`. The caption is what
 /// truncates; the facts keep their room. `esc` is shown once, on Stop. L2
 /// (`compact`) draws the same row without the token count. Command details
@@ -2886,6 +2911,7 @@ fn working_line(
     transcript: &Transcript,
     compact: bool,
     received_reasoning_is_visible: bool,
+    reduce_motion: bool,
 ) -> Div {
     let mut facts: Vec<String> = Vec::new();
     if let Some(elapsed) = transcript.turn_elapsed() {
@@ -2917,10 +2943,9 @@ fn working_line(
         row = row
             .debug_selector(move || selector.clone())
             // The shard snap is this row's liveness signal, so the text
-            // carries no extra opacity pulse. Its element id is a constant:
-            // the 3s timeline has to survive every re-render of the line.
+            // carries no extra opacity pulse.
             .child(components::gutter(
-                icons::animated_ferrite_icon(theme::GLYPH_BOX, "live-progress-indicator"),
+                working_mark(reduce_motion),
                 theme::LH_UI,
             ))
             .child(
@@ -5927,7 +5952,9 @@ mod tests {
 
     impl Render for ShowsProgress {
         fn render(&mut self, _: &mut gpui::Window, _: &mut Context<Self>) -> impl IntoElement {
-            div().w_full().child(working_line(&self.0, false, false))
+            div()
+                .w_full()
+                .child(working_line(&self.0, false, false, false))
         }
     }
 
