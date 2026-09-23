@@ -1918,7 +1918,8 @@ impl Cockpit {
             .collect();
         // Newest first, and a Thread whose log cannot be stat'd sorts last
         // rather than counting as the epoch's most recent.
-        threads.sort_by_key(|(used, thread)| (std::cmp::Reverse(*used), std::cmp::Reverse(*thread)));
+        threads
+            .sort_by_key(|(used, thread)| (std::cmp::Reverse(*used), std::cmp::Reverse(*thread)));
         threads.into_iter().find_map(|(_, thread)| {
             let project = self.project_id(thread)?;
             self.registry.project(project).map(|_| project)

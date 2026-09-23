@@ -246,9 +246,7 @@ fn typing_in_a_focused_composer_does_not_render_sibling_native_transcripts(
 }
 
 #[gpui::test]
-fn streaming_without_drawing_releases_temporary_transcript_elements(
-    cx: &mut TestAppContext,
-) {
+fn streaming_without_drawing_releases_temporary_transcript_elements(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("stream-without-drawing", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     tick(cx);
@@ -271,7 +269,8 @@ fn streaming_without_drawing_releases_temporary_transcript_elements(
         }
     });
     assert_eq!(
-        cache.retained_handles(), before,
+        cache.retained_handles(),
+        before,
         "stream updates must release all temporary native text handles"
     );
 }
@@ -1020,8 +1019,11 @@ fn answer_gutter_and_padding_survive_wrapping_resize(cx: &mut TestAppContext) {
         let text = view.read_with(cx, |view, cx| {
             let thread = view.panes[0].thread().unwrap();
             let block = &view.cockpit.thread(thread).unwrap().transcript().blocks()[0];
-            let id = format!("markdown-{}-{:?}", view.panes[0].text_namespace(),
-                block.markdown_run.unwrap_or(block.id));
+            let id = format!(
+                "markdown-{}-{:?}",
+                view.panes[0].text_namespace(),
+                block.markdown_run.unwrap_or(block.id)
+            );
             crate::rich::testing::bounds(&id, 0, cx).unwrap()
         });
         for delta in [
@@ -1031,11 +1033,17 @@ fn answer_gutter_and_padding_survive_wrapping_resize(cx: &mut TestAppContext) {
             answer.bottom() - text.bottom() - px(theme::COMMENTARY_PAD_Y),
             answer.right() - text.right(),
         ] {
-            assert!(delta.abs() <= px(1.), "answer/text geometry differs: {answer:?} {text:?}");
+            assert!(
+                delta.abs() <= px(1.),
+                "answer/text geometry differs: {answer:?} {text:?}"
+            );
         }
         heights.push(text.size.height);
     }
-    assert!(heights[1] > heights[0], "narrower Markdown must wrap naturally");
+    assert!(
+        heights[1] > heights[0],
+        "narrower Markdown must wrap naturally"
+    );
 }
 
 /// Reproducible CPU layout probe; uses synthetic sessions and no local logs.
@@ -1049,16 +1057,28 @@ fn streaming_layout_probe(cx: &mut TestAppContext) {
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1440.), px(900.)));
     view.update(cx, |view, cx| view.enter_group(group, cx));
-    for _ in 0..4 { tick(cx); }
+    for _ in 0..4 {
+        tick(cx);
+    }
     let started = std::time::Instant::now();
     for _ in 0..60 {
         for stream in fake.streams.borrow().iter() {
-            stream.send(SessionEvent::TextDelta { text: "more words ".into() }).unwrap();
+            stream
+                .send(SessionEvent::TextDelta {
+                    text: "more words ".into(),
+                })
+                .unwrap();
         }
         tick(cx);
     }
-    eprintln!("STREAM_LAYOUT iterations=60 panes=4 elapsed_ms={:.3}", started.elapsed().as_secs_f64() * 1000.);
-    let prefix = view.read_with(cx, |view, _| format!("markdown-{}-", view.panes[0].text_namespace()));
-    assert!(cx.update(|_, cx| crate::rich::testing::full_text(&prefix, cx))
+    eprintln!(
+        "STREAM_LAYOUT iterations=60 panes=4 elapsed_ms={:.3}",
+        started.elapsed().as_secs_f64() * 1000.
+    );
+    let prefix = view.read_with(cx, |view, _| {
+        format!("markdown-{}-", view.panes[0].text_namespace())
+    });
+    assert!(cx
+        .update(|_, cx| crate::rich::testing::full_text(&prefix, cx))
         .is_some_and(|text| text.contains("more words ".repeat(60).trim_end())));
 }

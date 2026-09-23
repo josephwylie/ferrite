@@ -274,29 +274,41 @@ fn multiline_drafts_keep_context_visible_across_group_sizes(cx: &mut TestAppCont
         cx.simulate_resize(gpui::size(px(width), px(height)));
         view.update(cx, |view, cx| {
             view.focus_pane(0);
-            view.panes[0].composer.update(cx, |composer, cx| composer.set(draft.into(), cx));
+            view.panes[0]
+                .composer
+                .update(cx, |composer, cx| composer.set(draft.into(), cx));
             cx.notify();
         });
         tick(cx);
         let (rect, level, thread) = cx.update(|window, cx| {
             let view = view.read(cx);
             (
-                view.pane_rects(window).into_iter().find(|(index, _)| *index == 0).unwrap().1,
+                view.pane_rects(window)
+                    .into_iter()
+                    .find(|(index, _)| *index == 0)
+                    .unwrap()
+                    .1,
                 view.level_of(0, window),
                 view.panes[0].thread().unwrap(),
             )
         });
         if level != Level::Wall {
             let editor = cx.debug_bounds("focused-prompt-editor").unwrap();
-            let send = bounds(cx, format!("composer-send-{:?}", PaneIdentity::Thread(thread)));
+            let send = bounds(
+                cx,
+                format!("composer-send-{:?}", PaneIdentity::Thread(thread)),
+            );
             assert!(
-                editor.top() >= px(rect.y + rect.h * (1. - crate::theme::COMPOSER_MAX_PANE_FRACTION)),
+                editor.top()
+                    >= px(rect.y + rect.h * (1. - crate::theme::COMPOSER_MAX_PANE_FRACTION)),
                 "typing preserves the majority of the Pane for context: {editor:?} / {rect:?}"
             );
             assert!(editor.bottom() <= px(rect.y + rect.h));
             assert!(send.top() >= px(rect.y) && send.bottom() <= px(rect.y + rect.h));
         }
-        view.read_with(cx, |view, cx| assert_eq!(view.panes[0].composer.read(cx).text(), draft));
+        view.read_with(cx, |view, cx| {
+            assert_eq!(view.panes[0].composer.read(cx).text(), draft)
+        });
         view.update(cx, |view, cx| {
             view.cockpit.toggle_fullscreen();
             cx.notify();
@@ -304,8 +316,13 @@ fn multiline_drafts_keep_context_visible_across_group_sizes(cx: &mut TestAppCont
         cx.simulate_resize(gpui::size(px(1200.), px(900.)));
         tick(cx);
         let expanded = cx.debug_bounds("focused-prompt-editor").unwrap();
-        assert_eq!(expanded.size.height, px(crate::theme::COMPOSER_ROW_H * crate::composer::MAX_ROWS as f32));
-        view.read_with(cx, |view, cx| assert_eq!(view.panes[0].composer.read(cx).text(), draft));
+        assert_eq!(
+            expanded.size.height,
+            px(crate::theme::COMPOSER_ROW_H * crate::composer::MAX_ROWS as f32)
+        );
+        view.read_with(cx, |view, cx| {
+            assert_eq!(view.panes[0].composer.read(cx).text(), draft)
+        });
     }
 }
 
@@ -327,25 +344,34 @@ fn compact_queue_scrolls_without_covering_context_or_composer_actions(cx: &mut T
     bind_production_keys(cx);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     let (namespace, other_namespace) = view.read_with(cx, |view, _| {
-        (view.panes[0].text_namespace(), view.panes[1].text_namespace())
+        (
+            view.panes[0].text_namespace(),
+            view.panes[1].text_namespace(),
+        )
     });
     // Reproduce the actual compact surface: checkout metadata, a passed-test
     // badge, live reasoning and elapsed time, queue, and an eight-line draft.
-    fake.streams.borrow()[0].send(SessionEvent::ToolStarted {
-        id: "queue-test-run".into(),
-        name: "Bash".into(),
-        input: serde_json::json!({"command": "cargo test --lib"}),
-    }).unwrap();
-    fake.streams.borrow()[0].send(SessionEvent::ToolCompleted {
-        id: "queue-test-run".into(),
-        output: "test result: ok. 24 passed; 0 failed; 0 ignored".into(),
-        is_error: false,
-        result: ferrite_core::ToolResult::Opaque,
-    }).unwrap();
-    fake.streams.borrow()[0].send(SessionEvent::ReasoningSummaryDelta {
-        text: "Checking the remaining interactions".into(),
-        summary_index: 0,
-    }).unwrap();
+    fake.streams.borrow()[0]
+        .send(SessionEvent::ToolStarted {
+            id: "queue-test-run".into(),
+            name: "Bash".into(),
+            input: serde_json::json!({"command": "cargo test --lib"}),
+        })
+        .unwrap();
+    fake.streams.borrow()[0]
+        .send(SessionEvent::ToolCompleted {
+            id: "queue-test-run".into(),
+            output: "test result: ok. 24 passed; 0 failed; 0 ignored".into(),
+            is_error: false,
+            result: ferrite_core::ToolResult::Opaque,
+        })
+        .unwrap();
+    fake.streams.borrow()[0]
+        .send(SessionEvent::ReasoningSummaryDelta {
+            text: "Checking the remaining interactions".into(),
+            summary_index: 0,
+        })
+        .unwrap();
     view.update(cx, |view, cx| {
         view.panes[0].composer.update(cx, |composer, cx| {
             composer.set("One\nTwo\nThree\nFour\nFive\nSix\nSeven\nEight".into(), cx);
@@ -365,12 +391,17 @@ fn compact_queue_scrolls_without_covering_context_or_composer_actions(cx: &mut T
         let latest = bounds(cx, format!("queue-row-{namespace}-0"));
         let other_latest = bounds(cx, format!("queue-row-{other_namespace}-0"));
         let editor = cx.debug_bounds("focused-prompt-editor").unwrap();
-        let send = bounds(cx, format!("composer-send-{:?}", PaneIdentity::Thread(thread)));
+        let send = bounds(
+            cx,
+            format!("composer-send-{:?}", PaneIdentity::Thread(thread)),
+        );
         assert!(queue.size.height <= px(crate::theme::CELL_HEADER_H + 1.));
         assert!(latest.top() >= queue.top() && latest.bottom() <= queue.bottom());
         assert!(queue.bottom() <= editor.top());
         if width == 860. {
-            let progress = cx.debug_bounds("progress-caption-Checking the remaining interactions").unwrap();
+            let progress = cx
+                .debug_bounds("progress-caption-Checking the remaining interactions")
+                .unwrap();
             assert!(
                 progress.bottom() <= queue.top() - px(crate::theme::COMPOSER_PAD_T + 1.),
                 "the complete live status stays above the Composer rule: {progress:?} / {queue:?}"
@@ -390,11 +421,18 @@ fn compact_queue_scrolls_without_covering_context_or_composer_actions(cx: &mut T
             "oldest {oldest:?} must fit queue {queue:?}"
         );
         let unaffected = bounds(cx, format!("queue-row-{other_namespace}-0"));
-        assert_eq!(unaffected, other_latest, "another Pane keeps its own scroll position");
-        assert!(unaffected.top() >= other_queue.top() && unaffected.bottom() <= other_queue.bottom());
+        assert_eq!(
+            unaffected, other_latest,
+            "another Pane keeps its own scroll position"
+        );
+        assert!(
+            unaffected.top() >= other_queue.top() && unaffected.bottom() <= other_queue.bottom()
+        );
     }
     view.update(cx, |view, cx| {
-        view.panes[0].composer.update(cx, |composer, cx| composer.set(String::new(), cx));
+        view.panes[0]
+            .composer
+            .update(cx, |composer, cx| composer.set(String::new(), cx));
     });
     tick(cx);
     cx.simulate_keystrokes("backspace");
@@ -402,7 +440,10 @@ fn compact_queue_scrolls_without_covering_context_or_composer_actions(cx: &mut T
     view.read_with(cx, |view, cx| {
         assert!(view.panes[0].composer.read(cx).is_empty());
         assert_eq!(view.cockpit.thread(thread).unwrap().queued_all().len(), 7);
-        assert_eq!(view.cockpit.thread(thread).unwrap().queued(), Some("Queued follow-up 6"));
+        assert_eq!(
+            view.cockpit.thread(thread).unwrap().queued(),
+            Some("Queued follow-up 6")
+        );
         assert_eq!(view.cockpit.thread(other).unwrap().queued_all().len(), 8);
     });
     cx.simulate_keystrokes("enter");

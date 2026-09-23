@@ -16,8 +16,8 @@ use ferrite_core::{
     ThreadId,
 };
 use gpui::{
-    base::ElementExt, div, list, prelude::*, px, relative, App, Context, Entity,
-    EventEmitter, FocusHandle, IntoElement, MouseButton, Render, SharedString, Window,
+    base::ElementExt, div, list, prelude::*, px, relative, App, Context, Entity, EventEmitter,
+    FocusHandle, IntoElement, MouseButton, Render, SharedString, Window,
 };
 
 use self::{
@@ -345,20 +345,13 @@ impl TranscriptView {
             if self.tool_state(DisclosureId::TurnDiff(diff.turn_id.clone()))
                 == DisclosureState::Expanded
             {
-                pane::collect_output_text(
-                    BlockId::TURN_DIFF,
-                    "turn-diff",
-                    &diff.diff,
-                    selection,
-                );
+                pane::collect_output_text(BlockId::TURN_DIFF, "turn-diff", &diff.diff, selection);
             }
         } else if let Some(source) = row.source() {
             let block = &row.blocks()[0];
-            let _ =
-                selection.answer(block.markdown_run.unwrap_or(block.id), source.to_owned());
+            let _ = selection.answer(block.markdown_run.unwrap_or(block.id), source.to_owned());
         } else if let Some(activity) = ToolActivity::at_start(row.blocks()) {
-            let expanded = self
-                .tool_state(DisclosureId::Group(activity.leader().call.clone()))
+            let expanded = self.tool_state(DisclosureId::Group(activity.leader().call.clone()))
                 == DisclosureState::Expanded;
             pane::collect_activity_text(
                 activity,
@@ -451,7 +444,8 @@ impl TranscriptView {
                         .left(px(0.))
                         .top(px(pad_y
                             + theme::ANSWER_MARK_TOP
-                            + (first_line_size - theme::FS_ANSWER) * theme::LINE_BODY / 2.))
+                            + (first_line_size - theme::FS_ANSWER) * theme::LINE_BODY
+                                / 2.))
                         .w(px(theme::GUTTER_W))
                         .child(icons::ferrite_icon(theme::ANSWER_MARK)),
                 )
@@ -522,7 +516,9 @@ impl TranscriptView {
             })
             .on_resend(move |_, _, cx| {
                 cx.stop_propagation();
-                view.update(cx, |_, cx| cx.emit(TranscriptEvent::ResendPrompt(resend.clone())));
+                view.update(cx, |_, cx| {
+                    cx.emit(TranscriptEvent::ResendPrompt(resend.clone()))
+                });
             })
             .into_any_element()
     }
@@ -656,9 +652,7 @@ impl Render for TranscriptView {
                 // carries none, so the stack ends on the body padding.
                 div()
                     .w_full()
-                    .when(index + 1 < row_count, |row| {
-                        row.pb(px(theme::BLOCK_GAP))
-                    })
+                    .when(index + 1 < row_count, |row| row.pb(px(theme::BLOCK_GAP)))
                     .child(row)
                     .into_any_element()
             },

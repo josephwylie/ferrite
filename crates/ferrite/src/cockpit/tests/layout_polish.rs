@@ -331,7 +331,8 @@ fn compact_group_question_expands_and_retains_answer_and_draft(cx: &mut TestAppC
         if iteration == 2 {
             let restored_editor = cx.debug_bounds("focused-prompt-editor").unwrap();
             assert!(
-                restored_editor.size.height <= px(pane.h * crate::theme::COMPOSER_MAX_PANE_FRACTION),
+                restored_editor.size.height
+                    <= px(pane.h * crate::theme::COMPOSER_MAX_PANE_FRACTION),
                 "returning to a compact Pane keeps the draft viewport bounded"
             );
         }
@@ -505,37 +506,64 @@ fn compact_live_reasoning_appears_once_and_returns_to_history(cx: &mut TestAppCo
         ("earlier", "The earlier observation is still relevant"),
         ("current", "Checking the remaining interactions"),
     ] {
-        fake.streams.borrow()[0].send(SessionEvent::ReasoningSummaryPart {
-            item_id: item.into(),
-            summary_index: 0,
-            text: text.into(),
-            snapshot: false,
-        }).unwrap();
+        fake.streams.borrow()[0]
+            .send(SessionEvent::ReasoningSummaryPart {
+                item_id: item.into(),
+                summary_index: 0,
+                text: text.into(),
+                snapshot: false,
+            })
+            .unwrap();
     }
     tick(cx);
     let (namespace, earlier, current) = view.read_with(cx, |view, _| {
-        let thoughts = view.cockpit.thread(thread).unwrap().transcript().blocks()
-            .iter().filter(|block| matches!(block.body, Body::Thinking(_)))
-            .map(|block| block.id).collect::<Vec<_>>();
+        let thoughts = view
+            .cockpit
+            .thread(thread)
+            .unwrap()
+            .transcript()
+            .blocks()
+            .iter()
+            .filter(|block| matches!(block.body, Body::Thinking(_)))
+            .map(|block| block.id)
+            .collect::<Vec<_>>();
         (view.panes[0].text_namespace(), thoughts[0], thoughts[1])
     });
     let row = |id| format!("l2-tail-row-{namespace}-{id:?}");
-    assert!(debug_bounds(cx, row(earlier)).is_some(), "older reasoning remains visible");
-    assert!(debug_bounds(cx, row(current)).is_none(), "live reasoning has one presentation");
-    assert!(cx.debug_bounds("progress-caption-Checking the remaining interactions").is_some());
-    fake.streams.borrow()[0].send(SessionEvent::Progress {
-        event: ferrite_core::progress::ProgressEvent::Phase {
-            phase: ferrite_core::progress::Phase::Compacting,
-            detail: String::new(),
-        },
-    }).unwrap();
+    assert!(
+        debug_bounds(cx, row(earlier)).is_some(),
+        "older reasoning remains visible"
+    );
+    assert!(
+        debug_bounds(cx, row(current)).is_none(),
+        "live reasoning has one presentation"
+    );
+    assert!(cx
+        .debug_bounds("progress-caption-Checking the remaining interactions")
+        .is_some());
+    fake.streams.borrow()[0]
+        .send(SessionEvent::Progress {
+            event: ferrite_core::progress::ProgressEvent::Phase {
+                phase: ferrite_core::progress::Phase::Compacting,
+                detail: String::new(),
+            },
+        })
+        .unwrap();
     tick(cx);
-    assert!(debug_bounds(cx, row(current)).is_some(), "a different live caption does not hide reasoning history");
-    fake.streams.borrow()[0].send(SessionEvent::TurnEnded {
-        outcome: ferrite_core::TurnOutcome::Completed,
-        cost_usd: None,
-    }).unwrap();
+    assert!(
+        debug_bounds(cx, row(current)).is_some(),
+        "a different live caption does not hide reasoning history"
+    );
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
     tick(cx);
     assert!(debug_bounds(cx, row(earlier)).is_some());
-    assert!(debug_bounds(cx, row(current)).is_some(), "completed reasoning is retained");
+    assert!(
+        debug_bounds(cx, row(current)).is_some(),
+        "completed reasoning is retained"
+    );
 }

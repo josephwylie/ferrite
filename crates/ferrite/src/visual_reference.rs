@@ -518,9 +518,7 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             let mut scene = Scene::new("starting");
             let ferrite = scene.project("ferrite");
             let (thread, _feed) = scene.open(Provider::Claude, &ferrite, "Starting up");
-            scene
-                .core
-                .send(thread, "Summarise the open issues.".into());
+            scene.core.send(thread, "Summarise the open issues.".into());
             (scene, none)
         }
         "error-turn" => (error_turn(label), none),
@@ -1038,9 +1036,7 @@ fn error_turn(label: &str) -> Scene {
     let mut scene = Scene::new(&format!("error-turn-{label}"));
     let ferrite = scene.project("ferrite");
     let (thread, feed) = scene.open(Provider::Claude, &ferrite, "Fix flaky pump test");
-    scene
-        .core
-        .send(thread, "Fix the flaky pump test.".into());
+    scene.core.send(thread, "Fix the flaky pump test.".into());
     feed.boot(Provider::Claude, 12_000)
         .bash(
             "repro",

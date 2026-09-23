@@ -363,7 +363,10 @@ fn contract_background_tasks_ride_the_composer_shelf(cx: &mut TestAppContext) {
         "chips hang at the right edge of the prompt box, not the left"
     );
     // Send closes the prompt row on the right, beside the editor.
-    let send = bounds(cx, format!("composer-send-{:?}", PaneIdentity::Thread(thread)));
+    let send = bounds(
+        cx,
+        format!("composer-send-{:?}", PaneIdentity::Thread(thread)),
+    );
     assert!(
         (shelf.right() - send.right()).abs() <= px(2.),
         "the shelf's right edge is the prompt box's right edge: shelf {:?} vs send {:?}",

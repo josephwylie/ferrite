@@ -13,9 +13,13 @@ pub(super) fn tool_label(tool: &ToolBlock) -> String {
 }
 
 pub(super) fn activity_label(activity: &ToolActivity<'_>) -> String {
-    let unavailable = activity.blocks.iter().filter(|block| {
-        matches!(&block.body, Body::Tool(tool) if tool.state == ToolState::Unavailable)
-    }).count();
+    let unavailable = activity
+        .blocks
+        .iter()
+        .filter(
+            |block| matches!(&block.body, Body::Tool(tool) if tool.state == ToolState::Unavailable),
+        )
+        .count();
     if unavailable > 0 {
         format!(
             "{} tool calls · {unavailable} results unavailable",
@@ -39,12 +43,7 @@ pub(super) fn diff_body(line: &str) -> &str {
     }
 }
 
-pub(crate) fn collect_output_text(
-    block: BlockId,
-    part: &str,
-    text: &str,
-    selection: &TextRuns,
-) {
+pub(crate) fn collect_output_text(block: BlockId, part: &str, text: &str, selection: &TextRuns) {
     if text.len() > 8 * 1024 {
         // Large output owns its selection in a separate native control.
         let _ = selection.output(block, part, text);
@@ -61,9 +60,7 @@ pub(crate) fn collect_block_text(block: &Block, expanded: bool, selection: &Text
                 let _ = selection.line(block.id, text, Vec::new());
             }
         }
-        Body::Paragraph { spans }
-        | Body::Heading { spans, .. }
-        | Body::Bullet { spans } => {
+        Body::Paragraph { spans } | Body::Heading { spans, .. } | Body::Bullet { spans } => {
             let (text, _) = inline(spans);
             let _ = selection.line(block.id, text, Vec::new());
         }
@@ -109,8 +106,7 @@ fn collect_tool_text(
             collect_output_text(block, "details", &output.text, selection);
         }
     } else {
-        if !redundant_test_result(tool)
-            && (!in_group || matches!(tool.state, ToolState::Failed(_)))
+        if !redundant_test_result(tool) && (!in_group || matches!(tool.state, ToolState::Failed(_)))
         {
             if let Some(line) = &tool.result_line {
                 let _ = selection.line(block, line.clone(), Vec::new());

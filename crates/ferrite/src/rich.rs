@@ -843,7 +843,8 @@ mod file_link_tests {
                 );
                 assert!(nested.left() >= first.left() + px(font_size));
                 assert!(nested.right() <= px(320.));
-                let selected = cx.update(|_, cx| testing::full_text("file-link-fixture", cx).unwrap());
+                let selected =
+                    cx.update(|_, cx| testing::full_text("file-link-fixture", cx).unwrap());
                 assert_eq!(
                     selected.trim_end(),
                     "first with a description that wraps onto another line.\ncontinued\nnested\nresumed\nsecond"

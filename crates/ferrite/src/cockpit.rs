@@ -6084,13 +6084,12 @@ impl CockpitView {
         // Attention so the tree names the Thread the toast was about. Only
         // an Idle row is lifted — Working, Failing and Blocked are the
         // louder truth, and a Decision is already Attention.
-        let status = if status == nav::RowStatus::Idle
-            && self.cockpit.notifications().attention(thread)
-        {
-            nav::RowStatus::Attention
-        } else {
-            status
-        };
+        let status =
+            if status == nav::RowStatus::Idle && self.cockpit.notifications().attention(thread) {
+                nav::RowStatus::Attention
+            } else {
+                status
+            };
         let now = std::time::SystemTime::now();
         nav::ThreadRow {
             thread,
@@ -7250,12 +7249,11 @@ impl Render for CockpitView {
                     }
                     View::Solo => ("New Thread", "New Thread", DraftPlacement::CurrentGroup),
                 };
-                let add_thread = crate::titlebar::add_thread_button(add_label, add_tooltip).on_click(
-                    cx.listener(move |view, _: &ClickEvent, _, cx| {
+                let add_thread = crate::titlebar::add_thread_button(add_label, add_tooltip)
+                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                         cx.stop_propagation();
                         view.open_draft_with_placement(DraftTarget::Main, placement, cx);
-                    }),
-                );
+                    }));
                 root.child(crate::titlebar::strip(
                     self.nav_width(),
                     crate::titlebar::Title {
@@ -9083,11 +9081,8 @@ impl CockpitView {
         }
         if state.thread_list_order == ThreadListOrder::ByProject {
             for (index, section) in state.project_sections.iter().enumerate() {
-                let heading = nav::project_section(
-                    section.label.clone(),
-                    section.rows.len(),
-                    index == 0,
-                );
+                let heading =
+                    nav::project_section(section.label.clone(), section.rows.len(), index == 0);
                 // `Other` gathers Threads whose Project cannot be read, so
                 // it names none to start a Thread in and gets no `+`.
                 let heading = match section.project {
@@ -9468,15 +9463,15 @@ impl CockpitView {
             let current = row.current;
             let thread = row.thread;
             let open = self.pane_for(thread).is_some();
-            items = items.child(nav::rail_item(row, current).on_click(
-                cx.listener(move |view, _: &ClickEvent, _, cx| {
+            items = items.child(nav::rail_item(row, current).on_click(cx.listener(
+                move |view, _: &ClickEvent, _, cx| {
                     if open {
                         view.focus_thread(thread, cx);
                     } else {
                         view.revive_thread(thread, cx);
                     }
-                }),
-            ));
+                },
+            )));
         }
         let primary = nav::rail_actions()
             .child(nav::rail_add_thread_button().on_click(cx.listener(
@@ -9494,14 +9489,12 @@ impl CockpitView {
                     cx.notify();
                 }),
             ));
-        let utilities = nav::rail_utilities()
-            .child(self.bell_element(cx))
-            .child(prefs::gear_button().on_click(cx.listener(
-                |view, _: &ClickEvent, _, cx| {
-                    cx.stop_propagation();
-                    view.toggle_settings(cx);
-                },
-            )));
+        let utilities = nav::rail_utilities().child(self.bell_element(cx)).child(
+            prefs::gear_button().on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
+                cx.stop_propagation();
+                view.toggle_settings(cx);
+            })),
+        );
         nav::rail(self.nav_filter.is_some())
             .child(primary)
             .child(items)
@@ -9547,9 +9540,13 @@ pub(crate) fn here() -> std::path::PathBuf {
 /// is the fallback for a store whose Threads name nothing the registry
 /// still knows.
 fn startup_project(cockpit: &ferrite_core::cockpit::Cockpit) -> Option<ProjectId> {
-    cockpit
-        .last_worked_project()
-        .or_else(|| cockpit.registry().projects().last().map(|project| project.id))
+    cockpit.last_worked_project().or_else(|| {
+        cockpit
+            .registry()
+            .projects()
+            .last()
+            .map(|project| project.id)
+    })
 }
 
 fn expand_home(typed: &str) -> std::path::PathBuf {
@@ -11626,8 +11623,12 @@ mod tests {
             assert_eq!(open.queued_all(), ["second thing", "first thing"]);
             assert_eq!(open.queued(), Some("second thing"));
         });
-        let top = cx.debug_bounds("queued-0").expect("the latest prompt is drawn");
-        let below = cx.debug_bounds("queued-1").expect("the earlier prompt is drawn too");
+        let top = cx
+            .debug_bounds("queued-0")
+            .expect("the latest prompt is drawn");
+        let below = cx
+            .debug_bounds("queued-1")
+            .expect("the earlier prompt is drawn too");
         assert!(
             top.origin.y < below.origin.y,
             "the latest sits on top: {top:?} above {below:?}"
@@ -13582,7 +13583,9 @@ mod tests {
         cx.simulate_mouse_move(prompt.center(), None, gpui::Modifiers::none());
         tick(cx);
         let copy_bounds = cx.debug_bounds(copy).expect("copy appears over the prompt");
-        let resend_bounds = cx.debug_bounds(resend).expect("resend appears over the prompt");
+        let resend_bounds = cx
+            .debug_bounds(resend)
+            .expect("resend appears over the prompt");
 
         cx.simulate_click(copy_bounds.center(), gpui::Modifiers::none());
         assert_eq!(clipboard(cx).as_deref(), Some("Run the focused checks"));
@@ -13639,8 +13642,7 @@ mod tests {
             );
             assert!(
                 control.left() < summary.left()
-                    && (summary.left() - control.left() - px(crate::theme::INDENT)).abs()
-                        <= px(1.),
+                    && (summary.left() - control.left() - px(crate::theme::INDENT)).abs() <= px(1.),
                 "chevron must stay inside the Pane beside the text: {summary:?} / {control:?}"
             );
         }
@@ -18336,11 +18338,7 @@ mod tests {
         let directory = scratch("original-image-path");
         std::fs::create_dir_all(directory.join("nested")).unwrap();
         let image = directory.join("résumé #50%.png");
-        std::fs::write(
-            &image,
-            include_bytes!("../assets/app-icon.png"),
-        )
-        .unwrap();
+        std::fs::write(&image, include_bytes!("../assets/app-icon.png")).unwrap();
         // Include a parent component so the route must canonicalize, not
         // concatenate a file:// prefix or hand the OS the unresolved path.
         let unresolved = directory.join("nested/../résumé #50%.png");
@@ -18355,8 +18353,8 @@ mod tests {
             .expect("the preview exposes its original image");
         cx.simulate_click(open.center(), gpui::Modifiers::none());
         cx.run_until_parked();
-        let opened = url::Url::parse(&cx.opened_url().expect("the OS received a file URL"))
-            .unwrap();
+        let opened =
+            url::Url::parse(&cx.opened_url().expect("the OS received a file URL")).unwrap();
         assert_eq!(opened.scheme(), "file");
         assert_eq!(
             opened.to_file_path().unwrap().canonicalize().unwrap(),

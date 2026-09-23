@@ -46,11 +46,11 @@ use crate::theme::{
     ICON_BUTTON, ICON_BUTTON_GLYPH, ICON_CHEVRON_LG, IDLE, LINE_TIGHT, MEMBERS_TOP, MEMBER_GAP,
     MEMBER_INDENT, MENU, MENU_PAD, MENU_ROW_H, MENU_TOP, NAV, NAV_HEAD_H, NAV_TREE_PAD,
     NAV_TREE_PAD_B, PROVIDER_CLAUDE, PROVIDER_CODEX, PROVIDER_MARK, PULSE_MIN, RAIL_INSET,
-    RAIL_OFFSET, ROW_GAP, ROW_ICON, ROW_ICON_GAP, ROW_PAD_X, ROW_PAD_Y, ROW_TEXT_W,
-    RUNNING, RUNNING_HALO, R_CONTROL, R_MENU, R_TIGHT, SEP, SHADOW_FAR, SHADOW_FAR_BLUR,
-    SHADOW_FAR_SPREAD, SHADOW_FAR_Y, SHADOW_NEAR, SHADOW_NEAR_BLUR, SHADOW_NEAR_Y, SOLOS_TOP,
-    STATUS_DOT, STATUS_HALO_INSET, STATUS_PULSE_MS, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG,
-    THREAD_ROW_H, TRAFFIC_RESERVE, WIN_CHROME_H,
+    RAIL_OFFSET, ROW_GAP, ROW_ICON, ROW_ICON_GAP, ROW_PAD_X, ROW_PAD_Y, ROW_TEXT_W, RUNNING,
+    RUNNING_HALO, R_CONTROL, R_MENU, R_TIGHT, SEP, SHADOW_FAR, SHADOW_FAR_BLUR, SHADOW_FAR_SPREAD,
+    SHADOW_FAR_Y, SHADOW_NEAR, SHADOW_NEAR_BLUR, SHADOW_NEAR_Y, SOLOS_TOP, STATUS_DOT,
+    STATUS_HALO_INSET, STATUS_PULSE_MS, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG, THREAD_ROW_H,
+    TRAFFIC_RESERVE, WIN_CHROME_H,
 };
 
 /// The nav's two widths—286px, and the platform rail cmd-b folds it to.
@@ -882,27 +882,20 @@ pub fn group_row_with_title(row: &GroupBlock, title: impl IntoElement) -> Statef
             .flex_col()
             .gap(px(ROW_GAP))
             .child(
-                div()
-                    .h(px(TITLE_LG_H))
-                    .overflow_hidden()
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .min_w(px(
-                                ROW_TEXT_W - GROUP_MARK_LG - ROW_PAD_X + TRUNCATE_SLOP,
-                            ))
-                            .max_w(px(
-                                ROW_TEXT_W - GROUP_MARK_LG - ROW_PAD_X + TRUNCATE_SLOP,
-                            ))
-                            .truncate()
-                            .h(px(TITLE_LG_H))
-                            .text_size(px(FS_LG))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .line_height(relative(LINE_TIGHT))
-                            .text_color(rgb(if row.current { TEXT_STRONG } else { TEXT }))
-                            .child(title),
-                    ),
+                div().h(px(TITLE_LG_H)).overflow_hidden().child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .min_w(px(ROW_TEXT_W - GROUP_MARK_LG - ROW_PAD_X + TRUNCATE_SLOP))
+                        .max_w(px(ROW_TEXT_W - GROUP_MARK_LG - ROW_PAD_X + TRUNCATE_SLOP))
+                        .truncate()
+                        .h(px(TITLE_LG_H))
+                        .text_size(px(FS_LG))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .line_height(relative(LINE_TIGHT))
+                        .text_color(rgb(if row.current { TEXT_STRONG } else { TEXT }))
+                        .child(title),
+                ),
             )
             .child(meta_line(icons::FOLDER, row.projects.clone(), TEXT_2)),
     )
@@ -1420,7 +1413,11 @@ pub fn rail_item(row: &ThreadRow, current: bool) -> Button {
                 .justify_center()
                 .w(px(RAIL_CONTROL))
                 .h(px(RAIL_CONTROL))
-                .text_size(px(if cfg!(target_os = "macos") { FS_MD } else { FS_SM }))
+                .text_size(px(if cfg!(target_os = "macos") {
+                    FS_MD
+                } else {
+                    FS_SM
+                }))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(rgb(TEXT_2))
                 .child(monogram)
@@ -1437,10 +1434,7 @@ pub fn rail_item(row: &ThreadRow, current: bool) -> Button {
 /// The expanded row's breathing halo needs more room than a 28px avatar.
 /// Rail state stays still so it cannot clip into duplicate marks.
 fn rail_status_dot(status: RowStatus) -> Div {
-    let dot = div()
-        .w(px(STATUS_DOT))
-        .h(px(STATUS_DOT))
-        .rounded_full();
+    let dot = div().w(px(STATUS_DOT)).h(px(STATUS_DOT)).rounded_full();
     match status {
         RowStatus::Working => dot.bg(rgb(RUNNING)),
         RowStatus::Failing => dot.bg(rgb(RUNNING)).border_1().border_color(rgb(BLOCKED)),

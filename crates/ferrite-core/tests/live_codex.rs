@@ -344,7 +344,9 @@ fn a_resume_pages_history_without_deprecated_hydration() {
     }
     assert_eq!(init.as_deref(), Some(thread.as_str()));
     assert!(
-        !notices.iter().any(|text| text.contains("hydration is deprecated")),
+        !notices
+            .iter()
+            .any(|text| text.contains("hydration is deprecated")),
         "deprecated hydration was requested: {notices:?}"
     );
     println!("{discovered} subagents discovered from paged history");

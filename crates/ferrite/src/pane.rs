@@ -55,8 +55,8 @@ use crate::theme;
 use crate::theme::{
     ATTENTION, ATTENTION_EDGE, ATTENTION_WASH, BLOCKED, BLOCKED_WASH, COMPOSER_EDGE,
     DIFF_ADDED_INK, DIFF_REMOVED_INK, FOCUS, HOVER, IDLE, INLINE_CODE_INK, LINK_INK, METER_OFF,
-    PANE, PANE_HEAD, PANE_HEAD_EDGE, RAISED, RUNNING, RUNNING_WASH, SEP, SYN_KEYWORD,
-    SYN_NUMBER, SYN_STRING, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG, TRANSPARENT,
+    PANE, PANE_HEAD, PANE_HEAD_EDGE, RAISED, RUNNING, RUNNING_WASH, SEP, SYN_KEYWORD, SYN_NUMBER,
+    SYN_STRING, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG, TRANSPARENT,
 };
 
 /// One Pane's view state: what the window owns per Pane. Everything it
@@ -2854,7 +2854,9 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
                                     let namespace = namespace.clone();
                                     div()
                                         .flex_shrink_0()
-                                        .debug_selector(move || format!("queue-row-{namespace}-{index}"))
+                                        .debug_selector(move || {
+                                            format!("queue-row-{namespace}-{index}")
+                                        })
                                         .child(queued_line(held, index, count))
                                 })),
                         ),
@@ -3252,16 +3254,12 @@ pub(crate) fn composer_queue_height(height: f32, compact: bool, count: usize) ->
     } else {
         theme::COMPOSER_QUEUE_ROWS
     });
-    rows as f32 * theme::CELL_HEADER_H
-        + rows.saturating_sub(1) as f32 * theme::COMPOSER_GAP
+    rows as f32 * theme::CELL_HEADER_H + rows.saturating_sub(1) as f32 * theme::COMPOSER_GAP
 }
 
 fn composer_fixed_height() -> f32 {
-    theme::COMPOSER_PAD_T
-        + theme::COMPOSER_PAD_B
-        + theme::COMPOSER_GAP
-        + theme::COMPOSER_ROW_H
-        + 1. // The Composer's top rule.
+    theme::COMPOSER_PAD_T + theme::COMPOSER_PAD_B + theme::COMPOSER_GAP + theme::COMPOSER_ROW_H + 1.
+    // The Composer's top rule.
 }
 
 /// Leave the majority of a Pane available for its Thread context. Only the
@@ -3271,8 +3269,7 @@ pub(crate) fn composer_row_limit(height: f32, compact: bool, queued: usize) -> u
     let fixed = composer_fixed_height();
     let queue = composer_queue_height(height, compact, queued)
         + if queued > 0 { theme::COMPOSER_GAP } else { 0. };
-    ((height * theme::COMPOSER_MAX_PANE_FRACTION - fixed - queue)
-        / theme::COMPOSER_ROW_H)
+    ((height * theme::COMPOSER_MAX_PANE_FRACTION - fixed - queue) / theme::COMPOSER_ROW_H)
         .floor()
         .max(1.)
         .min(crate::composer::MAX_ROWS as f32) as usize
@@ -4419,12 +4416,11 @@ pub(crate) fn render_block(
                         .min_w_0()
                         .gap(px(theme::KEYS_GAP))
                         .when(!text.is_empty(), |line| {
-                            line.child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .child(selection.line(block.id, text, Vec::new())),
-                            )
+                            line.child(div().flex_1().min_w_0().child(selection.line(
+                                block.id,
+                                text,
+                                Vec::new(),
+                            )))
                         })
                         .children(prompt_actions),
                 )
@@ -5245,16 +5241,10 @@ impl PromptActions {
         mut self,
         listener: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
     ) -> Self {
-        self.root = self
-            .root
-            .child(
-                prompt_action(
-                    "Copy prompt",
-                    icons::COPY,
-                    format!("copy-{:?}", self.block),
-                )
+        self.root = self.root.child(
+            prompt_action("Copy prompt", icons::COPY, format!("copy-{:?}", self.block))
                 .on_click(listener),
-            );
+        );
         self
     }
 
@@ -5306,7 +5296,11 @@ fn prompt_action(
         .debug_selector(move || {
             format!(
                 "prompt-action-{}",
-                tooltip.split_whitespace().next().unwrap_or_default().to_ascii_lowercase()
+                tooltip
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or_default()
+                    .to_ascii_lowercase()
             )
         })
         .flex()
@@ -5862,11 +5856,10 @@ mod tests {
                 disclosure_bounds: Rc::new(RefCell::new(HashMap::new())),
             };
             let selection = self.selection.clone();
-            self.transcript
-                .update(cx, |transcript, cx| {
-                    transcript.sync(input, selection, cx);
-                    transcript.assert_text_projection(cx);
-                });
+            self.transcript.update(cx, |transcript, cx| {
+                transcript.sync(input, selection, cx);
+                transcript.assert_text_projection(cx);
+            });
             self.transcript.clone()
         }
     }

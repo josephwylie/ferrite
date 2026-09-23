@@ -1172,8 +1172,8 @@ impl Element for LineElement {
         // frame, so a click that lands anywhere else — or on another app —
         // retires the cycle on that same frame. A background window shows no
         // caret: nothing typed would land here until it comes forward.
-        let focused = self.composer.read(cx).focus_handle.is_focused(window)
-            && window.is_window_active();
+        let focused =
+            self.composer.read(cx).focus_handle.is_focused(window) && window.is_window_active();
         let caret_visible = self.composer.update(cx, |composer, cx| {
             composer.sync_caret_blink(focused, cx);
             composer.caret_visible
