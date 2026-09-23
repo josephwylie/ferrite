@@ -1726,7 +1726,11 @@ fn wall_cell(
                         .text_color(rgb(if hot { TEXT_STRONG } else { TEXT_2 }))
                         .child(match title {
                             Some(title) => title,
-                            None => div().truncate().child(view.name.clone()).into_any_element(),
+                            None => div()
+                                .min_w_0()
+                                .truncate()
+                                .child(view.name.clone())
+                                .into_any_element(),
                         }),
                 ),
         )
@@ -1811,8 +1815,13 @@ fn l2_cell(
         .child(cell_dot(state))
         .child(
             div()
-                .min_w_0()
-                .truncate()
+                .debug_selector({
+                    let key = view.thread().map_or(0, ThreadId::get);
+                    move || format!("l2-title-{key}")
+                })
+                .flex()
+                .min_w(px(title_floor(&view.name)))
+                .overflow_hidden()
                 .text_size(px(theme::FS_UI))
                 .line_height(px(theme::LH_UI))
                 .font_weight(theme::W_LABEL)
@@ -1823,7 +1832,11 @@ fn l2_cell(
                 }))
                 .child(match title {
                     Some(title) => title,
-                    None => div().truncate().child(view.name.clone()).into_any_element(),
+                    None => div()
+                        .min_w_0()
+                        .truncate()
+                        .child(view.name.clone())
+                        .into_any_element(),
                 }),
         )
         .child(div().flex_1());
@@ -1835,16 +1848,22 @@ fn l2_cell(
             .text_color(rgb(TEXT_MUTED))
             .child(text)
     };
-    // The right meta names the Workspace binding — what an operator running
-    // many Threads actually needs — and a finished turn's one completion
-    // label (muted: green never means finished). A question too big for
-    // the cell puts its expander here instead.
+    // The right meta is a finished turn's one completion label (muted:
+    // green never means finished), else a worktree's name — the one thing
+    // about where the work is that the instrument row's `model · branch`
+    // does not already say. A Main checkout leaves the slot empty. A
+    // question too big for the cell puts its expander here instead.
     header = if let Some(expand) = expand_question {
         header.child(div().flex_shrink_0().child(expand))
     } else if state == WallState::Done {
         header.child(meta(SharedString::from("done")))
+    } else if let Some(WorkspaceBinding::Worktree { .. }) = workspace {
+        let key = view.thread().map_or(0, ThreadId::get);
+        header.child(
+            meta(binding_label(workspace)).debug_selector(move || format!("l2-binding-{key}")),
+        )
     } else {
-        header.child(meta(binding_label(workspace)))
+        header
     };
 
     let cell = div().flex().flex_col().flex_1().min_h_0().min_w_0();
@@ -2296,11 +2315,16 @@ fn pane_head(view: &PaneView, state: PaneHeadState<'_>) -> Div {
         Some(Status::Closed) => BLOCKED,
         _ => IDLE,
     };
-    let has_agents = agents.is_some();
     let key = view.thread().map_or(0, ThreadId::get);
+    // The title holds its width up to `HEAD_TITLE_MAX_W`, where it
+    // truncates, and never shrinks below `HEAD_TITLE_MIN_W` (or its whole
+    // text, when that is shorter): the checkout gives way first, and the
+    // agent tabs fold into their `+N` before the title starves. The floor
+    // is exact because the title is one mono run: `MONO_CELL` a character.
+    // `left` keeps its children's floors, so nothing squeezes past them.
+    let title_floor = title_floor(&view.name);
     let left = div()
         .flex()
-        .min_w_0()
         .flex_shrink(1.)
         .overflow_hidden()
         .items_center()
@@ -2308,16 +2332,23 @@ fn pane_head(view: &PaneView, state: PaneHeadState<'_>) -> Div {
         .child(components::status_dot(dot_color))
         .child(
             div()
-                .min_w_0()
+                .debug_selector(move || format!("pane-head-title-{key}"))
+                .flex()
                 .flex_shrink(1.)
-                .when(has_agents, |title| title.max_w(relative(0.32)))
+                .min_w(px(title_floor))
+                .max_w(px(theme::HEAD_TITLE_MAX_W))
+                .overflow_hidden()
                 .text_size(px(theme::FS_UI))
                 .line_height(px(theme::LH_UI))
                 .font_weight(theme::W_LABEL)
                 .text_color(rgb(if unfocused { TEXT } else { TEXT_STRONG }))
                 .child(match title {
                     Some(title) => title,
-                    None => div().truncate().child(view.name.clone()).into_any_element(),
+                    None => div()
+                        .min_w_0()
+                        .truncate()
+                        .child(view.name.clone())
+                        .into_any_element(),
                 }),
         )
         .children(
@@ -2363,6 +2394,15 @@ fn pane_head(view: &PaneView, state: PaneHeadState<'_>) -> Div {
             None => div().flex_1().min_w_0().into_any_element(),
         })
         .child(right)
+}
+
+/// The floor a head title keeps however narrow its head: `HEAD_TITLE_MIN_W`,
+/// or its whole text when that is shorter. Exact, because the title is one
+/// mono run at `FS_UI`: `MONO_CELL` a character.
+fn title_floor(name: &str) -> f32 {
+    (name.chars().count() as f32 * theme::MONO_CELL)
+        .ceil()
+        .min(theme::HEAD_TITLE_MIN_W)
 }
 
 /// The head's checkout (#29): the branch mark and name, then only what is

@@ -944,6 +944,11 @@ pub const WINDOW_MIN_H: f32 = 420.0;
 /// 36px — the Pane head: one row, no band. At 36 a 24px head control keeps
 /// 6px of air above and below.
 pub const PANE_HEAD_H: f32 = 36.0;
+/// The head title's cap before it truncates, and the floor it keeps however
+/// narrow the head (a shorter title keeps its whole text): the checkout and
+/// the agent tabs give way first.
+pub const HEAD_TITLE_MAX_W: f32 = 240.0;
+pub const HEAD_TITLE_MIN_W: f32 = 96.0;
 /// Between the head's dot, title and checkout.
 pub const HEAD_GAP: f32 = SPACE_2;
 /// Between the head's clusters: title → checkout, and between the facts on

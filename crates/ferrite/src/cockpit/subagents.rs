@@ -1100,7 +1100,9 @@ impl CockpitView {
                             .line_height(px(theme::LH_META))
                             .text_color(rgb(theme::ATTENTION))
                             .child(decision::mark())
-                            .child("expand to answer"),
+                            // One word: the tooltip carries the sentence,
+                            // and the chip never outgrows the title.
+                            .child("expand"),
                     )
                     .on_click(cx.listener(move |view, _, _, cx| {
                         if let Some(index) = view.pane_for(thread) {

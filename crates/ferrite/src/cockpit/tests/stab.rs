@@ -444,3 +444,100 @@ fn the_parked_fold_stays_clear_of_the_toast_stack(cx: &mut TestAppContext) {
         "room given back"
     );
 }
+
+/// A Pane head's title keeps its floor beside a full agent strip: at a
+/// width where everything cannot fit, the title still shows at least
+/// `HEAD_TITLE_MIN_W` of itself while the checkout gives way and the tabs
+/// fold into `+N`; with room, it shows whole (up to its cap).
+#[gpui::test]
+fn the_head_title_keeps_its_floor_beside_the_agent_tabs(cx: &mut TestAppContext) {
+    use ferrite_core::activity::{
+        ActivityEvent, AgentInfo, AgentKey, AgentStatus, Subject, TranscriptCoverage,
+    };
+    let (mut core, fake) = cockpit("head-title-floor", 1);
+    let thread = core.threads()[0];
+    core.rename_thread(thread, "Audit every surface of the overhaul")
+        .unwrap();
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    for name in [
+        "nav-audit",
+        "composer-audit",
+        "settings-audit",
+        "tokens-audit",
+    ] {
+        let key = AgentKey::new(Provider::Claude, "ui-fixture", name);
+        let mut info = AgentInfo::new(key.clone());
+        info.name = Some(name.into());
+        info.parent = Some(Subject::Main);
+        info.coverage = TranscriptCoverage::Live;
+        for event in [
+            ActivityEvent::Discovered(info),
+            ActivityEvent::Status {
+                key,
+                state: AgentStatus::Idle,
+            },
+        ] {
+            fake.streams.borrow()[0]
+                .send(SessionEvent::Activity(event))
+                .unwrap();
+        }
+    }
+    let title = "pane-head-title-1";
+    for (width, whole) in [(900., false), (1800., true)] {
+        cx.simulate_resize(gpui::size(px(width), px(800.)));
+        tick(cx);
+        tick(cx);
+        let bounds = cx.debug_bounds(title).expect("the head title");
+        assert!(
+            bounds.size.width >= px(crate::theme::HEAD_TITLE_MIN_W),
+            "{width}: the title keeps its floor: {bounds:?}"
+        );
+        if whole {
+            assert_eq!(
+                bounds.size.width,
+                px(crate::theme::HEAD_TITLE_MAX_W),
+                "with room the long title takes its cap"
+            );
+        }
+    }
+    assert!(
+        cx.debug_bounds("subject-overflow-1").is_none(),
+        "the wide head fits every tab"
+    );
+}
+
+/// An L2 cell's head says where the work is only when the instrument row
+/// cannot: a Main checkout adds no right meta (the row already reads
+/// `model · branch`).
+#[gpui::test]
+fn an_l2_head_does_not_repeat_the_branch(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("l2-no-branch-twice", 1);
+    let thread = core.threads()[0];
+    core.rename_thread(thread, "Board recipes and the long tail")
+        .unwrap();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(560.), px(700.)));
+    tick(cx);
+    assert_eq!(
+        cx.update(|window, cx| view.read(cx).level_now(window)),
+        Level::Instruments
+    );
+    assert!(cx.debug_bounds("l2-title-1").is_some());
+    assert!(
+        cx.debug_bounds("l2-binding-1").is_none(),
+        "a Main binding leaves the head's right slot empty"
+    );
+    // A question too big for the cell puts its expander in that slot; the
+    // one-word chip never pushes the title under its floor.
+    fake.streams.borrow()[0]
+        .send(question("l2-head-question"))
+        .unwrap();
+    tick(cx);
+    let expand = cx.debug_bounds("question-expand").expect("the expander");
+    let title = cx.debug_bounds("l2-title-1").unwrap();
+    assert!(
+        title.size.width >= px(crate::theme::HEAD_TITLE_MIN_W),
+        "the title keeps its floor: {title:?}"
+    );
+    assert!(title.right() <= expand.left(), "{title:?} / {expand:?}");
+}
