@@ -18,6 +18,7 @@ mod icons;
 mod keymap;
 mod line;
 mod menu;
+mod motion;
 mod nav;
 mod notifications;
 mod pane;
@@ -150,6 +151,7 @@ fn main() {
         .run(move |cx: &mut App| {
             keep_mouse_cursor_visible(cx);
             theme::init_components(cx);
+            motion::init(cx);
             register_fonts(cx);
 
             let bindings = load_bindings(keymap::PLATFORM, cx);
