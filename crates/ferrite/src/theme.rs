@@ -452,6 +452,9 @@ pub const ICON_CHEVRON: f32 = 12.0;
 /// 12px inline padding. Sheet controls are `FORM_CONTROL_H`.
 pub const CONTROL_H: f32 = 28.0;
 pub const CONTROL_PAD_X: f32 = SPACE_3;
+/// 10px — the drawn `⌘` in a key combination (`components::key_combo`):
+/// the `FS_SM` cap-height band, so it sits on the letters beside it.
+pub const KEY_GLYPH: f32 = 10.0;
 /// A keycap: 18px high (it fits inside a 20px UI row), 5px inline padding.
 pub const KBD_H: f32 = 18.0;
 pub const KBD_PAD_X: f32 = 5.0;
@@ -1170,9 +1173,6 @@ pub const MODAL_VIEWPORT_FRACTION: f32 = 0.92;
 /// Composer it opens from.
 pub const CHOICE_MENU_MIN_W: f32 = 240.0;
 pub const CHOICE_MENU_MAX_W: f32 = 320.0;
-/// 10px — a `⌘` glyph box inside a menu shortcut: the `FS_SM` cap height
-/// band, so the drawn key sits on the letters beside it.
-pub const MENU_KEY_GLYPH: f32 = 10.0;
 /// About 48 characters — how much of a long directory a menu row keeps,
 /// cut at its head behind `…/` (the tail names the place).
 pub const MENU_PATH_TAIL: usize = 48;
@@ -1728,25 +1728,10 @@ mod tests {
     }
 
     /// Every non-ASCII glyph render code puts in a literal must be one the
-    /// bundled mono face draws. Scans the render modules' non-test source,
+    /// bundled mono face draws: `❯ ⎿ ∴ ✻ ✓ ✗ ☐ ◆ ⌘` and friends are SVG glyph
+    /// boxes or painted marks. Scans the render modules' non-test source,
     /// skipping comments.
-    ///
-    /// TODO(work packages): after F1 these surfaces still draw glyphs Geist
-    /// Mono lacks as text (`--include-ignored` lists them). Each owner makes
-    /// them SVG glyph boxes (or a covered glyph), then removes the `#[ignore]`:
-    /// - WP-A (transcript): the prompt `❯` (pane.rs `render_block`), the `⎿`
-    ///   result elbows (`output_block`, `result_line`), and the `⎿` in the
-    ///   transcript copy formatter (cockpit.rs, before `mod tests`).
-    /// - WP-C (pane frame, L2, wall, board): `◐`/`✗`/`✓`/`⚠` state marks and
-    ///   `❯ idle` in `wall_state`/`wall_cell`/`l2_cell`, the ci mark's `✗`,
-    ///   the tasks meter's `▰`/`▱`, and the pane-drop `⇄ Swap` label.
-    /// - WP-D (composer, draft): the draft band's `⌵` chevron and the queued
-    ///   line's `⏳`.
-    /// - WP-E (menus, sheets): `⌘` in context-menu hints and in the Settings
-    ///   "⌘B toggles it" description.
-    /// - WP-F (decisions): `⌘` in the "Expand to answer" tooltip.
     #[test]
-    #[ignore = "enabled by WP-A/WP-C/WP-D/WP-E/WP-G once their glyphs are SVG (see the doc TODO)"]
     fn render_code_draws_only_covered_glyphs() {
         let sources: &[(&str, &str)] = &[
             ("pane.rs", include_str!("pane.rs")),
@@ -1766,6 +1751,17 @@ mod tests {
             ("attachments.rs", include_str!("attachments.rs")),
             ("background_chips.rs", include_str!("background_chips.rs")),
             ("keymap.rs", include_str!("keymap.rs")),
+            ("decision.rs", include_str!("decision.rs")),
+            (
+                "attachment_preview.rs",
+                include_str!("attachment_preview.rs"),
+            ),
+            ("prompt_drop.rs", include_str!("prompt_drop.rs")),
+            ("transcript/rows.rs", include_str!("transcript/rows.rs")),
+            ("transcript/scroll.rs", include_str!("transcript/scroll.rs")),
+            ("scrollbar.rs", include_str!("scrollbar.rs")),
+            ("file_links.rs", include_str!("file_links.rs")),
+            ("main.rs", include_str!("main.rs")),
         ];
         let mut missing = Vec::new();
         for (file, source) in sources {

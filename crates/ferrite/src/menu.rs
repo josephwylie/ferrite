@@ -9,10 +9,9 @@
 //! the second. Anything else pressed disarms it.
 
 use gpui::prelude::*;
-use gpui::{div, px, rgb, Div, SharedString, Stateful};
+use gpui::{px, Div, SharedString, Stateful};
 
 use crate::components::{self, MenuItem};
-use crate::icons;
 use crate::theme::*;
 
 /// One row of the menu: the shared menu row's content. Its `shortcut` is the
@@ -47,21 +46,10 @@ pub fn row(index: usize, item: &Item, armed: bool) -> Stateful<Div> {
         })
 }
 
-/// A shortcut in the menu's trailing column: mono `FS_SM`. A `cmd-` prefix
-/// draws the command key as a glyph box, because Geist Mono has no `⌘`.
+/// A shortcut in the menu's trailing column: mono `FS_SM`, `cmd-` drawn as
+/// the command glyph (`components::key_combo`).
 fn shortcut(keys: &SharedString, ink: u32) -> Div {
-    let drawn = div()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .text_size(px(FS_SM))
-        .text_color(rgb(ink));
-    match keys.strip_prefix("cmd-") {
-        Some(key) => drawn
-            .child(icons::icon(icons::COMMAND, MENU_KEY_GLYPH, ink))
-            .child(key.to_string()),
-        None => drawn.child(keys.clone()),
-    }
+    components::key_combo(keys, ink).text_size(px(FS_SM))
 }
 
 /// A tooltip in the floating vocabulary: mono `FS_SM`, 8px × 4px, at most
@@ -87,7 +75,7 @@ pub fn tooltip(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::{deferred, rgba, Context, CursorStyle, Render};
+    use gpui::{deferred, div, rgba, Context, CursorStyle, Render};
     use std::{cell::Cell, rc::Rc};
 
     struct OcclusionHarness {

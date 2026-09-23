@@ -165,12 +165,14 @@ pub const REASONING: &str = "icons/reasoning.svg";
 pub const BELL: &str = "icons/bell.svg";
 // (end WP-C)
 
+/// `⌘` (not in Geist Mono): the command key wherever a key combination is
+/// drawn — menu shortcuts, keycaps. Only `components::key_combo` places it.
+pub const COMMAND: &str = "icons/command.svg";
+
 // ---- WP-D icon names (append consts above the end line)
 // (end WP-D)
 
 // ---- WP-E icon names (append consts above the end line)
-/// `⌘` (not in Geist Mono): the command key in a menu row's shortcut.
-pub const COMMAND: &str = "icons/command.svg";
 // (end WP-E)
 
 // ---- WP-F icon names (append consts above the end line)

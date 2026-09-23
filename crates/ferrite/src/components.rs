@@ -333,6 +333,16 @@ pub fn pulsing_dot(
 /// The one keycap: `KBD_H`, at least square, `RAISED_2`, mono `FS_SM`
 /// `TEXT_2`, centred.
 pub fn kbd(key: impl Into<SharedString>) -> Div {
+    kbd_face().child(key.into())
+}
+
+/// A keycap holding a key table's combination, `cmd` drawn as the glyph:
+/// `cmd shift N` reads `⌘ shift N`.
+pub fn kbd_keys(keys: &str) -> Div {
+    kbd_face().child(key_combo(keys, theme::TEXT_2))
+}
+
+fn kbd_face() -> Div {
     div()
         .flex()
         .flex_shrink_0()
@@ -347,7 +357,36 @@ pub fn kbd(key: impl Into<SharedString>) -> Div {
         .text_size(px(theme::FS_SM))
         .line_height(px(theme::LH_META))
         .text_color(rgb(theme::TEXT_2))
-        .child(key.into())
+}
+
+/// A key combination as it is drawn, from a key table's spelling. Geist
+/// Mono has no `⌘`, so `cmd` is `command.svg` in a `KEY_GLYPH` box; every
+/// other part stays its own word. Parts joined by `-` sit tight, as a menu
+/// shortcut reads (`cmd-F` → `⌘F`); parts joined by spaces keep one mono
+/// space apart, as a keycap reads (`cmd shift N` → `⌘ shift N`). The one
+/// place the command glyph is drawn.
+pub fn key_combo(keys: &str, ink: u32) -> Div {
+    let spaced = keys.contains(' ');
+    let gap = if spaced {
+        theme::FS_SM * theme::MONO_ADVANCE
+    } else {
+        0.
+    };
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(gap))
+        .text_color(rgb(ink))
+        .children(keys.split([' ', '-']).map(|part| {
+            match part {
+                "cmd" => div()
+                    .debug_selector(|| "command-key".into())
+                    .child(icons::icon(icons::COMMAND, theme::KEY_GLYPH, ink))
+                    .into_any_element(),
+                key => SharedString::from(key.to_string()).into_any_element(),
+            }
+        }))
 }
 
 /// Key hints as `key verb   key verb`: keys `TEXT_2`, verbs `TEXT_MUTED`,

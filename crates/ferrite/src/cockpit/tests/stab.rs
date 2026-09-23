@@ -172,3 +172,45 @@ fn files_over_a_pane_edge_its_composer_in_the_accent(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("prompt-drop-sheet").is_none(), "dropped");
     assert!(cx.debug_bounds("composer-drop-target").is_none(), "dropped");
 }
+
+/// The command key is drawn, never typed: the empty board's keycaps and the
+/// context menu's shortcuts both place the one `⌘` glyph on macOS.
+#[gpui::test]
+fn keycaps_and_menu_shortcuts_draw_the_command_glyph(cx: &mut TestAppContext) {
+    if crate::keymap::PLATFORM != crate::keymap::Platform::Mac {
+        return;
+    }
+    let (core, _fake) = cockpit("command-glyph", 1);
+    let thread = core.threads()[0];
+    cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-w", CloseThread, None)]));
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    tick(cx);
+    assert!(
+        cx.debug_bounds("command-key").is_none(),
+        "nothing shows keys"
+    );
+
+    view.update(cx, |view, cx| {
+        view.open_context_menu(
+            MenuTarget::Pane(thread),
+            gpui::point(px(400.), px(300.)),
+            cx,
+        )
+    });
+    tick(cx);
+    assert!(
+        cx.debug_bounds("command-key").is_some(),
+        "the Pane menu's shortcuts draw the glyph"
+    );
+    cx.simulate_keystrokes("escape");
+    tick(cx);
+
+    cx.simulate_keystrokes("cmd-w");
+    tick(cx);
+    assert!(cx.debug_bounds("empty-board").is_some());
+    assert!(
+        cx.debug_bounds("command-key").is_some(),
+        "the empty board's keycaps draw the glyph"
+    );
+}

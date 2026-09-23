@@ -7696,7 +7696,7 @@ impl CockpitView {
                 .flex()
                 .items_center()
                 .gap(px(EMPTY_BOARD_GAP))
-                .children(Self::key_label(action).map(crate::components::kbd))
+                .children(Self::key_label(action).map(|keys| crate::components::kbd_keys(&keys)))
                 .child(verb)
         };
         div()
@@ -7731,8 +7731,9 @@ impl CockpitView {
     }
 
     /// A bound action's first keystroke as a keycap reads it, from this
-    /// platform's key table: `cmd-shift-n` → `cmd shift N`. Mono text — the
-    /// `⌘`/`⇧` symbols are not in the bundled face.
+    /// platform's key table: `cmd-shift-n` → `cmd shift N`. A keycap draws
+    /// `cmd` as the glyph (`components::kbd_keys`); a tooltip, which is
+    /// text, spells it.
     fn key_label(action: &str) -> Option<SharedString> {
         let (keys, _, _) = crate::keymap::bindings(crate::keymap::PLATFORM)
             .into_iter()
@@ -9943,7 +9944,7 @@ fn rss_mb() -> f64 {
 
 /// A transcript as plain text, the way the operator would paste it
 /// somewhere else: prompts quoted, prose flat, code fenced, tool rows as
-/// their one line plus the result line. Thinking stays out — it is not the
+/// their one line plus the result line indented under it. Thinking stays out — it is not the
 /// conversation.
 fn transcript_text(blocks: &[ferrite_core::transcript::Block]) -> String {
     use ferrite_core::transcript::Body;
@@ -9968,8 +9969,10 @@ fn transcript_text(blocks: &[ferrite_core::transcript::Block]) -> String {
                 if !tool.summary.is_empty() {
                     line.push_str(&format!(" ({})", tool.summary));
                 }
+                // The elbow is painted, never text: the result hangs at
+                // its column, as a sweep across the row copies it.
                 if let Some(result) = &tool.result_line {
-                    line.push_str(&format!("\n  ⎿ {result}"));
+                    line.push_str(&format!("\n    {result}"));
                 }
                 line
             }
