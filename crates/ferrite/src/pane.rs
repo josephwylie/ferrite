@@ -3795,35 +3795,35 @@ fn chip(label: impl Into<SharedString>, ink: u32, ground: gpui::Hsla) -> Div {
 /// inside the window's own maximum span is safe to present as a countdown.
 fn reset_label(resets_at: Option<u64>, span: Duration, now: SystemTime) -> SharedString {
     let Some(resets_at) = resets_at else {
-        return SharedString::from("Reset not reported");
+        return SharedString::from("reset not reported");
     };
     let now = now.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
     let Some(remaining) = resets_at
         .checked_sub(now)
         .filter(|remaining| *remaining <= span.as_secs())
     else {
-        return SharedString::from("Reset not reported");
+        return SharedString::from("reset not reported");
     };
     let label = match remaining {
-        0 => "Reset not reported".into(),
-        1..=59 => "Resets in <1m".into(),
-        60..=3_599 => format!("Resets in {}m", remaining / 60),
+        0 => "reset not reported".into(),
+        1..=59 => "resets in <1m".into(),
+        60..=3_599 => format!("resets in {}m", remaining / 60),
         3_600..=86_399 => {
             let hours = remaining / 3_600;
             let minutes = remaining % 3_600 / 60;
             if minutes == 0 {
-                format!("Resets in {hours}h")
+                format!("resets in {hours}h")
             } else {
-                format!("Resets in {hours}h {minutes}m")
+                format!("resets in {hours}h {minutes}m")
             }
         }
         86_400.. => {
             let days = remaining / 86_400;
             let hours = remaining % 86_400 / 3_600;
             if hours == 0 {
-                format!("Resets in {days}d")
+                format!("resets in {days}d")
             } else {
-                format!("Resets in {days}d {hours}h")
+                format!("resets in {days}d {hours}h")
             }
         }
     };
@@ -3879,7 +3879,7 @@ pub fn context_usage(
             .flex()
             .items_baseline()
             .justify_between()
-            .gap(px(12.))
+            .gap(px(theme::SPACE_3))
             .child(
                 div()
                     .flex_shrink_0()
@@ -3903,7 +3903,7 @@ pub fn context_usage(
             .child(SharedString::from(
                 percent
                     .map(|percent| format!("{percent}%"))
-                    .unwrap_or_else(|| "Not reported".into()),
+                    .unwrap_or_else(|| "not reported".into()),
             ))
     };
     let count_value = |key: &'static str, count: Option<u64>| {
@@ -3962,7 +3962,7 @@ pub fn context_usage(
     // bar says how full, this says of what.
     let counts = div()
         .flex()
-        .gap(px(4.))
+        .gap(px(theme::SPACE_1))
         .text_color(rgb(TEXT_MUTED))
         .child(count_value("current", Some(usage.total_tokens)))
         .child("/")
@@ -3977,13 +3977,13 @@ pub fn context_usage(
         .text_size(px(theme::FS_SM))
         .text_color(rgb(TEXT))
         .child(window(
-            "Context",
+            "context",
             "context",
             context_fraction,
             Some(counts.into_any_element()),
         ))
         .child(window(
-            "5-hour limit",
+            "5-hour",
             "five-hour",
             limits.five_hour.map(|limit| limit.used_fraction),
             Some(reset_value(
@@ -3993,7 +3993,7 @@ pub fn context_usage(
             )),
         ))
         .child(window(
-            "Weekly limit",
+            "weekly",
             "weekly",
             limits.weekly.map(|limit| limit.used_fraction),
             Some(reset_value(
@@ -4002,75 +4002,97 @@ pub fn context_usage(
                 Duration::from_secs(7 * 86_400),
             )),
         ));
-    if let Some(details) = details {
-        if let Some(usable) = details.usable_window {
-            card = card.child(
+    // Everything below the windows is a terminal readout: a quiet key at
+    // the left, the reported value right-aligned in tabular digits, every
+    // count grouped the same way, and a section head where the scope
+    // changes.
+    let row = |key: String, value: String| {
+        div()
+            .flex()
+            .justify_between()
+            .gap(px(theme::SPACE_3))
+            .child(
                 div()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(rgb(TEXT_MUTED))
+                    .child(key),
+            )
+            .child(components::tabular(div().flex_shrink_0().child(value)))
+    };
+    if let Some(details) = details {
+        let mut section = div().flex().flex_col();
+        if let Some(usable) = details.usable_window {
+            section = section.child(
+                row("usable".into(), count_label(usable))
                     .id(SharedString::from(format!("context-usable-{usable}")))
-                    .debug_selector(move || format!("context-usable-{usable}"))
-                    .child(format!("Usable {usable}")),
+                    .debug_selector(move || format!("context-usable-{usable}")),
             );
         }
         if let Some(threshold) = details.auto_compact_threshold {
-            card = card.child(
-                div()
+            let key = match details.is_auto_compact_enabled {
+                Some(true) => "compacts at",
+                Some(false) => "compaction off at",
+                None => "compaction threshold",
+            };
+            section = section.child(
+                row(key.into(), count_label(threshold))
                     .id(SharedString::from(format!(
                         "context-compaction-{threshold}"
                     )))
-                    .debug_selector(move || format!("context-compaction-{threshold}"))
-                    .child(match details.is_auto_compact_enabled {
-                        Some(true) => format!("Compacts at {threshold}"),
-                        Some(false) => format!("Compaction disabled · threshold {threshold}"),
-                        None => format!("Compaction threshold {threshold}"),
-                    }),
+                    .debug_selector(move || format!("context-compaction-{threshold}")),
             );
         }
         for (index, category) in details.categories.iter().enumerate() {
             let tokens = category.tokens;
-            card = card.child(
-                div()
+            section = section.child(
+                row(category.name.to_lowercase(), count_label(tokens))
                     .id(SharedString::from(format!(
                         "context-category-{index}-{tokens}"
                     )))
-                    .debug_selector(move || format!("context-category-{index}-{tokens}"))
-                    .child(format!("{} {tokens}", category.name)),
+                    .debug_selector(move || format!("context-category-{index}-{tokens}")),
             );
         }
+        card = card.child(section);
     }
     if let Some(details) = usage_details {
         let scope = match details.scope {
-            ferrite_core::UsageScope::Message => ("message", "This message"),
-            ferrite_core::UsageScope::Turn => ("turn", "This turn"),
-            ferrite_core::UsageScope::Session => ("session", "This session"),
+            ferrite_core::UsageScope::Message => ("message", "this message"),
+            ferrite_core::UsageScope::Turn => ("turn", "this turn"),
+            ferrite_core::UsageScope::Session => ("session", "this session"),
         };
-        card = card.child(
+        let mut section = div().flex().flex_col().child(
             div()
                 .debug_selector(move || format!("usage-scope-{}", scope.0))
-                .text_color(rgb(TEXT_MUTED))
+                .text_color(rgb(TEXT_2))
                 .child(scope.1),
         );
         for (key, label, count) in [
-            ("input", "Input", details.input_tokens),
-            ("cached-input", "Cached input", details.cached_input_tokens),
-            ("output", "Output", details.output_tokens),
+            ("input", "input", details.input_tokens),
+            ("cached-input", "cached input", details.cached_input_tokens),
+            ("output", "output", details.output_tokens),
             (
                 "reasoning-output",
-                "Reasoning output",
+                "reasoning output",
                 details.reasoning_output_tokens,
             ),
         ] {
-            card = card.child(
-                div()
-                    .debug_selector(move || format!("usage-{key}-{count}"))
-                    .child(format!("{label} {}", count_label(count))),
+            section = section.child(
+                row(label.into(), count_label(count))
+                    .debug_selector(move || format!("usage-{key}-{count}")),
             );
         }
-    }
-    if let Some(cost) = last_cost {
+        if let Some(cost) = last_cost {
+            section = section.child(
+                row("last cost".into(), format!("US${cost:.4}"))
+                    .debug_selector(move || format!("usage-cost-{cost}")),
+            );
+        }
+        card = card.child(section);
+    } else if let Some(cost) = last_cost {
         card = card.child(
-            div()
-                .debug_selector(move || format!("usage-cost-{cost}"))
-                .child(format!("Last cost US${cost:.4}")),
+            row("last cost".into(), format!("US${cost:.4}"))
+                .debug_selector(move || format!("usage-cost-{cost}")),
         );
     }
     card.max_h(px(440.)).overflow_y_scrollbar()
@@ -6891,28 +6913,28 @@ mod tests {
         let after = |seconds: u64| Some(1_000_000 + seconds);
         let week = Duration::from_secs(7 * 86_400);
 
-        assert_eq!(reset_label(None, week, now).as_ref(), "Reset not reported");
-        assert_eq!(reset_label(after(45), week, now).as_ref(), "Resets in <1m");
+        assert_eq!(reset_label(None, week, now).as_ref(), "reset not reported");
+        assert_eq!(reset_label(after(45), week, now).as_ref(), "resets in <1m");
         assert_eq!(
             reset_label(after(42 * 60), week, now).as_ref(),
-            "Resets in 42m"
+            "resets in 42m"
         );
         assert_eq!(
             reset_label(after(3 * 3_600 + 14 * 60), week, now).as_ref(),
-            "Resets in 3h 14m"
+            "resets in 3h 14m"
         );
         assert_eq!(
             reset_label(after(4 * 86_400 + 2 * 3_600), week, now).as_ref(),
-            "Resets in 4d 2h"
+            "resets in 4d 2h"
         );
         assert_eq!(
             reset_label(Some(999_999), week, now).as_ref(),
-            "Reset not reported",
+            "reset not reported",
             "an elapsed or relative provider timestamp must not underflow"
         );
         assert_eq!(
             reset_label(after(8 * 86_400), week, now).as_ref(),
-            "Reset not reported",
+            "reset not reported",
             "a value outside the window span is not guessed to be Unix seconds"
         );
     }

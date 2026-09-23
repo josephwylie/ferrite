@@ -306,6 +306,8 @@ const STATES: &[(&str, &[&str])] = &[
     // (end WP-C)
 
     // ---- WP-D states (append above the end line)
+    ("usagecard", &["app"]),
+    ("sessioncard", &["app"]),
     // (end WP-D)
 
     // ---- WP-E states (append above the end line)
@@ -555,6 +557,30 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
         // (end WP-C)
 
         // ---- WP-D scene arms (append above the end line)
+        "usagecard" => {
+            let scene = conversation(label);
+            let setup: Setup = Box::new(|view, _, _| {
+                let thread = view.panes[0].thread().expect("a Thread Pane");
+                view.context_usage = Some((
+                    ferrite_core::roster::PaneIdentity::Thread(thread),
+                    gpui::point(gpui::px(1150.), gpui::px(860.)),
+                ));
+            });
+            (scene, setup)
+        }
+        "sessioncard" => {
+            let scene = conversation(label);
+            let setup: Setup = Box::new(|view, _, _| {
+                let thread = view.panes[0].thread().expect("a Thread Pane");
+                let generation = view.cockpit.thread(thread).expect("open").generation();
+                view.session_controls = Some((
+                    thread,
+                    generation,
+                    gpui::point(gpui::px(1250.), gpui::px(860.)),
+                ));
+            });
+            (scene, setup)
+        }
         // (end WP-D)
 
         // ---- WP-E scene arms (append above the end line)
