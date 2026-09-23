@@ -65,6 +65,13 @@ impl Attachments {
     }
 }
 
+/// The island's ground and radius — shared with the background shelf that
+/// docks beside it above the prompt, so the two read as one surface.
+pub fn island_surface(cx: &App) -> (gpui::Hsla, gpui::Pixels) {
+    let theme = Theme::global(cx);
+    (theme.muted, theme.radius_2xl())
+}
+
 impl RenderOnce for Attachments {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         // The kit retains playback by generation and honors reduced motion.

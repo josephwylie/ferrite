@@ -7142,6 +7142,9 @@ impl CockpitView {
             transcript: retained_transcript,
             received_reasoning_visible,
             attachments: Composer::attachments(&pane.composer, &pane.preview, cx),
+            background: (level != Level::Wall)
+                .then(|| self.background_chips(index, cx))
+                .flatten(),
             menu: l1.then(|| self.popover_element(index, cx)).flatten(),
             model_picker: l1.then(|| self.model_picker(index, cx)).flatten(),
             usage_meter: l1.then(|| self.usage_meter(index, cx)).flatten(),
@@ -7565,6 +7568,64 @@ impl CockpitView {
                 }),
             }
             .into_any_element(),
+        )
+    }
+
+    /// The Pane's background shelf: the Session's running background tasks
+    /// as chips at the Composer's right edge, each `×` wired to `StopTask`
+    /// where the Session can stop one. Main only — a Subagent Subject's
+    /// Composer is Main's, but a shelf there would claim the tasks were the
+    /// Subagent's own. None while nothing runs, so the shelf leaves with
+    /// the last task.
+    fn background_chips(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let pane = &self.panes[index];
+        if !pane.is_main() {
+            return None;
+        }
+        let thread = pane.thread()?;
+        let open = self.cockpit.thread(thread)?;
+        let generation = open.generation();
+        let chips = crate::background_chips::BackgroundChips::new(
+            SharedString::from(format!("background-chips-{}", thread.get())),
+            open.transcript().progress().background().iter().cloned(),
+        );
+        if chips.is_empty() {
+            return None;
+        }
+        if !open.supports_control(ferrite_core::ControlKind::StopTask) {
+            return Some(chips.into_any_element());
+        }
+        let view = cx.entity().downgrade();
+        Some(
+            chips
+                .on_stop(move |id, _, cx| {
+                    let id = id.to_string();
+                    let _ = view.update(cx, |view, cx| {
+                        // Only a task this very Session still reports as
+                        // working: a chip clicked as its snapshot changes
+                        // must not stop whatever took its place.
+                        let running =
+                            view.cockpit.thread(thread).is_some_and(|open| {
+                                open.generation() == generation
+                                    && open.transcript().progress().background().iter().any(
+                                        |task| {
+                                            task.id == id
+                                                && task.status
+                                                    == ferrite_core::progress::TaskStatus::Working
+                                        },
+                                    )
+                            });
+                        if running {
+                            view.run_session_control(
+                                thread,
+                                generation,
+                                ferrite_core::SessionControl::StopTask { id },
+                            );
+                        }
+                        cx.notify();
+                    });
+                })
+                .into_any_element(),
         )
     }
 

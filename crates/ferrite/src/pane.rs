@@ -626,6 +626,11 @@ pub struct PaneWiring {
     /// row layout; the Pane only places the allocated viewport.
     pub transcript: Option<AnyElement>,
     pub attachments: Option<AnyElement>,
+    /// The Session's running background tasks as chips at the Composer's
+    /// right edge, each wired to its stop control — the other half of the
+    /// shelf the attachment island sits on. None while nothing runs in the
+    /// background, for a Subagent Subject, and at the wall.
+    pub background: Option<AnyElement>,
     /// The retained transcript reports whether its received-reasoning row is
     /// mounted; this keeps the pinned live progress caption singular.
     pub received_reasoning_visible: bool,
@@ -802,6 +807,7 @@ pub fn render_pane(
     let PaneWiring {
         transcript: retained_transcript,
         attachments,
+        background,
         received_reasoning_visible,
         menu,
         model_picker,
@@ -898,6 +904,7 @@ pub fn render_pane(
                     running,
                     empty: composer_empty,
                     attachments,
+                    background,
                     history_available,
                     menu: None,
                     mode: permission_mode.as_deref(),
@@ -1018,6 +1025,7 @@ pub fn render_pane(
                         running,
                         empty: composer_empty,
                         attachments,
+                        background,
                         history_available,
                         menu,
                         mode: permission_mode.as_deref(),
@@ -1199,6 +1207,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
                     running: false,
                     empty: composer_empty,
                     attachments,
+                    background: None,
                     history_available: false,
                     menu,
                     mode: None,
@@ -2565,6 +2574,9 @@ struct ComposerStack<'a> {
     running: bool,
     empty: bool,
     attachments: Option<AnyElement>,
+    /// Running background tasks as chips, hung at the right edge of the
+    /// same shelf the attachment island sits on.
+    background: Option<AnyElement>,
     history_available: bool,
     menu: Option<AnyElement>,
     mode: Option<&'a str>,
@@ -2609,6 +2621,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         running,
         empty,
         attachments,
+        background,
         history_available,
         menu,
         mode,
@@ -2828,14 +2841,27 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
                     .child(requests),
             ))
         })
-        .when_some(attachments, |stack, attachments| {
-            // The island floats clear of the prompt: its own rounded edge,
-            // clearance below it, and the composer's top edge left whole.
+        .when(attachments.is_some() || background.is_some(), |stack| {
+            // The shelf floats clear of the prompt: the attachment island
+            // centred in the room it has and the background chips at the
+            // right edge, each with its own rounded edge, clearance below
+            // them, and the composer's top edge left whole. The chips give
+            // way first — they cut their labels, the island does not.
             stack.child(
                 div()
+                    .debug_selector(|| "composer-shelf".into())
+                    .flex()
+                    .items_end()
+                    .gap(px(theme::EVENT_GAP))
+                    .min_w_0()
                     .px(px(theme::PANE_PAD_X))
                     .pb(px(theme::ATTACHMENT_ISLAND_GAP))
-                    .child(attachments),
+                    .when_some(attachments, |shelf, attachments| {
+                        shelf.child(div().flex_1().min_w_0().child(attachments))
+                    })
+                    .when_some(background, |shelf, chips| {
+                        shelf.child(div().ml_auto().min_w_0().max_w_full().child(chips))
+                    }),
             )
         })
         .child(region.child(controls))

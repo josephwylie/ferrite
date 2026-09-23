@@ -11,6 +11,7 @@
 //! dropped.
 
 mod activity;
+mod background;
 pub(super) mod catalog;
 mod controls;
 pub(super) mod discovery;
@@ -675,6 +676,11 @@ impl CodexSession {
                 | ControlKind::LoginMcp
                 | ControlKind::ReloadMcp
                 | ControlKind::SetPermissionMode
+                // `thread/backgroundTerminals/terminate`, by process id —
+                // the id every background task announces. There is no
+                // Codex verb for Claude's "send everything to the
+                // background", so `BackgroundTasks` stays unsupported.
+                | ControlKind::StopTask
         )
     }
 
@@ -896,6 +902,9 @@ fn read_stdout(
         // cannot block readiness.
         let mut menu_pending = true;
         let mut catalogs = live_catalogs::Catalogs::new(cwd.as_deref());
+        // Main's background terminals, read off the item stream; a change
+        // is announced before the frame goes on to its other readers.
+        let mut background = background::BackgroundTerminals::default();
         loop {
             line.clear();
             match reader.read_until(b'\n', &mut line) {
@@ -1002,6 +1011,11 @@ fn read_stdout(
             }
             turns.observe(text);
             if let Ok(frame) = serde_json::from_str(text) {
+                if let Some(event) = background.observe(&frame, turns.main_thread_id.as_deref()) {
+                    if sender.send(event).is_err() {
+                        return;
+                    }
+                }
                 if lock(&file_search).observe(&frame) {
                     continue;
                 }
