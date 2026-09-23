@@ -274,6 +274,7 @@ pub fn inline_file(
     window: &mut Window,
     cx: &mut App,
 ) -> (gpui::Size<gpui::Pixels>, gpui::AnyElement) {
+    use crate::pointer::{Pointer as _, PointerPressed as _};
     use crate::theme;
     use gpui::{rgb, SharedString};
 
@@ -316,7 +317,9 @@ pub fn inline_file(
     };
     let chrome = 2. * theme::INLINE_FILE_PAD_X + mark + theme::INLINE_FILE_GAP;
     let size = gpui::size(
-        (text_w + px(chrome)).clamp(px(theme::INLINE_FILE_MIN_W), px(theme::INLINE_FILE_MAX_W)),
+        // Whole pixels: a fractional shortfall would ellipsize a name that fits.
+        (text_w.ceil() + px(chrome))
+            .clamp(px(theme::INLINE_FILE_MIN_W), px(theme::INLINE_FILE_MAX_W)),
         px(theme::INLINE_FILE_H),
     );
     let host = preview.cloned();
@@ -336,22 +339,17 @@ pub fn inline_file(
         }
         file.open(window, cx);
     };
-    let chip = crate::components::button("inline-file-action")
-        .custom(
-            gpui::component::button::ButtonCustomVariant::new(cx)
-                .color(rgb(theme::RAISED).into())
-                .foreground(rgb(theme::TEXT).into())
-                .hover(rgb(theme::RAISED_2).into())
-                .active(rgb(theme::PRESSED).into()),
-        )
-        .tab_stop(true)
-        .key_context("PromptAttachment")
-        .accessibility_label(accessibility)
+    let chip = gpui::div()
+        .id("inline-file-chip")
+        .flex()
+        .items_center()
         .size_full()
         .min_w_0()
         .px(px(theme::INLINE_FILE_PAD_X))
         .gap(px(theme::INLINE_FILE_GAP))
-        .justify_start()
+        .bg(rgb(theme::RAISED))
+        .hover_raised()
+        .press_raised()
         .rounded(px(theme::R_CHIP))
         .font_family(theme::FONT_MONO)
         .font_weight(theme::W_BODY)
@@ -372,26 +370,52 @@ pub fn inline_file(
                 .into_any_element()
         })
         .child(
+            // The name gives way to an ellipsis; the `:line` never does.
             gpui::div()
+                .flex()
                 .min_w_0()
-                .truncate()
-                .text_color(rgb(theme::TEXT))
-                .child(name),
+                .child(
+                    gpui::div()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(rgb(theme::TEXT))
+                        .child(name),
+                )
+                .when(!location.is_empty(), |title| {
+                    title.child(
+                        gpui::div()
+                            .flex_none()
+                            .text_color(rgb(theme::TEXT_MUTED))
+                            .child(location),
+                    )
+                }),
+        );
+    // The click and keyboard target lies over the chip and draws nothing but
+    // the focus ring: the chip itself wears the hover face.
+    let clear: gpui::Hsla = gpui::transparent_black();
+    let target = crate::components::button("inline-file-action")
+        .custom(
+            gpui::component::button::ButtonCustomVariant::new(cx)
+                .color(clear)
+                .hover(clear)
+                .active(clear),
         )
-        .when(!location.is_empty(), |chip| {
-            chip.child(
-                gpui::div()
-                    .flex_none()
-                    .text_color(rgb(theme::TEXT_MUTED))
-                    .child(location),
-            )
-        })
+        .tab_stop(true)
+        .key_context("PromptAttachment")
+        .accessibility_label(accessibility)
+        .absolute()
+        .inset_0()
+        .size_full()
+        .min_w_0()
+        .p_0()
+        .rounded(px(theme::R_CHIP))
         .on_click(open);
     (
         size,
         gpui::div()
             .id("inline-file")
             .debug_selector(move || selector.clone())
+            .relative()
             .w_full()
             .h(size.height)
             .cursor_pointer()
@@ -399,6 +423,7 @@ pub fn inline_file(
                 gpui::component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)
             })
             .child(chip)
+            .child(target)
             .into_any_element(),
     )
 }
