@@ -337,7 +337,7 @@ pub const MONO_CELL: f32 = FS_UI * MONO_ADVANCE;
 /// Mono cmap (asserted by `theme::tests`). Anything else — `❯ ⎿ ∴ ✻ ✓ ✗ ☐`
 /// and friends — is an SVG in a glyph box, never text.
 pub const CHROME_GLYPHS: &[char] = &[
-    '↳', '±', '↑', '↓', '⇥', '↵', '⌫', '•', '●', '…', '→', '·', '−', '│', '└', '─', '›',
+    '↳', '±', '↑', '↓', '⇥', '⇧', '↵', '⌫', '•', '●', '…', '→', '·', '−', '—', '│', '└', '─', '›',
 ];
 
 /// 720px — the reading column's maximum width, gutter included. Wide Panes
