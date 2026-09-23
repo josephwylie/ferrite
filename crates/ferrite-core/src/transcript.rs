@@ -1313,11 +1313,21 @@ impl Transcript {
                         ..Update::default()
                     };
                 }
+                // What is waiting, in words: the questions by name, or the
+                // tool that needs approval and what it touches.
                 Update {
-                    dirty: vec![self.push(Body::Notice(format!(
-                        "decision needed: {} — {}",
-                        decision.tool_name, decision.description
-                    )))],
+                    dirty: vec![self.push(Body::Notice(match &decision.kind {
+                        crate::DecisionKind::Questions(questions) => {
+                            format!("asks {}", crate::questions::summary(questions))
+                        }
+                        _ if decision.description.is_empty() => {
+                            format!("{} needs approval", decision.tool_name)
+                        }
+                        _ => format!(
+                            "{} needs approval · {}",
+                            decision.tool_name, decision.description
+                        ),
+                    }))],
                     ..Update::default()
                 }
             }
@@ -2430,7 +2440,43 @@ mod tests {
         assert_eq!(transcript.status(), Status::Blocked);
         let last = transcript.blocks().last().unwrap();
         assert!(matches!(last.body, Body::Notice(_)));
-        assert_eq!(body_text(last), "decision needed: Write — ferrite-perm.txt");
+        assert_eq!(body_text(last), "Write needs approval · ferrite-perm.txt");
+    }
+
+    #[test]
+    fn a_blocking_question_names_its_questions_without_a_dangling_dash() {
+        let questions = crate::questions::parse(&serde_json::json!({"questions": [{
+            "question": "Which approach?",
+            "header": "Approach",
+            "options": [{"label": "A"}, {"label": "B"}]
+        }]}))
+        .unwrap();
+        for (kind, description, said) in [
+            (
+                crate::DecisionKind::Questions(questions),
+                "",
+                "asks 1 question · Approach",
+            ),
+            (crate::DecisionKind::Approval, "", "Bash needs approval"),
+        ] {
+            let mut transcript = Transcript::default();
+            transcript.apply(Input::Event(SessionEvent::DecisionRequested {
+                decision: Decision {
+                    delivery: Default::default(),
+                    kind,
+                    policy: Default::default(),
+                    id: "q_01".into(),
+                    tool_use_id: "toolu_02".into(),
+                    tool_name: "Bash".into(),
+                    description: description.into(),
+                    input: serde_json::Value::Null,
+                    suggestions: vec![],
+                },
+            }));
+            let text = body_text(transcript.blocks().last().unwrap());
+            assert_eq!(text, said);
+            assert!(!text.contains('—') && !text.ends_with(' '));
+        }
     }
 
     #[test]
