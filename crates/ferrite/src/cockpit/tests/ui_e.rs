@@ -39,3 +39,44 @@ fn toasts_follow_the_nav_to_the_side_with_ground_to_spare(cx: &mut TestAppContex
     tick(cx);
     assert_eq!(side(cx).0, gpui::Anchor::BottomLeft);
 }
+
+/// At the app size with the nav open, the toast stack's column (the kit's
+/// own placement values) lies wholly on the nav's ground: it never covers a
+/// Pane's head or the focused Composer.
+#[gpui::test]
+fn the_toast_column_clears_every_pane_head_and_the_composer(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("toast-geometry", 2);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    let (placement, margins, width) = cx.update(|_, cx| {
+        let toasts = &gpui::component::Theme::global(cx).notification;
+        (toasts.placement, toasts.margins.clone(), toasts.width)
+    });
+    assert_eq!(placement, gpui::Anchor::BottomLeft);
+    let right = margins.left + width;
+    assert!(
+        right <= px(crate::theme::NAV_WIDTH),
+        "the column stays on the nav"
+    );
+    let threads: Vec<_> = view.read_with(cx, |view, _| {
+        view.panes.iter().filter_map(|pane| pane.thread()).collect()
+    });
+    let heads: Vec<_> = threads
+        .iter()
+        .filter_map(|thread| {
+            cx.debug_bounds(Box::leak(
+                format!("pane-head-{}", thread.get()).into_boxed_str(),
+            ))
+        })
+        .collect();
+    assert!(!heads.is_empty(), "the board shows a Pane head");
+    for head in heads {
+        assert!(
+            head.origin.x >= right,
+            "a toast would cover the Pane head at {head:?}"
+        );
+    }
+    let editor = cx.debug_bounds("focused-prompt-editor").unwrap();
+    assert!(editor.origin.x >= right, "a toast would cover the Composer");
+}
