@@ -295,6 +295,26 @@ const STATES: &[(&str, &[&str])] = &[
     ("empty-transcript", &["app"]),
     ("starting", &["app"]),
     ("error-turn", &["wide", "app"]),
+    // ---- WP-A states (append above the end line)
+    // (end WP-A)
+
+    // ---- WP-B states (append above the end line)
+    // (end WP-B)
+
+    // ---- WP-C states (append above the end line)
+    // (end WP-C)
+
+    // ---- WP-D states (append above the end line)
+    // (end WP-D)
+
+    // ---- WP-E states (append above the end line)
+    // (end WP-E)
+
+    // ---- WP-F states (append above the end line)
+    // (end WP-F)
+
+    // ---- WP-G states (append above the end line)
+    // (end WP-G)
 ];
 
 /// A comma list from the environment; `None` is "everything".
@@ -522,6 +542,27 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
             (scene, none)
         }
         "error-turn" => (error_turn(label), none),
+
+        // ---- WP-A scene arms (append above the end line)
+        // (end WP-A)
+
+        // ---- WP-B scene arms (append above the end line)
+        // (end WP-B)
+
+        // ---- WP-C scene arms (append above the end line)
+        // (end WP-C)
+
+        // ---- WP-D scene arms (append above the end line)
+        // (end WP-D)
+
+        // ---- WP-E scene arms (append above the end line)
+        // (end WP-E)
+
+        // ---- WP-F scene arms (append above the end line)
+        // (end WP-F)
+
+        // ---- WP-G scene arms (append above the end line)
+        // (end WP-G)
         _ => legacy(state),
     }
 }
@@ -1301,3 +1342,24 @@ fn notifications() -> (Scene, Setup) {
     });
     (scene, setup)
 }
+
+// ---- WP-A scene builders (append above the end line)
+// (end WP-A)
+
+// ---- WP-B scene builders (append above the end line)
+// (end WP-B)
+
+// ---- WP-C scene builders (append above the end line)
+// (end WP-C)
+
+// ---- WP-D scene builders (append above the end line)
+// (end WP-D)
+
+// ---- WP-E scene builders (append above the end line)
+// (end WP-E)
+
+// ---- WP-F scene builders (append above the end line)
+// (end WP-F)
+
+// ---- WP-G scene builders (append above the end line)
+// (end WP-G)
