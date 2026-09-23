@@ -7413,9 +7413,16 @@ impl Render for CockpitView {
                     && !pane.controls_focus.is_focused(window)
                     && (!pane.is_main() || !pane.transcript_focus.is_focused(window)))
         });
+        // A reader sits beside its Pane, outside the transcript, so its text
+        // needs its own exemption or a click to select in it is undone.
+        let reader_text_focused = self
+            .panes
+            .iter()
+            .any(|pane| pane.preview.reader_text_focused(window, cx));
         if window.has_active_dialog(cx)
             || self.bell.open
             || native_text_focused
+            || reader_text_focused
             || pane_control_focused
         {
             // Native text, dialogs, and the bell keep their own keyboard focus.
@@ -8039,31 +8046,11 @@ impl CockpitView {
             .file_context(document.path.parent(), &pane.preview);
         let face = GhostFace {
             title: document.title.clone().into(),
-            detail: Some(SharedString::from(if document.is_markdown() {
-                "MARKDOWN"
-            } else {
-                "FILE"
-            })),
+            detail: Some(SharedString::from(document.kind())),
             reader: true,
             size: self.slot_size(leaf),
         };
-        let body = if document.is_markdown() {
-            crate::rich::Markdown::new(
-                format!("document-{}", document.path.display()),
-                document.source,
-                pane.document_rich.clone(),
-            )
-            .into_any_element()
-        } else {
-            crate::rich::Output {
-                id: format!("file-{}", document.path.display()).into(),
-                text: document.source.into(),
-                cache: pane.document_rich.clone(),
-                aria_label: "File contents".into(),
-                fill: true,
-            }
-            .into_any_element()
-        };
+        let body = crate::rich::document_body(document, pane.document_rich.clone());
         let reader = pane
             .preview
             .reader(body, head_drag(leaf, face))?

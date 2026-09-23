@@ -39,6 +39,9 @@ pub struct Preview {
     state: Arc<Mutex<State>>,
     bounds: Arc<Mutex<Bounds<Pixels>>>,
     focus: FocusHandle,
+    /// Tracked by the reader slot, so the cockpit can tell a selection in
+    /// the reader from a click that should hand focus back to the Pane.
+    reader_focus: FocusHandle,
 }
 
 impl Preview {
@@ -47,7 +50,15 @@ impl Preview {
             state: Arc::new(Mutex::new(State::default())),
             bounds: Arc::new(Mutex::new(Bounds::default())),
             focus: cx.focus_handle(),
+            reader_focus: cx.focus_handle(),
         }
+    }
+
+    /// Whether text inside the open reader holds focus — Markdown, code or
+    /// plain text being selected in. The slot itself taking focus on a click
+    /// is not text, and does not count.
+    pub fn reader_text_focused(&self, window: &Window, cx: &App) -> bool {
+        self.reader_focus.contains_focused(window, cx) && !self.reader_focus.is_focused(window)
     }
 
     pub fn focus_target(&self) -> Option<FocusHandle> {
@@ -170,7 +181,7 @@ impl Preview {
     pub fn reader(&self, body: AnyElement, head: impl FnOnce(Div) -> AnyElement) -> Option<Div> {
         let document = self.document()?;
         let markdown = document.is_markdown();
-        let kind = if markdown { "MARKDOWN" } else { "FILE" };
+        let kind = document.kind();
         let document_content = if markdown {
             div()
                 .id("markdown-reader-scroll")
@@ -262,6 +273,7 @@ impl Preview {
         Some(
             div()
                 .debug_selector(|| "markdown-reader".into())
+                .track_focus(&self.reader_focus)
                 .relative()
                 .flex()
                 .flex_col()
@@ -299,6 +311,30 @@ fn open_original(path: &Path, window: &mut Window, cx: &mut App) {
 }
 
 impl Document {
+    /// The reader's type chip: the language for a file the lexer knows, else
+    /// the extension as a file card shows it, else just `FILE`.
+    pub fn kind(&self) -> String {
+        if self.is_markdown() {
+            return "MARKDOWN".into();
+        }
+        if let Some(language) = ferrite_core::transcript::language_for_path(&self.path) {
+            return match language {
+                "cpp" => "C++".into(),
+                language => language.to_ascii_uppercase(),
+            };
+        }
+        match self
+            .path
+            .extension()
+            .and_then(|extension| extension.to_str())
+        {
+            Some(extension) if !extension.is_empty() && extension.len() <= 8 => {
+                extension.to_ascii_uppercase()
+            }
+            _ => "FILE".into(),
+        }
+    }
+
     pub fn is_markdown(&self) -> bool {
         self.path
             .extension()

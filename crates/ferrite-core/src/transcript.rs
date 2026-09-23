@@ -10,7 +10,7 @@ use crate::progress::{Phase, Progress, ProgressEvent, StepStatus};
 use crate::{Hunk, RateLimitWindow, SessionEvent, ToolResult, TurnOutcome};
 
 mod highlight;
-pub use highlight::{tokens as highlight_tokens, Lexer};
+pub use highlight::{language_for_path, tokens as highlight_tokens, Lexer};
 
 /// A Block's identity, stable for as long as the Block lives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]

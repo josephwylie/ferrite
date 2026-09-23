@@ -146,7 +146,9 @@ primary, and you can't delete a project that still has Threads.
 
 **Click a text file card** in the transcript to open the native reader in
 its own slot beside the Thread, in Solo or in a Group. It resizes and moves
-like any Pane, and keeps its place until you quit. Markdown links resolve from
+like any Pane, and keeps its place until you quit. Rust, Python, JavaScript,
+TypeScript, Go, C/C++, Java, shell, TOML, YAML and JSON files are syntax
+highlighted. Markdown links resolve from
 the document's folder, and opening another file replaces that Thread's
 reader. Files edited by the Thread or its subagents stay listed in the
 **Files changed** row above the prompt for quick access.
