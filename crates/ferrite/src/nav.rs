@@ -921,7 +921,7 @@ pub fn members(rows: Vec<AnyElement>) -> Div {
         .children(rows)
 }
 
-/// The 41.75px Thread row: title and provider mark on line 1, the Project
+/// The 44px (`THREAD_ROW_H`) Thread row: title and provider mark on line 1, the Project
 /// on line 2. The prototype's grid is
 /// `minmax(0, 1fr) 14px` with an 8px column gap; gpui's grid has uniform
 /// tracks only, so line 1 is flex — a `flex_1().min_w_0()` title beside a
@@ -1634,12 +1634,12 @@ mod tests {
         assert_eq!(
             height(thread_row(&bare)),
             Some(px(THREAD_ROW_H).into()),
-            "6 + 15 + 1 + 13.75 + 1 + 13.75 + 6"
+            "6 + LH_TIGHT 16 + ROW_GAP 0 + LH_META 16 + 6"
         );
         assert_eq!(
             height(group_row(&group(false))),
             Some(px(GROUP_ROW_H).into()),
-            "6 + 16.25 + 1 + 13.75 + 6"
+            "the same two lines as a Thread row"
         );
     }
 

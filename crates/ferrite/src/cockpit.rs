@@ -15702,7 +15702,7 @@ mod tests {
                 .expect("every open Thread has a row")
         };
         // Row `n`: the 42px window band, the 42px nav head, the tree's 8px
-        // inset, n rows of 56.5px each with the 2px between siblings, then
+        // inset, n rows of `THREAD_ROW_H` each with the 2px between siblings, then
         // halfway down its own row. No strip, no section header.
         let row_y =
             |n: usize| px(42. + 42. + 8. + n as f32 * (crate::theme::THREAD_ROW_H + 2.) + 28.);
@@ -19278,7 +19278,7 @@ mod tests {
         );
 
         // Past the end and clamped there, rather than a measured distance:
-        // a member row is 56.5px tall (#32), so 100 of them are ~5900px of
+        // a member row is `THREAD_ROW_H` tall, so 100 of them are ~4600px of
         // column and any number tuned to a shorter row would stop short.
         cx.simulate_event(gpui::ScrollWheelEvent {
             position: gpui::point(px(100.), px(200.)),
