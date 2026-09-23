@@ -76,6 +76,7 @@ actions!(
         NextDecision,
         NewThread,
         NewWorktreeThread,
+        NewGroup,
         BandCycle,
         ToolCyclePrevious,
         ToggleTool,
@@ -6625,6 +6626,20 @@ impl CockpitView {
         self.open_draft_in_current_view(DraftTarget::Main, cx);
     }
 
+    /// cmd-g: the titlebar's New Group — a draft that founds a Group with
+    /// the focused Thread on its first send. Only a Thread in no Group can
+    /// found one, so elsewhere the key does nothing, as the button is not
+    /// offered there either.
+    fn new_group(&mut self, _: &NewGroup, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some(thread) = self
+            .focused_thread()
+            .filter(|thread| self.cockpit.groups().of(*thread).is_none())
+        else {
+            return;
+        };
+        self.open_draft_with_placement(DraftTarget::Main, DraftPlacement::NewGroupWith(thread), cx);
+    }
+
     /// Reopen the Thread parked most recently — the one the operator just
     /// closed, which is the one they want back (#17); the core walks the
     /// park order, then creation order.
@@ -7508,6 +7523,7 @@ impl Render for CockpitView {
             .on_action(cx.listener(Self::next_decision))
             .on_action(cx.listener(Self::new_thread))
             .on_action(cx.listener(Self::new_worktree_thread))
+            .on_action(cx.listener(Self::new_group))
             .on_action(cx.listener(Self::band_cycle))
             .on_action(cx.listener(Self::tool_cycle_previous))
             .on_action(cx.listener(Self::toggle_tool_action))
@@ -7663,7 +7679,7 @@ impl Render for CockpitView {
                 let (add_label, add_tooltip, placement) = match self.cockpit.roster().view() {
                     View::Group(_) => (
                         "Add Thread",
-                        "New Thread in Group",
+                        "New Thread in Group (⌘N)",
                         DraftPlacement::CurrentGroup,
                     ),
                     View::Solo
@@ -7673,13 +7689,17 @@ impl Render for CockpitView {
                     {
                         (
                             "New Group",
-                            "New Group with New Thread",
+                            "New Group with New Thread (⌘G)",
                             DraftPlacement::NewGroupWith(
                                 self.focused_thread().expect("the guard names a Thread"),
                             ),
                         )
                     }
-                    View::Solo => ("New Thread", "New Thread", DraftPlacement::CurrentGroup),
+                    View::Solo => (
+                        "New Thread",
+                        "New Thread (⌘N)",
+                        DraftPlacement::CurrentGroup,
+                    ),
                 };
                 let add_thread = crate::titlebar::add_thread_button(add_label, add_tooltip).on_click(
                     cx.listener(move |view, _: &ClickEvent, _, cx| {

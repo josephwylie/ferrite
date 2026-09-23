@@ -81,6 +81,8 @@ Shortcuts below use `cmd`; on Windows use `ctrl`.
   worktrees or branches, or a new branch — in the checkout or in a fresh
   worktree.
 - `cmd-shift-n` — new Thread in its own git worktree
+- `cmd-g` — new Group: the focused Thread plus a new one beside it (the
+  titlebar's **New Group**, when the Thread is in no Group yet)
 - `escape` — interrupt whatever's running
 - `y` / `n` / `a` — answer a Decision: allow, deny, or always allow. Works from
   the focused Pane or from any Pane, however small.

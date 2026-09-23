@@ -391,7 +391,7 @@ fn load_bindings(platform: keymap::Platform, cx: &mut App) -> Vec<KeyBinding> {
 /// menu so the standard cut/copy/paste/select-all reach the Composer.
 fn app_menus() -> Vec<Menu> {
     use cockpit::{
-        CloseThread, NewThread, NewWorktreeThread, NextDecision, NextPane, OpenSettings,
+        CloseThread, NewGroup, NewThread, NewWorktreeThread, NextDecision, NextPane, OpenSettings,
         PreviousPane, ReopenThread, ToggleFullscreen, ToggleNav, ToggleNotifications,
     };
     vec![
@@ -412,6 +412,7 @@ fn app_menus() -> Vec<Menu> {
             items: vec![
                 MenuItem::action("New Thread", NewThread),
                 MenuItem::action("New Thread in a Worktree", NewWorktreeThread),
+                MenuItem::action("New Group with New Thread", NewGroup),
                 MenuItem::separator(),
                 MenuItem::action("Close Pane", CloseThread),
                 MenuItem::action("Reopen Parked Thread", ReopenThread),
