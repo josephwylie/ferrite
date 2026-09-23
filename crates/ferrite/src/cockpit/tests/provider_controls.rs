@@ -37,6 +37,13 @@ fn contract_context_card_refreshes_and_shows_native_details(cx: &mut TestAppCont
         fake.controls.borrow().as_slice(),
         [ferrite_core::SessionControl::RefreshContext]
     );
+    assert!(
+        cx.debug_bounds("context-category-0-12000").is_none(),
+        "the legend starts folded"
+    );
+    let toggle = cx.debug_bounds("context-window-toggle").unwrap();
+    cx.simulate_click(toggle.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
     assert!(cx.debug_bounds("context-usable-150000").is_some());
     assert!(cx.debug_bounds("context-compaction-140000").is_some());
     assert!(cx.debug_bounds("context-category-0-12000").is_some());

@@ -607,6 +607,8 @@ impl CockpitView {
             let picking = weak.clone();
             strip = strip.child(components::ChoiceMenu {
                 id: format!("subject-overflow-{}", thread.get()).into(),
+                // The strip runs across the Pane's top: the list drops below it.
+                anchor: gpui::Anchor::TopLeft,
                 trigger: components::button(("subject-overflow", thread.get()))
                     .text()
                     .tab_stop(true)

@@ -489,17 +489,10 @@ pub fn order_button(active: bool, open: bool) -> Button {
 /// Ordering menu anchored to the compact button rather than occupying the
 /// full Project-filter width.
 pub fn order_menu() -> Div {
-    filter_menu().left_auto().w(px(218.)).child(
-        div()
-            .h(px(24.))
-            .px(px(ROW_PAD_X))
-            .flex()
-            .items_center()
-            .text_size(px(FS_SM))
-            .font_weight(FontWeight::MEDIUM)
-            .text_color(rgb(TEXT_MUTED))
-            .child("Order threads by"),
-    )
+    filter_menu()
+        .left_auto()
+        .w(px(218.))
+        .child(crate::menu::heading("Order threads by"))
 }
 
 pub fn order_option(index: usize, label: &'static str, selected: bool) -> Button {
