@@ -660,3 +660,58 @@ fn the_next_digit_arms_the_own_answer_line(cx: &mut TestAppContext) {
     assert!(answers[0].picks.is_empty());
     assert_eq!(answers[0].other.as_deref(), Some("mine"));
 }
+
+// ------------------------------------------------------ operator rulings
+
+/// Q6 (the operator's ruling): on a board a waiting cell's edge is
+/// `ATTENTION_EDGE`, ochre at 35%, and the single answer-target cell alone
+/// wears full `ATTENTION`; in Solo no state recolours the edge — the docked
+/// Decision carries it.
+#[gpui::test]
+fn one_answer_target_wears_full_ink_and_solo_wears_no_state_edge(cx: &mut TestAppContext) {
+    assert_eq!(
+        crate::theme::ATTENTION_EDGE,
+        (crate::theme::ATTENTION << 8) | 0x59,
+        "the waiting edge is ATTENTION itself"
+    );
+    assert_eq!((0.35_f32 * 255.).round() as u32, 0x59, "at 35% alpha");
+    let (view, fake, cx, _group) = board("edge-answer-target", 4, cx);
+    fake.streams.borrow()[1].send(decision("edge-1")).unwrap();
+    fake.streams.borrow()[2].send(decision("edge-2")).unwrap();
+    tick(cx);
+    let (target, waiting) = view.read_with(cx, |view, _| {
+        (
+            view.key_target().expect("a Thread waits"),
+            [
+                view.panes[1].thread().unwrap(),
+                view.panes[2].thread().unwrap(),
+            ],
+        )
+    });
+    for thread in waiting {
+        let full = cx
+            .debug_bounds(format!("pane-answer-edge-{}", thread.get()).leak())
+            .is_some();
+        let alpha = cx
+            .debug_bounds(format!("pane-waiting-edge-{}", thread.get()).leak())
+            .is_some();
+        assert_eq!(full, thread == target, "only the answer target is full ink");
+        assert_eq!(alpha, thread != target, "every other waiting cell is alpha");
+    }
+
+    let (core, fake) = cockpit("edge-solo", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
+    fake.streams.borrow()[0]
+        .send(decision("edge-solo"))
+        .unwrap();
+    tick(cx);
+    let thread = view.read_with(cx, |view, _| view.cockpit.threads()[0]);
+    for edge in ["pane-answer-edge", "pane-waiting-edge"] {
+        assert!(
+            cx.debug_bounds(format!("{edge}-{}", thread.get()).leak())
+                .is_none(),
+            "Solo draws no {edge}"
+        );
+    }
+}

@@ -976,8 +976,13 @@ pub fn render_pane(
         SharedString::from(format!("pane-edge-{key}")),
     );
     let shell = record_card(
-        pane_shell(hover.ink(edge)).when(edge == PaneEdge::Focused, |shell| {
-            shell.debug_selector(move || format!("pane-focus-edge-{key}"))
+        pane_shell(hover.ink(edge)).map(|shell| match edge {
+            PaneEdge::Focused => shell.debug_selector(move || format!("pane-focus-edge-{key}")),
+            PaneEdge::Attention => shell.debug_selector(move || format!("pane-waiting-edge-{key}")),
+            PaneEdge::AnswerTarget => {
+                shell.debug_selector(move || format!("pane-answer-edge-{key}"))
+            }
+            _ => shell,
         }),
         view,
     );
@@ -1440,8 +1445,8 @@ pub(crate) enum PaneEdge {
 
 impl PaneEdge {
     pub(crate) fn of(focused: bool, attention: bool, blocked: bool, solo: bool) -> Self {
-        // Operator question Q6 (flagged for confirmation): Solo has no state
-        // edge. Reverting it is deleting this branch.
+        // The operator's ruling (Q6): Solo has no state edge — the docked
+        // Decision carries the signal.
         if solo {
             return if focused {
                 PaneEdge::Focused
