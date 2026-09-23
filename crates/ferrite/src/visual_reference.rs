@@ -423,8 +423,20 @@ fn render(
     })
     .unwrap();
     cx.run_until_parked();
-    // Let toast and popover entrances finish.
-    cx.advance_clock(std::time::Duration::from_millis(600));
+    // Let toast and popover entrances finish: the toast stack advances its
+    // transition one frame at a time, so a settled shot needs frames drawn
+    // across the clock, not one jump.
+    for _ in 0..8 {
+        cx.advance_clock(std::time::Duration::from_millis(150));
+        cx.run_until_parked();
+        cx.update_window(window.into(), |_, window, cx| {
+            let _ = window.draw(cx);
+        })
+        .unwrap();
+    }
+    // gpui's `with_animation` runs on the wall clock, not the executor's:
+    // a toast's entrance fade is only settled once real time has passed.
+    std::thread::sleep(std::time::Duration::from_millis(500));
     cx.run_until_parked();
     cx.update_window(window.into(), |_, window, cx| {
         // Two frames: toasts and anchored popovers land on the second.
