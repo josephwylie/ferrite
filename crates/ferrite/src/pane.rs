@@ -2911,6 +2911,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
     let is_draft = setup_controls.is_some();
     let blocking = decision.is_some_and(Decision::blocks_execution);
     let mut block = components::raised_edged(composer_edge(alert, editing))
+        .debug_selector(|| "composer-block".into())
         .relative()
         .flex()
         .flex_col()
@@ -3014,15 +3015,14 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         );
     }
     // The `❯` is always in layout, so the text origin never moves with
-    // focus: `ACCENT` while the keyboard is in the line, `TEXT_MUTED`
-    // otherwise. It hangs centred on the first row while the line grows.
+    // focus. It hangs centred on the first row while the line grows.
     let mut input = div()
         .flex()
         .items_start()
         .min_h(px(theme::COMPOSER_ROW_H))
         .min_w_0()
         .child(components::gutter(
-            components::prompt_mark(if editing { ACCENT } else { TEXT_MUTED }),
+            components::prompt_mark(prompt_ink(editing, decision.is_some())),
             theme::COMPOSER_ROW_H,
         ))
         .child(line);
@@ -3150,6 +3150,18 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
             .px(px(theme::PANE_PAD_X))
             .pb(px(theme::COMPOSER_INSET_B))
             .child(components::reading_column(stack))
+    }
+}
+
+/// The input line's `❯`: `ACCENT` while the keyboard is in the line —
+/// `ATTENTION` when the line is a pending Decision's reply channel, the one
+/// cue besides the placeholder that what is typed answers it — and
+/// `TEXT_MUTED` whenever keys would land elsewhere.
+fn prompt_ink(editing: bool, replying: bool) -> u32 {
+    match (editing, replying) {
+        (false, _) => TEXT_MUTED,
+        (true, true) => ATTENTION,
+        (true, false) => ACCENT,
     }
 }
 
@@ -5849,14 +5861,6 @@ mod tests {
         assert!(!hint_text(typing_hints(true)).contains("esc"));
     }
 
-    /// With text in the line the row says what Enter does now: behind a
-    /// running turn it queues, not sends.
-    #[test]
-    fn typing_hints_say_whether_enter_sends_or_queues() {
-        assert_eq!(hint_text(typing_hints(false)), "↵ send   ⇧↵ newline");
-        assert_eq!(hint_text(typing_hints(true)), "↵ queue   ⇧↵ newline");
-    }
-
     /// A prediction the operator can accept must say so: the key is the one
     /// thing about it the box itself cannot show.
     #[test]
@@ -7027,6 +7031,75 @@ mod tests {
     // (end WP-C)
 
     // ---- WP-D tests (append above the end line)
+    /// With text in the line the row says what Enter does now: behind a
+    /// running turn it queues, not sends.
+    #[test]
+    fn typing_hints_say_whether_enter_sends_or_queues() {
+        assert_eq!(hint_text(typing_hints(false)), "↵ send   ⇧↵ newline");
+        assert_eq!(hint_text(typing_hints(true)), "↵ queue   ⇧↵ newline");
+    }
+
+    /// The `❯` says where keys land: accent only while the line holds the
+    /// keyboard, attention when that line answers a Decision.
+    #[test]
+    fn the_prompt_mark_lights_only_while_the_line_holds_the_keyboard() {
+        assert_eq!(prompt_ink(true, false), ACCENT);
+        assert_eq!(prompt_ink(true, true), ATTENTION);
+        assert_eq!(prompt_ink(false, false), TEXT_MUTED);
+        assert_eq!(prompt_ink(false, true), TEXT_MUTED);
+    }
+
+    /// The block draws its own focus edge only where the Pane's edge is a
+    /// state colour and the keyboard is in the line (P0-8); otherwise the
+    /// resting edge, always 1px, always in layout.
+    #[test]
+    fn the_composer_edge_carries_focus_only_on_an_alert_pane() {
+        assert_eq!(composer_edge(true, true), (theme::FOCUS_RING << 8) | 0xff);
+        for (alert, editing) in [(false, false), (false, true), (true, false)] {
+            assert_eq!(composer_edge(alert, editing), theme::COMPOSER_EDGE);
+        }
+    }
+
+    /// The height budget counts exactly what the block draws around its
+    /// editor rows: inset, two edges, padding, the gap and the hint row.
+    #[test]
+    fn the_fixed_height_follows_the_composer_tokens() {
+        let block = 2. * theme::COMPOSER_EDGE_W
+            + theme::COMPOSER_PAD_T
+            + theme::COMPOSER_PAD_B
+            + theme::COMPOSER_GAP
+            + theme::COMPOSER_ROW_H;
+        assert_eq!(
+            composer_fixed_height(false),
+            theme::COMPOSER_INSET_B + block
+        );
+        assert_eq!(
+            composer_fixed_height(true),
+            theme::COMPOSER_INSET_L2 + block
+        );
+        assert_eq!(
+            theme::BOX_INSET_X,
+            theme::COMPOSER_EDGE_W + theme::COMPOSER_PAD_X
+        );
+        // A tall Pane shows every editor row; a short one keeps its majority.
+        assert_eq!(
+            composer_row_limit(900., false, 0),
+            crate::composer::MAX_ROWS
+        );
+        let limit = composer_row_limit(300., false, 0) as f32;
+        assert!(
+            composer_fixed_height(false) + limit * theme::COMPOSER_ROW_H
+                <= 300. * theme::COMPOSER_MAX_PANE_FRACTION
+        );
+    }
+
+    /// Usage is neutral until it runs tight: colour is state.
+    #[test]
+    fn usage_reads_neutral_until_it_runs_tight() {
+        assert_eq!(usage_ink(0.62), TEXT_2);
+        assert_eq!(usage_ink(theme::USAGE_TIGHT), ATTENTION);
+        assert_eq!(usage_ink(theme::USAGE_SPENT), BLOCKED);
+    }
     // (end WP-D)
 
     // ---- WP-E tests (append above the end line)
