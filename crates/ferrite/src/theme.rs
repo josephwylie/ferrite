@@ -688,6 +688,12 @@ pub fn init_components(cx: &mut gpui::App) {
     theme.scrollbar = rgba(TRANSPARENT).into();
     theme.scrollbar_thumb = rgb(SCROLLBAR).into();
     theme.scrollbar_thumb_hover = rgb(SCROLLBAR_HOVER).into();
+    // The subject strip (the app's only TabBar, plain Tab variant): no bar
+    // ground, the active tab a FILL pill in TEXT_STRONG, the rest muted.
+    theme.tab_bar = rgba(TRANSPARENT).into();
+    theme.tab_active = rgb(FILL).into();
+    theme.tab_active_foreground = rgb(TEXT_STRONG).into();
+    theme.tab_foreground = rgb(TEXT_MUTED).into();
     // `Theme::change` resolved the kit's pre-computed tokens from its default
     // palette, and nothing recomputes them: widgets that read `tokens.*`
     // (Button::primary, menu rows, tooltips, checkboxes) would paint the
@@ -1475,6 +1481,7 @@ mod tests {
             assert_eq!(tokens.accent.color, solid(FILL));
             assert_eq!(tokens.popover.color, solid(MENU));
             assert_eq!(tokens.muted.color, solid(RAISED));
+            assert_eq!(tokens.tab_active.color, solid(FILL));
             assert_eq!(tokens.ring.color, solid(FOCUS_RING));
             assert_eq!(tokens.input.color, solid(INPUT_EDGE));
             assert_eq!(tokens.border.color, alpha(HAIRLINE_STRONG));
