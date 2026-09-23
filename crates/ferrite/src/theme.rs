@@ -828,6 +828,12 @@ pub fn init_components(cx: &mut gpui::App) {
     theme.muted_foreground = rgb(TEXT_MUTED).into();
     theme.popover = rgb(MENU).into();
     theme.popover_foreground = rgb(TEXT).into();
+    // The reader's line numbers sit on the Pane itself, not a raised gutter.
+    // The gutter is painted opaque over the text, so it takes the Pane's own
+    // colour rather than none.
+    let mut highlight = (*theme.highlight_theme).clone();
+    highlight.style.editor_gutter_background = Some(rgb(PANE).into());
+    theme.highlight_theme = std::sync::Arc::new(highlight);
     theme.ring = rgb(FOCUS).into();
     theme.selection = rgba(TEXT_SELECTION_WASH).into();
     theme.sidebar = rgb(MENU).into();

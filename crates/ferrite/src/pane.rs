@@ -79,6 +79,7 @@ pub struct PaneView {
     pub selected: Subject,
     pub generation: u64,
     pub rich: crate::rich::TextCache,
+    pub document_rich: crate::rich::TextCache,
     pub agent_menu_open: bool,
     pub subject_strip_width: f32,
     pub tab_interaction: crate::cockpit::subagents::TabInteraction,
@@ -206,6 +207,7 @@ impl PaneView {
             selected: Subject::Main,
             generation: 0,
             rich,
+            document_rich: crate::rich::TextCache::default(),
             agent_menu_open: false,
             subject_strip_width: 0.,
             tab_interaction: Default::default(),
@@ -260,6 +262,7 @@ impl PaneView {
             selected: Subject::Main,
             generation: 0,
             rich,
+            document_rich: crate::rich::TextCache::default(),
             agent_menu_open: false,
             subject_strip_width: 0.,
             tab_interaction: Default::default(),
@@ -630,6 +633,8 @@ pub struct PaneWiring {
     /// The retained L1 transcript. Its cached entity owns native text and
     /// row layout; the Pane only places the allocated viewport.
     pub transcript: Option<AnyElement>,
+    /// Files edited by this Thread, as one-click preview entries.
+    pub changed_files: Option<AnyElement>,
     pub attachments: Option<AnyElement>,
     /// Pointer equivalents of the owning Composer's send and interrupt keys.
     pub composer_actions: Option<AnyElement>,
@@ -676,7 +681,14 @@ pub struct PaneWiring {
     pub expand_question: Option<AnyElement>,
     pub question_measurement: Option<AnyElement>,
     pub child_footer: Option<AnyElement>,
+    /// Wires the whole L1 head as the Pane's drag handle (the cockpit
+    /// supplies it while the board has somewhere to move the Pane to).
+    pub head_drag: Option<HeadDrag>,
 }
+
+/// Turns the Pane head's band into its drag handle: the cockpit gives it an
+/// id and the drag payload, since only the cockpit knows the board.
+pub type HeadDrag = Box<dyn FnOnce(Div) -> AnyElement>;
 
 /// The wall's state matrix (glance.md §4), selected from O(1) reads plus the
 /// folded tests flag. Pure so the matrix is assertable without a window.
@@ -818,6 +830,7 @@ pub fn render_pane(
     let wall = wall.unwrap_or(&empty);
     let PaneWiring {
         transcript: retained_transcript,
+        changed_files,
         attachments,
         composer_actions,
         background,
@@ -836,6 +849,7 @@ pub fn render_pane(
         expand_question,
         question_measurement,
         child_footer,
+        head_drag,
     } = wiring;
     let has_activity_decisions = activity_decisions.is_some() || expand_question.is_some();
     let subject = thread.and_then(|thread| thread.activity().subject(&view.selected));
@@ -921,6 +935,7 @@ pub fn render_pane(
                     attachments,
                     actions: composer_actions,
                     background,
+                    changed_files: None,
                     history_available,
                     menu: None,
                     mode: permission_mode.as_deref(),
@@ -973,6 +988,7 @@ pub fn render_pane(
             ci,
             attention: activity_attention,
             action: expand_question,
+            drag: head_drag,
         },
     ));
     match transcript {
@@ -1059,6 +1075,7 @@ pub fn render_pane(
                         attachments,
                         actions: composer_actions,
                         background,
+                        changed_files,
                         history_available,
                         menu,
                         mode: permission_mode.as_deref(),
@@ -1264,6 +1281,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
                     attachments,
                     actions: composer_actions,
                     background: None,
+                    changed_files: None,
                     history_available: false,
                     menu,
                     mode: None,
@@ -1974,9 +1992,10 @@ struct PaneHeadState<'a> {
     ci: Option<AnyElement>,
     attention: Option<AnyElement>,
     action: Option<AnyElement>,
+    drag: Option<HeadDrag>,
 }
 
-fn pane_head(view: &PaneView, state: PaneHeadState<'_>) -> Div {
+fn pane_head(view: &PaneView, state: PaneHeadState<'_>) -> AnyElement {
     let PaneHeadState {
         branch,
         checkout,
@@ -1987,6 +2006,7 @@ fn pane_head(view: &PaneView, state: PaneHeadState<'_>) -> Div {
         ci,
         attention,
         action,
+        drag,
     } = state;
     // The dot's base is the muted ink — the parked look — and each live
     // state takes its own signal colour. The no-dot ruling is scoped to
@@ -2039,7 +2059,7 @@ fn pane_head(view: &PaneView, state: PaneHeadState<'_>) -> Div {
     // The checkout keeps its own line now, so the title line no longer
     // has to share its width with a branch name.
     let checkout_line = checkout_strip(checkout, branch, project_branches, ci);
-    div()
+    let head = div()
         .flex()
         .flex_col()
         .flex_shrink_0()
@@ -2051,7 +2071,11 @@ fn pane_head(view: &PaneView, state: PaneHeadState<'_>) -> Div {
         .border_b_1()
         .border_color(rgba(PANE_HEAD_EDGE))
         .child(top)
-        .children(checkout_line)
+        .children(checkout_line);
+    match drag {
+        Some(drag) => drag(head),
+        None => head.into_any_element(),
+    }
 }
 
 /// The header's second line (#29): the branch mark and name, then only
@@ -2729,6 +2753,9 @@ struct ComposerStack<'a> {
     /// Running background tasks as chips, hung at the right edge of the
     /// same shelf the attachment island sits on.
     background: Option<AnyElement>,
+    /// A compact shelf of files touched by this Thread. It belongs inside
+    /// the Composer but above the prompt, separated from typed text.
+    changed_files: Option<AnyElement>,
     history_available: bool,
     menu: Option<AnyElement>,
     mode: Option<&'a str>,
@@ -2777,6 +2804,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         attachments,
         mut actions,
         background,
+        changed_files,
         history_available,
         menu,
         mode,
@@ -2823,6 +2851,9 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
                 .text_color(rgb(BLOCKED))
                 .child(div().min_w_0().whitespace_normal().child(error)),
         );
+    }
+    if let Some(changed_files) = changed_files {
+        region = region.child(changed_files);
     }
     // The queue shares the Composer's height budget. Keep the latest on
     // top and every earlier prompt reachable by scrolling; a long queue
@@ -3564,9 +3595,9 @@ fn hollow_dot(size: gpui::Pixels) -> Div {
 
 /// `+N −N` (§E.12): the added count in `--running`, **a literal space**,
 /// then the removed count in `--blocked` with a U+2212 MINUS SIGN — never a
-/// hyphen. The space is the gap; there is no flex gap here. One pair, drawn
-/// in exactly two places: an event's trail and a changed-strip chip.
-fn diff_stat(added: usize, removed: usize) -> Div {
+/// hyphen. The space is the gap; there is no flex gap here. One pair shared
+/// by event trails, aggregate instruments and the Composer's file shelf.
+pub(crate) fn diff_stat(added: usize, removed: usize) -> Div {
     // ONE text run, not three siblings: gpui rounds every run's advance up
     // to a whole pixel, so `+2`/space/`\u{2212}1` as three elements measures
     // 33px where the prototype measures 31.53px and the chip around it

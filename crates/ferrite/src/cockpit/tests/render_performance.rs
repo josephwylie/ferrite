@@ -349,15 +349,24 @@ fn retained_transcript_relative_file_links_use_the_thread_workspace_and_copy_tex
         })
         .unwrap();
     tick(cx);
+    cx.run_until_parked();
 
     let card = debug_bounds(cx, format!("file-attachment-{}", file.display()))
+        .or_else(|| debug_bounds(cx, "inline-file".to_string()))
         .expect("the retained transcript resolves the relative link from its Thread workspace");
     cx.simulate_click(card.center(), gpui::Modifiers::none());
+    assert_eq!(cx.opened_url(), None);
     assert_eq!(
-        cx.opened_url(),
-        Some(url::Url::from_file_path(&file).unwrap().to_string()),
-        "the file card opens the Thread-workspace file, without its line suffix"
+        view.read_with(cx, |view, _| view.panes[0]
+            .preview
+            .document()
+            .map(|document| document.path)),
+        Some(file.clone()),
+        "the file card opens the Thread-workspace file in the native reader"
     );
+    let close = debug_bounds(cx, "close-markdown-reader".to_string())
+        .expect("the native reader exposes its close control");
+    cx.simulate_click(close.center(), gpui::Modifiers::none());
 
     let id = view.read_with(cx, |view, _| {
         let thread = view.panes[0].thread().unwrap();

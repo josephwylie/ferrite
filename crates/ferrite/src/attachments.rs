@@ -320,6 +320,13 @@ pub fn inline_file(
                 return;
             }
         }
+        if !image && file.path.exists() {
+            if let Some(host) = &host {
+                if host.open_text_document(file.path.clone(), name_for_open.clone(), window, cx) {
+                    return;
+                }
+            }
+        }
         file.open(window, cx);
     };
     let card = Attachment::new()
