@@ -6,7 +6,6 @@ use ferrite_core::activity::{
 };
 use ferrite_core::transcript::Status;
 use gpui::component::{
-    button::ButtonVariants,
     checkbox::Checkbox,
     input::{Input, InputState},
     radio::{Radio, RadioGroup},
