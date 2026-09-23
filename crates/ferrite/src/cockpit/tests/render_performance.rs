@@ -325,7 +325,8 @@ fn retained_transcript_relative_file_links_use_the_thread_workspace_and_copy_tex
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1200.), px(600.)));
 
-    let suffix = " after reading the detailed notes about this change and the next steps.";
+    // Short enough to sit on one line of the 720px reading column.
+    let suffix = " after reading the notes on this change.";
     fake.streams.borrow()[0]
         .send(SessionEvent::TextDelta {
             text: format!("Before [guide](docs/guide.md:12){suffix}"),
@@ -1010,12 +1011,19 @@ fn answer_gutter_and_padding_survive_wrapping_resize(cx: &mut TestAppContext) {
             );
             crate::rich::testing::bounds(&id, 0, cx).unwrap()
         });
+        let mark = debug_bounds(cx, "answer-mark".into()).unwrap();
         for delta in [
-            text.left() - answer.left() - px(theme::EVENT_GUTTER_W + theme::ANSWER_GAP),
-            // A lone paragraph is commentary and takes the tighter padding.
-            text.top() - answer.top() - px(theme::COMMENTARY_PAD_Y),
-            answer.bottom() - text.bottom() - px(theme::COMMENTARY_PAD_Y),
+            // Prose starts on C1, the one content edge.
+            text.left() - answer.left() - px(theme::GUTTER_W),
+            // The row owns no padding: the list's gap table spaces rows.
+            text.top() - answer.top(),
+            answer.bottom() - text.bottom(),
             answer.right() - text.right(),
+            // The mark's glyph box hangs at the row's left edge, centred on
+            // the first prose line box.
+            mark.left() - answer.left(),
+            mark.size.width - px(theme::GLYPH_BOX),
+            (mark.top() + mark.size.height / 2.) - (text.top() + px(theme::LH_PROSE / 2.)),
         ] {
             assert!(
                 delta.abs() <= px(1.),

@@ -4021,25 +4021,22 @@ fn settled_duration(state: &Thread, event: &SessionEvent) -> Option<Duration> {
 
 fn completion_observation(thread: &Thread, event: &SessionEvent) -> Option<(Subject, u64, String)> {
     use crate::activity::ExecutionEvent;
-    let (subject, outcome) = match event {
-        SessionEvent::TurnEnded { outcome, .. } => (Subject::Main, outcome),
+    // Every outcome is timed: a completed turn's stamp, and the elapsed an
+    // interrupted or failed turn's row reports.
+    let subject = match event {
+        SessionEvent::TurnEnded { .. } => Subject::Main,
         SessionEvent::Activity(ActivityEvent::Content {
             key,
-            event: ExecutionEvent::TurnEnded { outcome, .. },
+            event: ExecutionEvent::TurnEnded { .. },
             ..
-        }) => (Subject::Subagent(key.clone()), outcome),
+        }) => Subject::Subagent(key.clone()),
         SessionEvent::Activity(ActivityEvent::MainContent {
-            event: ExecutionEvent::TurnEnded { outcome, .. },
+            event: ExecutionEvent::TurnEnded { .. },
             ..
-        }) => (Subject::Main, outcome),
-        SessionEvent::Activity(ActivityEvent::BackgroundTurnEnded { outcome, .. }) => {
-            (Subject::Main, outcome)
-        }
+        }) => Subject::Main,
+        SessionEvent::Activity(ActivityEvent::BackgroundTurnEnded { .. }) => Subject::Main,
         _ => return None,
     };
-    if !matches!(outcome, crate::TurnOutcome::Completed) {
-        return None;
-    }
     let elapsed = thread
         .activity
         .view()
@@ -4049,7 +4046,7 @@ fn completion_observation(thread: &Thread, event: &SessionEvent) -> Option<(Subj
     Some((
         subject,
         elapsed.as_millis().min(u64::MAX as u128) as u64,
-        chrono::Local::now().format("%H:%M").to_string(),
+        chrono::Local::now().format("%-I:%M %P").to_string(),
     ))
 }
 
@@ -5473,6 +5470,53 @@ mod tests {
     /// A finished Main turn buys exactly one prediction, carrying both sides
     /// of the exchange. Recorded rather than spawned: the suite must never
     /// shell out to a real CLI, let alone pay one.
+    /// The completion observation now times every outcome, so an
+    /// interrupted turn's row reads `Interrupted · 4.1s`. Timing it must not
+    /// make it a completion: no completed stamp, no "finished" notice, no
+    /// follow-up prediction, and the transcript still reads not-completed.
+    #[test]
+    fn a_timed_interruption_is_never_read_as_a_completion() {
+        let (mut cockpit, fake) = cockpit("timed-interruption");
+        cockpit.set_notification_grace(Duration::ZERO);
+        let thread = cockpit.open(Provider::Claude, main_choice()).unwrap();
+        cockpit.send(thread, "work".into());
+        fake.streams.borrow()[0].send(text("partial")).unwrap();
+        cockpit.pump();
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TurnEnded {
+                outcome: crate::TurnOutcome::Interrupted,
+                cost_usd: None,
+            })
+            .unwrap();
+        cockpit.pump();
+        cockpit.pump();
+        let transcript = cockpit.thread(thread).unwrap().transcript();
+        let ends: Vec<_> = transcript
+            .blocks()
+            .iter()
+            .filter_map(|block| match &block.body {
+                Body::TurnEnd(end) => Some(end.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ends.len(), 1, "the observation times the row, adds none");
+        assert_eq!(ends[0].outcome, crate::TurnOutcome::Interrupted);
+        assert!(ends[0].elapsed_ms.is_some(), "the interruption is timed");
+        assert!(ends[0].text().starts_with("Interrupted · "));
+        assert!(!transcript.turn_completed());
+        assert!(
+            cockpit
+                .notifications()
+                .notices()
+                .all(|notice| notice.thread != thread),
+            "an interruption raises no finished notice"
+        );
+        assert!(
+            fake.suggest_calls().is_empty(),
+            "an interruption buys no follow-up prediction"
+        );
+    }
+
     #[test]
     fn a_finished_turn_asks_for_one_follow_up_prediction() {
         let (mut cockpit, fake) = cockpit("suggest-trigger");
@@ -5831,16 +5875,17 @@ mod tests {
         let fields: Vec<_> = first.split(" · ").collect();
         assert_eq!(
             fields.len(),
-            3,
-            "completion, observed elapsed and local completion time"
+            2,
+            "the observed elapsed and the local completion time"
         );
-        let seconds: f64 = fields[1]
-            .strip_suffix("s elapsed")
-            .expect("elapsed is explicitly labelled, not process runtime")
+        let seconds: f64 = fields[0]
+            .strip_prefix("Worked for ")
+            .and_then(|elapsed| elapsed.strip_suffix('s'))
+            .expect("the stamp says how long the turn worked, not process runtime")
             .parse()
             .unwrap();
         assert!(seconds + 0.1 >= before.as_secs_f64());
-        assert!(fields[2].contains(':'), "human-readable completion time");
+        assert!(fields[1].contains(':'), "human-readable completion time");
         assert!(
             !first.contains('$') && !first.contains("0.038"),
             "provider cost stays private"
