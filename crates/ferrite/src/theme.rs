@@ -1083,23 +1083,59 @@ pub const EMPTY_BOARD_GAP: f32 = SPACE_2;
 /// Under the box, outside it, the meta row (`COMPOSER_META_H`,
 /// `COMPOSER_META_GAP` below the box): mode and a draft's setup chips at
 /// left, session controls and the usage meter at right, `FS_SM`
-/// `TEXT_MUTED`. The Composer writes one key hint, in its placeholder;
+/// `TEXT_MUTED`. The meta row's ink shares the box's text edges: its first
+/// label starts at C1 (`COMPOSER_META_START`), its last mark ends on the
+/// send control's trailing edge (`COMPOSER_META_END`); the chips' own
+/// padding hangs outside those edges. The Composer writes one key hint, in
+/// its placeholder, and drops it when the line has no room for it whole;
 /// its controls' tooltips name their keys. Any pad, gap, edge or inset
 /// change here must update `pane::composer_fixed_height` in the same commit.
 pub const COMPOSER_PAD_X: f32 = BOX_INSET_X - 1.0;
 pub const COMPOSER_PAD_T: f32 = SPACE_2;
 pub const COMPOSER_PAD_B: f32 = SPACE_2;
+/// The trailing padding equals the vertical one, so the send control sits
+/// `COMPOSER_CONTROL_INSET` from the box's top, bottom and trailing edges —
+/// the even inset concentric corners need. The leading side keeps
+/// `COMPOSER_PAD_X`, which puts the `❯` on the transcript's glyph axis.
+pub const COMPOSER_PAD_END: f32 = COMPOSER_PAD_T;
 pub const COMPOSER_ROW_H: f32 = 20.0;
 pub const COMPOSER_GAP: f32 = SPACE_1;
 pub const COMPOSER_META_H: f32 = CHIP_H;
 pub const COMPOSER_META_GAP: f32 = SPACE_1;
-/// The send control: a `COMPOSER_ROW_H` circle, its glyph 10px. It sends
-/// (↑) whenever the line has text — queueing behind a running turn — and
-/// stops (■) while a turn runs over an empty line.
+/// The send control: a `COMPOSER_ROW_H` circle, its glyph 10px. At rest it
+/// sends (↑); while a turn runs it stops (■), whatever is in the line —
+/// Enter is the key that queues a line behind the turn.
 pub const SEND_BUTTON: f32 = COMPOSER_ROW_H;
 pub const SEND_GLYPH: f32 = 10.0;
+/// Live, it is the one bright disc in the Pane: `TEXT_STRONG` with the
+/// glyph in the Pane's ground, stepping down to `TEXT` under the pointer and
+/// `TEXT_2` pressed. Idle (an empty line at rest) it keeps its shape, legible
+/// but plainly off: a `FILL_HOVER` disc, visible on `RAISED`, with a
+/// `TEXT_MUTED` glyph.
+pub const SEND_GROUND: u32 = TEXT_STRONG;
+pub const SEND_INK: u32 = PANE;
+pub const SEND_HOVER: u32 = TEXT;
+pub const SEND_PRESSED: u32 = TEXT_2;
+pub const SEND_IDLE_GROUND: u32 = FILL_HOVER;
+pub const SEND_IDLE_INK: u32 = TEXT_MUTED;
 /// The block's 1px edge, top and bottom: part of its fixed height.
 pub const COMPOSER_EDGE_W: f32 = 1.0;
+/// **Concentric radii.** Every control in and under the box is a
+/// `CHIP_H` pill (`COMPOSER_CHIP_R`, half its height — the send circle's
+/// own radius), and the box's corner is that radius plus the inset between
+/// them (`COMPOSER_CONTROL_INSET`: the edge and the vertical padding), so
+/// a one-line box is itself a pill around its send control. A setup chip's
+/// focus edge wraps its chip one `BAND_EDGE_W` out, so its radius is one
+/// more. The Subagent footer, the Composer's own block, shares the corner.
+pub const COMPOSER_CHIP_R: f32 = CHIP_H / 2.0;
+pub const COMPOSER_CONTROL_INSET: f32 = COMPOSER_EDGE_W + COMPOSER_PAD_T;
+pub const COMPOSER_R: f32 = COMPOSER_CHIP_R + COMPOSER_CONTROL_INSET;
+pub const BAND_EDGE_W: f32 = 1.0;
+/// Where the meta row's ink starts and ends, as padding on the row: C1 and
+/// the send control's trailing edge, less the `PICKER_PAD_X` each chip
+/// hangs outside its label.
+pub const COMPOSER_META_START: f32 = BOX_INSET_X + GUTTER_W - PICKER_PAD_X;
+pub const COMPOSER_META_END: f32 = COMPOSER_CONTROL_INSET - PICKER_PAD_X;
 /// 8px — from the block to the Pane's bottom edge at L1 (the transcript's
 /// own bottom padding supplies the air above it), and the L2 cell's inset
 /// around its compact Composer on three sides. The block's 6px vertical
@@ -1128,9 +1164,9 @@ pub const COMPOSER_SELECTION: u32 = TEXT_SELECTION_WASH;
 /// inline-code ground family — visibly lighter than a selection.
 pub const MENTION_INK: u32 = ACCENT;
 pub const MENTION_WASH: u32 = ACCENT_WASH;
-/// **Composer controls are quiet mono chips** (model, effort, mode, session
-/// `•••`, the usage meter): `CHIP_H`, `PICKER_PAD_X` both sides, `R_CONTROL`,
-/// no ground at rest, `FILL` under the pointer (the hover face on `RAISED`),
+/// **Composer controls are quiet chips** (model, effort, mode, session
+/// `•••`, the usage meter): `CHIP_H`, `PICKER_PAD_X` both sides,
+/// `COMPOSER_CHIP_R`, no ground at rest, `FILL` under the pointer (the hover face on `RAISED`),
 /// label `FS_SM` `TEXT_2`, a `ICON_CHEVRON_SM` chevron in `TEXT_MUTED`. A
 /// busy control reads `TEXT_MUTED`, never faded. The model and effort pair
 /// sits `PICKER_GAP` apart and reads as one unit.

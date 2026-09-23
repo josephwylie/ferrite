@@ -1618,14 +1618,17 @@ pub fn draft_close_button(draft: DraftId) -> gpui::component::button::Button {
         .child(icon(icons::CLOSE, theme::ICON_BUTTON_GLYPH, TEXT_MUTED))
 }
 
-/// Draft setup controls use the same 20px hint row as a live Composer. In
-/// a narrow Pane they give way first: their labels truncate before the
-/// model and effort pair or the usage meter loses a pixel.
+/// Draft setup controls ride the Composer's meta row. In a narrow Pane
+/// they give way first: their labels truncate before the model and effort
+/// pair or the usage meter loses a pixel. The band hangs its chips' focus
+/// edge outside the row's start, so their labels start at C1 as the mode
+/// word does.
 pub fn draft_band() -> Div {
     div()
         .debug_selector(|| "draft-band".into())
         .flex()
         .flex_shrink(1.)
+        .ml(px(-theme::BAND_EDGE_W))
         .min_w_0()
         .items_center()
         .gap(px(theme::PICKER_GAP))
@@ -1637,14 +1640,20 @@ pub fn draft_band() -> Div {
 /// that is always in layout and turns `FOCUS_RING` on tab, because the
 /// popover opens on ↵ and the chip must say where ↵ will land.
 pub fn band_chip(slot: usize, label: SharedString, accent: bool, focused: bool) -> Stateful<Div> {
+    // The label truncates in a narrow Pane; the tooltip keeps the whole
+    // choice reachable and names the keys that change it.
+    let tooltip = SharedString::from(format!("{label} \u{b7} Tab, then \u{21b5} to change"));
     div()
         .id(("band-chip", slot))
+        .tooltip(move |window, cx| {
+            gpui::component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)
+        })
         .debug_selector(move || format!("band-chip-{slot}"))
         .flex_shrink(1.)
         .min_w_0()
         .border_1()
         .border_color(band_edge(focused))
-        .rounded(px(theme::R_CONTROL))
+        .rounded(px(theme::COMPOSER_CHIP_R + theme::BAND_EDGE_W))
         .press_raised()
         .child(
             control_chip(if accent { TEXT } else { TEXT_2 })
@@ -1686,7 +1695,7 @@ pub fn draft_picker(
         .flex_shrink_0()
         .border_1()
         .border_color(band_edge(focused))
-        .rounded(px(theme::R_CONTROL))
+        .rounded(px(theme::COMPOSER_CHIP_R + theme::BAND_EDGE_W))
         .child(control)
 }
 
@@ -3206,9 +3215,9 @@ struct ComposerStack<'a> {
 /// The Composer: a raised block in the reading column. Its outer edges are
 /// the column's edges and its content sits `BOX_INSET_X` inside them, so
 /// its `❯` shares the transcript's glyph box and its text starts at C1.
-/// `RAISED`, `R_BLOCK`, a 1px edge that is always in layout (`COMPOSER_EDGE`,
-/// `COMPOSER_EDGE_FOCUS` while editing on an alert Pane), padding
-/// `COMPOSER_PAD_T/X/B`, rows `COMPOSER_GAP` apart:
+/// `RAISED`, `COMPOSER_R`, a 1px edge that is always in layout
+/// (`COMPOSER_EDGE`, `COMPOSER_EDGE_FOCUS` while editing on an alert Pane),
+/// padding `COMPOSER_PAD_T/X/END/B`, rows `COMPOSER_GAP` apart:
 ///
 /// - queued prompts, dim `❯` lines in a bounded scroll viewport;
 /// - the input line, `❯` then the editor, growing upward to
@@ -3247,7 +3256,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         alert,
     } = stack;
     let blocking = decision.is_some_and(Decision::blocks_execution);
-    let mut block = components::raised_edged(composer_edge(alert, editing, drop_target))
+    let mut block = composer_box(composer_edge(alert, editing, drop_target))
         .debug_selector(|| "composer-block".into())
         .when(drop_target, |block| {
             block.debug_selector(|| "composer-drop-target".into())
@@ -3259,7 +3268,8 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         .gap(px(theme::COMPOSER_GAP))
         .min_w_0()
         .pt(px(theme::COMPOSER_PAD_T))
-        .px(px(theme::COMPOSER_PAD_X))
+        .pl(px(theme::COMPOSER_PAD_X))
+        .pr(px(theme::COMPOSER_PAD_END))
         .pb(px(theme::COMPOSER_PAD_B))
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI))
@@ -3341,6 +3351,13 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
     if empty {
         // The Composer paints its own caret at the line origin, so the
         // ghost reserves the same caret inset in either focus state.
+        // The hint is never cut: an accept key stays whole and the ghost
+        // gives way to it; a pointer to the `/` menu wraps onto the
+        // clipped second line — gone — when the row has no room for it.
+        // A compact (L2) line has no room for a hint beside its ghost; the
+        // `/` menu is one key away all the same.
+        let (ghost, hint, keep) = placeholder(decision.is_some(), transcript, suggestion);
+        let hint = hint.filter(|_| !compact);
         line = line.child(
             div()
                 .debug_selector(|| "prompt-placeholder".into())
@@ -3350,26 +3367,18 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
                 .top_0()
                 .h(px(theme::COMPOSER_ROW_H))
                 .flex()
-                .items_center()
+                .when(!keep, |row| row.flex_wrap())
                 .overflow_hidden()
                 .whitespace_nowrap()
                 .text_color(rgb(TEXT_MUTED))
-                .children({
-                    let (ghost, hint) = placeholder(decision.is_some(), transcript, suggestion);
-                    // A compact (L2) line has no room for a hint beside its
-                    // ghost; the `/` menu is one key away all the same.
-                    let hint = hint.filter(|_| !compact);
-                    [ghost.into_any_element()]
-                        .into_iter()
-                        .chain(hint.map(|(key, verb)| {
-                            div()
-                                .debug_selector(|| "prompt-placeholder-hint".into())
-                                .flex_shrink_0()
-                                .ml(px(theme::SPACE_3))
-                                .child(format!("{key} {verb}"))
-                                .into_any_element()
-                        }))
-                }),
+                .child(div().min_w_0().truncate().child(ghost))
+                .children(hint.map(|(key, verb)| {
+                    div()
+                        .debug_selector(|| "prompt-placeholder-hint".into())
+                        .flex_shrink_0()
+                        .ml(px(theme::SPACE_3))
+                        .child(format!("{key} {verb}"))
+                })),
         );
     }
     // The `❯` is always in layout, so the text origin never moves with
@@ -3426,7 +3435,8 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         .gap(px(theme::SPACE_2))
         .h(px(theme::COMPOSER_META_H))
         .mt(px(theme::COMPOSER_META_GAP))
-        .px(px(theme::BOX_INSET_X))
+        .pl(px(theme::COMPOSER_META_START))
+        .pr(px(theme::COMPOSER_META_END))
         .min_w_0()
         .overflow_hidden()
         .text_size(px(theme::FS_SM))
@@ -3470,7 +3480,8 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
                     .items_end()
                     .gap(px(theme::SPACE_2))
                     .min_w_0()
-                    .px(px(theme::BOX_INSET_X))
+                    .pl(px(theme::BOX_INSET_X))
+                    .pr(px(theme::COMPOSER_CONTROL_INSET))
                     .pb(px(theme::SHELF_GAP))
                     .when_some(attachments, |shelf, attachments| {
                         shelf.child(div().flex_1().min_w_0().child(attachments))
@@ -3524,6 +3535,13 @@ fn composer_edge(alert: bool, editing: bool, drop_target: bool) -> u32 {
     }
 }
 
+/// The Composer's box: the raised block with its always-in-layout edge,
+/// cornered `COMPOSER_R` — concentric with the pill controls it holds
+/// (§ theme "Concentric radii"). The Subagent footer draws the same box.
+pub fn composer_box(edge: u32) -> Div {
+    components::raised_edged(edge).rounded(px(theme::COMPOSER_R))
+}
+
 /// Whether a Pane's own edge is a state colour: a Decision pending anywhere
 /// in its activity, or the Session closed under it. The same test
 /// `render_pane` makes for the edge.
@@ -3551,7 +3569,7 @@ fn control_chip(ink: u32) -> Div {
         .gap(px(theme::PICKER_GAP))
         .h(px(theme::CHIP_H))
         .px(px(theme::PICKER_PAD_X))
-        .rounded(px(theme::R_CONTROL))
+        .rounded(px(theme::COMPOSER_CHIP_R))
         .text_size(px(theme::FS_SM))
         .line_height(px(theme::LH_META))
         .text_color(rgb(ink))
@@ -3572,6 +3590,16 @@ pub fn mode_chip(mode: &str, menu: bool) -> Div {
         .when(menu, |chip| chip.child(chip_chevron()))
 }
 
+/// The button a Composer chip rides in (model, effort, mode, session
+/// `•••`): no padding of its own and the chip's pill radius, so the kit's
+/// hover, pressed and focus faces fill exactly the chip's shape.
+pub fn composer_control(id: impl Into<gpui::ElementId>) -> gpui::component::button::Button {
+    components::button(id)
+        .p_0()
+        .h_auto()
+        .rounded(px(theme::COMPOSER_CHIP_R))
+}
+
 /// The session-controls trigger: `•••` on the control-chip recipe.
 pub fn session_chip() -> Div {
     control_chip(TEXT_MUTED).child("•••")
@@ -3584,18 +3612,32 @@ pub fn session_chip() -> Div {
 /// description of one — with `⇥ accept`, because an accept key nobody knows
 /// about is the same as no accept key. The resting line points at the `/`
 /// menu, where everything else lives.
+///
+/// The third value says whether the hint must stay whole: `⇥ accept` is
+/// the only way to learn the accept key, so the ghost truncates before it;
+/// `/ for commands` merely points at a menu the empty state also names, so
+/// it drops out whole where the row cannot hold it.
 fn placeholder(
     pending: bool,
     transcript: Option<&Transcript>,
     suggestion: Option<&str>,
-) -> (SharedString, Option<(&'static str, &'static str)>) {
+) -> (SharedString, Option<(&'static str, &'static str)>, bool) {
     match followup::suggest(pending, transcript, suggestion) {
-        Followup::Decision => (SharedString::from("Reply to the Decision\u{2026}"), None),
-        Followup::Revive => (SharedString::from("Revive and continue\u{2026}"), None),
-        Followup::Suggested(text) => (SharedString::from(text), Some(("⇥", "accept"))),
+        Followup::Decision => (
+            SharedString::from("Reply to the Decision\u{2026}"),
+            None,
+            false,
+        ),
+        Followup::Revive => (
+            SharedString::from("Revive and continue\u{2026}"),
+            None,
+            false,
+        ),
+        Followup::Suggested(text) => (SharedString::from(text), Some(("⇥", "accept")), true),
         Followup::Steer => (
             SharedString::from("Steer this Thread\u{2026}"),
             Some(("/", "for commands")),
+            false,
         ),
     }
 }
@@ -6063,6 +6105,9 @@ mod tests {
             Some(("/", "for commands")),
             "a draft has no conversation to predict from"
         );
+        // The accept key is never cut; the menu pointer may drop out whole.
+        assert!(placeholder(false, Some(&answered), Some("Run the tests")).2);
+        assert!(!placeholder(false, Some(&live), None).2);
     }
     use ferrite_core::transcript::{Input, Lexer, Todos};
     use ferrite_core::{Hunk, SessionEvent, ToolResult, TurnOutcome};
@@ -7365,7 +7410,7 @@ mod tests {
             "Revive and continue\u{2026}"
         );
 
-        for (line, _) in [
+        for (line, _, _) in [
             placeholder(false, Some(&live), None),
             placeholder(true, Some(&live), None),
             placeholder(false, Some(&closed), None),

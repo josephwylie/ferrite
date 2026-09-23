@@ -115,8 +115,11 @@ fn composer_pointer_actions_target_their_own_pane(cx: &mut TestAppContext) {
     assert!(control.top() >= editor.top() && control.bottom() <= editor.top() + px(20.5));
 }
 
+/// While a turn runs the one control is Stop, whatever is in the line: the
+/// pointer can always interrupt. Enter still queues the line behind the
+/// turn, and the pointer Stop keeps both the line and the queue.
 #[gpui::test]
-fn composer_pointer_send_preserves_busy_queue_behavior(cx: &mut TestAppContext) {
+fn composer_pointer_stops_a_running_turn_with_text_in_the_line(cx: &mut TestAppContext) {
     let (mut core, fake) = cockpit("composer-pointer-queue", 1);
     let thread = core.threads()[0];
     core.send(thread, "first".into());
@@ -124,13 +127,26 @@ fn composer_pointer_send_preserves_busy_queue_behavior(cx: &mut TestAppContext) 
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1000.), px(800.)));
     tick(cx);
+    let send: &'static str =
+        Box::leak(format!("composer-send-{:?}", PaneIdentity::Thread(thread)).into_boxed_str());
+    let stop = bounds(
+        cx,
+        format!("composer-stop-{:?}", PaneIdentity::Thread(thread)),
+    );
     cx.simulate_input("follow up");
     cx.run_until_parked();
-    let send = bounds(
-        cx,
-        format!("composer-send-{:?}", PaneIdentity::Thread(thread)),
+    assert!(
+        cx.debug_bounds(send).is_none(),
+        "text in the line does not turn a running turn's Stop into Send"
     );
-    cx.simulate_click(send.center(), gpui::Modifiers::none());
+    let held = bounds(
+        cx,
+        format!("composer-stop-{:?}", PaneIdentity::Thread(thread)),
+    );
+    assert_eq!(held.center(), stop.center(), "in the same place");
+
+    // Enter queues the line, as it always has.
+    cx.simulate_keystrokes("enter");
     tick(cx);
     assert_eq!(fake.sent.borrow().as_slice(), ["first"]);
     view.read_with(cx, |view, cx| {
@@ -140,28 +156,32 @@ fn composer_pointer_send_preserves_busy_queue_behavior(cx: &mut TestAppContext) 
         );
         assert!(view.panes[0].composer.read(cx).is_empty());
     });
-    // Over an empty line while the turn runs, the one control is Stop:
-    // there is no empty Send to reach Enter's separate unqueue path.
-    assert!(
-        cx.debug_bounds(Box::leak(
-            format!("composer-send-{:?}", PaneIdentity::Thread(thread)).into_boxed_str()
-        ))
-        .is_none(),
-        "the control became Stop"
-    );
+
+    // With a new line typed, the pointer Stop interrupts and keeps it.
+    cx.simulate_input("and then this");
+    cx.run_until_parked();
     let stop = bounds(
         cx,
         format!("composer-stop-{:?}", PaneIdentity::Thread(thread)),
     );
-    assert_eq!(stop.center(), send.center(), "in the same place");
     cx.simulate_click(stop.center(), gpui::Modifiers::none());
     tick(cx);
     assert_eq!(*fake.interrupts.borrow(), 1);
-    view.read_with(cx, |view, _| {
+    assert_eq!(
+        fake.sent.borrow().as_slice(),
+        ["first"],
+        "Stop sends nothing"
+    );
+    view.read_with(cx, |view, cx| {
         assert_eq!(
             view.cockpit.thread(thread).unwrap().queued_all(),
             ["follow up"],
             "the pointer Stop preserves existing interrupt/queue semantics"
+        );
+        assert_eq!(
+            view.panes[0].composer.read(cx).text(),
+            "and then this",
+            "the line survives the interrupt"
         );
     });
 }
@@ -392,9 +412,10 @@ fn compact_queue_scrolls_without_covering_context_or_composer_actions(cx: &mut T
         let latest = bounds(cx, format!("queue-row-{namespace}-0"));
         let other_latest = bounds(cx, format!("queue-row-{other_namespace}-0"));
         let editor = cx.debug_bounds("focused-prompt-editor").unwrap();
+        // The turn runs, so the one control is Stop, text in the line or not.
         let send = bounds(
             cx,
-            format!("composer-send-{:?}", PaneIdentity::Thread(thread)),
+            format!("composer-stop-{:?}", PaneIdentity::Thread(thread)),
         );
         assert!(queue.size.height <= px(crate::theme::CELL_HEADER_H + 1.));
         assert!(latest.top() >= queue.top() && latest.bottom() <= queue.bottom());

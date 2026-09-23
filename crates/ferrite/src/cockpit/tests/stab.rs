@@ -614,7 +614,9 @@ fn a_narrow_draft_keeps_its_controls_inside_the_composer(cx: &mut TestAppContext
     let effort = cx.debug_bounds("draft-effort-picker").expect("effort");
     let model = cx.debug_bounds("draft-model-picker").expect("model");
     assert!(
-        effort.right() <= block.right() - px(crate::theme::COMPOSER_PAD_X) + px(0.5),
+        effort.right()
+            <= block.right() - px(crate::theme::COMPOSER_CONTROL_INSET + crate::theme::SEND_BUTTON)
+                + px(0.5),
         "effort {effort:?} stays inside the block {block:?}"
     );
     assert!(model.right() <= effort.left());
@@ -1254,7 +1256,7 @@ fn a_group_chevron_leads_in_the_gutter(cx: &mut TestAppContext) {
 /// The Composer is one input row in its box — the line, then the model pair
 /// and the round send control — with a quiet meta row under it (mode at
 /// left, usage at right). Enter still sends and the control turns to Stop
-/// while the turn runs over an empty line.
+/// while the turn runs.
 #[gpui::test]
 fn the_composer_is_one_row_over_a_quiet_meta_row(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("composer-one-row", 1);

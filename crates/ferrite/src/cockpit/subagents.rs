@@ -954,7 +954,7 @@ impl CockpitView {
         // radius and inset in the reading column — with a dimmed `❯` in its
         // glyph box (nothing to type here), what this transcript covers at
         // C1, and the way back to Main.
-        let footer = components::raised_edged(theme::COMPOSER_EDGE)
+        let footer = crate::pane::composer_box(theme::COMPOSER_EDGE)
             .debug_selector(move || format!("child-footer-{}", thread.get()))
             .flex()
             .items_center()

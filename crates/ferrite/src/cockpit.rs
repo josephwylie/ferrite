@@ -3337,18 +3337,21 @@ impl CockpitView {
                 open.busy() || open.activity().main_operator_turn() || open.pending().is_some()
             });
         let has_queue = open.as_ref().is_some_and(|open| open.queued().is_some());
-        // One round control at the end of the input row. With text on the
-        // line it sends (↑) — queueing behind a running turn, as Enter does;
-        // over an empty line while a turn runs (or a draft starts) it stops
-        // (■), as Esc does. The keys work either way and the tooltip names
-        // them. Its selector says which verb it is now.
+        // One round control at the end of the input row. While a turn runs
+        // (or a draft starts) it stops (■), as Esc does — whatever is in
+        // the line, so the pointer can always reach Stop; Enter still
+        // queues the line behind the turn. At rest it sends (↑). The keys
+        // work either way and the tooltip names them. Its selector says
+        // which verb it is now.
         let empty = pane.composer.read(cx).is_empty();
-        let stopping = can_stop && (empty || starting);
+        let stopping = can_stop;
         let (verb, tooltip) = if stopping {
             (
                 "stop",
                 if starting {
                     "Cancel startup (Esc); keep the draft"
+                } else if !empty {
+                    "Interrupt Main (Esc). Enter queues the line."
                 } else if has_queue {
                     "Interrupt Main (Esc). Queued prompts remain and may run next."
                 } else {
@@ -3373,18 +3376,18 @@ impl CockpitView {
             crate::components::button(SharedString::from(id))
                 .custom(
                     ButtonCustomVariant::new(cx)
-                        .foreground(rgb(crate::theme::PANE).into())
-                        .hover(rgb(crate::theme::TEXT).into())
-                        .active(rgb(crate::theme::TEXT_2).into()),
+                        .foreground(rgb(crate::theme::SEND_INK).into())
+                        .hover(rgb(crate::theme::SEND_HOVER).into())
+                        .active(rgb(crate::theme::SEND_PRESSED).into()),
                 )
                 .debug_selector(move || selector.clone())
                 .size(px(crate::theme::SEND_BUTTON))
                 .p_0()
                 .rounded_full()
                 .bg(rgb(if live {
-                    crate::theme::TEXT_STRONG
+                    crate::theme::SEND_GROUND
                 } else {
-                    crate::theme::FILL
+                    crate::theme::SEND_IDLE_GROUND
                 }))
                 .disabled(!live)
                 .tooltip(tooltip)
@@ -3397,9 +3400,9 @@ impl CockpitView {
                     },
                     crate::theme::SEND_GLYPH,
                     if live {
-                        crate::theme::PANE
+                        crate::theme::SEND_INK
                     } else {
-                        crate::theme::TEXT_MUTED
+                        crate::theme::SEND_IDLE_INK
                     },
                 ))
                 .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
@@ -8090,7 +8093,7 @@ impl CockpitView {
                     "usage-meter-{key}"
                 ))))
                 .debug_selector(move || format!("usage-meter-{selector}"))
-                .rounded(px(crate::theme::R_CONTROL))
+                .rounded(px(crate::theme::COMPOSER_CHIP_R))
                 .child(pane::usage_meter_body(
                     self.prefs.settings.usage_meter_style,
                     fraction,
@@ -8182,10 +8185,8 @@ impl CockpitView {
         Some(
             crate::components::ChoiceMenu {
                 id: format!("mode-picker-{}", thread.get()).into(),
-                trigger: crate::components::button(("mode-picker", thread.get() as usize))
+                trigger: pane::composer_control(("mode-picker", thread.get() as usize))
                     .debug_selector(move || format!("mode-picker-{}", thread.get()))
-                    .p_0()
-                    .h_auto()
                     .tooltip("Permission mode")
                     .child(pane::mode_chip(&label, true)),
                 choices,
@@ -8303,14 +8304,12 @@ impl CockpitView {
                 shown == thread && shown_generation == generation
             });
         Some(
-            crate::components::button(SharedString::from(format!(
+            pane::composer_control(SharedString::from(format!(
                 "session-controls-{}",
                 thread.get()
             )))
             .debug_selector(move || format!("session-controls-{}", thread.get()))
             .tooltip("Session controls")
-            .p_0()
-            .h_auto()
             .child(pane::session_chip())
             .on_click(cx.listener(move |view, event: &ClickEvent, window, cx| {
                 cx.stop_propagation();
@@ -8928,9 +8927,7 @@ impl CockpitView {
         let model_chip = self.choice_menu(
             index,
             Kind::Provider,
-            crate::components::button(("model-picker", thread.get() as usize))
-                .p_0()
-                .h_auto()
+            pane::composer_control(("model-picker", thread.get() as usize))
                 .tooltip(if busy { TUNING_BUSY_HINT } else { "Model" })
                 .child(pane::model_picker(Some(provider), label, busy)),
             cx,
@@ -8950,9 +8947,7 @@ impl CockpitView {
             self.choice_menu(
                 index,
                 Kind::Effort,
-                crate::components::button(("effort-picker", thread.get() as usize))
-                    .p_0()
-                    .h_auto()
+                pane::composer_control(("effort-picker", thread.get() as usize))
                     .tooltip(if busy {
                         TUNING_BUSY_HINT
                     } else {
