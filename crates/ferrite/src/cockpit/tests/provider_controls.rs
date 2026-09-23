@@ -318,6 +318,7 @@ fn the_composer_mode_chip_opens_a_native_mode_menu_while_idle(cx: &mut TestAppCo
 fn contract_background_tasks_ride_the_composer_shelf(cx: &mut TestAppContext) {
     use ferrite_core::progress::{BackgroundTask, ProgressEvent, TaskStatus};
     let (core, fake) = cockpit("native-background-chips", 1);
+    let thread = core.threads()[0];
     *fake.native_controls.borrow_mut() = true;
     let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1100.), px(800.)));
@@ -361,11 +362,13 @@ fn contract_background_tasks_ride_the_composer_shelf(cx: &mut TestAppContext) {
         chip.center().x > editor.center().x,
         "chips hang at the right edge of the prompt box, not the left"
     );
+    // Send closes the prompt row on the right, beside the editor.
+    let send = bounds(cx, format!("composer-send-{:?}", PaneIdentity::Thread(thread)));
     assert!(
-        (shelf.right() - editor.right()).abs() <= px(2.),
-        "the shelf's right edge is the prompt box's right edge: shelf {:?} vs editor {:?}",
+        (shelf.right() - send.right()).abs() <= px(2.),
+        "the shelf's right edge is the prompt box's right edge: shelf {:?} vs send {:?}",
         shelf.right(),
-        editor.right()
+        send.right()
     );
     let stop = cx.debug_bounds("background-chip-stop-0").unwrap();
     cx.simulate_click(stop.center(), gpui::Modifiers::none());

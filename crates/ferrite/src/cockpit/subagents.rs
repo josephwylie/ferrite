@@ -16,6 +16,7 @@ use gpui::component::{
     Disableable, Sizable,
 };
 use gpui::{Animation, AnimationExt, KeyDownEvent};
+use gpui_base::ElementExt as _;
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 #[derive(Clone, Default)]
@@ -25,6 +26,89 @@ struct RequestForm {
     inputs: Vec<Entity<InputState>>,
     form_inputs: HashMap<String, Entity<InputState>>,
     values: serde_json::Map<String, serde_json::Value>,
+    fit: QuestionFit,
+}
+
+#[derive(Default)]
+struct QuestionFit {
+    available: Option<gpui::Size<gpui::Pixels>>,
+    island: Option<gpui::Bounds<gpui::Pixels>>,
+    viewport: Option<gpui::Bounds<gpui::Pixels>>,
+    content: Option<gpui::Bounds<gpui::Pixels>>,
+    first_control: Option<gpui::Bounds<gpui::Pixels>>,
+    required: Option<gpui::Pixels>,
+}
+
+impl QuestionFit {
+    fn needs_expansion(&self) -> bool {
+        self.available
+            .zip(self.required)
+            .is_some_and(|(available, required)| available.height < required)
+    }
+
+    fn measure(&mut self, part: QuestionMeasure, bounds: gpui::Bounds<gpui::Pixels>) {
+        match part {
+            QuestionMeasure::Available => {
+                if self
+                    .available
+                    .is_some_and(|previous| (previous.width - bounds.size.width).abs() > px(0.5))
+                {
+                    self.island = None;
+                    self.viewport = None;
+                    self.content = None;
+                    self.first_control = None;
+                    self.required = None;
+                }
+                self.available = Some(bounds.size);
+            }
+            QuestionMeasure::Island => self.island = Some(bounds),
+            QuestionMeasure::Viewport => self.viewport = Some(bounds),
+            QuestionMeasure::Content => self.content = Some(bounds),
+            QuestionMeasure::FirstControl => self.first_control = Some(bounds),
+        }
+        if let (Some(island), Some(viewport), Some(content), Some(first)) =
+            (self.island, self.viewport, self.content, self.first_control)
+        {
+            // Both content and its first control move by the same scroll
+            // offset. Their difference is a size, not a scrolling position.
+            let first_section = first.bottom() - content.top();
+            self.required = Some(island.size.height - viewport.size.height + first_section);
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum QuestionMeasure {
+    Available,
+    Island,
+    Viewport,
+    Content,
+    FirstControl,
+}
+
+fn measure_question(
+    forms: RequestForms,
+    handle: DecisionHandle,
+    part: QuestionMeasure,
+    owner: gpui::WeakEntity<CockpitView>,
+) -> impl Fn(gpui::Bounds<gpui::Pixels>, &mut Window, &mut gpui::App) + 'static {
+    move |bounds, window, cx| {
+        let changed = {
+            let mut forms = forms.0.borrow_mut();
+            let Some(form) = forms.get_mut(&handle) else {
+                return;
+            };
+            let before = form.fit.needs_expansion();
+            form.fit.measure(part, bounds);
+            before != form.fit.needs_expansion()
+        };
+        if changed {
+            let owner = owner.clone();
+            window.defer(cx, move |_, cx| {
+                let _ = owner.update(cx, |_, cx| cx.notify());
+            });
+        }
+    }
 }
 
 #[derive(Clone, Default)]
@@ -33,6 +117,12 @@ pub(crate) struct TabInteraction(Rc<RefCell<TabInteractionState>>);
 struct TabInteractionState {
     focus: HashMap<Subject, FocusHandle>,
     keyboard: Option<Subject>,
+}
+
+impl TabInteraction {
+    pub(super) fn main_focus(&self) -> Option<FocusHandle> {
+        self.0.borrow().focus.get(&Subject::Main).cloned()
+    }
 }
 
 /// Pending handles can share a destination. Visit each destination once,
@@ -91,6 +181,9 @@ fn request_island(
     cx: &mut gpui::App,
 ) -> AnyElement {
     let radius = gpui::component::Theme::global(cx).radius_2xl();
+    // Clip flex ancestors instead of forcing zero minimum heights: the
+    // native Scrollable must contribute its intrinsic size until the pane
+    // runs out of space, then shrink only its content viewport.
     let surface = div()
         .bg(rgb(theme::RAISED))
         .border_1()
@@ -99,12 +192,14 @@ fn request_island(
         .p(px(16.))
         .w_full()
         .min_w_0()
+        .overflow_hidden()
         .style()
         .clone();
     native_keys(
         div()
             .w_full()
             .min_w_0()
+            .overflow_hidden()
             .flex()
             .justify_center()
             .px(radius)
@@ -114,6 +209,8 @@ fn request_island(
                     .id(("question-island", handle.serial as usize))
                     .debug_selector(|| "question-island".into())
                     .relative()
+                    .flex()
+                    .flex_col()
                     // The island floats over the transcript, whose prose is
                     // selectable and so paints an I-beam. Without a hitbox of
                     // its own the card inherits that cursor everywhere the
@@ -122,12 +219,14 @@ fn request_island(
                     .w_full()
                     .max_w(px(680.))
                     .min_w_0()
+                    .overflow_hidden()
                     .font_family(theme::FONT_UI)
                     .child(
                         GroupBox::new()
                             .id("question-surface")
                             .fill()
                             .min_w_0()
+                            .overflow_hidden()
                             .content_style(surface)
                             .child(body),
                     ),
@@ -343,27 +442,43 @@ impl CockpitView {
             .collect();
         // The slot is laid out after the real title, branch, attention and usage
         // controls. Match native Underline/XSmall's 10px inter-tab gap exactly.
-        let available = pane.subject_strip_width;
-        let mut visible_count = widths.len();
-        let all_width = 24. + widths.iter().sum::<f32>() + widths.len() as f32 * 10.;
+        let main_width = measure("Main").ceil() + 2.;
+        let selected = children
+            .iter()
+            .position(|agent| agent.subject() == pane.selected);
+        let overflow_width = |hidden: usize| {
+            if hidden == 0 {
+                0.
+            } else {
+                10. + measure(&format!("+{hidden}")) + 8.
+            }
+        };
+        // Main and the selected Subject are navigation anchors. Reserve their
+        // room first so resizing never hides the transcript being read.
+        let minimum = main_width
+            + selected.map_or(0., |at| 10. + widths[at])
+            + overflow_width(children.len() - usize::from(selected.is_some()));
+        let available = pane.subject_strip_width.max(minimum);
+        let mut visible_indices: Vec<usize> = (0..children.len()).collect();
+        let all_width = main_width + widths.iter().sum::<f32>() + widths.len() as f32 * 10.;
         if all_width > available {
-            visible_count = 0;
-            let mut used = 24.;
+            visible_indices = selected.into_iter().collect();
+            let mut used = main_width + selected.map_or(0., |at| 10. + widths[at]);
             for (at, width) in widths.iter().enumerate() {
-                let remaining = widths.len() - at - 1;
-                let overflow = if remaining > 0 {
-                    10. + measure(&format!("+{remaining}")) + 8.
-                } else {
-                    0.
-                };
+                if selected == Some(at) {
+                    continue;
+                }
+                let overflow = overflow_width(children.len() - visible_indices.len() - 1);
                 if used + 10. + width + overflow > available {
                     break;
                 }
                 used += 10. + width;
-                visible_count = at + 1;
+                visible_indices.push(at);
             }
+            // Priority changes visibility, not the Provider's child order.
+            visible_indices.sort_unstable();
         }
-        let visible = &children[..visible_count];
+        let visible: Vec<_> = visible_indices.iter().map(|at| &children[*at]).collect();
         let mut order = vec![Subject::Main];
         order.extend(visible.iter().map(|agent| agent.subject()));
         let nav = Rc::new(order);
@@ -382,18 +497,18 @@ impl CockpitView {
             .tooltip(|window, cx| {
                 gpui::component::tooltip::Tooltip::new("Main transcript").build(window, cx)
             })
-            .w(px(24.))
+            .w(px(main_width))
             .debug_selector(move || format!("subject-main-{}", thread.get()))
             .child(
                 div()
-                    .w(px(17.))
-                    .h(px(2.))
-                    .rounded_full()
-                    .bg(rgb(if pane.is_main() {
+                    .debug_selector(move || format!("subject-main-label-{}", thread.get()))
+                    .text_size(px(theme::FS_SM))
+                    .text_color(rgb(if pane.is_main() {
                         theme::TEXT_STRONG
                     } else {
                         theme::TEXT_MUTED
-                    })),
+                    }))
+                    .child("Main"),
             );
         tabs = tabs.child(self.subject_tab(
             main,
@@ -437,7 +552,7 @@ impl CockpitView {
             let tooltip = format!("{name} — {}", status_label(agent.status(), agent.fresh()));
             let tab = Tab::new()
                 .aria_label(tooltip.clone())
-                .w(px(widths[at]))
+                .w(px(widths[visible_indices[at]]))
                 .debug_selector(move || selector.clone())
                 .child(content)
                 .tooltip(move |window, cx| {
@@ -460,12 +575,17 @@ impl CockpitView {
             .flex()
             .items_center()
             .flex_1()
-            .min_w(px(58.))
+            .min_w(px(minimum))
             .h(px(26.))
             .debug_selector(move || format!("subject-strip-{}", thread.get()))
             .child(tabs);
-        if visible_count < children.len() {
-            let hidden = &children[visible_count..];
+        if visible_indices.len() < children.len() {
+            let hidden: Vec<_> = children
+                .iter()
+                .enumerate()
+                .filter(|(at, _)| !visible_indices.contains(at))
+                .map(|(_, agent)| agent)
+                .collect();
             let choices = hidden
                 .iter()
                 .map(|agent| components::Choice {
@@ -784,6 +904,97 @@ impl CockpitView {
         cx.notify();
     }
 
+    /// Small Panes keep a clear path to the retained form instead of compressing
+    /// Question chrome into a viewport too small for an option. The fixed Pane
+    /// header owns this button, so even a tall draft cannot cover it.
+    pub(super) fn activity_question_expander(
+        &self,
+        index: usize,
+        compact: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let pane = &self.panes[index];
+        if self.cockpit.roster().fullscreen() == Some(pane.identity) {
+            return None;
+        }
+        let thread = pane.thread()?;
+        let pending = self.cockpit.thread(thread)?.activity().pending_decisions();
+        if !pending.iter().any(|request| {
+            (request.subject.as_ref() == Some(&pane.selected)
+                || (request.subject.is_none() && pane.is_main()))
+                && pane::question_of(&request.decision).is_some()
+                && (compact
+                    || pane
+                        .request_forms
+                        .0
+                        .borrow()
+                        .get(&request.handle)
+                        .is_some_and(|form| form.fit.needs_expansion()))
+        }) {
+            return None;
+        }
+        Some(
+            native_keys(
+                components::button(("expand-question", thread.get()))
+                    .tab_stop(true)
+                    .h(px(20.))
+                    .px(px(6.))
+                    .bg(rgb(theme::FILL))
+                    .accessibility_label("Expand this Thread to answer its question")
+                    .tooltip("Expand this Thread to answer its question (⌘F)")
+                    .debug_selector(|| "question-expand".into())
+                    .label("Expand to answer")
+                    .on_click(cx.listener(move |view, _, _, cx| {
+                        if let Some(index) = view.pane_for(thread) {
+                            view.focus_pane(index);
+                            if view.cockpit.roster().fullscreen()
+                                != Some(view.panes[index].identity)
+                            {
+                                view.cockpit.toggle_fullscreen();
+                            }
+                            cx.notify();
+                        }
+                    })),
+            )
+            .into_any_element(),
+        )
+    }
+
+    pub(super) fn activity_question_measurement(
+        &self,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let pane = &self.panes[index];
+        let thread = pane.thread()?;
+        let handles: Vec<_> = self
+            .cockpit
+            .thread(thread)?
+            .activity()
+            .pending_decisions()
+            .iter()
+            .filter(|request| {
+                (request.subject.as_ref() == Some(&pane.selected)
+                    || (request.subject.is_none() && pane.is_main()))
+                    && pane::question_of(&request.decision).is_some()
+            })
+            .map(|request| request.handle.clone())
+            .collect();
+        if handles.is_empty() {
+            return None;
+        }
+        let mut measure = div().absolute().inset_0();
+        for handle in handles {
+            measure = measure.on_prepaint(measure_question(
+                pane.request_forms.clone(),
+                handle,
+                QuestionMeasure::Available,
+                cx.entity().downgrade(),
+            ));
+        }
+        Some(measure.into_any_element())
+    }
+
     pub(super) fn activity_decisions(
         &self,
         index: usize,
@@ -819,29 +1030,36 @@ impl CockpitView {
         if requests.is_empty() {
             return None;
         }
+        let requests: Vec<_> = requests
+            .into_iter()
+            .filter(|request| {
+                self.cockpit.roster().fullscreen() == Some(pane.identity)
+                    || !pane
+                        .request_forms
+                        .0
+                        .borrow()
+                        .get(&request.handle)
+                        .is_some_and(|form| form.fit.needs_expansion())
+            })
+            .collect();
+        if requests.is_empty() {
+            return None;
+        }
         let multiple_requests = requests.len() > 1;
         let mut cards = div()
             .id(("subject-requests", thread.get()))
             .w_full()
             .min_w_0()
             .flex()
-            .flex_shrink_0()
+            .min_h_0()
+            .max_h_full()
             .flex_col()
             .gap(px(8.));
         for request in requests {
             cards = cards.child(self.request_card(index, thread, request, window, cx));
         }
         if multiple_requests {
-            Some(
-                native_keys(
-                    cards
-                        .max_h(px(
-                            (f32::from(window.viewport_size().height) * 0.55).min(440.)
-                        ))
-                        .overflow_y_scrollbar(),
-                )
-                .into_any_element(),
-            )
+            Some(native_keys(cards.max_h_full().overflow_y_scrollbar()).into_any_element())
         } else {
             // A single request owns its own bounded content viewport. Giving
             // its surrounding stack another scroll container makes that
@@ -963,6 +1181,7 @@ impl CockpitView {
                         inputs: Vec::new(),
                         form_inputs,
                         values: form_defaults(&fields),
+                        fit: Default::default(),
                     },
                 );
             }
@@ -1446,16 +1665,23 @@ impl CockpitView {
                     inputs,
                     form_inputs: Default::default(),
                     values: Default::default(),
+                    fit: Default::default(),
                 },
             );
         }
         let mut content = div()
             .id(("question-content", handle.serial as usize))
+            .debug_selector(|| "question-scroll-content".into())
+            .on_prepaint(measure_question(
+                forms.clone(),
+                handle.clone(),
+                QuestionMeasure::Content,
+                cx.entity().downgrade(),
+            ))
             .w_full()
             .min_w_0()
-            .max_h(px(
-                (f32::from(window.viewport_size().height) * 0.4).min(320.)
-            ))
+            .flex_shrink_1()
+            .max_h(px(320.))
             .overflow_y_scrollbar()
             .pr(px(4.))
             .flex()
@@ -1463,6 +1689,7 @@ impl CockpitView {
             .gap(px(20.));
         for (qi, question) in questions.iter().enumerate() {
             let mut section = div()
+                .flex_shrink_0()
                 .w_full()
                 .min_w_0()
                 .flex()
@@ -1485,6 +1712,14 @@ impl CockpitView {
                     section = section.child(
                         div()
                             .id(("question-checkbox-hover", qi * 256 + oi))
+                            .when(qi == 0 && oi == 0, |row| {
+                                row.on_prepaint(measure_question(
+                                    forms.clone(),
+                                    handle.clone(),
+                                    QuestionMeasure::FirstControl,
+                                    cx.entity().downgrade(),
+                                ))
+                            })
                             .w_full()
                             .min_w_0()
                             .rounded(px(theme::R_CONTROL))
@@ -1539,6 +1774,14 @@ impl CockpitView {
                         .children(question.options.iter().enumerate().map(|(oi, option)| {
                             let checked = selected == Some(oi);
                             Radio::new(oi)
+                                .when(qi == 0 && oi == 0, |row| {
+                                    row.on_prepaint(measure_question(
+                                        forms.clone(),
+                                        handle.clone(),
+                                        QuestionMeasure::FirstControl,
+                                        cx.entity().downgrade(),
+                                    ))
+                                })
                                 .w_full()
                                 .min_w_0()
                                 .group("question-option")
@@ -1579,6 +1822,14 @@ impl CockpitView {
                             .w_full()
                             .min_w_0()
                             .debug_selector(move || selector.clone())
+                            .when(qi == 0 && question.options.is_empty(), |input| {
+                                input.on_prepaint(measure_question(
+                                    forms.clone(),
+                                    handle.clone(),
+                                    QuestionMeasure::FirstControl,
+                                    cx.entity().downgrade(),
+                                ))
+                            })
                             .cursor_text()
                             .child(
                                 Input::new(&forms.0.borrow()[&handle].inputs[qi])
@@ -1617,6 +1868,7 @@ impl CockpitView {
             status.into_any_element()
         };
         let mut body = div()
+            .overflow_hidden()
             .w_full()
             .min_w_0()
             .flex()
@@ -1624,6 +1876,7 @@ impl CockpitView {
             .gap(px(16.))
             .child(
                 div()
+                    .flex_shrink_0()
                     .flex()
                     .flex_wrap()
                     .items_center()
@@ -1648,7 +1901,20 @@ impl CockpitView {
                     theme::TEXT_2,
                 ))
             })
-            .child(content);
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .overflow_hidden()
+                    .debug_selector(|| "question-viewport".into())
+                    .on_prepaint(measure_question(
+                        forms.clone(),
+                        handle.clone(),
+                        QuestionMeasure::Viewport,
+                        cx.entity().downgrade(),
+                    ))
+                    .child(content),
+            );
         if let Some(error) = request.reply_error.as_ref().or_else(|| {
             self.panes[index]
                 .request_error
@@ -1658,11 +1924,18 @@ impl CockpitView {
         }) {
             body = body.child(div().text_color(rgb(theme::BLOCKED)).child(error.clone()));
         }
+        let island_measure = measure_question(
+            forms.clone(),
+            handle.clone(),
+            QuestionMeasure::Island,
+            cx.entity().downgrade(),
+        );
         let skip_handle = handle.clone();
         let submit_handle = handle.clone();
         let selector = format!("request-submit-{}-{}", thread.get(), handle.serial);
         body = body.child(
             div()
+                .flex_shrink_0()
                 .flex()
                 .justify_end()
                 .items_center()
@@ -1727,7 +2000,14 @@ impl CockpitView {
                     })),
                 ),
         );
-        request_island(&handle, body, cx)
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .on_prepaint(island_measure)
+            .child(request_island(&handle, body, cx))
+            .into_any_element()
     }
 
     fn reload_subject_history(&mut self, thread: ThreadId, cx: &mut Context<Self>) {

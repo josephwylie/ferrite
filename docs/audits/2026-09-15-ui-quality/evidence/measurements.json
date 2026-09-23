@@ -1,0 +1,434 @@
+{
+  "method": "sRGB relative luminance. Alpha composites modeled over named existing background; rounded displayed hex, ratios computed from unrounded channels. Fixed neutral toolkit ghost HSL lightness multiplier traced to dependency theme/color.rs. Not OCR or perceptual score. GPUI logical px sizes separate from framebuffer pixel sizes.",
+  "contrasts": [
+    {
+      "state": "TEXT on PANE",
+      "foreground": "#dedede",
+      "background": "#171717",
+      "alpha": 1,
+      "ratio": 13.326
+    },
+    {
+      "state": "TEXT_2 on PANE",
+      "foreground": "#a8a8a8",
+      "background": "#171717",
+      "alpha": 1,
+      "ratio": 7.539
+    },
+    {
+      "state": "TEXT_MUTED on PANE",
+      "foreground": "#959595",
+      "background": "#171717",
+      "alpha": 1,
+      "ratio": 5.985
+    },
+    {
+      "state": "TEXT_MUTED on MENU",
+      "foreground": "#959595",
+      "background": "#282828",
+      "alpha": 1,
+      "ratio": 4.922
+    },
+    {
+      "state": "TEXT_MUTED on NAV",
+      "foreground": "#959595",
+      "background": "#232323",
+      "alpha": 1,
+      "ratio": 5.247
+    },
+    {
+      "state": "TEXT_MUTED on FILL",
+      "foreground": "#959595",
+      "background": "#343434",
+      "alpha": 1,
+      "ratio": 4.156
+    },
+    {
+      "state": "TEXT_MUTED on FILL_HOVER",
+      "foreground": "#959595",
+      "background": "#3b3b3b",
+      "alpha": 1,
+      "ratio": 3.74
+    },
+    {
+      "state": "TEXT_2 on FILL_HOVER",
+      "foreground": "#a8a8a8",
+      "background": "#3b3b3b",
+      "alpha": 1,
+      "ratio": 4.711
+    },
+    {
+      "state": "SEP on PANE",
+      "foreground": "#6e6e6e",
+      "background": "#171717",
+      "alpha": 1,
+      "ratio": 3.516
+    },
+    {
+      "state": "FOCUS on PANE",
+      "foreground": "#5e5e5e",
+      "background": "#171717",
+      "alpha": 1,
+      "ratio": 2.765
+    },
+    {
+      "state": "FOCUS on MENU",
+      "foreground": "#5e5e5e",
+      "background": "#282828",
+      "alpha": 1,
+      "ratio": 2.274
+    },
+    {
+      "state": "FOCUS on FILL",
+      "foreground": "#5e5e5e",
+      "background": "#343434",
+      "alpha": 1,
+      "ratio": 1.92
+    },
+    {
+      "state": "SCROLLBAR on PANE",
+      "foreground": "#3a3a3a",
+      "background": "#171717",
+      "alpha": 1,
+      "ratio": 1.576
+    },
+    {
+      "state": "SCROLLBAR on MENU",
+      "foreground": "#3a3a3a",
+      "background": "#282828",
+      "alpha": 1,
+      "ratio": 1.296
+    },
+    {
+      "state": "SEP on MENU",
+      "foreground": "#6e6e6e",
+      "background": "#282828",
+      "alpha": 1,
+      "ratio": 2.891
+    },
+    {
+      "state": "HOVER on MENU",
+      "foreground": "#2c2c2c",
+      "background": "#282828",
+      "alpha": 1,
+      "ratio": 1.056
+    },
+    {
+      "state": "FILL on MENU",
+      "foreground": "#343434",
+      "background": "#282828",
+      "alpha": 1,
+      "ratio": 1.184
+    },
+    {
+      "state": "FILL_HOVER on FILL",
+      "foreground": "#3b3b3b",
+      "background": "#343434",
+      "alpha": 1,
+      "ratio": 1.111
+    },
+    {
+      "state": "TEXT_STRONG on MENU",
+      "foreground": "#ffffff",
+      "background": "#282828",
+      "alpha": 1,
+      "ratio": 14.743
+    },
+    {
+      "state": "RUNNING on PANE",
+      "foreground": "#7fbf95",
+      "background": "#171717",
+      "alpha": 1,
+      "ratio": 8.357
+    },
+    {
+      "state": "ATTENTION on PANE",
+      "foreground": "#d9b872",
+      "background": "#171717",
+      "alpha": 1,
+      "ratio": 9.433
+    },
+    {
+      "state": "BLOCKED on PANE",
+      "foreground": "#e08f86",
+      "background": "#171717",
+      "alpha": 1,
+      "ratio": 7.208
+    },
+    {
+      "state": "GROUND on TEXT",
+      "foreground": "#0e0e0e",
+      "background": "#dedede",
+      "alpha": 1,
+      "ratio": 14.349
+    },
+    {
+      "state": "GROUND on TEXT_STRONG",
+      "foreground": "#0e0e0e",
+      "background": "#ffffff",
+      "alpha": 1,
+      "ratio": 19.305
+    },
+    {
+      "state": "GROUND on TEXT_2",
+      "foreground": "#0e0e0e",
+      "background": "#a8a8a8",
+      "alpha": 1,
+      "ratio": 8.118
+    },
+    {
+      "state": "Toolkit Settings button 3px focus ring",
+      "foreground": "#434343",
+      "background": "#282828",
+      "alpha": 0.5,
+      "ratio": 1.49
+    },
+    {
+      "state": "Completed L2 TEXT",
+      "foreground": "#acacac",
+      "background": "#171717",
+      "alpha": 0.75,
+      "ratio": 7.92
+    },
+    {
+      "state": "Completed L3 TEXT",
+      "foreground": "#8e8e8e",
+      "background": "#171717",
+      "alpha": 0.6,
+      "ratio": 5.501
+    },
+    {
+      "state": "Completed L2 TEXT_2",
+      "foreground": "#848484",
+      "background": "#171717",
+      "alpha": 0.75,
+      "ratio": 4.777
+    },
+    {
+      "state": "Completed L3 TEXT_2",
+      "foreground": "#6e6e6e",
+      "background": "#171717",
+      "alpha": 0.6,
+      "ratio": 3.516
+    },
+    {
+      "state": "Completed L2 TEXT_MUTED",
+      "foreground": "#767676",
+      "background": "#171717",
+      "alpha": 0.75,
+      "ratio": 3.919
+    },
+    {
+      "state": "Completed L3 TEXT_MUTED",
+      "foreground": "#636363",
+      "background": "#171717",
+      "alpha": 0.6,
+      "ratio": 2.966
+    },
+    {
+      "state": "Completed L2 RUNNING",
+      "foreground": "#659576",
+      "background": "#171717",
+      "alpha": 0.75,
+      "ratio": 5.217
+    },
+    {
+      "state": "Completed L3 RUNNING",
+      "foreground": "#557c63",
+      "background": "#171717",
+      "alpha": 0.6,
+      "ratio": 3.792
+    },
+    {
+      "state": "Pulsing live label trough",
+      "foreground": "#757575",
+      "background": "#171717",
+      "alpha": 0.65,
+      "ratio": 3.905
+    },
+    {
+      "state": "DIFF_ADDED_INK on composited diff wash",
+      "foreground": "#9fd4b1",
+      "background": "#222925",
+      "alpha": 1,
+      "ratio": 8.825
+    },
+    {
+      "state": "SEP line numbers on RUNNING_WASH",
+      "foreground": "#6e6e6e",
+      "background": "#222925",
+      "alpha": 1,
+      "ratio": 2.902
+    },
+    {
+      "state": "DIFF_REMOVED_INK on composited diff wash",
+      "foreground": "#eda59d",
+      "background": "#2d2423",
+      "alpha": 1,
+      "ratio": 7.527
+    },
+    {
+      "state": "SEP line numbers on BLOCKED_WASH",
+      "foreground": "#6e6e6e",
+      "background": "#2d2423",
+      "alpha": 1,
+      "ratio": 2.961
+    },
+    {
+      "state": "Toolkit ghost hover over MENU",
+      "foreground": "#2b2b2b",
+      "background": "#282828",
+      "alpha": 0.8,
+      "ratio": 1.044
+    },
+    {
+      "state": "Toolkit ghost active over MENU",
+      "foreground": "#2e2e2e",
+      "background": "#282828",
+      "alpha": 0.8,
+      "ratio": 1.092
+    },
+    {
+      "state": "Toolkit ghost hover over NAV",
+      "foreground": "#2a2a2a",
+      "background": "#232323",
+      "alpha": 0.8,
+      "ratio": 1.098
+    },
+    {
+      "state": "Toolkit ghost active over NAV",
+      "foreground": "#2d2d2d",
+      "background": "#232323",
+      "alpha": 0.8,
+      "ratio": 1.148
+    },
+    {
+      "state": "Toolkit ghost hover over PANE",
+      "foreground": "#282828",
+      "background": "#171717",
+      "alpha": 0.8,
+      "ratio": 1.213
+    },
+    {
+      "state": "Toolkit ghost active over PANE",
+      "foreground": "#2b2b2b",
+      "background": "#171717",
+      "alpha": 0.8,
+      "ratio": 1.266
+    }
+  ],
+  "framebuffers": [
+    {
+      "path": "/tmp/ferrite-ui-baseline/approval-narrow.png",
+      "width": 1440,
+      "height": 2800,
+      "focus_pixels": 14010,
+      "attention_pixels": 4194,
+      "pane_pixels": 1734319
+    },
+    {
+      "path": "/tmp/ferrite-ui-baseline/approval-wide.png",
+      "width": 2000,
+      "height": 2800,
+      "focus_pixels": 16250,
+      "attention_pixels": 4223,
+      "pane_pixels": 3017473
+    },
+    {
+      "path": "/tmp/ferrite-ui-baseline/decision-narrow.png",
+      "width": 1440,
+      "height": 2800,
+      "focus_pixels": 14146,
+      "attention_pixels": 3304,
+      "pane_pixels": 1349901
+    },
+    {
+      "path": "/tmp/ferrite-ui-baseline/decision-wide.png",
+      "width": 2000,
+      "height": 2800,
+      "focus_pixels": 16380,
+      "attention_pixels": 3304,
+      "pane_pixels": 2399254
+    },
+    {
+      "path": "/tmp/ferrite-ui-baseline/edges-narrow.png",
+      "width": 1440,
+      "height": 2800,
+      "focus_pixels": 14114,
+      "attention_pixels": 365,
+      "pane_pixels": 1828430
+    },
+    {
+      "path": "/tmp/ferrite-ui-baseline/edges-wide.png",
+      "width": 2000,
+      "height": 2800,
+      "focus_pixels": 16354,
+      "attention_pixels": 365,
+      "pane_pixels": 3183101
+    },
+    {
+      "path": "/tmp/ferrite-ui-baseline/expanded-narrow.png",
+      "width": 1440,
+      "height": 2800,
+      "focus_pixels": 14067,
+      "attention_pixels": 218,
+      "pane_pixels": 1900035
+    },
+    {
+      "path": "/tmp/ferrite-ui-baseline/expanded-wide.png",
+      "width": 2000,
+      "height": 2800,
+      "focus_pixels": 16307,
+      "attention_pixels": 218,
+      "pane_pixels": 3265270
+    },
+    {
+      "path": "/tmp/ferrite-ui-baseline/formatting-narrow.png",
+      "width": 1440,
+      "height": 2800,
+      "focus_pixels": 14229,
+      "attention_pixels": 218,
+      "pane_pixels": 1793422
+    },
+    {
+      "path": "/tmp/ferrite-ui-baseline/formatting-wide.png",
+      "width": 2000,
+      "height": 2800,
+      "focus_pixels": 16461,
+      "attention_pixels": 218,
+      "pane_pixels": 3151942
+    },
+    {
+      "path": "/tmp/ferrite-ui-baseline/interrupted-narrow.png",
+      "width": 1440,
+      "height": 2800,
+      "focus_pixels": 14025,
+      "attention_pixels": 218,
+      "pane_pixels": 1837465
+    },
+    {
+      "path": "/tmp/ferrite-ui-baseline/interrupted-wide.png",
+      "width": 2000,
+      "height": 2800,
+      "focus_pixels": 16265,
+      "attention_pixels": 218,
+      "pane_pixels": 3197017
+    },
+    {
+      "path": "/tmp/ferrite-ui-baseline/live-narrow.png",
+      "width": 1440,
+      "height": 2800,
+      "focus_pixels": 14061,
+      "attention_pixels": 288,
+      "pane_pixels": 1904622
+    },
+    {
+      "path": "/tmp/ferrite-ui-baseline/live-wide.png",
+      "width": 2000,
+      "height": 2800,
+      "focus_pixels": 16301,
+      "attention_pixels": 288,
+      "pane_pixels": 3269838
+    }
+  ]
+}

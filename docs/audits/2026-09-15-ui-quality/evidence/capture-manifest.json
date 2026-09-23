@@ -1,0 +1,245 @@
+{
+  "product_baseline": "fbc03f3",
+  "captured_on": "2026-09-15",
+  "renderer": "GPUI HeadlessAppContext, production CockpitView, fake Sessions",
+  "screenshots": [
+    {
+      "file": "formatting-wide.png",
+      "logical_size": [
+        1000,
+        1400
+      ],
+      "fixture": "baseline",
+      "pixel_size": [
+        2000,
+        2800
+      ],
+      "backing_scale": 2,
+      "sha256": "698a0bd557a05acb2ce82da5e5272b46ad2988a1cf561afe9a02de66adcd7c95"
+    },
+    {
+      "file": "formatting-narrow.png",
+      "logical_size": [
+        720,
+        1400
+      ],
+      "fixture": "baseline",
+      "pixel_size": [
+        1440,
+        2800
+      ],
+      "backing_scale": 2,
+      "sha256": "fef0b54d374493ee4d8b052e04e08acbacadb1898587d56f8fab66265d49949e"
+    },
+    {
+      "file": "approval-narrow.png",
+      "logical_size": [
+        720,
+        1400
+      ],
+      "fixture": "baseline",
+      "pixel_size": [
+        1440,
+        2800
+      ],
+      "backing_scale": 2,
+      "sha256": "165de9c10e00382b27f67757a9d75b5e5d6c1b2febaa310e71fef752aac011db"
+    },
+    {
+      "file": "decision-wide.png",
+      "logical_size": [
+        1000,
+        1400
+      ],
+      "fixture": "baseline",
+      "pixel_size": [
+        2000,
+        2800
+      ],
+      "backing_scale": 2,
+      "sha256": "d320859833e5c507441f29d074773766b4ca34feaa9c729d872200e05f3c70b3"
+    },
+    {
+      "file": "live-wide.png",
+      "logical_size": [
+        1000,
+        1400
+      ],
+      "fixture": "baseline",
+      "pixel_size": [
+        2000,
+        2800
+      ],
+      "backing_scale": 2,
+      "sha256": "0918f0b5e18044c102ddac87f669039dab070517012a926c8b5e811db82e7e60"
+    },
+    {
+      "file": "expanded-wide.png",
+      "logical_size": [
+        1000,
+        1400
+      ],
+      "fixture": "baseline",
+      "pixel_size": [
+        2000,
+        2800
+      ],
+      "backing_scale": 2,
+      "sha256": "8c2268e1d848b10577f016366fe2f222fcc1db54a9fbe324b9fdc3bb39ddfa0a"
+    },
+    {
+      "file": "interrupted-wide.png",
+      "logical_size": [
+        1000,
+        1400
+      ],
+      "fixture": "baseline",
+      "pixel_size": [
+        2000,
+        2800
+      ],
+      "backing_scale": 2,
+      "sha256": "cdbb80fa68797287097a00221f11ca92fbf0a2193a7ac406c6d0b8910dc020c7"
+    },
+    {
+      "file": "settings-compact.png",
+      "logical_size": [
+        1000,
+        800
+      ],
+      "fixture": "daily-size",
+      "pixel_size": [
+        2000,
+        1600
+      ],
+      "backing_scale": 2,
+      "sha256": "f2e4d20e3fdad9dc3eca6a2813f763a346e6eabf32f4eff3efad26af6474cc32"
+    },
+    {
+      "file": "settings-desktop.png",
+      "logical_size": [
+        1440,
+        900
+      ],
+      "fixture": "daily-size",
+      "pixel_size": [
+        2880,
+        1800
+      ],
+      "backing_scale": 2,
+      "sha256": "0faa0132c0802524e186378eb7ba555181fc70b5a5f07be387b4dbbfcff40b15"
+    },
+    {
+      "file": "prose-desktop.png",
+      "logical_size": [
+        1440,
+        900
+      ],
+      "fixture": "daily-size",
+      "pixel_size": [
+        2880,
+        1800
+      ],
+      "backing_scale": 2,
+      "sha256": "9e57d1538572def2af8a090162dafb48ecd6c48c48196c8c213ed974b76361c4"
+    },
+    {
+      "file": "prose-compact.png",
+      "logical_size": [
+        1000,
+        800
+      ],
+      "fixture": "daily-size",
+      "pixel_size": [
+        2000,
+        1600
+      ],
+      "backing_scale": 2,
+      "sha256": "0bb9c99eec8ac9f3bd460935ed606ef1f78267203059a247fffd086c7fc0454f"
+    },
+    {
+      "file": "draft-1000x800.png",
+      "logical_size": [
+        1000,
+        800
+      ],
+      "pixel_size": [
+        2000,
+        1600
+      ],
+      "backing_scale": 2,
+      "fixture": "group-and-creation",
+      "sha256": "879e1cd0728425797aab29d3b439b9e4c58f3a52c8686104bfc3c312b3381b16"
+    },
+    {
+      "file": "group-l1-1200x800.png",
+      "logical_size": [
+        1200,
+        800
+      ],
+      "pixel_size": [
+        2400,
+        1600
+      ],
+      "backing_scale": 2,
+      "fixture": "group-and-creation",
+      "sha256": "78c562c92e6f4e88e0b48ea2ad26088e54b8150f6b7bdbeeafdc4303fc1416c4"
+    },
+    {
+      "file": "group-l2-860x500.png",
+      "logical_size": [
+        860,
+        500
+      ],
+      "pixel_size": [
+        1720,
+        1000
+      ],
+      "backing_scale": 2,
+      "fixture": "group-and-creation",
+      "sha256": "2beea4cd7a81389bdbedb5ac575e185d8d1edcbf02e9e4ab5ddd5b0ec9af7b38"
+    },
+    {
+      "file": "new-project-1000x800.png",
+      "logical_size": [
+        1000,
+        800
+      ],
+      "pixel_size": [
+        2000,
+        1600
+      ],
+      "backing_scale": 2,
+      "fixture": "group-and-creation",
+      "sha256": "c5d9b8db64a3528c20b573c7fc9ca112f6b50163a2ea22ee06f28eed52d0f944"
+    },
+    {
+      "file": "question-group-1200x800.png",
+      "logical_size": [
+        1200,
+        800
+      ],
+      "pixel_size": [
+        2400,
+        1600
+      ],
+      "backing_scale": 2,
+      "fixture": "group-and-creation",
+      "sha256": "20763866fa6c493f2a8c51739c6aa30e888ad3b5d4f29a667d93e40a6a63080a"
+    },
+    {
+      "file": "subagents-1000x800.png",
+      "logical_size": [
+        1000,
+        800
+      ],
+      "pixel_size": [
+        2000,
+        1600
+      ],
+      "backing_scale": 2,
+      "fixture": "group-and-creation",
+      "sha256": "7e9dd293b8d22056720366ed486065ed8785bf1560c505c916368d5eb5538880"
+    }
+  ]
+}

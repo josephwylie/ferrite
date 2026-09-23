@@ -765,3 +765,207 @@ fn replacing_an_offscreen_selected_thinking_row_clears_only_that_selection(
         "copy cannot recover stale text from the replaced offscreen member"
     );
 }
+
+/// Reading preference changes layout, not the native source/selection identity.
+/// Group rendering always keeps its compact type, including after fullscreen.
+#[gpui::test]
+fn solo_reading_size_reflows_without_replacing_text_or_selection(cx: &mut TestAppContext) {
+    use ferrite_core::settings::SoloReadingSize;
+    let (mut core, fake) = cockpit("solo-reading-size", 2);
+    let group = group_all(&mut core);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1100.), px(700.)));
+    for stream in fake.streams.borrow().iter() {
+        stream
+            .send(SessionEvent::TextDelta {
+                text: "A readable answer with **meaningful emphasis** and exact source text."
+                    .into(),
+            })
+            .unwrap();
+    }
+    tick(cx);
+    let index = view.read_with(cx, |view, _| view.focused());
+    let prefix = view.read_with(cx, |view, _| {
+        format!("markdown-{}-", view.panes[index].text_namespace())
+    });
+    let (identity, selected) = cx.update(|_, cx| {
+        assert_eq!(crate::rich::testing::font_size(&prefix, cx), Some(px(13.)));
+        (
+            crate::rich::testing::first_entity(&prefix, cx).unwrap(),
+            crate::rich::testing::full_text(&prefix, cx).unwrap(),
+        )
+    });
+    view.update(cx, |view, cx| {
+        view.prefs.settings.solo_reading_size = SoloReadingSize::Large;
+        cx.notify();
+    });
+    tick(cx);
+    cx.update(|_, cx| {
+        assert_eq!(crate::rich::testing::font_size(&prefix, cx), Some(px(17.)));
+        assert_eq!(
+            crate::rich::testing::first_entity(&prefix, cx),
+            Some(identity)
+        );
+        assert_eq!(
+            crate::rich::testing::selected_text(&prefix, cx),
+            Some(selected.clone())
+        );
+    });
+    view.update(cx, |view, cx| view.enter_group(group, cx));
+    tick(cx);
+    cx.update(|_, cx| {
+        assert_eq!(crate::rich::testing::font_size(&prefix, cx), Some(px(13.)));
+        assert_eq!(
+            crate::rich::testing::first_entity(&prefix, cx),
+            Some(identity)
+        );
+    });
+    view.update(cx, |view, cx| {
+        view.focus_pane(index);
+        view.cockpit.toggle_fullscreen();
+        cx.notify();
+    });
+    tick(cx);
+    cx.update(|_, cx| {
+        assert_eq!(crate::rich::testing::font_size(&prefix, cx), Some(px(17.)));
+        assert_eq!(
+            crate::rich::testing::first_entity(&prefix, cx),
+            Some(identity)
+        );
+    });
+}
+
+#[gpui::test]
+fn keyboard_reaches_code_actions_after_disclosures_and_returns_to_the_draft(
+    cx: &mut TestAppContext,
+) {
+    fn enter(cx: &mut gpui::VisualTestContext) {
+        cx.simulate_keystrokes("enter");
+        cx.simulate_event(gpui::KeyUpEvent {
+            keystroke: gpui::Keystroke::parse("enter").unwrap(),
+        });
+        cx.run_until_parked();
+    }
+    let (mut core, fake) = cockpit("code-actions-keyboard", 1);
+    let thread = core.threads()[0];
+    core.send(thread, "prior prompt".into());
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(900.)));
+    let stream = fake.streams.borrow();
+    stream[0]
+        .send(SessionEvent::ReasoningSummaryPart {
+            item_id: "reading-details".into(),
+            summary_index: 0,
+            text: "Checked the implementation\nThe details remain available.".into(),
+            snapshot: false,
+        })
+        .unwrap();
+    stream[0]
+        .send(SessionEvent::TextDelta {
+            text: "```rust\n    first();\n```\n\n```html\n<p>second</p>\n```".into(),
+        })
+        .unwrap();
+    stream[0]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    drop(stream);
+    tick(cx);
+    cx.simulate_input("unsent draft");
+    cx.simulate_keystrokes("tab");
+    view.read_with(cx, |view, _| assert!(view.panes[0].has_tool_target()));
+    cx.simulate_keystrokes("tab");
+    assert!(cx.update(|window, _| crate::rich::code_actions_focused(window)));
+    enter(cx);
+    assert_eq!(clipboard(cx).as_deref(), Some("    first();"));
+    // HTML has Preview before Copy in the same native tab order.
+    cx.simulate_keystrokes("tab");
+    cx.simulate_keystrokes("tab");
+    enter(cx);
+    assert_eq!(clipboard(cx).as_deref(), Some("<p>second</p>"));
+    assert_eq!(fake.sent.borrow().as_slice(), ["prior prompt"]);
+    cx.simulate_keystrokes("tab");
+    cx.update(|window, cx| {
+        let pane = &view.read(cx).panes[0];
+        assert!(pane.composer.focus_handle(cx).is_focused(window));
+        assert_eq!(pane.composer.read(cx).text(), "unsent draft");
+    });
+    cx.simulate_keystrokes("shift-tab");
+    enter(cx);
+    assert_eq!(clipboard(cx).as_deref(), Some("<p>second</p>"));
+    cx.simulate_keystrokes("shift-tab");
+    cx.simulate_keystrokes("shift-tab");
+    enter(cx);
+    assert_eq!(clipboard(cx).as_deref(), Some("    first();"));
+    cx.simulate_keystrokes("shift-tab");
+    view.read_with(cx, |view, _| assert!(view.panes[0].has_tool_target()));
+    cx.simulate_keystrokes("shift-tab");
+    cx.update(|window, cx| {
+        assert!(view.read(cx).panes[0]
+            .composer
+            .focus_handle(cx)
+            .is_focused(window));
+    });
+    assert_eq!(fake.sent.borrow().as_slice(), ["prior prompt"]);
+}
+
+#[gpui::test]
+fn code_copy_traversal_does_not_accept_an_empty_composers_followup(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("code-copy-offered-followup", 1);
+    let thread = core.threads()[0];
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TextDelta {
+            text: "```rust\n    first();\n```".into(),
+        })
+        .unwrap();
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    core.pump();
+    core.deliver_suggestion(thread, "Run the tests".into());
+    core.pump();
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    tick(cx);
+    cx.update(|_, cx| {
+        cx.write_to_clipboard(ClipboardItem::new_string("preserved clipboard".into()))
+    });
+
+    cx.simulate_keystrokes("shift-tab");
+    assert!(cx.update(|window, _| crate::rich::code_actions_focused(window)));
+    cx.simulate_keystrokes("tab");
+    cx.update(|window, cx| {
+        let view = view.read(cx);
+        let composer = &view.panes[0].composer;
+        assert!(
+            composer.focus_handle(cx).is_focused(window),
+            "Tab leaves Copy for the input"
+        );
+        assert!(
+            composer.read(cx).is_empty(),
+            "leaving Copy cannot accept ghost text"
+        );
+        assert_eq!(
+            view.cockpit.thread(thread).unwrap().suggestion(),
+            Some("Run the tests")
+        );
+    });
+    assert_eq!(clipboard(cx).as_deref(), Some("preserved clipboard"));
+    assert!(fake.sent.borrow().is_empty());
+
+    // The next Tab is actually from the input, so the offered text remains
+    // available to accept through its intended interaction.
+    cx.simulate_keystrokes("tab");
+    view.read_with(cx, |view, cx| {
+        assert_eq!(view.panes[0].composer.read(cx).text(), "Run the tests");
+    });
+    assert_eq!(clipboard(cx).as_deref(), Some("preserved clipboard"));
+    assert!(fake.sent.borrow().is_empty(), "accepting is still unsent");
+}

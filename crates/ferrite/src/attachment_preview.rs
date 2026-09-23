@@ -2,7 +2,7 @@
 //! this module supplies the owning Pane's bounds instead of the window's.
 
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
@@ -97,6 +97,24 @@ impl Preview {
     }
 }
 
+/// The OS opens the original file in its image viewer, where it can be
+/// inspected at full resolution. Canonicalize before URL encoding so relative
+/// paths, symlinks and Windows drive paths all use the same file-link route.
+fn open_original(path: &Path, window: &mut Window, cx: &mut App) {
+    use gpui::component::{notification::Notification, WindowExt};
+    match std::fs::canonicalize(path) {
+        Ok(path) => crate::file_links::FileLink {
+            path,
+            location: None,
+        }
+        .open(window, cx),
+        Err(error) => window.push_notification(
+            Notification::error(format!("Could not open {}: {error}", path.display())),
+            cx,
+        ),
+    }
+}
+
 #[derive(IntoElement)]
 struct PreviewLayer(Preview);
 
@@ -110,6 +128,7 @@ impl RenderOnce for PreviewLayer {
         let bounds = *preview.bounds.lock().unwrap();
         let close_button = preview.clone();
         let close_dialog = preview.clone();
+        let original = path.clone();
         let content = div()
             .debug_selector(|| "attachment-preview-content".into())
             .w(relative(0.9))
@@ -135,9 +154,24 @@ impl RenderOnce for PreviewLayer {
                                     .child(title),
                             )
                             .child(
+                                Button::new("open-original-attachment")
+                                    .ghost()
+                                    .xsmall()
+                                    .flex_shrink_0()
+                                    .label("Open Original")
+                                    .accessibility_label("Open original image in the default app")
+                                    .tooltip("Open full-size image in the default app")
+                                    .debug_selector(|| "open-original-attachment".into())
+                                    .on_click(move |_, window, cx| {
+                                        cx.stop_propagation();
+                                        open_original(&original, window, cx);
+                                    }),
+                            )
+                            .child(
                                 Button::new("close-attachment-preview")
                                     .ghost()
                                     .xsmall()
+                                    .flex_shrink_0()
                                     .icon(IconName::Close)
                                     .accessibility_label("Close image preview")
                                     .tooltip("Close image preview")

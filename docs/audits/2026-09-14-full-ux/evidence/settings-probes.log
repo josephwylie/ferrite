@@ -1,0 +1,26 @@
+   Compiling ferrite v0.3.0 (/private/var/folders/5y/hnh41b2j29z8kqxy7ftzfdn80000gn/T/ferrite-ux-decisions-kwkw0hkm/crates/ferrite)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.79s
+warning: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/main.rs (/Users/josephwylie/Desktop/Projects/ferrite/target/debug/deps/ferrite-97c6c8b36e1fdb9c)
+
+running 2 tests
+
+thread 'cockpit::tests::provider_forms::audit_settings_close_does_not_park_hidden_thread' (1897891) panicked at crates/ferrite/src/cockpit/tests/provider_forms.rs:475:31:
+Cmd+W in Settings parked hidden Thread; settings_open=true, visible_threads=[]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test cockpit::tests::provider_forms::audit_settings_close_does_not_park_hidden_thread ... FAILED
+
+thread 'cockpit::tests::provider_forms::audit_settings_enter_does_not_send_hidden_prompt' (1897892) panicked at crates/ferrite/src/cockpit/tests/provider_forms.rs:457:5:
+Enter in Settings sent hidden Composer draft: ["Draft I have not decided to send"]
+test cockpit::tests::provider_forms::audit_settings_enter_does_not_send_hidden_prompt ... FAILED
+
+failures:
+
+failures:
+    cockpit::tests::provider_forms::audit_settings_close_does_not_park_hidden_thread
+    cockpit::tests::provider_forms::audit_settings_enter_does_not_send_hidden_prompt
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 356 filtered out; finished in 0.39s
+
+error: test failed, to rerun pass `-p ferrite --bin ferrite`

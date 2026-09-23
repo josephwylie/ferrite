@@ -1,0 +1,45 @@
+diff --git a/crates/ferrite/src/visual_reference.rs b/crates/ferrite/src/visual_reference.rs
+index 5b63390..64996bf 100644
+--- a/crates/ferrite/src/visual_reference.rs
++++ b/crates/ferrite/src/visual_reference.rs
+@@ -39,16 +39,8 @@ pub fn capture(output: String) {
+     let output = PathBuf::from(output);
+     std::fs::create_dir_all(&output).expect("create artifact directory");
+     let platform = gpui::platform::current_platform(true);
+-    for (label, width) in [("narrow", 720.), ("wide", 1000.)] {
+-        for state in [
+-            "formatting",
+-            "edges",
+-            "live",
+-            "decision",
+-            "approval",
+-            "expanded",
+-            "interrupted",
+-        ] {
++    for (label, width) in [("desktop", 1440.), ("compact", 1000.)] {
++        for state in ["prose", "settings"] {
+             let store_path = std::env::temp_dir().join(format!(
+                 "ferrite-reference-{}-{label}-{state}",
+                 std::process::id()
+@@ -87,6 +79,7 @@ pub fn capture(output: String) {
+                 })
+                 .unwrap();
+             let source = match state {
++            "prose" | "settings" => "## Review the proposed change\n\nThe importer now keeps the original reference beside each row, so you can compare an incoming payment with the matching invoice before accepting it. Existing records stay visible while the update runs. If a record cannot be matched, it remains in the review list with a short explanation and a link to its source. The next step is to check the remaining unmatched items and confirm the result before continuing.\n\n### What changed\n\n- Retained the source reference beside each payment.\n- Added a clear message when no invoice matches.\n- Kept the review list available during background work.\n\n```rust\nfn summarize(rows: &[Row]) -> Summary {\n    Summary::from_rows(rows)\n}\n```\n\nThe checks passed. You can now review the sample data and decide whether the matching behavior is ready to use.".into(),
+             "formatting" => include_str!("../../../docs/research/cli-capture-2026-09-06/model-source/claude-formatting.md").to_string(),
+             "edges" => format!("# Heading emphasis\n\n## Second heading\n\n**bold**, *italic*; `one  two` [label](https://example.com/exact?q=a%20b).\n\n9. Nine\n10. Ten with a wrapped continuation of several words\n\nSeparate list:\n\n100. One hundred with a wrapped continuation\n\n> First quote line\n> Second quote line\n>\n> > Nested quote\n\n```text\n    one  two\n\n\tthree   four  \n```\n\n```python\nprint(\"one  two\") # comment\nvalue = 42\n```\n\n| Name | Number | Long token |\n| :--- | ---: | :--- |\n| double  space | 12 | {} |\n| CJK 漢字 | 100 | é NBSP text |\n\n{}", "X".repeat(80), "W".repeat(124)),
+             "live" => "I am checking the supplied fixture.\n\n## Streaming heading\n\n- First item\n- Second item\n\n```rust\nlet count = 2;".into(),
+@@ -213,11 +206,12 @@ pub fn capture(output: String) {
+             });
+             let window = cx
+                 .open_window(
+-                    gpui::size(gpui::px(width), gpui::px(1400.)),
++                    gpui::size(gpui::px(width), gpui::px(if label == "desktop" { 900. } else { 800. })),
+                     |window, cx| {
+                         let view = cx.new(|cx| {
+                             let mut view =
+                                 super::CockpitView::new_with_provider(core, Provider::Claude, cx);
++                            if state == "settings" { view.settings_open = true; }
+                             if state == "expanded" {
+                                 for id in ["read", "ok"] {
+                                     view.panes[0]

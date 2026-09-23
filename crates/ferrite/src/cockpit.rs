@@ -43,6 +43,7 @@ use ferrite_core::workspace::registry::ProjectId;
 #[cfg(test)]
 use ferrite_core::workspace::WorkspaceChoice;
 use ferrite_core::{DecisionAnswer, ThreadId};
+use gpui::component::Disableable;
 use gpui::prelude::*;
 use gpui::{
     actions, anchored, deferred, div, ease_out_quint, px, rgb, rgba, Animation, AnimationExt,
@@ -122,6 +123,7 @@ const MAIN_BRANCH: &str = "main";
 const PUMP_MS: u64 = 8;
 const NAV_OPEN_MS: u64 = 260;
 const NAV_CLOSE_MS: u64 = 190;
+const TUNING_BUSY_HINT: &str = "Available when this turn finishes";
 
 pub struct CockpitView {
     cockpit: Cockpit,
@@ -874,6 +876,13 @@ impl CockpitView {
         let transcript = subject_view.transcript();
         let revision = subject_view.presentation_revision();
         let status = subagents::transcript_status(subject_view.status(), subject_view.fresh());
+        let reading_size = if self.cockpit.roster().view() == View::Solo
+            || self.cockpit.roster().fullscreen().is_some()
+        {
+            self.prefs.settings.solo_reading_size
+        } else {
+            ferrite_core::settings::SoloReadingSize::Standard
+        };
         let entity = self.panes[index]
             .ensure_transcript(cx)
             .expect("thread Pane has a transcript entity");
@@ -886,6 +895,7 @@ impl CockpitView {
             disclosure_revision,
             focused,
             Some(status),
+            reading_size,
         ) {
             return;
         }
@@ -902,6 +912,7 @@ impl CockpitView {
             signal_status: Some(status),
             timings: subject_view.timings().clone(),
             focused,
+            reading_size,
             selection_scope,
             preview,
             expanded: disclosure.0,
@@ -1137,7 +1148,19 @@ impl CockpitView {
             }
         }
         let models_changed = self.cockpit.take_models_changed();
-        if models_changed {
+        let tuning_availability_changed = self.popover.as_ref().is_some_and(|open| {
+            matches!(open.kind, Kind::Provider | Kind::Effort)
+                && open.pane.thread().is_some_and(|thread| {
+                    self.cockpit
+                        .thread(thread)
+                        .is_some_and(|thread| thread.busy())
+                        != open
+                            .rows
+                            .first()
+                            .is_some_and(|row| row.name == TUNING_BUSY_HINT)
+                })
+        });
+        if models_changed || tuning_availability_changed {
             self.refresh_model_picker(cx);
         }
         let completions = self.cockpit.take_bootstrap_results();
@@ -2420,7 +2443,7 @@ impl CockpitView {
             return None;
         }
         let settings = &self.prefs.settings;
-        let mut defaults = vec![prefs::choices(
+        let defaults = vec![prefs::choices(
             "settings-provider",
             "Provider",
             "What a new Thread starts on",
@@ -2438,15 +2461,10 @@ impl CockpitView {
                 settings.default_provider = provider
             }),
         )];
+        let mut new_thread_groups = vec![SettingGroup::new().items(defaults)];
         for provider in [Provider::Claude, Provider::Codex] {
             let chosen = settings.model_for(provider).map(str::to_string);
-            let mut catalog = self.cockpit.model_catalog(provider);
-            if let Some(chosen) = &chosen {
-                if !catalog.iter().any(|row| row.is(chosen)) {
-                    catalog.push(ferrite_core::ModelInfo::bare(chosen));
-                }
-            }
-            defaults.push(prefs::choices(
+            let model = prefs::chooser(
                 if provider == Provider::Claude {
                     "settings-claude-model"
                 } else {
@@ -2457,25 +2475,26 @@ impl CockpitView {
                 } else {
                     "Codex model"
                 },
-                "Default uses the CLI's own choice",
-                catalog
-                    .into_iter()
-                    .map(|model| {
-                        let value = Some(model.value).filter(|v| v != "default");
-                        (model.display.into(), chosen == value, value)
-                    })
-                    .collect(),
+                "The model new Threads use. CLI default follows the Provider's own choice.",
+                prefs::model_options(self.cockpit.model_catalog(provider), chosen.as_deref()),
                 self.setting_change(cx, move |settings, value| {
                     settings.set_model_for(provider, value)
                 }),
-            ));
+            );
             let effort = settings.effort_for(provider).map(str::to_string);
-            let ladder = ferrite_core::providers::models::efforts_for(
+            let mut ladder = ferrite_core::providers::models::efforts_for(
                 provider,
                 chosen.as_deref(),
                 &self.cockpit.announced_models(provider),
             );
-            defaults.push(prefs::choices(
+            // A saved value remains visible even if the current model's
+            // announcement no longer includes it; presentation never rewrites it.
+            if let Some(effort) = &effort {
+                if !ladder.contains(effort) {
+                    ladder.push(effort.clone());
+                }
+            }
+            let effort = prefs::choices(
                 if provider == Provider::Claude {
                     "settings-claude-effort"
                 } else {
@@ -2500,7 +2519,12 @@ impl CockpitView {
                 self.setting_change(cx, move |settings, value| {
                     settings.set_effort_for(provider, value)
                 }),
-            ));
+            );
+            new_thread_groups.push(
+                SettingGroup::new()
+                    .title(provider_title(provider))
+                    .items([model, effort]),
+            );
         }
         let modes = |options: &[(&str, Option<&str>)], selected: Option<&str>| {
             options
@@ -2594,6 +2618,32 @@ impl CockpitView {
                 self.setting_change(cx, |settings, style| settings.usage_meter_style = style),
             ),
         ];
+        let reading = vec![prefs::choices(
+            "settings-solo-answer-size",
+            "Solo answer size",
+            "Answer text in Solo and fullscreen. Group panes keep their compact size.",
+            [
+                (
+                    "Standard",
+                    ferrite_core::settings::SoloReadingSize::Standard,
+                ),
+                (
+                    "Comfortable",
+                    ferrite_core::settings::SoloReadingSize::Comfortable,
+                ),
+                ("Large", ferrite_core::settings::SoloReadingSize::Large),
+            ]
+            .into_iter()
+            .map(|(label, size)| {
+                (
+                    SharedString::from(label),
+                    settings.solo_reading_size == size,
+                    size,
+                )
+            })
+            .collect(),
+            self.setting_change(cx, |settings, size| settings.solo_reading_size = size),
+        )];
         let (claude, codex) = self
             .cli_versions
             .clone()
@@ -2619,11 +2669,19 @@ impl CockpitView {
                     .into(),
             ),
         ]);
-        let groups = vec![
-            SettingGroup::new().title("New Threads").items(defaults),
-            SettingGroup::new().title("Permissions").items(permissions),
-            SettingGroup::new().title("Behaviour").items(behaviour),
-            SettingGroup::new().title("About").items(about),
+        let pages = vec![
+            prefs::page("New Threads", new_thread_groups),
+            prefs::page("Permissions", vec![SettingGroup::new().items(permissions)]),
+            prefs::page(
+                "Behaviour",
+                vec![
+                    SettingGroup::new().title("Reading").items(reading),
+                    SettingGroup::new()
+                        .title("Threads and navigation")
+                        .items(behaviour),
+                ],
+            ),
+            prefs::page("About", vec![SettingGroup::new().items(about)]),
         ];
 
         let card = prefs::card()
@@ -2634,14 +2692,14 @@ impl CockpitView {
                 MouseButton::Left,
                 cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
             )
-            .child(prefs::head(prefs::close_button().on_click(cx.listener(
+            .child(prefs::head(prefs::close_button(cx).on_click(cx.listener(
                 |view, _: &ClickEvent, _, cx| {
                     cx.stop_propagation();
                     view.settings_open = false;
                     cx.notify();
                 },
             ))))
-            .child(prefs::body(groups));
+            .child(prefs::body(pages));
         Some(
             deferred(
                 prefs::veil()
@@ -2877,14 +2935,16 @@ impl CockpitView {
                 .collect(),
             None => editor.staged.clone(),
         };
+        let directory_count = directories.len();
         let editing = editor.target;
 
-        let close =
-            project_editor::close_button().on_click(cx.listener(|view, _: &ClickEvent, _, cx| {
+        let close = project_editor::close_button(cx).on_click(cx.listener(
+            |view, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
                 view.project_editor = None;
                 cx.notify();
-            }));
+            },
+        ));
         let mut body = project_editor::body()
             .child(project_editor::name_field(editor.name.clone()))
             .child(project_editor::section_label(
@@ -2905,6 +2965,7 @@ impl CockpitView {
                         ("remove-project-directory", index),
                         "Remove",
                         false,
+                        cx,
                     )
                     .on_click(cx.listener(
                         move |view, _: &ClickEvent, _, cx| {
@@ -2938,12 +2999,11 @@ impl CockpitView {
                 actions,
             ));
         }
-        let add = project_editor::action_button("add-project-directory", "Add Directory").on_click(
-            cx.listener(move |view, _: &ClickEvent, _, cx| {
+        let add = project_editor::action_button("add-project-directory", "Add Directory", cx)
+            .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
                 view.browse_for_project_directory(cx);
-            }),
-        );
+            }));
         let mut right = div().flex().items_center().gap(px(8.));
         if let Some(project) = editing {
             let in_use = self.project_in_use(project);
@@ -2956,6 +3016,7 @@ impl CockpitView {
                         "Remove Project"
                     },
                     in_use,
+                    cx,
                 )
                 .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                     cx.stop_propagation();
@@ -2986,6 +3047,7 @@ impl CockpitView {
                 "confirm-project",
                 if editing.is_some() { "Done" } else { "Create" },
                 !ready,
+                cx,
             )
             .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                 cx.stop_propagation();
@@ -2994,12 +3056,12 @@ impl CockpitView {
                 }
             })),
         );
-        body = body.child(project_editor::footer(add, right));
+        let footer = project_editor::footer(add, right);
         if let Some(error) = editor.error.clone() {
             body = body.child(project_editor::error_line(error));
         }
 
-        let card = project_editor::card()
+        let card = project_editor::card(directory_count)
             .id("project-editor-card")
             .debug_selector(|| "project-editor-card".into())
             .track_focus(&self.project_editor_focus)
@@ -3008,7 +3070,8 @@ impl CockpitView {
                 cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
             )
             .child(project_editor::head(title, close))
-            .child(body);
+            .child(body)
+            .child(footer);
         Some(
             deferred(
                 project_editor::veil()
@@ -3131,6 +3194,140 @@ impl CockpitView {
     fn focused_draft_mut(&mut self) -> Option<&mut pane::DraftBinding> {
         let focused = self.focused();
         self.panes.get_mut(focused).and_then(PaneView::draft_mut)
+    }
+
+    /// A pointer action belongs to its Pane, regardless of keyboard focus.
+    /// Modal editors retain their own confirmation semantics; a stale click
+    /// must never confirm one of those or send from a hidden Pane.
+    fn composer_action(
+        &mut self,
+        identity: PaneIdentity,
+        stop: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.settings_open || self.project_editor.is_some() || self.rename.is_some() {
+            return;
+        }
+        let Some(index) = self.index_of(identity) else {
+            return;
+        };
+        let level = self.level_of(index, window);
+        if !self.panes[index].is_main()
+            || !self.pane_rects(window).iter().any(|(at, _)| *at == index)
+            || level == Level::Wall
+            || (identity.draft().is_some() && level != Level::Transcript)
+        {
+            return;
+        }
+        let starting = identity
+            .draft()
+            .is_some_and(|id| self.cockpit.draft_starting(id));
+        if stop {
+            if !starting
+                && !identity.thread().is_some_and(|thread| {
+                    self.cockpit.thread(thread).is_some_and(|open| {
+                        open.busy()
+                            || open.activity().main_operator_turn()
+                            || open.pending().is_some()
+                    })
+                })
+            {
+                return;
+            }
+        } else if starting || !self.panes[index].composer.read(cx).can_submit() {
+            return;
+        }
+        self.focus_pane(index);
+        self.popover = None;
+        self.context_checks = None;
+        self.context_usage = None;
+        self.session_controls = None;
+        self.context_menu = None;
+        if let Some(draft) = self.focused_draft_mut() {
+            draft.band_focus = None;
+        }
+        window.focus(&self.panes[index].composer.focus_handle(cx), cx);
+        if stop {
+            self.interrupt(&Interrupt, window, cx);
+        } else {
+            self.submit(&Submit, window, cx);
+        }
+    }
+
+    fn composer_actions(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let pane = &self.panes[index];
+        if !pane.is_main() {
+            return None;
+        }
+        let identity = pane.identity;
+        let open = pane.thread().and_then(|thread| self.cockpit.thread(thread));
+        let starting = identity
+            .draft()
+            .is_some_and(|id| self.cockpit.draft_starting(id));
+        let can_send = pane.composer.read(cx).can_submit() && !starting;
+        let queued = open.as_ref().is_some_and(|open| open.needs_queue());
+        // Submission precedes the provider's Running event. Keep Stop
+        // available during that admission interval as well as the live turn.
+        let can_stop = starting
+            || open.as_ref().is_some_and(|open| {
+                open.busy() || open.activity().main_operator_turn() || open.pending().is_some()
+            });
+        let has_queue = open.as_ref().is_some_and(|open| open.queued().is_some());
+        let send =
+            crate::components::button(SharedString::from(format!("composer-send-{identity:?}")))
+                .debug_selector(move || format!("composer-send-{identity:?}"))
+                .h(px(crate::theme::COMPOSER_ROW_H))
+                .px(px(crate::theme::MODE_CHIP_PAD_X))
+                .bg(rgb(crate::theme::FILL))
+                .disabled(!can_send)
+                .tooltip(if starting {
+                    "Starting this Thread"
+                } else if queued {
+                    "Send or queue input (Enter). Shift+Enter inserts a newline."
+                } else {
+                    "Send (Enter). Shift+Enter inserts a newline."
+                })
+                .child(crate::components::label(
+                    if starting { "Starting…" } else { "Send" },
+                    if can_send {
+                        crate::theme::TEXT
+                    } else {
+                        crate::theme::TEXT_MUTED
+                    },
+                ))
+                .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
+                    cx.stop_propagation();
+                    view.composer_action(identity, false, window, cx);
+                }));
+        let stop = can_stop.then(|| {
+            crate::components::button(SharedString::from(format!("composer-stop-{identity:?}")))
+                .debug_selector(move || format!("composer-stop-{identity:?}"))
+                .h(px(crate::theme::COMPOSER_ROW_H))
+                .px(px(crate::theme::MODE_CHIP_PAD_X))
+                .tooltip(if starting {
+                    "Cancel startup (Esc); keep the draft"
+                } else if has_queue {
+                    "Interrupt Main (Esc). Queued prompts remain and may run next."
+                } else {
+                    "Interrupt Main (Esc)"
+                })
+                .child(crate::components::label("Stop · Esc", crate::theme::TEXT_2))
+                .on_click(cx.listener(move |view, _: &ClickEvent, window, cx| {
+                    cx.stop_propagation();
+                    view.composer_action(identity, true, window, cx);
+                }))
+        });
+        Some(
+            div()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .gap(px(crate::theme::KEYS_GAP))
+                .children(stop)
+                .child(send)
+                .into_any_element(),
+        )
     }
 
     fn submit(&mut self, _: &Submit, _window: &mut Window, cx: &mut Context<Self>) {
@@ -3297,7 +3494,7 @@ impl CockpitView {
     /// The condition is `followup::suggest` itself, the same call the idle
     /// line renders from, so the key and the ghost text can never disagree
     /// about whether there is something to accept.
-    fn accept_suggestion(&mut self, cx: &mut Context<Self>) -> bool {
+    fn accept_suggestion(&mut self, window: &Window, cx: &mut Context<Self>) -> bool {
         if self.settings_open
             || self.project_editor.is_some()
             || self.rename.is_some()
@@ -3326,10 +3523,9 @@ impl CockpitView {
         else {
             return false;
         };
-        // Only ever onto an empty line: Tab is the disclosure walk once the
-        // operator has started typing, and overwriting their draft would be
-        // the worst possible reading of the key.
-        if !composer.read(cx).is_empty() {
+        // Only Tab from the empty input accepts its suggestion. Tab from a
+        // transcript action or attachment continues that control's focus walk.
+        if !composer.focus_handle(cx).is_focused(window) || !composer.read(cx).is_empty() {
             return false;
         }
         composer.update(cx, |composer, cx| composer.set(text, cx));
@@ -3347,7 +3543,7 @@ impl CockpitView {
             self.pick(at, cx);
             return;
         }
-        if self.accept_suggestion(cx) {
+        if self.accept_suggestion(window, cx) {
             return;
         }
         if self.settings_open
@@ -3364,6 +3560,29 @@ impl CockpitView {
                             .any(|request| pane::question_of(&request.decision).is_some())
                 })
         {
+            // Composer is the end of the pane's native tab order. Start its
+            // Subject walk at Main instead of wrapping to a sidebar control,
+            // which the pane's focus keeper would return to Composer.
+            if !self.settings_open && self.project_editor.is_none() {
+                if let Some(pane) = self.panes.get(self.focused()) {
+                    let has_children = pane
+                        .thread()
+                        .and_then(|thread| self.cockpit.thread(thread))
+                        .is_some_and(|thread| !thread.activity().children().is_empty());
+                    if has_children
+                        && pane
+                            .composer
+                            .read(cx)
+                            .focus_target(window, cx)
+                            .contains_focused(window, cx)
+                    {
+                        if let Some(focus) = pane.tab_interaction.main_focus() {
+                            window.focus(&focus, cx);
+                            return;
+                        }
+                    }
+                }
+            }
             window.focus_next(cx);
             return;
         }
@@ -3434,9 +3653,39 @@ impl CockpitView {
         }
         let focused = self.focused();
         let calls = self.expandable_tools(focused, Level::Transcript);
-        let targeted = self.panes[focused].cycle_tools(&calls, reverse).is_some();
+        let transcript = self.panes[focused].transcript();
+        let tool_focus = self.panes[focused].tool_focus();
+        let in_controls = crate::rich::code_actions_focused(window);
+        let cycle_controls = |from_edge, window: &mut Window, cx: &mut gpui::App| {
+            transcript.as_ref().is_some_and(|transcript| {
+                transcript.update(cx, |transcript, cx| {
+                    transcript.cycle_controls(reverse, from_edge, window, cx)
+                })
+            })
+        };
+        // Preserve the existing disclosure walk, then include native actions
+        // such as fenced-code Copy/Preview before returning to the composer.
+        if in_controls && cycle_controls(false, window, cx) {
+            return;
+        }
+        if reverse
+            && !in_controls
+            && !tool_focus.is_focused(window)
+            && cycle_controls(true, window, cx)
+        {
+            return;
+        }
+        let targeted = if in_controls && !reverse {
+            false
+        } else {
+            self.panes[focused].cycle_tools(&calls, reverse).is_some()
+        };
+        if !targeted && !reverse && !in_controls && cycle_controls(true, window, cx) {
+            cx.notify();
+            return;
+        }
         let focus = if targeted {
-            self.panes[focused].tool_focus()
+            tool_focus
         } else {
             self.panes[focused].composer.focus_handle(cx)
         };
@@ -4091,6 +4340,21 @@ impl CockpitView {
     /// dispatched. The popover closes either way — a door it opens (the
     /// pickers) is a fresh popover in its place.
     fn pick(&mut self, at: usize, cx: &mut Context<Self>) {
+        // The native menu can outlive the frame in which it opened. A turn
+        // that started meanwhile must not turn a visible choice into a
+        // guaranteed refusal in the transcript.
+        if let Some(open) = self.popover.as_ref() {
+            if matches!(open.kind, Kind::Provider | Kind::Effort)
+                && open.pane.thread().is_some_and(|thread| {
+                    self.cockpit
+                        .thread(thread)
+                        .is_some_and(|thread| thread.busy())
+                })
+            {
+                self.refresh_model_picker(cx);
+                return;
+            }
+        }
         let Some(open) = self.popover.take() else {
             return;
         };
@@ -4435,10 +4699,8 @@ impl CockpitView {
     /// The model picker in the Composer slot: one section per Provider —
     /// its logomark row, then its models under the names the Provider's
     /// own menu shows — with the ✓ on what is serving. Claude's rows come
-    /// from its handshake; Codex's from the catalog. Opens before and after
-    /// the first prompt: the model can always change (the conversation is
-    /// resumed under the new one), and once the prompt has gone out the
-    /// other Provider's section is drawn inert and says why.
+    /// from its handshake; Codex's from the catalog. The catalog stays
+    /// inspectable during a turn, with unavailable choices and their reason.
     fn open_provider_picker(&mut self, thread: ThreadId, cx: &mut Context<Self>) {
         let Some(open) = self.cockpit.thread(thread) else {
             return;
@@ -4447,13 +4709,17 @@ impl CockpitView {
         let chosen = open.model().map(str::to_string);
         let serving = open.transcript().model().map(str::to_string);
         let locked = open.first_prompt_sent();
-        let (rows, selected) = self.provider_rows(
+        let busy = open.busy();
+        let (mut rows, mut selected) = self.provider_rows(
             current,
             chosen.as_deref(),
             serving.as_deref(),
             locked,
             |choice| Consequence::Provision(choice),
         );
+        if busy {
+            Self::unavailable_tuning_rows(&mut rows, &mut selected);
+        }
         // The `/` menu the pick came through is already closed; a chip
         // click replaces whatever the slot held outright.
         self.popover = Some(Popover {
@@ -4463,6 +4729,30 @@ impl CockpitView {
             selected,
         });
         cx.notify();
+    }
+
+    /// Keep the current checkmark and catalog inspectable while choices
+    /// cannot be applied. The reason is a visible, inert menu row.
+    fn unavailable_tuning_rows(rows: &mut Vec<Row>, selected: &mut usize) {
+        for row in rows.iter_mut() {
+            row.row.inert = true;
+        }
+        rows.insert(
+            0,
+            Row {
+                row: pane::MenuRow {
+                    insert: SharedString::default(),
+                    name: TUNING_BUSY_HINT.into(),
+                    matched: Vec::new(),
+                    detail: SharedString::default(),
+                    prose_detail: true,
+                    inert: true,
+                },
+                active: false,
+                consequence: Consequence::Inert,
+            },
+        );
+        *selected += 1;
     }
 
     /// The sectioned rows every model picker shows — the Composer's and
@@ -6568,7 +6858,44 @@ impl Render for CockpitView {
         // The open popover widens its Composer's own key context to
         // ComposerMenu: the focused node, where enter and escape can win
         // their tie against Submit and Interrupt.
-        for pane in &self.panes {
+        let pane_rects = self.pane_rects(window);
+        for (index, pane) in self.panes.iter().enumerate() {
+            let row_limit = pane_rects
+                .iter()
+                .find(|(at, _)| *at == index)
+                .map(|(_, rect)| {
+                    let compact = fullscreen.is_none()
+                        && Level::for_cell(Cell::new(rect.w, rect.h)) == Level::Instruments;
+                    let queued = pane
+                        .thread()
+                        .and_then(|thread| self.cockpit.thread(thread))
+                        .map_or(0, |thread| thread.queued_all().len());
+                    pane::composer_row_limit(rect.h, compact, queued)
+                })
+                .unwrap_or(crate::composer::MAX_ROWS);
+            // Derive this every frame so answering, leaving fullscreen, or
+            // changing Subjects restores the full draft viewport automatically.
+            let answering_expanded_question = fullscreen == Some(index)
+                && pane
+                    .thread()
+                    .and_then(|thread| self.cockpit.thread(thread))
+                    .is_some_and(|open| {
+                        open.activity().pending_decisions().iter().any(|request| {
+                            (request.subject.as_ref() == Some(&pane.selected)
+                                || (request.subject.is_none() && pane.is_main()))
+                                && pane::question_of(&request.decision).is_some()
+                        })
+                    });
+            pane.composer.update(cx, |composer, cx| {
+                composer.set_visible_row_limit(
+                    if answering_expanded_question {
+                        row_limit.min(2)
+                    } else {
+                        row_limit
+                    },
+                    cx,
+                )
+            });
             let open = self
                 .popover
                 .as_ref()
@@ -6627,15 +6954,15 @@ impl Render for CockpitView {
             })
             .unwrap_or_else(|| self.focus.clone());
         use gpui::component::WindowExt as _;
-        let native_text_focused = (gpui::base::TextSelection::has_selection(window, cx)
-            || self
-                .panes
-                .get(self.focused())
-                .is_some_and(|pane| pane.rich.output_focused(&pane.text_namespace(), window, cx)))
-            && self
-                .panes
-                .get(self.focused())
-                .is_some_and(|pane| pane.transcript_focus.contains_focused(window, cx));
+        let native_text_focused = self
+            .panes
+            .get(self.focused())
+            .is_some_and(|pane| pane.transcript_focus.contains_focused(window, cx))
+            && (crate::rich::code_actions_focused(window)
+                || gpui::base::TextSelection::has_selection(window, cx)
+                || self.panes.get(self.focused()).is_some_and(|pane| {
+                    pane.rich.output_focused(&pane.text_namespace(), window, cx)
+                }));
         let pane_control_focused = self.panes.get(self.focused()).is_some_and(|pane| {
             let controls = pane
                 .thread()
@@ -6902,34 +7229,31 @@ impl Render for CockpitView {
                         .project(project)
                         .map(|project| SharedString::from(project.title.clone()))
                 });
-                let add_tooltip = match self.cockpit.roster().view() {
-                    View::Group(_) => "New Thread in Group",
+                let (add_label, add_tooltip, placement) = match self.cockpit.roster().view() {
+                    View::Group(_) => (
+                        "Add Thread",
+                        "New Thread in Group",
+                        DraftPlacement::CurrentGroup,
+                    ),
                     View::Solo
                         if self
                             .focused_thread()
                             .is_some_and(|thread| self.cockpit.groups().of(thread).is_none()) =>
                     {
-                        "New Group with New Thread"
+                        (
+                            "New Group",
+                            "New Group with New Thread",
+                            DraftPlacement::NewGroupWith(
+                                self.focused_thread().expect("the guard names a Thread"),
+                            ),
+                        )
                     }
-                    View::Solo => "New Thread",
+                    View::Solo => ("New Thread", "New Thread", DraftPlacement::CurrentGroup),
                 };
-                let add_thread = crate::titlebar::add_thread_button(add_tooltip).on_click(
-                    cx.listener(|view, _: &ClickEvent, _, cx| {
+                let add_thread = crate::titlebar::add_thread_button(add_label, add_tooltip).on_click(
+                    cx.listener(move |view, _: &ClickEvent, _, cx| {
                         cx.stop_propagation();
-                        match view.cockpit.roster().view() {
-                            View::Group(_) => {
-                                view.open_draft_in_current_view(DraftTarget::Main, cx)
-                            }
-                            View::Solo => match view.focused_thread() {
-                                Some(thread) if view.cockpit.groups().of(thread).is_none() => view
-                                    .open_draft_with_placement(
-                                        DraftTarget::Main,
-                                        DraftPlacement::NewGroupWith(thread),
-                                        cx,
-                                    ),
-                                _ => view.open_draft_in_current_view(DraftTarget::Main, cx),
-                            },
-                        }
+                        view.open_draft_with_placement(DraftTarget::Main, placement, cx);
                     }),
                 );
                 root.child(crate::titlebar::strip(
@@ -7072,6 +7396,7 @@ impl CockpitView {
                 pane,
                 pane::DraftState {
                     attachments: Composer::attachments(&pane.composer, &pane.preview, cx),
+                    composer_actions: self.composer_actions(index, cx),
                     discard: pane::draft_close_button(draft_id)
                         .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                             cx.stop_propagation();
@@ -7122,6 +7447,14 @@ impl CockpitView {
                 .map(|facts| facts.project_branches.as_slice())
                 .unwrap_or_default(),
             composer_empty: pane.composer.read(cx).is_empty(),
+            composer_queue_height: pane::composer_queue_height(
+                self.pane_rects(window)
+                    .into_iter()
+                    .find(|(at, _)| *at == index)
+                    .map_or(self.cell(window).height, |(_, rect)| rect.h),
+                level == Level::Instruments,
+                open.map_or(0, |thread| thread.queued_all().len()),
+            ),
             history_available: self.history_available(index, level),
             focused,
             attention: !focused && self.cockpit.notifications().attention(thread),
@@ -7142,6 +7475,9 @@ impl CockpitView {
             transcript: retained_transcript,
             received_reasoning_visible,
             attachments: Composer::attachments(&pane.composer, &pane.preview, cx),
+            composer_actions: (level != Level::Wall)
+                .then(|| self.composer_actions(index, cx))
+                .flatten(),
             background: (level != Level::Wall)
                 .then(|| self.background_chips(index, cx))
                 .flatten(),
@@ -7164,6 +7500,12 @@ impl CockpitView {
             activity_attention: self.activity_attention(index, cx),
             activity_decisions: (level != Level::Wall)
                 .then(|| self.activity_decisions(index, window, cx))
+                .flatten(),
+            expand_question: (level != Level::Wall)
+                .then(|| self.activity_question_expander(index, level == Level::Instruments, cx))
+                .flatten(),
+            question_measurement: l1
+                .then(|| self.activity_question_measurement(index, cx))
                 .flatten(),
             child_footer: self.child_footer(index, cx),
         };
@@ -8137,13 +8479,13 @@ impl CockpitView {
 
     /// The Composer's model picker (#25): the provider logomark, the bare
     /// model name, and a chevron — on **every** L1 Pane, not only pre-lock.
-    /// Its click still opens the provider picker, which is what the old
-    /// provider chip was for; a locked Thread's picker refuses the swap
-    /// itself rather than the control vanishing.
+    /// Its click opens the catalog even while working; the current choice
+    /// stays visible and availability follows the Thread's busy state.
     fn model_picker(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
         let thread = self.panes[index].thread()?;
         let open = self.cockpit.thread(thread)?;
         let provider = open.provider();
+        let busy = open.busy();
         // The standing choice names the chip; else what the Session's own
         // Init said is serving; until either, the Provider's own name —
         // and always the name a person says, never the id on the wire.
@@ -8159,7 +8501,10 @@ impl CockpitView {
             crate::components::button(("model-picker", thread.get() as usize))
                 .p_0()
                 .h_auto()
-                .child(pane::model_picker(Some(provider), label)),
+                .tooltip(if busy { TUNING_BUSY_HINT } else { "Model" })
+                .child(
+                    pane::model_picker(Some(provider), label).when(busy, |chip| chip.opacity(0.8)),
+                ),
             cx,
         );
         // The effort chip beside it — only when the model takes one; a
@@ -8180,7 +8525,12 @@ impl CockpitView {
                 crate::components::button(("effort-picker", thread.get() as usize))
                     .p_0()
                     .h_auto()
-                    .child(pane::effort_picker(label)),
+                    .tooltip(if busy {
+                        TUNING_BUSY_HINT
+                    } else {
+                        "Reasoning effort"
+                    })
+                    .child(pane::effort_picker(label).when(busy, |chip| chip.opacity(0.8))),
                 cx,
             )
         });
@@ -8242,8 +8592,14 @@ impl CockpitView {
             .unwrap_or_default();
         let weak = cx.entity().downgrade();
         let picker = weak.clone();
+        let busy = identity.thread().is_some_and(|thread| {
+            self.cockpit
+                .thread(thread)
+                .is_some_and(|thread| thread.busy())
+        });
         crate::components::ChoiceMenu {
-            id: format!("choice-{identity:?}-{effort}").into(),
+            // Rebuild the retained native menu when availability changes.
+            id: format!("choice-{identity:?}-{effort}-{busy}").into(),
             trigger,
             choices,
             open: open.is_some(),
@@ -8296,6 +8652,7 @@ impl CockpitView {
             return;
         };
         let provider = open.provider();
+        let busy = open.busy();
         let chosen = open.effort().map(str::to_string);
         let default = self.prefs.settings.effort_for(provider).map(str::to_string);
         let ladder =
@@ -8330,7 +8687,10 @@ impl CockpitView {
                 consequence: Consequence::Effort(Some(effort)),
             });
         }
-        let selected = rows.iter().position(|row| row.active).unwrap_or(0);
+        let mut selected = rows.iter().position(|row| row.active).unwrap_or(0);
+        if busy {
+            Self::unavailable_tuning_rows(&mut rows, &mut selected);
+        }
         self.popover = Some(Popover {
             pane: PaneIdentity::Thread(thread),
             kind: Kind::Effort,
@@ -9255,6 +9615,8 @@ fn transcript_text(blocks: &[ferrite_core::transcript::Block]) -> String {
 #[cfg(test)]
 mod tests {
     mod completion_checks;
+    mod composer_controls;
+    mod layout_polish;
     mod provider_controls;
     mod provider_forms;
     mod provider_navigation;
@@ -9754,6 +10116,34 @@ mod tests {
                 .expect("the new Thread belongs to a Group");
             assert_eq!(group.members, [original, focused]);
             assert_eq!(view.cockpit.roster().view(), View::Group(group.id));
+        });
+    }
+
+    #[gpui::test]
+    fn titlebar_add_in_a_group_keeps_the_draft_in_that_group(cx: &mut TestAppContext) {
+        let (mut core, _fake) = cockpit("titlebar-add-in-group", 2);
+        let threads = core.threads();
+        let group = core
+            .apply_group(GroupChange::Create {
+                first: threads[0],
+                second: threads[1],
+            })
+            .unwrap()
+            .group
+            .unwrap();
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, cx| view.enter_group(group, cx));
+        tick(cx);
+        let add = cx.debug_bounds("titlebar-add-thread").unwrap();
+        cx.simulate_click(add.center(), gpui::Modifiers::none());
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            let draft = view.cockpit.roster().focused().unwrap().draft().unwrap();
+            let scope = view.cockpit.roster().draft_scope(draft).unwrap();
+            assert_eq!(scope.group, Some(group));
+            assert_eq!(scope.new_group_with, None);
+            assert_eq!(view.cockpit.roster().view(), View::Group(group));
+            assert_eq!(view.cockpit.visible().len(), 3);
         });
     }
 
@@ -11151,9 +11541,8 @@ mod tests {
     /// #26: the mouse presses the keycap it depicts — a real click on the
     /// card's rightmost keycap runs its exact decide verb (`n deny`), even
     /// with text on the Composer line, where the n KEY would type instead.
-    /// The sweep hunts the card band so the test does not encode the
-    /// keycap's exact position, and the first click that answers must have
-    /// denied — allow sits further left.
+    /// Use the keycap's actual bounds: the Composer also has real pointer
+    /// actions, so a coordinate sweep would click unrelated controls first.
     #[gpui::test]
     fn clicking_a_keycap_runs_its_own_decide_verb(cx: &mut TestAppContext) {
         let (core, fake) = cockpit("keycap-click", 1);
@@ -11177,28 +11566,12 @@ mod tests {
             );
         });
 
-        // Sweep the card band right to left until a click answers; misses
-        // land on the card's own dead space and change nothing.
-        let mut answered = false;
-        'sweep: for row in 0..12 {
-            let y = 838. - row as f32 * 4.;
-            for step in 0..45 {
-                let x = 1430. - step as f32 * 6.;
-                cx.simulate_click(gpui::point(px(x), px(y)), gpui::Modifiers::none());
-                cx.run_until_parked();
-                if view.read_with(cx, |view, _| {
-                    view.cockpit
-                        .thread(thread)
-                        .and_then(|open| open.pending())
-                        .is_none()
-                }) {
-                    answered = true;
-                    break 'sweep;
-                }
-            }
-        }
-        assert!(answered, "the sweep never found a keycap");
+        cx.run_until_parked();
+        let deny = cx.debug_bounds("decision-deny").expect("the Deny keycap");
+        cx.simulate_click(deny.center(), gpui::Modifiers::none());
+        cx.run_until_parked();
         view.read_with(cx, |view, cx| {
+            assert!(view.cockpit.thread(thread).unwrap().pending().is_none());
             let answered_as = view
                 .cockpit
                 .thread(thread)
@@ -17255,16 +17628,36 @@ mod tests {
             cx.notify();
         });
         tick(cx);
+        let card = cx.debug_bounds("settings-card").unwrap();
+        cx.simulate_click(
+            card.origin + gpui::point(px(80.), px(66.)),
+            gpui::Modifiers::none(),
+        );
+        cx.simulate_input("Future Model");
+        tick(cx);
         let choice = cx
-            .debug_bounds("settings-codex-model-0")
-            .expect("Settings renders the discovered model")
+            .debug_bounds("settings-codex-model")
+            .expect("Settings search indexes models inside the chooser")
             .center();
         cx.simulate_click(choice, gpui::Modifiers::none());
+        cx.run_until_parked();
+        cx.simulate_keystrokes("down down enter");
         cx.run_until_parked();
         view.read_with(cx, |view, _| {
             assert_eq!(
                 view.prefs.settings.codex_model.as_deref(),
                 Some("gpt-future-model")
+            );
+        });
+        let choice = cx.debug_bounds("settings-codex-model").unwrap().center();
+        cx.simulate_click(choice, gpui::Modifiers::none());
+        cx.run_until_parked();
+        cx.simulate_keystrokes("down enter");
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert_eq!(
+                view.prefs.settings.codex_model, None,
+                "CLI default is an explicit reversible choice"
             );
         });
     }
@@ -17819,6 +18212,33 @@ mod tests {
             card.origin + gpui::point(px(80.), px(66.)),
             gpui::Modifiers::none(),
         );
+        cx.simulate_input("Solo answer size");
+        tick(cx);
+        let comfortable = cx
+            .debug_bounds("settings-solo-answer-size-1")
+            .unwrap()
+            .center();
+        cx.simulate_click(comfortable, gpui::Modifiers::none());
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert_eq!(
+                view.prefs.settings.solo_reading_size,
+                ferrite_core::settings::SoloReadingSize::Comfortable
+            );
+            assert_eq!(
+                ferrite_core::settings::Settings::load(&view.prefs.dir).solo_reading_size,
+                ferrite_core::settings::SoloReadingSize::Comfortable
+            );
+        });
+        cx.simulate_click(
+            card.origin + gpui::point(px(80.), px(66.)),
+            gpui::Modifiers::none(),
+        );
+        cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+            "cmd-a backspace"
+        } else {
+            "ctrl-a backspace"
+        });
         cx.simulate_input("Confirm before deleting");
         tick(cx);
         let toggle = cx.debug_bounds("settings-confirm-delete").unwrap().center();
@@ -17903,6 +18323,54 @@ mod tests {
             assert!(view.cockpit.thread(thread).is_none(), "gone on one press");
         });
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[gpui::test]
+    fn image_preview_opens_the_canonical_original_without_sending_or_closing(
+        cx: &mut TestAppContext,
+    ) {
+        let (core, fake) = cockpit("open-original-image", 1);
+        bind_production_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(800.)));
+        let directory = scratch("original-image-path");
+        std::fs::create_dir_all(directory.join("nested")).unwrap();
+        let image = directory.join("résumé #50%.png");
+        std::fs::write(
+            &image,
+            include_bytes!("../assets/app-icon.png"),
+        )
+        .unwrap();
+        // Include a parent component so the route must canonicalize, not
+        // concatenate a file:// prefix or hand the OS the unresolved path.
+        let unresolved = directory.join("nested/../résumé #50%.png");
+        view.update_in(cx, |view, window, cx| {
+            view.panes[0]
+                .preview
+                .open(unresolved, "Screenshot".into(), window, cx);
+        });
+        tick(cx);
+        let open = cx
+            .debug_bounds("open-original-attachment")
+            .expect("the preview exposes its original image");
+        cx.simulate_click(open.center(), gpui::Modifiers::none());
+        cx.run_until_parked();
+        let opened = url::Url::parse(&cx.opened_url().expect("the OS received a file URL"))
+            .unwrap();
+        assert_eq!(opened.scheme(), "file");
+        assert_eq!(
+            opened.to_file_path().unwrap().canonicalize().unwrap(),
+            image.canonicalize().unwrap()
+        );
+        assert!(opened.fragment().is_none() && opened.query().is_none());
+        assert!(
+            fake.sent.borrow().is_empty(),
+            "inspection never submits a prompt"
+        );
+        assert!(cx.debug_bounds("attachment-preview-content").is_some());
+        cx.simulate_keystrokes("escape");
+        tick(cx);
+        assert!(cx.debug_bounds("attachment-preview-content").is_none());
     }
 
     #[gpui::test]

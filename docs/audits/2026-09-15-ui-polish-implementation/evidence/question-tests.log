@@ -1,0 +1,19 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.76s
+warning: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/main.rs (/Users/josephwylie/Desktop/Projects/ferrite/target/debug/deps/ferrite-97c6c8b36e1fdb9c)
+
+running 10 tests
+test cockpit::tests::provider_forms::contract_live_claude_base_branch_question_renders ... ok
+test cockpit::tests::completion_checks::typed_and_pasted_question_marks_remain_literal_composer_text ... ok
+test cockpit::tests::provider_forms::contract_typed_question_renders_and_returns_normalized_picks ... ok
+test cockpit::tests::a_question_decision_is_answered_by_its_form ... ok
+test cockpit::tests::a_typed_line_answers_a_question_in_the_operators_words ... ok
+test cockpit::tests::layout_polish::group_question_stays_between_its_thread_header_and_growing_composer ... ok
+test cockpit::tests::subagents::unattributed_question_keeps_native_input_focus_across_repaint_and_sends_exact_answer ... ok
+test cockpit::tests::completion_checks::wrapped_question_retains_exact_picks_and_note_through_rejection_and_ack ... ok
+test cockpit::tests::layout_polish::group_question_uses_measured_space_and_restores_inline_form ... ok
+test cockpit::tests::layout_polish::compact_group_question_expands_and_retains_answer_and_draft ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 358 filtered out; finished in 1.00s
+
