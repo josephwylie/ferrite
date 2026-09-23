@@ -177,8 +177,6 @@ pub const ACCENT_EDGE: u32 = 0x8daedf66;
 pub const ACCENT_WASH: u32 = 0x8daedf24;
 /// `#8daedf40` (25%) — native text selection, painted over glyphs.
 pub const TEXT_SELECTION_WASH: u32 = 0x8daedf40;
-/// `#2a384f` — the Composer's opaque selection quad.
-pub const SELECTION: u32 = 0x2a384f;
 /// The caret.
 pub const CARET: u32 = ACCENT;
 
@@ -1371,13 +1369,10 @@ mod tests {
         );
         floor(
             &[("TEXT", TEXT)],
-            &[
-                (
-                    "TEXT_SELECTION_WASH on PANE",
-                    over(TEXT_SELECTION_WASH, PANE),
-                ),
-                ("SELECTION", SELECTION),
-            ],
+            &[(
+                "TEXT_SELECTION_WASH on PANE",
+                over(TEXT_SELECTION_WASH, PANE),
+            )],
             4.5,
         );
     }

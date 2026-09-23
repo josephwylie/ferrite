@@ -361,8 +361,11 @@ pub fn key_hints(hints: &[(&str, &str)]) -> Div {
         .items_center()
         .gap(px(theme::SPACE_3))
         .children(hints.iter().map(|(key, verb)| {
+            // A pair never shrinks: a narrow row drops whole hints rather
+            // than cutting one mid-word.
             div()
                 .flex()
+                .flex_shrink_0()
                 .gap(px(theme::SPACE_1))
                 .child(
                     div()
