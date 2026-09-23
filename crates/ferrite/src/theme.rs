@@ -984,6 +984,8 @@ pub const SEAM_LINE_INSET: f32 = SPACE_2;
 /// Pane's radius; its label is a raised mono tag, 8/4 padded.
 pub const DROP_LABEL_PAD_X: f32 = SPACE_2;
 pub const DROP_LABEL_PAD_Y: f32 = SPACE_1;
+/// The Pane a live drag picked up, dimmed in its slot until the release.
+pub const DRAG_SOURCE_OPACITY: f32 = 0.5;
 /// The empty board's hint column: lines 8px apart, a key 8px from its verb.
 pub const EMPTY_BOARD_GAP: f32 = SPACE_2;
 // (end WP-C) — append above this line only

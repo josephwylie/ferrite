@@ -243,6 +243,8 @@ pub struct CockpitView {
     /// A Pane being dragged over another: the target and what a release
     /// there would do, for the preview wash.
     drop_preview: Option<(ThreadId, Zone)>,
+    /// The Pane a live drag picked up: its cell dims until the release.
+    pane_drag_source: Option<ThreadId>,
     /// The operator's settings and where they save; every change saves.
     prefs: Preferences,
     /// The Settings panel is up.
@@ -778,6 +780,7 @@ impl CockpitView {
             facts: Facts::with_auto_title(prefs.settings.auto_title),
             seam_drag: None,
             drop_preview: None,
+            pane_drag_source: None,
             prefs,
             settings_open: false,
             project_editor: None,
@@ -2350,6 +2353,7 @@ impl CockpitView {
     /// leaves, an edge moves the source beside the target — the tree
     /// persists either way. Reads the preview the last move computed.
     fn drop_pane(&mut self, source: ThreadId, target: ThreadId, cx: &mut Context<Self>) {
+        self.pane_drag_source = None;
         let preview = self.drop_preview.take();
         let Some((previewed, zone)) = preview.filter(|(previewed, _)| *previewed == target) else {
             cx.notify();
@@ -3136,6 +3140,7 @@ impl CockpitView {
         }
         let badge = self.panes[index].name.clone();
         let grouped = self.cockpit.groups().of(thread).is_some();
+        let this = cx.entity().downgrade();
         pane::head_title(self.panes[index].name.clone())
             .id(("pane-title", thread.get() as usize))
             .debug_selector(move || format!("pane-title-{}", thread.get()))
@@ -3145,6 +3150,12 @@ impl CockpitView {
                 title.cursor(gpui::CursorStyle::OpenHand).on_drag(
                     PaneDrag { thread },
                     move |_, _, _, cx| {
+                        // The drag has begun: its source dims until the
+                        // release (the root's mouse-up) ends it.
+                        let _ = this.update(cx, |view, cx| {
+                            view.pane_drag_source = Some(thread);
+                            cx.notify();
+                        });
                         let badge = badge.clone();
                         cx.new(|_| PaneDragPreview(badge))
                     },
@@ -7241,7 +7252,8 @@ impl Render for CockpitView {
                 MouseButton::Left,
                 cx.listener(|view, _: &MouseUpEvent, _, cx| {
                     view.end_seam_drag(cx);
-                    if view.drop_preview.take().is_some() {
+                    let dragged = view.pane_drag_source.take().is_some();
+                    if view.drop_preview.take().is_some() || dragged {
                         cx.notify();
                     }
                 }),
@@ -7634,6 +7646,11 @@ impl CockpitView {
                 .flatten(),
             child_footer: self.child_footer(index, cx),
         };
+        // The Pane a live drag picked up reads as lifted out of its slot.
+        let cell = cell.when(self.pane_drag_source == Some(thread), |cell| {
+            cell.opacity(crate::theme::DRAG_SOURCE_OPACITY)
+                .debug_selector(move || format!("pane-drag-source-{}", thread.get()))
+        });
         cell.child(pane::render_pane(pane, facts, wiring, level))
     }
     /// The board with no Pane open: one quiet line and the three keys that
