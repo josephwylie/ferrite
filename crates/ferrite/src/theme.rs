@@ -655,8 +655,9 @@ pub fn init_components(cx: &mut gpui::App) {
     theme.scrollbar = rgba(TRANSPARENT).into();
     theme.scrollbar_thumb = rgb(SCROLLBAR).into();
     theme.scrollbar_thumb_hover = rgb(SCROLLBAR_HOVER).into();
-    // The subject strip (the app's only TabBar, plain Tab variant): no bar
-    // ground, the active tab a FILL pill in TEXT_STRONG, the rest muted.
+    // Kit tabs, should one appear (the Subject strip draws its own on the
+    // headless tab): no bar ground, the active tab a FILL pill in
+    // TEXT_STRONG, the rest muted.
     theme.tab_bar = rgba(TRANSPARENT).into();
     theme.tab_active = rgb(FILL).into();
     theme.tab_active_foreground = rgb(TEXT_STRONG).into();
@@ -1230,12 +1231,11 @@ pub const DECISION_KEYS_GAP: f32 = SPACE_3;
 /// The L2 Decision body: the cell's padding, 6px between its lines.
 pub const DECISION_L2_GAP: f32 = SPACE_1_5;
 
-/// Subagent tabs: the kit's plain `Tab` variant at XSmall (20px high, 8px
-/// inline padding inside a 1px edge each side, packed with no gap), the
-/// active tab a `FILL` pill; labels truncate at 112px. A mark sits 6px
-/// after its label; the `+N` overflow keeps 4px either side.
+/// Subagent tabs: Ferrite's own row of 20px tabs packed with no gap, 8px
+/// inline padding, no edge and no rule under the row; the active tab a
+/// `FILL` pill; labels truncate at 112px. A mark sits 6px after its label;
+/// the `+N` overflow keeps 4px either side.
 pub const SUBJECT_TAB_PAD_X: f32 = SPACE_2;
-pub const SUBJECT_TAB_EDGE: f32 = 1.0;
 pub const SUBJECT_TAB_GAP: f32 = SPACE_1;
 pub const SUBJECT_TAB_INNER_GAP: f32 = SPACE_1_5;
 pub const SUBJECT_LABEL_MAX_W: f32 = 112.0;

@@ -11,7 +11,6 @@ use gpui::component::{
     input::{Input, InputState},
     radio::{Radio, RadioGroup},
     scroll::ScrollableElement,
-    tab::{Tab, TabBar},
     Disableable, Sizable,
 };
 use gpui::{Animation, AnimationExt, KeyDownEvent};
@@ -300,8 +299,45 @@ fn subject_marks(agent: &ferrite_core::activity::AgentView<'_>, waiting: bool) -
     }
 }
 
-/// One tab's laid-out width in the plain Tab variant: its inline padding
-/// and 1px edges, the label up to its cap, and each mark after a gap. The
+/// One Subject tab's face on the headless tab (its role and selection are
+/// the platform's): `width` wide (`tab_width`), `CHIP_H` high, a `FILL`
+/// pill in `TEXT_STRONG` when active; otherwise `TEXT_MUTED`, brightening
+/// under the pointer. No edge and no rule: the pill says which.
+fn subject_tab_face(at: usize, selected: bool, width: f32) -> gpui_base::Tab {
+    gpui_base::Tab::new(at)
+        .selected(selected)
+        .justify_start()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .w(px(width))
+        .h(px(theme::CHIP_H))
+        .px(px(theme::SUBJECT_TAB_PAD_X))
+        .overflow_hidden()
+        .rounded(px(theme::R_CHIP))
+        .cursor_pointer()
+        .text_size(px(theme::FS_SM))
+        .line_height(px(theme::LH_META))
+        .when(selected, |tab| {
+            // The tab's own debug name is its Subject's; the pill is named
+            // by a box laid exactly over it.
+            tab.relative()
+                .bg(rgb(theme::FILL))
+                .text_color(rgb(theme::TEXT_STRONG))
+                .child(
+                    div()
+                        .debug_selector(|| "subject-tab-selected".into())
+                        .absolute()
+                        .inset_0(),
+                )
+        })
+        .when(!selected, |tab| {
+            tab.text_color(rgb(theme::TEXT_MUTED))
+                .hover(|style| style.text_color(rgb(theme::TEXT_STRONG)))
+        })
+}
+
+/// One tab's laid-out width: its inline padding, the label up to its cap, and each mark after a gap. The
 /// overflow model and the tab's own `w` both come from here.
 fn tab_width(label: f32, marks: Marks) -> f32 {
     let mark = |on: bool, width: f32| {
@@ -311,7 +347,7 @@ fn tab_width(label: f32, marks: Marks) -> f32 {
             0.
         }
     };
-    2. * (theme::SUBJECT_TAB_PAD_X + theme::SUBJECT_TAB_EDGE)
+    2. * theme::SUBJECT_TAB_PAD_X
         + label.min(theme::SUBJECT_LABEL_MAX_W)
         + mark(marks.working, theme::BUSY_DOTS_W)
         + mark(marks.waiting, theme::ATTENTION_DOT)
@@ -533,22 +569,20 @@ impl CockpitView {
         let nav = Rc::new(order);
         let interaction = pane.tab_interaction.clone();
         let identity = format!("subject-tabs-{}-{:?}", thread.get(), nav);
-        // The plain Tab variant: the active tab is a `FILL` pill (the kit's
-        // `tab_active`), never a sliding accent underline.
-        let mut tabs = TabBar::new(SharedString::from(identity))
-            .xsmall()
-            .h(px(theme::CHIP_H))
-            .last_empty_space(div().w_0());
-        if let Some(at) = nav.iter().position(|subject| subject == &pane.selected) {
-            tabs = tabs.selected_index(at);
-        }
-        let main = Tab::new()
-            .aria_label("Main transcript")
+        // Our own row, not the kit's TabBar: the kit edges its active tab
+        // and rules the bar in the global border colour. The active tab is
+        // a `FILL` pill and nothing else; the id carries the ordered Subjects
+        // so a reorder discards positional press state before any release.
+        let selected_at = nav.iter().position(|subject| subject == &pane.selected);
+        let mut tabs = gpui_base::Tabs::new(SharedString::from(identity))
+            .flex()
+            .items_center()
+            .h(px(theme::CHIP_H));
+        let main = subject_tab_face(0, selected_at == Some(0), main_width)
+            .accessibility_label("Main transcript")
             .tooltip(|window, cx| {
                 gpui::component::tooltip::Tooltip::new("Main transcript").build(window, cx)
             })
-            .w(px(main_width))
-            .rounded(px(theme::R_CHIP))
             .debug_selector(move || format!("subject-main-{}", thread.get()))
             .child(
                 div()
@@ -612,15 +646,17 @@ impl CockpitView {
                 }
             );
             let tooltip = format!("{name} — {}", status_label(agent.status(), agent.fresh()));
-            let tab = Tab::new()
-                .aria_label(tooltip.clone())
-                .w(px(widths[visible_indices[at]]))
-                .rounded(px(theme::R_CHIP))
-                .debug_selector(move || selector.clone())
-                .child(content)
-                .tooltip(move |window, cx| {
-                    gpui::component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)
-                });
+            let tab = subject_tab_face(
+                at + 1,
+                selected_at == Some(at + 1),
+                widths[visible_indices[at]],
+            )
+            .accessibility_label(tooltip.clone())
+            .debug_selector(move || selector.clone())
+            .child(content)
+            .tooltip(move |window, cx| {
+                gpui::component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)
+            });
             tabs = tabs.child(self.subject_tab(
                 tab,
                 thread,
@@ -740,14 +776,14 @@ impl CockpitView {
 
     fn subject_tab(
         &self,
-        tab: Tab,
+        tab: gpui_base::Tab,
         thread: ThreadId,
         subject: Subject,
         at: usize,
         order: Rc<Vec<Subject>>,
         interaction: TabInteraction,
         cx: &mut Context<Self>,
-    ) -> Tab {
+    ) -> gpui_base::Tab {
         let focus = interaction
             .0
             .borrow_mut()
@@ -765,7 +801,7 @@ impl CockpitView {
             .tab_stop(true)
             .focus_visible(components::control_focus)
             .on_click(cx.listener(move |view, event, window, cx| {
-                // The TabBar identity includes the ordered Subjects. A reorder
+                // The row's identity includes the ordered Subjects. A reorder
                 // discards native positional press state before any release.
                 view.activate_subject(thread, clicked_subject.clone(), event, window, cx);
             }))

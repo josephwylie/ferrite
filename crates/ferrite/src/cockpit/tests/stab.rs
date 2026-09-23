@@ -214,3 +214,51 @@ fn keycaps_and_menu_shortcuts_draw_the_command_glyph(cx: &mut TestAppContext) {
         "the empty board's keycaps draw the glyph"
     );
 }
+
+/// The Subject strip is Ferrite's own tab row: exactly one active pill,
+/// which follows the pick, on a row no taller than a chip (no kit rule
+/// hanging under it).
+#[gpui::test]
+fn the_subject_strip_marks_one_active_pill_that_follows_the_pick(cx: &mut TestAppContext) {
+    use ferrite_core::activity::{
+        ActivityEvent, AgentInfo, AgentKey, AgentStatus, Subject, TranscriptCoverage,
+    };
+    let (core, fake) = cockpit("subject-pill", 1);
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
+    let key = AgentKey::new(Provider::Claude, "ui-fixture", "Atlas");
+    let mut info = AgentInfo::new(key.clone());
+    info.name = Some("Atlas".into());
+    info.parent = Some(Subject::Main);
+    info.coverage = TranscriptCoverage::Live;
+    for event in [
+        ActivityEvent::Discovered(info),
+        ActivityEvent::Status {
+            key: key.clone(),
+            state: AgentStatus::Idle,
+        },
+    ] {
+        fake.streams.borrow()[0]
+            .send(SessionEvent::Activity(event))
+            .unwrap();
+    }
+    tick(cx);
+    let strip = cx.debug_bounds("subject-strip-1").expect("the strip");
+    let pill = cx.debug_bounds("subject-tab-selected").expect("one pill");
+    let main = cx.debug_bounds("subject-main-1").unwrap();
+    assert_eq!(pill, main, "Main is active first");
+    assert_eq!(pill.size.height, px(crate::theme::CHIP_H));
+    assert!(strip.size.height <= px(crate::theme::SUBJECT_STRIP_H));
+
+    let atlas: &'static str =
+        Box::leak(format!("subject-agent-1-{}", key.as_str()).into_boxed_str());
+    let tab = cx.debug_bounds(atlas).expect("Atlas's tab");
+    cx.simulate_click(tab.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    tick(cx);
+    assert_eq!(
+        cx.debug_bounds("subject-tab-selected").unwrap(),
+        cx.debug_bounds(atlas).unwrap(),
+        "the pill follows the pick"
+    );
+}
