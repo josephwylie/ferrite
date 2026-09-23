@@ -553,6 +553,7 @@ impl PulseLeases {
     }
 }
 
+#[derive(Default)]
 struct PulseClock {
     epoch: Option<Instant>,
     leases: PulseLeases,
@@ -560,16 +561,6 @@ struct PulseClock {
 }
 
 impl Global for PulseClock {}
-
-impl Default for PulseClock {
-    fn default() -> Self {
-        Self {
-            epoch: None,
-            leases: PulseLeases::default(),
-            running: false,
-        }
-    }
-}
 
 /// The phase `[0, 1)` of a loop with this `period`, leasing `view` onto the
 /// clock so it re-renders on the next tick. Call it only while painting the
