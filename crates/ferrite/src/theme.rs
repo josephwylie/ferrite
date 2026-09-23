@@ -493,6 +493,12 @@ pub const ROW_ICON: f32 = 12.0;
 pub const ROW_ICON_GAP: f32 = 5.0;
 /// 12px — the provider logomark in a picker row and the Composer's chip.
 pub const PROVIDER_MARK_SM: f32 = 12.0;
+/// The badge under the pointer while a Pane or a nav row is dragged
+/// (`components::drag_badge`): 26px high, 10px inline padding, at most
+/// 280px before the title truncates.
+pub const DRAG_BADGE_H: f32 = 26.0;
+pub const DRAG_BADGE_PAD_X: f32 = 10.0;
+pub const DRAG_BADGE_MAX_W: f32 = 280.0;
 /// 24px — an L2 cell's header row; 10px its padding.
 pub const CELL_HEADER_H: f32 = 24.0;
 pub const CELL_PAD: f32 = 10.0;
@@ -973,11 +979,6 @@ pub const SEAM_LINE_INSET: f32 = SPACE_2;
 /// Pane's radius; its label is a raised mono tag, 8/4 padded.
 pub const DROP_LABEL_PAD_X: f32 = SPACE_2;
 pub const DROP_LABEL_PAD_Y: f32 = SPACE_1;
-/// The badge under the pointer while a Pane is dragged: 26px high, 10px
-/// inline padding, at most 280px before the title truncates.
-pub const DRAG_BADGE_H: f32 = 26.0;
-pub const DRAG_BADGE_PAD_X: f32 = 10.0;
-pub const DRAG_BADGE_MAX_W: f32 = 280.0;
 /// The empty board's hint column: lines 8px apart, a key 8px from its verb.
 pub const EMPTY_BOARD_GAP: f32 = SPACE_2;
 // (end WP-C) — append above this line only

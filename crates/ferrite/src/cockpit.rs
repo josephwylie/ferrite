@@ -327,28 +327,8 @@ struct PaneDrag {
 struct PaneDragPreview(SharedString);
 
 impl Render for PaneDragPreview {
-    /// A raised mono tag with the float shadow, its face set here because
-    /// the preview is its own window-level view and inherits nothing; a
-    /// long title truncates instead of dragging a banner.
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        use crate::theme::*;
-        div()
-            .flex()
-            .items_center()
-            .h(px(DRAG_BADGE_H))
-            .max_w(px(DRAG_BADGE_MAX_W))
-            .px(px(DRAG_BADGE_PAD_X))
-            .rounded(px(R_CONTROL))
-            .bg(rgb(RAISED))
-            .border_1()
-            .border_color(rgba(HAIRLINE_STRONG))
-            .shadow(crate::components::float_shadow())
-            .font_family(FONT_MONO)
-            .text_size(px(FS_UI))
-            .line_height(px(LH_UI))
-            .font_weight(W_LABEL)
-            .text_color(rgb(TEXT_STRONG))
-            .child(div().min_w_0().truncate().child(self.0.clone()))
+        crate::components::drag_badge(self.0.clone())
     }
 }
 
@@ -459,7 +439,7 @@ struct NavDrag {
 
 impl Render for NavDragPreview {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        nav::drag_badge(self.0.clone())
+        crate::components::drag_badge(self.0.clone())
     }
 }
 

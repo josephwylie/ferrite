@@ -1161,32 +1161,6 @@ pub fn rename_target_thread(thread: ThreadId, title: SharedString) -> Stateful<D
         .child(title)
 }
 
-/// The badge that follows the pointer while a row is dragged — the Pane
-/// drag's own badge (`PaneDragPreview`), so the two drags read as one
-/// gesture: a raised mono tag with a strong edge and the float shadow, the
-/// dragged Thread's or Group's title in `TEXT_STRONG`, truncating rather
-/// than trailing a banner. Its face is set here because a drag preview is
-/// its own window-level view and inherits nothing.
-pub fn drag_badge(label: SharedString) -> Div {
-    div()
-        .flex()
-        .items_center()
-        .h(px(DRAG_BADGE_H))
-        .max_w(px(DRAG_BADGE_MAX_W))
-        .px(px(DRAG_BADGE_PAD_X))
-        .rounded(px(R_CONTROL))
-        .bg(rgb(RAISED))
-        .border_1()
-        .border_color(rgba(HAIRLINE_STRONG))
-        .shadow(components::float_shadow())
-        .font_family(FONT_MONO)
-        .text_size(px(FS_UI))
-        .line_height(px(LH_UI))
-        .font_weight(W_LABEL)
-        .text_color(rgb(TEXT_STRONG))
-        .child(div().min_w_0().truncate().child(label))
-}
-
 /// The collapsed rail. Primary navigation actions sit at the top, recent
 /// Threads occupy the scrolling middle, and utilities are supplied by the
 /// caller at the bottom—the familiar desktop navigation-rail hierarchy.

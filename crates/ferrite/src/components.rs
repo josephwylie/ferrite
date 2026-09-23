@@ -252,6 +252,31 @@ pub fn floating_surface() -> Div {
         .shadow(float_shadow())
 }
 
+/// The badge that follows the pointer while a Pane or a nav row is
+/// dragged, so the two drags read as one gesture: a raised mono tag with a
+/// strong edge and the float shadow, the dragged title in `TEXT_STRONG`,
+/// truncating rather than trailing a banner. Its face is set here because a
+/// drag preview is its own window-level view and inherits nothing.
+pub fn drag_badge(label: SharedString) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .h(px(theme::DRAG_BADGE_H))
+        .max_w(px(theme::DRAG_BADGE_MAX_W))
+        .px(px(theme::DRAG_BADGE_PAD_X))
+        .rounded(px(theme::R_CONTROL))
+        .bg(rgb(theme::RAISED))
+        .border_1()
+        .border_color(rgba(theme::HAIRLINE_STRONG))
+        .shadow(float_shadow())
+        .font_family(theme::FONT_MONO)
+        .text_size(px(theme::FS_UI))
+        .line_height(px(theme::LH_UI))
+        .font_weight(theme::W_LABEL)
+        .text_color(rgb(theme::TEXT_STRONG))
+        .child(div().min_w_0().truncate().child(label))
+}
+
 /// The modal veil: covers its parent, takes every press, centres its child.
 pub fn veil() -> Div {
     div()
