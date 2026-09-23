@@ -77,3 +77,40 @@ fn a_sweep_across_long_disclosed_output_copies_prose_output_and_prose(cx: &mut T
         "the `$` and the elbows are chrome: {copied:?}"
     );
 }
+
+/// UI-14 in the new grammar: an answer that opens with a heading centres
+/// its Ferrite mark on the heading's own line box, not the prose line's.
+#[gpui::test]
+fn the_answer_mark_centres_on_a_leading_headings_line_box(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("answer-mark-heading", 1);
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TextDelta {
+            text: "# Heading one\n\nBody text under it.\n\n".into(),
+        })
+        .unwrap();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    tick(cx);
+    tick(cx);
+    let mark = debug_bounds(cx, "answer-mark".into()).unwrap();
+    let answer = debug_bounds(cx, "transcript-answer".into()).unwrap();
+    let heading = view.read_with(cx, |view, cx| {
+        let thread = view.panes[0].thread().unwrap();
+        let block = &view.cockpit.thread(thread).unwrap().transcript().blocks()[0];
+        let id = format!(
+            "markdown-{}-{:?}",
+            view.panes[0].text_namespace(),
+            block.markdown_run.unwrap_or(block.id)
+        );
+        crate::rich::testing::bounds(&id, 0, cx).unwrap()
+    });
+    let line = crate::rich::heading_line_height(1, crate::theme::FS_PROSE);
+    assert!(
+        (mark.top() + mark.size.height / 2. - (answer.top() + px(line / 2.))).abs() <= px(1.),
+        "the mark centres on the heading's {line}px line box: {mark:?} / {answer:?}"
+    );
+    assert!(
+        (heading.top() - answer.top()).abs() <= px(1.),
+        "the leading heading carries no top margin to throw the mark off: {heading:?}"
+    );
+}

@@ -415,6 +415,14 @@ impl TranscriptView {
                 .unwrap_or(blocks[0].id);
             let answer_size = theme::answer_text_size(self.input.reading_size);
             let line_height = theme::answer_line_height(self.input.reading_size);
+            // The mark centres on the first line box: a leading heading's
+            // own, taller box, or the prose line at this reading size.
+            let first_line = match &blocks[0].body {
+                Body::Heading { level, .. } => {
+                    crate::rich::heading_line_height(*level, answer_size)
+                }
+                _ => line_height,
+            };
             return div()
                 .id(SharedString::from(format!(
                     "answer-{}-{first:?}",
@@ -433,8 +441,7 @@ impl TranscriptView {
                 .line_height(px(line_height))
                 .child(
                     // The monochrome Ferrite mark, centred on the first line
-                    // box: the pixel line height at every reading size, a
-                    // leading heading included (it inherits the row's).
+                    // box at every reading size, a leading heading included.
                     components::gutter(
                         components::glyph_box(icons::icon(
                             icons::FERRITE_MONO,
@@ -442,7 +449,7 @@ impl TranscriptView {
                             theme::TEXT_MUTED,
                         ))
                         .debug_selector(|| "answer-mark".into()),
-                        line_height,
+                        first_line,
                     )
                     .absolute()
                     .left_0()
