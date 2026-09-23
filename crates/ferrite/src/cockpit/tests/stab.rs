@@ -472,10 +472,10 @@ fn the_head_title_keeps_its_floor_beside_the_agent_tabs(cx: &mut TestAppContext)
         .unwrap();
     let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     for name in [
-        "nav-audit",
-        "composer-audit",
-        "settings-audit",
-        "tokens-audit",
+        // Short names: on a wide Pane the head spans the reading column
+        // (720), and the title at its cap, the checkout and all four tabs
+        // must fit there.
+        "nav", "cmp", "set", "tok",
     ] {
         let key = AgentKey::new(Provider::Claude, "ui-fixture", name);
         let mut info = AgentInfo::new(key.clone());
@@ -1394,5 +1394,36 @@ fn a_compact_placeholder_carries_no_hint(cx: &mut TestAppContext) {
     assert!(
         cx.debug_bounds("prompt-placeholder-hint").is_some(),
         "L1 carries its one hint"
+    );
+}
+
+/// A Pane wider than the reading column lays its head out on the column's
+/// grid: the title starts at the transcript's C1 (where the Composer's line
+/// and every row's text start), so the Pane keeps one left edge. A narrow
+/// Pane keeps the head at its own padding.
+#[gpui::test]
+fn the_head_title_starts_at_c1_on_a_wide_pane(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("head-on-column", 1);
+    let thread = core.threads()[0];
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    let title: &'static str =
+        Box::leak(format!("pane-head-title-{}", thread.get()).into_boxed_str());
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    let block = cx.debug_bounds("composer-block").unwrap();
+    let c1 = block.left() + px(crate::theme::BOX_INSET_X + crate::theme::GUTTER_W);
+    let head = cx.debug_bounds(title).expect("the head title");
+    assert!(
+        (head.left() - c1).abs() <= px(0.5),
+        "the title {head:?} starts at C1 {c1:?}"
+    );
+
+    cx.simulate_resize(gpui::size(px(760.), px(900.)));
+    tick(cx);
+    let head = cx.debug_bounds(title).unwrap();
+    let block = cx.debug_bounds("composer-block").unwrap();
+    assert!(
+        head.left() < block.left() + px(crate::theme::BOX_INSET_X + crate::theme::GUTTER_W),
+        "a narrow Pane keeps its head at its own padding"
     );
 }

@@ -7510,6 +7510,17 @@ impl CockpitView {
         )
     }
 
+    /// Whether a Pane is wider than the reading column (inside its padding
+    /// and edges), so its head lays out on the column's grid.
+    fn head_column(&self, index: usize, window: &Window) -> bool {
+        let width = self
+            .pane_rects(window)
+            .into_iter()
+            .find(|(at, _)| *at == index)
+            .map_or(self.cell(window).width, |(_, rect)| rect.w);
+        width - 2. * (crate::theme::PANE_PAD_X + 1.) > crate::theme::READING_MAX_W
+    }
+
     /// Whether native files hover this Pane right now: the last Pane their
     /// drag moved over, while that drag is still live.
     fn drop_target(&self, index: usize, cx: &gpui::App) -> bool {
@@ -7632,6 +7643,7 @@ impl CockpitView {
                     reduce_motion: cx.reduce_motion(),
                     drop_target: self.drop_target(index, cx),
                     show_focus: self.visible_indices().len() > 1,
+                    head_column: self.head_column(index, window),
                 },
                 level,
             ));
@@ -7682,6 +7694,7 @@ impl CockpitView {
                 && pane.composer.read(cx).focus_handle(cx).is_focused(window),
             drop_target: self.drop_target(index, cx),
             show_focus: self.visible_indices().len() > 1,
+            head_column: self.head_column(index, window),
         };
         // Only L1 draws a Composer to hang a popover over (#23), a model
         // picker (#25) or usage meter; the wall answers with keys alone.

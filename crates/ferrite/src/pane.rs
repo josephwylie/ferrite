@@ -626,6 +626,9 @@ pub struct PaneFacts<'a> {
     /// More than one Pane is on the board, so which one holds the keyboard
     /// needs showing: only then does focus draw the `FOCUS_RING` edge.
     pub show_focus: bool,
+    /// The Pane is wider than the reading column, so its head lays out on
+    /// the column's grid (`PaneHeadState::column`).
+    pub head_column: bool,
 }
 
 /// The click-wired elements only the cockpit can build — gpui listeners
@@ -875,6 +878,7 @@ pub fn render_pane(
         editing,
         drop_target,
         show_focus,
+        head_column,
     } = facts;
     let pulse = attention.then(|| view.thread()).flatten();
     let empty = WallCard::default();
@@ -1042,6 +1046,7 @@ pub fn render_pane(
             attention: activity_attention,
             action: expand_question,
             tasks: l1_tasks(&mut cx),
+            column: head_column,
         },
     ));
     match transcript {
@@ -1487,6 +1492,8 @@ pub struct DraftState<'a> {
     pub drop_target: bool,
     /// More than one Pane is on the board (`PaneFacts::show_focus`).
     pub show_focus: bool,
+    /// The head lays out on the reading column (`PaneFacts::head_column`).
+    pub head_column: bool,
 }
 
 /// A draft Pane (#29): an empty transcript area and the Composer wearing
@@ -1509,6 +1516,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
         reduce_motion: _,
         drop_target,
         show_focus,
+        head_column,
     } = state;
     // A draft wears the live Pane's edge: the resting hairline (stepping up
     // under the pointer) or, beside other Panes, the focus ink. It has no
@@ -1545,6 +1553,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
                 view,
                 PaneHeadState {
                     action: Some(discard),
+                    column: head_column,
                     ..Default::default()
                 },
             ))
@@ -2329,6 +2338,9 @@ struct PaneHeadState<'a> {
     action: Option<AnyElement>,
     /// The tasks meter (`l1_tasks`), riding the right cluster.
     tasks: Option<AnyElement>,
+    /// The Pane is wider than the reading column: the head lays out on the
+    /// column's grid, so the whole Pane keeps one left edge.
+    column: bool,
 }
 
 fn pane_head(view: &PaneView, state: PaneHeadState<'_>) -> Div {
@@ -2343,6 +2355,7 @@ fn pane_head(view: &PaneView, state: PaneHeadState<'_>) -> Div {
         attention,
         action,
         tasks,
+        column,
     } = state;
     // The dot's base is the muted ink — the parked look — and each live
     // state takes its own signal colour. The no-dot ruling is scoped to
@@ -2360,13 +2373,19 @@ fn pane_head(view: &PaneView, state: PaneHeadState<'_>) -> Div {
     // agent tabs fold into their `+N` before the title starves
     // (`title_floor`). `left` keeps its children's floors, so nothing squeezes past them.
     let title_floor = title_floor(&view.name);
+    // On the column grid the dot hangs in the gutter's glyph box, where the
+    // transcript's `❯` does, and the title starts at C1; in a narrow Pane
+    // the dot leads the title by `HEAD_GAP`.
     let left = div()
         .flex()
         .flex_shrink(1.)
         .overflow_hidden()
         .items_center()
-        .gap(px(theme::HEAD_GAP))
-        .child(components::status_dot(dot_color))
+        .child(if column {
+            components::gutter(components::status_dot(dot_color), theme::LH_UI)
+        } else {
+            components::status_dot(dot_color).mr(px(theme::HEAD_GAP))
+        })
         .child(
             div()
                 .debug_selector(move || format!("pane-head-title-{key}"))
@@ -2390,7 +2409,7 @@ fn pane_head(view: &PaneView, state: PaneHeadState<'_>) -> Div {
         )
         .children(
             checkout_strip(checkout, branch, project_branches)
-                .map(|checkout| checkout.ml(px(theme::HEAD_CLUSTER_GAP - theme::HEAD_GAP))),
+                .map(|checkout| checkout.ml(px(theme::HEAD_CLUSTER_GAP))),
         );
     // The PR is one fact with its CI: wired where the cockpit could wire
     // the card, else drawn flat (below L1, pane-only tests, no checks).
@@ -2409,17 +2428,13 @@ fn pane_head(view: &PaneView, state: PaneHeadState<'_>) -> Div {
         .children(pr)
         .children(attention)
         .children(action);
-    div()
-        .debug_selector(move || format!("pane-head-{key}"))
+    let row = div()
         .flex()
-        .flex_shrink_0()
         .items_center()
-        .h(px(theme::PANE_HEAD_H))
+        .w_full()
+        .h_full()
+        .min_w_0()
         .gap(px(theme::HEAD_CLUSTER_GAP))
-        .px(px(theme::PANE_PAD_X))
-        .text_size(px(theme::FS_SM))
-        .line_height(px(theme::LH_META))
-        .text_color(rgb(TEXT_MUTED))
         .child(left)
         // The tabs take the free width; without them a growing spacer does
         // — never `ml_auto`, which collapses every gap in the row (taffy
@@ -2428,7 +2443,26 @@ fn pane_head(view: &PaneView, state: PaneHeadState<'_>) -> Div {
             Some(agents) => agents,
             None => div().flex_1().min_w_0().into_any_element(),
         })
-        .child(right)
+        .child(right);
+    let head = div()
+        .debug_selector(move || format!("pane-head-{key}"))
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .h(px(theme::PANE_HEAD_H))
+        .px(px(theme::PANE_PAD_X))
+        .text_size(px(theme::FS_SM))
+        .line_height(px(theme::LH_META))
+        .text_color(rgb(TEXT_MUTED));
+    if column {
+        // The transcript's own grid: the reading column, inset like its
+        // rows, so the head's content spans exactly the rows' content.
+        head.child(components::reading_column(
+            div().h_full().px(px(theme::BOX_INSET_X)).child(row),
+        ))
+    } else {
+        head.child(row)
+    }
 }
 
 /// The floor a head title keeps however narrow its head: `HEAD_TITLE_MIN_W`,
