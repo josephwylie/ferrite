@@ -15,6 +15,9 @@ use std::{
 };
 
 use gpui::component::ActiveTheme;
+use gpui::{rgb, transparent_black};
+
+use crate::theme;
 use gpui::{
     fill, point, px, relative, size, App, Axis, BorderStyle, Bounds, ContentMask, CursorStyle,
     Edges, Element, ElementId, GlobalElementId, Hitbox, HitboxBehavior, Hsla, InspectorElementId,
@@ -22,17 +25,19 @@ use gpui::{
     Point, Position, ScrollWheelEvent, Size, Style, Window,
 };
 
-/// The width of the scrollbar (THUMB_ACTIVE_INSET * 2 + THUMB_ACTIVE_WIDTH)
-const WIDTH: Pixels = px(4. * 2. + 8.);
-const MIN_THUMB_SIZE: f32 = 48.;
+// Ferrite owns the geometry and the inks (theme.rs, WP-B section): a thin
+// overlay with no track — 4px while scrolling, 6px under the pointer.
+/// The hit strip: `SCROLLBAR_INSET * 2 + SCROLLBAR_THUMB_W_HOVER`.
+const WIDTH: Pixels = px(theme::SCROLLBAR_GUTTER);
+const MIN_THUMB_SIZE: f32 = theme::SCROLLBAR_MIN_THUMB;
 
-const THUMB_WIDTH: Pixels = px(6.);
-const THUMB_RADIUS: Pixels = px(6. / 2.);
-const THUMB_INSET: Pixels = px(4.);
+const THUMB_WIDTH: Pixels = px(theme::SCROLLBAR_THUMB_W);
+const THUMB_RADIUS: Pixels = px(theme::SCROLLBAR_THUMB_W / 2.);
+const THUMB_INSET: Pixels = px(theme::SCROLLBAR_INSET);
 
-const THUMB_ACTIVE_WIDTH: Pixels = px(8.);
-const THUMB_ACTIVE_RADIUS: Pixels = px(8. / 2.);
-const THUMB_ACTIVE_INSET: Pixels = px(4.);
+const THUMB_ACTIVE_WIDTH: Pixels = px(theme::SCROLLBAR_THUMB_W_HOVER);
+const THUMB_ACTIVE_RADIUS: Pixels = px(theme::SCROLLBAR_THUMB_W_HOVER / 2.);
+const THUMB_ACTIVE_INSET: Pixels = px(theme::SCROLLBAR_INSET);
 
 const FADE_OUT_DURATION: f32 = 3.0;
 const FADE_OUT_DELAY: f32 = 2.0;
@@ -312,70 +317,55 @@ impl Scrollbar {
         WIDTH
     }
 
-    fn style_for_active(cx: &App) -> (Hsla, Hsla, Hsla, Pixels, Pixels, Pixels) {
+    // No track and no border in any state: only the thumb is ever ink.
+    fn thumb(
+        ink: u32,
+        (width, inset, radius): (Pixels, Pixels, Pixels),
+    ) -> (Hsla, Hsla, Hsla, Pixels, Pixels, Pixels) {
         (
-            cx.theme().scrollbar_thumb_hover,
-            cx.theme().scrollbar,
-            cx.theme().border,
-            THUMB_ACTIVE_WIDTH,
-            THUMB_ACTIVE_INSET,
-            THUMB_ACTIVE_RADIUS,
-        )
-    }
-
-    fn style_for_hovered_thumb(cx: &App) -> (Hsla, Hsla, Hsla, Pixels, Pixels, Pixels) {
-        (
-            cx.theme().scrollbar_thumb_hover,
-            cx.theme().scrollbar,
-            cx.theme().border,
-            THUMB_ACTIVE_WIDTH,
-            THUMB_ACTIVE_INSET,
-            THUMB_ACTIVE_RADIUS,
-        )
-    }
-
-    fn style_for_hovered_bar(cx: &App) -> (Hsla, Hsla, Hsla, Pixels, Pixels, Pixels) {
-        (
-            cx.theme().scrollbar_thumb,
-            cx.theme().scrollbar,
-            gpui::transparent_black(),
-            THUMB_ACTIVE_WIDTH,
-            THUMB_ACTIVE_INSET,
-            THUMB_ACTIVE_RADIUS,
-        )
-    }
-
-    fn style_for_normal(&self, cx: &App) -> (Hsla, Hsla, Hsla, Pixels, Pixels, Pixels) {
-        let scrollbar_show = self.scrollbar_show.unwrap_or(cx.theme().scrollbar_mode);
-        let (width, inset, radius) = match scrollbar_show {
-            ScrollbarShow::Scrolling => (THUMB_WIDTH, THUMB_INSET, THUMB_RADIUS),
-            _ => (THUMB_ACTIVE_WIDTH, THUMB_ACTIVE_INSET, THUMB_ACTIVE_RADIUS),
-        };
-
-        (
-            cx.theme().scrollbar_thumb,
-            cx.theme().scrollbar,
-            gpui::transparent_black(),
+            rgb(ink).into(),
+            transparent_black(),
+            transparent_black(),
             width,
             inset,
             radius,
         )
     }
 
-    fn style_for_idle(&self, cx: &App) -> (Hsla, Hsla, Hsla, Pixels, Pixels, Pixels) {
-        let scrollbar_show = self.scrollbar_show.unwrap_or(cx.theme().scrollbar_mode);
-        let (width, inset, radius) = match scrollbar_show {
-            ScrollbarShow::Scrolling => (THUMB_WIDTH, THUMB_INSET, THUMB_RADIUS),
-            _ => (THUMB_ACTIVE_WIDTH, THUMB_ACTIVE_INSET, THUMB_ACTIVE_RADIUS),
-        };
+    fn style_for_active(_: &App) -> (Hsla, Hsla, Hsla, Pixels, Pixels, Pixels) {
+        Self::thumb(
+            theme::SCROLLBAR_HOVER,
+            (THUMB_ACTIVE_WIDTH, THUMB_ACTIVE_INSET, THUMB_ACTIVE_RADIUS),
+        )
+    }
 
+    fn style_for_hovered_thumb(_: &App) -> (Hsla, Hsla, Hsla, Pixels, Pixels, Pixels) {
+        Self::thumb(
+            theme::SCROLLBAR_HOVER,
+            (THUMB_ACTIVE_WIDTH, THUMB_ACTIVE_INSET, THUMB_ACTIVE_RADIUS),
+        )
+    }
+
+    fn style_for_hovered_bar(_: &App) -> (Hsla, Hsla, Hsla, Pixels, Pixels, Pixels) {
+        Self::thumb(
+            theme::SCROLLBAR_HOVER,
+            (THUMB_ACTIVE_WIDTH, THUMB_ACTIVE_INSET, THUMB_ACTIVE_RADIUS),
+        )
+    }
+
+    // Scrolling shows the thin thumb in every mode; the pointer widens it.
+    fn style_for_normal(&self, _: &App) -> (Hsla, Hsla, Hsla, Pixels, Pixels, Pixels) {
+        Self::thumb(theme::SCROLLBAR, (THUMB_WIDTH, THUMB_INSET, THUMB_RADIUS))
+    }
+
+    fn style_for_idle(&self, _: &App) -> (Hsla, Hsla, Hsla, Pixels, Pixels, Pixels) {
         (
-            gpui::transparent_black(),
-            gpui::transparent_black(),
-            gpui::transparent_black(),
-            width,
-            inset,
-            radius,
+            transparent_black(),
+            transparent_black(),
+            transparent_black(),
+            THUMB_WIDTH,
+            THUMB_INSET,
+            THUMB_RADIUS,
         )
     }
 }
@@ -561,7 +551,7 @@ impl Element for Scrollbar {
                                 Self::style_for_hovered_bar(cx)
                             };
                         } else if elapsed < FADE_OUT_DELAY {
-                            idle_state.0 = cx.theme().scrollbar_thumb;
+                            idle_state.0 = rgb(theme::SCROLLBAR).into();
 
                             if !state.get().idle_timer_scheduled {
                                 let state = state.clone();
@@ -578,7 +568,7 @@ impl Element for Scrollbar {
                             }
                         } else if elapsed < FADE_OUT_DURATION {
                             let opacity = 1.0 - (elapsed - FADE_OUT_DELAY).powi(10);
-                            idle_state.0 = cx.theme().scrollbar_thumb.opacity(opacity);
+                            idle_state.0 = Hsla::from(rgb(theme::SCROLLBAR)).opacity(opacity);
 
                             window.request_animation_frame();
                         }
@@ -947,7 +937,8 @@ mod tests {
         assert_eq!(scroll.bounds().size, size(px(200.), px(300.)));
         assert!(scroll.max_offset().y > px(0.));
         // Both sides of the painted thumb belong to its draggable gutter.
-        for x in [185., 199.] {
+        let gutter = 200. - f32::from(WIDTH);
+        for x in [gutter + 1., 199.] {
             scroll.set_offset(point(px(0.), px(0.)));
             view.update(cx, |_, cx| cx.notify());
             cx.run_until_parked();
@@ -972,7 +963,7 @@ mod tests {
 
     #[test]
     fn thumb_hover_bounds_stay_inside_click_and_cursor_gutter() {
-        let bounds = Bounds::new(point(px(184.), px(0.)), size(WIDTH, px(300.)));
+        let bounds = Bounds::new(point(px(200.) - WIDTH, px(0.)), size(WIDTH, px(300.)));
         let inset = THUMB_ACTIVE_INSET;
         let thumb_start = px(0.);
         let thumb_length = px(92.);
