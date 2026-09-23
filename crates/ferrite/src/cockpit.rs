@@ -7338,6 +7338,10 @@ impl Render for CockpitView {
         self.present_notices(window, cx);
         self.present_cli_updates(window, cx);
         self.maximized = window.is_maximized();
+        // The floating cards grow with their content up to the window,
+        // less the margin they are snapped inside, and scroll past that.
+        let floating_max_h =
+            (f32::from(window.viewport_size().height) - 2. * crate::theme::GRID_PAD).max(120.);
         // The fullscreened Pane, if the roster still shows it: a Pane gone
         // by any path is the roster's to notice, and it falls back to the
         // grid — never a blank cockpit.
@@ -7928,8 +7932,8 @@ impl Render for CockpitView {
                 ))
             })
             .children(self.context_menu_element(cx))
-            .children(self.context_usage_element(cx))
-            .children(self.session_controls_element(cx))
+            .children(self.context_usage_element(floating_max_h, cx))
+            .children(self.session_controls_element(floating_max_h, cx))
             .children(self.context_checks_element(cx))
             .children(self.settings_element(cx))
             .children(self.project_editor_element(cx))
@@ -8883,7 +8887,9 @@ impl CockpitView {
         )
     }
 
-    fn session_controls_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// `max_h` is the tallest the card may grow: the window, less the
+    /// margin `anchored` keeps it from the edges.
+    fn session_controls_element(&self, max_h: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
         use crate::components::{action_button, label, section_label};
         use crate::theme::{
             ATTENTION, BLOCKED, CARD_ROW_H, FILL, FS_SM, RUNNING, SESSION_CARD_W, STATUS_DOT, TEXT,
@@ -8898,7 +8904,16 @@ impl CockpitView {
         // One type scale for the whole card: every name, status and verb at
         // the small UI size, the sections told apart by their headings
         // rather than by whatever size each control happened to default to.
-        let section = || div().flex().flex_col().w_full().gap(px(4.));
+        // `flex_shrink_0`: past the height cap the card scrolls rather than
+        // squeezing its sections until the bottom ones clip.
+        let section = || {
+            div()
+                .flex()
+                .flex_col()
+                .flex_shrink_0()
+                .w_full()
+                .gap(px(4.))
+        };
         let heading = |title: &'static str| {
             div()
                 .flex()
@@ -8930,7 +8945,7 @@ impl CockpitView {
             .id("session-controls-card")
             .debug_selector(|| "session-controls-card".into())
             .w(px(SESSION_CARD_W))
-            .max_h(px(460.))
+            .max_h(px(max_h))
             .overflow_y_scroll()
             .p(px(8.))
             .gap(px(12.))
@@ -8947,6 +8962,7 @@ impl CockpitView {
             card = card.child(
                 div()
                     .id("session-control-error")
+                    .flex_shrink_0()
                     .px(px(8.))
                     .py(px(6.))
                     .rounded(px(crate::theme::R_CONTROL))
@@ -9373,7 +9389,8 @@ impl CockpitView {
         )
     }
 
-    fn context_usage_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// `max_h` as for `session_controls_element`.
+    fn context_usage_element(&self, max_h: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
         let (identity, at) = self.context_usage?;
         let (usage, provider, details, usage_details, last_cost) = match identity {
             PaneIdentity::Thread(thread) => {
@@ -9421,6 +9438,7 @@ impl CockpitView {
                 usage_details,
                 last_cost,
                 self.context_usage_expanded,
+                max_h - 2. * crate::theme::MENU_PAD,
                 cx.listener(|view, _: &ClickEvent, _, cx| {
                     view.context_usage_expanded = !view.context_usage_expanded;
                     cx.notify();

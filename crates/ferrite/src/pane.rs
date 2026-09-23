@@ -3771,6 +3771,7 @@ pub fn context_usage(
     usage_details: Option<&ferrite_core::UsageDetails>,
     last_cost: Option<f64>,
     expanded: bool,
+    max_h: f32,
     on_toggle: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
 ) -> impl IntoElement {
     let maximum = usage.context_window.filter(|limit| *limit > 0);
@@ -3864,6 +3865,7 @@ pub fn context_usage(
         let mut block = div()
             .flex()
             .flex_col()
+            .flex_shrink_0()
             .gap(px(theme::USAGE_CARD_ROW_GAP))
             .child(heading(
                 label,
@@ -3890,6 +3892,7 @@ pub fn context_usage(
                 .id(SharedString::from(selector.clone()))
                 .debug_selector(move || selector.clone())
                 .flex()
+                .flex_shrink_0()
                 .items_center()
                 .gap(px(8.))
                 .h(px(theme::USAGE_LEGEND_ROW_H))
@@ -4038,6 +4041,7 @@ pub fn context_usage(
     let mut context_block = div()
         .flex()
         .flex_col()
+        .flex_shrink_0()
         .gap(px(theme::USAGE_CARD_ROW_GAP))
         .child(context_heading)
         .child(context_bar);
@@ -4082,7 +4086,11 @@ pub fn context_usage(
         }
         context_block = context_block.child(rows);
     }
+    // Its own scroll container, and every block `flex_shrink_0`: once the
+    // open legend outgrows the height cap the card scrolls, rather than
+    // squeezing its rows until the bottom ones are clipped.
     let mut card = div()
+        .id("context-usage-body")
         .flex()
         .flex_col()
         .w(px(theme::USAGE_CARD_W))
@@ -4117,6 +4125,7 @@ pub fn context_usage(
         div()
             .flex()
             .flex_col()
+            .flex_shrink_0()
             .pt(px(theme::USAGE_CARD_GAP))
             .border_t_1()
             .border_color(rgb(theme::TABLE_RULE))
@@ -4162,7 +4171,7 @@ pub fn context_usage(
             )),
         );
     }
-    card.max_h(px(520.)).overflow_y_scrollbar()
+    card.max_h(px(max_h)).overflow_y_scroll()
 }
 
 /// A usage bar's ink: the Pane's own status inks, so a budget reads like
