@@ -436,25 +436,22 @@ pub const BOARD_TOP: f32 = WIN_CHROME_H + GRID_PAD;
 /// the foot of the nav covers only the ground and never a Pane.
 pub const TOAST_W: f32 = NAV_WIDTH - 2.0 * SPACE_2;
 /// One toast's height: 12px padding around a title line over a meta line,
-/// inside its 1px edge. The kit stacks at most `TOAST_LAYERS` of them,
-/// each layer behind the front peeking `TOAST_PEEK` above it (the kit's
-/// collapsed-stack geometry).
+/// inside its 1px edge. Collapsed, the stack shows only its front toast (no
+/// ghost edges behind it, `DefaultToastMotion` in `init_components`); how
+/// many more wait is a `+N` bubble on its top-right corner (`TOAST_MORE_H`).
+/// The pointer on the stack still fans them out, `TOAST_GAP` apart.
 pub const TOAST_H: f32 = 2.0 * SPACE_3 + LH_UI + LH_META + 2.0;
-pub const TOAST_PEEK: f32 = 14.0;
-pub const TOAST_LAYERS: usize = 3;
-/// What the foot of the nav gives up while `layers` toasts are stacked on
-/// it: the stack, its bottom margin and 8px of air, so nothing in the nav
-/// (the Parked fold above all) ever sits under a toast.
-pub const fn toast_reserve(layers: usize) -> f32 {
-    if layers == 0 {
+pub const TOAST_GAP: f32 = SPACE_3;
+/// The `+N` bubble: 16px high, straddling the front toast's top-right corner.
+pub const TOAST_MORE_H: f32 = 16.0;
+/// What the foot of the nav gives up while toasts are showing: the front
+/// toast, its bottom margin and 8px of air, so nothing in the nav (the
+/// Parked fold above all) ever sits under a collapsed stack.
+pub const fn toast_reserve(toasts: usize) -> f32 {
+    if toasts == 0 {
         return 0.0;
     }
-    let layers = if layers < TOAST_LAYERS {
-        layers
-    } else {
-        TOAST_LAYERS
-    };
-    GRID_PAD + TOAST_H + TOAST_PEEK * (layers - 1) as f32 + SPACE_2
+    GRID_PAD + TOAST_H + SPACE_2
 }
 
 // -------------------------------------------- pane body and the row column
@@ -727,6 +724,15 @@ pub fn init_components(cx: &mut gpui::App) {
     };
     theme.notification.width = px(TOAST_W);
     theme.notification.max_items = 5;
+    // Collapsed, only the front toast shows: no ghost edges behind it. The
+    // cockpit draws how many more wait (`TOAST_MORE_H`); hover fans them out.
+    cx.set_global(gpui::base::DefaultToastMotion(gpui::base::ToastMotion {
+        collapsed_peek: px(0.),
+        collapsed_scale_step: 0.,
+        collapsed_visible: 1,
+        expanded_gap: px(TOAST_GAP),
+        ..gpui::base::ToastMotion::sonner()
+    }));
 }
 
 // ======================================== end of the frozen shared head

@@ -407,7 +407,7 @@ fn the_parked_fold_stays_clear_of_the_toast_stack(cx: &mut TestAppContext) {
         cx.update(|window, _| window.refresh());
         cx.run_until_parked();
     }
-    let layers = view.read_with(cx, |view, _| view.toast_layers);
+    let layers = view.read_with(cx, |view, _| view.toasts);
     assert!(layers >= 2, "the premise: a stack of toasts ({layers})");
     let parked = cx.debug_bounds("nav-parked").expect("the Parked fold");
     let window_h = cx.update(|window, _| window.viewport_size().height);
@@ -426,6 +426,18 @@ fn the_parked_fold_stays_clear_of_the_toast_stack(cx: &mut TestAppContext) {
             );
         }
     }
+    // Collapsed, only the front toast shows; the rest are a `+N` bubble on
+    // its top-right corner.
+    let more = cx.debug_bounds("toast-more").expect("the +N bubble");
+    let corner = gpui::point(
+        px(crate::theme::SPACE_2 + crate::theme::TOAST_W),
+        window_h - px(crate::theme::GRID_PAD + crate::theme::TOAST_H),
+    );
+    assert!(
+        (more.center().x - corner.x).abs() <= px(1.)
+            && (more.center().y - corner.y).abs() <= px(1.),
+        "the bubble straddles the front toast's corner: {more:?} / {corner:?}"
+    );
     assert!(
         parked.top() < resting.top(),
         "the fold moved up to make room"
@@ -437,7 +449,7 @@ fn the_parked_fold_stays_clear_of_the_toast_stack(cx: &mut TestAppContext) {
     });
     cx.executor().advance_clock(Duration::from_secs(1));
     tick(cx);
-    assert_eq!(view.read_with(cx, |view, _| view.toast_layers), 0);
+    assert_eq!(view.read_with(cx, |view, _| view.toasts), 0);
     assert_eq!(
         cx.debug_bounds("nav-parked"),
         Some(resting),

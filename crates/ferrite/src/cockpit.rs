@@ -248,11 +248,12 @@ pub struct CockpitView {
     drop_preview: Option<(ThreadId, Zone)>,
     /// The Pane a live drag picked up: its cell dims until the release.
     pane_drag_source: Option<ThreadId>,
-    /// How many toasts stand at the foot of the nav, read off the kit's
-    /// list each frame; the nav reserves their room (`theme::toast_reserve`).
-    /// The watch repaints the cockpit when the list changes on its own (an
-    /// autohide, a dismiss).
-    toast_layers: usize,
+    /// How many toasts are up, read off the kit's list each frame: the nav
+    /// reserves the front toast's room while they stand at its foot
+    /// (`theme::toast_reserve`), and the rest are counted in a `+N` bubble
+    /// (`toast_more`). The watch repaints the cockpit when the list changes
+    /// on its own (an autohide, a dismiss).
+    toasts: usize,
     toast_watch: Option<gpui::Subscription>,
     /// The Pane native files were last dragged over. Read only while a drag
     /// is live (`drop_target`), so a drag that leaves the window leaves no
@@ -799,7 +800,7 @@ impl CockpitView {
             seam_drag: None,
             drop_preview: None,
             pane_drag_source: None,
-            toast_layers: 0,
+            toasts: 0,
             toast_watch: None,
             file_drop_over: None,
             prefs,
@@ -7449,6 +7450,7 @@ impl Render for CockpitView {
             .children(self.project_editor_element(window, cx))
             .children(gpui::component::Root::render_dialog_layer(window, cx))
             .children(gpui::component::Root::render_notification_layer(window, cx))
+            .children(self.toast_more(window, cx))
     }
 }
 
@@ -9272,15 +9274,59 @@ impl CockpitView {
             .root::<gpui::component::Root>()
             .flatten()
             .map(|root| root.read(cx).notification.clone());
-        self.toast_layers = match (&list, self.nav_collapsed) {
-            (Some(list), false) => list.read(cx).notifications().len(),
-            _ => 0,
-        };
+        self.toasts = list
+            .as_ref()
+            .map_or(0, |list| list.read(cx).notifications().len());
         if self.toast_watch.is_none() {
             if let Some(list) = list {
                 self.toast_watch = Some(cx.observe(&list, |_, _, cx| cx.notify()));
             }
         }
+    }
+
+    /// How many toasts wait behind the front one — the collapsed stack
+    /// shows only the front — as a `+N` bubble straddling the front toast's
+    /// top-right corner, wherever the stack stands (`present_notices`).
+    fn toast_more(&self, window: &Window, cx: &gpui::App) -> Option<AnyElement> {
+        use crate::theme::*;
+        let settings = &gpui::component::Theme::global(cx).notification;
+        let more = self.toasts.min(settings.max_items).saturating_sub(1);
+        if more == 0 {
+            return None;
+        }
+        let window_size = window.viewport_size();
+        let right = match settings.placement {
+            gpui::Anchor::BottomLeft => settings.margins.left + settings.width,
+            _ => window_size.width - settings.margins.right,
+        };
+        let top = window_size.height - settings.margins.bottom - px(TOAST_H);
+        let span = px(4. * TOAST_MORE_H);
+        Some(
+            div()
+                .absolute()
+                .left(right - span / 2.)
+                .top(top - px(TOAST_MORE_H / 2.))
+                .w(span)
+                .flex()
+                .justify_center()
+                .child(
+                    div()
+                        .debug_selector(|| "toast-more".into())
+                        .h(px(TOAST_MORE_H))
+                        .px(px(SPACE_1_5))
+                        .flex()
+                        .items_center()
+                        .rounded_full()
+                        .bg(rgb(RAISED_2))
+                        .border_1()
+                        .border_color(rgba(HAIRLINE_STRONG))
+                        .font_family(FONT_UI)
+                        .text_size(px(FS_BADGE))
+                        .text_color(rgb(TEXT_2))
+                        .child(SharedString::from(format!("+{more}"))),
+                )
+                .into_any_element(),
+        )
     }
 
     /// The bell in the nav's chrome band, its badge, and its panel.
@@ -9384,12 +9430,12 @@ impl CockpitView {
                 )
                 .children(self.nav_parked(&state, cx))
                 // The toasts' ground: nothing of the nav is drawn under them.
-                .when(self.toast_layers > 0, |nav| {
+                .when(self.toasts > 0, |nav| {
                     nav.child(
                         div()
                             .debug_selector(|| "nav-toast-reserve".into())
                             .flex_shrink_0()
-                            .h(px(crate::theme::toast_reserve(self.toast_layers))),
+                            .h(px(crate::theme::toast_reserve(self.toasts))),
                     )
                 })
         };
