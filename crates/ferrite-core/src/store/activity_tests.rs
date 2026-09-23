@@ -1010,7 +1010,7 @@ fn cache_restores_historical_failure_rows_without_replacing_matching_live_status
             _ => None,
         })
         .collect();
-    assert_eq!(rows, vec!["interrupted", "Subagent failed"]);
+    assert_eq!(rows, vec!["Interrupted", "Failed · Subagent failed"]);
 }
 
 #[test]

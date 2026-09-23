@@ -714,67 +714,94 @@ pub fn init_components(cx: &mut gpui::App) {
 // Owner: WP-A (transcript.rs, pane/text.rs, the transcript rows in pane.rs, ferrite-core transcript strings.)
 // Edit values and append tokens only inside this section.
 
+// ---------------------------------------------------- transcript grammar
+//
+// The transcript is Claude Code's layout in Ferrite's ink:
+//
+// - **One content edge.** Every row is `[gutter | text]`: a `GLYPH_BOX`
+//   glyph centred on the row's first line box, `GUTTER_GAP`, then text at
+//   C1 (`GUTTER_W`). Prompt text, answer prose, tool calls, group summaries,
+//   reasoning and the turn stamp all start at C1. A result hangs one gutter
+//   further in, at C2, under a drawn elbow whose stem sits under the call's
+//   name. Rows are inset `BOX_INSET_X` inside the reading column, so the
+//   transcript `❯` and the Composer's share one axis.
+// - **Glyphs are drawn, never typed.** `❯` is `prompt.svg`, `∴` is
+//   `reasoning.svg`, the answer mark is the monochrome `ferrite-mono.svg`,
+//   the tool dot and the elbow are painted. None of them registers text.
+// - **State lives in the dot.** A tool's name is neutral ink whatever
+//   happened; its dot says how it went (`tool_dot`), and a failure colours
+//   the one word that says so. A collapsed group is one muted line whose only
+//   state ink is ` · N failed`.
+// - **Rhythm by rule.** The space above a row is chosen once, at reconcile,
+//   from the row before it and its own kind (`GAP_*`), and is part of the
+//   row's identity, so a changed gap is a changed row and nothing is measured
+//   per frame.
+// - **Face follows voice.** Structural rows are mono `FS_UI`/`LH_UI`; agent
+//   prose and reasoning are Geist `FS_PROSE`/`LH_PROSE`; the stamp and the
+//   trail are `FS_SM`/`LH_META`.
+
+/// 24px — above every prompt but the first: the turn boundary. No rule is
+/// drawn between turns; this space, the accent `❯` and the stamp do the job.
+pub const GAP_TURN: f32 = SPACE_6;
+/// 12px — a change of voice: prompt → the agent's first row, prose ↔ tools,
+/// anything ↔ reasoning, notices, the turn's changes.
+pub const GAP_SECTION: f32 = SPACE_3;
+/// 4px — tool rows in one run of work, and a one-paragraph commentary that
+/// introduces the tool row under it.
+pub const GAP_TOOL: f32 = SPACE_1;
+/// 8px — the last row of a turn → its stamp (and a decision record under
+/// the row it answers).
+pub const GAP_STAMP: f32 = SPACE_2;
+
+/// 6px — a tool call's state dot, the size of every status dot.
+pub const TOOL_DOT: f32 = STATUS_DOT;
+/// The elbow `⎿`, painted in the 12px glyph box: its stem 3px in, so it
+/// stands under the stem of the call name's first letter, running from the
+/// top of the row box to the first line's centre, then 8px along it.
+pub const ELBOW_STEM_X: f32 = 3.0;
+pub const ELBOW_ARM: f32 = SPACE_2;
+/// A disclosed call echoes its input under `⎿` only when the call line could
+/// not show it whole: a command (always, exactly), a titled call, a
+/// multi-line input, or one longer than this many characters.
+pub const INPUT_ECHO_CHARS: usize = 48;
+/// A settled call shows its time only from one second up; anything quicker
+/// is noise on every row.
+pub const DURATION_MIN_MS: u128 = 1_000;
+/// Output up to this many lines and bytes draws inline under its elbow;
+/// longer output scrolls in a bounded native viewport of the same height,
+/// with `… +N lines` under it.
+pub const OUTPUT_MAX_LINES: usize = 12;
+pub const OUTPUT_INLINE_BYTES: usize = 8 * 1024;
+
 /// An added diff line's code: `RUNNING` lifted a step to read on its wash.
 pub const DIFF_ADDED_INK: u32 = 0xa7d9b8;
 /// A removed diff line's code: `BLOCKED` lifted the same step.
 pub const DIFF_REMOVED_INK: u32 = 0xefa89f;
-/// 9px — the tool/event rows' glyph column today, and 8px (`EVENT_GAP`) to
-/// the verb beside it; their sum, 17px (`INDENT`), is the inset a result
-/// line and a hunk share. WP-A replaces it with the shared `GUTTER_W` (C1).
-pub const EVENT_GUTTER_W: f32 = 9.0;
-pub const INDENT: f32 = 17.0;
-/// 15px — an answer's Ferrite mark. It draws wider than the `GUTTER_W`
-/// gutter it hangs in and out of the flow, so its overhang lands in the
-/// answer row's own `ANSWER_GAP` rather than moving the prose.
-pub const ANSWER_MARK: f32 = 15.0;
-/// The offset that centres that mark on the first prose line box at the
-/// Standard reading size (`LH_PROSE`). Other sizes add half their line box's
-/// difference from `LH_PROSE`.
-pub const ANSWER_MARK_TOP: f32 = (LH_PROSE - ANSWER_MARK) / 2.0;
-/// 14px — the answer row's gutter-to-prose gap, wider than the `EVENT_GAP`
-/// the tool rows use: an answer's prose is indented off the mark rather than
-/// held on the tool rows' text edge, and the gap clears the mark's overhang.
-pub const ANSWER_GAP: f32 = 14.0;
-/// Structured answers retain a passage boundary without isolating every update.
-pub const ANSWER_PAD_Y: f32 = 8.0;
-/// A single prose paragraph sits closer to the work it introduces.
-pub const COMMENTARY_PAD_Y: f32 = 4.0;
-/// A tool row's vertical padding. The prototype's 3px each side put 43px
-/// between consecutive calls; a run of shell commands reads as a list only
-/// when they sit as close as Claude Code's own `●`/`⎿` pairs do.
-pub const EVENT_PAD_Y: f32 = 1.0;
-/// The result line's padding: hugging its call above, a hair under.
-pub const RESULT_PAD_T: f32 = 0.0;
-pub const RESULT_PAD_B: f32 = 1.0;
-/// An invisible hit area, not a drawn thing: the tool-disclosure target.
-pub const TOOL_DISCLOSURE_HIT: f32 = 20.0;
-/// A 16px list indent, with a 4px disc 15px left of the text.
-pub const UL_INDENT: f32 = 16.0;
-#[allow(dead_code)]
-pub const BULLET_D: f32 = 4.0;
-#[allow(dead_code)]
-pub const BULLET_OFFSET: f32 = 15.0;
-/// 5px — the operator's prompt block's block padding: the ground the line
-/// stands on (`--raised`, or the provider's wash on a Thread), so a prompt
-/// reads apart from an answer.
-pub const PROMPT_PAD_Y: f32 = 5.0;
-/// A hunk row: 8px inline padding, a 24px right-aligned number column, a
-/// 7px sign column, 10px between columns. A hunk sits 4px below the event
-/// and 10px above what follows.
-#[allow(dead_code)]
-pub const HUNK_PAD_X: f32 = 8.0;
-pub const DIFF_NUM_W: f32 = 24.0;
-#[allow(dead_code)]
-pub const DIFF_SIGN_W: f32 = 7.0;
-#[allow(dead_code)]
-pub const DIFF_GAP: f32 = 10.0;
-#[allow(dead_code)]
-pub const HUNK_MARGIN_T: f32 = 4.0;
+/// A diff card at C2: `RAISED`, `R_CHIP`, 4px above and inside it, 8px
+/// inline. Its columns are `[number][8][sign][4][code]`: the number column
+/// is as wide as the largest number's digits (`MONO_CELL` each), the sign is
+/// one whole-pixel mono cell, and code keeps its indentation.
+pub const HUNK_PAD_X: f32 = SPACE_2;
+pub const HUNK_PAD_Y: f32 = SPACE_1;
+pub const HUNK_MARGIN_T: f32 = SPACE_1;
+pub const DIFF_SIGN_W: f32 = SPACE_2;
+pub const DIFF_GAP: f32 = SPACE_2;
+pub const DIFF_SIGN_GAP: f32 = SPACE_1;
 /// How many rows one hunk card draws before it stops and says how many it
 /// did not. An edit's patch is a handful of lines; a written file's is
 /// however long the file is, and a card that redrew a 900-line file would
 /// be the transcript rather than a note in it.
 pub const HUNK_MAX_ROWS: usize = 24;
+
+/// 20px — an invisible hit area, not a drawn thing: a disclosure's trailing
+/// chevron target and a prompt action's button.
+pub const TOOL_DISCLOSURE_HIT: f32 = 20.0;
+/// 10px — the trailing disclosure chevron.
+pub const DISCLOSURE_CHEVRON: f32 = 10.0;
+/// 4px — how far a prompt's hover wash bleeds past its text on each side.
+pub const PROMPT_HOVER_BLEED: f32 = SPACE_1;
+/// 16px — a fallback list item's hang: `-` at C1, text 16px in.
+pub const UL_INDENT: f32 = SPACE_4;
 // (end WP-A) — append above this line only
 
 // ======================================== WP-B · markdown, prose, scrollbars

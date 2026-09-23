@@ -30,21 +30,55 @@ pub(super) fn activity_label(activity: &ToolActivity<'_>) -> String {
     }
 }
 
+/// Whether a disclosed call echoes its input: only where the call line
+/// could not already show it whole (`INPUT_ECHO_CHARS`), or where the input
+/// is all there is to disclose (a call still running).
+pub(crate) fn shows_input(tool: &ToolBlock) -> bool {
+    !tool.summary.is_empty()
+        && (ferrite_core::docview::is_command_run(&tool.name)
+            || tool.title.is_some()
+            || tool.summary.contains(['\n', '\r'])
+            || tool.summary.chars().count() > theme::INPUT_ECHO_CHARS
+            || (tool.output.is_none() && tool.structured_result.is_none() && tool.diffs.is_empty()))
+}
+
 pub(super) fn redundant_test_result(tool: &ToolBlock) -> bool {
     tool.state == ToolState::Ok
         && is_test_run(tool)
         && tool.result_line.as_deref().and_then(passed_count).is_some()
 }
 
+/// A diff line's code: the unified-diff marker byte removed, and nothing
+/// else — indentation is code.
 pub(super) fn diff_body(line: &str) -> &str {
-    match DiffKind::of(line) {
-        DiffKind::Added | DiffKind::Removed => line[1..].trim_start(),
-        DiffKind::Context => line.trim_start(),
+    match line.as_bytes().first() {
+        Some(b'+' | b'-' | b' ') => &line[1..],
+        _ => line,
+    }
+}
+
+/// Hard lines in a block of output.
+pub(super) fn output_lines(text: &str) -> usize {
+    text.lines().count()
+}
+
+/// Whether output leaves the inline run for the bounded native viewport:
+/// past `OUTPUT_INLINE_BYTES`, or past `OUTPUT_MAX_LINES` lines.
+pub(super) fn output_scrolls(text: &str) -> bool {
+    text.len() > theme::OUTPUT_INLINE_BYTES || output_lines(text) > theme::OUTPUT_MAX_LINES
+}
+
+/// `512 B`, `1.2 KB`, `3.4 MB`.
+pub(super) fn byte_size(bytes: usize) -> String {
+    match bytes {
+        bytes if bytes < 1024 => format!("{bytes} B"),
+        bytes if bytes < 1024 * 1024 => format!("{:.1} KB", bytes as f64 / 1024.0),
+        bytes => format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0)),
     }
 }
 
 pub(crate) fn collect_output_text(block: BlockId, part: &str, text: &str, selection: &TextRuns) {
-    if text.len() > 8 * 1024 {
+    if output_scrolls(text) {
         // Large output owns its selection in a separate native control.
         let _ = selection.output(block, part, text);
     } else {
@@ -99,7 +133,7 @@ fn collect_tool_text(
 ) {
     let _ = selection.line(block, tool_label(tool), Vec::new());
     if expanded {
-        if !tool.summary.is_empty() {
+        if shows_input(tool) {
             collect_output_text(block, "command", &tool.summary, selection);
         }
         if let Some(output) = &tool.output {

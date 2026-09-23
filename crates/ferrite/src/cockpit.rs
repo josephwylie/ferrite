@@ -13659,9 +13659,10 @@ mod tests {
                 "a short summary must size to its text: {summary:?}"
             );
             assert!(
-                control.left() < summary.left()
-                    && (summary.left() - control.left() - px(crate::theme::INDENT)).abs() <= px(1.),
-                "chevron must stay inside the Pane beside the text: {summary:?} / {control:?}"
+                control.left() > summary.right()
+                    && (control.size.width - px(crate::theme::TOOL_DISCLOSURE_HIT)).abs() <= px(1.)
+                    && control.right() <= px(width),
+                "the chevron trails the text and stays inside the Pane: {summary:?} / {control:?}"
             );
         }
 
@@ -13794,7 +13795,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn transcript_spacing_separates_prompts_tools_and_answers(cx: &mut TestAppContext) {
+    fn transcript_rows_share_one_content_edge_and_the_gap_table(cx: &mut TestAppContext) {
         let (mut core, fake) = cockpit("transcript-spacing", 1);
         let thread = core.threads()[0];
         core.send(thread, "Check the build".into());
@@ -13821,29 +13822,39 @@ mod tests {
                 text: "The build passed.\n\n".into(),
             })
             .unwrap();
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TurnEnded {
+                outcome: ferrite_core::TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
         for width in [1000., 720.] {
             cx.simulate_resize(gpui::size(px(width), px(700.)));
             tick(cx);
             let prompt = cx.debug_bounds("transcript-prompt").unwrap();
             let tools = cx.debug_bounds("tool-group-spacing-0").unwrap();
             let answer = cx.debug_bounds("transcript-answer").unwrap();
-            assert_eq!(tools.top() - prompt.bottom(), px(crate::theme::BLOCK_GAP));
-            assert_eq!(answer.top() - tools.bottom(), px(crate::theme::BLOCK_GAP));
-            let prompt_start = caret(&view, cx, 0, 0).x;
-            let answer_start = caret(&view, cx, 3, 0).x;
-            // An answer is indented off its Ferrite mark rather than held on
-            // the tool summary's reading column: its gutter is the same
-            // `EVENT_GUTTER_W` the tool rows use, and the extra step is the answer
-            // row's wider gap.
+            let stamp = cx.debug_bounds("turn-stamp").unwrap();
+            // The prompt's hover wash bleeds past its line box; the gap is
+            // measured from the line box.
+            let bleed = px(crate::theme::PROMPT_HOVER_BLEED);
             assert_eq!(
-                answer_start - prompt_start,
-                px(crate::theme::ANSWER_GAP - crate::theme::EVENT_GAP),
-                "an answer's prose is indented past the prompt's reading column"
+                tools.top() - (prompt.bottom() - bleed),
+                px(crate::theme::GAP_SECTION)
             );
+            assert_eq!(answer.top() - tools.bottom(), px(crate::theme::GAP_SECTION));
+            assert_eq!(stamp.top() - answer.bottom(), px(crate::theme::GAP_STAMP));
+            // One content edge: the prompt's text, the group summary and the
+            // answer's prose all start on C1.
+            let prompt_start = caret(&view, cx, 0, 0).x;
+            let tools_start = caret(&view, cx, 1, 0).x;
+            let answer_start = caret(&view, cx, 3, 0).x;
+            assert_eq!(answer_start, prompt_start, "answer prose sits on C1");
+            assert_eq!(tools_start, prompt_start, "the group summary sits on C1");
             assert_eq!(
                 prompt_start - tools.left(),
-                px(17.5),
-                "17px native gutter plus the caret helper's half-pixel inset"
+                px(crate::theme::GUTTER_W + 0.5),
+                "C1 past the row's left edge, plus the caret helper's half-pixel inset"
             );
         }
     }
@@ -14518,8 +14529,11 @@ mod tests {
             .unwrap();
         tick(cx);
         let before = cx
+            .debug_bounds("transcript-progress")
+            .expect("the live line is pinned above the composer");
+        let metadata = cx
             .debug_bounds("progress-metadata")
-            .expect("live metadata is pinned above the composer");
+            .expect("live metadata shares the pinned line");
         assert!(
             cx.debug_bounds("progress-caption-Thinking").is_some(),
             "visible reasoning is not duplicated in the pinned row"
@@ -14540,10 +14554,17 @@ mod tests {
                 .is_some(),
             "pinned headline remains available when its history is offscreen"
         );
+        // The caption may swap to the offscreen headline; the line itself,
+        // and the row its metadata sits on, stay put.
         assert_eq!(
-            cx.debug_bounds("progress-metadata").unwrap(),
+            cx.debug_bounds("transcript-progress").unwrap(),
             before,
             "scrollback cannot move the progress component"
+        );
+        assert_eq!(
+            cx.debug_bounds("progress-metadata").unwrap().top(),
+            metadata.top(),
+            "scrollback cannot move the progress metadata off its line"
         );
         // Working-phase detail appends no transcript block. Its wall caption
         // must still change, or the smallest panes freeze on the old heading.

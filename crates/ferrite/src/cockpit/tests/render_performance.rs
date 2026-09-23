@@ -1010,12 +1010,19 @@ fn answer_gutter_and_padding_survive_wrapping_resize(cx: &mut TestAppContext) {
             );
             crate::rich::testing::bounds(&id, 0, cx).unwrap()
         });
+        let mark = debug_bounds(cx, "answer-mark".into()).unwrap();
         for delta in [
-            text.left() - answer.left() - px(theme::EVENT_GUTTER_W + theme::ANSWER_GAP),
-            // A lone paragraph is commentary and takes the tighter padding.
-            text.top() - answer.top() - px(theme::COMMENTARY_PAD_Y),
-            answer.bottom() - text.bottom() - px(theme::COMMENTARY_PAD_Y),
+            // Prose starts on C1, the one content edge.
+            text.left() - answer.left() - px(theme::GUTTER_W),
+            // The row owns no padding: the list's gap table spaces rows.
+            text.top() - answer.top(),
+            answer.bottom() - text.bottom(),
             answer.right() - text.right(),
+            // The mark's glyph box hangs at the row's left edge, centred on
+            // the first prose line box.
+            mark.left() - answer.left(),
+            mark.size.width - px(theme::GLYPH_BOX),
+            (mark.top() + mark.size.height / 2.) - (text.top() + px(theme::LH_PROSE / 2.)),
         ] {
             assert!(
                 delta.abs() <= px(1.),

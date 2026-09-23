@@ -165,12 +165,18 @@ fn activity_line(tool: &ToolBlock) -> String {
 /// Every other tool's summary is a path, and a path is not a test result.
 const COMMAND_RUNNERS: [&str; 2] = ["Bash", "commandExecution"];
 
+/// Whether a tool runs a command, so its summary is the command itself: the
+/// transcript echoes it as `$ command` when the call is disclosed.
+pub fn is_command_run(name: &str) -> bool {
+    COMMAND_RUNNERS.contains(&name)
+}
+
 /// A tool row that ran a test suite. Gated on the tool actually being a
 /// command run: an Edit of `tests/foo.rs` or a Read under `tests/` would
 /// otherwise clear a red suite that nobody had rerun. Public because the
 /// tool row's pass badge asks the same question the instruments do.
 pub fn is_test_run(tool: &ToolBlock) -> bool {
-    if !COMMAND_RUNNERS.contains(&tool.name.as_str()) {
+    if !is_command_run(&tool.name) {
         return false;
     }
     let command = tool.summary.to_lowercase();

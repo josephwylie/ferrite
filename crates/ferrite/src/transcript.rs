@@ -26,7 +26,7 @@ use self::{
 };
 use crate::{
     attachment_preview::Preview,
-    icons,
+    components, icons,
     pane::{self, DisclosureId, DisclosureState},
     pointer::Pointer,
     rich::TextCache,
@@ -405,6 +405,7 @@ impl TranscriptView {
         if let Some(diff) = row.turn_diff() {
             return self.render_turn_diff(diff, selection, view, cx);
         }
+        let reduce_motion = cx.reduce_motion();
         let blocks = row.blocks();
         if let Some(source) = row.source() {
             let first = blocks
@@ -414,11 +415,6 @@ impl TranscriptView {
                 .unwrap_or(blocks[0].id);
             let answer_size = theme::answer_text_size(self.input.reading_size);
             let line_height = theme::answer_line_height(self.input.reading_size);
-            let pad_y = if blocks.len() == 1 && matches!(&blocks[0].body, Body::Paragraph { .. }) {
-                theme::COMMENTARY_PAD_Y
-            } else {
-                theme::ANSWER_PAD_Y
-            };
             return div()
                 .id(SharedString::from(format!(
                     "answer-{}-{first:?}",
@@ -432,22 +428,25 @@ impl TranscriptView {
                 // A fixed gutter needs no flex sizing. Giving Markdown the
                 // remaining block width avoids intrinsic-size passes over the
                 // entire growing document before its final wrapped layout.
-                .pl(px(theme::EVENT_GUTTER_W + theme::ANSWER_GAP))
-                .py(px(pad_y))
+                .pl(px(theme::GUTTER_W))
                 .text_size(px(answer_size))
                 .line_height(px(line_height))
                 .child(
-                    div()
-                        .absolute()
-                        .left(px(0.))
-                        // Centred on the first line box, which is the pixel
-                        // line height whatever the first block is (a leading
-                        // heading included).
-                        .top(px(pad_y
-                            + theme::ANSWER_MARK_TOP
-                            + (line_height - theme::LH_PROSE) / 2.))
-                        .w(px(theme::EVENT_GUTTER_W))
-                        .child(icons::ferrite_icon(theme::ANSWER_MARK)),
+                    // The monochrome Ferrite mark, centred on the first line
+                    // box: the pixel line height at every reading size, a
+                    // leading heading included (it inherits the row's).
+                    components::gutter(
+                        components::glyph_box(icons::icon(
+                            icons::FERRITE_MONO,
+                            theme::GLYPH_BOX,
+                            theme::TEXT_MUTED,
+                        ))
+                        .debug_selector(|| "answer-mark".into()),
+                        line_height,
+                    )
+                    .absolute()
+                    .left_0()
+                    .top_0(),
                 )
                 .child(selection.answer(first, source.to_owned()))
                 .into_any_element();
@@ -466,6 +465,7 @@ impl TranscriptView {
                     view.as_ref()
                         .map(|view| self.control(call, view.clone(), cx))
                 },
+                reduce_motion,
             );
         }
         let Some(block) = blocks.first() else {
@@ -493,10 +493,15 @@ impl TranscriptView {
                 view.as_ref()
                     .map(|view| self.control(call, view.clone(), cx))
             }),
-            pane::signal_color(self.input.signal_status),
+            if row.live_notice() {
+                pane::signal_color(self.input.signal_status)
+            } else {
+                theme::TEXT_MUTED
+            },
             None,
             &self.input.preview,
             view.map(|view| self.prompt_actions(block, view)),
+            reduce_motion,
         )
     }
 
@@ -535,24 +540,25 @@ impl TranscriptView {
         let disclosure = view
             .as_ref()
             .map(|view| self.control(&call, view.clone(), cx));
-        let gutter = div().flex_shrink_0().w(px(theme::EVENT_GUTTER_W));
+        // The group recipe: no glyph, a muted line at C1, the chevron
+        // trailing.
         let header = div()
             .id(SharedString::from(format!(
                 "turn-diff-row-{}",
                 diff.turn_id
             )))
+            .group("disclosure-row")
             .relative()
             .flex()
-            .items_baseline()
+            .items_center()
             .min_w_0()
-            .gap(px(theme::EVENT_GAP))
-            .py(px(theme::EVENT_PAD_Y))
+            .pl(px(theme::GUTTER_W))
+            .pr(px(theme::TOOL_DISCLOSURE_HIT))
+            .rounded(px(theme::R_CHIP))
             .text_size(px(theme::FS_UI))
             .line_height(px(theme::LH_UI))
             .text_color(gpui::rgb(theme::TEXT_MUTED))
-            .hover(|style| style.text_color(gpui::rgb(theme::TEXT)))
-            .active(|style| style.text_color(gpui::rgb(theme::TEXT_STRONG)))
-            .child(gutter)
+            .hover_row()
             .child(selection.line(BlockId::TURN_DIFF, "Turn changes", Vec::new()))
             .children(disclosure);
         let mut card = gpui::component::collapsible::Collapsible::new()
@@ -565,15 +571,11 @@ impl TranscriptView {
                 "turn-diff",
                 &diff.diff,
                 theme::TEXT_MUTED,
+                false,
                 selection,
             ));
             if diff.omitted_bytes > 0 {
-                details = details.child(pane::result_line(theme::TEXT_MUTED).child(
-                    div().min_w_0().child(format!(
-                        "… {} bytes omitted from inline view",
-                        diff.omitted_bytes
-                    )),
-                ));
+                details = details.child(pane::omitted_line(diff.omitted_bytes));
             }
             card = card.content(details);
         }
@@ -616,7 +618,9 @@ impl TranscriptView {
             let sink = self.input.disclosure_bounds.clone();
             let measured = call.clone();
             control.on_children_prepainted(move |bounds, _, _| {
-                if let Some(bounds) = bounds.first() {
+                // The hit box is the overlay's last child; a keyboard ring
+                // may precede it.
+                if let Some(bounds) = bounds.last() {
                     sink.borrow_mut().insert(measured.clone(), *bounds);
                 }
             })
@@ -629,7 +633,6 @@ impl Render for TranscriptView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.document.begin_viewport_update(cx);
         let rows = self.rows.clone();
-        let row_count = rows.len();
         let selection = self.text_runs();
         let view = cx.entity();
         if self.scroll.is_following_tail() {
@@ -641,22 +644,31 @@ impl Render for TranscriptView {
                 let Some(row) = rows.get(index).cloned() else {
                     return div().into_any_element();
                 };
-                let row = view.update(cx, |view, cx| {
+                let element = view.update(cx, |view, cx| {
                     selection.begin_row();
                     view.render_row(&row, &selection, Some(cx.entity()), cx)
                 });
-                // Every row is wrapped, last one included: a list item is
-                // laid out as its own root, where a bare row's `w_full`
-                // has no parent width to resolve against and shrinks to
-                // its text. Only the gap below differs — the last row
-                // carries none, so the stack ends on the body padding.
+                // Every row is wrapped: a list item is laid out as its own
+                // root, where a bare row's `w_full` has no parent width to
+                // resolve against and shrinks to its text. The wrapper is
+                // also the reading column — gpui lays list items at the
+                // list's full width, so the column lives in the row — and
+                // carries the row's own gap above it (the first row's is
+                // the body's top padding: the list's own top padding
+                // flickers mid-scroll).
+                let gap = row.gap();
                 div()
                     .w_full()
-                    .when(index + 1 < row_count, |row| row.pb(px(theme::BLOCK_GAP)))
-                    .child(row)
+                    .px(px(theme::PANE_PAD_X))
+                    .child(components::reading_column(
+                        div().px(px(theme::BOX_INSET_X)).pt(px(gap)).child(element),
+                    ))
                     .into_any_element()
             },
         )
+        // The bottom padding is the list's own: it counts in the scroll
+        // extent and the tail follow, and the working line overlays it.
+        .pb(px(theme::BODY_PAD_B))
         .size_full()
         .min_h_0();
         let scroll = self.scroll.clone();
@@ -676,12 +688,9 @@ impl Render for TranscriptView {
             .min_w_0()
             .w_full()
             .min_h_0()
-            .px(px(theme::PANE_PAD_X))
-            .pt(px(theme::BODY_PAD_T))
-            .pb(px(theme::BODY_PAD_B))
             .text_size(px(theme::FS_UI))
             .line_height(px(theme::LH_UI))
-            .text_color(gpui::rgb(theme::TEXT_2))
+            .text_color(gpui::rgb(theme::TEXT))
             .hover_text()
             .track_focus(&self.transcript_focus)
             .child(list)
@@ -695,6 +704,9 @@ impl Render for TranscriptView {
             } else {
                 self.input.selection_scope
             });
+        // A Thread with nothing in it yet says what to do, in the column's
+        // centre; the first row replaces it.
+        let empty = self.rows.len() == 0 && self.input.signal_status != Some(Status::Streaming);
         div()
             .relative()
             .flex()
@@ -703,6 +715,18 @@ impl Render for TranscriptView {
             .size_full()
             .min_h_0()
             .child(list)
+            .when(empty, |body| {
+                body.child(
+                    div()
+                        .debug_selector(|| "transcript-empty".into())
+                        .absolute()
+                        .inset_0()
+                        .child(components::empty_state(
+                            "New thread",
+                            Some("type a prompt \u{b7} / for commands".into()),
+                        )),
+                )
+            })
             .child(crate::components::scrollbar(
                 SharedString::from(format!("transcript-scrollbar-{}", self.input.namespace)),
                 self.scroll.list_state(),

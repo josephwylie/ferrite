@@ -344,6 +344,21 @@ impl Progress {
     }
 }
 
+/// An elapsed time in compact units, the way the turn stamp and the working
+/// line print it: `0.3s`, `8.2s`, `42s`, `2m14s`. It never reads `0.0s`: a
+/// blip rounds up to the first tenth.
+pub fn duration_label(elapsed: std::time::Duration) -> String {
+    let secs = elapsed.as_secs_f64().max(0.1);
+    if secs < 10.0 {
+        format!("{secs:.1}s")
+    } else if secs < 60.0 {
+        format!("{}s", secs as u64)
+    } else {
+        let whole = secs as u64;
+        format!("{}m{:02}s", whole / 60, whole % 60)
+    }
+}
+
 /// A status line is one readable line. Bound Unicode by characters, and
 /// remove control characters. ANSI CSI/OSC escapes are discarded too.
 pub fn one_line(text: &str, max: usize) -> String {
