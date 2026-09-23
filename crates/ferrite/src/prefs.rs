@@ -13,11 +13,7 @@ use std::rc::Rc;
 
 use crate::components;
 use crate::icons::{self, icon};
-use crate::theme::{
-    FILL, FILL_HOVER, FONT_MONO, FONT_UI, FORM_CHOICE_PAD, FORM_CONTROL_H, FORM_FIELD_W, FS_SM,
-    FS_UI, ICON_BUTTON, ICON_BUTTON_GLYPH, MENU, MODAL_HEAD_H, MODAL_PAD, MODAL_VIEWPORT_FRACTION,
-    PANE, R_BLOCK, R_CHIP, R_CONTROL, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG, W_LABEL,
-};
+use crate::theme::*;
 
 /// The card's width; tall enough sections scroll inside it.
 pub const WIDTH: f32 = 820.0;

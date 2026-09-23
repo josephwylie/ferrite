@@ -35,10 +35,7 @@ use gpui::{
 
 use crate::icons::{self, icon};
 use crate::pointer::{Pointer, PointerPressed};
-use crate::theme::{
-    ATTENTION, ATTENTION_WASH, BLOCKED, CAPTION_GLYPH, CAPTION_RESIZE_EDGE, CAPTION_W, FS_SM,
-    FS_UI, GRID_PAD, ICON_BUTTON, ICON_BUTTON_GLYPH, R_CHIP, TEXT, TEXT_MUTED, WIN_CHROME_H,
-};
+use crate::theme::*;
 
 /// The active location named in the window chrome. A Group may span
 /// Projects, so the Project follows the focused Pane rather than trying to

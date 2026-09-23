@@ -11,10 +11,7 @@ use gpui::prelude::*;
 use gpui::{div, px, rgb, rgba, Div, SharedString, Stateful};
 
 use crate::pointer::{Pointer, PointerPressed};
-use crate::theme::{
-    BLOCKED, BLOCKED_WASH, FS_SM, FS_UI, MENU, MENU_PAD, MENU_ROW_H, R_BLOCK, R_CONTROL, TEXT,
-    TEXT_MUTED, TEXT_STRONG,
-};
+use crate::theme::*;
 
 /// The menu's width: wide enough for `Confirm delete Thread` beside a
 /// shortcut hint, narrow enough to sit inside a nav row's reach.

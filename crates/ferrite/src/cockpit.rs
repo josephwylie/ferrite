@@ -53,6 +53,8 @@ use gpui::{
 };
 
 use crate::composer::{Composer, Edited};
+#[allow(unused_imports)]
+use crate::decision;
 use crate::facts::Facts;
 use crate::menu;
 use crate::nav;
@@ -7412,6 +7414,10 @@ impl CockpitView {
                     composer_empty: pane.composer.read(cx).is_empty(),
                     focused,
                     error: draft.error.as_ref(),
+                    editing: focused
+                        && window.is_window_active()
+                        && pane.composer.read(cx).focus_handle(cx).is_focused(window),
+                    reduce_motion: cx.reduce_motion(),
                 },
                 level,
             ));
@@ -7457,6 +7463,10 @@ impl CockpitView {
             focused,
             attention: !focused && self.cockpit.notifications().attention(thread),
             wall: cached.and_then(|facts| facts.wall_for(&pane.selected)),
+            reduce_motion: cx.reduce_motion(),
+            editing: focused
+                && window.is_window_active()
+                && pane.composer.read(cx).focus_handle(cx).is_focused(window),
         };
         // Only L1 draws a Composer to hang a popover over (#23), a model
         // picker (#25) or usage meter; the wall answers with keys alone.
@@ -9619,6 +9629,13 @@ mod tests {
     mod provider_navigation;
     mod render_performance;
     mod subagents;
+    mod ui_a;
+    mod ui_b;
+    mod ui_c;
+    mod ui_d;
+    mod ui_e;
+    mod ui_f;
+    mod ui_g;
     use super::*;
     use std::cell::RefCell;
     use std::rc::Rc;

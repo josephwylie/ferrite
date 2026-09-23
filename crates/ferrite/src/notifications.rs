@@ -27,11 +27,7 @@ use gpui::{
 
 use crate::components;
 use crate::pointer::{Pointer, PointerPressed};
-use crate::theme::{
-    ATTENTION, BLOCKED, FONT_UI, FS_SM, FS_UI, ICON_BUTTON, ICON_BUTTON_GLYPH, LH_META, LH_TIGHT,
-    MENU, MENU_PAD, MENU_ROW_H, ROW_GAP, ROW_PAD_X, R_BLOCK, R_CONTROL, STATUS_DOT, TEXT, TEXT_2,
-    TEXT_MUTED, TEXT_STRONG,
-};
+use crate::theme::*;
 
 /// What a click on the bell's surfaces means. The cockpit answers each
 /// against the core and repaints.

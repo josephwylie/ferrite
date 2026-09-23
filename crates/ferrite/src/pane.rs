@@ -45,6 +45,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::components;
 use crate::composer::Composer;
+#[allow(unused_imports)]
+use crate::decision;
 use crate::icons::{self, icon};
 use crate::pointer::{Pointer, PointerPressed};
 use crate::select::TextRuns;
@@ -52,12 +54,7 @@ use gpui::component::scroll::ScrollableElement;
 // Every color and metric here is a Soft token (crate::theme) — no literal
 // survives in render code, which is #22's grep-able law.
 use crate::theme;
-use crate::theme::{
-    ATTENTION, ATTENTION_EDGE, ATTENTION_WASH, BLOCKED, BLOCKED_WASH, COMPOSER_EDGE,
-    DIFF_ADDED_INK, DIFF_REMOVED_INK, FOCUS_RING, HOVER, IDLE, INLINE_CODE_INK, LINK_INK,
-    METER_OFF, PANE, PANE_HEAD, PANE_HEAD_EDGE, RAISED, RUNNING, RUNNING_WASH, SYN_KEYWORD,
-    SYN_NUMBER, SYN_STRING, TEXT, TEXT_2, TEXT_FAINT, TEXT_MUTED, TEXT_STRONG, TRANSPARENT,
-};
+use crate::theme::*;
 
 /// One Pane's view state: what the window owns per Pane. Everything it
 /// shows lives in core; this is the keyboard, the scrollback position, and
@@ -620,6 +617,10 @@ pub struct PaneFacts<'a> {
     /// everything the L3 recipe needs that is not an O(1) transcript read.
     /// None for a Thread the facts have not met, which draws as empty.
     pub wall: Option<&'a WallCard>,
+    /// The operator asked the system for reduced motion (`cx.reduce_motion()`).
+    pub reduce_motion: bool,
+    /// The Composer's own focus handle holds focus in the active window.
+    pub editing: bool,
 }
 
 /// The click-wired elements only the cockpit can build — gpui listeners
@@ -795,6 +796,63 @@ pub fn wall_card(transcript: Option<&Transcript>, decision: Option<&Decision>) -
 /// One Pane. A Thread with no open state in core is one the cockpit could
 /// not open; it still gets a cell, because a Pane that vanishes hides the
 /// problem.
+/// Everything the `render_pane` slots read for one frame, gathered once by the
+/// skeleton. **Foundation-owned:** only the integrator adds a field, so no
+/// package edits this struct. The owned wiring pieces are `Option`s that the
+/// slot named in their doc `take()`s.
+pub(crate) struct PaneCtx<'a> {
+    pub view: &'a PaneView,
+    #[allow(dead_code)]
+    pub thread: Option<ThreadView<'a>>,
+    /// The selected Subject's transcript; `None` for a parked Pane.
+    pub transcript: Option<&'a Transcript>,
+    #[allow(dead_code)]
+    pub level: Level,
+    pub focused: bool,
+    /// The Main Subject's pending Decision.
+    pub decision: Option<&'a Decision>,
+    /// Activity requests (or a question expander) exist for this Pane, so
+    /// the plain Decision card steps aside.
+    pub has_activity_decisions: bool,
+    pub queued: Vec<&'a str>,
+    pub queue_height: f32,
+    pub needs_queue: bool,
+    pub composer_empty: bool,
+    pub history_available: bool,
+    pub permission_mode: Option<SharedString>,
+    pub suggestion: Option<&'a str>,
+    pub received_reasoning_visible: bool,
+    // ---- pre-plumbed for the work packages: wired, not read yet
+    /// The operator asked the system for reduced motion.
+    #[allow(dead_code)]
+    pub reduce_motion: bool,
+    /// The Composer itself holds the keyboard in the active window.
+    #[allow(dead_code)]
+    pub editing: bool,
+    /// The Session is starting or being replaced; nothing committed yet.
+    #[allow(dead_code)]
+    pub starting: bool,
+    /// Finished while the operator looked elsewhere (an unread Notice).
+    #[allow(dead_code)]
+    pub unread: bool,
+    // ---- owned wiring
+    /// `l1_composer` / `l2_composer`.
+    pub attachments: Option<AnyElement>,
+    pub composer_actions: Option<AnyElement>,
+    pub background: Option<AnyElement>,
+    pub menu: Option<AnyElement>,
+    pub model_picker: Option<AnyElement>,
+    pub usage_meter: Option<AnyElement>,
+    pub session_controls: Option<AnyElement>,
+    pub mode_picker: Option<AnyElement>,
+    /// A Subagent's footer, drawn where the Composer would be.
+    pub child_footer: Option<AnyElement>,
+    /// `l1_dock` (and the L2 cell).
+    pub decide: Option<AnyElement>,
+    /// `l1_dock`: activity requests that were not docked in the body.
+    pub activity_decisions: Option<AnyElement>,
+}
+
 pub fn render_pane(
     view: &PaneView,
     facts: PaneFacts<'_>,
@@ -812,6 +870,8 @@ pub fn render_pane(
         focused,
         attention,
         wall,
+        reduce_motion,
+        editing,
     } = facts;
     let pulse = attention.then(|| view.thread()).flatten();
     let empty = WallCard::default();
@@ -827,7 +887,7 @@ pub fn render_pane(
         usage_meter,
         session_controls,
         mode_picker,
-        mut decide,
+        decide,
         title,
         agents,
         ci,
@@ -845,21 +905,11 @@ pub fn render_pane(
     } else {
         None
     };
-    let queued = thread.map(|thread| thread.queued_all()).unwrap_or_default();
     let workspace = thread.and_then(|thread| thread.workspace());
-    let permission_mode = thread.and_then(|thread| {
-        thread
-            .permission_mode()
-            .map(|mode| permission_mode_label(mode, &thread.permission_modes()))
-    });
-    let suggestion = thread.and_then(|thread| thread.suggestion());
     let timings = subject.as_ref().map(|subject| subject.timings());
     let status = subject.as_ref().map(|subject| {
         crate::cockpit::subagents::transcript_status(subject.status(), subject.fresh())
     });
-    // Submission guidance follows the same predicate as Submit, including
-    // startup and held prompts, independently of this Pane's focus.
-    let needs_queue = thread.is_some_and(|thread| thread.needs_queue());
     let state = wall_state(
         transcript,
         decision.is_some_and(Decision::blocks_execution),
@@ -901,40 +951,58 @@ pub fn render_pane(
         );
     }
 
+    // Requests occupy the space below this Thread's header and above its
+    // actual Composer. Keeping the overlay in that flex slot makes it follow
+    // multiline drafts and split resizing without escaping into other Panes.
+    // (At L2 the cell hangs them itself.)
+    let docked_requests = if level == Level::Instruments {
+        None
+    } else {
+        activity_decisions.take()
+    };
+    let mut cx = PaneCtx {
+        view,
+        thread,
+        transcript,
+        level,
+        focused,
+        decision,
+        has_activity_decisions,
+        queued: thread.map(|thread| thread.queued_all()).unwrap_or_default(),
+        queue_height: composer_queue_height,
+        // Submission guidance follows the same predicate as Submit, including
+        // startup and held prompts, independently of this Pane's focus.
+        needs_queue: thread.is_some_and(|thread| thread.needs_queue()),
+        composer_empty,
+        history_available,
+        permission_mode: thread.and_then(|thread| {
+            thread
+                .permission_mode()
+                .map(|mode| permission_mode_label(mode, &thread.permission_modes()))
+        }),
+        suggestion: thread.and_then(|thread| thread.suggestion()),
+        received_reasoning_visible,
+        reduce_motion,
+        editing,
+        starting: thread.is_some_and(|thread| thread.starting()),
+        unread: attention,
+        attachments,
+        composer_actions,
+        background,
+        menu,
+        model_picker,
+        usage_meter,
+        session_controls,
+        mode_picker,
+        child_footer,
+        decide,
+        activity_decisions,
+    };
+
     if level == Level::Instruments {
-        // An L2 cell keeps its Composer: the operator types into a small
-        // Pane as into a big one — a cell too small to read a transcript
-        // is not too small to be told what to do next. No menu, picker
-        // or band at this size; the keys still work.
-        let composer = transcript.filter(|_| view.is_main()).map(|transcript| {
-            composer_region(
-                view,
-                Some(transcript),
-                ComposerStack {
-                    compact: true,
-                    decision,
-                    requests: None,
-                    queued,
-                    queue_height: composer_queue_height,
-                    needs_queue,
-                    empty: composer_empty,
-                    attachments,
-                    actions: composer_actions,
-                    background,
-                    history_available,
-                    menu: None,
-                    mode: permission_mode.as_deref(),
-                    mode_picker: None,
-                    model_picker: None,
-                    usage_meter: None,
-                    session_controls: None,
-                    setup_controls: None,
-                    draft_error: None,
-                    suggestion,
-                    focused,
-                },
-            )
-        });
+        let composer = l2_composer(&mut cx);
+        let decide = cx.decide.take();
+        let activity_decisions = cx.activity_decisions.take();
         return focus_wrapper(
             shell.child(l2_cell(
                 view,
@@ -946,7 +1014,7 @@ pub fn render_pane(
                 timings,
                 decide,
                 title,
-                composer.or_else(|| child_footer.map(|footer| div().child(footer))),
+                composer,
                 activity_decisions.filter(|_| expand_question.is_none()),
                 expand_question,
             )),
@@ -955,11 +1023,6 @@ pub fn render_pane(
             alert,
         );
     }
-
-    // Requests occupy the space below this Thread's header and above its
-    // actual Composer. Keeping the overlay in that flex slot makes it follow
-    // multiline drafts and split resizing without escaping into other Panes.
-    let docked_requests = activity_decisions.take();
 
     let mut pane = shell.child(pane_head(
         view,
@@ -976,13 +1039,9 @@ pub fn render_pane(
         },
     ));
     match transcript {
-        Some(transcript) => {
-            // The tasks strip sits directly under the header, full width,
-            // exactly where the Main comp draws it — meter, the step being
-            // worked, and the muted tag (#22 eyeball round).
-            if let Some(todos) = transcript.todos() {
-                pane = pane.child(tasks_strip(todos, transcript.current_task()));
-            }
+        Some(_) => {
+            // The tasks strip sits directly under the header, full width.
+            pane = pane.children(l1_tasks(&mut cx));
             view.rich
                 .file_context(workspace.map(WorkspaceBinding::cwd), &view.preview);
             pane = pane.child(
@@ -1001,84 +1060,157 @@ pub fn render_pane(
                         body.child(deferred(requests_overlay(requests)))
                     }),
             );
-            if transcript.status() == Status::Streaming {
-                pane = pane.child(
-                    div()
-                        .debug_selector(|| "transcript-progress".into())
-                        .px(px(theme::PANE_PAD_X))
-                        .py(px(theme::KEYS_GAP))
-                        .child(working_line(transcript, false, received_reasoning_visible)),
-                );
-            }
-            // The Decision card is a **sibling of the body**, not a child
-            // of the Composer (§D.5): its `margin: 0 12px 8px` is measured
-            // from the Pane's own content box, so nesting it inside the
-            // Composer's 12px padding would inset it twice. The child
-            // order is head · tasks · body · decision · composer — §D.1
-            // pins a CHANGED strip between the last two, which the Pane no
-            // longer draws: a strip of filenames repeated what the diff
-            // cards in the body had already said, file by file, and cost a
-            // walk of every Block per frame to say it.
-            if view.is_main() {
-                if let Some((_, error)) = &view.request_error {
-                    pane = pane.child(
-                        div()
-                            .px(px(theme::PANE_PAD_X))
-                            .py(px(4.))
-                            .text_size(px(theme::FS_SM))
-                            .text_color(rgb(theme::BLOCKED))
-                            .child(format!("Could not send answer: {error}")),
-                    );
-                }
-            }
-            if let Some(decision) = decision.filter(|_| !has_activity_decisions) {
-                pane = pane.child(decision_card(
-                    decision,
-                    decide.take(),
-                    &view.rich,
-                    view.text_namespace(),
-                ));
-            }
-            if let Some(decisions) = activity_decisions {
-                pane = pane.child(decisions);
-            }
-            if let Some(footer) = child_footer {
-                pane = pane.child(footer);
-            } else {
-                pane = pane.child(composer_region(
-                    view,
-                    Some(transcript),
-                    ComposerStack {
-                        compact: false,
-                        decision,
-                        requests: None,
-                        queued,
-                        queue_height: composer_queue_height,
-                        needs_queue,
-                        empty: composer_empty,
-                        attachments,
-                        actions: composer_actions,
-                        background,
-                        history_available,
-                        menu,
-                        mode: permission_mode.as_deref(),
-                        mode_picker,
-                        model_picker,
-                        usage_meter,
-                        session_controls,
-                        setup_controls: None,
-                        draft_error: None,
-                        suggestion,
-                        focused,
-                    },
-                ));
-            }
+            // The order is head · tasks · body · progress · dock · composer.
+            pane = pane.children(l1_progress(&mut cx));
+            pane = pane.children(l1_dock(&mut cx));
+            pane = pane.children(l1_composer(&mut cx));
         }
         None => {
             pane = pane.child(parked_body());
         }
     }
     focus_wrapper(pane, focused, pulse, alert)
+}
+
+// ---------------------------------------------------------- render_pane slots
+// Each slot's body belongs to one package; its signature and `PaneCtx` are
+// the integrator's.
+
+/// WP-A · the L1 working line, while the transcript streams.
+fn l1_progress(cx: &mut PaneCtx) -> Option<AnyElement> {
+    let transcript = cx.transcript?;
+    (transcript.status() == Status::Streaming).then(|| {
+        div()
+            .debug_selector(|| "transcript-progress".into())
+            .px(px(theme::PANE_PAD_X))
+            .py(px(theme::KEYS_GAP))
+            .child(working_line(
+                transcript,
+                false,
+                cx.received_reasoning_visible,
+            ))
+            .into_any_element()
+    })
+}
+
+/// WP-C · the tasks strip under the head.
+fn l1_tasks(cx: &mut PaneCtx) -> Option<AnyElement> {
+    let transcript = cx.transcript?;
+    let todos = transcript.todos()?;
+    Some(tasks_strip(todos, transcript.current_task()).into_any_element())
+}
+
+/// WP-F · between the body and the Composer: a failed answer's error, the
+/// plain Decision card, and activity requests not docked in the body.
+///
+/// The Decision card is a **sibling of the body**, not a child of the
+/// Composer (§D.5): its margin is measured from the Pane's own content box,
+/// so nesting it inside the Composer's padding would inset it twice.
+fn l1_dock(cx: &mut PaneCtx) -> Vec<AnyElement> {
+    let mut dock = Vec::new();
+    if cx.view.is_main() {
+        if let Some((_, error)) = &cx.view.request_error {
+            dock.push(
+                div()
+                    .px(px(theme::PANE_PAD_X))
+                    .py(px(4.))
+                    .text_size(px(theme::FS_SM))
+                    .text_color(rgb(theme::BLOCKED))
+                    .child(format!("Could not send answer: {error}"))
+                    .into_any_element(),
+            );
+        }
+    }
+    if let Some(decision) = cx.decision.filter(|_| !cx.has_activity_decisions) {
+        dock.push(
+            decision_card(
+                decision,
+                cx.decide.take(),
+                &cx.view.rich,
+                cx.view.text_namespace(),
+            )
+            .into_any_element(),
+        );
+    }
+    dock.extend(cx.activity_decisions.take());
+    dock
+}
+
+/// WP-D · the L1 Composer, or a Subagent's footer in its place.
+fn l1_composer(cx: &mut PaneCtx) -> Option<AnyElement> {
+    if let Some(footer) = cx.child_footer.take() {
+        return Some(footer);
+    }
+    let transcript = cx.transcript?;
+    Some(
+        composer_region(
+            cx.view,
+            Some(transcript),
+            ComposerStack {
+                compact: false,
+                decision: cx.decision,
+                requests: None,
+                queued: std::mem::take(&mut cx.queued),
+                queue_height: cx.queue_height,
+                needs_queue: cx.needs_queue,
+                empty: cx.composer_empty,
+                attachments: cx.attachments.take(),
+                actions: cx.composer_actions.take(),
+                background: cx.background.take(),
+                history_available: cx.history_available,
+                menu: cx.menu.take(),
+                mode: cx.permission_mode.as_deref(),
+                mode_picker: cx.mode_picker.take(),
+                model_picker: cx.model_picker.take(),
+                usage_meter: cx.usage_meter.take(),
+                session_controls: cx.session_controls.take(),
+                setup_controls: None,
+                draft_error: None,
+                suggestion: cx.suggestion,
+                focused: cx.focused,
+            },
+        )
+        .into_any_element(),
+    )
+}
+
+/// WP-D · the L2 cell's compact Composer, or a Subagent's footer. An L2 cell
+/// keeps its Composer: the operator types into a small Pane as into a big
+/// one. No menu, picker or band at this size; the keys still work.
+fn l2_composer(cx: &mut PaneCtx) -> Option<Div> {
+    let composer = cx
+        .transcript
+        .filter(|_| cx.view.is_main())
+        .map(|transcript| {
+            composer_region(
+                cx.view,
+                Some(transcript),
+                ComposerStack {
+                    compact: true,
+                    decision: cx.decision,
+                    requests: None,
+                    queued: std::mem::take(&mut cx.queued),
+                    queue_height: cx.queue_height,
+                    needs_queue: cx.needs_queue,
+                    empty: cx.composer_empty,
+                    attachments: cx.attachments.take(),
+                    actions: cx.composer_actions.take(),
+                    background: cx.background.take(),
+                    history_available: cx.history_available,
+                    menu: None,
+                    mode: cx.permission_mode.as_deref(),
+                    mode_picker: None,
+                    model_picker: None,
+                    usage_meter: None,
+                    session_controls: None,
+                    setup_controls: None,
+                    draft_error: None,
+                    suggestion: cx.suggestion,
+                    focused: cx.focused,
+                },
+            )
+        });
+    composer.or_else(|| cx.child_footer.take().map(|footer| div().child(footer)))
 }
 
 /// The Pane box (§D.1): `--pane` ground, 8px radius, and a 1px border that
@@ -1198,6 +1330,12 @@ pub struct DraftState<'a> {
     /// has spent no context, and its account windows answer before the
     /// prompt is written.
     pub usage_meter: Option<AnyElement>,
+    /// Pre-plumbed for WP-D: the Composer holds the keyboard in the active
+    /// window, and the operator asked for reduced motion.
+    #[allow(dead_code)]
+    pub editing: bool,
+    #[allow(dead_code)]
+    pub reduce_motion: bool,
 }
 
 /// A draft Pane (#29): an empty transcript area and the Composer wearing
@@ -1216,6 +1354,8 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
         focused,
         error,
         usage_meter,
+        editing: _,
+        reduce_motion: _,
     } = state;
     let shell = pane_shell(rgba(TRANSPARENT).into());
 

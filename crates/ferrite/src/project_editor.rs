@@ -10,11 +10,7 @@ use gpui::{div, px, rgb, rgba, App, Div, FontWeight, SharedString};
 
 use crate::components;
 use crate::icons::{self, icon};
-use crate::theme::{
-    BLOCKED, FILL, FONT_MONO, FONT_UI, FORM_CONTROL_H, FS_SM, FS_UI, ICON_BUTTON,
-    ICON_BUTTON_GLYPH, MENU, MODAL_GAP, MODAL_HEAD_H, MODAL_PAD, MODAL_VIEWPORT_FRACTION, PANE,
-    RAISED, R_BLOCK, R_CONTROL, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG, W_LABEL,
-};
+use crate::theme::*;
 
 const WIDTH: f32 = 600.;
 /// The first directory has room for its labels and the Name field. Each

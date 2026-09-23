@@ -40,16 +40,7 @@ use gpui::{
 use crate::components;
 use crate::icons::{self, icon};
 use crate::pointer::{Pointer, PointerPressed};
-use crate::theme::{
-    ATTENTION, BLOCKED, FILL, FONT_UI, FS_SM, FS_UI, GROUP_GAP, GROUP_RAIL, GROUP_ROW_H,
-    ICON_BUTTON, ICON_BUTTON_GLYPH, ICON_CHEVRON_LG, IDLE, LH_META, LH_TIGHT, LH_UI, MEMBERS_TOP,
-    MEMBER_GAP, MEMBER_INDENT, MENU, MENU_PAD, MENU_ROW_H, MENU_TOP, NAV, NAV_HEAD_H, NAV_TREE_PAD,
-    NAV_TREE_PAD_B, PROVIDER_CLAUDE, PROVIDER_CODEX, PROVIDER_MARK, PULSE_MIN, RAIL_INSET,
-    RAIL_OFFSET, ROW_GAP, ROW_ICON, ROW_ICON_GAP, ROW_PAD_X, ROW_PAD_Y, ROW_TEXT_W, RUNNING,
-    RUNNING_HALO, R_BLOCK, R_CONTROL, R_TIGHT, SOLOS_TOP, STATUS_DOT, STATUS_HALO_INSET,
-    STATUS_PULSE_MS, TEXT, TEXT_2, TEXT_FAINT, TEXT_MUTED, TEXT_STRONG, THREAD_ROW_H,
-    TRAFFIC_RESERVE, WIN_CHROME_H, W_LABEL,
-};
+use crate::theme::*;
 
 /// The nav's two widths—286px, and the platform rail cmd-b folds it to.
 /// macOS uses the traffic-light reserve; other platforms use 56px.

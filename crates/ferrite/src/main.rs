@@ -9,6 +9,7 @@ mod background_chips;
 mod cockpit;
 mod components;
 mod composer;
+mod decision;
 mod demo;
 mod facts;
 mod file_links;
