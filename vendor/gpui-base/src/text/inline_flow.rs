@@ -335,10 +335,12 @@ impl Element for InlineFlow {
         let layout_state = InlineFlowLayoutState::default();
         let layout_ref = layout_state.layout.clone();
         let code_font = self.code_font.clone();
+        // The measure closure runs during layout computation, outside this
+        // element's text-style stack: capture the inherited style here.
+        let text_style = window.text_style();
 
         let layout_id = window.request_measured_layout(Default::default(), {
             move |known_dimensions, available_space, window, _cx| {
-                let text_style = window.text_style();
                 let wrap_width = if text_style.white_space == WhiteSpace::Normal {
                     known_dimensions.width.or(match available_space.width {
                         AvailableSpace::Definite(width) => Some(width),
@@ -357,14 +359,16 @@ impl Element for InlineFlow {
                         }
                     }
                 }
-                let layout = layout_flow(
-                    &measure_items,
-                    &image_sizes,
-                    &text_style,
-                    wrap_width,
-                    code_font.as_ref(),
-                    window,
-                );
+                let layout = window.with_rem_size(Some(rem_size), |window| {
+                    layout_flow(
+                        &measure_items,
+                        &image_sizes,
+                        &text_style,
+                        wrap_width,
+                        code_font.as_ref(),
+                        window,
+                    )
+                });
                 let size = layout.size;
                 if let Ok(mut state) = layout_ref.lock() {
                     *state = Some(layout);
@@ -616,8 +620,8 @@ fn layout_flow(
     code_font: Option<&SharedString>,
     window: &mut Window,
 ) -> InlineFlowLayout {
-    let line_height = window.line_height();
     let rem_size = window.rem_size();
+    let line_height = text_style.line_height_in_pixels(rem_size);
     let total_len = items.iter().map(MeasureItem::len).sum::<usize>();
     if total_len == 0 {
         return InlineFlowLayout::default();
