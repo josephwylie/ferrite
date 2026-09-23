@@ -140,8 +140,11 @@ pub struct CockpitView {
     /// Pane holds a Composer, this handle is what keeps the keyboard alive.
     focus: FocusHandle,
     perf: Option<Perf>,
-    /// When the watchdog last swept. Measurements are cached from the RSS
-    /// worker, so a sweep never waits for an operating-system query.
+    /// When the watchdog last swept, on the executor's clock (the wall
+    /// clock in the app, the fake one under test, so a loaded test machine
+    /// cannot drop a sweep into the middle of a test). Measurements are
+    /// cached from the RSS worker, so a sweep never waits for an
+    /// operating-system query.
     swept: std::time::Instant,
     /// One checkout-label refresh at a time, always off the UI thread.
     branch_refreshing: bool,
@@ -756,7 +759,7 @@ impl CockpitView {
                 frames: 0,
                 since: std::time::Instant::now(),
             }),
-            swept: std::time::Instant::now(),
+            swept: cx.background_executor().now(),
             branch_refreshing: false,
             selection: TranscriptText::default(),
             native_copy: None,
@@ -1198,8 +1201,9 @@ impl CockpitView {
         }
         let mut restarted = Vec::new();
         let mut branch_tick = false;
-        if self.swept.elapsed() >= SWEEP_INTERVAL {
-            self.swept = std::time::Instant::now();
+        let now = cx.background_executor().now();
+        if now.duration_since(self.swept) >= SWEEP_INTERVAL {
+            self.swept = now;
             for restart in self.cockpit.sweep() {
                 eprintln!(
                     "ferrite: restarted thread {} after {} bytes resident",
@@ -13351,7 +13355,7 @@ mod tests {
         // watchdog cadence still refreshes and repaints the header.
         git(&["checkout", "-q", "-b", "agent-moved"]);
         view.update(cx, |view, cx| {
-            view.swept = std::time::Instant::now() - SWEEP_INTERVAL;
+            view.swept = cx.background_executor().now() - SWEEP_INTERVAL;
             view.pump(cx);
         });
         view.read_with(cx, |view, _| {

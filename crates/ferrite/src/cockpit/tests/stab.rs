@@ -345,3 +345,28 @@ fn the_project_name_field_shows_keyboard_focus(cx: &mut TestAppContext) {
         "elsewhere: the resting edge"
     );
 }
+
+/// The watchdog sweeps on the executor's clock, not the wall clock: a slow
+/// or loaded machine that takes longer than `SWEEP_INTERVAL` of real time
+/// over a test must not drop a sweep (and its repaint and git refresh) into
+/// the middle of it. Only the executor's time moving past the interval does.
+#[gpui::test]
+fn the_watchdog_sweeps_on_the_executor_clock(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("sweep-clock", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    tick(cx);
+    let before = view.read_with(cx, |view, _| view.swept);
+    std::thread::sleep(SWEEP_INTERVAL + Duration::from_millis(50));
+    view.update(cx, |view, cx| view.pump(cx));
+    assert_eq!(
+        view.read_with(cx, |view, _| view.swept),
+        before,
+        "real time alone never sweeps"
+    );
+    cx.executor().advance_clock(SWEEP_INTERVAL);
+    view.update(cx, |view, cx| view.pump(cx));
+    assert!(
+        view.read_with(cx, |view, _| view.swept) > before,
+        "the executor's time does"
+    );
+}
