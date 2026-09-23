@@ -113,8 +113,18 @@ pub fn strip(
         // absorbs spare width and remains the Windows drag target, while the
         // contextual creation door sits at the trailing edge immediately
         // before the caption controls.
-        .child(title_region(title, board))
-        .children(DEV.then(dev_badge))
+        // An empty location (the empty board) takes no slot, so the `dev`
+        // tag keeps the location's own inset instead of trailing an empty
+        // region and its gap.
+        .map(|strip| {
+            if title.project.is_none() && title.group.is_none() {
+                strip.children(DEV.then(|| dev_badge().ml(px(GRID_PAD))))
+            } else {
+                strip
+                    .child(title_region(title, board))
+                    .children(DEV.then(dev_badge))
+            }
+        })
         .child(trailing_drag)
         .child(add_thread)
         .children(CUSTOM.then(|| caption_buttons(maximized)))

@@ -793,3 +793,26 @@ fn a_draft_body_says_how_to_start(cx: &mut TestAppContext) {
     let block = cx.debug_bounds("composer-block").unwrap();
     assert!(empty.bottom() <= block.top(), "{empty:?} / {block:?}");
 }
+
+/// On the empty board the titlebar has no location, and the `dev` tag
+/// takes the location's own inset rather than trailing an empty slot.
+#[gpui::test]
+fn the_empty_board_titlebar_keeps_the_dev_tag_on_the_inset(cx: &mut TestAppContext) {
+    if !crate::titlebar::DEV {
+        return;
+    }
+    let (core, _fake) = cockpit("empty-titlebar", 1);
+    cx.update(|cx| cx.bind_keys([KeyBinding::new("cmd-w", CloseThread, None)]));
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    tick(cx);
+    cx.simulate_keystrokes("cmd-w");
+    tick(cx);
+    assert!(cx.debug_bounds("empty-board").is_some());
+    let tag = cx.debug_bounds("titlebar-dev-badge").expect("the dev tag");
+    assert_eq!(
+        tag.left(),
+        px(crate::theme::NAV_WIDTH + crate::theme::GRID_PAD),
+        "{tag:?}"
+    );
+}
