@@ -315,3 +315,33 @@ fn the_popover_keeps_its_keyboard_cursor_in_view(cx: &mut TestAppContext) {
     assert!(visible(cx) <= first.max(1));
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// The Project card's name field wears the focus ink while the keyboard is
+/// in it, like every other field, and its resting edge otherwise.
+#[gpui::test]
+fn the_project_name_field_shows_keyboard_focus(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("project-name-focus", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    view.update(cx, |view, cx| view.open_project_creator(cx));
+    tick(cx);
+    let name = view.read_with(cx, |view, _| {
+        view.project_editor.as_ref().unwrap().name.clone()
+    });
+    cx.update(|window, cx| {
+        let handle = name.read(cx).focus_handle(cx);
+        window.focus(&handle, cx);
+    });
+    tick(cx);
+    assert!(
+        cx.debug_bounds("project-name-focused").is_some(),
+        "focused: the edge is the focus ink"
+    );
+    let transcript = view.read_with(cx, |view, _| view.panes[0].transcript_focus.clone());
+    cx.update(|window, cx| window.focus(&transcript, cx));
+    tick(cx);
+    assert!(
+        cx.debug_bounds("project-name-focused").is_none(),
+        "elsewhere: the resting edge"
+    );
+}

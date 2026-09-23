@@ -2952,7 +2952,11 @@ impl CockpitView {
     /// Project mutations stay visible together in one protected surface.
     /// Folder picking may temporarily leave the app, but the card remains
     /// open so the changed directory list is visible on return.
-    fn project_editor_element(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn project_editor_element(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         let editor = self.project_editor.as_ref()?;
         let project = editor
             .target
@@ -2983,7 +2987,10 @@ impl CockpitView {
             },
         ));
         let mut body = project_editor::body()
-            .child(project_editor::name_field(editor.name.clone()))
+            .child(project_editor::name_field(
+                editor.name.clone(),
+                editor.name.read(cx).focus_handle(cx).is_focused(window),
+            ))
             .child(project_editor::section_label(
                 "Directories",
                 "The first directory is the main one. Add the others one at a time.",
@@ -7435,7 +7442,7 @@ impl Render for CockpitView {
             .children(self.session_controls_element(cx))
             .children(self.context_checks_element(cx))
             .children(self.settings_element(cx))
-            .children(self.project_editor_element(cx))
+            .children(self.project_editor_element(window, cx))
             .children(gpui::component::Root::render_dialog_layer(window, cx))
             .children(gpui::component::Root::render_notification_layer(window, cx))
     }

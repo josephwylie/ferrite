@@ -77,8 +77,9 @@ pub fn section_label(title: &'static str, hint: &'static str) -> Div {
 
 /// The Project name row: a section label over a field recessed into the
 /// sheet (`PANE`, the strong hairline edge), recognizable before the live
-/// editor holds any text.
-pub fn name_field(editor: impl IntoElement) -> Div {
+/// editor holds any text. While the keyboard is in it the edge is the
+/// focus ink, like every other field's; the edge is always in layout.
+pub fn name_field(editor: impl IntoElement, focused: bool) -> Div {
     div()
         .flex_shrink_0()
         .flex()
@@ -93,7 +94,14 @@ pub fn name_field(editor: impl IntoElement) -> Div {
                 .px(px(FORM_FIELD_PAD_X))
                 .rounded(px(R_CONTROL))
                 .border_1()
-                .border_color(rgba(HAIRLINE_STRONG))
+                .border_color(if focused {
+                    rgb(FOCUS_RING)
+                } else {
+                    rgba(HAIRLINE_STRONG)
+                })
+                .when(focused, |field| {
+                    field.debug_selector(|| "project-name-focused".into())
+                })
                 .bg(rgb(PANE))
                 .child(div().min_w_0().flex_1().child(editor)),
         )
