@@ -1683,16 +1683,13 @@ pub fn draft_close_button(draft: DraftId) -> gpui::component::button::Button {
 }
 
 /// The × with its tooltip: `Discard draft`, and the key after it only where
-/// one is bound (`components::chord_tooltip`).
+/// one is bound (`menu::tooltip_with_key`).
 pub fn draft_discard(draft: DraftId, button: AnyElement, keys: Option<String>) -> Stateful<Div> {
-    let tip = div()
+    div()
         .id(("discard-draft-tip", draft.get() as usize))
-        .flex_shrink_0();
-    match keys {
-        Some(keys) => tip.tooltip(components::chord_tooltip("Discard draft", keys)),
-        None => tip.tooltip(crate::menu::tooltip("Discard draft")),
-    }
-    .child(button)
+        .flex_shrink_0()
+        .tooltip(crate::menu::tooltip_with_key("Discard draft", keys))
+        .child(button)
 }
 
 /// Draft setup controls ride the Composer's meta row. In a narrow Pane
@@ -1728,6 +1725,7 @@ pub fn band_chip(slot: usize, label: SharedString, accent: bool, focused: bool) 
         .min_w_0()
         .rounded(px(theme::COMPOSER_CHIP_R))
         .map(|chip| components::focused(chip, focused))
+        .hover_raised(format!("band-chip-{slot}"))
         .press_raised()
         .child(
             control_chip(if accent { TEXT } else { TEXT_2 })
@@ -1750,8 +1748,9 @@ pub fn draft_picker(
     id: &'static str,
     focused: bool,
     control: Div,
+    cx: &gpui::App,
 ) -> gpui::component::button::Button {
-    crate::components::button(id)
+    chip_button(id, cx)
         .debug_selector(move || id.to_string())
         .p_0()
         .h_auto()
@@ -2769,7 +2768,7 @@ pub(crate) fn group_head(head: GroupHead) -> Div {
 
 /// `needs you` as a door: a press runs the ⌘D jump (`NextDecision`) from
 /// wherever the keyboard is — the press does not land on a Pane first — and
-/// the tooltip names that key: `Jump to what needs you ⌘D`. The Group head's
+/// the tooltip names that key: `Next needs you ⌘D`. The Group head's
 /// slot and the Solo titlebar share it.
 pub(crate) fn needs_you_door(id: SharedString, selector: SharedString, face: Div) -> AnyElement {
     let door = div()
@@ -2783,14 +2782,11 @@ pub(crate) fn needs_you_door(id: SharedString, selector: SharedString, face: Div
         .on_click(|_, window, cx| {
             window.dispatch_action(Box::new(crate::cockpit::NextDecision), cx)
         });
-    match components::bound_chord("cockpit::NextDecision") {
-        Some(keys) => door
-            .tooltip(components::chord_tooltip("Jump to what needs you", keys))
-            .into_any_element(),
-        None => door
-            .tooltip(crate::menu::tooltip("Jump to what needs you"))
-            .into_any_element(),
-    }
+    door.tooltip(crate::menu::action_tooltip(
+        "Next needs you",
+        "cockpit::NextDecision",
+    ))
+    .into_any_element()
 }
 
 /// The head's branch: the checkout's, only when it is not the default. The
@@ -2920,7 +2916,14 @@ pub fn ci_mark(pr: &PullRequest, key: u64, open: bool) -> Stateful<Div> {
         .id(("ci-mark", key as usize))
         .debug_selector(move || format!("ci-mark-{key}"))
         .tooltip(|window, cx| gpui::component::tooltip::Tooltip::new("CI checks").build(window, cx))
-        .hover_control()
+        .map(|mark| {
+            let hover = format!("ci-mark-{key}");
+            if open {
+                mark.hover_carried(hover)
+            } else {
+                mark.hover_control(hover)
+            }
+        })
         .press_control()
 }
 
@@ -3129,7 +3132,10 @@ pub fn check_row(index: usize, run: &Check) -> Stateful<Div> {
                 .child(check_word(run.state, &run.detail)),
         )
         // The card is a raised surface: its rows take the raised faces.
-        .when(openable, |row| row.hover_raised().press_raised())
+        .when(openable, |row| {
+            row.hover_raised(format!("check-row-{index}"))
+                .press_raised()
+        })
 }
 
 /// The head's title: the name, truncating, with no hover face and the
@@ -3936,8 +3942,9 @@ pub fn composer_box(edge: u32) -> Div {
 
 /// A Composer control on the hint row (§ theme "Composer controls"): the
 /// model, effort and mode pickers and the session `•••` share it. No ground
-/// at rest, `FILL` under the pointer (the hover face on `RAISED`), label in
-/// `ink`, an optional chevron. Render-only; the cockpit wires it.
+/// at rest; the button it rides in (`composer_control`, `draft_picker`) or
+/// its own id'd wrapper wears the one hover blend. Label in `ink`, an
+/// optional chevron. Render-only; the cockpit wires it.
 fn control_chip(ink: u32) -> Div {
     div()
         .flex()
@@ -3950,7 +3957,6 @@ fn control_chip(ink: u32) -> Div {
         .text_size(px(theme::FS_SM))
         .line_height(px(theme::LH_META))
         .text_color(rgb(ink))
-        .hover_raised()
 }
 
 /// A control chip's menu chevron.
@@ -3983,11 +3989,27 @@ pub fn mode_chip(mode: &str, menu: bool) -> Div {
 /// The button a Composer chip rides in (model, effort, mode, session
 /// `•••`): no padding of its own and the chip's pill radius, so the kit's
 /// hover, pressed and focus faces fill exactly the chip's shape.
-pub fn composer_control(id: impl Into<gpui::ElementId>) -> gpui::component::button::Button {
-    components::button(id)
+pub fn composer_control(
+    id: impl Into<gpui::ElementId>,
+    cx: &gpui::App,
+) -> gpui::component::button::Button {
+    chip_button(id, cx)
         .p_0()
         .h_auto()
         .rounded(px(theme::COMPOSER_CHIP_R))
+}
+
+/// A Composer chip's button: no ground at rest, `HOVER_RAISED` under the
+/// pointer over the one 150ms blend, `FILL_HOVER` pressed at once.
+fn chip_button(id: impl Into<gpui::ElementId>, cx: &gpui::App) -> gpui::component::button::Button {
+    components::faded_button(
+        id,
+        gpui::rgba(theme::TRANSPARENT).into(),
+        rgb(theme::HOVER_RAISED).into(),
+        rgb(theme::FILL_HOVER).into(),
+        rgb(TEXT_2).into(),
+        cx,
+    )
 }
 
 /// The session-controls trigger: `•••` on the control-chip recipe.
@@ -6436,6 +6458,8 @@ fn prompt_action(
     icon_key: &'static str,
     id: impl Into<gpui::ElementId>,
 ) -> Stateful<Div> {
+    let id = id.into();
+    let hover = crate::pointer::hover_key(&id);
     div()
         .id(id)
         .debug_selector(move || {
@@ -6454,9 +6478,9 @@ fn prompt_action(
         .w(px(theme::TOOL_DISCLOSURE_HIT))
         .h(px(theme::TOOL_DISCLOSURE_HIT))
         .rounded(px(theme::R_CHIP))
-        // A self-grounded control on the Pane: `HOVER` under the pointer,
-        // pressed at once.
-        .hover_control()
+        // A self-grounded control on the Pane: `HOVER` under the pointer
+        // over the one blend, pressed at once.
+        .hover_control(hover)
         .press_control()
         .tooltip(move |window, cx| {
             gpui::component::tooltip::Tooltip::new(tooltip).build(window, cx)

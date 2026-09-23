@@ -54,7 +54,7 @@ use crate::cockpit::thread_status;
 use crate::components;
 use crate::icons::{self, icon};
 use crate::pane::WallState;
-use crate::pointer::{Pointer, PointerFaded, PointerPressed};
+use crate::pointer::{Pointer, PointerPressed};
 use crate::theme::*;
 
 /// The nav's two widths—286px, and the platform rail cmd-b folds it to.
@@ -483,11 +483,21 @@ pub fn collapse_button(collapsed: bool) -> Stateful<Div> {
         .w(px(size))
         .h(px(size))
         .rounded(px(R_CONTROL))
-        .hover_control()
+        .hover_control("nav-collapse")
         .press_control()
+        .tooltip(crate::menu::action_tooltip(
+            "Toggle sidebar",
+            "cockpit::ToggleNav",
+        ))
+        // The glyph lifts to `TEXT` through the same blend as the ground.
         .child(
-            icon(icons::SIDEBAR, ICON_BUTTON_GLYPH, TEXT_MUTED)
-                .group_hover(COLLAPSE_GROUP, |style| style.text_color(rgb(TEXT))),
+            icon(icons::SIDEBAR, ICON_BUTTON_GLYPH, TEXT_MUTED).text_color(
+                crate::motion::hover_blend(
+                    "nav-collapse",
+                    rgb(TEXT_MUTED).into(),
+                    rgb(TEXT).into(),
+                ),
+            ),
         )
 }
 
@@ -685,13 +695,14 @@ pub fn filter_trigger(state: &FilterState) -> Stateful<Div> {
         // its hover face: the menu is the hover made permanent, so the
         // control does not blink when the pointer leaves.
         .when(state.open, |open| {
-            open.bg(rgb(FILL))
-                .text_color(rgb(TEXT_STRONG))
-                .hover_carried()
+            open.text_color(rgb(TEXT_STRONG))
+                .hover_carried("nav-filter")
                 .press_row()
         })
         .when(!state.open, |shut| {
-            shut.text_color(rgb(TEXT_2)).hover_control().press_control()
+            shut.text_color(rgb(TEXT_2))
+                .hover_control("nav-filter")
+                .press_control()
         })
         .child(lead(
             icon(icons::FOLDER, ROW_ICON, TEXT_MUTED)
@@ -752,11 +763,15 @@ pub fn project_edit_button() -> gpui::component::button::Button {
 /// `TEXT` under the pointer, on the raised hover face. The caller sets a
 /// separator above it and wires the press to the folder picker.
 pub fn filter_action(index: usize, label: &'static str) -> Stateful<Div> {
+    let key = SharedString::from(format!("nav-filter-action-{index}"));
     components::menu_row_content(&components::MenuItem::new(label), false, false)
         .id(("nav-filter-action", index))
-        .text_color(rgb(TEXT_MUTED))
-        .cursor_pointer()
-        .hover(|row| row.bg(rgb(FILL)).text_color(rgb(TEXT)))
+        .text_color(crate::motion::hover_blend(
+            &key,
+            rgb(TEXT_MUTED).into(),
+            rgb(TEXT).into(),
+        ))
+        .hover_raised(key)
         .press_raised()
 }
 
@@ -991,7 +1006,7 @@ pub fn needs_you_row(entry: &NeedsYouRow) -> Stateful<Div> {
         .rounded(px(NAV_ROW_R));
     let key = SharedString::from(format!("nav-needs-{}", thread.get()));
     frame
-        .hover_row_faded(key)
+        .hover_row(key)
         .press_row()
         .tooltip(row_tooltip(row))
         .child(lead(components::status_dot(ATTENTION)))
@@ -1336,11 +1351,21 @@ pub fn parked_section() -> Div {
 /// word on the text column, and how many wait — a heading in the Project
 /// headings' quiet voice, but a control: the press toggles the fold, and a
 /// right press offers the section's own menu. The cockpit wires both.
-pub fn parked_header(count: usize, open: bool) -> Stateful<Div> {
-    let chevron = if open {
-        icons::CHEVRON_DOWN
+pub fn parked_header(count: usize, open: bool, eased: bool) -> Stateful<Div> {
+    // One chevron that turns a quarter when open: over 150ms on a pointer
+    // toggle, at once on a keyboard or menu toggle (rule 2.10.5).
+    let chevron = |turn: f32| {
+        icon(icons::CHEVRON_RIGHT, ICON_CHEVRON, TEXT_FAINT)
+            .group_hover(PARKED_GROUP, |style| style.text_color(rgb(TEXT_MUTED)))
+            .with_transformation(Transformation::rotate(radians(
+                std::f32::consts::FRAC_PI_2 * turn,
+            )))
+    };
+    let mark = if eased {
+        crate::motion::settled("nav-parked-chevron", open, crate::motion::TURN, chevron)
+            .into_any_element()
     } else {
-        icons::CHEVRON_RIGHT
+        chevron(if open { 1. } else { 0. }).into_any_element()
     };
     components::text_meta()
         .id(("nav-parked", 0usize))
@@ -1353,12 +1378,9 @@ pub fn parked_header(count: usize, open: bool) -> Stateful<Div> {
         .mt(px(NAV_SECTION_GAP))
         .px(px(ROW_PAD_X))
         .rounded(px(NAV_ROW_R))
-        .hover_row()
+        .hover_row("nav-parked")
         .press_row()
-        .child(lead(
-            icon(chevron, ROW_ICON, TEXT_FAINT)
-                .group_hover(PARKED_GROUP, |style| style.text_color(rgb(TEXT_MUTED))),
-        ))
+        .child(lead(mark))
         .child(
             div()
                 .min_w_0()
@@ -1474,7 +1496,7 @@ pub fn rail_filter(filtered: bool, scope: SharedString) -> Stateful<Div> {
         .w(px(NAV_RAIL_CONTROL))
         .h(px(NAV_RAIL_CONTROL))
         .rounded(px(R_CONTROL))
-        .hover_control()
+        .hover_control("nav-rail-filter")
         .press_control()
         .tooltip(crate::menu::tooltip(scope))
         .child(
@@ -1503,6 +1525,19 @@ pub fn rail_items() -> Stateful<Div> {
         .overflow_y_scroll()
 }
 
+/// A rail item under its tooltip: the Thread's title, then the key that
+/// lands on it (`⌘1`…`⌘9`) read from the key table as a mono suffix.
+pub fn rail_item_tip(row: &ThreadRow, position: usize, item: impl IntoElement) -> Stateful<Div> {
+    let key = rail_ordinal(position)
+        .and_then(crate::cockpit::focus_rail_action)
+        .and_then(components::bound_chord);
+    div()
+        .id(("nav-rail-item-tip", row.thread.get() as usize))
+        .flex_shrink_0()
+        .tooltip(crate::menu::tooltip_with_key(row.name.clone(), key))
+        .child(item)
+}
+
 /// The ordinal a rail item wears and the ⌘ key that lands on it: the first
 /// nine items are ⌘1…⌘9 (`cockpit::FocusThread1`…`9`), the rest none.
 pub fn rail_ordinal(position: usize) -> Option<usize> {
@@ -1512,23 +1547,18 @@ pub fn rail_ordinal(position: usize) -> Option<usize> {
 /// One rail item: the Thread's provider mark in its brand colour, centred
 /// in a 16px box, its status dot at the bottom-right corner and, for the
 /// first nine, its ordinal at the top-left in `FS_SM` `TEXT_MUTED`
-/// (tabular) — the ⌘1…⌘9 that lands on it. No initials. The tooltip is the
-/// title and its key. The focused Thread's item carries the tree's one
-/// selected fill.
+/// (tabular) — the ⌘1…⌘9 that lands on it. No initials. The tooltip
+/// (`rail_item_tip`) is the title and its key. The focused Thread's item
+/// carries the tree's one selected fill.
 pub fn rail_item(row: &ThreadRow, current: bool, position: usize) -> Button {
     let ordinal = rail_ordinal(position);
     let title = row.name.clone();
-    let tip = match ordinal {
-        Some(ordinal) => SharedString::from(format!("{title} \u{2318}{ordinal}")),
-        None => title.clone(),
-    };
     components::button(("nav-rail-item", row.thread.get() as usize))
         .debug_selector(move || format!("nav-rail-item-{}", row.thread.get()))
         .group(RAIL_ITEM_GROUP)
         .w(px(NAV_RAIL_CONTROL))
         .h(px(NAV_RAIL_CONTROL))
         .p_0()
-        .tooltip(tip)
         .accessibility_label(title)
         .when(current, |button| button.bg(rgb(FILL)))
         .child(
@@ -1590,9 +1620,9 @@ fn row_frame(id: (&'static str, usize), height: f32, selected: bool) -> Stateful
     // sweeps these rows constantly, so a snap would flicker the column.
     let key = SharedString::from(format!("{}-{}", id.0, id.1));
     let frame = if selected {
-        frame.hover_carried_faded(key).press_row()
+        frame.hover_carried(key).press_row()
     } else {
-        frame.hover_row_faded(key).press_row()
+        frame.hover_row(key).press_row()
     };
     // Rows are draggable into Groups, so they wear the open hand rather than
     // the pointer: the drag is the row's second verb, and the only one the
@@ -1669,7 +1699,7 @@ mod tests {
         let style = filter.style();
         assert_eq!(style.text.font_weight, Some(W_BODY));
         assert_eq!(style.text.color, Some(rgb(TEXT_2).into()));
-        let mut parked = parked_header(3, false);
+        let mut parked = parked_header(3, false, false);
         assert_eq!(parked.style().margin.top, Some(px(NAV_SECTION_GAP).into()));
     }
 
@@ -2094,10 +2124,10 @@ mod tests {
     /// bottom edge by a pixel.
     #[test]
     fn the_parked_header_is_a_row_sized_heading() {
-        let mut shut = parked_header(3, false);
+        let mut shut = parked_header(3, false, false);
         assert_eq!(shut.style().mouse_cursor, Some(CursorStyle::PointingHand));
         assert_eq!(shut.style().size.height, Some(px(NAV_SECTION_H).into()));
-        let mut open = parked_header(3, true);
+        let mut open = parked_header(3, true, false);
         assert_eq!(open.style().size.height, shut.style().size.height);
         let mut heading = project_section(0, "ferrite".into(), 3, true);
         assert_eq!(heading.style().size.height, shut.style().size.height);

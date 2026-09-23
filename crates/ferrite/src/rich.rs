@@ -448,21 +448,33 @@ impl gpui::Render for CodeActions {
                 },
             ));
         }
+        // `Copy ⌘C`: the key read from the key table, as a mono suffix on a
+        // wrapper (a kit button's own tooltip is plain text).
         actions = actions.child(
-            code_action("copy-code", cx)
-                .debug_selector(|| "copy-code".into())
-                .accessibility_label("Copy code")
-                .tooltip("Copy \u{2318}C")
-                .label(if self.copied { "Copied" } else { "Copy" })
-                .when(self.copied, |button| {
-                    button.debug_selector(|| "code-copied".into())
-                })
-                .on_click(cx.listener(|view, _, _, cx| {
-                    cx.stop_propagation();
-                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(view.code.to_string()));
-                    view.copied = true;
-                    cx.notify();
-                })),
+            gpui::div()
+                .id("copy-code-tip")
+                .flex_shrink_0()
+                .tooltip(crate::menu::action_tooltip(
+                    "Copy",
+                    "cockpit::CopySelection",
+                ))
+                .child(
+                    code_action("copy-code", cx)
+                        .debug_selector(|| "copy-code".into())
+                        .accessibility_label("Copy code")
+                        .label(if self.copied { "Copied" } else { "Copy" })
+                        .when(self.copied, |button| {
+                            button.debug_selector(|| "code-copied".into())
+                        })
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            cx.stop_propagation();
+                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                view.code.to_string(),
+                            ));
+                            view.copied = true;
+                            cx.notify();
+                        })),
+                ),
         );
         gpui::div()
             .id(SharedString::from(format!("{}-overlay", self.key)))
@@ -474,27 +486,27 @@ impl gpui::Render for CodeActions {
 }
 
 /// A quiet text action in a fence's overlay: Geist `FS_SM` `TEXT_2` on the
-/// block's own `RAISED`, `FILL` under the pointer (the hover face on
-/// `RAISED`), pressed at once, a stable `CODE_ACTION_H` ×
-/// `CODE_ACTION_MIN_W` target.
+/// block's own `RAISED`, `HOVER_RAISED` under the pointer (the one 150ms
+/// blend), pressed at once, a stable `CODE_ACTION_H` × `CODE_ACTION_MIN_W`
+/// target.
 fn code_action(id: &'static str, cx: &App) -> gpui::component::button::Button {
-    use gpui::component::button::{ButtonCustomVariant, ButtonVariants as _};
-    crate::components::button(id)
-        .custom(
-            ButtonCustomVariant::new(cx)
-                .foreground(rgb(theme::TEXT_2).into())
-                .hover(rgb(theme::FILL).into())
-                .active(rgb(theme::FILL_HOVER).into()),
-        )
-        .h(px(theme::CODE_ACTION_H))
-        .min_w(px(theme::CODE_ACTION_MIN_W))
-        .px(px(theme::CODE_ACTION_PAD_X))
-        .rounded(px(theme::R_CHIP))
-        .font_family(theme::FONT_UI)
-        .text_size(px(theme::FS_SM))
-        .line_height(px(theme::LH_META))
-        .flex_shrink_0()
-        .tab_stop(true)
+    crate::components::faded_button(
+        id,
+        rgba(theme::TRANSPARENT).into(),
+        rgb(theme::HOVER_RAISED).into(),
+        rgb(theme::FILL_HOVER).into(),
+        rgb(theme::TEXT_2).into(),
+        cx,
+    )
+    .h(px(theme::CODE_ACTION_H))
+    .min_w(px(theme::CODE_ACTION_MIN_W))
+    .px(px(theme::CODE_ACTION_PAD_X))
+    .rounded(px(theme::R_CHIP))
+    .font_family(theme::FONT_UI)
+    .text_size(px(theme::FS_SM))
+    .line_height(px(theme::LH_META))
+    .flex_shrink_0()
+    .tab_stop(true)
 }
 
 /// Markdown's look at the Standard reading size (see the WP-B section of

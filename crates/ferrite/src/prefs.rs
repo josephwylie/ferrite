@@ -21,8 +21,10 @@ use gpui::{div, px, rgb, rgba, App, Div, SharedString};
 use gpui::component::button::Button;
 use gpui::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui::component::setting::{SettingGroup, SettingItem, SettingPage, Settings};
-use gpui::component::{ActiveTheme, Selectable, Sizable};
-use gpui_base::{spring, Switch, SwitchThumb, SwitchTrack};
+use gpui::component::{Selectable, Sizable};
+use gpui_base::{Switch, SwitchThumb, SwitchTrack};
+
+use crate::pointer::Pointer;
 use std::rc::Rc;
 
 use crate::components::{self, MenuItem};
@@ -101,7 +103,7 @@ pub fn sheet_head(title: impl Into<SharedString>, close: impl IntoElement) -> Di
             div()
                 .id("sheet-close-tip")
                 .flex_shrink_0()
-                .tooltip(components::key_tooltip("Close", "esc"))
+                .tooltip(crate::menu::action_tooltip("Close", "cockpit::Interrupt"))
                 .child(close),
         )
 }
@@ -319,49 +321,56 @@ pub fn chooser<T: Clone + 'static>(
     form_item(title, detail.into(), keywords, move |_, cx| {
         let options = options.clone();
         let change = change.clone();
-        components::form_button(id, cx)
-            .debug_selector(move || id.into())
-            .accessibility_label(format!("{title}: {selected}"))
-            .h(px(FORM_CONTROL_H))
-            .w(px(FORM_FIELD_W))
-            .px(px(FORM_FIELD_PAD_X))
-            .bg(rgb(RAISED_2))
-            .dropdown_caret(true)
-            .child(
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .child(components::form_label(selected.clone(), TEXT_STRONG)),
+        // A field on the raised sheet: `RAISED_2`, lifting to `FILL` under
+        // the pointer over the one blend.
+        components::faded_button(
+            id,
+            rgb(RAISED_2).into(),
+            rgb(FILL).into(),
+            rgb(FILL_HOVER).into(),
+            rgb(TEXT).into(),
+            cx,
+        )
+        .tab_stop(true)
+        .debug_selector(move || id.into())
+        .accessibility_label(format!("{title}: {selected}"))
+        .h(px(FORM_CONTROL_H))
+        .w(px(FORM_FIELD_W))
+        .px(px(FORM_FIELD_PAD_X))
+        .dropdown_caret(true)
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .child(components::form_label(selected.clone(), TEXT_STRONG)),
+        )
+        .dropdown_menu(move |menu, _, _| {
+            options.iter().fold(
+                menu.min_w(px(CHOICE_MENU_MIN_W))
+                    .max_w(px(CHOICE_MENU_MAX_W))
+                    .max_h(px(MENU_MAX_H))
+                    .scrollable(true),
+                |menu, (label, selected, value)| {
+                    let value = value.clone();
+                    let change = change.clone();
+                    // The CLI's own default says whose choice it is.
+                    let mut item = MenuItem::new(label.clone()).checked(*selected);
+                    if label.as_ref() == CLI_DEFAULT {
+                        item = item.detail(CLI_DEFAULT_NOTE);
+                    }
+                    menu.item(
+                        PopupMenuItem::element(move |_, _| {
+                            components::kit_row(components::menu_row_content(&item, false, false))
+                        })
+                        .on_click(move |_, _, cx| {
+                            cx.stop_propagation();
+                            change(value.clone(), cx);
+                        }),
+                    )
+                },
             )
-            .dropdown_menu(move |menu, _, _| {
-                options.iter().fold(
-                    menu.min_w(px(CHOICE_MENU_MIN_W))
-                        .max_w(px(CHOICE_MENU_MAX_W))
-                        .max_h(px(MENU_MAX_H))
-                        .scrollable(true),
-                    |menu, (label, selected, value)| {
-                        let value = value.clone();
-                        let change = change.clone();
-                        // The CLI's own default says whose choice it is.
-                        let mut item = MenuItem::new(label.clone()).checked(*selected);
-                        if label.as_ref() == CLI_DEFAULT {
-                            item = item.detail(CLI_DEFAULT_NOTE);
-                        }
-                        menu.item(
-                            PopupMenuItem::element(move |_, _| {
-                                components::kit_row(components::menu_row_content(
-                                    &item, false, false,
-                                ))
-                            })
-                            .on_click(move |_, _, cx| {
-                                cx.stop_propagation();
-                                change(value.clone(), cx);
-                            }),
-                        )
-                    },
-                )
-            })
-            .into_any_element()
+        })
+        .into_any_element()
     })
 }
 
@@ -404,25 +413,36 @@ pub fn toggle(
     let change = Rc::new(change);
     form_item(title, detail.into(), Vec::new(), move |window, cx| {
         let change = change.clone();
-        let thumb_x = spring(
-            (id, "thumb"),
-            px(if checked { SWITCH_TRAVEL } else { 0. }),
-            cx.theme().motion_tokens().spring_move,
+        // The thumb moves over 150ms on the standard curve when the pointer
+        // flipped it, and lands at once on a keyboard toggle (no spring).
+        let now = cx.background_executor().now();
+        let spec = if pointer_pressed(id, now) {
+            crate::motion::TURN
+        } else {
+            crate::motion::MotionSpec::new(0, crate::motion::EASE_STANDARD)
+        };
+        let travel = crate::motion::settle(
+            (gpui::ElementId::from(id), "thumb"),
+            if checked { 1. } else { 0. },
+            spec,
             window,
             cx,
         );
+        let thumb_x = px(SWITCH_TRAVEL * travel);
         div()
             .id(id)
             .debug_selector(move || id.into())
+            .on_mouse_down(gpui::MouseButton::Left, move |_, _, cx| {
+                note_pointer_press(id, cx.background_executor().now());
+            })
             .child(
                 Switch::new(id)
                     .checked(checked)
                     .accessibility_label(title)
                     .p(px(SPACE_1))
                     .rounded(px(R_CONTROL))
-                    .cursor_pointer()
+                    .hover_raised(format!("switch-{id}"))
                     .focus_visible(components::control_focus)
-                    .hover(|style| style.bg(rgb(FILL)))
                     .on_change(move |value, _, _, cx| {
                         cx.stop_propagation();
                         change(value, cx);
@@ -451,6 +471,30 @@ pub fn toggle(
     })
 }
 
+thread_local! {
+    /// The switches the pointer pressed last, and when: a flip that follows
+    /// one within `POINTER_FLIP` is a pointer toggle, anything else is the
+    /// keyboard's.
+    static POINTER_PRESSES: std::cell::RefCell<std::collections::HashMap<&'static str, std::time::Instant>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// How long after a press its switch still counts as flipped by the pointer.
+const POINTER_FLIP: std::time::Duration = std::time::Duration::from_millis(1_000);
+
+fn note_pointer_press(id: &'static str, now: std::time::Instant) {
+    POINTER_PRESSES.with(|presses| presses.borrow_mut().insert(id, now));
+}
+
+fn pointer_pressed(id: &'static str, now: std::time::Instant) -> bool {
+    POINTER_PRESSES.with(|presses| {
+        presses
+            .borrow()
+            .get(id)
+            .is_some_and(|at| now.saturating_duration_since(*at) < POINTER_FLIP)
+    })
+}
+
 /// The switch track: steel when on, one step above the sheet when off.
 fn switch_track(checked: bool) -> u32 {
     if checked {
@@ -467,7 +511,17 @@ fn switch_track(checked: bool) -> u32 {
 /// `FORM_CHOICE_PAD`: concentric.
 pub fn chip(id: (&'static str, usize), label: SharedString, selected: bool, cx: &App) -> Button {
     let (ink, ground, edge) = components::choice_inks(selected);
-    components::form_button(id, cx)
+    // A selected chip carries its FILL and steps up to FILL_HOVER under the
+    // pointer; the rest take the sheet's raised hover. Both blend.
+    let button = match ground {
+        Some(ground) => {
+            let hover = rgb(FILL_HOVER).into();
+            components::faded_button(id, rgb(ground).into(), hover, hover, rgb(ink).into(), cx)
+                .tab_stop(true)
+        }
+        None => components::form_button(id, cx),
+    };
+    button
         .selected(selected)
         .toggled(selected)
         .debug_selector(move || format!("{}-{}", id.0, id.1))
@@ -476,7 +530,6 @@ pub fn chip(id: (&'static str, usize), label: SharedString, selected: bool, cx: 
         .rounded(px(R_CHIP))
         .border_1()
         .border_color(rgba(edge))
-        .when_some(ground, |chip, ground| chip.bg(rgb(ground)))
         .child(components::form_label(label, ink))
 }
 
@@ -513,15 +566,40 @@ pub fn fact(title: &'static str, value: SharedString) -> SettingItem {
     .keywords(words)
 }
 
-/// The nav chrome's gear: the door to this panel.
-pub fn gear_button() -> Button {
-    components::button("settings-gear")
-        .debug_selector(|| "settings-gear".into())
-        .w(px(ICON_BUTTON))
-        .h(px(ICON_BUTTON))
-        .p_0()
-        .tooltip("Settings")
-        .child(icon(icons::GEAR, ICON_BUTTON_GLYPH, TEXT_MUTED))
+/// The nav chrome's gear: the door to this panel. Ground and glyph blend
+/// to their hover faces over the one 150ms blend (`TEXT_MUTED` → `TEXT`, as
+/// the collapse button does). `gear` hangs its tooltip, `Settings ⌘,`.
+pub fn gear_button(cx: &App) -> Button {
+    let id = gpui::ElementId::from("settings-gear");
+    let key = crate::pointer::hover_key(&id);
+    let glyph = crate::motion::hover_blend(&key, rgb(TEXT_MUTED).into(), rgb(TEXT).into());
+    components::faded_button(
+        id,
+        rgba(TRANSPARENT).into(),
+        rgb(HOVER).into(),
+        rgb(PRESSED).into(),
+        rgb(TEXT_MUTED).into(),
+        cx,
+    )
+    .debug_selector(|| "settings-gear".into())
+    .w(px(ICON_BUTTON))
+    .h(px(ICON_BUTTON))
+    .p_0()
+    .accessibility_label("Settings")
+    .child(icon(icons::GEAR, ICON_BUTTON_GLYPH, TEXT_MUTED).text_color(glyph))
+}
+
+/// The gear with its tooltip, `Settings ⌘,` (a kit button's own tooltip is
+/// plain text, so the key rides a wrapper).
+pub fn gear(button: Button, id: &'static str) -> gpui::Stateful<Div> {
+    div()
+        .id(id)
+        .flex_shrink_0()
+        .tooltip(crate::menu::action_tooltip(
+            "Settings",
+            "cockpit::OpenSettings",
+        ))
+        .child(button)
 }
 
 #[cfg(test)]

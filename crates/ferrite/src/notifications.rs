@@ -291,13 +291,14 @@ impl Bell {
         rows: Vec<Row>,
         handle: Handle,
         on_open: impl Fn(bool, &mut Window, &mut App) + 'static,
+        cx: &App,
     ) -> AnyElement {
         let tone = badge_tone(&rows);
         let rows = Rc::new(rows);
-        Popover::new("notifications-bell")
+        let popover = Popover::new("notifications-bell")
             .anchor(Anchor::TopLeft)
             .appearance(false)
-            .trigger(trigger(unread, tone, self.open))
+            .trigger(trigger(unread, tone, self.open, cx))
             .open(self.open)
             .on_open_change(move |open, window, cx| on_open(*open, window, cx))
             .content(move |_, _, _| {
@@ -306,7 +307,15 @@ impl Bell {
                     panel(&rows, handle.clone()),
                     crate::motion::Opens::Down,
                 )
-            })
+            });
+        gpui::div()
+            .id("notifications-bell-tip")
+            .flex_shrink_0()
+            .tooltip(crate::menu::action_tooltip(
+                "Notifications",
+                "cockpit::ToggleNotifications",
+            ))
+            .child(popover)
             .into_any_element()
     }
 }
@@ -343,20 +352,39 @@ fn badge_tone(rows: &[Row]) -> BadgeTone {
 /// The 28×28 bell button in the nav's chrome band, with the unread count
 /// riding its top edge, hidden at zero. The glyph is `TEXT_MUTED` at rest
 /// and `TEXT` while the panel is down, when the `FILL` ground alone says it
-/// is open: the bell never borrows the accent.
-fn trigger(unread: usize, tone: BadgeTone, open: bool) -> Button {
-    let glyph = if open { TEXT } else { TEXT_MUTED };
-    components::button("notifications-bell")
-        .debug_selector(|| "notifications-bell".into())
-        .relative()
-        .w(px(ICON_BUTTON))
-        .h(px(ICON_BUTTON))
-        .p_0()
-        .when(open, |bell| bell.bg(rgb(FILL)))
-        .tooltip("Notifications")
-        .accessibility_label("Notifications")
-        .child(icons::icon(icons::BELL, ICON_BUTTON_GLYPH, glyph))
-        .when(unread > 0, |bell| bell.child(badge(unread, tone)))
+/// is open: the bell never borrows the accent. Ground and glyph blend to
+/// their hover faces over the one 150ms blend (`TEXT_MUTED` → `TEXT`, as
+/// the collapse button does); the tooltip (`Notifications ⌘I`) rides the
+/// wrapper in `Bell::element`, since a kit button's own tooltip is text.
+fn trigger(unread: usize, tone: BadgeTone, open: bool, cx: &App) -> Button {
+    let id = gpui::ElementId::from("notifications-bell");
+    let key = crate::pointer::hover_key(&id);
+    let (rest, hover) = if open {
+        (FILL, FILL_HOVER)
+    } else {
+        (TRANSPARENT, HOVER)
+    };
+    let glyph = if open {
+        rgb(TEXT).into()
+    } else {
+        crate::motion::hover_blend(&key, rgb(TEXT_MUTED).into(), rgb(TEXT).into())
+    };
+    components::faded_button(
+        id,
+        gpui::rgba(rest).into(),
+        gpui::rgba(hover).into(),
+        rgb(PRESSED).into(),
+        rgb(TEXT_MUTED).into(),
+        cx,
+    )
+    .debug_selector(|| "notifications-bell".into())
+    .relative()
+    .w(px(ICON_BUTTON))
+    .h(px(ICON_BUTTON))
+    .p_0()
+    .accessibility_label("Notifications")
+    .child(icons::icon(icons::BELL, ICON_BUTTON_GLYPH, TEXT_MUTED).text_color(glyph))
+    .when(unread > 0, |bell| bell.child(badge(unread, tone)))
 }
 
 /// The unread count: UI `FS_SM` `W_BODY`, tabular, `99+` past two digits,
@@ -691,9 +719,8 @@ fn row_element(index: usize, row: &Row, handle: Handle) -> Stateful<Div> {
         .py(px(SPACE_1_5))
         .gap(px(SPACE_2))
         .rounded(px(R_MENU_ROW))
-        .hover_raised()
+        .hover_raised(key)
         .press_raised()
-        .on_hover(crate::motion::hover_listener(key))
         // Title and detail truncate at the panel's width; the whole of both
         // stays one hover away.
         .tooltip(crate::menu::tooltip(format!(

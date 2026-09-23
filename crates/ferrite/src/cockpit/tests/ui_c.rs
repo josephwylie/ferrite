@@ -77,21 +77,31 @@ fn the_empty_cockpit_says_how_to_start(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("empty-board").is_none());
 }
 
-/// The empty board's keys come from the platform's own key table.
+/// The empty board's keys come from the platform's own key table and read
+/// as glyphs: `⌘N`, `⌘⇧N`, `⌘O` (rule 2.11.4).
 #[test]
 fn the_empty_board_spells_keys_from_the_key_table() {
-    let primary = match crate::keymap::PLATFORM {
-        crate::keymap::Platform::Mac => "cmd",
-        crate::keymap::Platform::Windows => "ctrl",
+    let (primary, glyph) = match crate::keymap::PLATFORM {
+        crate::keymap::Platform::Mac => ("cmd", "\u{2318}"),
+        crate::keymap::Platform::Windows => ("ctrl", "\u{2303}"),
+    };
+    let spelled = |action: &str| {
+        CockpitView::key_label(action).map(|keys| crate::components::key_glyphs(&keys))
     };
     assert_eq!(
         CockpitView::key_label("cockpit::NewThread").as_deref(),
-        Some(format!("{primary} N").as_str())
+        Some(format!("{primary}-N").as_str())
     );
+    assert_eq!(spelled("cockpit::NewThread"), Some(format!("{glyph}N")));
     assert_eq!(
         CockpitView::key_label("cockpit::NewWorktreeThread").as_deref(),
-        Some(format!("{primary} shift N").as_str())
+        Some(format!("{primary}-shift-N").as_str())
     );
+    assert_eq!(
+        spelled("cockpit::NewWorktreeThread"),
+        Some(format!("{glyph}\u{21e7}N"))
+    );
+    assert_eq!(spelled("cockpit::ReopenThread"), Some(format!("{glyph}O")));
 }
 
 // ---------------------------------------------------------------- P4 board

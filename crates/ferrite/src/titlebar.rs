@@ -27,7 +27,7 @@
 //! Drawing only, like `nav.rs`: the cockpit places these and owns the state
 //! they read.
 
-use gpui::component::button::{Button, ButtonCustomVariant, ButtonVariants};
+use gpui::component::button::{Button, ButtonVariants};
 use gpui::prelude::*;
 use gpui::{
     div, px, rgb, rgba, AnyElement, App, Div, MouseButton, SharedString, Stateful,
@@ -163,12 +163,12 @@ const ADD_GROUP: &str = "titlebar-add-thread";
 pub fn add_thread_button(label: &'static str, cx: &App) -> Button {
     let ink = crate::motion::hover_blend(ADD_GROUP, rgb(TEXT_MUTED).into(), rgb(TEXT).into());
     components::button("titlebar-add-thread")
-        .custom(
-            ButtonCustomVariant::new(cx)
-                .foreground(rgb(TEXT_MUTED).into())
-                .hover(rgba(TRANSPARENT).into())
-                .active(rgba(TRANSPARENT).into()),
-        )
+        .custom(crate::pointer::button_variant(
+            rgba(TRANSPARENT).into(),
+            rgb(TEXT_MUTED).into(),
+            rgba(TRANSPARENT).into(),
+            cx,
+        ))
         .debug_selector(|| "titlebar-add-thread".into())
         .group(ADD_GROUP)
         .flex_shrink_0()
@@ -201,15 +201,14 @@ pub fn add_thread_button(label: &'static str, cx: &App) -> Button {
 
 /// The add control with its tooltip: what the click makes, and the chord
 /// after it only where the click is exactly that key's action
-/// (`components::chord_tooltip`).
+/// (`menu::tooltip_with_key`).
 pub fn add_thread(button: Button, tooltip: &'static str, chord: Option<String>) -> AnyElement {
-    let tip = div().id("titlebar-add-thread-tip").flex_shrink_0();
-    match chord {
-        Some(keys) => tip.tooltip(components::chord_tooltip(tooltip, keys)),
-        None => tip.tooltip(crate::menu::tooltip(tooltip)),
-    }
-    .child(button)
-    .into_any_element()
+    div()
+        .id("titlebar-add-thread-tip")
+        .flex_shrink_0()
+        .tooltip(crate::menu::tooltip_with_key(tooltip, chord))
+        .child(button)
+        .into_any_element()
 }
 
 /// An empty stretch Windows drags the window by. The tagged part starts
@@ -284,10 +283,10 @@ fn need_you(count: usize) -> Div {
         .on_click(|_, window, cx| {
             window.dispatch_action(Box::new(crate::cockpit::NextDecision), cx)
         });
-    let label = match components::bound_chord("cockpit::NextDecision") {
-        Some(keys) => label.tooltip(components::chord_tooltip("Next decision", keys)),
-        None => label.tooltip(crate::menu::tooltip("Next decision")),
-    };
+    let label = label.tooltip(crate::menu::action_tooltip(
+        "Next needs you",
+        "cockpit::NextDecision",
+    ));
     div()
         .flex()
         .flex_shrink_0()
@@ -573,7 +572,7 @@ fn button(
         .justify_center()
         .w(px(CAPTION_W))
         .h_full()
-        .hover_control()
+        .hover_control(id)
         .press_control()
         // A caption press arrives as a *non-client* press, which gpui
         // dispatches into the tree first and Windows acts on only if the

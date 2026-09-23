@@ -324,7 +324,7 @@ fn mark_slot(mark: Option<u32>) -> Div {
 /// (`hover_carried`); otherwise no ground, `TEXT_MUTED` blending to `TEXT`
 /// through the one hover blend. No edge and no rule: the pill says which.
 fn subject_tab_face(at: usize, selected: bool, width: f32, key: SharedString) -> gpui_base::Tab {
-    use crate::pointer::PointerFaded as _;
+    use crate::pointer::Pointer as _;
     gpui_base::Tab::new(at)
         .selected(selected)
         .justify_start()
@@ -343,7 +343,7 @@ fn subject_tab_face(at: usize, selected: bool, width: f32, key: SharedString) ->
             // The tab's own debug name is its Subject's; the pill is named
             // by a box laid exactly over it.
             tab.relative()
-                .hover_carried_faded(key.clone())
+                .hover_carried(key.clone())
                 .text_color(rgb(theme::TEXT_STRONG))
                 .child(
                     div()

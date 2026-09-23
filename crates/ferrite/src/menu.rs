@@ -76,6 +76,53 @@ pub fn tooltip(
     }
 }
 
+/// A tooltip that names a verb and its key (`Toggle sidebar ⌘B`,
+/// `Close esc`, `Send ↵`): the label in the tooltip's Geist `FS_SM`, then
+/// the key as a Geist Mono `FS_SM` `TEXT_MUTED` suffix, modifiers drawn as
+/// glyphs at `KEY_GLYPH` (`components::key_combo`). No parentheses, and no
+/// suffix when `key` is `None` — a key is read from the key table
+/// (`components::bound_chord`), never typed, so a tooltip never names a
+/// key that would not act.
+pub fn tooltip_with_key(
+    label: impl Into<SharedString>,
+    key: Option<impl Into<SharedString>>,
+) -> impl Fn(&mut gpui::Window, &mut gpui::App) -> gpui::AnyView + 'static {
+    let label = label.into();
+    let key: Option<SharedString> = key.map(Into::into);
+    move |window, cx| {
+        let (label, key) = (label.clone(), key.clone());
+        gpui::component::tooltip::Tooltip::element(move |_, _| {
+            gpui::div()
+                .flex()
+                .items_center()
+                .gap(px(SPACE_1_5))
+                .child(label.clone())
+                .children(
+                    key.as_ref()
+                        .map(|key| components::key_combo(key, TEXT_MUTED).text_size(px(FS_SM))),
+                )
+        })
+        .font_family(FONT_UI)
+        .text_size(px(FS_SM))
+        .line_height(px(LH_META))
+        .px(px(TOOLTIP_PAD_X))
+        .py(px(TOOLTIP_PAD_Y))
+        .max_w(px(TOOLTIP_MAX_W))
+        .rounded(px(R_CONTROL))
+        .shadow(components::float_shadow())
+        .build(window, cx)
+    }
+}
+
+/// `tooltip_with_key` for a bound action: its chord read from the key
+/// table (`components::bound_chord`), dropped when nothing binds it.
+pub fn action_tooltip(
+    label: impl Into<SharedString>,
+    action: &str,
+) -> impl Fn(&mut gpui::Window, &mut gpui::App) -> gpui::AnyView + 'static {
+    tooltip_with_key(label, components::bound_chord(action))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -158,7 +205,7 @@ mod tests {
 
     #[test]
     fn an_armed_destructive_row_holds_the_fill_and_colours_its_word() {
-        let delete = Item::new("Delete Thread").destructive();
+        let delete = Item::new("Delete thread").destructive();
         let mut drawn = row(2, &delete, true);
         assert_eq!(drawn.style().background, Some(rgb(FILL).into()));
         let mut calm = row(2, &delete, false);

@@ -2,6 +2,7 @@
 //! this module supplies the owning Pane's bounds, which place and size the
 //! sheet, while the scrim covers the window like every modal's.
 
+use crate::components::Tip as _;
 use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -152,7 +153,7 @@ impl RenderOnce for PreviewLayer {
                 crate::theme::TEXT_2,
             ))
             .accessibility_label("Open original image in the default app")
-            .tooltip("Open full-size image in the default app")
+            .tip("Open full-size image in the default app")
             .debug_selector(|| "open-original-attachment".into())
             .on_click(move |_, window, cx| {
                 cx.stop_propagation();

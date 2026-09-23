@@ -22,6 +22,14 @@
 //!    Green never means "finished". The one exception is brand, not state:
 //!    a provider's logomark wears its own colour (`PROVIDER_*`) wherever it
 //!    appears — nav rows, the model chip, picker rows — and nothing else.
+//!    **Hues can be counted:** at rest the only non-grey pixels are status
+//!    dots, provider marks, links and a failed word; any other hue means
+//!    something needs you. **Colour sits on the word**, not the row, ground
+//!    or ring: a state shows once per surface (one alpha edge, one dot, or
+//!    one word or lead phrase), and no state tints a ground (the ochre
+//!    wash is retired; rich text never uses `ACCENT_WASH`; inline code is
+//!    `INLINE_CODE_INK` = `TEXT`; a waiting Pane's edge is
+//!    `ATTENTION_EDGE` at alpha).
 //! 3. **Opaque faces, alpha edges.** Planes and hover/fill faces are opaque
 //!    `rgb()` values (a hover must never be tinted by what lies under it, see
 //!    `pointer.rs`). Hairlines, washes, rings over content and veils are alpha
@@ -29,8 +37,13 @@
 //! 4. **An ordered elevation ladder.** `GROUND` (window, nav, board) <
 //!    `PANE` < `RAISED` (Composer, code, cards, menus) < `RAISED_2` (keycaps,
 //!    chips on a raised block) < `FILL` (selected) < `FILL_HOVER`. `HOVER` is
-//!    the hover face on `GROUND`/`PANE` only; on `RAISED` the hover face is
-//!    `FILL`, because `HOVER` would be invisible there. Floating surfaces are
+//!    the hover face on `GROUND`/`PANE` only, because it would be invisible
+//!    on `RAISED`. **The ladder on `RAISED`:** rest `RAISED`; hover
+//!    `HOVER_RAISED` (`RAISED_2`); the cursor or a selected row `FILL`; that
+//!    row under the pointer `FILL_HOVER`; press `FILL_HOVER`. The pointer
+//!    half blends over 150ms (`pointer.rs`); the cursor's `FILL` and a press
+//!    land at once. The Stop control's ground is never `TEXT_STRONG`
+//!    (`SEND_STOP_GROUND`): only an armed Send is bright. Floating surfaces are
 //!    `RAISED` + a `HAIRLINE_STRONG` edge + `R_BLOCK` + a float shadow; in-flow
 //!    blocks and planes cast no shadow; a modal adds `VEIL`.
 //! 5. **An ink ladder with floors**, brightest first: `TEXT_STRONG` (titles,
@@ -47,7 +60,9 @@
 //!    notifications, chips, buttons, empty states, and agent prose.
 //!    `FONT_CODE` (Geist Mono) is only for literal code and machine text:
 //!    fenced blocks and inline `code`, diffs and their number column, a tool
-//!    call's arguments and every line of its output (the tool's name is UI),
+//!    call's arguments and every line of its output (the tool's name is UI,
+//!    Geist `W_BODY` `TEXT`: the split stands until the operator rules on
+//!    the all-mono tool line, Q1),
 //!    the Composer's input line, placeholder and queued prompts (a terminal
 //!    line), a Decision's command well, keycaps, and the aligned `/command`
 //!    names. A metric that assumes a fixed advance (`CODE_CELL`) is only ever
@@ -66,6 +81,18 @@
 //!     never text on any surface; it is an SVG in a glyph box. `CHROME_GLYPHS`
 //!     lists the non-ASCII glyphs text may use, and a test checks each against
 //!     both bundled faces, Geist and Geist Mono.
+//! 11. **Words.** Ferrite's own copy speaks one shared word list
+//!     (`theme::words`, beside the state inks and tested against the
+//!     notifications, the Decision card and the transcript): `needs you`,
+//!     `failing N`, `failed`, `interrupted`, `working`, `done`. Titles,
+//!     buttons, menu items, labels and empty states are sentence case
+//!     (`New thread`, `Delete thread`); state and value tokens are always
+//!     lowercase, even leading a row; Title Case lives only in the macOS menu
+//!     bar. `·` (in `TEXT_FAINT`) is the only separator inside a line — no
+//!     colon labels, no em dash, no final period on one-line copy — and no
+//!     surface prints `now`. A shortcut in a tooltip is a mono `TEXT_MUTED`
+//!     suffix with glyph modifiers (`Toggle sidebar ⌘B`), read from the
+//!     keymap, never typed by hand.
 //!
 //! **Layout of this file.** Everything down to `init_components` is the frozen
 //! shared head: values more than one work package reads, and the kit mapping.
@@ -98,12 +125,16 @@ pub const RAISED: u32 = 0x1a1d21;
 /// can split them without a rename.
 pub const MENU: u32 = RAISED;
 /// `#1d2024` — a row's or control's hover face on `GROUND` or `PANE` only.
-/// On `RAISED` the hover face is `FILL`.
+/// On `RAISED` the hover face is `HOVER_RAISED`.
 pub const HOVER: u32 = 0x1d2024;
 /// `#21252a` — one step above `RAISED`: keycaps, chips on a raised block.
 pub const RAISED_2: u32 = 0x21252a;
-/// `#24282e` — the selected fill (the focused Thread's row, an active tab),
-/// and the hover face of anything on `RAISED` (menu rows included).
+/// The hover face of anything on `RAISED` (menu rows, options, keycaps):
+/// `RAISED_2`, one step up, and one step under the cursor's `FILL`, so a
+/// hovered row never reads as the armed one (rule 4).
+pub const HOVER_RAISED: u32 = RAISED_2;
+/// `#24282e` — the selected fill (the focused Thread's row, an active tab,
+/// the menu cursor, a selected option).
 pub const FILL: u32 = 0x24282e;
 /// `#2b2f36` — a filled row under the pointer.
 pub const FILL_HOVER: u32 = 0x2b2f36;
@@ -190,8 +221,6 @@ pub const CARET: u32 = ACCENT;
 /// `#8cb59d` — live work (a sage, 22%): the running status dot, a running signal line, the
 /// pass chip, diff `+`.
 pub const RUNNING: u32 = 0x8cb59d;
-/// The halo that breathes behind a running background task's dot.
-pub const RUNNING_HALO: u32 = 0x8cb59d59;
 /// `#cbb280` — a Decision (a muted ochre, 42%): the status dot, the signal line, the Pane's edge,
 /// the Decision card's mark.
 pub const ATTENTION: u32 = 0xcbb280;
@@ -705,13 +734,7 @@ pub const QUEUE_ROW_H: f32 = COMPOSER_ROW_H;
 
 /// 6px — the status dot: the Pane head, nav rows, the wall.
 pub const STATUS_DOT: f32 = 6.0;
-/// 4px — how far a running background task's halo reaches past its dot on
-/// every side, so the circle is 14px across (`components::pulsing_dot`).
-pub const STATUS_HALO_INSET: f32 = 4.0;
-/// The halo loop behind a running background task's dot. Nav dots do not
-/// loop: only an unread one breathes, on `MOTION_BREATH_MS`.
-pub const STATUS_PULSE_MS: u64 = 1_400;
-/// The dimmest a breath goes (a halo, or an unread dot's own opacity):
+/// The dimmest a breath goes (an unread dot's own opacity):
 /// never all the way out, so it never flickers off.
 pub const PULSE_MIN: f32 = 0.15;
 /// The Ferrite progress mark follows the timing and geometry of the supplied
@@ -874,8 +897,20 @@ pub fn init_components(cx: &mut gpui::App) {
         collapsed_scale_step: 0.,
         collapsed_visible: 1,
         expanded_gap: px(TOAST_GAP),
-        ..gpui::base::ToastMotion::sonner()
+        // The stack settles over the toast tokens (rule 2.10.4).
+        duration: std::time::Duration::from_millis(MOTION_TOAST_IN_MS),
+        exit_duration: std::time::Duration::from_millis(MOTION_TOAST_OUT_MS),
     }));
+    // C26: the kit's own scrollbars (every `overflow_y_scrollbar` site) keep
+    // Ferrite's timing — on the first scroll frame, a 1.4s hold, a 150ms
+    // fade — so they match `scrollbar.rs`.
+    let base = gpui::base::Theme::global_mut(cx);
+    base.scrollbar = base.scrollbar.clone().with_motion(
+        gpui::base::ScrollbarMotion::default()
+            .with_enter(std::time::Duration::ZERO)
+            .with_idle(std::time::Duration::from_millis(MOTION_SCROLLBAR_LINGER_MS))
+            .with_exit(std::time::Duration::from_millis(MOTION_HOVER_FADE_MS)),
+    );
 }
 
 // ======================================== end of the frozen shared head
@@ -1314,8 +1349,14 @@ pub const DROP_LABEL_PAD_Y: f32 = SPACE_1;
 /// The Pane a live drag picked up, dimmed in its slot until the release.
 pub const DRAG_SOURCE_OPACITY: f32 = 0.5;
 /// The empty board's hints: lines 8px apart, the keys in one column 8px
-/// from their verbs' shared edge, the heading twice that above them.
+/// from their verbs' shared edge.
 pub const EMPTY_BOARD_GAP: f32 = SPACE_2;
+/// 24px — the empty board's Ferrite mark (`ferrite-mono` in `TEXT_FAINT`,
+/// rule 2.11.4), left-aligned on the keycap column, `EMPTY_BOARD_MARK_GAP`
+/// (16px) above the hints. It replaces the line of words: the board says
+/// how to start, once.
+pub const EMPTY_BOARD_MARK: f32 = 24.0;
+pub const EMPTY_BOARD_MARK_GAP: f32 = SPACE_4;
 // (end WP-C) — append above this line only
 
 // ======================================== WP-D · composer, pickers, usage, draft
@@ -1381,6 +1422,8 @@ pub const SEND_PRESSED: u32 = TEXT_2;
 pub const SEND_IDLE_GROUND: u32 = FILL_HOVER;
 pub const SEND_IDLE_INK: u32 = TEXT_MUTED;
 pub const SEND_STOP_GROUND: u32 = FILL;
+// Rule 2.2.7 / C27: an always-present control is never the brightest ground.
+const _: () = assert!(SEND_STOP_GROUND != TEXT_STRONG);
 pub const SEND_STOP_HOVER: u32 = FILL_HOVER;
 pub const SEND_STOP_INK: u32 = TEXT_2;
 pub const SEND_STOP_INK_HOVER: u32 = TEXT_STRONG;
@@ -1828,15 +1871,18 @@ pub const NAV_AUTO_RAIL_HYSTERESIS: f32 = 24.0;
 // that wears it). The rules every animated surface follows:
 //
 // - **Ease out, and exits softer than entrances.** Entrances rise or settle
-//   a few pixels into place. A menu, a sheet or a fold that closes goes at
-//   once: dismissals are frequent, and the closed state says it all.
-//   Nothing slides a full container height.
-// - **High-frequency interactions get at most a 150ms colour or opacity
-//   blend** (`MOTION_HOVER_FADE_MS`): row hovers, selection moves, keys.
-//   Nothing on them scales, slides or staggers, and a press resolves at
-//   once — the pressed face never waits on the fade.
-// - **Interruptible.** A state the operator can flip back (the nav
-//   collapse, a hover) retargets from where it is, never restarts.
+//   a few pixels into place. A menu or a sheet that closes goes at once:
+//   dismissals are frequent, and the closed state says it all. A fold opens
+//   and closes at once; only its chevron turns. Nothing slides a container
+//   height, and a column never tweens its width (cmd-B is instant).
+// - **Pointer hover gets one 150ms colour blend (`MOTION_HOVER_FADE_MS`).**
+//   A keyboard change (focus, cmd-] / cmd-D, menu selection, folds, tier
+//   changes, a Send becoming ready) and a press land on the same frame.
+//   Only turn-level rows enter (`MOTION_ROW_IN_MS` 180, opacity only). One
+//   breath, `MOTION_BREATH_MS` 2400, used only by unread. Nothing on a
+//   high-frequency interaction scales, slides or staggers.
+// - **Interruptible.** A state the operator can flip back (a hover, a
+//   chevron) retargets from where it is, never restarts.
 // - **No entrance on first paint.** Only a change the operator watched
 //   happen animates; a restored layout or scroll-back arrives in place.
 // - **Every animation has a static end state** that says the same thing
@@ -1848,17 +1894,16 @@ pub const NAV_AUTO_RAIL_HYSTERESIS: f32 = 24.0;
 
 /// Zeron's signature entrance curve, CSS `cubic-bezier(0.16, 1, 0.3, 1)`.
 pub const MOTION_EASE_OUT_EXPO: [f32; 4] = [0.16, 1.0, 0.3, 1.0];
-/// CSS `ease-out`: width and height transitions.
-pub const MOTION_EASE_OUT: [f32; 4] = [0.0, 0.0, 0.58, 1.0];
 /// CSS `ease`: quick fades, menu and sheet entrances.
 pub const MOTION_EASE: [f32; 4] = [0.25, 0.1, 0.25, 1.0];
 /// CSS `transition-colors`' default curve: every hover blend.
 pub const MOTION_EASE_STANDARD: [f32; 4] = [0.4, 0.0, 0.2, 1.0];
 /// A contextual icon swap's curve (a spring with no bounce, approximated).
 pub const MOTION_EASE_ICON: [f32; 4] = [0.2, 0.0, 0.0, 1.0];
-/// `fade-in`: 500ms, rising 4px into place. Live-appended blocks only.
-pub const MOTION_FADE_IN_MS: u64 = 500;
-pub const MOTION_FADE_IN_RISE: f32 = 4.0;
+/// `row-in`: 180ms on `MOTION_EASE_OUT_EXPO`, opacity only, nothing moves.
+/// Only turn-level transcript rows appended live wear it: a prompt, the first
+/// answer block of a turn, a Decision summary (rule 2.10.1).
+pub const MOTION_ROW_IN_MS: u64 = 180;
 /// `fade-quick`: 150ms, opacity only.
 pub const MOTION_FADE_QUICK_MS: u64 = 150;
 /// `menu-in`: 140ms, settling 2px away from its opener (Zeron's 0.96 scale
@@ -1871,10 +1916,6 @@ pub const MOTION_MENU_FROM_OPACITY: f32 = 0.3;
 /// `dialog-in`: 180ms, rising 2px (the 0.96 scale approximated likewise).
 pub const MOTION_DIALOG_IN_MS: u64 = 180;
 pub const MOTION_DIALOG_RISE: f32 = 2.0;
-/// Width and height transitions (the nav collapse): 200ms ease-out.
-pub const MOTION_RESIZE_MS: u64 = 200;
-/// A disclosure's body opening or closing: 180ms ease-out.
-pub const MOTION_COLLAPSE_MS: u64 = 180;
 /// A disclosure chevron turning: 150ms.
 pub const MOTION_CHEVRON_MS: u64 = 150;
 /// The hover blend: 150ms on `MOTION_EASE_STANDARD`.
@@ -1887,9 +1928,12 @@ pub const MOTION_BREATH_MS: u64 = 2_400;
 /// to a quarter as the arriving one grows from it.
 pub const MOTION_ICON_SWAP_MS: u64 = 300;
 pub const MOTION_ICON_SWAP_SCALE: f32 = 0.25;
-/// Where the nav's content fades up from while the column changes width,
-/// so the tree and the rail never pop in at full ink.
-pub const MOTION_NAV_CONTENT_FROM: f32 = 0.35;
+/// A toast's stack timing: it settles in over 180ms and leaves over 100ms.
+pub const MOTION_TOAST_IN_MS: u64 = 180;
+pub const MOTION_TOAST_OUT_MS: u64 = 100;
+/// 1.4s — how long a scrollbar thumb holds after the last scroll frame
+/// (C26) before it fades out over `MOTION_HOVER_FADE_MS`. Idle, no thumb.
+pub const MOTION_SCROLLBAR_LINGER_MS: u64 = 1_400;
 /// The pulse clock: one ~30fps tick shared by every loop in the window.
 /// A view stays on it `MOTION_PULSE_LEASE_MS` after its last paint of a
 /// loop, so an unmounted loader drops off and the clock parks.

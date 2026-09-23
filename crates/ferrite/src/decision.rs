@@ -428,6 +428,8 @@ pub struct Row {
 /// `FS_SM` `TEXT_MUTED` at the right. Selected is `FILL` plus the check;
 /// hover `RAISED_2`; keyboard focus the one `FOCUS_RING` recipe.
 pub fn option_row(id: impl Into<ElementId>, row: Row) -> gpui_base::Button {
+    let id = id.into();
+    let key = crate::pointer::hover_key(&id);
     let ink = match (row.enabled, row.quiet) {
         (false, _) => theme::TEXT_MUTED,
         (true, true) => theme::TEXT,
@@ -465,11 +467,13 @@ pub fn option_row(id: impl Into<ElementId>, row: Row) -> gpui_base::Button {
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI))
         .text_color(rgb(ink))
-        .when(row.selected, |button| button.bg(rgb(theme::FILL)))
+        // A selected option takes its FILL at once (a keyboard change);
+        // only the pointer half of the ladder blends.
         .map(|button| match (row.enabled, row.selected) {
-            (false, _) => button.cursor_default(),
-            (true, true) => button.hover_carried().press_raised(),
-            (true, false) => button.hover_raised().press_raised(),
+            (false, true) => button.bg(rgb(theme::FILL)).cursor_default(),
+            (false, false) => button.cursor_default(),
+            (true, true) => button.hover_carried(key).press_raised(),
+            (true, false) => button.hover_raised(key).press_raised(),
         })
         .focus_visible(components::control_focus)
         .child(
@@ -674,7 +678,7 @@ pub fn key_action(
         .text_size(px(theme::FS_SM))
         .line_height(px(theme::LH_META))
         .text_color(rgb(theme::TEXT_MUTED))
-        .hover_row()
+        .hover_row(id)
         .press_row()
         .child(components::kbd(key))
         .when(with_verb, |pair| {

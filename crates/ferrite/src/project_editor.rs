@@ -1,11 +1,10 @@
 //! Explicit Project editing modal, on the sheet recipe (`prefs::sheet`).
 
-use gpui::component::{
-    button::{Button, ButtonCustomVariant, ButtonVariants},
-    Disableable,
-};
+use gpui::component::{button::Button, Disableable};
 use gpui::prelude::*;
-use gpui::{div, px, rgb, App, Div, SharedString};
+use gpui::{div, px, rgb, rgba, App, Div, SharedString};
+
+use crate::pointer::Pointer;
 
 use crate::components;
 use crate::prefs;
@@ -121,24 +120,26 @@ pub fn directory_list(rows: Vec<gpui::Stateful<Div>>) -> Div {
 /// directory`, or `+ Add main directory` while there is none): `TEXT_MUTED`,
 /// brightening to `TEXT` under the pointer, on the text's own edge.
 pub fn add_directory(label: &'static str, cx: &App) -> Button {
-    components::form_button("add-project-directory", cx)
-        .custom(
-            ButtonCustomVariant::new(cx)
-                .foreground(rgb(TEXT_MUTED).into())
-                .hover(rgb(FILL).into())
-                .active(rgb(FILL_HOVER).into()),
-        )
-        .debug_selector(|| "project-add-directory".into())
-        .group(ADD_GROUP)
-        .h(px(FORM_CONTROL_H))
-        .ml(px(-SPACE_2))
-        .px(px(SPACE_2))
-        .child(
-            components::text_ui()
-                .text_color(rgb(TEXT_MUTED))
-                .group_hover(ADD_GROUP, |style| style.text_color(rgb(TEXT)))
-                .child(label),
-        )
+    components::faded_button(
+        "add-project-directory",
+        rgba(TRANSPARENT).into(),
+        rgb(HOVER_RAISED).into(),
+        rgb(FILL_HOVER).into(),
+        rgb(TEXT_MUTED).into(),
+        cx,
+    )
+    .tab_stop(true)
+    .debug_selector(|| "project-add-directory".into())
+    .group(ADD_GROUP)
+    .h(px(FORM_CONTROL_H))
+    .ml(px(-SPACE_2))
+    .px(px(SPACE_2))
+    .child(
+        components::text_ui()
+            .text_color(rgb(TEXT_MUTED))
+            .group_hover(ADD_GROUP, |style| style.text_color(rgb(TEXT)))
+            .child(label),
+    )
 }
 
 const ADD_GROUP: &str = "project-add-directory";
@@ -193,7 +194,8 @@ pub fn directory_row(
         .py(px(SPACE_1))
         .gap(px(SPACE_3))
         .rounded(px(R_CONTROL))
-        .hover(|row| row.bg(rgb(FILL)))
+        .hover_raised(format!("project-directory-row-{index}"))
+        .cursor_default()
         .child(
             div()
                 .id(selector.clone())
@@ -240,27 +242,34 @@ pub fn destructive_button(
     disabled: bool,
     cx: &App,
 ) -> Button {
-    components::form_button(id, cx)
-        .custom(
-            ButtonCustomVariant::new(cx)
-                .foreground(rgb(TEXT_MUTED).into())
-                .hover(rgb(FILL).into())
-                .active(rgb(FILL_HOVER).into()),
-        )
-        .group(DESTRUCTIVE_GROUP)
-        .disabled(disabled)
-        .when(disabled, |button| button.cursor_default())
-        .h(px(FORM_CONTROL_H))
-        .px(px(FORM_BUTTON_PAD_X))
-        .child(
-            components::text_ui()
-                .font_weight(W_BODY)
-                .text_color(rgb(TEXT_MUTED))
-                .when(!disabled, |text| {
-                    text.group_hover(DESTRUCTIVE_GROUP, |style| style.text_color(rgb(TEXT)))
-                })
-                .child(label),
-        )
+    let (hover, press) = if disabled {
+        (rgba(TRANSPARENT).into(), rgba(TRANSPARENT).into())
+    } else {
+        (rgb(HOVER_RAISED).into(), rgb(FILL_HOVER).into())
+    };
+    components::faded_button(
+        id,
+        rgba(TRANSPARENT).into(),
+        hover,
+        press,
+        rgb(TEXT_MUTED).into(),
+        cx,
+    )
+    .tab_stop(true)
+    .group(DESTRUCTIVE_GROUP)
+    .disabled(disabled)
+    .when(disabled, |button| button.cursor_default())
+    .h(px(FORM_CONTROL_H))
+    .px(px(FORM_BUTTON_PAD_X))
+    .child(
+        components::text_ui()
+            .font_weight(W_BODY)
+            .text_color(rgb(TEXT_MUTED))
+            .when(!disabled, |text| {
+                text.group_hover(DESTRUCTIVE_GROUP, |style| style.text_color(rgb(TEXT)))
+            })
+            .child(label),
+    )
 }
 
 /// Completion actions remain visible while the directory list scrolls.

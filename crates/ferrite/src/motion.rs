@@ -10,18 +10,17 @@
 //!
 //! | Zeron | Spec | Ferrite surface |
 //! | --- | --- | --- |
-//! | `transition-colors` hover | [`HOVER_FADE`] 150ms | nav rows: the hover wash fades in and out, the selected row's step-up likewise; a press is instant |
+//! | `transition-colors` hover | [`HOVER_FADE`] 150ms | every pointer hover (`pointer.rs`'s roles, `components::faded_button`): the face blends in and out; a press and every keyboard change land on their frame |
 //! | selection move | none | the nav's one `FILL` moves at once: selection is keyboard-rate, a high-frequency interaction |
-//! | sidebar width | [`RESIZE`] 200ms ease-out | nav collapse ⇄ rail: an interruptible [`Tween`] on the column's width, the content fading up from `MOTION_NAV_CONTENT_FROM` |
-//! | toasts | kit-owned | enter and exit are gpui-component's own (see below); the `+N` bubble fades in on [`FADE_QUICK`] |
-//! | working indicator | pulse clock | the working line's Ferrite mark and every breathing status dot ride [`pulse_phase`] (~30fps, one tick, parks) instead of a per-frame repeat |
+//! | toasts | `MOTION_TOAST_IN_MS` 180ms / `MOTION_TOAST_OUT_MS` 100ms | the toast stack settles over 180ms and lets a toast go over 100ms (`DefaultToastMotion`); the toast card's own slide is the kit's (see below); the `+N` bubble fades in on [`FADE_QUICK`] |
+//! | working indicator | pulse clock | the working line's Ferrite mark and the one breath (unread, `MOTION_BREATH_MS`) ride [`pulse_phase`] (~30fps, one tick, parks) instead of a per-frame repeat |
 //! | `menu-in` | [`MENU_IN`] 140ms | every Ferrite-drawn floating surface: the context menu, the nav's order and Project menus, the Composer's menus, the footer cards (session controls, context usage, checks) and the bell's panel, via [`menu_in`] / [`menu_in_at`], settling away from their opener ([`Opens`]) |
 //! | `menu-out` | none | a menu closes at once (see the rules in `theme.rs`) |
 //! | `dialog-in` | [`DIALOG_IN`] 180ms | the Settings and Project sheets via [`dialog_in`], their veil darkening in over [`FADE_QUICK`] ([`veil_in`]) |
-//! | chevron rotate | [`CHEVRON`] 150ms | the transcript's trailing disclosure chevron turns a quarter as an eased `svg` rotation, on a pointer toggle only ([`settled`]) |
-//! | collapse | [`COLLAPSE`] 180ms | the nav's Parked fold grows open under its header ([`Settled::reveal_only`]); it folds shut at once |
+//! | chevron rotate | [`CHEVRON`] 150ms | a disclosure chevron (the transcript's, the nav's Parked fold) turns a quarter as an eased `svg` rotation, on a pointer toggle only ([`settled`]); the fold itself opens at once |
 //! | icon swap | [`ICON_SWAP`] 300ms | the Composer's send ⇄ stop: both glyphs stay mounted and cross-fade, opacity with `svg` scale 0.25 → 1 |
-//! | `fade-in` | [`FADE_IN`] 500ms, 4px rise | a transcript row appended at the tail while the operator watches ([`fade_in_at`]); never first paint, a history window growing at its head, or scroll-back |
+//! | row-in | [`ROW_IN`] 180ms, opacity only | a turn-level transcript row appended at the tail while the operator watches ([`row_in_at`]): a prompt, a turn's first answer block, a Decision summary. Tool rows, output and later paragraphs are printed, never staged |
+//! | scrollbar | `MOTION_SCROLLBAR_LINGER_MS` 1.4s + [`HOVER_FADE`] 150ms | a thumb appears on the first scroll frame, holds 1.4s, then fades over 150ms; idle, nothing is drawn |
 //!
 //! Kit-drawn menus (the Composer's provider and effort pickers, gpui-kit's
 //! `PopupMenu`) keep the kit's own behaviour. A tool group's disclosure in
@@ -39,9 +38,11 @@
 //! - **Blur.** No filter on elements, so the icon swap's `blur(4px)` is
 //!   dropped; opacity and scale carry it.
 //! - **Frost and edge fades.** Fork-only paint effects; not ported.
-//! - **Toast enter and exit.** gpui-component's `Notification` hard-codes a
-//!   400ms rise from 96px below and a 200ms exit; Ferrite configures only the
-//!   stack (`DefaultToastMotion`), so the toast's own motion stays the kit's.
+//! - **Toast enter and exit.** Ferrite sets the stack's timing
+//!   (`DefaultToastMotion`, from the toast tokens), but gpui-component's
+//!   `Notification` (not vendored) hard-codes its own 400ms rise from 96px
+//!   and 200ms exit on the card itself, so the card's 4px / 0.3-opacity
+//!   entrance waits on that crate.
 //!
 //! # Reduced motion
 //!
@@ -150,7 +151,6 @@ impl CubicBezier {
 }
 
 pub const EASE_OUT_EXPO: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_OUT_EXPO);
-pub const EASE_OUT: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_OUT);
 pub const EASE: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE);
 pub const EASE_STANDARD: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_STANDARD);
 pub const EASE_ICON: CubicBezier = CubicBezier::from_points(theme::MOTION_EASE_ICON);
@@ -203,15 +203,16 @@ impl MotionSpec {
     }
 }
 
-pub const FADE_IN: MotionSpec = MotionSpec::new(theme::MOTION_FADE_IN_MS, EASE_OUT_EXPO);
+pub const ROW_IN: MotionSpec = MotionSpec::new(theme::MOTION_ROW_IN_MS, EASE_OUT_EXPO);
 pub const FADE_QUICK: MotionSpec = MotionSpec::new(theme::MOTION_FADE_QUICK_MS, EASE);
 pub const MENU_IN: MotionSpec = MotionSpec::new(theme::MOTION_MENU_IN_MS, EASE);
 pub const DIALOG_IN: MotionSpec = MotionSpec::new(theme::MOTION_DIALOG_IN_MS, EASE);
-pub const RESIZE: MotionSpec = MotionSpec::new(theme::MOTION_RESIZE_MS, EASE_OUT);
-pub const COLLAPSE: MotionSpec = MotionSpec::new(theme::MOTION_COLLAPSE_MS, EASE_OUT);
 pub const CHEVRON: MotionSpec = MotionSpec::new(theme::MOTION_CHEVRON_MS, EASE);
 pub const HOVER_FADE: MotionSpec = MotionSpec::new(theme::MOTION_HOVER_FADE_MS, EASE_STANDARD);
 pub const ICON_SWAP: MotionSpec = MotionSpec::new(theme::MOTION_ICON_SWAP_MS, EASE_ICON);
+/// A two-state control the pointer flipped (the Parked chevron, a switch
+/// thumb): 150ms on the standard curve. A keyboard flip lands at once.
+pub const TURN: MotionSpec = MotionSpec::new(theme::MOTION_CHEVRON_MS, EASE_STANDARD);
 
 /// Linear interpolation.
 pub fn lerp(from: f32, to: f32, t: f32) -> f32 {
@@ -317,17 +318,14 @@ where
     })
 }
 
-/// `fade-in` at progress `t`: opacity with a `MOTION_FADE_IN_RISE` rise,
-/// for a caller that drives `t` itself (a live-appended transcript row).
-pub fn fade_in_at<E: Styled>(element: E, t: f32) -> E {
-    element
-        .opacity(t)
-        .relative()
-        .top(px(theme::MOTION_FADE_IN_RISE * (1.0 - t)))
+/// `row-in` at progress `t`: opacity only, nothing moves, for a caller that
+/// drives `t` itself (a live-appended turn-level transcript row).
+pub fn row_in_at<E: Styled>(element: E, t: f32) -> E {
+    element.opacity(t)
 }
 
 // ---------------------------------------------------------------------------
-// Tweens: interruptible width and height transitions
+// Tweens: interruptible value transitions
 // ---------------------------------------------------------------------------
 
 /// A value moving `from → to` along a spec, sampled at render time. Unlike a
@@ -375,15 +373,6 @@ impl Tween {
         lerp(self.from, self.to, self.spec.progress_at(elapsed))
     }
 
-    /// Eased progress 0..1 along the tween; 1 once finished or reduced.
-    pub fn progress(&self, now: Instant, reduced: bool) -> f32 {
-        if !self.running(now, reduced) {
-            return 1.0;
-        }
-        self.spec
-            .progress_at(now.saturating_duration_since(self.started))
-    }
-
     /// Mid-flight: the owner must ask for another frame.
     pub fn running(&self, now: Instant, reduced: bool) -> bool {
         !reduced
@@ -409,14 +398,11 @@ struct SettleState {
 }
 
 /// The value this element draws at, easing toward `target` whenever it
-/// changes. `reveal_only` snaps any move toward 0 (a fold that closes goes
-/// at once) and eases only the opening. Asks the painting view for another
-/// frame while it moves.
+/// changes. Asks the painting view for another frame while it moves.
 pub fn settle(
     id: impl Into<ElementId>,
     target: f32,
     spec: MotionSpec,
-    reveal_only: bool,
     window: &mut Window,
     cx: &mut App,
 ) -> f32 {
@@ -429,10 +415,14 @@ pub fn settle(
                 tween: None,
             });
             if state.target != target {
-                let snap = reveal_only && target < state.target;
-                state.tween = (!snap).then(|| {
-                    Tween::retarget(state.tween, state.target, target, spec, now, reduced)
-                });
+                state.tween = Some(Tween::retarget(
+                    state.tween,
+                    state.target,
+                    target,
+                    spec,
+                    now,
+                    reduced,
+                ));
                 state.target = target;
             }
             let value = state
@@ -454,7 +444,6 @@ pub struct Settled<F> {
     id: ElementId,
     target: f32,
     spec: MotionSpec,
-    reveal_only: bool,
     build: F,
 }
 
@@ -468,16 +457,7 @@ where
         id: id.into(),
         target: if on { 1.0 } else { 0.0 },
         spec,
-        reveal_only: false,
         build,
-    }
-}
-
-impl<F> Settled<F> {
-    /// Only the opening eases; a close lands at once.
-    pub fn reveal_only(mut self) -> Self {
-        self.reveal_only = true;
-        self
     }
 }
 
@@ -487,14 +467,7 @@ where
     E: IntoElement,
 {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let value = settle(
-            self.id,
-            self.target,
-            self.spec,
-            self.reveal_only,
-            window,
-            cx,
-        );
+        let value = settle(self.id, self.target, self.spec, window, cx);
         (self.build)(value)
     }
 }
@@ -582,6 +555,8 @@ pub fn pulse_phase(period: Duration, view: EntityId, cx: &mut App) -> f32 {
                 let clock = cx.default_global::<PulseClock>();
                 match clock.leases.tick(now) {
                     Some(views) => {
+                        #[cfg(test)]
+                        testing::PULSE_TICKS.with(|ticks| ticks.set(ticks.get() + 1));
                         for view in views {
                             cx.notify(view);
                         }
@@ -818,6 +793,13 @@ pub(crate) fn live() -> bool {
 pub mod testing {
     thread_local! {
         pub(super) static DRIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        pub(super) static PULSE_TICKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    /// How many times the pulse clock has ticked views on this thread: the
+    /// budget a window of loops is measured against.
+    pub fn pulse_ticks() -> usize {
+        PULSE_TICKS.with(std::cell::Cell::get)
     }
 
     /// This test (its thread) runs the motion kit live.
@@ -866,7 +848,13 @@ mod tests {
         );
     }
 
-    const CURVES: [CubicBezier; 5] = [EASE_OUT_EXPO, EASE_OUT, EASE, EASE_STANDARD, EASE_ICON];
+    const CURVES: [CubicBezier; 5] = [
+        EASE_OUT_EXPO,
+        CubicBezier::new(0.0, 0.0, 0.58, 1.0),
+        EASE,
+        EASE_STANDARD,
+        EASE_ICON,
+    ];
 
     #[test]
     fn a_linear_bezier_is_the_identity() {
@@ -887,8 +875,10 @@ mod tests {
                 [0.494391, 0.825622, 0.971779, 0.997677, 0.999878],
             ),
             (
+                // CSS `ease-out`: no catalog entry rides it any more, but the
+                // solver still answers its reference values.
                 "ease-out",
-                EASE_OUT,
+                CubicBezier::new(0.0, 0.0, 0.58, 1.0),
                 [0.160572, 0.378138, 0.684643, 0.906535, 0.982973],
             ),
             (
@@ -926,14 +916,14 @@ mod tests {
 
     #[test]
     fn the_catalog_keeps_zerons_numbers() {
-        assert_eq!(FADE_IN.duration_ms, 500);
-        assert_eq!(FADE_IN.curve, CubicBezier::new(0.16, 1.0, 0.3, 1.0));
-        assert_eq!(theme::MOTION_FADE_IN_RISE, 4.0);
+        assert_eq!(ROW_IN.duration_ms, 180);
+        assert_eq!(ROW_IN.curve, CubicBezier::new(0.16, 1.0, 0.3, 1.0));
         assert_eq!(FADE_QUICK.duration_ms, 150);
         assert_eq!(MENU_IN.duration_ms, 140);
         assert_eq!(DIALOG_IN.duration_ms, 180);
-        assert_eq!(RESIZE.duration_ms, 200);
-        assert_eq!(RESIZE.curve, CubicBezier::new(0.0, 0.0, 0.58, 1.0));
+        assert_eq!(theme::MOTION_TOAST_IN_MS, 180);
+        assert_eq!(theme::MOTION_TOAST_OUT_MS, 100);
+        assert_eq!(theme::MOTION_SCROLLBAR_LINGER_MS, 1_400);
         assert_eq!(HOVER_FADE.duration_ms, 150);
         assert_eq!(HOVER_FADE.curve, CubicBezier::new(0.4, 0.0, 0.2, 1.0));
         assert_eq!(ICON_SWAP.curve, CubicBezier::new(0.2, 0.0, 0.0, 1.0));
@@ -944,7 +934,7 @@ mod tests {
     fn a_tween_eases_to_its_target_and_retargets_from_where_it_is() {
         let t0 = Instant::now();
         let ms = |m: u64| t0 + Duration::from_millis(m);
-        let open = Tween::new(52.0, 286.0, RESIZE, t0);
+        let open = Tween::new(52.0, 286.0, DIALOG_IN, t0);
         assert_eq!(open.value(t0, false), 52.0);
         assert!(open.running(ms(100), false));
         let mid = open.value(ms(100), false);
@@ -954,19 +944,19 @@ mod tests {
 
         // Flipped back mid-flight: the new tween starts on screen, not at
         // the far end.
-        let back = Tween::retarget(Some(open), 286.0, 52.0, RESIZE, ms(100), false);
+        let back = Tween::retarget(Some(open), 286.0, 52.0, DIALOG_IN, ms(100), false);
         close(back.from, mid, 1e-3, "continuity");
         assert_eq!(back.value(ms(300), false), 52.0);
 
         // Nothing moving: from the resting value.
-        let rest = Tween::retarget(None, 286.0, 52.0, RESIZE, t0, false);
+        let rest = Tween::retarget(None, 286.0, 52.0, DIALOG_IN, t0, false);
         assert_eq!(rest.from, 286.0);
     }
 
     #[test]
     fn reduced_motion_snaps_a_tween_to_its_end_state() {
         let t0 = Instant::now();
-        let tween = Tween::new(52.0, 286.0, RESIZE, t0);
+        let tween = Tween::new(52.0, 286.0, DIALOG_IN, t0);
         assert_eq!(tween.value(t0, true), 286.0);
         assert!(!tween.running(t0, true), "no frame is asked for");
     }
@@ -1135,7 +1125,6 @@ mod tests {
 
     struct Switch {
         on: bool,
-        reveal_only: bool,
         drawn: std::rc::Rc<std::cell::Cell<f32>>,
     }
 
@@ -1146,18 +1135,13 @@ mod tests {
                 drawn.set(value);
                 div().size_4()
             });
-            div().child(if self.reveal_only {
-                fold.reveal_only()
-            } else {
-                fold
-            })
+            div().child(fold)
         }
     }
 
     fn switch(
         cx: &mut TestAppContext,
         on: bool,
-        reveal_only: bool,
     ) -> (
         gpui::Entity<Switch>,
         std::rc::Rc<std::cell::Cell<f32>>,
@@ -1165,11 +1149,7 @@ mod tests {
     ) {
         let drawn = std::rc::Rc::new(std::cell::Cell::new(-1.0));
         let seen = drawn.clone();
-        let (view, cx) = cx.add_window_view(move |_, _| Switch {
-            on,
-            reveal_only,
-            drawn: seen,
-        });
+        let (view, cx) = cx.add_window_view(move |_, _| Switch { on, drawn: seen });
         cx.run_until_parked();
         (view, drawn, cx)
     }
@@ -1194,7 +1174,7 @@ mod tests {
     #[gpui::test]
     fn a_settled_element_lands_on_first_paint_and_eases_a_flip(cx: &mut TestAppContext) {
         testing::drive();
-        let (view, drawn, cx) = switch(cx, true, false);
+        let (view, drawn, cx) = switch(cx, true);
         assert_eq!(drawn.get(), 1.0, "first paint lands open");
         assert_eq!(next_frame(cx), 0, "and asks for nothing");
 
@@ -1213,29 +1193,12 @@ mod tests {
         assert_eq!(next_frame(cx), 0, "settled: no frames");
     }
 
-    /// A reveal eases open and closes at once.
-    #[gpui::test]
-    fn a_reveal_eases_open_and_closes_at_once(cx: &mut TestAppContext) {
-        testing::drive();
-        let (view, drawn, cx) = switch(cx, false, true);
-        assert_eq!(drawn.get(), 0.0);
-        flip(&view, true, cx);
-        cx.executor().advance_clock(Duration::from_millis(50));
-        next_frame(cx);
-        let opening = drawn.get();
-        assert!(opening > 0.0 && opening < 1.0, "opening {opening}");
-        flip(&view, false, cx);
-        assert_eq!(drawn.get(), 0.0, "closed at once");
-        next_frame(cx); // the frame the opening had already asked for
-        assert_eq!(next_frame(cx), 0, "and nothing after");
-    }
-
     /// Reduced motion lands every flip.
     #[gpui::test]
     fn reduced_motion_lands_a_settled_flip(cx: &mut TestAppContext) {
         testing::drive();
         cx.update(|cx| cx.set_reduce_motion(true));
-        let (view, drawn, cx) = switch(cx, false, false);
+        let (view, drawn, cx) = switch(cx, false);
         flip(&view, true, cx);
         assert_eq!(drawn.get(), 1.0);
         assert_eq!(next_frame(cx), 0);

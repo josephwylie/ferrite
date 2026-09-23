@@ -927,7 +927,7 @@ fn the_checks_card_grows_to_its_tally(cx: &mut TestAppContext) {
     );
 }
 
-/// A Project with Threads still offers "Remove Project", disabled, with the
+/// A Project with Threads still offers "Remove project", disabled, with the
 /// reason in its tooltip; pressing it removes nothing.
 #[gpui::test]
 fn a_project_in_use_keeps_its_remove_verb_disabled(cx: &mut TestAppContext) {

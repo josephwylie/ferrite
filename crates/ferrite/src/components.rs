@@ -10,12 +10,12 @@
 use std::ops::Range;
 use std::time::Duration;
 
-use gpui::component::button::{Button, ButtonCustomVariant, ButtonVariants};
+use gpui::component::button::{Button, ButtonVariants};
 use gpui::component::{FocusableExt, Sizable};
 use gpui::prelude::*;
 use gpui::{
     div, point, pulsating_between, px, rgb, rgba, AnyElement, App, BoxShadow, Div, ElementId,
-    FontFeatures, HighlightStyle, SharedString, Stateful, StyleRefinement, Window,
+    FontFeatures, HighlightStyle, Hsla, SharedString, Stateful, StyleRefinement, Window,
 };
 
 use crate::icons;
@@ -66,17 +66,65 @@ pub fn focused<E: Styled>(mut element: E, focused: bool) -> E {
     element
 }
 
-/// Form actions need an opaque hover face on the modal's raised ground.
-/// Use the toolkit's variant API: its renderer owns hover/press handlers.
-pub fn form_button(id: impl Into<ElementId>, cx: &App) -> Button {
+/// One hover blend for a kit `Button` (rule 2.10.2): its ground blends
+/// `rest → hover` over 150ms under a key derived from its id, the kit's own
+/// hover is held at that ground (`pointer::button_variant`) so it never
+/// snaps over the blend, and the press lands at once on `press`. The caller
+/// sets no ground of its own after it.
+pub fn faded_button(
+    id: impl Into<ElementId>,
+    rest: Hsla,
+    hover: Hsla,
+    press: Hsla,
+    ink: Hsla,
+    cx: &App,
+) -> Button {
+    let id = id.into();
+    let key = crate::pointer::hover_key(&id);
+    let ground = motion::hover_blend(&key, rest, hover);
+    // The ground is also the caller-layer style: the kit draws a custom
+    // variant's rest a fifth toward transparent, and replays this layer in
+    // its selected state, so the blended face is exactly what shows.
+    // A clear ground paints nothing of its own.
     button(id)
-        .custom(
-            ButtonCustomVariant::new(cx)
-                .foreground(rgb(theme::TEXT).into())
-                .hover(rgb(theme::FILL).into())
-                .active(rgb(theme::FILL_HOVER).into()),
-        )
-        .tab_stop(true)
+        .custom(crate::pointer::button_variant(ground, ink, press, cx))
+        .when(ground.a > 0.0, |button| button.bg(ground))
+        .on_hover(motion::hover_listener(key))
+}
+
+/// A text tooltip on a faded kit `Button`, in the floating vocabulary
+/// (`menu::tooltip`). The kit's own `tooltip` rides an `on_hover` listener,
+/// and an element carries one: the blend's. This one is gpui's own.
+pub trait Tip {
+    fn tip(self, text: impl Into<SharedString>) -> Self;
+}
+
+impl Tip for Button {
+    fn tip(mut self, text: impl Into<SharedString>) -> Self {
+        self.interactivity().tooltip(crate::menu::tooltip(text));
+        self
+    }
+}
+
+/// Form actions need an opaque hover face on the modal's raised ground:
+/// nothing at rest, `HOVER_RAISED` under the pointer (blended), `FILL_HOVER`
+/// pressed.
+pub fn form_button(id: impl Into<ElementId>, cx: &App) -> Button {
+    form_button_on(id, rgba(theme::TRANSPARENT).into(), cx)
+}
+
+/// `form_button` resting on its own `rest` ground (a filled field-like
+/// control): the same blend and press.
+pub fn form_button_on(id: impl Into<ElementId>, rest: Hsla, cx: &App) -> Button {
+    faded_button(
+        id,
+        rest,
+        rgb(theme::HOVER_RAISED).into(),
+        rgb(theme::FILL_HOVER).into(),
+        rgb(theme::TEXT).into(),
+        cx,
+    )
+    .tab_stop(true)
 }
 
 /// The completing action: steel `ACCENT_STRONG` with white ink, hovering to
@@ -84,18 +132,28 @@ pub fn form_button(id: impl Into<ElementId>, cx: &App) -> Button {
 /// `TEXT_MUTED` ink. On the filled face the focus outline is `TEXT_STRONG`.
 pub fn primary_button(id: impl Into<ElementId>, disabled: bool, cx: &App) -> Button {
     use gpui::component::Disableable;
-    form_button(id, cx)
-        .custom(
-            ButtonCustomVariant::new(cx)
-                .foreground(rgb(primary_ink(disabled)).into())
-                .hover(rgb(theme::PRIMARY_HOVER).into())
-                .active(rgb(theme::PRIMARY_ACTIVE).into()),
+    let face: Hsla = rgb(primary_face(disabled)).into();
+    let (hover, press) = if disabled {
+        (face, face)
+    } else {
+        (
+            rgb(theme::PRIMARY_HOVER).into(),
+            rgb(theme::PRIMARY_ACTIVE).into(),
         )
-        .bg(rgb(primary_face(disabled)))
-        .text_color(rgb(primary_ink(disabled)))
-        .focus_visible(|style| focus_outline(style, theme::TEXT_STRONG))
-        .disabled(disabled)
-        .when(disabled, |button| button.cursor_default())
+    };
+    faded_button(
+        id,
+        face,
+        hover,
+        press,
+        rgb(primary_ink(disabled)).into(),
+        cx,
+    )
+    .tab_stop(true)
+    .text_color(rgb(primary_ink(disabled)))
+    .focus_visible(|style| focus_outline(style, theme::TEXT_STRONG))
+    .disabled(disabled)
+    .when(disabled, |button| button.cursor_default())
 }
 
 fn primary_face(disabled: bool) -> u32 {
@@ -295,60 +353,6 @@ pub fn status_ring(ink: u32) -> Div {
         .border_color(rgb(ink))
 }
 
-/// A status dot with a halo that breathes behind it on the `STATUS_PULSE_MS`
-/// loop; still when the operator asked for reduced motion. The halo is
-/// absolute and the box is a fixed `STATUS_DOT`, so nothing around it moves.
-/// The breath is read off the shared pulse clock (`motion::pulse_phase`), so
-/// every dot on screen breathes together and a window of them costs one
-/// ~30fps tick, not a frame each at the display's rate; `_id` is kept for
-/// callers only.
-pub fn pulsing_dot(
-    _id: impl Into<ElementId>,
-    ink: u32,
-    halo: u32,
-    reduce_motion: bool,
-) -> AnyElement {
-    PulsingDot {
-        ink,
-        halo,
-        reduce_motion,
-    }
-    .into_any_element()
-}
-
-#[derive(IntoElement)]
-struct PulsingDot {
-    ink: u32,
-    halo: u32,
-    reduce_motion: bool,
-}
-
-impl RenderOnce for PulsingDot {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let opacity = if self.reduce_motion {
-            theme::PULSE_MIN
-        } else {
-            let period = Duration::from_millis(theme::STATUS_PULSE_MS);
-            let phase = motion::pulse_phase(period, window.current_view(), cx);
-            pulsating_between(theme::PULSE_MIN, 1.0)(phase)
-        };
-        let ring = div()
-            .absolute()
-            .left(px(-theme::STATUS_HALO_INSET))
-            .top(px(-theme::STATUS_HALO_INSET))
-            .size(px(theme::STATUS_DOT + 2. * theme::STATUS_HALO_INSET))
-            .rounded_full()
-            .bg(rgba(self.halo))
-            .opacity(opacity);
-        div()
-            .relative()
-            .flex_shrink_0()
-            .size(px(theme::STATUS_DOT))
-            .child(ring)
-            .child(status_dot(self.ink))
-    }
-}
-
 /// A status dot whose own opacity breathes on the one breath
 /// (`MOTION_BREATH_MS`, read off `motion::pulse_phase`, so every breathing
 /// dot on screen shares one ~30fps tick and a board of them costs no more
@@ -385,8 +389,8 @@ pub fn kbd(key: impl Into<SharedString>) -> Div {
     kbd_face().child(key.into())
 }
 
-/// A keycap holding a key table's combination, `cmd` drawn as the glyph:
-/// `cmd shift N` reads `⌘ shift N`.
+/// A keycap holding a key table's combination, the modifiers drawn as
+/// glyphs: `cmd-shift-N` reads `⌘⇧N`.
 pub fn kbd_keys(keys: &str) -> Div {
     kbd_face().child(key_combo(keys, theme::TEXT_2))
 }
@@ -408,19 +412,53 @@ fn kbd_face() -> Div {
         .text_color(rgb(theme::TEXT_2))
 }
 
+/// A modifier's glyph as a key combination spells it: `cmd` ⌘, `shift` ⇧,
+/// `alt` ⌥, `ctrl` ⌃. `None` for a key that is its own word.
+#[cfg(test)]
+pub fn key_glyph(part: &str) -> Option<char> {
+    match part {
+        "cmd" => Some('\u{2318}'),
+        "shift" => Some('\u{21e7}'),
+        "alt" => Some('\u{2325}'),
+        "ctrl" => Some('\u{2303}'),
+        _ => None,
+    }
+}
+
+/// A key table's combination as `key_combo` draws it, in characters:
+/// `cmd-shift-N` → `⌘⇧N`, `cmd shift N` → `⌘ ⇧ N`. What a reader sees and
+/// what a test compares.
+#[cfg(test)]
+pub fn key_glyphs(keys: &str) -> String {
+    let glyph = |part: &str| key_glyph(part).map_or_else(|| part.to_string(), String::from);
+    keys.split(' ')
+        .map(|word| word.split('-').map(glyph).collect::<String>())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// A key combination as it is drawn, from a key table's spelling, in the
-/// code face (keys are machine text, rule 6). Neither face has `⌘`, so `cmd`
-/// is `command.svg` in a `KEY_GLYPH` box; every other part stays its own
-/// word. Parts joined by `-` sit tight, as a menu shortcut reads (`cmd-F` →
-/// `⌘F`); parts joined by spaces keep one code space apart, as a keycap
-/// reads (`cmd shift N` → `⌘ shift N`). The one place the command glyph is
-/// drawn.
+/// code face (keys are machine text, rule 6). Every modifier is a glyph in
+/// a `KEY_GLYPH` box: `⌘` (`command.svg`), `⌥` (`option.svg`) and `⌃`
+/// (`control.svg`) are in neither face, and `⇧` is Geist Mono's own
+/// (`CHROME_GLYPHS`); every other part stays its own word. Parts joined by
+/// `-` sit tight, as a menu shortcut or a tooltip reads (`cmd-F` → `⌘F`);
+/// parts joined by spaces keep one code space apart. The one place a
+/// modifier glyph is drawn.
 pub fn key_combo(keys: &str, ink: u32) -> Div {
     let spaced = keys.contains(' ');
     let gap = if spaced {
         theme::FS_SM * theme::CODE_ADVANCE
     } else {
         0.
+    };
+    let glyph_box = || {
+        div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .justify_center()
+            .w(px(theme::KEY_GLYPH))
     };
     div()
         .flex()
@@ -430,12 +468,22 @@ pub fn key_combo(keys: &str, ink: u32) -> Div {
         .gap(px(gap))
         .text_color(rgb(ink))
         .children(keys.split([' ', '-']).map(|part| {
-            match part {
-                "cmd" => div()
-                    .debug_selector(|| "command-key".into())
-                    .child(icons::icon(icons::COMMAND, theme::KEY_GLYPH, ink))
+            let svg = match part {
+                "cmd" => Some((icons::COMMAND, "command-key")),
+                "alt" => Some((icons::OPTION, "option-key")),
+                "ctrl" => Some((icons::CONTROL, "control-key")),
+                _ => None,
+            };
+            match (svg, part) {
+                (Some((path, selector)), _) => glyph_box()
+                    .debug_selector(move || selector.into())
+                    .child(icons::icon(path, theme::KEY_GLYPH, ink))
                     .into_any_element(),
-                key => SharedString::from(key.to_string()).into_any_element(),
+                (None, "shift") => glyph_box()
+                    .debug_selector(|| "shift-key".into())
+                    .child("\u{21e7}")
+                    .into_any_element(),
+                (None, key) => SharedString::from(key.to_string()).into_any_element(),
             }
         }))
 }
@@ -513,84 +561,28 @@ pub fn empty_state(title: impl Into<SharedString>, hint: Option<SharedString>) -
 
 // --------------------------------------------------------------- controls
 
-/// A control's tooltip that names its verb and key (`Interrupt esc`,
-/// `Send ↵`): the verb in the tooltip's Geist, the key after it as a mono
-/// `TEXT_MUTED` suffix. No punctuation; a longer sentence belongs in the
-/// control's accessibility label.
-pub fn key_tooltip(
-    label: impl Into<SharedString>,
-    key: impl Into<SharedString>,
-) -> impl Fn(&mut Window, &mut App) -> gpui::AnyView + 'static {
-    let (label, key) = (label.into(), key.into());
-    move |window, cx| {
-        let (label, key) = (label.clone(), key.clone());
-        gpui::component::tooltip::Tooltip::element(move |_, _| {
-            div()
-                .flex()
-                .items_center()
-                .gap(px(theme::SPACE_1_5))
-                .child(label.clone())
-                .child(
-                    div()
-                        .font_family(theme::FONT_CODE)
-                        .text_color(rgb(theme::TEXT_MUTED))
-                        .child(key.clone()),
-                )
-        })
-        .font_family(theme::FONT_UI)
-        .text_size(px(theme::FS_SM))
-        .line_height(px(theme::LH_META))
-        .px(px(theme::TOOLTIP_PAD_X))
-        .py(px(theme::TOOLTIP_PAD_Y))
-        .max_w(px(theme::TOOLTIP_MAX_W))
-        .rounded(px(theme::R_CONTROL))
-        .shadow(float_shadow())
-        .build(window, cx)
-    }
-}
-
-/// `key_tooltip` for a key table's chord (`cmd-D`): the label, then the
-/// chord as `key_combo` draws it (`⌘D`) in mono `TEXT_MUTED` — no
-/// parentheses.
-pub fn chord_tooltip(
-    label: impl Into<SharedString>,
-    keys: impl Into<SharedString>,
-) -> impl Fn(&mut Window, &mut App) -> gpui::AnyView + 'static {
-    let (label, keys) = (label.into(), keys.into());
-    move |window, cx| {
-        let (label, keys) = (label.clone(), keys.clone());
-        gpui::component::tooltip::Tooltip::element(move |_, _| {
-            div()
-                .flex()
-                .items_center()
-                .gap(px(theme::SPACE_1_5))
-                .child(label.clone())
-                .child(key_combo(&keys, theme::TEXT_MUTED))
-        })
-        .font_family(theme::FONT_UI)
-        .text_size(px(theme::FS_SM))
-        .line_height(px(theme::LH_META))
-        .px(px(theme::TOOLTIP_PAD_X))
-        .py(px(theme::TOOLTIP_PAD_Y))
-        .max_w(px(theme::TOOLTIP_MAX_W))
-        .rounded(px(theme::R_CONTROL))
-        .shadow(float_shadow())
-        .build(window, cx)
-    }
-}
-
 /// The chord an action is bound to with no key context, as a menu shortcut
-/// spells it (`cmd-D`, the last key upper-cased): `None` when nothing binds
-/// it, so a tooltip never names a key that would not act.
+/// spells it (`cmd-D`, the last key upper-cased; `esc`, `↵`): `None` when
+/// nothing binds it, so a tooltip never names a key that would not act.
 pub fn bound_chord(action: &str) -> Option<String> {
     let (keys, _, _) = crate::keymap::bindings(crate::keymap::PLATFORM)
         .into_iter()
         .find(|(_, bound, context)| *bound == action && context.is_none())?;
     let mut parts: Vec<String> = keys.split('-').map(str::to_string).collect();
     if let Some(key) = parts.last_mut() {
-        *key = key.to_uppercase();
+        *key = key_word(key);
     }
     Some(parts.join("-"))
+}
+
+/// A key table's key as a combination spells it: a letter upper-cased,
+/// `escape` as `esc` and `enter` as `↵`, the words a keycap prints.
+fn key_word(key: &str) -> String {
+    match key {
+        "escape" => "esc".into(),
+        "enter" => "\u{21b5}".into(),
+        key => key.to_uppercase(),
+    }
 }
 
 /// An icon-only control: `ICON_BUTTON` square, the glyph at
@@ -602,23 +594,24 @@ pub fn icon_button(
     tooltip: &'static str,
     cx: &App,
 ) -> Button {
-    button(id)
-        .custom(
-            ButtonCustomVariant::new(cx)
-                .foreground(rgb(theme::TEXT_MUTED).into())
-                .hover(rgb(theme::HOVER).into())
-                .active(rgb(theme::PRESSED).into()),
-        )
-        .group(ICON_BUTTON_GROUP)
-        .size(px(theme::ICON_BUTTON))
-        .tooltip(tooltip)
-        .accessibility_label(tooltip)
-        .child(
-            icons::icon(glyph, theme::ICON_BUTTON_GLYPH, theme::TEXT_MUTED)
-                .group_hover(ICON_BUTTON_GROUP, |style| {
-                    style.text_color(rgb(theme::TEXT))
-                }),
-        )
+    faded_button(
+        id,
+        rgba(theme::TRANSPARENT).into(),
+        rgb(theme::HOVER).into(),
+        rgb(theme::PRESSED).into(),
+        rgb(theme::TEXT_MUTED).into(),
+        cx,
+    )
+    .group(ICON_BUTTON_GROUP)
+    .size(px(theme::ICON_BUTTON))
+    .tip(tooltip)
+    .accessibility_label(tooltip)
+    .child(
+        icons::icon(glyph, theme::ICON_BUTTON_GLYPH, theme::TEXT_MUTED)
+            .group_hover(ICON_BUTTON_GROUP, |style| {
+                style.text_color(rgb(theme::TEXT))
+            }),
+    )
 }
 
 /// An `svg()` paints from its own style, never an ambient text colour, so
@@ -630,21 +623,22 @@ const ICON_BUTTON_GROUP: &str = "icon-button";
 /// hover `RAISED_2`, press `FILL_HOVER`. A button is read like any row, so
 /// it never takes the heading weight.
 pub fn ghost_button(id: impl Into<ElementId>, label: impl Into<SharedString>, cx: &App) -> Button {
-    button(id)
-        .custom(
-            ButtonCustomVariant::new(cx)
-                .foreground(rgb(theme::TEXT_2).into())
-                .hover(rgb(theme::RAISED_2).into())
-                .active(rgb(theme::FILL_HOVER).into()),
-        )
-        .h(px(theme::CONTROL_H))
-        .px(px(theme::CONTROL_PAD_X))
-        .child(
-            text_ui()
-                .font_weight(theme::W_BODY)
-                .text_color(rgb(theme::TEXT_2))
-                .child(label.into()),
-        )
+    faded_button(
+        id,
+        rgba(theme::TRANSPARENT).into(),
+        rgb(theme::HOVER_RAISED).into(),
+        rgb(theme::FILL_HOVER).into(),
+        rgb(theme::TEXT_2).into(),
+        cx,
+    )
+    .h(px(theme::CONTROL_H))
+    .px(px(theme::CONTROL_PAD_X))
+    .child(
+        text_ui()
+            .font_weight(theme::W_BODY)
+            .text_color(rgb(theme::TEXT_2))
+            .child(label.into()),
+    )
 }
 
 /// A text-only control with no ground at all (`Back to Main`): `CONTROL_H`,
@@ -653,13 +647,12 @@ pub fn ghost_button(id: impl Into<ElementId>, label: impl Into<SharedString>, cx
 pub fn quiet_button(id: impl Into<ElementId>, label: impl Into<SharedString>, cx: &App) -> Button {
     let none: gpui::Hsla = rgba(theme::TRANSPARENT).into();
     button(id)
-        .custom(
-            ButtonCustomVariant::new(cx)
-                .color(none)
-                .foreground(rgb(theme::TEXT_MUTED).into())
-                .hover(none)
-                .active(none),
-        )
+        .custom(crate::pointer::button_variant(
+            none,
+            rgb(theme::TEXT_MUTED).into(),
+            none,
+            cx,
+        ))
         .group(QUIET_BUTTON_GROUP)
         .h(px(theme::CONTROL_H))
         .px(px(theme::CONTROL_PAD_X))
@@ -934,13 +927,15 @@ pub fn menu_row(
     cursor: bool,
     armed: bool,
 ) -> Stateful<Div> {
+    let id = id.into();
+    let key = crate::pointer::hover_key(&id);
     let row = menu_row_content(item, cursor, armed).id(id);
     if item.disabled || armed {
         row
     } else if cursor {
-        row.hover_carried()
+        row.hover_carried(key).press_raised()
     } else {
-        row.hover_raised().press_raised()
+        row.hover_raised(key).press_raised()
     }
 }
 
@@ -1500,7 +1495,7 @@ mod tests {
             (cursor.label, cursor.ground),
             (theme::TEXT_STRONG, Some(fill))
         );
-        let delete = MenuItem::new("Delete Thread").destructive();
+        let delete = MenuItem::new("Delete thread").destructive();
         assert_eq!(row_inks(&delete, false, false).label, theme::TEXT);
         assert_eq!(row_inks(&delete, true, false).label, theme::TEXT_STRONG);
         let armed = row_inks(&delete, false, true);

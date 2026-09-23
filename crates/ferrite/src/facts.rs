@@ -25,7 +25,8 @@ use crate::pane::{wall_card, WallCard};
 #[derive(Default)]
 pub struct ThreadFacts {
     /// What the Thread is called: the operator's title, else its first
-    /// prompt, else its number — `Cockpit::display_title`, cached by the
+    /// prompt cut at a word boundary, else `New thread` (`display_name`,
+    /// never its number), cached by the
     /// same moments as the other facts (a first prompt sent, a rename, a
     /// park) so no frame reads a log to name a row.
     pub name: SharedString,
@@ -223,7 +224,7 @@ impl Facts {
             let last_used = cockpit.last_used(*thread);
             let facts = self.threads.entry(*thread).or_default();
             facts.last_used = last_used;
-            facts.name = SharedString::from(cockpit.display_title(*thread, self.auto_title));
+            facts.name = display_name(cockpit, *thread, self.auto_title);
             let Ok(meta) = cockpit.peek(*thread) else {
                 facts.provider = None;
                 facts.project = None;
@@ -286,7 +287,7 @@ impl Facts {
             Err(_) => (None, None),
         };
         let default_branch = default_branch_of(&mut self.default_branches, project, cwd.as_deref());
-        let name = SharedString::from(cockpit.display_title(thread, self.auto_title));
+        let name = display_name(cockpit, thread, self.auto_title);
         let last_used = cockpit.last_used(thread);
         let facts = self.threads.entry(thread).or_default();
         facts.last_used = last_used;
@@ -307,7 +308,7 @@ impl Facts {
             ),
             Err(_) => (None, None),
         };
-        let name = SharedString::from(cockpit.display_title(thread, self.auto_title));
+        let name = display_name(cockpit, thread, self.auto_title);
         let last_used = cockpit.last_used(thread);
         let facts = self.threads.entry(thread).or_default();
         facts.last_used = last_used;
@@ -319,18 +320,18 @@ impl Facts {
     /// The name alone — after a first prompt or a rename, the one fact
     /// that moved.
     pub fn renamed(&mut self, cockpit: &Cockpit, thread: ThreadId) {
-        let name = SharedString::from(cockpit.display_title(thread, self.auto_title));
+        let name = display_name(cockpit, thread, self.auto_title);
         self.threads.entry(thread).or_default().name = name;
     }
 
-    /// What a Thread is called, from the cache; its number until a moment
-    /// has named it.
+    /// What a Thread is called, from the cache; `New thread` until a moment
+    /// has named it (never its number).
     pub fn name(&self, thread: ThreadId) -> SharedString {
         self.threads
             .get(&thread)
             .filter(|facts| !facts.name.is_empty())
             .map(|facts| facts.name.clone())
-            .unwrap_or_else(|| SharedString::from(format!("thread-{}", thread.get())))
+            .unwrap_or_else(|| SharedString::from(NEW_THREAD))
     }
 
     /// Only the selected child needs a wall projection. Refresh at selection
@@ -438,6 +439,41 @@ pub fn since_label(last_used: SystemTime, now: SystemTime) -> SharedString {
     SharedString::from(text)
 }
 
+/// A Thread with no title and no prompt yet.
+pub const NEW_THREAD: &str = "New thread";
+
+/// What a Thread is called (rule 2.11): its real title when it has one;
+/// before that, the first prompt cut at a word boundary (`auto`, the
+/// operator's setting); with no prompt, `New thread`. Never `thread-{id}`.
+fn display_name(cockpit: &Cockpit, thread: ThreadId, auto: bool) -> SharedString {
+    let shown = cockpit.display_title(thread, auto);
+    let titled = cockpit
+        .thread(thread)
+        .is_some_and(|open| open.title().is_some())
+        || cockpit.peek(thread).is_ok_and(|meta| meta.title.is_some());
+    if titled {
+        return shown.into();
+    }
+    if shown == format!("thread-{}", thread.get()) {
+        return NEW_THREAD.into();
+    }
+    at_word_boundary(&shown).into()
+}
+
+/// A provisional title cut short (`…`) ends on a whole word: the partial
+/// word the character cut left behind is dropped.
+fn at_word_boundary(title: &str) -> String {
+    let Some(cut) = title.strip_suffix('\u{2026}') else {
+        return title.to_string();
+    };
+    match cut.trim_end().rsplit_once(' ') {
+        Some((words, _)) if !words.trim_end().is_empty() => {
+            format!("{}\u{2026}", words.trim_end())
+        }
+        _ => title.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -446,6 +482,25 @@ mod tests {
     fn ago(secs: u64) -> SharedString {
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(10 * 365 * 24 * 3600);
         since_label(now - Duration::from_secs(secs), now)
+    }
+
+    /// A provisional title never ends on half a word, and a whole title is
+    /// left alone.
+    #[test]
+    fn a_provisional_title_is_cut_at_a_word_boundary() {
+        assert_eq!(
+            at_word_boundary("Fix the flaky scrollbar fade in the transcri\u{2026}"),
+            "Fix the flaky scrollbar fade in the\u{2026}"
+        );
+        assert_eq!(at_word_boundary("Fix the fade"), "Fix the fade");
+        assert_eq!(
+            at_word_boundary("Supercalifragilistic\u{2026}"),
+            "Supercalifragilistic\u{2026}",
+            "one long word keeps its cut"
+        );
+        assert_eq!(NEW_THREAD, "New thread");
+        let facts = Facts::default();
+        assert_eq!(facts.name(ThreadId::new(7)), NEW_THREAD, "never thread-7");
     }
 
     #[test]

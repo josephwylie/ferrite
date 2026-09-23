@@ -147,8 +147,7 @@ fn pending_chips(attachments: Attachments) -> gpui::AnyElement {
             .pl(gpui::px(theme::SPACE_0_5))
             .pr(gpui::px(theme::SPACE_0_5))
             .rounded(gpui::px(theme::R_CHIP))
-            .bg(rgb(theme::FILL))
-            .hover_carried()
+            .hover_carried(format!("attachment-{index}-{}", open.display()))
             .text_size(gpui::px(theme::FS_SM))
             .line_height(gpui::px(theme::LH_META))
             .text_color(rgb(theme::TEXT_2))
@@ -397,7 +396,7 @@ pub fn inline_file(
         .px(px(theme::INLINE_FILE_PAD_X))
         .gap(px(theme::INLINE_FILE_GAP))
         .bg(rgba(theme::INLINE_CODE_WASH))
-        .hover_raised()
+        .hover_raised(format!("inline-{selector}-{label}"))
         .press_raised()
         .rounded(px(theme::R_CHIP))
         .font_family(theme::FONT_CODE)
@@ -438,12 +437,12 @@ pub fn inline_file(
     // the focus ring: the chip itself wears the hover face.
     let clear: gpui::Hsla = gpui::transparent_black();
     let target = crate::components::button("inline-file-action")
-        .custom(
-            gpui::component::button::ButtonCustomVariant::new(cx)
-                .color(clear)
-                .hover(clear)
-                .active(clear),
-        )
+        .custom(crate::pointer::button_variant(
+            clear,
+            rgb(theme::TEXT).into(),
+            clear,
+            cx,
+        ))
         .tab_stop(true)
         .key_context("PromptAttachment")
         .accessibility_label(accessibility)

@@ -69,6 +69,8 @@ icons![
     "resend",
     "prompt",
     "ferrite-mono",
+    "option",
+    "control",
     // ---- WP-A icons (append names above the end line)
     "reasoning",
     // (end WP-A)
@@ -175,6 +177,10 @@ pub const STOP: &str = "icons/stop.svg";
 /// `⌘` (not in Geist Mono): the command key wherever a key combination is
 /// drawn — menu shortcuts, keycaps. Only `components::key_combo` places it.
 pub const COMMAND: &str = "icons/command.svg";
+/// `⌥` and `⌃` (in neither bundled face): the option and control keys,
+/// placed only by `components::key_combo` like `COMMAND`.
+pub const OPTION: &str = "icons/option.svg";
+pub const CONTROL: &str = "icons/control.svg";
 
 // ---- WP-D icon names (append consts above the end line)
 // (end WP-D)
@@ -401,6 +407,8 @@ mod tests {
             FERRITE_MONO,
             DIAMOND,
             REASONING,
+            OPTION,
+            CONTROL,
         ] {
             let bytes = Assets
                 .load(key)
@@ -412,8 +420,9 @@ mod tests {
         }
         assert_eq!(
             ICONS.len(),
-            33,
-            "the prototype and app controls, including close,              and the four Windows caption glyphs"
+            35,
+            "the prototype and app controls, including close, the four Windows caption glyphs \
+             and the option and control key glyphs"
         );
     }
 

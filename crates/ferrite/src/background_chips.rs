@@ -59,8 +59,7 @@ impl BackgroundChips {
 }
 
 impl RenderOnce for BackgroundChips {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        let reduce_motion = cx.reduce_motion();
+    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
         let mut shelf = div()
             .id(self.id)
             .debug_selector(|| "background-chips".into())
@@ -72,21 +71,16 @@ impl RenderOnce for BackgroundChips {
             .min_w_0()
             .max_w_full();
         for (index, task) in self.tasks.into_iter().enumerate() {
-            shelf = shelf.child(chip(index, task, reduce_motion, self.on_stop.clone()));
+            shelf = shelf.child(chip(index, task, self.on_stop.clone()));
         }
         shelf
     }
 }
 
-/// One chip: the shared pulsing `RUNNING` dot, the task's own description
+/// One chip: a static `RUNNING` dot, the task's own description
 /// cut to the chip's width, and the `×` where stopping is wired. The whole
 /// description and the task's kind wait in the tooltip.
-fn chip(
-    index: usize,
-    task: BackgroundTask,
-    reduce_motion: bool,
-    on_stop: Option<Stop>,
-) -> impl IntoElement {
+fn chip(index: usize, task: BackgroundTask, on_stop: Option<Stop>) -> impl IntoElement {
     let kind = kind_label(&task.detail);
     let label: SharedString = if task.label.trim().is_empty() {
         kind.into()
@@ -117,12 +111,8 @@ fn chip(
         .tooltip(move |window, cx| {
             gpui::component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)
         })
-        .child(crate::components::pulsing_dot(
-            ("background-chip-pulse", index),
-            theme::RUNNING,
-            theme::RUNNING_HALO,
-            reduce_motion,
-        ))
+        // Working is the normal state: a static dot (rule 2.10.3).
+        .child(crate::components::status_dot(theme::RUNNING))
         .child(div().min_w_0().truncate().child(label));
     if let Some(stop) = on_stop {
         let id = task.id.clone();
@@ -136,7 +126,7 @@ fn chip(
                 .justify_center()
                 .size(px(theme::BG_CHIP_STOP))
                 .rounded(px(theme::R_TIGHT))
-                .hover_carried()
+                .hover_carried(format!("background-chip-stop-{index}"))
                 .child(icon(
                     icons::CLOSE,
                     theme::BG_CHIP_STOP_GLYPH,
