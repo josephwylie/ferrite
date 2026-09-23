@@ -99,3 +99,76 @@ fn a_dragged_pane_dims_its_source_until_the_release(cx: &mut TestAppContext) {
         assert!(cx.debug_bounds(source).is_none(), "the release restores it");
     }
 }
+
+/// Native files dragged over a Pane lay the drop sheet over that Pane and
+/// edge its Composer in the accent; the sheet follows the pointer to the
+/// next Pane, and leaving the window or dropping clears both.
+#[gpui::test]
+fn files_over_a_pane_edge_its_composer_in_the_accent(cx: &mut TestAppContext) {
+    let (mut core, _fake) = cockpit("drop-composer-edge", 2);
+    let threads = core.threads();
+    let group = core
+        .apply_group(GroupChange::Create {
+            first: threads[0],
+            second: threads[1],
+        })
+        .unwrap()
+        .group
+        .unwrap();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    view.update(cx, |view, cx| view.enter_group(group, cx));
+    tick(cx);
+    let rects: Vec<_> = cx.update(|window, cx| {
+        view.read(cx)
+            .pane_rects(window)
+            .into_iter()
+            .map(|(_, r)| r)
+            .collect()
+    });
+    let inside = |r: &layout::Rect, at: gpui::Point<Pixels>| {
+        at.x >= px(r.x) && at.x <= px(r.x + r.w) && at.y >= px(r.y) && at.y <= px(r.y + r.h)
+    };
+    let centre = |r: &layout::Rect| gpui::point(px(r.x + r.w / 2.), px(r.y + r.h / 2.));
+    let paths = gpui::ExternalPaths(vec![here().join("notes.txt")].into());
+    assert!(cx.debug_bounds("prompt-drop-sheet").is_none());
+    assert!(cx.debug_bounds("composer-drop-target").is_none());
+
+    cx.simulate_event(gpui::FileDropEvent::Entered {
+        position: centre(&rects[0]),
+        paths: paths.clone(),
+    });
+    tick(cx);
+    for rect in [&rects[0], &rects[1]] {
+        if rect != &rects[0] {
+            cx.simulate_event(gpui::FileDropEvent::Pending {
+                position: centre(rect),
+            });
+            tick(cx);
+        }
+        let sheet = cx.debug_bounds("prompt-drop-sheet").expect("the sheet");
+        let edged = cx
+            .debug_bounds("composer-drop-target")
+            .expect("the Composer wears the accent edge");
+        assert!(inside(rect, sheet.center()), "{sheet:?} over {rect:?}");
+        assert!(inside(rect, edged.center()), "{edged:?} in {rect:?}");
+    }
+
+    cx.simulate_event(gpui::FileDropEvent::Exited);
+    tick(cx);
+    assert!(cx.debug_bounds("prompt-drop-sheet").is_none(), "left");
+    assert!(cx.debug_bounds("composer-drop-target").is_none(), "left");
+
+    cx.simulate_event(gpui::FileDropEvent::Entered {
+        position: centre(&rects[1]),
+        paths,
+    });
+    tick(cx);
+    assert!(cx.debug_bounds("composer-drop-target").is_some());
+    cx.simulate_event(gpui::FileDropEvent::Submit {
+        position: centre(&rects[1]),
+    });
+    tick(cx);
+    assert!(cx.debug_bounds("prompt-drop-sheet").is_none(), "dropped");
+    assert!(cx.debug_bounds("composer-drop-target").is_none(), "dropped");
+}

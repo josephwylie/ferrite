@@ -621,6 +621,9 @@ pub struct PaneFacts<'a> {
     pub reduce_motion: bool,
     /// The Composer's own focus handle holds focus in the active window.
     pub editing: bool,
+    /// Native files are dragged over this Pane: the drop sheet covers it
+    /// and the Composer, drawn above the sheet, wears the accent edge.
+    pub drop_target: bool,
 }
 
 /// The click-wired elements only the cockpit can build — gpui listeners
@@ -826,6 +829,8 @@ pub(crate) struct PaneCtx<'a> {
     /// The Composer itself holds the keyboard in the active window.
     #[allow(dead_code)]
     pub editing: bool,
+    /// Native files hover this Pane (`PaneFacts::drop_target`).
+    pub drop_target: bool,
     /// The Session is starting or being replaced; nothing committed yet.
     #[allow(dead_code)]
     pub starting: bool,
@@ -869,6 +874,7 @@ pub fn render_pane(
         wall,
         reduce_motion,
         editing,
+        drop_target,
     } = facts;
     let pulse = attention.then(|| view.thread()).flatten();
     let empty = WallCard::default();
@@ -940,7 +946,11 @@ pub fn render_pane(
     // Far enough away, a Pane is one signal: no header, no transcript,
     // nothing that stops reading at a glance.
     if level == Level::Wall {
-        return frame(shell.child(wall_cell(view, wall, state, focused, title)));
+        return frame(
+            shell
+                .child(wall_cell(view, wall, state, focused, title))
+                .children(drop_target.then(crate::prompt_drop::sheet)),
+        );
     }
 
     // Requests occupy the space below this Thread's header and above its
@@ -976,6 +986,7 @@ pub fn render_pane(
         received_reasoning_visible,
         reduce_motion,
         editing,
+        drop_target,
         starting: thread.is_some_and(|thread| thread.starting()),
         unread: attention,
         attachments,
@@ -1009,6 +1020,7 @@ pub fn render_pane(
             activity_decisions.filter(|_| expand_question.is_none()),
             expand_question,
             reduce_motion,
+            drop_target,
         )));
     }
 
@@ -1063,10 +1075,15 @@ pub fn render_pane(
             // The order is head · body · progress · dock · composer.
             pane = pane.children(l1_progress(&mut cx));
             pane = pane.children(l1_dock(&mut cx));
+            // The drop sheet covers the Pane beneath the Composer, which
+            // paints after it and so stays in view, edged in the accent.
+            pane = pane.children(drop_target.then(crate::prompt_drop::sheet));
             pane = pane.children(l1_composer(&mut cx));
         }
         None => {
-            pane = pane.child(parked_body());
+            pane = pane
+                .child(parked_body())
+                .children(drop_target.then(crate::prompt_drop::sheet));
         }
     }
     frame(pane)
@@ -1201,6 +1218,7 @@ fn l1_composer(cx: &mut PaneCtx) -> Option<AnyElement> {
                 suggestion: cx.suggestion,
                 focused: cx.focused,
                 editing: cx.editing,
+                drop_target: cx.drop_target,
                 alert,
             },
         )
@@ -1242,6 +1260,7 @@ fn l2_composer(cx: &mut PaneCtx) -> Option<Div> {
                     suggestion: cx.suggestion,
                     focused: cx.focused,
                     editing: cx.editing,
+                    drop_target: cx.drop_target,
                     alert,
                 },
             )
@@ -1464,6 +1483,8 @@ pub struct DraftState<'a> {
     pub editing: bool,
     #[allow(dead_code)]
     pub reduce_motion: bool,
+    /// Native files hover the draft (`PaneFacts::drop_target`).
+    pub drop_target: bool,
 }
 
 /// A draft Pane (#29): an empty transcript area and the Composer wearing
@@ -1484,6 +1505,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
         usage_meter,
         editing,
         reduce_motion: _,
+        drop_target,
     } = state;
     // A draft wears the live Pane's edge: the resting hairline (stepping up
     // under the pointer) or the focus ink. It has no state to announce.
@@ -1504,7 +1526,8 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
                         .text_color(rgb(TEXT_MUTED))
                         .child("draft"),
                 )
-                .child(div().absolute().top(px(2.)).right(px(2.)).child(discard)),
+                .child(div().absolute().top(px(2.)).right(px(2.)).child(discard))
+                .children(drop_target.then(crate::prompt_drop::sheet)),
             focused,
             None,
             false,
@@ -1521,6 +1544,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
                 },
             ))
             .child(div().flex().flex_1().min_h_0())
+            .children(drop_target.then(crate::prompt_drop::sheet))
             .child(composer_region(
                 view,
                 None,
@@ -1547,6 +1571,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
                     suggestion: None,
                     focused,
                     editing,
+                    drop_target,
                     alert: false,
                 },
             )),
@@ -1770,8 +1795,12 @@ fn l2_cell(
     requests: Option<AnyElement>,
     expand_question: Option<AnyElement>,
     reduce_motion: bool,
+    drop_target: bool,
 ) -> Div {
     let compact_question = expand_question.is_some();
+    // The drop sheet paints before the Composer, so the Composer shows
+    // above it; a cell with no Composer takes it last, over everything.
+    let sheet = || drop_target.then(crate::prompt_drop::sheet);
     let mut header = div()
         .flex()
         .flex_shrink_0()
@@ -1820,7 +1849,7 @@ fn l2_cell(
 
     let cell = div().flex().flex_col().flex_1().min_h_0().min_w_0();
     let Some(transcript) = transcript else {
-        return cell.child(header).child(parked_body());
+        return cell.child(header).child(parked_body()).children(sheet());
     };
 
     if let Some(requests) = requests {
@@ -1833,16 +1862,20 @@ fn l2_cell(
                     .min_h_0()
                     .child(deferred(requests_overlay(requests))),
             )
+            .children(sheet())
             .children(composer);
     }
 
     // A Decision's cell body is the card, keyed like the in-Pane card.
     if let Some(decision) = decision.filter(|_| !compact_question) {
-        return cell.child(header).child(
-            l2_decision_body(decision, decide)
-                .key_context("Decision")
-                .track_focus(&view.decision_focus),
-        );
+        return cell
+            .child(header)
+            .child(
+                l2_decision_body(decision, decide)
+                    .key_context("Decision")
+                    .track_focus(&view.decision_focus),
+            )
+            .children(sheet());
     }
 
     let read = Instruments::of(transcript);
@@ -1952,7 +1985,10 @@ fn l2_cell(
     if state == WallState::Done {
         body = body.opacity(theme::DONE_CELL_OPACITY);
     }
-    cell.child(header).child(body).children(composer)
+    cell.child(header)
+        .child(body)
+        .children(sheet())
+        .children(composer)
 }
 
 /// How many Blocks an L2 tail reaches back for.
@@ -3045,6 +3081,9 @@ struct ComposerStack<'a> {
     /// `❯` lights to `ACCENT` and the caret shows. Otherwise the `❯` is
     /// `TEXT_MUTED` and there is no caret.
     editing: bool,
+    /// Native files hover the Pane: the block's edge is `ACCENT_EDGE`,
+    /// saying where they will land.
+    drop_target: bool,
     /// The Pane's own edge is a state colour (a Decision, a blocker). The
     /// block then carries the focus edge itself while `editing`, so focus
     /// never hides behind the amber or red.
@@ -3093,12 +3132,16 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         suggestion,
         focused,
         editing,
+        drop_target,
         alert,
     } = stack;
     let is_draft = setup_controls.is_some();
     let blocking = decision.is_some_and(Decision::blocks_execution);
-    let mut block = components::raised_edged(composer_edge(alert, editing))
+    let mut block = components::raised_edged(composer_edge(alert, editing, drop_target))
         .debug_selector(|| "composer-block".into())
+        .when(drop_target, |block| {
+            block.debug_selector(|| "composer-drop-target".into())
+        })
         .relative()
         .flex()
         .flex_col()
@@ -3348,8 +3391,10 @@ fn prompt_ink(editing: bool, replying: bool) -> u32 {
 /// The block's edge (as `0xRRGGBBAA`): the resting `COMPOSER_EDGE`, or the
 /// focus ink when the keyboard is in the line on a Pane whose own edge is a
 /// state colour — the one case the Pane ring alone could leave in doubt.
-fn composer_edge(alert: bool, editing: bool) -> u32 {
-    if alert && editing {
+fn composer_edge(alert: bool, editing: bool, drop_target: bool) -> u32 {
+    if drop_target {
+        theme::ACCENT_EDGE
+    } else if alert && editing {
         (theme::COMPOSER_EDGE_FOCUS << 8) | 0xff
     } else {
         theme::COMPOSER_EDGE
@@ -7284,9 +7329,12 @@ mod tests {
     /// resting edge, always 1px, always in layout.
     #[test]
     fn the_composer_edge_carries_focus_only_on_an_alert_pane() {
-        assert_eq!(composer_edge(true, true), (theme::FOCUS_RING << 8) | 0xff);
+        assert_eq!(
+            composer_edge(true, true, false),
+            (theme::FOCUS_RING << 8) | 0xff
+        );
         for (alert, editing) in [(false, false), (false, true), (true, false)] {
-            assert_eq!(composer_edge(alert, editing), theme::COMPOSER_EDGE);
+            assert_eq!(composer_edge(alert, editing, false), theme::COMPOSER_EDGE);
         }
     }
 

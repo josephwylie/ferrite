@@ -245,6 +245,10 @@ pub struct CockpitView {
     drop_preview: Option<(ThreadId, Zone)>,
     /// The Pane a live drag picked up: its cell dims until the release.
     pane_drag_source: Option<ThreadId>,
+    /// The Pane native files were last dragged over. Read only while a drag
+    /// is live (`drop_target`), so a drag that leaves the window leaves no
+    /// sheet behind.
+    file_drop_over: Option<PaneIdentity>,
     /// The operator's settings and where they save; every change saves.
     prefs: Preferences,
     /// The Settings panel is up.
@@ -781,6 +785,7 @@ impl CockpitView {
             seam_drag: None,
             drop_preview: None,
             pane_drag_source: None,
+            file_drop_over: None,
             prefs,
             settings_open: false,
             project_editor: None,
@@ -7426,21 +7431,47 @@ impl CockpitView {
         let composer = self.panes[index].composer.clone();
         let identity = self.panes[index].identity;
         let view = cx.entity().downgrade();
-        crate::prompt_drop::target(content, composer, move |_, cx| {
-            let _ = view.update(cx, |view, cx| {
-                if let Some(index) = view.index_of(identity) {
-                    view.focus_pane(index);
-                    if level == Level::Wall {
-                        view.cockpit.toggle_fullscreen();
-                    }
-                    if let Some(draft) = view.panes[index].draft_mut() {
-                        draft.band_focus = None;
-                    }
-                    view.popover = None;
+        let hovered = view.clone();
+        let hover = move |over: bool, _: &mut Window, cx: &mut gpui::App| {
+            let _ = hovered.update(cx, |view, cx| {
+                let next = match (over, view.file_drop_over) {
+                    (true, _) => Some(identity),
+                    (false, Some(current)) if current == identity => None,
+                    (false, current) => current,
+                };
+                if view.file_drop_over != next {
+                    view.file_drop_over = next;
                     cx.notify();
                 }
             });
-        })
+        };
+        crate::prompt_drop::target(
+            content,
+            composer,
+            move |_, cx| {
+                let _ = view.update(cx, |view, cx| {
+                    view.file_drop_over = None;
+                    if let Some(index) = view.index_of(identity) {
+                        view.focus_pane(index);
+                        if level == Level::Wall {
+                            view.cockpit.toggle_fullscreen();
+                        }
+                        if let Some(draft) = view.panes[index].draft_mut() {
+                            draft.band_focus = None;
+                        }
+                        view.popover = None;
+                        cx.notify();
+                    }
+                });
+            },
+            hover,
+        )
+    }
+
+    /// Whether native files hover this Pane right now: the last Pane their
+    /// drag moved over, while that drag is still live.
+    fn drop_target(&self, index: usize, cx: &gpui::App) -> bool {
+        cx.has_active_drag() && self.file_drop_over == Some(self.panes[index].identity)
     }
 
     fn pane_content(
@@ -7547,6 +7578,7 @@ impl CockpitView {
                         && window.is_window_active()
                         && pane.composer.read(cx).focus_handle(cx).is_focused(window),
                     reduce_motion: cx.reduce_motion(),
+                    drop_target: self.drop_target(index, cx),
                 },
                 level,
             ));
@@ -7596,6 +7628,7 @@ impl CockpitView {
             editing: focused
                 && window.is_window_active()
                 && pane.composer.read(cx).focus_handle(cx).is_focused(window),
+            drop_target: self.drop_target(index, cx),
         };
         // Only L1 draws a Composer to hang a popover over (#23), a model
         // picker (#25) or usage meter; the wall answers with keys alone.
