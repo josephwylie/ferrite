@@ -1074,3 +1074,267 @@ fn streaming_layout_probe(cx: &mut TestAppContext) {
         .update(|_, cx| crate::rich::testing::full_text(&prefix, cx))
         .is_some_and(|text| text.contains("more words ".repeat(60).trim_end())));
 }
+
+/// Delivers the display frame the last draw asked for, and says how many
+/// animation-frame requests were waiting on it.
+fn display_frames(cx: &mut gpui::VisualTestContext) -> usize {
+    let frames = cx.update(|window, cx| window.simulate_next_frame(cx));
+    cx.run_until_parked();
+    frames
+}
+
+/// First paint settles (measurement passes, springs arriving at rest) over
+/// a few frames; deliver them until the window asks for none.
+fn settle(cx: &mut gpui::VisualTestContext) {
+    for _ in 0..64 {
+        if display_frames(cx) == 0 {
+            return;
+        }
+        cx.executor().advance_clock(Duration::from_millis(16));
+    }
+    panic!("the window never stopped asking for frames");
+}
+
+fn pulse_parked(cx: &mut gpui::VisualTestContext) -> bool {
+    cx.update(|_, cx| crate::motion::pulse_parked(cx))
+}
+
+/// The motion kit's budget: with nothing animating, a window asks for no
+/// display frame and arms no clock, however long it sits.
+#[gpui::test]
+fn an_idle_window_with_the_motion_kit_schedules_no_animation_frames(cx: &mut TestAppContext) {
+    crate::motion::testing::drive();
+    let (core, _fake) = cockpit("motion-idle", 2);
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    settle(cx);
+    assert_eq!(display_frames(cx), 0, "an idle window asks for no frame");
+    assert!(pulse_parked(cx), "and holds no pulse lease");
+    cx.executor().advance_clock(Duration::from_secs(2));
+    cx.run_until_parked();
+    assert_eq!(display_frames(cx), 0, "time passing changes nothing");
+    assert!(pulse_parked(cx));
+}
+
+/// A working Thread's loops — the working line's mark, the nav's breathing
+/// dot — ride the shared pulse clock instead of asking for every display
+/// frame, and the clock parks once the turn ends and its lease lapses.
+#[gpui::test]
+fn a_working_thread_loops_on_the_pulse_clock_and_parks_when_it_ends(cx: &mut TestAppContext) {
+    crate::motion::testing::drive();
+    let (mut core, fake) = cockpit("motion-working", 1);
+    let thread = core.threads()[0];
+    core.send(thread, "Inspect progress".into());
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+    fake.streams.borrow()[0]
+        .send(SessionEvent::ReasoningSummaryDelta {
+            text: "**Checking marks**".into(),
+            summary_index: 0,
+        })
+        .unwrap();
+    tick(cx);
+    assert!(cx.debug_bounds("progress-mark-live").is_some());
+    assert!(!pulse_parked(cx), "the working mark leases the clock");
+    settle(cx);
+    cx.executor().advance_clock(Duration::from_millis(100));
+    cx.run_until_parked();
+    assert!(!pulse_parked(cx), "and keeps it while it is mounted");
+    assert_eq!(
+        display_frames(cx),
+        0,
+        "the loops ask the clock for ~30fps, never the display for every frame"
+    );
+
+    fake.streams.borrow()[0]
+        .send(SessionEvent::TurnEnded {
+            outcome: ferrite_core::TurnOutcome::Completed,
+            cost_usd: None,
+        })
+        .unwrap();
+    tick(cx);
+    assert!(cx.debug_bounds("progress-mark-live").is_none());
+    cx.executor().advance_clock(Duration::from_millis(
+        crate::theme::MOTION_PULSE_LEASE_MS + 2 * crate::theme::MOTION_PULSE_TICK_MS,
+    ));
+    cx.run_until_parked();
+    assert!(pulse_parked(cx), "the lapsed clock parks");
+    // The turn's completion toast arrives on its own springs; once they
+    // rest, the window is idle again.
+    settle(cx);
+    assert!(pulse_parked(cx));
+}
+
+/// A pulse tick repaints what paints the loop and nothing cached beside it:
+/// the working mark animates while the Pane's retained transcript — the
+/// expensive native text — is reused from its cache on every tick.
+#[gpui::test]
+fn a_pulse_tick_leaves_the_cached_transcript_untouched(cx: &mut TestAppContext) {
+    crate::motion::testing::drive();
+    let (mut core, fake) = cockpit("motion-tick-isolation", 1);
+    let thread = core.threads()[0];
+    core.send(thread, "Inspect progress".into());
+    long_transcripts(&fake);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    tick(cx);
+    tick(cx);
+    settle(cx);
+    assert!(cx.debug_bounds("progress-mark-live").is_some());
+    let prefix = view.read_with(cx, |view, _| {
+        format!("markdown-{}-", view.panes[0].text_namespace())
+    });
+    assert!(
+        mounted_native_texts(&prefix, cx) > 0,
+        "the premise: the transcript's native text is mounted"
+    );
+
+    reset_native_text_renders(cx);
+    for _ in 0..10 {
+        cx.executor()
+            .advance_clock(Duration::from_millis(crate::theme::MOTION_PULSE_TICK_MS));
+        cx.run_until_parked();
+    }
+    assert!(!pulse_parked(cx), "the mark kept the clock running");
+    assert_eq!(
+        native_text_renders(&prefix, cx),
+        0,
+        "ten ticks rebuilt none of the cached transcript's native text"
+    );
+    assert_eq!(display_frames(cx), 0, "and asked the display for nothing");
+}
+
+/// A row appended while the operator watches rises in over
+/// `motion::FADE_IN` and then asks for nothing.
+#[gpui::test]
+fn a_live_appended_row_fades_in_and_then_rests(cx: &mut TestAppContext) {
+    crate::motion::testing::drive();
+    let (mut core, fake) = cockpit("motion-arrival", 1);
+    let thread = core.threads()[0];
+    core.send(thread, "Inspect progress".into());
+    long_transcripts(&fake);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1400.), px(900.)));
+    tick(cx);
+    tick(cx);
+    settle(cx);
+    let arrivals = |cx: &mut gpui::VisualTestContext| {
+        view.read_with(cx, |view, cx| {
+            view.panes[0]
+                .transcript()
+                .map_or(0, |transcript| transcript.read(cx).arrivals())
+        })
+    };
+    fake.streams.borrow()[0]
+        .send(SessionEvent::ToolStarted {
+            id: "arrival-run".into(),
+            name: "Bash".into(),
+            input: serde_json::json!({"command": "cargo test"}),
+        })
+        .unwrap();
+    tick(cx);
+    assert_eq!(arrivals(cx), 1, "the appended row is stamped");
+    assert!(display_frames(cx) > 0, "and rises in");
+    cx.executor()
+        .advance_clock(Duration::from_millis(crate::theme::MOTION_FADE_IN_MS));
+    settle(cx);
+    assert_eq!(display_frames(cx), 0, "landed: no more frames");
+}
+
+fn nav_column_width(cx: &mut gpui::VisualTestContext) -> f32 {
+    f32::from(
+        cx.debug_bounds("nav-column")
+            .expect("the nav column")
+            .size
+            .width,
+    )
+}
+
+/// cmd-b tweens the column's width over `motion::RESIZE` and asks for frames
+/// only while it moves; flipped back mid-flight it turns around from the
+/// width on screen instead of jumping to an end; settled, it asks for none.
+#[gpui::test]
+fn the_nav_collapse_is_interruptible_and_settles_without_frames(cx: &mut TestAppContext) {
+    crate::motion::testing::drive();
+    let (core, _fake) = cockpit("motion-nav", 2);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    settle(cx);
+    assert_eq!(nav_column_width(cx), nav::WIDTH, "first paint: no tween");
+
+    view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(100));
+    assert!(display_frames(cx) > 0, "a moving column asks for frames");
+    let mid = nav_column_width(cx);
+    assert!(
+        mid < nav::WIDTH && mid > nav::RAIL_WIDTH,
+        "mid-flight at 100ms: {mid}"
+    );
+
+    view.update(cx, |view, cx| view.set_nav_collapsed(false, cx));
+    cx.run_until_parked();
+    let turned = nav_column_width(cx);
+    assert!(
+        (turned - mid).abs() < 1.0,
+        "the flip starts from the width on screen: {mid} -> {turned}"
+    );
+
+    cx.executor()
+        .advance_clock(Duration::from_millis(crate::theme::MOTION_RESIZE_MS));
+    display_frames(cx);
+    assert_eq!(nav_column_width(cx), nav::WIDTH, "settled on its target");
+    assert_eq!(display_frames(cx), 0, "and asks for nothing more");
+}
+
+/// Reduced motion: the column lands at its new width at once.
+#[gpui::test]
+fn reduced_motion_snaps_the_nav_collapse(cx: &mut TestAppContext) {
+    crate::motion::testing::drive();
+    let (core, _fake) = cockpit("motion-nav-reduced", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    tick(cx);
+    settle(cx);
+    view.update(cx, |view, cx| view.set_nav_collapsed(true, cx));
+    cx.run_until_parked();
+    assert_eq!(nav_column_width(cx), nav::RAIL_WIDTH);
+    assert_eq!(display_frames(cx), 0);
+}
+
+/// A nav row's hover blends in over `motion::HOVER_FADE`: frames while it
+/// fades, none once it has landed or once the pointer has left and the
+/// blend has returned to rest.
+#[gpui::test]
+fn a_nav_row_hover_fades_and_then_asks_for_no_frames(cx: &mut TestAppContext) {
+    crate::motion::testing::drive();
+    let (core, _fake) = cockpit("motion-hover", 2);
+    let thread = core.threads()[1];
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    settle(cx);
+    let row = debug_bounds(cx, format!("nav-thread-{}", thread.get())).expect("the row");
+    cx.simulate_mouse_move(row.center(), None, gpui::Modifiers::none());
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(50));
+    assert!(display_frames(cx) > 0, "the blend is mid-flight");
+    cx.executor()
+        .advance_clock(Duration::from_millis(crate::theme::MOTION_HOVER_FADE_MS));
+    display_frames(cx);
+    assert_eq!(display_frames(cx), 0, "landed: no more frames");
+
+    cx.simulate_mouse_move(
+        gpui::point(px(900.), px(450.)),
+        None,
+        gpui::Modifiers::none(),
+    );
+    cx.run_until_parked();
+    cx.executor()
+        .advance_clock(Duration::from_millis(crate::theme::MOTION_HOVER_FADE_MS));
+    display_frames(cx);
+    assert_eq!(display_frames(cx), 0, "back at rest: no more frames");
+}

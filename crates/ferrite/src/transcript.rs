@@ -21,7 +21,7 @@ use gpui::{
 };
 
 use self::{
-    rows::{TranscriptRow, TranscriptRows},
+    rows::{RowId, TranscriptRow, TranscriptRows},
     scroll::TranscriptScroll,
 };
 use crate::{
@@ -96,6 +96,10 @@ pub(crate) enum TranscriptEvent {
 pub(crate) struct TranscriptView {
     input: TranscriptInput,
     rows: TranscriptRows,
+    /// Rows appended at the tail while the operator watched, and when:
+    /// they fade in (`motion::FADE_IN`). First paint, a history window
+    /// growing at its head and a row scrolled back into view never do.
+    arrivals: HashMap<RowId, std::time::Instant>,
     scroll: TranscriptScroll,
     rich: TextCache,
     selection_source: TranscriptText,
@@ -161,6 +165,7 @@ impl TranscriptView {
         let mut view = Self {
             input,
             rows,
+            arrivals: HashMap::new(),
             scroll,
             rich,
             selection_source,
@@ -189,12 +194,14 @@ impl TranscriptView {
         // The gap table is part of the rows: a reading-size change
         // re-projects them, re-spacing every row whose gap scales.
         if content_changed || reading_changed {
+            let tail = self.rows.rows().last().map(|row| row.id().clone());
             let delta = self.rows.reconcile(
                 &self.input.blocks,
                 self.input.turn_diff.as_ref(),
                 theme::answer_text_size(self.input.reading_size),
             );
             self.scroll.reconcile(&delta);
+            self.note_arrivals(tail, cx);
         }
         if content_changed || display_changed {
             if disclosure_changed || reading_changed {
@@ -211,6 +218,43 @@ impl TranscriptView {
             }
             cx.notify();
         }
+    }
+
+    /// Stamp the rows that now follow what was the tail: appended live.
+    fn note_arrivals(&mut self, tail: Option<RowId>, cx: &App) {
+        let now = cx.background_executor().now();
+        let spell = crate::motion::FADE_IN.duration();
+        self.arrivals
+            .retain(|_, at| now.saturating_duration_since(*at) < spell);
+        let Some(tail) = tail else {
+            return;
+        };
+        let rows = self.rows.rows();
+        let Some(at) = rows.iter().rposition(|row| *row.id() == tail) else {
+            return;
+        };
+        for row in &rows[at + 1..] {
+            self.arrivals.insert(row.id().clone(), now);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn arrivals(&self) -> usize {
+        self.arrivals.len()
+    }
+
+    /// How far a live-appended row is into its entrance, while it is.
+    fn arrival(&self, row: &RowId, cx: &App) -> Option<f32> {
+        if crate::motion::reduced_motion(cx) {
+            return None;
+        }
+        let at = self.arrivals.get(row)?;
+        let elapsed = cx
+            .background_executor()
+            .now()
+            .saturating_duration_since(*at);
+        (elapsed < crate::motion::FADE_IN.duration())
+            .then(|| crate::motion::FADE_IN.progress_at(elapsed))
     }
 
     #[cfg(test)]
@@ -654,13 +698,16 @@ impl Render for TranscriptView {
         }
         let list = list(
             self.scroll.list_state().clone(),
-            move |index, _window, cx| {
+            move |index, window, cx| {
                 let Some(row) = rows.get(index).cloned() else {
                     return div().into_any_element();
                 };
-                let element = view.update(cx, |view, cx| {
+                let (element, arrival) = view.update(cx, |view, cx| {
                     selection.begin_row();
-                    view.render_row(&row, &selection, Some(cx.entity()), cx)
+                    (
+                        view.render_row(&row, &selection, Some(cx.entity()), cx),
+                        view.arrival(row.id(), cx),
+                    )
                 });
                 // Every row is wrapped: a list item is laid out as its own
                 // root, where a bare row's `w_full` has no parent width to
@@ -671,9 +718,17 @@ impl Render for TranscriptView {
                 // the body's top padding: the list's own top padding
                 // flickers mid-scroll).
                 let gap = row.gap();
-                div()
-                    .w_full()
-                    .px(px(theme::PANE_PAD_X))
+                let wrapper = div().w_full().px(px(theme::PANE_PAD_X));
+                // A row appended live rises into place; its gap does not
+                // move, so the rows above it hold still.
+                let wrapper = match arrival {
+                    Some(t) => {
+                        window.request_animation_frame();
+                        crate::motion::fade_in_at(wrapper, t)
+                    }
+                    None => wrapper,
+                };
+                wrapper
                     .child(components::reading_column(
                         div().px(px(theme::BOX_INSET_X)).pt(px(gap)).child(element),
                     ))

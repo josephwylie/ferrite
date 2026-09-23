@@ -1612,6 +1612,80 @@ pub const NAV_RAIL_ITEMS_TOP: f32 = SPACE_3;
 pub const NAV_PARKED_MAX_SHARE: f32 = 0.5;
 // (end WP-G) — append above this line only
 
+// ======================================== motion
+// Owner: the motion kit (motion.rs, and the call sites that ride it).
+// Edit values and append tokens only inside this section.
+//
+// **Motion is a budget, not a garnish.** The catalog is Zeron's, ported
+// with its numbers (`motion.rs` maps each entry to the Ferrite surface
+// that wears it). The rules every animated surface follows:
+//
+// - **Ease out, and exits softer than entrances.** Entrances rise or settle
+//   a few pixels into place. A menu, a sheet or a fold that closes goes at
+//   once: dismissals are frequent, and the closed state says it all.
+//   Nothing slides a full container height.
+// - **High-frequency interactions get at most a 150ms colour or opacity
+//   blend** (`MOTION_HOVER_FADE_MS`): row hovers, selection moves, keys.
+//   Nothing on them scales, slides or staggers, and a press resolves at
+//   once — the pressed face never waits on the fade.
+// - **Interruptible.** A state the operator can flip back (the nav
+//   collapse, a hover) retargets from where it is, never restarts.
+// - **No entrance on first paint.** Only a change the operator watched
+//   happen animates; a restored layout or scroll-back arrives in place.
+// - **Every animation has a static end state** that says the same thing
+//   without motion. Reduced motion (the system flag, `cx.reduce_motion()`)
+//   snaps a one-shot to its end and holds a loop at its start.
+// - **A window with nothing animating schedules no frame.** Loops ride one
+//   shared, throttled pulse clock (`MOTION_PULSE_TICK_MS`), leased by the
+//   views that paint them; it parks when the last lease lapses.
+
+/// Zeron's signature entrance curve, CSS `cubic-bezier(0.16, 1, 0.3, 1)`.
+pub const MOTION_EASE_OUT_EXPO: [f32; 4] = [0.16, 1.0, 0.3, 1.0];
+/// CSS `ease-out`: width and height transitions.
+pub const MOTION_EASE_OUT: [f32; 4] = [0.0, 0.0, 0.58, 1.0];
+/// CSS `ease`: quick fades, menu and sheet entrances.
+pub const MOTION_EASE: [f32; 4] = [0.25, 0.1, 0.25, 1.0];
+/// CSS `transition-colors`' default curve: every hover blend.
+pub const MOTION_EASE_STANDARD: [f32; 4] = [0.4, 0.0, 0.2, 1.0];
+/// A contextual icon swap's curve (a spring with no bounce, approximated).
+pub const MOTION_EASE_ICON: [f32; 4] = [0.2, 0.0, 0.0, 1.0];
+/// `fade-in`: 500ms, rising 4px into place. Live-appended blocks only.
+pub const MOTION_FADE_IN_MS: u64 = 500;
+pub const MOTION_FADE_IN_RISE: f32 = 4.0;
+/// `fade-quick`: 150ms, opacity only.
+pub const MOTION_FADE_QUICK_MS: u64 = 150;
+/// `menu-in`: 140ms, settling 2px away from its opener (Zeron's 0.96 scale
+/// has no div transform here; the shift and fade carry it). A menu closes
+/// at once: no exit.
+pub const MOTION_MENU_IN_MS: u64 = 140;
+pub const MOTION_MENU_SHIFT: f32 = 2.0;
+/// The opacity a menu starts from: it is already legible on its first frame.
+pub const MOTION_MENU_FROM_OPACITY: f32 = 0.3;
+/// `dialog-in`: 180ms, rising 2px (the 0.96 scale approximated likewise).
+pub const MOTION_DIALOG_IN_MS: u64 = 180;
+pub const MOTION_DIALOG_RISE: f32 = 2.0;
+/// Width and height transitions (the nav collapse): 200ms ease-out.
+pub const MOTION_RESIZE_MS: u64 = 200;
+/// A disclosure's body opening or closing: 180ms ease-out.
+pub const MOTION_COLLAPSE_MS: u64 = 180;
+/// A disclosure chevron turning: 150ms.
+pub const MOTION_CHEVRON_MS: u64 = 150;
+/// The hover blend: 150ms on `MOTION_EASE_STANDARD`.
+pub const MOTION_HOVER_FADE_MS: u64 = 150;
+/// A contextual icon swap (send ⇄ stop): 300ms, the leaving glyph shrinking
+/// to a quarter as the arriving one grows from it.
+pub const MOTION_ICON_SWAP_MS: u64 = 300;
+pub const MOTION_ICON_SWAP_SCALE: f32 = 0.25;
+/// Where the nav's content fades up from while the column changes width,
+/// so the tree and the rail never pop in at full ink.
+pub const MOTION_NAV_CONTENT_FROM: f32 = 0.35;
+/// The pulse clock: one ~30fps tick shared by every loop in the window.
+/// A view stays on it `MOTION_PULSE_LEASE_MS` after its last paint of a
+/// loop, so an unmounted loader drops off and the clock parks.
+pub const MOTION_PULSE_TICK_MS: u64 = 33;
+pub const MOTION_PULSE_LEASE_MS: u64 = 300;
+// (end motion) — append above this line only
+
 #[cfg(test)]
 mod tests {
     use super::*;

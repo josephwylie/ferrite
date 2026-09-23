@@ -46,7 +46,7 @@ use gpui::{
 
 use crate::components;
 use crate::icons::{self, icon};
-use crate::pointer::{Pointer, PointerPressed};
+use crate::pointer::{Pointer, PointerFaded, PointerPressed};
 use crate::theme::*;
 
 /// The nav's two widths—286px, and the platform rail cmd-b folds it to.
@@ -283,6 +283,7 @@ fn lead(glyph: impl IntoElement) -> Div {
 /// Nothing is clipped here — the tree scrolls itself.
 pub fn shell(collapsed: bool) -> Div {
     div()
+        .debug_selector(|| "nav-column".into())
         .flex()
         .flex_col()
         .flex_shrink_0()
@@ -1313,10 +1314,13 @@ fn row_frame(id: (&'static str, usize), height: f32, selected: bool) -> Stateful
         .py(px(ROW_PAD_Y))
         .gap(px(ROW_GAP))
         .rounded(px(NAV_ROW_R));
+    // The hover face fades in and out (`motion::HOVER_FADE`): the pointer
+    // sweeps these rows constantly, so a snap would flicker the column.
+    let key = SharedString::from(format!("{}-{}", id.0, id.1));
     let frame = if selected {
-        frame.bg(rgb(FILL)).hover_carried().press_row()
+        frame.hover_carried_faded(key).press_row()
     } else {
-        frame.hover_row().press_row()
+        frame.hover_row_faded(key).press_row()
     };
     // Rows are draggable into Groups, so they wear the open hand rather than
     // the pointer: the drag is the row's second verb, and the only one the

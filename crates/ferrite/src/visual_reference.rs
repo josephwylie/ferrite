@@ -430,6 +430,10 @@ fn render(
         cx.advance_clock(std::time::Duration::from_millis(150));
         cx.run_until_parked();
         cx.update_window(window.into(), |_, window, cx| {
+            // There is no platform frame loop here: deliver the frames the
+            // last draw asked for, so eased state changes (a disclosure's
+            // turn, a fold) land on the clock this loop steps.
+            window.simulate_next_frame(cx);
             let _ = window.draw(cx);
         })
         .unwrap();

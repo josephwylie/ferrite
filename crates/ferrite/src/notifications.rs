@@ -235,7 +235,13 @@ impl Bell {
             .trigger(trigger(unread, waiting, self.open))
             .open(self.open)
             .on_open_change(move |open, window, cx| on_open(*open, window, cx))
-            .content(move |_, _, _| panel(&rows, handle.clone()))
+            .content(move |_, _, _| {
+                crate::motion::menu_in(
+                    "notifications-panel-in",
+                    panel(&rows, handle.clone()),
+                    crate::motion::Opens::Down,
+                )
+            })
             .into_any_element()
     }
 }

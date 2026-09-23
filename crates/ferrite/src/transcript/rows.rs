@@ -104,7 +104,6 @@ pub(crate) struct TranscriptRow {
 
 impl TranscriptRow {
     /// Stable identity used by list reconciliation and element keys.
-    #[cfg(test)]
     pub(crate) fn id(&self) -> &RowId {
         &self.id
     }
