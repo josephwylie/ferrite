@@ -3196,7 +3196,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         queue_height,
         empty,
         attachments,
-        mut actions,
+        actions,
         background,
         menu,
         mode,
@@ -7351,9 +7351,6 @@ mod tests {
     // (end WP-C)
 
     // ---- WP-D tests (append above the end line)
-    /// With text in the line the row says what Enter does now: behind a
-    /// running turn it queues, not sends.
-
     /// The `❯` says where keys land: accent only while the line holds the
     /// keyboard, attention when that line answers a Decision.
     #[test]
