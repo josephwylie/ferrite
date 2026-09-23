@@ -647,6 +647,36 @@ pub fn ghost_button(id: impl Into<ElementId>, label: impl Into<SharedString>, cx
         )
 }
 
+/// A text-only control with no ground at all (`Back to Main`): `CONTROL_H`,
+/// UI `FS_UI` `W_BODY` `TEXT_MUTED`, brightening to `TEXT` under the
+/// pointer. For a way out that must stay quieter than the line it ends.
+pub fn quiet_button(id: impl Into<ElementId>, label: impl Into<SharedString>, cx: &App) -> Button {
+    let none: gpui::Hsla = rgba(theme::TRANSPARENT).into();
+    button(id)
+        .custom(
+            ButtonCustomVariant::new(cx)
+                .color(none)
+                .foreground(rgb(theme::TEXT_MUTED).into())
+                .hover(none)
+                .active(none),
+        )
+        .group(QUIET_BUTTON_GROUP)
+        .h(px(theme::CONTROL_H))
+        .px(px(theme::CONTROL_PAD_X))
+        .child(
+            text_ui()
+                .font_weight(theme::W_BODY)
+                .text_color(rgb(theme::TEXT_MUTED))
+                .group_hover(QUIET_BUTTON_GROUP, |style| {
+                    style.text_color(rgb(theme::TEXT))
+                })
+                .child(label.into()),
+        )
+}
+
+/// `quiet_button`'s hover reaches its label through this group.
+const QUIET_BUTTON_GROUP: &str = "quiet-button";
+
 /// A choice chip's ink, ground (`0xRRGGBB`) and edge (`0xRRGGBBAA`). The
 /// selection is neutral — a `FILL` chip with the strong hairline — because
 /// the accent is only for focus, links, the caret and the primary button

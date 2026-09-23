@@ -502,3 +502,151 @@ fn unread_breathing_rides_the_pulse_clock_and_rests_under_reduced_motion(cx: &mu
     );
     assert_eq!(cx.update(|window, cx| window.simulate_next_frame(cx)), 0);
 }
+
+/// C6: with two cells waiting on a board, only the cell `y` would answer
+/// shows the keys, and `y` answers exactly that cell.
+#[gpui::test]
+fn only_the_answer_target_cell_shows_its_keys_and_y_answers_it(cx: &mut TestAppContext) {
+    let (view, fake, cx, _group) = board("board-answer-target", 12, cx);
+    assert_eq!(
+        cx.update(|window, cx| view.read(cx).level_now(window)),
+        Level::Instruments
+    );
+    fake.streams.borrow()[1]
+        .send(decision("first-wait"))
+        .unwrap();
+    fake.streams.borrow()[2]
+        .send(decision("second-wait"))
+        .unwrap();
+    view.update(cx, |view, cx| {
+        view.focus_pane(0);
+        cx.notify();
+    });
+    tick(cx);
+    let (target, keyed) = view.update_in(cx, |view, window, cx| {
+        let target = view.key_target().expect("a Thread waits");
+        let keyed: Vec<_> = (0..view.panes.len())
+            .filter(|index| {
+                view.decide_keycaps(*index, Level::Instruments, window, cx)
+                    .is_some()
+            })
+            .filter_map(|index| view.panes[index].thread())
+            .collect();
+        (target, keyed)
+    });
+    assert_eq!(keyed, [target], "the keys show on the target's cell alone");
+    let target_rect = view.update_in(cx, |view, window, _| {
+        let index = view.pane_for(target).unwrap();
+        view.pane_rects(window)
+            .into_iter()
+            .find(|(at, _)| *at == index)
+            .unwrap()
+            .1
+    });
+    let deny = cx.debug_bounds("decision-deny").expect("the target's n");
+    assert!(
+        deny.left() >= px(target_rect.x)
+            && deny.right() <= px(target_rect.x + target_rect.w)
+            && deny.top() >= px(target_rect.y)
+            && deny.bottom() <= px(target_rect.y + target_rect.h),
+        "{deny:?} sits in the target cell {target_rect:?}"
+    );
+    let expected = view.read_with(cx, |view, _| {
+        view.cockpit
+            .thread(target)
+            .unwrap()
+            .pending()
+            .unwrap()
+            .id
+            .clone()
+    });
+    // ⌘D lands on the answer target; its keys stay on that one cell.
+    cx.simulate_keystrokes("cmd-d");
+    tick(cx);
+    let keyed = view.update_in(cx, |view, window, cx| {
+        (0..view.panes.len())
+            .filter(|index| {
+                view.decide_keycaps(*index, Level::Instruments, window, cx)
+                    .is_some()
+            })
+            .filter_map(|index| view.panes[index].thread())
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(keyed, [target], "focus on the target keeps one keyed cell");
+    cx.simulate_keystrokes("y");
+    tick(cx);
+    assert!(
+        matches!(
+            fake.answered.borrow().last(),
+            Some((id, DecisionAnswer::Allow { .. })) if *id == expected
+        ),
+        "y answered the cell that showed it: {:?}",
+        fake.answered.borrow()
+    );
+    assert_eq!(fake.answered.borrow().len(), 1);
+}
+
+/// Rule 2.8.7: at the group9 geometry a waiting L1 cell's Decision claims
+/// its natural height — `n Deny` sits whole inside the block.
+#[gpui::test]
+fn a_group_cell_decision_never_clips_its_deny_row(cx: &mut TestAppContext) {
+    let (view, fake, cx, _group) = board("board-deny-whole", 9, cx);
+    assert_eq!(
+        cx.update(|window, cx| view.read(cx).level_now(window)),
+        Level::Transcript
+    );
+    fake.streams.borrow()[1]
+        .send(decision("whole-deny"))
+        .unwrap();
+    tick(cx);
+    let island = cx.debug_bounds("question-island").expect("the Decision");
+    let deny = cx.debug_bounds("decision-deny").expect("its deny row");
+    assert!(
+        island.contains(&deny.origin) && island.contains(&deny.bottom_right()),
+        "{deny:?} inside {island:?}"
+    );
+    assert!(deny.size.height >= px(crate::theme::MENU_ROW_H));
+}
+
+/// Rule 2.8.6: the digit one past a question's options arms its one answer
+/// line — typing lands there, not in the Composer — and Send carries it.
+#[gpui::test]
+fn the_next_digit_arms_the_own_answer_line(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("own-answer-digit", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1280.), px(900.)));
+    fake.streams.borrow()[0].send(question("armed")).unwrap();
+    tick(cx);
+    view.update_in(cx, |view, window, cx| {
+        let focus = view.panes[0].composer.read(cx).focus_handle(cx);
+        window.focus(&focus, cx);
+    });
+    tick(cx);
+    cx.simulate_keystrokes("3");
+    tick(cx);
+    cx.simulate_input("mine");
+    tick(cx);
+    assert_eq!(composer_text(&view, cx), "", "the Composer keeps its line");
+    let (thread, serial) = view.read_with(cx, |view, _| {
+        let thread = view.panes[0].thread().unwrap();
+        let serial = view
+            .cockpit
+            .thread(thread)
+            .unwrap()
+            .activity()
+            .pending_decisions()[0]
+            .handle
+            .serial;
+        (thread, serial)
+    });
+    let send = bounds(cx, format!("request-submit-{}-{serial}", thread.get()));
+    cx.simulate_click(send.center(), gpui::Modifiers::none());
+    tick(cx);
+    let answered = fake.answered.borrow();
+    let Some((_, DecisionAnswer::Questions { answers })) = answered.last() else {
+        panic!("the question was answered: {answered:?}")
+    };
+    assert!(answers[0].picks.is_empty());
+    assert_eq!(answers[0].other.as_deref(), Some("mine"));
+}

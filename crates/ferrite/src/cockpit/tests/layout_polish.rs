@@ -440,7 +440,9 @@ fn group_question_uses_measured_space_and_restores_inline_form(cx: &mut TestAppC
             "scroll position must not affect the fit decision"
         );
     }
-    let draft = "Keep the entered values.\nShow the recovery action.\nRetain the selected option.\nRestore the form afterward.";
+    // The Decision's rows are list rows (28px), so only a Composer grown to
+    // its full height leaves the body too short for the form.
+    let draft = "Keep the entered values.\nShow the recovery action.\nRetain the selected option.\nRestore the form afterward.\nKeep the focus where it was.\nName the expired session.\nOffer to sign in again.\nThen resume the form.";
     view.update(cx, |view, cx| {
         view.panes[0]
             .composer

@@ -747,11 +747,11 @@ fn an_l2_approval_cell_keeps_its_composer(cx: &mut TestAppContext) {
     assert_eq!(composer_text(&view, cx), "hold on");
 }
 
-/// A question's own-answer field is a full control: `CONTROL_H` tall, its
-/// edge and padding hanging left of the option labels' column so its text
-/// starts where they do.
+/// A question's own answer is not a second field (rule 2.8.6): one bare
+/// line, a list line's text height, its text starting on the option
+/// labels' column — the glyph column holds its digit as it holds theirs.
 #[gpui::test]
-fn the_own_answer_field_is_a_full_control_on_the_label_column(cx: &mut TestAppContext) {
+fn the_own_answer_is_one_bare_line_on_the_label_column(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("own-answer-field", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1280.), px(900.)));
@@ -773,15 +773,15 @@ fn the_own_answer_field_is_a_full_control_on_the_label_column(cx: &mut TestAppCo
         ))
         .expect("the own-answer field");
     let choice = cx.debug_bounds("question-choice-0-0").expect("an option");
-    assert_eq!(field.size.height, px(crate::theme::CONTROL_H));
+    assert_eq!(field.size.height, px(crate::theme::QUESTION_OTHER_H));
     let labels = choice.left()
         + px(crate::theme::DECISION_ROW_PAD_X
-            + crate::theme::KBD_H
+            + crate::theme::GLYPH_BOX
             + crate::theme::DECISION_ROW_INNER_GAP);
     assert_eq!(
-        field.left() + px(crate::theme::QUESTION_FIELD_PAD_X + 1.),
+        field.left(),
         labels,
-        "the field's text starts on the labels' column"
+        "the line's text starts on the labels' column"
     );
 }
 
@@ -1187,7 +1187,10 @@ fn the_ui_and_code_faces_follow_what_the_text_is(cx: &mut TestAppContext) {
             "keys",
             ui(crate::components::key_combo("cmd-F", crate::theme::TEXT)),
         ),
-        ("command well", ui(crate::decision::well(gpui::div()))),
+        (
+            "command well",
+            ui(crate::decision::well(false, gpui::div())),
+        ),
     ] {
         assert_eq!(family.as_deref(), Some(FONT_CODE), "{what} is code");
     }

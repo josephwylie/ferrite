@@ -195,13 +195,15 @@ pub const RUNNING_HALO: u32 = 0x8cb59d59;
 /// `#cbb280` — a Decision (a muted ochre, 42%): the status dot, the signal line, the Pane's edge,
 /// the Decision card's mark.
 pub const ATTENTION: u32 = 0xcbb280;
-/// A Decision card's ground.
-pub const ATTENTION_WASH: u32 = 0xcbb28014;
-/// A Decision card's 1px inset ring. An inset ring takes no layout.
+/// A waiting Pane's edge on a board (C6): ochre at 35%, so the one
+/// answer-target cell at full `ATTENTION` stands out, and focus beside it
+/// stays readable.
 pub const ATTENTION_EDGE: u32 = 0xcbb28059;
 /// `#d29089` — blocked or failed (a dusty red, 45%): the status dot, the signal line, the
 /// Pane's edge, diff `−`, the word "failed".
 pub const BLOCKED: u32 = 0xd29089;
+/// A closed Pane's edge on a board: `BLOCKED` at 35%.
+pub const BLOCKED_EDGE: u32 = 0xd2908959;
 /// Blocked as a one-line ground (a refused drop, a destructive control
 /// under the pointer); never a multi-line wash (`DIFF_REMOVED_WASH`).
 pub const BLOCKED_WASH: u32 = 0xd290891f;
@@ -240,6 +242,8 @@ pub mod words {
     pub const PARKED: &str = "parked";
     /// Ferrite cannot observe it.
     pub const UNAVAILABLE: &str = "unavailable";
+    /// An answer is on its way to the provider.
+    pub const SENDING: &str = "sending";
 }
 
 /// The ink a lexicon word wears when it leads a line: `needs you` is
@@ -1583,39 +1587,53 @@ pub const MENU_PATH_TAIL: usize = 48;
 // Owner: WP-F (decision.rs, subagents.rs, the Decision card and keycaps.)
 // Edit values and append tokens only inside this section.
 
-/// The Decision card (approvals, questions, forms, links — Main's and a
-/// Subagent's alike): a `RAISED` block under an `ATTENTION_WASH` ground with
-/// a 1px `ATTENTION_EDGE` (35%) edge, in the reading column above the
-/// Composer. Mono head (`◆` drawn, the kind word `W_LABEL` `ATTENTION`),
-/// prose question (Geist `FS_PROSE` `W_STRONG` `TEXT_STRONG`), option rows
-/// that each show the one key that picks them, a mono footer. Colour is
-/// state: Deny is not red; the card's amber is the only hue it carries.
-/// 12px inline and 10px block padding; the block step (12) between sections.
+/// The Decision block (approvals, questions, forms, links — Main's and a
+/// Subagent's alike, rule 2.8): `RAISED`, one 1px `COMPOSER_EDGE`,
+/// `R_BLOCK`, in the reading column. Docked on a live Composer it merges
+/// into it — one outlined block: the Decision section, one full-width
+/// seam (the Composer's own top edge, held in layout so nothing moves),
+/// the Composer's mono input line — so there is no gap and no second
+/// outline. Ochre is only on `◆` and the kind word
+/// (`◆ approval · Bash`, `FS_SM`, the word `W_BODY` `ATTENTION`, each
+/// detail after a `TEXT_FAINT` `·` in `TEXT_MUTED`): no wash, no state
+/// edge. Prose question (Geist `FS_PROSE` `W_STRONG` `TEXT_STRONG`), option
+/// rows that each show the one key that picks them. Deny is not red. 12px
+/// inline and 10px block padding; the block step (12) between sections.
 /// The head names the kind and nothing else unless a status adds something
-/// (`sending…`, `work continues`); a card is waiting by being there.
+/// (`sending`, `work continues`); a card is waiting by being there. Every
+/// section keeps its natural height — nothing clips; when the Pane runs
+/// short the prose goes first, then the command well gives way down to one
+/// line.
 pub const DECISION_PAD_X: f32 = SPACE_3;
 pub const DECISION_PAD_Y: f32 = 10.0;
 pub const DECISION_GAP: f32 = SPACE_3;
-/// The head's drawn diamond: 8px in a `LH_META` line.
+/// The head's drawn diamond: 8px in the glyph box of a `LH_META` line.
 pub const DECISION_MARK: f32 = SPACE_2;
-/// From the card to the Composer below it, and between stacked cards.
-pub const DECISION_DOCK_GAP: f32 = SPACE_2;
-/// An option row: 8px inline, 4px block padding around a `LH_PROSE_SM` line
-/// (26px with no description), 2px apart; its keycap sits 8px before the
-/// label. Hover is `FILL` (the row rests on `RAISED`), selected is `FILL`
-/// plus a trailing `ACCENT` check — never a focus-coloured border.
+/// An option row (rule 2.8.4): a title-only row is a list row,
+/// `MENU_ROW_H` — `LH_UI` plus 4px above and below — and a description
+/// adds `LH_PROSE_SM` a line; rows sit flush. It hangs 8px left of the
+/// card's content so its hover ground reaches around the keycap, which is
+/// centred on the glyph column; the title starts 8px after the glyph box,
+/// on the text column. Hover is `RAISED_2`, selected is `FILL` plus a
+/// trailing `ACCENT` check — never a focus-coloured border.
 pub const DECISION_ROW_PAD_X: f32 = SPACE_2;
-pub const DECISION_ROW_PAD_Y: f32 = SPACE_1;
-pub const DECISION_ROW_GAP: f32 = SPACE_0_5;
-pub const DECISION_ROW_INNER_GAP: f32 = SPACE_2;
+pub const DECISION_ROW_PAD_Y: f32 = (MENU_ROW_H - LH_UI) / 2.0;
+pub const DECISION_ROW_GAP: f32 = 0.0;
+pub const DECISION_ROW_INNER_GAP: f32 = GUTTER_GAP;
 /// The selected row's trailing check.
 pub const DECISION_CHECK: f32 = SPACE_3;
 /// A question's text to its rows, and one question to the next.
 pub const DECISION_QUESTION_GAP: f32 = SPACE_2;
 pub const DECISION_QUESTIONS_GAP: f32 = SPACE_4;
-/// The command well: `GROUND`, 6/10 padding, scrolling past 160px.
+/// The command well (C5): `RAISED_2` — code one step up from its card,
+/// never darker than the Pane — `R_CONTROL`, 6/10 padding, mono
+/// `TEXT_STRONG`, a shell command after a `TEXT_FAINT` `$ ` that copy
+/// leaves out. It scrolls past 160px, and when the Pane is short it is
+/// the one section that shrinks, never below one line
+/// (`DECISION_WELL_MIN_H`).
 pub const DECISION_WELL_PAD_X: f32 = 10.0;
 pub const DECISION_WELL_PAD_Y: f32 = SPACE_1_5;
+pub const DECISION_WELL_MIN_H: f32 = LH_CODE + 2.0 * DECISION_WELL_PAD_Y;
 pub const DECISION_INPUT_MAX_H: f32 = 160.0;
 /// A question body's scroll cap inside the card (head and footer stay
 /// pinned); container-relative, never a window fraction.
@@ -1623,42 +1641,39 @@ pub const DECISION_BODY_MAX_H: f32 = 320.0;
 /// Below a 360px Pane the body caps at two described option rows and
 /// scrolls, so the head and the answer row always stay in reach.
 pub const DECISION_SHORT_PANE_H: f32 = 360.0;
-pub const DECISION_SHORT_BODY_MAX_H: f32 =
-    2.0 * (2.0 * LH_PROSE_SM + 2.0 * DECISION_ROW_PAD_Y) + DECISION_ROW_GAP;
+pub const DECISION_SHORT_BODY_MAX_H: f32 = 2.0 * (MENU_ROW_H + LH_PROSE_SM) + DECISION_ROW_GAP;
 /// The scroll gutter a body keeps free for its thumb.
 pub const DECISION_SCROLL_GUTTER: f32 = SPACE_1;
-/// A question's "type your own answer" field: the sheet field recipe
-/// (`PANE`, `INPUT_EDGE`, `R_CONTROL`, `CONTROL_H`, mono `FS_UI`) with 6px
-/// inline padding, its edge and padding hanging left of the option labels'
-/// column so its text starts on it.
-pub const QUESTION_FIELD_PAD_X: f32 = SPACE_1_5;
+/// A question's own answer (rule 2.8.6) is not a second field: it is one
+/// bare mono input line on the text column, `LH_UI` high, placeholder
+/// `Or type your own answer…` in `TEXT_MUTED`; the digit one past the last
+/// option arms it.
+pub const QUESTION_OTHER_H: f32 = LH_UI;
+/// The primary's `↵`: `ON_ACCENT` at 70%, so the key reads under its label.
+pub const SEND_KEY_INK: u32 = 0xffffffb3;
 /// An L2 keycap pair (`y allow`): key, 4px, verb; pairs 12px apart.
 pub const DECISION_KEY_GAP: f32 = SPACE_1;
 pub const DECISION_KEYS_GAP: f32 = SPACE_3;
-/// The L2 Decision body: the cell's padding, 6px between its lines.
+/// The L2 Decision body: 6px between its lines, `GAP_BLOCK` above the
+/// Composer line.
 pub const DECISION_L2_GAP: f32 = SPACE_1_5;
 
-/// Subagent tabs: Ferrite's own row of 20px tabs packed with no gap, 8px
-/// inline padding, no edge and no rule under the row; the active tab a
-/// `FILL` pill; labels truncate at 112px. A mark sits 6px after its label;
-/// the `+N` overflow keeps 4px either side.
+/// Subagent tabs (rule 2.2.4-5): their own `SUBJECT_STRIP_H` row at the
+/// Pane's top — under the Group head in a board cell — closed by a
+/// permanent `HAIRLINE` the body clips at. 20px tabs packed with no gap
+/// and centred in the row, 8px inline padding, no edge; the active tab a
+/// `FILL` pill in `TEXT_STRONG` (`FILL_HOVER` under the pointer), the
+/// others `TEXT_MUTED` blending to `TEXT` with no ground. Main's label sits
+/// on the text column. Labels truncate at 112px. A still `STATUS_DOT`
+/// leads a subagent's label 6px before it, in a slot every tab reserves —
+/// waiting `ATTENTION` > failed `BLOCKED` > working `RUNNING` — so a tab
+/// never changes width with its state; the `+N` overflow uses the same
+/// slot.
 pub const SUBJECT_TAB_PAD_X: f32 = SPACE_2;
 pub const SUBJECT_TAB_GAP: f32 = SPACE_1;
 pub const SUBJECT_TAB_INNER_GAP: f32 = SPACE_1_5;
 pub const SUBJECT_LABEL_MAX_W: f32 = 112.0;
-/// The strip's row: the 20px pills with 2px of air above and below.
-pub const SUBJECT_STRIP_H: f32 = CHIP_H + 2.0 * SPACE_0_5;
-/// A working tab's busy dots: three 2px dots 2px apart (10px, no slack),
-/// lifting 2px on a 650ms loop; still under reduced motion.
-pub const BUSY_DOT_D: f32 = SPACE_0_5;
-pub const BUSY_DOT_GAP: f32 = SPACE_0_5;
-pub const BUSY_DOT_LIFT: f32 = SPACE_0_5;
-pub const BUSY_DOTS_MS: u64 = 650;
-pub const BUSY_DOTS_W: f32 = 3.0 * BUSY_DOT_D + 2.0 * BUSY_DOT_GAP;
-/// The one needs-you dot: a waiting tab and the tab overflow.
-pub const ATTENTION_DOT: f32 = 5.0;
-/// A failed agent's drawn `✗`, in `BLOCKED`, beside its label.
-pub const SUBJECT_FAILED_MARK: f32 = SPACE_2;
+pub const SUBJECT_STRIP_H: f32 = PANE_HEAD_H;
 // (end WP-F) — append above this line only
 
 // ======================================== WP-G · nav
@@ -1885,6 +1900,28 @@ pub const MOTION_PULSE_LEASE_MS: u64 = 300;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Rule 2.2.4: no state tints a ground. The Decision's wash is retired,
+    /// and nothing in the crate may bring it back.
+    #[test]
+    fn no_source_file_names_the_retired_attention_wash() {
+        let retired = ["ATTENTION", "_WASH"].concat();
+        let mut stack = vec![std::path::PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src"
+        ))];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_some_and(|ext| ext == "rs") {
+                    let source = std::fs::read_to_string(&path).unwrap();
+                    assert!(!source.contains(&retired), "{path:?} names {retired}");
+                }
+            }
+        }
+    }
 
     /// Every lexicon word, so the casing rule below covers them all.
     const LEXICON: &[&str] = &[

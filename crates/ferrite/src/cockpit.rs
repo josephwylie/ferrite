@@ -8450,6 +8450,8 @@ impl CockpitView {
             provider_mark: open
                 .map(|thread| thread.provider())
                 .filter(|provider| Some(*provider) != self.board_provider()),
+            answer_target: self.grid_board() && self.key_target() == Some(thread),
+            decision_joined: false,
         };
         // Only L1 draws a Composer to hang a popover over (#23), a model
         // picker (#25) or usage meter; the wall answers with keys alone.
@@ -8462,16 +8464,33 @@ impl CockpitView {
                     transcript.read(cx).received_reasoning_is_visible(&caption)
                 })
             });
+        let attachments = Composer::attachments(&pane.composer, &pane.preview, cx);
+        let background = (level != Level::Wall)
+            .then(|| self.background_chips(index, cx))
+            .flatten();
+        // The docked Decision merges into the Composer when that Composer
+        // is a live block with nothing floating between them (rule 2.8.1).
+        let joins = pane.is_main()
+            && attachments.is_none()
+            && background.is_none()
+            && (!self.grid_board() || focused);
+        let activity_decisions = (level != Level::Wall)
+            .then(|| self.activity_decisions(index, joins, window, cx))
+            .flatten();
+        let expand_question = level != Level::Wall
+            && self.question_needs_expansion(index, level == Level::Instruments);
+        let mut facts = facts;
+        facts.decision_joined = joins
+            && activity_decisions.is_some()
+            && !(level == Level::Instruments && expand_question);
         let wiring = pane::PaneWiring {
             transcript: retained_transcript,
             received_reasoning_visible,
-            attachments: Composer::attachments(&pane.composer, &pane.preview, cx),
+            attachments,
             composer_actions: (level != Level::Wall)
                 .then(|| self.composer_actions(index, cx))
                 .flatten(),
-            background: (level != Level::Wall)
-                .then(|| self.background_chips(index, cx))
-                .flatten(),
+            background,
             menu: l1.then(|| self.popover_element(index, cx)).flatten(),
             model_picker: l1.then(|| self.model_picker(index, cx)).flatten(),
             usage_meter: l1.then(|| self.usage_meter(index, cx)).flatten(),
@@ -8480,18 +8499,15 @@ impl CockpitView {
                 .flatten(),
             mode_picker: l1.then(|| self.mode_picker(index, cx)).flatten(),
             decide: (level != Level::Wall)
-                .then(|| self.decide_keycaps(index, level, cx))
+                .then(|| self.decide_keycaps(index, level, window, cx))
                 .flatten(),
             // The title is the Pane's handle at every size: a drag moves a
             // grouped Pane, a double-click renames it — an L2 cell with no
             // handle could not be rearranged at all.
             title: Some(self.activity_title(index, cx)),
             agents: l1.then(|| self.subject_strip(index, window, cx)).flatten(),
-            activity_decisions: (level != Level::Wall)
-                .then(|| self.activity_decisions(index, window, cx))
-                .flatten(),
-            expand_question: level != Level::Wall
-                && self.question_needs_expansion(index, level == Level::Instruments),
+            activity_decisions,
+            expand_question,
             question_measurement: l1
                 .then(|| self.activity_question_measurement(index, cx))
                 .flatten(),
@@ -8764,24 +8780,48 @@ impl CockpitView {
         }
     }
 
+    /// The Thread `y`/`n`/`a` act on right now: the focused Thread when
+    /// it waits, else the answer target (the Needs-you strip's first row) —
+    /// exactly what `answer` picks, so the one cell that shows the keys is
+    /// the one they answer.
+    pub(crate) fn key_target(&self) -> Option<ThreadId> {
+        match self.focused_thread() {
+            Some(thread)
+                if self
+                    .cockpit
+                    .thread(thread)
+                    .and_then(|open| open.pending())
+                    .is_some() =>
+            {
+                Some(thread)
+            }
+            _ => self.cockpit.answer_target(),
+        }
+    }
+
     /// The L2 Decision cell's keycaps (#26), each press wired to the exact
     /// decide verb its key runs — the mouse presses the keycap it depicts.
-    /// Only keys that act are drawn (`y` where the provider allows it, `n`
-    /// where it allows a deny), and only where the cell draws its own
-    /// compact card: at L1 every request is the overlay card, whose rows
-    /// carry their keys. Presses land on the clicked Pane first (the
-    /// keyboard may be elsewhere) and stop propagation so the Pane's own
-    /// press handler cannot re-target them.
+    /// Only the key target's cell draws them (C6: a key hint shows only
+    /// where the key would act), and only keys that act (`y` where the
+    /// provider allows it, `n` where it allows a deny, `a` while a standing
+    /// answer is bound): `y allow  n deny  a always`. A narrow cell drops
+    /// verbs whole from the right, down to `y n a`. Presses land on the
+    /// clicked Pane first (the keyboard may be elsewhere) and stop
+    /// propagation so the Pane's own press handler cannot re-target them.
     fn decide_keycaps(
         &self,
         index: usize,
         level: Level,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         if level != Level::Instruments || !self.l2_decision_card(index) {
             return None;
         }
         let thread = self.panes[index].thread()?;
+        if self.key_target() != Some(thread) {
+            return None;
+        }
         let request = self
             .cockpit
             .thread(thread)?
@@ -8791,6 +8831,44 @@ impl CockpitView {
             .find(|request| request.subject == Some(ferrite_core::activity::Subject::Main))?
             .clone();
         let policy = request.decision.policy;
+        let mut keys: Vec<(Answer, &'static str)> = Vec::new();
+        if policy.allow && !policy.interaction_required {
+            keys.push((Answer::Allow, "allow"));
+        }
+        if policy.deny {
+            keys.push((Answer::Deny, "deny"));
+        }
+        if policy.allow
+            && !policy.interaction_required
+            && request.decision.standing_answer().is_some()
+        {
+            keys.push((Answer::Always, "always"));
+        }
+        // Which pairs keep their verb: from the left, while they fit the
+        // cell's text width; the rest are bare keys.
+        let width = self
+            .pane_rects(window)
+            .into_iter()
+            .find(|(at, _)| *at == index)
+            .map_or(0., |(_, rect)| rect.w)
+            - 2. * (crate::theme::PANE_PAD_X + 1.);
+        let key_w = crate::theme::KBD_H;
+        let bare = keys.len() as f32 * key_w
+            + keys.len().saturating_sub(1) as f32 * crate::theme::DECISION_KEYS_GAP;
+        let mut used = bare;
+        let mut verbs = 0;
+        for (_, verb) in &keys {
+            let extra = crate::theme::DECISION_KEY_GAP
+                // A generous Geist advance, so a verb is dropped before
+                // it could be clipped.
+                + verb.len() as f32 * crate::theme::FS_SM * 0.6
+                + crate::theme::SPACE_1;
+            if used + extra > width {
+                break;
+            }
+            used += extra;
+            verbs += 1;
+        }
         let wire = |keycap: Stateful<Div>, answer: Answer, cx: &mut Context<Self>| {
             let request = request.clone();
             keycap.on_mouse_down(
@@ -8805,11 +8883,14 @@ impl CockpitView {
             )
         };
         let mut cluster = decision::key_actions();
-        if policy.allow && !policy.interaction_required {
-            cluster = cluster.child(wire(pane::keycap_allow(), Answer::Allow, cx));
-        }
-        if policy.deny {
-            cluster = cluster.child(wire(pane::keycap_deny(), Answer::Deny, cx));
+        for (at, (answer, _)) in keys.iter().enumerate() {
+            let verb = at < verbs;
+            let keycap = match answer {
+                Answer::Allow => pane::keycap_allow(verb),
+                Answer::Deny => pane::keycap_deny(verb),
+                Answer::Always => pane::keycap_always(verb),
+            };
+            cluster = cluster.child(wire(keycap, *answer, cx));
         }
         Some(cluster.into_any_element())
     }

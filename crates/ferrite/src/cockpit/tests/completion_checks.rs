@@ -714,7 +714,7 @@ fn long_subagent_approval_keeps_allow_and_deny_inside_the_island(cx: &mut TestAp
             gap >= px(0.) && gap <= px(16.),
             "the command-to-Allow gap must stay near the well's design gap: {gap:?}"
         );
-        let row_h = 2. * crate::theme::DECISION_ROW_PAD_Y + crate::theme::LH_PROSE_SM;
+        let row_h = crate::theme::MENU_ROW_H;
         assert!(
             allow.size.height <= px(row_h + 1.),
             "an approval row is one line: {allow:?}"

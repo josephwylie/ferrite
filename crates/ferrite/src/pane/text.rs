@@ -99,7 +99,7 @@ pub(crate) fn collect_output_text(block: BlockId, part: &str, text: &str, select
     }
 }
 
-pub(crate) fn collect_block_text(block: &Block, expanded: bool, selection: &TextRuns) {
+pub(crate) fn collect_block_text(block: &Block, expanded: bool, signal: u32, selection: &TextRuns) {
     match &block.body {
         Body::Prompt(line) => {
             let (text, _) = ferrite_core::prompt_files::split(line.clone());
@@ -124,7 +124,11 @@ pub(crate) fn collect_block_text(block: &Block, expanded: bool, selection: &Text
                 }
             }
         }
-        Body::Notice(text) | Body::Meta(text) => {
+        Body::Notice(text) => {
+            let text = super::notice_text(text, super::notice_docked(signal));
+            let _ = selection.line(block.id, text.to_owned(), Vec::new());
+        }
+        Body::Meta(text) => {
             let _ = selection.line(block.id, text.clone(), Vec::new());
         }
         Body::TurnEnd(end) => {

@@ -430,7 +430,12 @@ impl TranscriptView {
                 Body::Thinking(_) => self.tool_state(DisclosureId::Reasoning(block.id)),
                 _ => DisclosureState::Collapsed,
             } == DisclosureState::Expanded;
-            pane::collect_block_text(block, expanded, selection);
+            let signal = if row.live_notice() {
+                pane::signal_color(self.input.signal_status)
+            } else {
+                theme::TEXT_MUTED
+            };
+            pane::collect_block_text(block, expanded, signal, selection);
         }
     }
 

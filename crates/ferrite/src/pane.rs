@@ -658,6 +658,12 @@ pub struct PaneFacts<'a> {
     /// This Thread's provider, only when it differs from the board's
     /// majority: the Group head names the odd one out and no other.
     pub provider_mark: Option<Provider>,
+    /// The one waiting Thread the answer keys act on (C6): its cell alone
+    /// wears the full `ATTENTION` edge and the inline `y n a` pairs.
+    pub answer_target: bool,
+    /// This Pane's docked Decision merges into its live Composer (one
+    /// block, rule 2.8.1): the Composer drops its top edge and corners.
+    pub decision_joined: bool,
 }
 
 /// The click-wired elements only the cockpit can build — gpui listeners
@@ -882,6 +888,8 @@ pub(crate) struct PaneCtx<'a> {
     pub decide: Option<AnyElement>,
     /// `l1_dock`: activity requests that were not docked in the body.
     pub activity_decisions: Option<AnyElement>,
+    /// The docked Decision merges into this Pane's Composer (one block).
+    pub decision_joined: bool,
 }
 
 pub fn render_pane(
@@ -905,6 +913,8 @@ pub fn render_pane(
         show_focus,
         head_column,
         provider_mark,
+        answer_target,
+        decision_joined,
     } = facts;
     let empty = WallCard::default();
     let wall = wall.unwrap_or(&empty);
@@ -957,7 +967,8 @@ pub fn render_pane(
     // Pane is plainly the one holding the keyboard, and rests on its
     // hairline like any other.
     let framed = focused && show_focus;
-    let edge = PaneEdge::of(framed, attention_pending, blocked);
+    let edge =
+        PaneEdge::of(framed, attention_pending, blocked, !show_focus).answer_target(answer_target);
     let key = view.thread().map_or(0, ThreadId::get);
     let hover = HoverEdge::of(
         edge,
@@ -1076,6 +1087,7 @@ pub fn render_pane(
         child_footer,
         decide,
         activity_decisions,
+        decision_joined,
     };
 
     if level == Level::Instruments {
@@ -1293,6 +1305,7 @@ fn l1_composer(cx: &mut PaneCtx) -> Option<AnyElement> {
                 focused: cx.focused,
                 editing: cx.editing,
                 drop_target: cx.drop_target,
+                joined: cx.decision_joined,
             },
         )
         .into_any_element(),
@@ -1334,6 +1347,7 @@ fn l2_composer(cx: &mut PaneCtx) -> Option<Div> {
                     focused: cx.focused,
                     editing: cx.editing,
                     drop_target: cx.drop_target,
+                    joined: cx.decision_joined,
                 },
             )
         });
@@ -1409,18 +1423,32 @@ impl HoverEdge {
 
 /// What a Pane's 1px edge says, by precedence: a closed Session beats a
 /// Decision, a Decision beats focus, and a Pane with none of them rests on
-/// the hairline. One colour — focus on an alert Pane is the inset ring
-/// `pane_frame` draws, never a second edge.
+/// the hairline. On a board the state edges are alpha (`BLOCKED_EDGE`,
+/// `ATTENTION_EDGE`) and only the one answer-target cell wears full
+/// `ATTENTION` (C6). In Solo state never recolours the frame (rule 2.2.5):
+/// the docked Decision carries it. One colour — focus on an alert Pane is
+/// the inset ring `pane_frame` draws, never a second edge.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PaneEdge {
     Blocked,
     Attention,
+    /// The waiting cell `y`/`n`/`a` act on.
+    AnswerTarget,
     Focused,
     Rest,
 }
 
 impl PaneEdge {
-    pub(crate) fn of(focused: bool, attention: bool, blocked: bool) -> Self {
+    pub(crate) fn of(focused: bool, attention: bool, blocked: bool, solo: bool) -> Self {
+        // Operator question Q6 (flagged for confirmation): Solo has no state
+        // edge. Reverting it is deleting this branch.
+        if solo {
+            return if focused {
+                PaneEdge::Focused
+            } else {
+                PaneEdge::Rest
+            };
+        }
         if blocked {
             PaneEdge::Blocked
         } else if attention {
@@ -1432,10 +1460,19 @@ impl PaneEdge {
         }
     }
 
+    /// The answer target's waiting cell steps up to full ink.
+    pub(crate) fn answer_target(self, target: bool) -> Self {
+        match self {
+            PaneEdge::Attention if target => PaneEdge::AnswerTarget,
+            edge => edge,
+        }
+    }
+
     pub(crate) fn ink(self) -> gpui::Hsla {
         match self {
-            PaneEdge::Blocked => rgb(BLOCKED).into(),
-            PaneEdge::Attention => rgb(ATTENTION).into(),
+            PaneEdge::Blocked => rgba(BLOCKED_EDGE).into(),
+            PaneEdge::Attention => rgba(ATTENTION_EDGE).into(),
+            PaneEdge::AnswerTarget => rgb(ATTENTION).into(),
             PaneEdge::Focused => rgb(FOCUS_RING).into(),
             PaneEdge::Rest => rgba(HAIRLINE).into(),
         }
@@ -1558,7 +1595,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
     // under the pointer on a board) or, beside other Panes, the focus ink.
     // It has no state to announce.
     let framed = focused && show_focus;
-    let edge = PaneEdge::of(framed, false, false);
+    let edge = PaneEdge::of(framed, false, false, !show_focus);
     let key = view.identity.draft().map_or(0, DraftId::get);
     let hover = HoverEdge::of(
         edge,
@@ -1608,6 +1645,7 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
             focused,
             editing,
             drop_target,
+            joined: false,
         },
     );
     pane_frame(
@@ -2084,7 +2122,14 @@ fn l2_cell(
         let card = l2_decision_body(decision, decide)
             .key_context("Decision")
             .track_focus(&view.decision_focus);
-        return cell.child(card).children(sheet()).children(composer);
+        // The tail takes what the Decision leaves; the Decision never
+        // yields (rule 2.8.7), and its head already says what the notice
+        // would, so the tail prints only the notice's lead.
+        return cell
+            .child(l2_tail(transcript, view.text_namespace(), true))
+            .child(card)
+            .children(sheet())
+            .children(composer);
     }
 
     let read = Instruments::of(transcript);
@@ -2202,13 +2247,7 @@ pub(crate) fn tail_text(body: &Body, docked: bool) -> Option<String> {
         }
         Body::Code { language, .. } => format!("```{}", language.as_deref().unwrap_or("")),
         Body::Tool(tool) => text::tool_label(tool).to_string(),
-        Body::Notice(text) => {
-            let text = text.trim();
-            match text.split_once(" \u{b7} ") {
-                Some((lead, _)) if docked => lead.to_string(),
-                _ => text.to_string(),
-            }
-        }
+        Body::Notice(text) => notice_text(text.trim(), docked).to_string(),
         Body::Meta(text) => text.clone(),
         Body::TurnEnd(end) if end.outcome == TurnOutcome::Completed => return None,
         Body::TurnEnd(end) => end.text(),
@@ -2531,35 +2570,34 @@ fn tail_prose(text: String, heading: bool) -> Div {
         .child(SharedString::from(text))
 }
 
-/// The Cockpit board's Decision cell body: the `◆ approve` head, the
-/// subject (two lines at most), where it runs, and the y/n keycaps — no
-/// `a always` at L2. The group hangs directly under the header; a spacer
-/// would strand the keycaps on the cell floor (#22 A2). The keycaps arrive
-/// wired from the cockpit (#26), each only where its key would act.
+/// The Cockpit board's Decision cell body: the `◆ approval` head, the
+/// subject in runs (`Bash · gh issue close 212`, the command in the code
+/// face, soft-wrapping and never cut), where it runs, and — on the one
+/// answer-target cell only — the `y allow  n deny  a always` pairs. It
+/// takes its natural height, bottom-anchored `GAP_BLOCK` above the
+/// Composer line; the transcript's tail above it takes what is left. The
+/// keycaps arrive wired from the cockpit (#26), each only where its key
+/// would act.
 fn l2_decision_body(decision: &Decision, decide: Option<AnyElement>) -> Div {
     div()
+        .debug_selector(|| "l2-decision".into())
         .flex()
         .flex_col()
-        .flex_1()
-        .min_h_0()
+        .flex_shrink_0()
+        .justify_end()
         .px(px(theme::PANE_PAD_X))
-        .py(px(theme::GAP_BLOCK))
+        .pt(px(theme::GAP_BLOCK))
+        .pb(px(theme::GAP_BLOCK))
         .gap(px(theme::DECISION_L2_GAP))
         .font_family(theme::FONT_UI)
         .child(decision::head(decision::kind_word(decision), None, None))
-        .child(
-            div()
-                .w_full()
-                .min_w_0()
-                .line_clamp(2)
-                .text_size(px(theme::FS_UI))
-                .line_height(px(theme::LH_UI))
-                .text_color(rgb(TEXT_STRONG))
-                .child(decision_subject(decision)),
-        )
+        // The subject and its place read on the text column, under the
+        // kind word; `◆` alone holds the glyph column.
+        .child(decision_subject_runs(decision).pl(px(theme::GUTTER_W)))
         .children(decision_place(decision).map(|place| {
             div()
                 .w_full()
+                .pl(px(theme::GUTTER_W))
                 .truncate()
                 .text_size(px(theme::FS_SM))
                 .line_height(px(theme::LH_META))
@@ -2793,6 +2831,9 @@ fn tab_strip(key: u64, agents: AnyElement, tasks: Option<AnyElement>, column: bo
         .h_full()
         .min_w_0()
         .gap(px(theme::HEAD_CLUSTER_GAP))
+        // Main's pill hangs its inline padding left of the text column, so
+        // its label starts where the transcript's text does.
+        .pl(px(theme::GUTTER_W - theme::SUBJECT_TAB_PAD_X))
         .child(agents)
         .children(tasks.map(|tasks| div().flex_shrink_0().child(tasks)));
     let strip = div()
@@ -2807,12 +2848,15 @@ fn tab_strip(key: u64, agents: AnyElement, tasks: Option<AnyElement>, column: bo
         .text_size(px(theme::FS_SM))
         .line_height(px(theme::LH_META))
         .text_color(rgb(TEXT_MUTED));
+    let inset = div()
+        .h_full()
+        .w_full()
+        .px(px(theme::BOX_INSET_X))
+        .child(row);
     if column {
-        strip.child(components::reading_column(
-            div().h_full().px(px(theme::BOX_INSET_X)).child(row),
-        ))
+        strip.child(components::reading_column(inset))
     } else {
-        strip.child(row)
+        strip.child(inset)
     }
 }
 
@@ -3428,37 +3472,6 @@ fn working_line(
     div().w_full().min_w_0().flex_shrink_0().child(row)
 }
 
-/// A line that is in flight (`sending…`): its opacity breathes on the one
-/// shared clock (`motion::pulse_phase`, `MOTION_BREATH_MS`) — never its own
-/// repeating animation — and holds still under reduced motion.
-pub(crate) fn live_text(row: Div, id: SharedString) -> AnyElement {
-    LiveText { row, id }.into_any_element()
-}
-
-#[derive(IntoElement)]
-struct LiveText {
-    row: Div,
-    id: SharedString,
-}
-
-impl RenderOnce for LiveText {
-    fn render(self, window: &mut gpui::Window, cx: &mut gpui::App) -> impl IntoElement {
-        let phase = if crate::motion::reduced_motion(cx) {
-            0.0
-        } else {
-            crate::motion::pulse_phase(
-                Duration::from_millis(theme::MOTION_BREATH_MS),
-                window.current_view(),
-                cx,
-            )
-        };
-        let id = self.id;
-        self.row
-            .debug_selector(move || id.to_string())
-            .opacity(gpui::pulsating_between(0.65, 1.0)(phase))
-    }
-}
-
 /// `8.0k`, `12k`, `340` — the token count the way Claude Code prints it.
 fn tokens_label(tokens: u64) -> String {
     if tokens >= 10_000 {
@@ -3525,6 +3538,9 @@ struct ComposerStack<'a> {
     /// Native files hover the Pane: the block's edge is `ACCENT_EDGE`,
     /// saying where they will land.
     drop_target: bool,
+    /// A docked Decision sits flush on top and ends in the seam: the block
+    /// drops its top edge and top corners, so the two read as one.
+    joined: bool,
 }
 
 /// The Composer: a raised block in the reading column. Its outer edges are
@@ -3569,6 +3585,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         focused,
         editing,
         drop_target,
+        joined,
     } = stack;
     // On a board only the focused cell's line is live (C4): the others lie
     // flat on the Pane — no ground, the edge held in layout at zero ink, no
@@ -3580,7 +3597,11 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
     } else {
         (theme::COMPOSER_PAD_T, theme::COMPOSER_PAD_B)
     };
-    let block = if live {
+    let block = if live && joined {
+        // The block's own top edge is the seam under the Decision: it stays
+        // in layout, so a Decision arriving never moves the line.
+        composer_box(composer_edge(drop_target)).rounded_t(px(0.))
+    } else if live {
         composer_box(composer_edge(drop_target))
     } else {
         div()
@@ -4053,7 +4074,9 @@ fn placeholder(
         return Ghost::ladder("Start a thread", None, true);
     }
     match followup::suggest(pending, transcript, suggestion) {
-        Followup::Decision => Ghost::ladder("Reply to the Decision", None, false),
+        // A docked Decision owns the block above this line; the line itself
+        // still steers, so it says so (rule 2.8.1: one input line).
+        Followup::Decision => Ghost::ladder("Steer", Some(" this Thread"), false),
         Followup::Revive => Ghost::ladder("Revive", Some(" and continue"), false),
         Followup::Suggested(text) => Ghost {
             head: SharedString::from(text),
@@ -4349,19 +4372,14 @@ fn queued_line(held: &str, index: usize, count: usize, keys: bool) -> impl IntoE
         })
 }
 
-/// The exact tool input an approval would send. Commands retain their source;
-/// other provider input remains inspectable as its JSON value.
-pub(crate) fn approval_input(
-    decision: &Decision,
-    cache: &crate::rich::TextCache,
-    id: SharedString,
-) -> Option<AnyElement> {
-    use gpui::component::scroll::ScrollableElement as _;
-
+/// The text of an approval's command well: a command's source, else the
+/// input as a string, else its pretty JSON. `None` for a question or an
+/// input-less request.
+pub(crate) fn approval_source(decision: &Decision) -> Option<String> {
     if questions_of(decision).is_some() {
         return None;
     }
-    let source = decision
+    decision
         .input
         .get("command")
         .and_then(serde_json::Value::as_str)
@@ -4372,7 +4390,30 @@ pub(crate) fn approval_input(
                 serde_json::to_string_pretty(&decision.input)
                     .expect("decision input is serializable")
             })
-        })?;
+        })
+}
+
+/// Whether an approval's well holds a shell command, which reads after a
+/// `$ ` prompt.
+pub(crate) fn shell_command(decision: &Decision) -> bool {
+    decision.tool_name == "Bash"
+        && decision
+            .input
+            .get("command")
+            .and_then(serde_json::Value::as_str)
+            .is_some()
+}
+
+/// The exact tool input an approval would send. Commands retain their source;
+/// other provider input remains inspectable as its JSON value.
+pub(crate) fn approval_input(
+    decision: &Decision,
+    cache: &crate::rich::TextCache,
+    id: SharedString,
+) -> Option<AnyElement> {
+    use gpui::component::scroll::ScrollableElement as _;
+
+    let source = approval_source(decision)?;
     Some(
         div()
             .debug_selector(|| "approval-input".into())
@@ -4395,25 +4436,101 @@ pub(crate) fn approval_input(
     )
 }
 
-/// The Decision's subject — what it wants to do, tool-prefixed the comps'
-/// way: `Bash: gh issue close 212`; the tool's name alone without a
-/// description, else the honest unreadable fallback. Every surface that
-/// names a Decision (L1 card, L2 cell, wall alert) goes through here.
-fn decision_subject(decision: &Decision) -> SharedString {
+/// The Decision's subject in its parts: the tool, then what it would do —
+/// the command itself when the input carries one (machine text, `mono`),
+/// else the provider's description. A question is its summary.
+struct DecisionSubject {
+    tool: Option<SharedString>,
+    text: Option<SharedString>,
+    mono: bool,
+}
+
+fn subject_parts(decision: &Decision) -> DecisionSubject {
     if let Some(questions) = questions_of(decision) {
-        return SharedString::from(ferrite_core::questions::summary(questions));
+        return DecisionSubject {
+            tool: None,
+            text: Some(ferrite_core::questions::summary(questions).into()),
+            mono: false,
+        };
     }
-    match (
-        decision.tool_name.is_empty(),
-        decision.description.is_empty(),
-    ) {
-        (false, false) => {
-            SharedString::from(format!("{}: {}", decision.tool_name, decision.description))
-        }
-        (true, false) => SharedString::from(decision.description.clone()),
-        (false, true) => SharedString::from(decision.tool_name.clone()),
-        (true, true) => SharedString::from("unreadable permission request"),
+    let command = decision
+        .input
+        .get("command")
+        .and_then(serde_json::Value::as_str)
+        .filter(|command| !command.trim().is_empty());
+    let tool = (!decision.tool_name.is_empty()).then(|| decision.tool_name.clone().into());
+    let (text, mono) = match command {
+        Some(command) => (Some(command.to_string().into()), true),
+        None => (
+            (!decision.description.is_empty()).then(|| decision.description.clone().into()),
+            false,
+        ),
+    };
+    if tool.is_none() && text.is_none() {
+        return DecisionSubject {
+            tool: None,
+            text: Some("unreadable permission request".into()),
+            mono: false,
+        };
     }
+    DecisionSubject { tool, text, mono }
+}
+
+/// The Decision's subject as one line of words — `Bash · gh issue close
+/// 212`, never a `Bash:` label; the tool's name alone without a
+/// description, else the honest unreadable fallback. Every surface that
+/// names a Decision in words (the wall alert's tooltip) goes through here.
+fn decision_subject(decision: &Decision) -> SharedString {
+    let DecisionSubject { tool, text, .. } = subject_parts(decision);
+    match (tool, text) {
+        (Some(tool), Some(text)) => format!("{tool} \u{b7} {text}").into(),
+        (Some(only), None) | (None, Some(only)) => only,
+        (None, None) => "unreadable permission request".into(),
+    }
+}
+
+/// The subject drawn (the L2 Decision cell): the tool in Geist
+/// `TEXT_MUTED`, `·` in `TEXT_FAINT`, then the command in the code face at
+/// `FS_UI` `TEXT_STRONG` — soft-wrapping, never cut.
+fn decision_subject_runs(decision: &Decision) -> Div {
+    let DecisionSubject { tool, text, mono } = subject_parts(decision);
+    let seam = tool.is_some() && text.is_some();
+    div()
+        .w_full()
+        .min_w_0()
+        .text_size(px(theme::FS_UI))
+        .line_height(px(theme::LH_UI))
+        .child(
+            div()
+                .flex()
+                .flex_wrap()
+                .items_baseline()
+                .min_w_0()
+                .children(tool.map(|tool| {
+                    div()
+                        .flex_shrink_0()
+                        .font_family(theme::FONT_UI)
+                        .text_color(rgb(TEXT_MUTED))
+                        .child(tool)
+                }))
+                .when(seam, |line| {
+                    line.child(
+                        div()
+                            .flex_shrink_0()
+                            .px(px(theme::SPACE_1_5))
+                            .text_color(rgb(TEXT_FAINT))
+                            .child("\u{b7}"),
+                    )
+                })
+                .children(text.map(|text| {
+                    div()
+                        .min_w_0()
+                        .whitespace_normal()
+                        .when(mono, |run| run.font_family(theme::FONT_CODE))
+                        .text_color(rgb(TEXT_STRONG))
+                        .child(text)
+                })),
+        )
 }
 
 /// Where an approval would run — `in /work/api` — when the request names
@@ -4431,11 +4548,14 @@ fn decision_place(decision: &Decision) -> Option<SharedString> {
 
 /// The L2 decide keycaps, one constructor per verb, so the cockpit can wire
 /// each press without respelling the keycap grammar (#26).
-pub fn keycap_allow() -> Stateful<Div> {
-    decision::key_action("y allow", "y", "allow")
+pub fn keycap_allow(verb: bool) -> Stateful<Div> {
+    decision::key_action("y allow", "y", "allow", verb)
 }
-pub fn keycap_deny() -> Stateful<Div> {
-    decision::key_action("n deny", "n", "deny").debug_selector(|| "decision-deny".into())
+pub fn keycap_deny(verb: bool) -> Stateful<Div> {
+    decision::key_action("n deny", "n", "deny", verb).debug_selector(|| "decision-deny".into())
+}
+pub fn keycap_always(verb: bool) -> Stateful<Div> {
+    decision::key_action("a always", "a", "always", verb)
 }
 
 // -------------------------------------------------------------- questions
@@ -5252,13 +5372,35 @@ pub(crate) fn render_block(
         }
         // A notice: a dot and one line, cut by width at the column's edge
         // with the whole of it one hover away. Only the transcript's latest
-        // notice wears the Pane's state (`signal`); history stays neutral.
+        // notice wears the Pane's state (`signal`), and then only on its dot
+        // and its lead phrase (`Bash needs approval`, `asks 1 question`):
+        // the `·` is `TEXT_FAINT` and the detail `TEXT_2`. While the
+        // Decision it announces is docked below, the detail is the card's
+        // to say, so only the lead prints (and copies). History stays
+        // neutral.
         Body::Notice(text) => {
-            let (mark, ink) = if signal == TEXT_MUTED {
-                (TEXT_FAINT, TEXT_2)
+            let docked = notice_docked(signal);
+            let text = notice_text(text, docked).to_string();
+            let mark = if signal == TEXT_MUTED {
+                TEXT_FAINT
             } else {
-                (signal, signal)
+                signal
             };
+            let mut highlights = separators(&text);
+            if signal != TEXT_MUTED {
+                let lead = text.split(" \u{b7} ").next().unwrap_or_default().len();
+                highlights.insert(
+                    0,
+                    (
+                        0..lead,
+                        HighlightStyle {
+                            color: Some(rgb(signal).into()),
+                            ..Default::default()
+                        },
+                    ),
+                );
+            }
+            let text = SharedString::from(text);
             row.child(
                 gutter_row(
                     components::status_dot(mark).size(px(theme::TOOL_DOT)),
@@ -5266,7 +5408,7 @@ pub(crate) fn render_block(
                 )
                 .text_size(px(theme::FS_UI))
                 .line_height(px(theme::LH_UI))
-                .text_color(rgb(ink))
+                .text_color(rgb(TEXT_2))
                 .child(
                     div()
                         .id(SharedString::from(format!("notice-{:?}", block.id)))
@@ -5278,7 +5420,7 @@ pub(crate) fn render_block(
                         .min_w_0()
                         .truncate()
                         .tooltip(crate::menu::tooltip(text.clone()))
-                        .child(selection.line(block.id, text.clone(), separators(text))),
+                        .child(selection.line(block.id, text, highlights)),
                 ),
             )
             .into_any_element()
@@ -5451,6 +5593,21 @@ pub(super) fn turn_end_message(end: &ferrite_core::transcript::TurnEnd) -> Optio
 
 /// The `·` seams in a UI line: glyph ink, never a weight. Highlighted in
 /// place so the line stays one run and copies back exactly as written.
+/// Whether the notice drawn with this signal announces a Decision docked in
+/// the same Pane: the live notice wears `ATTENTION` exactly while one waits.
+pub(crate) fn notice_docked(signal: u32) -> bool {
+    signal == ATTENTION
+}
+
+/// A notice as it reads: whole, or only its lead phrase (before the first
+/// ` · `) while the Decision it announces is docked below it.
+pub(crate) fn notice_text(text: &str, docked: bool) -> &str {
+    match text.split_once(" \u{b7} ") {
+        Some((lead, _)) if docked => lead,
+        _ => text,
+    }
+}
+
 fn separators(text: &str) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
     text.match_indices('\u{b7}')
         .map(|(at, dot)| {
@@ -6944,7 +7101,8 @@ mod tests {
                 .flex_col()
                 .w(px(900.))
                 .font_family(crate::theme::FONT_UI)
-                .text_size(px(12.))
+                .text_size(px(crate::theme::FS_UI))
+                .line_height(px(crate::theme::LH_UI))
                 .children(self.decisions.iter().enumerate().map(|(at, decision)| {
                     let rows = decision::approval_rows(decision)
                         .into_iter()
@@ -6955,17 +7113,20 @@ mod tests {
                                 decision::Row {
                                     key: row.key,
                                     label: row.label,
+                                    scope: row.scope,
                                     description: None,
                                     recommended: false,
                                     selected: false,
                                     enabled: row.enabled,
-                                    prose: false,
+                                    quiet: row.verb == decision::Verb::Deny,
+                                    enter: false,
                                 },
                             )
                             .into_any_element()
                         });
                     decision::card(
                         at as u64,
+                        false,
                         [
                             decision::head(
                                 decision::kind_word(decision),
@@ -6977,8 +7138,12 @@ mod tests {
                         ]
                         .into_iter()
                         .chain(
-                            approval_input(decision, &self.cache, "decision-reference".into())
-                                .map(|input| decision::well(input).into_any_element()),
+                            approval_input(decision, &self.cache, "decision-reference".into()).map(
+                                |input| {
+                                    decision::well(shell_command(decision), input)
+                                        .into_any_element()
+                                },
+                            ),
                         )
                         .chain(rows),
                     )
@@ -6988,8 +7153,8 @@ mod tests {
                         decision,
                         Some(
                             decision::key_actions()
-                                .child(keycap_allow())
-                                .child(keycap_deny())
+                                .child(keycap_allow(true))
+                                .child(keycap_deny(true))
                                 .into_any_element(),
                         ),
                     )
@@ -7106,8 +7271,12 @@ mod tests {
         );
 
         // The decide keycaps answer the mouse (#26) and say so.
-        assert_eq!(cursor(keycap_allow()), Some(CursorStyle::PointingHand));
-        assert_eq!(cursor(keycap_deny()), Some(CursorStyle::PointingHand));
+        assert_eq!(cursor(keycap_allow(true)), Some(CursorStyle::PointingHand));
+        assert_eq!(cursor(keycap_deny(true)), Some(CursorStyle::PointingHand));
+        assert_eq!(
+            cursor(keycap_always(false)),
+            Some(CursorStyle::PointingHand)
+        );
     }
 
     /// The app is thin by design, so its render test is that every Block kind
@@ -7522,7 +7691,7 @@ mod tests {
             wall_card(Some(&transcript), Some(&decision))
                 .context
                 .as_ref(),
-            "Bash: gh issue close 212"
+            "Bash \u{b7} gh issue close 212"
         );
 
         // A closed Session's reason is promoted into the alert line itself
@@ -7554,7 +7723,11 @@ mod tests {
             suggestions: vec![],
         };
         let full = decision("Bash", "gh issue close 212");
-        assert_eq!(decision_subject(&full).as_ref(), "Bash: gh issue close 212");
+        assert_eq!(
+            decision_subject(&full).as_ref(),
+            "Bash \u{b7} gh issue close 212"
+        );
+        assert!(!decision_subject(&full).contains(':'), "no colon label");
         assert_eq!(decision_place(&full), None);
         // A request naming its cwd carries it on the place line (#22 C7).
         let mut placed = decision("Bash", "gh issue close 212");
@@ -7996,14 +8169,46 @@ mod tests {
     /// ring), and a calm unfocused Pane rests on the hairline.
     #[test]
     fn pane_edge_ranks_state_over_focus() {
-        assert_eq!(PaneEdge::of(true, true, true), PaneEdge::Blocked);
-        assert_eq!(PaneEdge::of(false, true, true), PaneEdge::Blocked);
-        assert_eq!(PaneEdge::of(true, true, false), PaneEdge::Attention);
-        assert_eq!(PaneEdge::of(false, true, false), PaneEdge::Attention);
-        assert_eq!(PaneEdge::of(true, false, false), PaneEdge::Focused);
-        assert_eq!(PaneEdge::of(false, false, false), PaneEdge::Rest);
+        assert_eq!(PaneEdge::of(true, true, true, false), PaneEdge::Blocked);
+        assert_eq!(PaneEdge::of(false, true, true, false), PaneEdge::Blocked);
+        assert_eq!(PaneEdge::of(true, true, false, false), PaneEdge::Attention);
+        assert_eq!(PaneEdge::of(false, true, false, false), PaneEdge::Attention);
+        assert_eq!(PaneEdge::of(true, false, false, false), PaneEdge::Focused);
+        assert_eq!(PaneEdge::of(false, false, false, false), PaneEdge::Rest);
         assert_eq!(PaneEdge::Rest.ink(), rgba(HAIRLINE).into());
         assert_eq!(PaneEdge::Focused.ink(), rgb(FOCUS_RING).into());
+        // State edges are alpha on a board (C6); only the answer target is
+        // full ochre, and only a waiting cell can be it.
+        assert_eq!(PaneEdge::Attention.ink(), rgba(ATTENTION_EDGE).into());
+        assert_eq!(PaneEdge::Blocked.ink(), rgba(BLOCKED_EDGE).into());
+        assert_eq!(PaneEdge::AnswerTarget.ink(), rgb(ATTENTION).into());
+        assert_eq!(
+            PaneEdge::of(false, true, false, false).answer_target(true),
+            PaneEdge::AnswerTarget
+        );
+        assert_eq!(
+            PaneEdge::of(false, false, true, false).answer_target(true),
+            PaneEdge::Blocked
+        );
+        assert_eq!(
+            PaneEdge::of(false, false, false, false).answer_target(true),
+            PaneEdge::Rest
+        );
+        // Solo: whatever the state, the frame is the hairline or focus.
+        for focused in [false, true] {
+            for attention in [false, true] {
+                for blocked in [false, true] {
+                    for target in [false, true] {
+                        let edge =
+                            PaneEdge::of(focused, attention, blocked, true).answer_target(target);
+                        assert!(
+                            matches!(edge, PaneEdge::Rest | PaneEdge::Focused),
+                            "solo {focused} {attention} {blocked} {target}: {edge:?}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     /// A run's state word is coloured only when it failed; the dot beside
@@ -8218,7 +8423,7 @@ mod tests {
         );
         assert_eq!(
             placeholder(true, false, Some(&live), None).rungs(),
-            ["Reply to the Decision\u{2026}"]
+            ["Steer this Thread\u{2026}", "Steer\u{2026}"]
         );
 
         let mut closed = Transcript::default();
@@ -8253,10 +8458,11 @@ mod tests {
             placeholder(false, false, Some(&answered), Some("Run the tests")).head,
             "Run the tests"
         );
-        // A Decision and a dead Session both outrank it.
+        // A Decision and a dead Session both outrank it: with a Decision
+        // docked the line keeps steering, never the prediction.
         assert_eq!(
             placeholder(true, false, Some(&answered), Some("Run the tests")).rungs(),
-            ["Reply to the Decision\u{2026}"]
+            ["Steer this Thread\u{2026}", "Steer\u{2026}"]
         );
         assert_eq!(
             placeholder(false, false, Some(&closed), Some("Run the tests")).rungs(),

@@ -1,6 +1,6 @@
 //! Subject navigation and supervision. Provider execution stays in core.
 use super::*;
-use crate::{components, decision, icons, theme};
+use crate::{components, decision, theme};
 use ferrite_core::activity::{
     AgentInfo, AgentStatus, DecisionHandle, PendingDecision, Subject, TranscriptCoverage,
 };
@@ -10,9 +10,9 @@ use gpui::component::{
     input::{Input, InputState},
     radio::{Radio, RadioGroup},
     scroll::ScrollableElement,
-    Disableable, Sizable,
+    Disableable,
 };
-use gpui::{Animation, AnimationExt, KeyDownEvent};
+use gpui::KeyDownEvent;
 use gpui_base::ElementExt as _;
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
@@ -168,11 +168,13 @@ fn native_keys<E: gpui::InteractiveElement>(element: E) -> E {
         })
 }
 
-/// Every request card's frame in the overlay: the Pane's inline inset, the
-/// card centred in the reading column, and the dock gap above the
-/// Composer. For a question this frame is the island `QuestionFit`
-/// measures, so the gap is part of what must fit.
-fn request_frame(card: impl IntoElement) -> Div {
+/// Every request card's frame in the overlay: the Pane's inline inset and
+/// the card centred in the reading column. A card merged into the live
+/// Composer sits flush on it (they are one block); one that is not keeps
+/// `GAP_BLOCK` above whatever line is below it. For a question this frame
+/// is the island `QuestionFit` measures, so that gap is part of what must
+/// fit.
+fn request_frame(card: impl IntoElement, joined: bool) -> Div {
     native_keys(
         div()
             .w_full()
@@ -183,7 +185,7 @@ fn request_frame(card: impl IntoElement) -> Div {
             .items_center()
             .overflow_hidden()
             .px(px(theme::PANE_PAD_X))
-            .pb(px(theme::DECISION_DOCK_GAP))
+            .when(!joined, |frame| frame.pb(px(theme::GAP_BLOCK)))
             .child(card),
     )
 }
@@ -288,30 +290,41 @@ pub(crate) fn agent_name(info: &AgentInfo) -> String {
         .unwrap_or_else(|| "Subagent".into())
 }
 
-/// What a subagent tab carries after its label.
-#[derive(Clone, Copy, Default, Debug, PartialEq)]
-struct Marks {
-    working: bool,
-    waiting: bool,
-    failed: bool,
-}
-
-/// Busy dots while it works, the needs-you dot while a request waits, a
-/// drawn `✗` once it failed; idle, stopped and starting agents carry none
-/// (the tooltip keeps the status word).
-fn subject_marks(agent: &ferrite_core::activity::AgentView<'_>, waiting: bool) -> Marks {
-    Marks {
-        working: agent.fresh() && agent.status() == AgentStatus::Working,
-        waiting,
-        failed: matches!(agent.status(), AgentStatus::Failed | AgentStatus::NotFound),
+/// A subagent tab's one mark, by precedence: a request waiting
+/// (`ATTENTION`) > failed or not found (`BLOCKED`) > working (`RUNNING`).
+/// Idle, stopped and starting agents carry none (the tooltip keeps the
+/// status word). The mark is a still dot: nothing on a tab moves.
+fn subject_mark(agent: &ferrite_core::activity::AgentView<'_>, waiting: bool) -> Option<u32> {
+    if waiting {
+        Some(theme::ATTENTION)
+    } else if matches!(agent.status(), AgentStatus::Failed | AgentStatus::NotFound) {
+        Some(theme::BLOCKED)
+    } else if agent.fresh() && agent.status() == AgentStatus::Working {
+        Some(theme::RUNNING)
+    } else {
+        None
     }
 }
 
+/// The mark's slot: always in layout, `STATUS_DOT` square, holding the dot
+/// when there is one — so a tab never changes width with its state.
+fn mark_slot(mark: Option<u32>) -> Div {
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .justify_center()
+        .size(px(theme::STATUS_DOT))
+        .children(mark.map(components::status_dot))
+}
+
 /// One Subject tab's face on the headless tab (its role and selection are
-/// the platform's): `width` wide (`tab_width`), `CHIP_H` high, a `FILL`
-/// pill in `TEXT_STRONG` when active; otherwise `TEXT_MUTED`, brightening
-/// under the pointer. No edge and no rule: the pill says which.
-fn subject_tab_face(at: usize, selected: bool, width: f32) -> gpui_base::Tab {
+/// the platform's): `width` wide (`tab_width`), `CHIP_H` high. Selected, a
+/// `FILL` pill in `TEXT_STRONG` that goes to `FILL_HOVER` under the pointer
+/// (`hover_carried`); otherwise no ground, `TEXT_MUTED` blending to `TEXT`
+/// through the one hover blend. No edge and no rule: the pill says which.
+fn subject_tab_face(at: usize, selected: bool, width: f32, key: SharedString) -> gpui_base::Tab {
+    use crate::pointer::PointerFaded as _;
     gpui_base::Tab::new(at)
         .selected(selected)
         .justify_start()
@@ -330,7 +343,7 @@ fn subject_tab_face(at: usize, selected: bool, width: f32) -> gpui_base::Tab {
             // The tab's own debug name is its Subject's; the pill is named
             // by a box laid exactly over it.
             tab.relative()
-                .bg(rgb(theme::FILL))
+                .hover_carried_faded(key.clone())
                 .text_color(rgb(theme::TEXT_STRONG))
                 .child(
                     div()
@@ -340,68 +353,25 @@ fn subject_tab_face(at: usize, selected: bool, width: f32) -> gpui_base::Tab {
                 )
         })
         .when(!selected, |tab| {
-            tab.text_color(rgb(theme::TEXT_MUTED))
-                .hover(|style| style.text_color(rgb(theme::TEXT_STRONG)))
+            tab.text_color(crate::motion::hover_blend(
+                &key,
+                rgb(theme::TEXT_MUTED).into(),
+                rgb(theme::TEXT).into(),
+            ))
+            .on_hover(crate::motion::hover_listener(key.clone()))
         })
 }
 
-/// One tab's laid-out width: its inline padding, the label up to its cap, and each mark after a gap. The
+/// A subagent tab's laid-out width: its inline padding, the label up to its
+/// cap, and the mark slot after its gap — whatever the agent's state. The
 /// overflow model and the tab's own `w` both come from here.
-fn tab_width(label: f32, marks: Marks) -> f32 {
-    let mark = |on: bool, width: f32| {
-        if on {
-            theme::SUBJECT_TAB_INNER_GAP + width
-        } else {
-            0.
-        }
-    };
-    2. * theme::SUBJECT_TAB_PAD_X
-        + label.min(theme::SUBJECT_LABEL_MAX_W)
-        + mark(marks.working, theme::BUSY_DOTS_W)
-        + mark(marks.waiting, theme::ATTENTION_DOT)
-        + mark(marks.failed, theme::SUBJECT_FAILED_MARK)
+fn tab_width(label: f32) -> f32 {
+    main_tab_width(label) + theme::SUBJECT_TAB_INNER_GAP + theme::STATUS_DOT
 }
 
-/// The one needs-you dot: a waiting tab, the overflow.
-fn attention_dot() -> Div {
-    div()
-        .flex_shrink_0()
-        .size(px(theme::ATTENTION_DOT))
-        .rounded_full()
-        .bg(rgb(theme::ATTENTION))
-}
-
-/// A working tab's busy dots: three `RUNNING` dots in a box exactly as wide
-/// as they are, lifting in turn; still under reduced motion.
-fn working_dots(animated: bool) -> AnyElement {
-    let mut row = div()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .gap(px(theme::BUSY_DOT_GAP))
-        .w(px(theme::BUSY_DOTS_W))
-        .h(px(theme::LH_META));
-    for index in 0usize..3 {
-        let dot = div()
-            .relative()
-            .size(px(theme::BUSY_DOT_D))
-            .rounded_full()
-            .bg(rgb(theme::RUNNING));
-        row = row.child(if animated {
-            dot.with_animation(
-                ("working-dot", index),
-                Animation::new(Duration::from_millis(theme::BUSY_DOTS_MS)).repeat(),
-                move |dot, progress| {
-                    let phase = progress * std::f32::consts::TAU - index as f32 * 0.7;
-                    dot.top(px(-phase.sin().max(0.) * theme::BUSY_DOT_LIFT))
-                },
-            )
-            .into_any_element()
-        } else {
-            dot.into_any_element()
-        });
-    }
-    row.into_any_element()
+/// Main's tab: no mark, so no slot.
+fn main_tab_width(label: f32) -> f32 {
+    2. * theme::SUBJECT_TAB_PAD_X + label.min(theme::SUBJECT_LABEL_MAX_W)
 }
 
 impl CockpitView {
@@ -522,20 +492,12 @@ impl CockpitView {
         };
         let widths: Vec<f32> = children
             .iter()
-            .map(|agent| {
-                let waiting = activity
-                    .pending_decisions()
-                    .iter()
-                    .any(|request| request.subject.as_ref() == Some(&agent.subject()));
-                tab_width(
-                    measure(&agent_name(agent.info())).ceil(),
-                    subject_marks(agent, waiting),
-                )
-            })
+            .map(|agent| tab_width(measure(&agent_name(agent.info())).ceil()))
             .collect();
-        // The slot is laid out after the real title, branch, attention and usage
-        // controls; the plain Tab variant packs its tabs with no gap.
-        let main_width = tab_width(measure("Main").ceil(), Marks::default());
+        // The strip is its own row: the tabs have the whole column, less
+        // the indent that puts Main's label on the text column. The plain
+        // Tab variant packs its tabs with no gap.
+        let main_width = main_tab_width(measure("Main").ceil());
         let selected = children
             .iter()
             .position(|agent| agent.subject() == pane.selected);
@@ -543,7 +505,10 @@ impl CockpitView {
             if hidden == 0 {
                 0.
             } else {
-                2. * (theme::SUBJECT_TAB_GAP + theme::CHIP_PAD_X) + measure(&format!("+{hidden}"))
+                2. * (theme::SUBJECT_TAB_GAP + theme::CHIP_PAD_X)
+                    + measure(&format!("+{hidden}"))
+                    + theme::SUBJECT_TAB_INNER_GAP
+                    + theme::STATUS_DOT
             }
         };
         // Main and the selected Subject are navigation anchors. Reserve their
@@ -586,23 +551,23 @@ impl CockpitView {
             .flex()
             .items_center()
             .h(px(theme::CHIP_H));
-        let main = subject_tab_face(0, selected_at == Some(0), main_width)
-            .accessibility_label("Main transcript")
-            .tooltip(|window, cx| {
-                gpui::component::tooltip::Tooltip::new("Main transcript").build(window, cx)
-            })
-            .debug_selector(move || format!("subject-main-{}", thread.get()))
-            .child(
-                div()
-                    .debug_selector(move || format!("subject-main-label-{}", thread.get()))
-                    .text_size(px(theme::FS_SM))
-                    .text_color(rgb(if pane.is_main() {
-                        theme::TEXT_STRONG
-                    } else {
-                        theme::TEXT_MUTED
-                    }))
-                    .child("Main"),
-            );
+        let main = subject_tab_face(
+            0,
+            selected_at == Some(0),
+            main_width,
+            format!("subject-tab-{}-main", thread.get()).into(),
+        )
+        .accessibility_label("Main transcript")
+        .tooltip(|window, cx| {
+            gpui::component::tooltip::Tooltip::new("Main transcript").build(window, cx)
+        })
+        .debug_selector(move || format!("subject-main-{}", thread.get()))
+        .child(
+            div()
+                .debug_selector(move || format!("subject-main-label-{}", thread.get()))
+                .text_size(px(theme::FS_SM))
+                .child("Main"),
+        );
         tabs = tabs.child(self.subject_tab(
             main,
             thread,
@@ -619,12 +584,14 @@ impl CockpitView {
                 .pending_decisions()
                 .iter()
                 .any(|request| request.subject.as_ref() == Some(&subject));
-            let marks = subject_marks(agent, waiting);
-            let mut content = div()
+            let mark = subject_mark(agent, waiting);
+            // The mark leads the label, in a slot every tab keeps.
+            let content = div()
                 .flex()
                 .items_center()
                 .gap(px(theme::SUBJECT_TAB_INNER_GAP))
                 .min_w_0()
+                .child(mark_slot(mark))
                 .child(
                     div()
                         .max_w(px(theme::SUBJECT_LABEL_MAX_W))
@@ -632,19 +599,6 @@ impl CockpitView {
                         .text_size(px(theme::FS_SM))
                         .child(name.clone()),
                 );
-            if marks.working {
-                content = content.child(working_dots(!cx.reduce_motion()));
-            }
-            if marks.waiting {
-                content = content.child(attention_dot());
-            }
-            if marks.failed {
-                content = content.child(icons::icon(
-                    icons::CLOSE,
-                    theme::SUBJECT_FAILED_MARK,
-                    theme::BLOCKED,
-                ));
-            }
             let selector = format!(
                 "subject-agent-{}-{}",
                 thread.get(),
@@ -658,6 +612,7 @@ impl CockpitView {
                 at + 1,
                 selected_at == Some(at + 1),
                 widths[visible_indices[at]],
+                format!("{selector}-hover").into(),
             )
             .accessibility_label(tooltip.clone())
             .debug_selector(move || selector.clone())
@@ -735,8 +690,10 @@ impl CockpitView {
                             .text_size(px(theme::FS_SM))
                             .line_height(px(theme::LH_META))
                             .text_color(rgb(theme::TEXT_MUTED))
-                            .child(format!("+{}", hidden.len()))
-                            .when(hidden_waiting, |label| label.child(attention_dot())),
+                            .child(mark_slot(hidden_waiting.then_some(theme::ATTENTION)))
+                            .child(components::tabular(
+                                div().child(format!("+{}", hidden.len())),
+                            )),
                     ),
                 choices,
                 open: pane.agent_menu_open,
@@ -856,39 +813,11 @@ impl CockpitView {
             )
     }
 
+    /// The head's title: the Thread's, whichever Subject is selected — the
+    /// strip's selected tab already says which transcript this is.
     pub(super) fn activity_title(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
-        let pane = &self.panes[index];
-        let thread = pane.thread().expect("Thread Pane");
-        if pane.is_main() {
-            return self.pane_title(index, thread, cx);
-        }
-        let label = self
-            .cockpit
-            .thread(thread)
-            .and_then(|thread| {
-                thread
-                    .activity()
-                    .children()
-                    .into_iter()
-                    .find(|agent| agent.subject() == pane.selected)
-                    .map(|agent| agent_name(agent.info()))
-            })
-            .unwrap_or_else(|| "Subagent".into());
-        // `↳`: this transcript is a child of the Thread's Main.
-        div()
-            .flex()
-            .items_center()
-            .gap(px(theme::SPACE_1_5))
-            .min_w_0()
-            .debug_selector(move || format!("subject-title-{}", thread.get()))
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .text_color(rgb(theme::TEXT_MUTED))
-                    .child("↳"),
-            )
-            .child(div().min_w_0().truncate().child(label))
-            .into_any_element()
+        let thread = self.panes[index].thread().expect("Thread Pane");
+        self.pane_title(index, thread, cx)
     }
 
     pub(super) fn child_footer(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -902,51 +831,80 @@ impl CockpitView {
             .thread(thread)?
             .activity()
             .subject(&pane.selected)?;
-        let coverage = if !subject.retained() {
-            "loading saved transcript…"
+        // What this transcript covers, as a lead and an optional tail that
+        // shows only where it fits; a complete transcript says nothing.
+        let coverage: Option<(&str, Option<&str>)> = if !subject.retained() {
+            Some(("loading saved transcript\u{2026}", None))
         } else {
             match subject.coverage() {
-                TranscriptCoverage::Unavailable => "transcript unavailable",
-                TranscriptCoverage::ToolActivity => "tool activity only",
-                TranscriptCoverage::Live => "live transcript · earlier messages may be unavailable",
-                TranscriptCoverage::Partial => "partial transcript",
-                TranscriptCoverage::Complete => "subagent transcript",
+                TranscriptCoverage::Unavailable => Some(("transcript unavailable", None)),
+                TranscriptCoverage::ToolActivity => Some(("tool activity only", None)),
+                TranscriptCoverage::Live => Some((
+                    "live transcript",
+                    Some(" \u{b7} earlier messages may be unavailable"),
+                )),
+                TranscriptCoverage::Partial => Some(("partial transcript", None)),
+                TranscriptCoverage::Complete => None,
             }
         };
         let error = pane.history_error.clone();
-        // A read-only Composer: the Composer's own block — ground, edge,
-        // radius and inset in the reading column — with a dimmed `❯` in its
-        // glyph box (nothing to type here), what this transcript covers at
-        // C1, and the way back to Main.
-        let footer = crate::pane::composer_box(theme::COMPOSER_EDGE)
+        let seam = || {
+            div()
+                .flex_shrink_0()
+                .px(px(theme::SPACE_1_5))
+                .text_color(rgb(theme::TEXT_FAINT))
+                .child("\u{b7}")
+        };
+        let text = div()
+            .debug_selector(move || format!("child-footer-text-{}", thread.get()))
+            .flex()
+            .flex_1()
+            .items_center()
+            .min_w_0()
+            .overflow_hidden()
+            .text_color(rgb(theme::TEXT_MUTED));
+        let text = match (&error, coverage) {
+            // `failed · could not load transcript · <error>`: only the
+            // state word carries the hue, and the error is machine text.
+            (Some(error), _) => text
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .text_color(rgb(theme::BLOCKED))
+                        .child(theme::words::FAILED),
+                )
+                .child(seam())
+                .child(div().flex_shrink_0().child("could not load transcript"))
+                .child(seam())
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .font_family(theme::FONT_CODE)
+                        .child(SharedString::from(error.clone())),
+                ),
+            (None, Some((lead, tail))) => text
+                .flex_wrap()
+                .h(px(theme::LH_META))
+                .child(div().flex_shrink_0().child(lead))
+                .children(tail.map(|tail| div().flex_shrink_0().child(tail))),
+            (None, None) => text,
+        };
+        // A read-only line in the Composer's slot: one fixed
+        // `COMPOSER_GRID_H` row on the Pane's own ground — no box, no edge,
+        // no `❯` (nothing to type here) — its words on the text column and
+        // the way back to Main at the right.
+        let footer = div()
             .debug_selector(move || format!("child-footer-{}", thread.get()))
             .flex()
             .items_center()
-            .min_h(px(theme::COMPOSER_ROW_H))
-            .px(px(theme::COMPOSER_PAD_X))
-            .py(px(theme::COMPOSER_PAD_T))
+            .h(px(theme::COMPOSER_GRID_H))
+            .pl(px(theme::BOX_INSET_X + theme::GUTTER_W))
+            .pr(px(theme::COMPOSER_PAD_END))
             .font_family(theme::FONT_UI)
             .text_size(px(theme::FS_SM))
             .line_height(px(theme::LH_META))
-            .child(components::gutter(
-                components::prompt_mark(theme::TEXT_MUTED),
-                theme::LH_META,
-            ))
-            .child(
-                div()
-                    .debug_selector(move || format!("child-footer-text-{}", thread.get()))
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_color(rgb(if error.is_some() {
-                        theme::BLOCKED
-                    } else {
-                        theme::TEXT_MUTED
-                    }))
-                    .child(SharedString::from(
-                        error.as_deref().unwrap_or(coverage).to_string(),
-                    )),
-            )
+            .child(text)
             .child(
                 div()
                     .flex()
@@ -968,7 +926,7 @@ impl CockpitView {
                         )
                     })
                     .child(
-                        components::ghost_button(("return-main", thread.get()), "Back to Main", cx)
+                        components::quiet_button(("return-main", thread.get()), "Back to Main", cx)
                             .tab_stop(true)
                             .debug_selector(move || format!("return-main-{}", thread.get()))
                             .on_click(cx.listener(move |view, _, window, cx| {
@@ -1095,6 +1053,7 @@ impl CockpitView {
     pub(super) fn activity_decisions(
         &self,
         index: usize,
+        joined: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
@@ -1142,8 +1101,12 @@ impl CockpitView {
             .min_h_0()
             .max_h_full()
             .flex_col();
-        for request in requests {
-            cards = cards.child(self.request_card(index, thread, request, short, window, cx));
+        let last = requests.len() - 1;
+        for (at, request) in requests.into_iter().enumerate() {
+            // Only the card nearest the Composer merges into it.
+            let joined = joined && at == last;
+            cards =
+                cards.child(self.request_card(index, thread, request, short, joined, window, cx));
         }
         if multiple_requests {
             Some(native_keys(cards.max_h_full().overflow_y_scrollbar()).into_any_element())
@@ -1178,12 +1141,14 @@ impl CockpitView {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn request_card(
         &self,
         index: usize,
         thread: ThreadId,
         request: PendingDecision,
         short: bool,
+        joined: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -1194,18 +1159,18 @@ impl CockpitView {
             let handle = request.handle.clone();
             let questions = questions.to_vec();
             return self.question_request_card(
-                index, thread, request, handle, questions, short, window, cx,
+                index, thread, request, handle, questions, short, joined, window, cx,
             );
         }
         match &request.decision.kind {
             ferrite_core::DecisionKind::Form { .. } => {
-                self.form_request_card(index, thread, request, window, cx)
+                self.form_request_card(index, thread, request, joined, window, cx)
             }
             ferrite_core::DecisionKind::External { .. }
             | ferrite_core::DecisionKind::Unsupported { .. } => {
-                self.link_request_card(index, thread, request, cx)
+                self.link_request_card(index, thread, request, joined, cx)
             }
-            _ => self.approval_request_card(index, thread, request, cx),
+            _ => self.approval_request_card(index, thread, request, short, joined, cx),
         }
     }
 
@@ -1223,7 +1188,7 @@ impl CockpitView {
         // something — a card is waiting by being there.
         let status = request
             .submitting
-            .then(|| pane::live_text(decision::status("sending…"), "request-live".into()));
+            .then(|| decision::sending().into_any_element());
         let head = decision::head(
             decision::kind_word(decision),
             request_detail(&decision.tool_name, request.subject.is_none()),
@@ -1234,8 +1199,12 @@ impl CockpitView {
                 "The provider sent a request Ferrite could not read.",
             ))
         } else {
-            (!decision.description.is_empty())
-                .then(|| SharedString::from(decision.description.clone()))
+            // The subject is printed once: prose that only repeats the
+            // command in the well below goes.
+            let command = pane::approval_source(decision);
+            (!decision.description.is_empty()
+                && !decision::prose_repeats_command(&decision.description, command.as_deref()))
+            .then(|| SharedString::from(decision.description.clone()))
         };
         let serial = request.handle.serial;
         let title = title.map(|title| {
@@ -1261,12 +1230,16 @@ impl CockpitView {
         index: usize,
         thread: ThreadId,
         request: PendingDecision,
+        short: bool,
+        joined: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let handle = request.handle.clone();
         let (head, title, error) = self.request_preamble(index, thread, &request);
         let mut children = vec![head.into_any_element()];
-        children.extend(title.map(IntoElement::into_any_element));
+        // A short Pane gives up the prose first — the head and the command
+        // still say what is asked — so the rows stay whole.
+        children.extend(title.filter(|_| !short).map(IntoElement::into_any_element));
         if let Some(input) = pane::approval_input(
             &request.decision,
             &self.panes[index].rich,
@@ -1279,7 +1252,7 @@ impl CockpitView {
             .into(),
         ) {
             children.push(
-                decision::well(input)
+                decision::well(pane::shell_command(&request.decision), input)
                     .debug_selector(|| "approval-well".into())
                     .into_any_element(),
             );
@@ -1314,11 +1287,15 @@ impl CockpitView {
                 decision::Row {
                     key: row.key,
                     label: row.label,
+                    scope: row.scope,
                     description: None,
                     recommended: false,
                     selected: false,
                     enabled: row.enabled && !request.submitting,
-                    prose: false,
+                    quiet: verb == decision::Verb::Deny,
+                    // No key but the row's own letter picks an approval:
+                    // ↵ chooses nothing here, so no row shows it.
+                    enter: false,
                 },
             )
             .debug_selector(move || selector.clone())
@@ -1337,7 +1314,7 @@ impl CockpitView {
             rows = rows.child(button);
         }
         children.push(rows.into_any_element());
-        request_frame(decision::card(handle.serial, children)).into_any_element()
+        request_frame(decision::card(handle.serial, joined, children), joined).into_any_element()
     }
 
     /// An approval row's verb, from its click or its digit. The standing
@@ -1375,6 +1352,7 @@ impl CockpitView {
         index: usize,
         thread: ThreadId,
         request: PendingDecision,
+        joined: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -1590,6 +1568,7 @@ impl CockpitView {
                         "form-send",
                         if sending { "Sending…" } else { "Send" },
                         !request.decision.policy.allow || sending,
+                        false,
                         cx,
                     )
                     .debug_selector(move || selector.clone())
@@ -1601,7 +1580,7 @@ impl CockpitView {
             )
             .into_any_element(),
         );
-        request_frame(decision::card(handle.serial, children)).into_any_element()
+        request_frame(decision::card(handle.serial, joined, children), joined).into_any_element()
     }
 
     fn send_form(
@@ -1668,6 +1647,7 @@ impl CockpitView {
         index: usize,
         thread: ThreadId,
         request: PendingDecision,
+        joined: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let handle = request.handle.clone();
@@ -1707,6 +1687,7 @@ impl CockpitView {
                         "external-complete",
                         "Complete",
                         !request.decision.policy.allow || sending,
+                        false,
                         cx,
                     )
                     .on_click(cx.listener(move |view, _, _, cx| {
@@ -1732,7 +1713,7 @@ impl CockpitView {
             error.map(|error| decision::error_line("could not send", error).into_any_element()),
         );
         children.push(decision::footer(&[], actions).into_any_element());
-        request_frame(decision::card(handle.serial, children)).into_any_element()
+        request_frame(decision::card(handle.serial, joined, children), joined).into_any_element()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1744,6 +1725,7 @@ impl CockpitView {
         handle: DecisionHandle,
         questions: Vec<ferrite_core::questions::Question>,
         short: bool,
+        joined: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -1754,7 +1736,7 @@ impl CockpitView {
                 .map(|question| {
                     cx.new(|cx| {
                         InputState::new(window, cx)
-                            .placeholder("or type your own answer…")
+                            .placeholder("Or type your own answer\u{2026}")
                             .masked(question.secret)
                     })
                 })
@@ -1833,11 +1815,13 @@ impl CockpitView {
                         decision::Row {
                             key: digit(oi),
                             label: SharedString::from(label.to_string()),
+                            scope: None,
                             description: Some(option.description.clone().into()),
                             recommended,
                             selected,
                             enabled: !sending,
-                            prose: true,
+                            quiet: false,
+                            enter: false,
                         },
                     )
                     .debug_selector(move || format!("question-choice-{qi}-{oi}"))
@@ -1860,6 +1844,10 @@ impl CockpitView {
             }
             section = section.child(rows);
             if question.allow_other {
+                // The own answer is not a second field: one bare mono line
+                // on the rows' grid — its digit on the glyph column, its
+                // text on the labels' column — that the digit one past the
+                // options arms.
                 let selector = format!("request-other-{}-{}-{qi}", thread.get(), handle.serial);
                 section = section.child(
                     div()
@@ -1868,22 +1856,21 @@ impl CockpitView {
                         .flex()
                         .items_center()
                         .gap(px(theme::DECISION_ROW_INNER_GAP))
-                        .px(px(theme::DECISION_ROW_PAD_X))
                         .child(
                             div()
                                 .flex()
                                 .flex_shrink_0()
-                                .min_w(px(theme::KBD_H))
+                                .items_center()
+                                .justify_center()
+                                .w(px(theme::GLYPH_BOX))
+                                .h(px(theme::QUESTION_OTHER_H))
                                 .children(digit(question.options.len()).map(components::kbd)),
                         )
                         .child(
                             div()
                                 .flex_1()
                                 .min_w_0()
-                                // The field's edge and padding hang left of
-                                // the column, so its text starts where the
-                                // option labels do.
-                                .ml(px(-(theme::QUESTION_FIELD_PAD_X + 1.)))
+                                .h(px(theme::QUESTION_OTHER_H))
                                 .debug_selector(move || selector.clone())
                                 .when(qi == 0 && question.options.is_empty(), |input| {
                                     input.on_prepaint(measure_question(
@@ -1897,16 +1884,15 @@ impl CockpitView {
                                 .child(
                                     gpui::Styled::h(
                                         Input::new(&forms.0.borrow()[&handle].inputs[qi])
-                                            .small()
+                                            .appearance(false)
                                             .disabled(sending),
-                                        px(theme::CONTROL_H),
+                                        px(theme::QUESTION_OTHER_H),
                                     )
-                                    .px(px(theme::QUESTION_FIELD_PAD_X))
-                                    .rounded(px(theme::R_CONTROL))
-                                    .bg(rgb(theme::PANE))
-                                    .border_color(rgb(theme::INPUT_EDGE))
-                                    .font_family(theme::FONT_UI)
-                                    .text_size(px(theme::FS_UI)),
+                                    .px(px(0.))
+                                    .py(px(0.))
+                                    .font_family(theme::FONT_CODE)
+                                    .text_size(px(theme::FS_UI))
+                                    .text_color(rgb(theme::TEXT)),
                                 ),
                         ),
                 );
@@ -1923,7 +1909,7 @@ impl CockpitView {
         // A plain wait says nothing the card does not: only a status that
         // adds something rides the head.
         let status = if sending {
-            Some("sending…")
+            Some(theme::words::SENDING)
         } else if working {
             Some("work continues")
         } else if async_question {
@@ -1932,11 +1918,10 @@ impl CockpitView {
             None
         }
         .map(|word| {
-            let status = decision::status(word);
-            if sending || working {
-                pane::live_text(status, "question-live".into())
+            if sending {
+                decision::sending().into_any_element()
             } else {
-                status.into_any_element()
+                decision::status(word).into_any_element()
             }
         });
         let detail = match questions.as_slice() {
@@ -1990,17 +1975,19 @@ impl CockpitView {
                 let keys = (question.options.len() + usize::from(question.allow_other))
                     .min(decision::DIGIT_KEYS);
                 let range = if keys > 1 {
-                    format!("1-{keys}")
+                    format!("1\u{2013}{keys}")
                 } else {
                     "1".into()
                 };
-                if question.multi_select {
-                    vec![(range, "toggle"), ("↵".into(), "send")]
+                // ↵ lives on the Send button, not in the hints.
+                let verb = if question.multi_select {
+                    "toggle"
                 } else if questions.len() == 1 {
-                    vec![(range, "answer")]
+                    "answer"
                 } else {
-                    vec![(range, "pick"), ("↵".into(), "send")]
-                }
+                    "pick"
+                };
+                vec![(range, verb)]
             })
             .unwrap_or_default();
         let hints: Vec<(&str, &str)> = hints
@@ -2026,8 +2013,9 @@ impl CockpitView {
                         .into_any_element(),
                     decision::send_button(
                         "question-send",
-                        if sending { "Sending…" } else { "Send" },
+                        if sending { "Sending\u{2026}" } else { "Send" },
                         sending,
+                        !sending,
                         cx,
                     )
                     .debug_selector(move || selector.clone())
@@ -2042,7 +2030,7 @@ impl CockpitView {
         // The frame is the island QuestionFit measures: it carries the dock
         // gap as well as the card, so `required` counts every pixel the
         // overlay must hold.
-        request_frame(decision::card(handle.serial, children))
+        request_frame(decision::card(handle.serial, joined, children), joined)
             .on_prepaint(measure_question(
                 forms,
                 handle.clone(),
@@ -2206,7 +2194,7 @@ impl CockpitView {
             .cockpit
             .retry_subject_history(thread, &subject)
             .err()
-            .map(|error| format!("Could not load transcript: {error}"));
+            .map(|error| error.to_string());
         cx.notify();
     }
 
@@ -2219,7 +2207,7 @@ impl CockpitView {
             .cockpit
             .ensure_subject_history(thread, &subject)
             .err()
-            .map(|error| format!("Could not load transcript: {error}"))
+            .map(|error| error.to_string())
             .or_else(|| {
                 self.cockpit
                     .subject_history_error(thread, &subject)
@@ -2366,6 +2354,34 @@ fn form_defaults(fields: &[ferrite_core::FormField]) -> serde_json::Map<String, 
 #[cfg(test)]
 mod status_word_tests {
     use super::*;
+
+    /// A tab's width is its label's and a reserved mark slot's: an agent
+    /// starting, finishing or waiting never moves the tabs beside it.
+    #[test]
+    fn a_tab_keeps_its_width_whatever_its_state() {
+        for label in [0., 24., 80., 400.] {
+            assert_eq!(
+                tab_width(label),
+                2. * theme::SUBJECT_TAB_PAD_X
+                    + f32::min(label, theme::SUBJECT_LABEL_MAX_W)
+                    + theme::SUBJECT_TAB_INNER_GAP
+                    + theme::STATUS_DOT
+            );
+            assert_eq!(
+                tab_width(label) - main_tab_width(label),
+                theme::SUBJECT_TAB_INNER_GAP + theme::STATUS_DOT,
+                "Main carries no slot"
+            );
+        }
+    }
+
+    /// Nothing on the strip or a Decision loops: no repeating animation.
+    #[test]
+    fn subagents_schedule_no_loops() {
+        let source = include_str!("subagents.rs");
+        let needle = [".repeat", "()"].concat();
+        assert!(!source.contains(&needle), "no repeating animation here");
+    }
 
     #[test]
     fn every_agent_state_reads_in_the_lexicon() {
