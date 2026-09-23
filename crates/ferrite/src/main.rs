@@ -231,6 +231,11 @@ fn main() {
                                 px(theme::TRAFFIC_Y),
                             )),
                         }),
+                        // Windows draws a DirectComposition window with no
+                        // redirection bitmap: shown before gpui presents,
+                        // it is an empty see-through frame. It opens hidden
+                        // and is shown with its first frame (below).
+                        show: !cfg!(target_os = "windows"),
                         ..Default::default()
                     },
                     |window, cx| {
@@ -257,7 +262,14 @@ fn main() {
                 .unwrap();
 
             window
-                .update(cx, |_, _window, cx| cx.activate(true))
+                .update(cx, |_, window, cx| {
+                    // A hidden window is sent no frames: `open_window` has
+                    // drawn the first one, and showing it presents it.
+                    if cfg!(target_os = "windows") {
+                        window.activate_window();
+                    }
+                    cx.activate(true)
+                })
                 .unwrap();
         });
 }
