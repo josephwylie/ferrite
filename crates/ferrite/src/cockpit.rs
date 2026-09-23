@@ -327,8 +327,28 @@ struct PaneDrag {
 struct PaneDragPreview(SharedString);
 
 impl Render for PaneDragPreview {
+    /// A raised mono tag with the float shadow, its face set here because
+    /// the preview is its own window-level view and inherits nothing; a
+    /// long title truncates instead of dragging a banner.
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        nav::drag_badge(self.0.clone())
+        use crate::theme::*;
+        div()
+            .flex()
+            .items_center()
+            .h(px(DRAG_BADGE_H))
+            .max_w(px(DRAG_BADGE_MAX_W))
+            .px(px(DRAG_BADGE_PAD_X))
+            .rounded(px(R_CONTROL))
+            .bg(rgb(RAISED))
+            .border_1()
+            .border_color(rgba(HAIRLINE_STRONG))
+            .shadow(crate::components::float_shadow())
+            .font_family(FONT_MONO)
+            .text_size(px(FS_UI))
+            .line_height(px(LH_UI))
+            .font_weight(W_LABEL)
+            .text_color(rgb(TEXT_STRONG))
+            .child(div().min_w_0().truncate().child(self.0.clone()))
     }
 }
 
@@ -2157,37 +2177,45 @@ impl CockpitView {
                 .seam_drag
                 .as_ref()
                 .is_some_and(|drag| drag.group == group && drag.seam == seam.id);
+            // The line stops short of both ends so it never touches a Pane
+            // corner; it exists at rest only so the band's hover can light
+            // it (`TEXT_FAINT`), and it takes the accent while held.
+            let inset = crate::theme::SEAM_LINE_INSET;
+            let line_w = crate::theme::SEAM_LINE_W;
             let line = match seam.axis {
                 layout::Axis::Row => div()
                     .absolute()
-                    .left(px((band.w - 2.0) / 2.0))
-                    .top_0()
-                    .bottom_0()
-                    .w(px(2.0)),
+                    .left(px((band.w - line_w) / 2.0))
+                    .top(px(inset))
+                    .bottom(px(inset))
+                    .w(px(line_w)),
                 layout::Axis::Column => div()
                     .absolute()
-                    .top(px((band.h - 2.0) / 2.0))
-                    .left_0()
-                    .right_0()
-                    .h(px(2.0)),
+                    .top(px((band.h - line_w) / 2.0))
+                    .left(px(inset))
+                    .right(px(inset))
+                    .h(px(line_w)),
+            };
+            let group_name = SharedString::from(format!("seam-{at}"));
+            let line = line.rounded(px(1.));
+            let line = if dragging {
+                line.bg(rgb(crate::theme::ACCENT))
+            } else {
+                line.group_hover(group_name.clone(), |style| {
+                    style.bg(rgb(crate::theme::TEXT_FAINT))
+                })
             };
             board = board.child(
                 div()
                     .id(("seam", at))
+                    .group(group_name)
                     .absolute()
                     .left(px(band.x))
                     .top(px(band.y))
                     .w(px(band.w))
                     .h(px(band.h))
                     .cursor(cursor)
-                    // The seam brightens under the pointer and while it is
-                    // held: the whole resize affordance.
-                    .child(line.rounded(px(1.0)).bg(rgb(if dragging {
-                        crate::theme::FOCUS_RING
-                    } else {
-                        crate::theme::GROUND
-                    })))
-                    .hover(|style| style.bg(rgba(crate::theme::SEAM_HOVER)))
+                    .child(line)
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |view, _: &MouseDownEvent, _, cx| {
@@ -2203,6 +2231,9 @@ impl CockpitView {
                 .into_iter()
                 .find(|(leaf, _)| *leaf == target)
             {
+                // The slot a release would fill: the accent wash with the
+                // non-focus accent edge (a focused Pane's ring is its own
+                // blue), and a raised mono tag naming the verb.
                 let wash = local(layout::zone_rect(rect, zone));
                 board = board.child(
                     div()
@@ -2214,24 +2245,28 @@ impl CockpitView {
                         .rounded(px(crate::theme::R_PANE))
                         .bg(rgba(crate::theme::DROP_WASH))
                         .border_1()
-                        .border_color(rgb(crate::theme::DROP_VALID))
+                        .border_color(rgba(crate::theme::ACCENT_EDGE))
                         .flex()
                         .items_center()
                         .justify_center()
                         .child(
                             div()
-                                .px(px(crate::theme::ROW_PAD_X))
-                                .py(px(crate::theme::ROW_PAD_Y))
+                                .px(px(crate::theme::DROP_LABEL_PAD_X))
+                                .py(px(crate::theme::DROP_LABEL_PAD_Y))
                                 .rounded(px(crate::theme::R_CONTROL))
-                                .bg(rgb(crate::theme::MENU))
+                                .bg(rgb(crate::theme::RAISED))
+                                .border_1()
+                                .border_color(rgba(crate::theme::HAIRLINE_STRONG))
+                                .font_family(crate::theme::FONT_MONO)
                                 .text_size(px(crate::theme::FS_SM))
-                                .text_color(rgb(crate::theme::TEXT))
+                                .line_height(px(crate::theme::LH_META))
+                                .text_color(rgb(crate::theme::TEXT_STRONG))
                                 .child(match zone {
-                                    Zone::Swap => "⇄ Swap",
-                                    Zone::Split(Edge::Left) => "Split left",
-                                    Zone::Split(Edge::Right) => "Split right",
-                                    Zone::Split(Edge::Top) => "Split above",
-                                    Zone::Split(Edge::Bottom) => "Split below",
+                                    Zone::Swap => "swap",
+                                    Zone::Split(Edge::Left) => "split left",
+                                    Zone::Split(Edge::Right) => "split right",
+                                    Zone::Split(Edge::Top) => "split above",
+                                    Zone::Split(Edge::Bottom) => "split below",
                                 }),
                         ),
                 );
@@ -7068,6 +7103,10 @@ impl Render for CockpitView {
             // says what a release would do. Absolute geometry, so a seam
             // drag moves exactly the two sides it sits between.
             self.tree_board(group, tree, window, cx)
+        } else if visible.is_empty() {
+            // Nothing open: the board says how to start instead of lying
+            // blank.
+            frame().flex().child(self.empty_board())
         } else {
             let columns = layout.columns;
             let mut grid = frame().flex().flex_col();
@@ -7089,10 +7128,9 @@ impl Render for CockpitView {
             grid
         };
 
-        // Two full-height columns and nothing above them: there is no
-        // title band at all, so the Pane board starts at y = 0 and its own
-        // 10px padding is the only inset (§5 #1). The window's default face
-        // is the system sans; the Pane opts into the bundled mono itself.
+        // Two full-height columns under the titlebar band: the board starts
+        // at `BOARD_TOP` and keeps its own padding on the other three sides.
+        // The chrome face is the bundled mono; prose opts into Geist.
         div()
             .flex()
             .flex_row()
@@ -7280,7 +7318,7 @@ impl Render for CockpitView {
                     }
                     View::Solo => ("New Thread", "New Thread", DraftPlacement::CurrentGroup),
                 };
-                let add_thread = crate::titlebar::add_thread_button(add_label, add_tooltip)
+                let add_thread = crate::titlebar::add_thread_button(add_label, add_tooltip, cx)
                     .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
                         cx.stop_propagation();
                         view.open_draft_with_placement(DraftTarget::Main, placement, cx);
@@ -7289,7 +7327,11 @@ impl Render for CockpitView {
                     self.nav_width(),
                     crate::titlebar::Title {
                         project: project_title,
-                        group: group_title,
+                        group: group_title.clone(),
+                    },
+                    crate::titlebar::Board {
+                        count: group_title.is_some().then(|| self.visible_indices().len()),
+                        fullscreen: fullscreen.is_some(),
                     },
                     add_thread,
                     !self.overlay_open(),
@@ -7547,6 +7589,63 @@ impl CockpitView {
             child_footer: self.child_footer(index, cx),
         };
         cell.child(pane::render_pane(pane, facts, wiring, level))
+    }
+    /// The board with no Pane open: one quiet line and the three keys that
+    /// start work, spelled from the platform's own key table. No icon, no
+    /// button — the nav's `+` is the pointer's way in.
+    fn empty_board(&self) -> Div {
+        use crate::theme::*;
+        let hint = |action: &str, verb: &'static str| {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(EMPTY_BOARD_GAP))
+                .children(Self::key_label(action).map(crate::components::kbd))
+                .child(verb)
+        };
+        div()
+            .debug_selector(|| "empty-board".into())
+            .flex_1()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(px(EMPTY_BOARD_GAP))
+            .font_family(FONT_MONO)
+            .text_size(px(FS_SM))
+            .line_height(px(LH_META))
+            .text_color(rgb(TEXT_MUTED))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_start()
+                    .gap(px(EMPTY_BOARD_GAP))
+                    .child(
+                        div()
+                            .text_size(px(FS_UI))
+                            .line_height(px(LH_UI))
+                            .text_color(rgb(TEXT_2))
+                            .child("no thread open"),
+                    )
+                    .child(hint("cockpit::NewThread", "new thread"))
+                    .child(hint("cockpit::NewWorktreeThread", "new worktree thread"))
+                    .child(hint("cockpit::ReopenThread", "reopen last")),
+            )
+    }
+
+    /// A bound action's first keystroke as a keycap reads it, from this
+    /// platform's key table: `cmd-shift-n` → `cmd shift N`. Mono text — the
+    /// `⌘`/`⇧` symbols are not in the bundled face.
+    fn key_label(action: &str) -> Option<SharedString> {
+        let (keys, _, _) = crate::keymap::bindings(crate::keymap::PLATFORM)
+            .into_iter()
+            .find(|(_, bound, context)| *bound == action && context.is_none())?;
+        let mut parts: Vec<String> = keys.split('-').map(str::to_string).collect();
+        if let Some(key) = parts.last_mut() {
+            *key = key.to_uppercase();
+        }
+        Some(SharedString::from(parts.join(" ")))
     }
 
     fn toggle_tool(
@@ -8457,7 +8556,7 @@ impl CockpitView {
             .context_checks
             .is_some_and(|(shown, _)| shown == thread);
         Some(
-            pane::ci_mark(pr, thread.get())
+            pane::ci_mark(pr, thread.get(), was_open)
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |view, event: &MouseDownEvent, _, cx| {
@@ -8468,8 +8567,13 @@ impl CockpitView {
                         view.context_usage = None;
                         // Outside-click dismissal runs in the capture phase,
                         // before this toggle: read the mark that was pressed.
-                        view.context_checks = (!was_open)
-                            .then_some((thread, event.position + gpui::point(px(0.), px(8.))));
+                        // The card hangs from under the press by its
+                        // top-right corner, so a chip at the head's right
+                        // edge opens its card into the Pane.
+                        view.context_checks = (!was_open).then_some((
+                            thread,
+                            event.position + gpui::point(px(0.), px(crate::theme::FLOAT_OFFSET)),
+                        ));
                         cx.notify();
                     }),
                 )
@@ -8530,6 +8634,7 @@ impl CockpitView {
         Some(
             deferred(
                 anchored()
+                    .anchor(gpui::Anchor::TopRight)
                     .position(at)
                     .snap_to_window_with_margin(px(crate::theme::GRID_PAD))
                     .child(card),
@@ -13798,9 +13903,10 @@ mod tests {
                 "a short summary must size to its text: {summary:?}"
             );
             assert!(
-                control.left() < summary.left()
-                    && (summary.left() - control.left() - px(crate::theme::INDENT)).abs() <= px(1.),
-                "chevron must stay inside the Pane beside the text: {summary:?} / {control:?}"
+                control.left() > summary.right()
+                    && (control.size.width - px(crate::theme::TOOL_DISCLOSURE_HIT)).abs() <= px(1.)
+                    && control.right() <= px(width),
+                "the chevron trails the text and stays inside the Pane: {summary:?} / {control:?}"
             );
         }
 
@@ -13933,7 +14039,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn transcript_spacing_separates_prompts_tools_and_answers(cx: &mut TestAppContext) {
+    fn transcript_rows_share_one_content_edge_and_the_gap_table(cx: &mut TestAppContext) {
         let (mut core, fake) = cockpit("transcript-spacing", 1);
         let thread = core.threads()[0];
         core.send(thread, "Check the build".into());
@@ -13960,29 +14066,39 @@ mod tests {
                 text: "The build passed.\n\n".into(),
             })
             .unwrap();
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TurnEnded {
+                outcome: ferrite_core::TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
         for width in [1000., 720.] {
             cx.simulate_resize(gpui::size(px(width), px(700.)));
             tick(cx);
             let prompt = cx.debug_bounds("transcript-prompt").unwrap();
             let tools = cx.debug_bounds("tool-group-spacing-0").unwrap();
             let answer = cx.debug_bounds("transcript-answer").unwrap();
-            assert_eq!(tools.top() - prompt.bottom(), px(crate::theme::BLOCK_GAP));
-            assert_eq!(answer.top() - tools.bottom(), px(crate::theme::BLOCK_GAP));
-            let prompt_start = caret(&view, cx, 0, 0).x;
-            let answer_start = caret(&view, cx, 3, 0).x;
-            // An answer is indented off its Ferrite mark rather than held on
-            // the tool summary's reading column: its gutter is the same
-            // `EVENT_GUTTER_W` the tool rows use, and the extra step is the answer
-            // row's wider gap.
+            let stamp = cx.debug_bounds("turn-stamp").unwrap();
+            // The prompt's hover wash bleeds past its line box; the gap is
+            // measured from the line box.
+            let bleed = px(crate::theme::PROMPT_HOVER_BLEED);
             assert_eq!(
-                answer_start - prompt_start,
-                px(crate::theme::ANSWER_GAP - crate::theme::EVENT_GAP),
-                "an answer's prose is indented past the prompt's reading column"
+                tools.top() - (prompt.bottom() - bleed),
+                px(crate::theme::GAP_SECTION)
             );
+            assert_eq!(answer.top() - tools.bottom(), px(crate::theme::GAP_SECTION));
+            assert_eq!(stamp.top() - answer.bottom(), px(crate::theme::GAP_STAMP));
+            // One content edge: the prompt's text, the group summary and the
+            // answer's prose all start on C1.
+            let prompt_start = caret(&view, cx, 0, 0).x;
+            let tools_start = caret(&view, cx, 1, 0).x;
+            let answer_start = caret(&view, cx, 3, 0).x;
+            assert_eq!(answer_start, prompt_start, "answer prose sits on C1");
+            assert_eq!(tools_start, prompt_start, "the group summary sits on C1");
             assert_eq!(
                 prompt_start - tools.left(),
-                px(17.5),
-                "17px native gutter plus the caret helper's half-pixel inset"
+                px(crate::theme::GUTTER_W + 0.5),
+                "C1 past the row's left edge, plus the caret helper's half-pixel inset"
             );
         }
     }
@@ -14657,8 +14773,11 @@ mod tests {
             .unwrap();
         tick(cx);
         let before = cx
+            .debug_bounds("transcript-progress")
+            .expect("the live line is pinned above the composer");
+        let metadata = cx
             .debug_bounds("progress-metadata")
-            .expect("live metadata is pinned above the composer");
+            .expect("live metadata shares the pinned line");
         assert!(
             cx.debug_bounds("progress-caption-Thinking").is_some(),
             "visible reasoning is not duplicated in the pinned row"
@@ -14679,10 +14798,17 @@ mod tests {
                 .is_some(),
             "pinned headline remains available when its history is offscreen"
         );
+        // The caption may swap to the offscreen headline; the line itself,
+        // and the row its metadata sits on, stay put.
         assert_eq!(
-            cx.debug_bounds("progress-metadata").unwrap(),
+            cx.debug_bounds("transcript-progress").unwrap(),
             before,
             "scrollback cannot move the progress component"
+        );
+        assert_eq!(
+            cx.debug_bounds("progress-metadata").unwrap().top(),
+            metadata.top(),
+            "scrollback cannot move the progress metadata off its line"
         );
         // Working-phase detail appends no transcript block. Its wall caption
         // must still change, or the smallest panes freeze on the old heading.

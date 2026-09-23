@@ -337,7 +337,7 @@ pub const MONO_CELL: f32 = FS_UI * MONO_ADVANCE;
 /// Mono cmap (asserted by `theme::tests`). Anything else — `❯ ⎿ ∴ ✻ ✓ ✗ ☐`
 /// and friends — is an SVG in a glyph box, never text.
 pub const CHROME_GLYPHS: &[char] = &[
-    '↳', '±', '↑', '↓', '⇥', '↵', '⌫', '•', '●', '…', '→', '·', '−', '│', '└', '─', '›',
+    '↳', '±', '↑', '↓', '⇥', '⇧', '↵', '⌫', '•', '●', '…', '→', '·', '−', '—', '│', '└', '─', '›',
 ];
 
 /// 720px — the reading column's maximum width, gutter included. Wide Panes
@@ -714,67 +714,95 @@ pub fn init_components(cx: &mut gpui::App) {
 // Owner: WP-A (transcript.rs, pane/text.rs, the transcript rows in pane.rs, ferrite-core transcript strings.)
 // Edit values and append tokens only inside this section.
 
+// ---------------------------------------------------- transcript grammar
+//
+// The transcript is Claude Code's layout in Ferrite's ink:
+//
+// - **One content edge.** Every row is `[gutter | text]`: a `GLYPH_BOX`
+//   glyph centred on the row's first line box, `GUTTER_GAP`, then text at
+//   C1 (`GUTTER_W`). Prompt text, answer prose, tool calls, group summaries,
+//   reasoning and the turn stamp all start at C1. A result hangs one gutter
+//   further in, at C2, under a drawn elbow whose stem sits under the call's
+//   name. Rows are inset `BOX_INSET_X` inside the reading column, so the
+//   transcript `❯` and the Composer's share one axis.
+// - **Glyphs are drawn, never typed.** `❯` is `prompt.svg`, `∴` is
+//   `reasoning.svg`, the answer mark is the monochrome `ferrite-mono.svg`,
+//   the tool dot and the elbow are painted. None of them registers text.
+// - **State lives in the dot.** A tool's name is neutral ink whatever
+//   happened; its dot says how it went (`tool_dot`), and a failure colours
+//   the one word that says so. A collapsed group is one muted line whose only
+//   state ink is ` · N failed`.
+// - **Rhythm by rule.** The space above a row is chosen once, at reconcile,
+//   from the row before it and its own kind (`GAP_*`), and is part of the
+//   row's identity, so a changed gap is a changed row and nothing is measured
+//   per frame.
+// - **Face follows voice.** Structural rows are mono `FS_UI`/`LH_UI`; agent
+//   prose and reasoning are Geist `FS_PROSE`/`LH_PROSE`; the stamp and the
+//   trail are `FS_SM`/`LH_META`.
+
+/// 24px — above every prompt but the first: the turn boundary. No rule is
+/// drawn between turns; this space, the accent `❯` and the stamp do the job.
+pub const GAP_TURN: f32 = SPACE_6;
+/// 12px — a change of voice: prompt → the agent's first row, prose ↔ tools,
+/// anything ↔ reasoning, notices, the turn's changes.
+pub const GAP_SECTION: f32 = SPACE_3;
+/// 4px — tool rows in one run of work, and a one-paragraph commentary that
+/// introduces the tool row under it.
+pub const GAP_TOOL: f32 = SPACE_1;
+/// 8px — the last row of a turn → its stamp (and a decision record under
+/// the row it answers).
+pub const GAP_STAMP: f32 = SPACE_2;
+
+/// 6px — a tool call's state dot, the size of every status dot.
+pub const TOOL_DOT: f32 = STATUS_DOT;
+/// The elbow `⎿`, painted in the 12px glyph box: its stem 3px in, so it
+/// stands under the stem of the call name's first letter, running from the
+/// top of the row box to the first line's centre, then 8px along it.
+pub const ELBOW_STEM_X: f32 = 3.0;
+pub const ELBOW_ARM: f32 = SPACE_2;
+/// A disclosed call echoes its input under `⎿` only when the call line could
+/// not show it whole: a command (always, exactly), a titled call, a
+/// multi-line input, or one longer than this many characters.
+pub const INPUT_ECHO_CHARS: usize = 48;
+/// A settled call shows its time only from one second up; anything quicker
+/// is noise on every row.
+pub const DURATION_MIN_MS: u128 = 1_000;
+/// Output up to `OUTPUT_INLINE_BYTES` draws inline under its elbow, where a
+/// copy sweep across the transcript reaches it; larger output scrolls in a
+/// bounded native viewport `OUTPUT_MAX_LINES` high, with `… +N lines` under
+/// it saying how much is out of view.
+pub const OUTPUT_MAX_LINES: usize = 12;
+pub const OUTPUT_INLINE_BYTES: usize = 8 * 1024;
+
 /// An added diff line's code: `RUNNING` lifted a step to read on its wash.
 pub const DIFF_ADDED_INK: u32 = 0xa7d9b8;
 /// A removed diff line's code: `BLOCKED` lifted the same step.
 pub const DIFF_REMOVED_INK: u32 = 0xefa89f;
-/// 9px — the tool/event rows' glyph column today, and 8px (`EVENT_GAP`) to
-/// the verb beside it; their sum, 17px (`INDENT`), is the inset a result
-/// line and a hunk share. WP-A replaces it with the shared `GUTTER_W` (C1).
-pub const EVENT_GUTTER_W: f32 = 9.0;
-pub const INDENT: f32 = 17.0;
-/// 15px — an answer's Ferrite mark. It draws wider than the `GUTTER_W`
-/// gutter it hangs in and out of the flow, so its overhang lands in the
-/// answer row's own `ANSWER_GAP` rather than moving the prose.
-pub const ANSWER_MARK: f32 = 15.0;
-/// The offset that centres that mark on the first prose line box at the
-/// Standard reading size (`LH_PROSE`). Other sizes add half their line box's
-/// difference from `LH_PROSE`.
-pub const ANSWER_MARK_TOP: f32 = (LH_PROSE - ANSWER_MARK) / 2.0;
-/// 14px — the answer row's gutter-to-prose gap, wider than the `EVENT_GAP`
-/// the tool rows use: an answer's prose is indented off the mark rather than
-/// held on the tool rows' text edge, and the gap clears the mark's overhang.
-pub const ANSWER_GAP: f32 = 14.0;
-/// Structured answers retain a passage boundary without isolating every update.
-pub const ANSWER_PAD_Y: f32 = 8.0;
-/// A single prose paragraph sits closer to the work it introduces.
-pub const COMMENTARY_PAD_Y: f32 = 4.0;
-/// A tool row's vertical padding. The prototype's 3px each side put 43px
-/// between consecutive calls; a run of shell commands reads as a list only
-/// when they sit as close as Claude Code's own `●`/`⎿` pairs do.
-pub const EVENT_PAD_Y: f32 = 1.0;
-/// The result line's padding: hugging its call above, a hair under.
-pub const RESULT_PAD_T: f32 = 0.0;
-pub const RESULT_PAD_B: f32 = 1.0;
-/// An invisible hit area, not a drawn thing: the tool-disclosure target.
-pub const TOOL_DISCLOSURE_HIT: f32 = 20.0;
-/// A 16px list indent, with a 4px disc 15px left of the text.
-pub const UL_INDENT: f32 = 16.0;
-#[allow(dead_code)]
-pub const BULLET_D: f32 = 4.0;
-#[allow(dead_code)]
-pub const BULLET_OFFSET: f32 = 15.0;
-/// 5px — the operator's prompt block's block padding: the ground the line
-/// stands on (`--raised`, or the provider's wash on a Thread), so a prompt
-/// reads apart from an answer.
-pub const PROMPT_PAD_Y: f32 = 5.0;
-/// A hunk row: 8px inline padding, a 24px right-aligned number column, a
-/// 7px sign column, 10px between columns. A hunk sits 4px below the event
-/// and 10px above what follows.
-#[allow(dead_code)]
-pub const HUNK_PAD_X: f32 = 8.0;
-pub const DIFF_NUM_W: f32 = 24.0;
-#[allow(dead_code)]
-pub const DIFF_SIGN_W: f32 = 7.0;
-#[allow(dead_code)]
-pub const DIFF_GAP: f32 = 10.0;
-#[allow(dead_code)]
-pub const HUNK_MARGIN_T: f32 = 4.0;
+/// A diff card at C2: `RAISED`, `R_CHIP`, 4px above and inside it, 8px
+/// inline. Its columns are `[number][8][sign][4][code]`: the number column
+/// is as wide as the largest number's digits (`MONO_CELL` each), the sign is
+/// one whole-pixel mono cell, and code keeps its indentation.
+pub const HUNK_PAD_X: f32 = SPACE_2;
+pub const HUNK_PAD_Y: f32 = SPACE_1;
+pub const HUNK_MARGIN_T: f32 = SPACE_1;
+pub const DIFF_SIGN_W: f32 = SPACE_2;
+pub const DIFF_GAP: f32 = SPACE_2;
+pub const DIFF_SIGN_GAP: f32 = SPACE_1;
 /// How many rows one hunk card draws before it stops and says how many it
 /// did not. An edit's patch is a handful of lines; a written file's is
 /// however long the file is, and a card that redrew a 900-line file would
 /// be the transcript rather than a note in it.
 pub const HUNK_MAX_ROWS: usize = 24;
+
+/// 20px — an invisible hit area, not a drawn thing: a disclosure's trailing
+/// chevron target and a prompt action's button.
+pub const TOOL_DISCLOSURE_HIT: f32 = 20.0;
+/// 10px — the trailing disclosure chevron.
+pub const DISCLOSURE_CHEVRON: f32 = 10.0;
+/// 4px — how far a prompt's hover wash bleeds past its text on each side.
+pub const PROMPT_HOVER_BLEED: f32 = SPACE_1;
+/// 16px — a fallback list item's hang: `-` at C1, text 16px in.
+pub const UL_INDENT: f32 = SPACE_4;
 // (end WP-A) — append above this line only
 
 // ======================================== WP-B · markdown, prose, scrollbars
@@ -859,16 +887,31 @@ const _: () = assert!(SCROLLBAR_GUTTER <= PANE_PAD_X);
 // ======================================== WP-C · pane frame, levels, board, titlebar
 // Owner: WP-C (the pane shell, head, L2/wall cells, board, seams, titlebar.)
 // Edit values and append tokens only inside this section.
+//
+// **The Pane frame.** A Pane is a `PANE` sheet with a 1px edge that is always
+// in layout, so a state change recolours it and nothing reflows. The edge
+// says one thing, by precedence (`pane::PaneEdge`): blocked `BLOCKED` >
+// a Decision `ATTENTION` > focused `FOCUS_RING` > at rest `HAIRLINE`, which
+// lifts to `HAIRLINE_STRONG` under the pointer. A *focused* alert Pane also
+// draws a `FOCUS_RING` ring inset by 2px, so focus is never hidden by a
+// state. A Thread that finished while the operator looked elsewhere breathes
+// an `ACCENT` ring until they land on it (still under reduced motion).
+//
+// **The head is one 36px row** on the Pane's own plane, closed by a
+// hairline: dot · title · checkout, the agent tabs, then the right cluster —
+// tasks meter · PR/CI · attention jump · head action. Colour is state: the
+// checkout, drift and PR are `TEXT_MUTED`; only the CI dot, a failure count
+// and the live meter segment carry a hue.
+//
+// **Below L1** (L2 instruments, the wall) brightness sorts cells: a hot cell
+// (working, failing, a Decision, blocked, focused) has a `TEXT_STRONG`
+// title, a quiet one `TEXT_2`. Signals are words, never glyph soup, and a
+// word is coloured only when it is state.
 
-/// The seam's grab band under the pointer: a faint lift over the gutter.
-pub const SEAM_HOVER: u32 = 0xffffff14;
-/// A row's opacity while it is being dragged.
-#[allow(dead_code)]
-pub const DRAGGING_OPACITY: f32 = 0.4;
 /// The Windows caption buttons (`titlebar.rs`), which exist only where the
 /// app draws its own titlebar. 46px is the width Windows gives each of its
 /// own — the snap-layout flyout aligns to it, so a narrower button would
-/// hang the flyout off-centre — and they run the band's full 42px height,
+/// hang the flyout off-centre — and they run the band's full height,
 /// flush to the window's top-right corner.
 #[allow(dead_code)]
 pub const CAPTION_W: f32 = 46.0;
@@ -884,41 +927,105 @@ pub const CAPTION_GLYPH: f32 = 10.0;
 /// nothing.
 #[allow(dead_code)]
 pub const CAPTION_RESIZE_EDGE: f32 = 4.0;
-/// 32px — the Pane head's title row, inside the grounded header band.
-pub const PANE_HEAD_H: f32 = 32.0;
-/// The checkout line beneath the Pane head's title: 20px, sharing the
-/// head's inline padding and its ground, so the two read as one band.
-pub const PANE_CHECKOUT_H: f32 = 20.0;
-/// The gap between the checkout line's own marks — tighter than the head's
-/// gap, because these are one reading, not separate slots.
-pub const CHECKOUT_GAP: f32 = 8.0;
-/// 24px — the tasks strip.
-pub const TASKS_STRIP_H: f32 = 24.0;
-/// The tasks meter: 12 × 4 segments, 1px radius, 3px apart (15px pitch).
+/// Platform chrome, not a Ferrite state colour: Windows' own close-button
+/// field under the pointer and pressed, with its white mark. Muscle memory
+/// wins over "colour is state" for this one control.
 #[allow(dead_code)]
-pub const METER_SEG_W: f32 = 12.0;
+pub const CAPTION_CLOSE: u32 = 0xc42b1c;
 #[allow(dead_code)]
-pub const METER_SEG_H: f32 = 4.0;
+pub const CAPTION_CLOSE_PRESSED: u32 = 0x9b2218;
 #[allow(dead_code)]
-pub const METER_SEG_GAP: f32 = 3.0;
-#[allow(dead_code)]
+pub const CAPTION_CLOSE_INK: u32 = 0xffffff;
+/// The titlebar location's segments: 6px apart, one mono baseline.
+pub const TITLE_GAP: f32 = SPACE_1_5;
+/// The titlebar's labelled add control: the icon-button face with room for
+/// its mono label, the glyph 6px from it.
+pub const TITLE_ADD_PAD_X: f32 = SPACE_2;
+pub const TITLE_ADD_GAP: f32 = SPACE_1_5;
+/// The development-build tag: a quiet mono `dev` in a hairline box, 18px
+/// high (it sits inside a 20px UI line), 6px inline padding.
+pub const DEV_TAG_H: f32 = 18.0;
+pub const DEV_TAG_PAD_X: f32 = SPACE_1_5;
+/// The smallest window the chrome still lays out in: the nav plus one Pane
+/// at L2, the title, the add control and the Windows caption group.
+pub const WINDOW_MIN_W: f32 = 640.0;
+pub const WINDOW_MIN_H: f32 = 420.0;
+
+/// 36px — the Pane head: one row, no band. At 36 a 24px head control keeps
+/// 6px of air above and below.
+pub const PANE_HEAD_H: f32 = 36.0;
+/// Between the head's dot, title and checkout.
+pub const HEAD_GAP: f32 = SPACE_2;
+/// Between the head's clusters: title → checkout, and between the facts on
+/// the right (tasks · PR/CI · attention · action).
+pub const HEAD_CLUSTER_GAP: f32 = SPACE_3;
+/// How much more the checkout shrinks than the title when the head is
+/// narrow. Drift and dirt give way first, then the branch name — never
+/// below a few characters, so a narrow Pane still says where the work is.
+pub const HEAD_CHECKOUT_SHRINK: f32 = 4.0;
+pub const HEAD_BRANCH_MIN_W: f32 = 64.0;
+/// The checkout's floor: its branch mark, the gap and that minimum name.
+pub const HEAD_CHECKOUT_MIN_W: f32 = ROW_ICON + ROW_ICON_GAP + HEAD_BRANCH_MIN_W;
+/// Between a checkout's directory/branch pairs.
+pub const CHECKOUT_GAP: f32 = SPACE_2;
+/// The tasks meter in the head: 6 × 3 segments, 1px radius, 2px apart (an
+/// 8px pitch). Past `METER_SEG_CAP` steps it is one `METER_TRACK_W` track —
+/// the same length as the usage lines, so the two readings share a module.
+pub const METER_SEG_W: f32 = 6.0;
+pub const METER_SEG_H: f32 = 3.0;
+pub const METER_SEG_GAP: f32 = SPACE_0_5;
 pub const METER_SEG_R: f32 = 1.0;
-/// The checks card the header's `ci` mark opens (#29): wide enough for a
+pub const METER_SEG_CAP: usize = 12;
+pub const METER_TRACK_W: f32 = 48.0;
+/// Between the meter and its `3/4` count.
+pub const METER_GAP: f32 = SPACE_1_5;
+/// The unread ring's brightest breath (its dimmest is `PULSE_MIN`).
+pub const UNREAD_PULSE_MAX: f32 = 0.7;
+/// The checks card the head's PR/CI chip opens (#29): wide enough for a
 /// matrix job's own name — `test (windows-latest, stable)` — beside its
 /// state word, which is the whole reason the card exists.
 pub const CHECKS_CARD_W: f32 = 312.0;
-pub const CHECKS_CARD_PAD: f32 = 8.0;
+pub const CHECKS_CARD_PAD: f32 = SPACE_1;
 /// Between the card's heading and its runs.
-pub const CHECKS_CARD_GAP: f32 = 8.0;
-/// One run's line.
-pub const CHECKS_ROW_H: f32 = 22.0;
+pub const CHECKS_CARD_GAP: f32 = SPACE_1;
+/// The card's heading row and one run's row.
+pub const CHECKS_HEAD_H: f32 = 28.0;
+pub const CHECKS_ROW_H: f32 = 24.0;
 /// A workflow's heading above the runs it owns, and the space that sets
 /// that group off from the one before it.
-pub const CHECKS_GROUP_H: f32 = 18.0;
-pub const CHECKS_GROUP_GAP: f32 = 6.0;
-pub const LED_WALL: f32 = 5.0;
+pub const CHECKS_GROUP_H: f32 = 20.0;
+pub const CHECKS_GROUP_GAP: f32 = SPACE_1_5;
+
+/// The wall cell: 8px padding, 4px between rows, an 8px status dot — the
+/// wall's whole job is the signal, so its dot is bigger than a row's.
+pub const WALL_PAD: f32 = SPACE_2;
+pub const WALL_ROW_GAP: f32 = SPACE_1;
+pub const WALL_DOT: f32 = 8.0;
+/// Between a cell's dot and its title (L2 and the wall).
+pub const CELL_DOT_GAP: f32 = SPACE_1_5;
+/// Between an L2 cell's rows, and between the lines of its tail.
+pub const CELL_ROW_GAP: f32 = SPACE_1_5;
+pub const CELL_TAIL_GAP: f32 = SPACE_1;
+/// A completed L2 cell's history, quieted; the header and the Composer
+/// keep full contrast (the header's `done` is the one completion label).
 pub const DONE_CELL_OPACITY: f32 = 0.75;
-pub const DONE_WALL_OPACITY: f32 = 0.6;
+
+/// A seam between Panes: the grab band is transparent, and a 2px line
+/// inset 8px from each end (so it never touches a Pane corner) appears
+/// `TEXT_FAINT` under the pointer and `ACCENT` while held.
+pub const SEAM_LINE_W: f32 = 2.0;
+pub const SEAM_LINE_INSET: f32 = SPACE_2;
+/// A dragged Pane's drop wash: `DROP_WASH` ground, `ACCENT_EDGE` edge, the
+/// Pane's radius; its label is a raised mono tag, 8/4 padded.
+pub const DROP_LABEL_PAD_X: f32 = SPACE_2;
+pub const DROP_LABEL_PAD_Y: f32 = SPACE_1;
+/// The badge under the pointer while a Pane is dragged: 26px high, 10px
+/// inline padding, at most 280px before the title truncates.
+pub const DRAG_BADGE_H: f32 = 26.0;
+pub const DRAG_BADGE_PAD_X: f32 = 10.0;
+pub const DRAG_BADGE_MAX_W: f32 = 280.0;
+/// The empty board's hint column: lines 8px apart, a key 8px from its verb.
+pub const EMPTY_BOARD_GAP: f32 = SPACE_2;
 // (end WP-C) — append above this line only
 
 // ======================================== WP-D · composer, pickers, usage, draft

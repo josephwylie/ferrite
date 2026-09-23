@@ -82,17 +82,34 @@ pub struct TurnEnd {
 }
 
 impl TurnEnd {
-    /// What the row says, and what copy and search see.
+    /// What the row says, and what copy and search see: `Worked for 38s ·
+    /// 8:53 pm`, `Interrupted · 4.1s`, `Failed · 4.1s · <the provider's
+    /// message>`. A time that was never observed (an older log) is left out
+    /// rather than guessed.
     pub fn text(&self) -> String {
+        let elapsed = self
+            .elapsed_ms
+            .map(|ms| crate::progress::duration_label(std::time::Duration::from_millis(ms)));
+        let mut parts: Vec<String> = Vec::new();
         match &self.outcome {
-            TurnOutcome::Completed => format!(
-                "Completed · {:.1}s elapsed · {}",
-                self.elapsed_ms.unwrap_or_default() as f64 / 1_000.0,
-                self.completed_at.as_deref().unwrap_or_default()
-            ),
-            TurnOutcome::Interrupted => "interrupted".into(),
-            TurnOutcome::Error(message) => message.clone(),
+            TurnOutcome::Completed => {
+                parts.push(match &elapsed {
+                    Some(elapsed) => format!("Worked for {elapsed}"),
+                    None => "Worked".into(),
+                });
+                parts.extend(self.completed_at.clone().filter(|at| !at.is_empty()));
+            }
+            TurnOutcome::Interrupted => {
+                parts.push("Interrupted".into());
+                parts.extend(elapsed);
+            }
+            TurnOutcome::Error(message) => {
+                parts.push("Failed".into());
+                parts.extend(elapsed);
+                parts.extend((!message.is_empty()).then(|| message.clone()));
+            }
         }
+        parts.join(" \u{b7} ")
     }
 
     pub fn completed(&self) -> bool {
@@ -825,6 +842,21 @@ impl Transcript {
                 elapsed_ms,
                 completed_at,
             } => {
+                // An interrupted or failed turn already left its row; the
+                // observation times it. A completed turn ends without a row,
+                // so the observation is its stamp.
+                if let Some(block) = self.blocks.last_mut() {
+                    if let Body::TurnEnd(end) = &mut block.body {
+                        if !end.completed() && end.elapsed_ms.is_none() {
+                            end.elapsed_ms = Some(elapsed_ms);
+                            end.completed_at = Some(completed_at);
+                            return Update {
+                                dirty: vec![block.id],
+                                ..Update::default()
+                            };
+                        }
+                    }
+                }
                 let id = self.push(Body::TurnEnd(TurnEnd {
                     outcome: TurnOutcome::Completed,
                     elapsed_ms: Some(elapsed_ms),
@@ -1251,9 +1283,11 @@ impl Transcript {
                         elapsed_ms: None,
                         completed_at: None,
                     }))),
-                    TurnOutcome::Error(message) => {
-                        dirty.push(self.push(Body::Notice(message.clone())))
-                    }
+                    TurnOutcome::Error(message) => dirty.push(self.push(Body::TurnEnd(TurnEnd {
+                        outcome: TurnOutcome::Error(message.clone()),
+                        elapsed_ms: None,
+                        completed_at: None,
+                    }))),
                 }
                 self.turn_outcome = Some(outcome);
                 Update {
@@ -1279,11 +1313,21 @@ impl Transcript {
                         ..Update::default()
                     };
                 }
+                // What is waiting, in words: the questions by name, or the
+                // tool that needs approval and what it touches.
                 Update {
-                    dirty: vec![self.push(Body::Notice(format!(
-                        "decision needed: {} — {}",
-                        decision.tool_name, decision.description
-                    )))],
+                    dirty: vec![self.push(Body::Notice(match &decision.kind {
+                        crate::DecisionKind::Questions(questions) => {
+                            format!("asks {}", crate::questions::summary(questions))
+                        }
+                        _ if decision.description.is_empty() => {
+                            format!("{} needs approval", decision.tool_name)
+                        }
+                        _ => format!(
+                            "{} needs approval · {}",
+                            decision.tool_name, decision.description
+                        ),
+                    }))],
                     ..Update::default()
                 }
             }
@@ -2396,7 +2440,43 @@ mod tests {
         assert_eq!(transcript.status(), Status::Blocked);
         let last = transcript.blocks().last().unwrap();
         assert!(matches!(last.body, Body::Notice(_)));
-        assert_eq!(body_text(last), "decision needed: Write — ferrite-perm.txt");
+        assert_eq!(body_text(last), "Write needs approval · ferrite-perm.txt");
+    }
+
+    #[test]
+    fn a_blocking_question_names_its_questions_without_a_dangling_dash() {
+        let questions = crate::questions::parse(&serde_json::json!({"questions": [{
+            "question": "Which approach?",
+            "header": "Approach",
+            "options": [{"label": "A"}, {"label": "B"}]
+        }]}))
+        .unwrap();
+        for (kind, description, said) in [
+            (
+                crate::DecisionKind::Questions(questions),
+                "",
+                "asks 1 question · Approach",
+            ),
+            (crate::DecisionKind::Approval, "", "Bash needs approval"),
+        ] {
+            let mut transcript = Transcript::default();
+            transcript.apply(Input::Event(SessionEvent::DecisionRequested {
+                decision: Decision {
+                    delivery: Default::default(),
+                    kind,
+                    policy: Default::default(),
+                    id: "q_01".into(),
+                    tool_use_id: "toolu_02".into(),
+                    tool_name: "Bash".into(),
+                    description: description.into(),
+                    input: serde_json::Value::Null,
+                    suggestions: vec![],
+                },
+            }));
+            let text = body_text(transcript.blocks().last().unwrap());
+            assert_eq!(text, said);
+            assert!(!text.contains('—') && !text.ends_with(' '));
+        }
     }
 
     #[test]
@@ -2987,7 +3067,8 @@ mod tests {
                 ..
             })
         ));
-        assert_eq!(body_text(last), "interrupted");
+        // No observation timed it here, so the row claims no elapsed.
+        assert_eq!(body_text(last), "Interrupted");
     }
 
     #[test]
@@ -3001,8 +3082,47 @@ mod tests {
 
         assert_eq!(transcript.status(), Status::Idle);
         let last = transcript.blocks().last().unwrap();
-        assert!(matches!(last.body, Body::Notice(_)));
-        assert_eq!(body_text(last), "model overloaded");
+        assert!(matches!(
+            &last.body,
+            Body::TurnEnd(TurnEnd {
+                outcome: crate::TurnOutcome::Error(_),
+                ..
+            })
+        ));
+        assert_eq!(body_text(last), "Failed · model overloaded");
+    }
+
+    #[test]
+    fn an_observation_times_the_interrupted_or_failed_turn_it_follows() {
+        for (outcome, said) in [
+            (crate::TurnOutcome::Interrupted, "Interrupted · 4.1s"),
+            (
+                crate::TurnOutcome::Error("model overloaded".into()),
+                "Failed · 4.1s · model overloaded",
+            ),
+            (crate::TurnOutcome::Completed, "Worked for 4.1s · 8:53 pm"),
+        ] {
+            let mut transcript = Transcript::default();
+            transcript.apply(Input::Prompt("go".into()));
+            transcript.apply(Input::Event(SessionEvent::TurnEnded {
+                outcome,
+                cost_usd: None,
+            }));
+            let rows = transcript.blocks().len();
+            let update = transcript.apply(Input::CompletionObservation {
+                elapsed_ms: 4_100,
+                completed_at: "8:53 pm".into(),
+            });
+            let ends: Vec<_> = transcript
+                .blocks()
+                .iter()
+                .filter(|block| matches!(block.body, Body::TurnEnd(_)))
+                .collect();
+            assert_eq!(ends.len(), 1, "one row per turn end, never two");
+            assert_eq!(body_text(ends[0]), said);
+            assert_eq!(update.dirty, vec![ends[0].id]);
+            assert!(transcript.blocks().len() <= rows + 1);
+        }
     }
 
     #[test]

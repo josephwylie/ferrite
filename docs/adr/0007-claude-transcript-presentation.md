@@ -37,17 +37,19 @@ does not introduce a terminal renderer into the application.
 
 
 Completion uses one quiet locally observed timestamp and elapsed duration,
-persisted with the turn rather than regenerated on replay. Labels say elapsed;
-provider process runtime and approval-wait breakdowns are shown only if supplied.
+persisted with the turn rather than regenerated on replay. The stamp reads
+`Worked for 38s · 8:53 pm`; an interrupted or failed turn states its elapsed on
+its own row (`Interrupted · 4.1s`, `Failed · 4.1s · <message>`); provider process runtime and approval-wait breakdowns are shown only if supplied.
 Reasoning appears once in the visible transcript/live area; only the live marker
 animates. Exact literal tool output and question notes retain source whitespace.
 
 Native tabs retain U+0009 and the platform shaper's local run advance. There is
 no terminal-wide eight-column grid or source-to-space rewrite. The reference
-fixture records macOS tab advances with bundled JetBrains Mono. Ordered markers
+fixture records macOS tab advances with the then-bundled JetBrains Mono; Ferrite
+now bundles Geist Mono. Ordered markers
 use native measured widths, and overflowing tables use the existing horizontal
-scroll table layout. H1 is bold/italic/underlined and H2–H6 bold, while the
-operator's existing enlarged heading sizes remain.
+scroll table layout. Headings are semibold with no italic or underline;
+H1 and H2 are enlarged relative to the answer size.
 
 The [final findings account](../research/ferrite-transcript-implementation-2026-09-06/README.md)
 records all F01–F60 dispositions, native artifacts and comparison limits.

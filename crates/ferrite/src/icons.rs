@@ -70,12 +70,14 @@ icons![
     "prompt",
     "ferrite-mono",
     // ---- WP-A icons (append names above the end line)
+    "reasoning",
     // (end WP-A)
 
     // ---- WP-B icons (append names above the end line)
     // (end WP-B)
 
     // ---- WP-C icons (append names above the end line)
+    "bell",
     // (end WP-C)
 
     // ---- WP-D icons (append names above the end line)
@@ -147,12 +149,18 @@ pub const PROMPT: &str = "icons/prompt.svg";
 pub const FERRITE_MONO: &str = "icons/ferrite-mono.svg";
 
 // ---- WP-A icon names (append consts above the end line)
+/// `∴` (not in Geist Mono): the reasoning row's gutter mark, three dots.
+pub const REASONING: &str = "icons/reasoning.svg";
 // (end WP-A)
 
 // ---- WP-B icon names (append consts above the end line)
 // (end WP-B)
 
 // ---- WP-C icon names (append consts above the end line)
+/// The notifications bell, in the line family (it replaces the kit's
+/// Lucide bell, whose 24-box stroke read heavier than the gear beside it).
+#[allow(dead_code)]
+pub const BELL: &str = "icons/bell.svg";
 // (end WP-C)
 
 // ---- WP-D icon names (append consts above the end line)
@@ -343,6 +351,7 @@ mod tests {
     fn every_icon_key_loads_an_svg() {
         for key in [
             SIDEBAR,
+            BELL,
             CHEVRON_DOWN,
             CHEVRON_RIGHT,
             CLOSE,
@@ -378,7 +387,7 @@ mod tests {
         }
         assert_eq!(
             ICONS.len(),
-            26,
+            28,
             "the prototype and app controls, including disclosure and close,              and the four Windows caption glyphs"
         );
     }
@@ -389,6 +398,7 @@ mod tests {
     fn line_icons_bake_the_stroke_class_and_logomarks_do_not() {
         for key in [
             SIDEBAR,
+            BELL,
             CHEVRON_DOWN,
             CHEVRON_RIGHT,
             CLOSE,
@@ -407,7 +417,12 @@ mod tests {
             let svg = std::str::from_utf8(&bytes).unwrap();
             assert!(svg.contains(r#"fill="none""#), "{key} does not fill");
             assert!(svg.contains(r#"stroke="currentColor""#), "{key} strokes");
-            assert!(svg.contains(r#"stroke-width="1.5""#), "{key} is 1.5");
+            // One drawn weight whatever the viewBox: 1.5px at 16px.
+            assert!(
+                (effective_stroke(svg) - 1.5).abs() < 0.01,
+                "{key} draws {} at 16px, not 1.5",
+                effective_stroke(svg)
+            );
         }
 
         let branch = Assets.load(BRANCH).unwrap().unwrap();
@@ -423,6 +438,23 @@ mod tests {
             assert!(svg.contains(r#"fill="currentColor""#), "{key} fills");
             assert!(!svg.contains("stroke"), "{key} is a fill logomark");
         }
+    }
+
+    /// `stroke-width × 16 / viewBox` — the stroke an icon draws at 16px.
+    fn effective_stroke(svg: &str) -> f32 {
+        let attr = |name: &str| {
+            let at = svg.find(&format!("{name}=\"")).unwrap() + name.len() + 2;
+            let end = at + svg[at..].find('"').unwrap();
+            svg[at..end].to_string()
+        };
+        let stroke: f32 = attr("stroke-width").parse().unwrap();
+        let view: f32 = attr("viewBox")
+            .split_whitespace()
+            .nth(2)
+            .unwrap()
+            .parse()
+            .unwrap();
+        stroke * 16.0 / view
     }
 
     /// A name nothing embeds is `Ok(None)`, not an error: gpui asks for a
