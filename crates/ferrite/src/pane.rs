@@ -3196,7 +3196,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         queue_height,
         empty,
         attachments,
-        mut actions,
+        actions,
         background,
         menu,
         mode,
@@ -3322,10 +3322,14 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
                 .text_color(rgb(TEXT_MUTED))
                 .children({
                     let (ghost, hint) = placeholder(decision.is_some(), transcript, suggestion);
+                    // A compact (L2) line has no room for a hint beside its
+                    // ghost; the `/` menu is one key away all the same.
+                    let hint = hint.filter(|_| !compact);
                     [ghost.into_any_element()]
                         .into_iter()
                         .chain(hint.map(|(key, verb)| {
                             div()
+                                .debug_selector(|| "prompt-placeholder-hint".into())
                                 .flex_shrink_0()
                                 .ml(px(theme::SPACE_3))
                                 .child(format!("{key} {verb}"))
@@ -7347,9 +7351,6 @@ mod tests {
     // (end WP-C)
 
     // ---- WP-D tests (append above the end line)
-    /// With text in the line the row says what Enter does now: behind a
-    /// running turn it queues, not sends.
-
     /// The `❯` says where keys land: accent only while the line holds the
     /// keyboard, attention when that line answers a Decision.
     #[test]

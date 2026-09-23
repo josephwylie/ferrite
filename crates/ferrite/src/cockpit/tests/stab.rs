@@ -1388,3 +1388,28 @@ fn a_waiting_decision_head_names_only_its_kind(cx: &mut TestAppContext) {
         "a waiting card carries no status word"
     );
 }
+
+/// A compact (L2) Composer's placeholder carries no hint: a narrow cell has
+/// no room for one beside the ghost, and a clipped hint reads as noise.
+#[gpui::test]
+fn a_compact_placeholder_carries_no_hint(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("compact-placeholder", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(560.), px(700.)));
+    tick(cx);
+    assert_eq!(
+        cx.update(|window, cx| view.read(cx).level_now(window)),
+        Level::Instruments
+    );
+    assert!(cx.debug_bounds("prompt-placeholder").is_some(), "the ghost");
+    assert!(
+        cx.debug_bounds("prompt-placeholder-hint").is_none(),
+        "no hint at L2"
+    );
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    tick(cx);
+    assert!(
+        cx.debug_bounds("prompt-placeholder-hint").is_some(),
+        "L1 carries its one hint"
+    );
+}
