@@ -415,9 +415,9 @@ pub const GRID_PAD: f32 = 10.0;
 /// corner sits directly beneath the caption buttons, and their hover face
 /// — edge-to-edge by design — reads as lying over the Pane.
 pub const BOARD_TOP: f32 = WIN_CHROME_H + GRID_PAD;
-/// 320px — a toast's width: a Thread's name, a detail line, room for the
-/// kit's icon and close button.
-pub const TOAST_W: f32 = 320.0;
+/// A toast's width: the nav column less 8px each side, so a toast stacked at
+/// the foot of the nav covers only the ground and never a Pane.
+pub const TOAST_W: f32 = NAV_WIDTH - 2.0 * SPACE_2;
 
 // -------------------------------------------- pane body and the row column
 
@@ -691,16 +691,17 @@ pub fn init_components(cx: &mut gpui::App) {
     // (Button::primary, menu rows, tooltips, checkboxes) would paint the
     // kit's neutrals. Rebuild them from the colours above.
     theme.tokens = gpui::component::ThemeTokens::from(&theme.colors);
-    // Toasts stack at the board's top-right corner, inside its own
-    // padding, so they cover a Pane's head and never the nav or the bell
-    // that lists them. Five at once is a wall's worth; the bell holds the
-    // rest.
-    theme.notification.placement = gpui::Anchor::TopRight;
+    // Toasts stack at the foot of the nav column, 8px in from its edges:
+    // the ground is the least valuable space, so no toast covers a Pane's
+    // head or its Composer. With the nav collapsed the cockpit moves the
+    // stack BottomRight, above the Composer (`present_notices`). Five at
+    // once is a wall's worth; the bell holds the rest.
+    theme.notification.placement = gpui::Anchor::BottomLeft;
     theme.notification.margins = gpui::base::Edges {
         top: px(BOARD_TOP),
         right: px(GRID_PAD),
         bottom: px(GRID_PAD),
-        left: px(GRID_PAD),
+        left: px(SPACE_2),
     };
     theme.notification.width = px(TOAST_W);
     theme.notification.max_items = 5;
