@@ -27,8 +27,14 @@ const VERSION_CASE: &str = "case \"$1\" in --version) echo '2.1.243 (Claude Code
 /// handshake timeout — and would be lying about the protocol. Stubs that are
 /// *about* the handshake build on `VERSION_CASE` instead and answer it
 /// themselves.
+///
+/// Right after the handshake the Session polls `mcp_status` for its MCP
+/// prompts (request ids `ferrite_mcp_…`); a stub reading the pipe
+/// positionally takes its lines with `take`, which skips those, and
+/// `read_lines` drops them from what a stub recorded.
 const PRELUDE: &str = concat!(
     "case \"$1\" in --version) echo '2.1.243 (Claude Code)'; exit 0;; esac\n",
+    "take() { while IFS= read -r line; do case \"$line\" in *'\"request_id\":\"ferrite_mcp_'*) continue;; esac; return 0; done; return 1; }\n",
     r#"echo '{"type":"control_response","response":{"subtype":"success","request_id":"req_1","response":{}}}'"#,
 );
 
@@ -696,7 +702,7 @@ fn the_session_speaks_the_pinned_command_line_and_protocol() {
     let program = stub(
         "claude-echoes",
         &format!(
-            "{PRELUDE}\necho \"$@\" > '{}'\nIFS= read -r line\necho \"$line\" >> '{}'\nIFS= read -r line\necho \"$line\" >> '{}'\necho '{{\"type\":\"control_response\",\"response\":{{\"subtype\":\"success\",\"request_id\":\"req_2\",\"response\":{{}}}}}}'\ncat >> '{}'",
+            "{PRELUDE}\necho \"$@\" > '{}'\ntake\necho \"$line\" >> '{}'\ntake\necho \"$line\" >> '{}'\necho '{{\"type\":\"control_response\",\"response\":{{\"subtype\":\"success\",\"request_id\":\"req_2\",\"response\":{{}}}}}}'\ncat >> '{}'",
             log.display(),
             log.display(),
             log.display(),
@@ -806,10 +812,10 @@ fn effort_changes_clear_the_override_without_replacing_the_process() {
         "claude-live-effort",
         &format!(
             r#"{PRELUDE}
-IFS= read -r line
+take
 echo "$line" >> '{log}'
 for id in req_2 req_3 req_4; do
-    IFS= read -r line
+    take
     echo "$line" >> '{log}'
     echo '{{"type":"control_response","response":{{"subtype":"success","request_id":"'"$id"'","response":{{}}}}}}'
 done
@@ -849,9 +855,9 @@ fn a_rejected_effort_is_reported_and_the_session_can_still_send() {
         "claude-rejected-effort",
         &format!(
             r#"{PRELUDE}
-IFS= read -r line
+take
 echo "$line" >> '{log}'
-IFS= read -r line
+take
 echo "$line" >> '{log}'
 echo '{{"type":"control_response","response":{{"subtype":"error","request_id":"req_2","error":"unsupported effort"}}}}'
 cat >> '{log}'"#,
@@ -1013,12 +1019,16 @@ fn log_path(name: &str) -> PathBuf {
 
 /// Wait for the stub to have written `wanted` lines; the CLI end of a pipe
 /// gets there when it gets there.
+/// The stub's record of the pipe, less the Session's own MCP settle
+/// traffic (`ferrite_mcp_…` request ids), which rides the same pipe right
+/// after the handshake and is not what these tests are about.
 fn read_lines(path: &std::path::Path, wanted: usize) -> Vec<String> {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let lines: Vec<String> = fs::read_to_string(path)
             .unwrap_or_default()
             .lines()
+            .filter(|line| !line.contains("\"request_id\":\"ferrite_mcp_"))
             .map(str::to_string)
             .collect();
         if lines.len() >= wanted {
@@ -1055,13 +1065,13 @@ fn native_queue_admission_and_cancellation_use_the_existing_session_pipe() {
         "native-queue",
         &format!(
             r#"{PRELUDE}
-read -r line
+take
 printf '%s\n' "$line" > '{}'
 echo '{{"type":"system","subtype":"init","session_id":"native","model":"stub","capabilities":["msg_lifecycle_v1"]}}'
-read -r line
+take
 printf '%s\n' "$line" >> '{}'
 echo '{}'
-read -r line
+take
 printf '%s\n' "$line" >> '{}'
 echo '{}'
 echo '{{"type":"control_response","response":{{"subtype":"success","request_id":"req_2","response":{{"cancelled":true}}}}}}'
@@ -1160,4 +1170,45 @@ done
     drain(session.events());
     std::thread::sleep(Duration::from_millis(100));
     assert_eq!(session.take_suggestion(), None);
+}
+
+/// A server still pending when the settle gives up — or one toggled on
+/// later — shows up in the next turn's `system:init` `slash_commands`, and
+/// a prompt named there that the menu lacks fetches the menu again.
+#[test]
+fn a_turn_head_naming_an_unknown_mcp_prompt_refreshes_the_menu() {
+    let script = format!(
+        r#"{PRELUDE}
+while IFS= read -r line; do
+  case "$line" in
+    *'"request_id":"ferrite_mcp_status_'*)
+      id=$(printf '%s' "$line" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
+      printf '{{"type":"control_response","response":{{"subtype":"success","request_id":"%s","response":{{"mcpServers":[{{"name":"reui","status":"pending"}}]}}}}}}\n' "$id";;
+    *'"request_id":"ferrite_mcp_init_'*)
+      id=$(printf '%s' "$line" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
+      printf '{{"type":"control_response","response":{{"subtype":"success","request_id":"%s","response":{{"commands":[{{"name":"reui:improve (MCP)","description":"Refine ReUI UI"}}]}}}}}}\n' "$id";;
+    *'"type":"user"'*)
+      echo '{{"type":"system","subtype":"init","session_id":"s","model":"stub","mcp_servers":[{{"name":"reui","status":"connected"}}],"slash_commands":["compact","mcp__reui__improve"]}}'
+      echo '{{"type":"result","subtype":"success","is_error":false,"session_id":"s","total_cost_usd":0}}';;
+  esac
+done
+"#
+    );
+    let mut session = ClaudeSession::spawn(config(stub("claude-menu-init", &script))).unwrap();
+    session.send("hi").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let commands = loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match session.events().recv_timeout(left) {
+            Ok(SessionEvent::Commands { commands }) => break commands,
+            Ok(_) => {}
+            Err(e) => panic!("the menu was never refreshed: {e}"),
+        }
+    };
+    assert_eq!(commands.len(), 1);
+    assert_eq!(commands[0].name, "mcp__reui__improve");
+    assert_eq!(
+        commands[0].description,
+        "reui:improve (MCP) · Refine ReUI UI"
+    );
 }
