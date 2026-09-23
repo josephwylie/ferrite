@@ -14496,6 +14496,67 @@ mod tests {
         }
     }
 
+    /// The prompt echo reads at the answer's size at every reading size
+    /// (14/22, 16/24, 18/28): the turn's heading is set apart by its `❯`,
+    /// weight and ink, never by being smaller than the answer under it.
+    #[gpui::test]
+    fn the_prompt_echo_reads_at_the_answer_size_at_every_reading_size(cx: &mut TestAppContext) {
+        use ferrite_core::settings::SoloReadingSize;
+        let (mut core, fake) = cockpit("echo-reading-size", 1);
+        let thread = core.threads()[0];
+        core.send(thread, "Check the build".into());
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        cx.simulate_resize(gpui::size(px(1000.), px(700.)));
+        fake.streams.borrow()[0]
+            .send(SessionEvent::TextDelta {
+                text: "The build passed.".into(),
+            })
+            .unwrap();
+        tick(cx);
+        // Each step changes the size, so the transcript re-renders (a cached
+        // view registers no debug bounds).
+        for size in [
+            SoloReadingSize::Large,
+            SoloReadingSize::Comfortable,
+            SoloReadingSize::Standard,
+        ] {
+            view.update(cx, |view, cx| {
+                view.prefs.settings.solo_reading_size = size;
+                cx.notify();
+            });
+            tick(cx);
+            let prompt = cx.debug_bounds("transcript-prompt").unwrap();
+            assert_eq!(
+                prompt.size.height,
+                px(crate::theme::answer_line_height(size)),
+                "{size:?}: the echo sits on the answer's line"
+            );
+            let echo = view.read_with(cx, |view, cx| {
+                let pane = &view.panes[0];
+                let block = view
+                    .cockpit
+                    .thread(thread)
+                    .unwrap()
+                    .transcript()
+                    .blocks()
+                    .iter()
+                    .find(|block| matches!(block.body, Body::Prompt(_)))
+                    .unwrap()
+                    .id;
+                crate::rich::testing::font_size(
+                    &format!("literal-{}-{block:?}", pane.text_namespace()),
+                    cx,
+                )
+                .unwrap()
+            });
+            assert_eq!(
+                echo,
+                px(crate::theme::answer_text_size(size)),
+                "{size:?}: the echo is set at the answer's size"
+            );
+        }
+    }
+
     #[gpui::test]
     fn transcript_rows_share_one_content_edge_and_the_gap_table(cx: &mut TestAppContext) {
         let (mut core, fake) = cockpit("transcript-spacing", 1);
@@ -14537,13 +14598,8 @@ mod tests {
             let tools = cx.debug_bounds("tool-group-spacing-0").unwrap();
             let answer = cx.debug_bounds("transcript-answer").unwrap();
             let stamp = cx.debug_bounds("turn-stamp").unwrap();
-            // The prompt's hover wash bleeds past its line box; the gap is
-            // measured from the line box.
-            let bleed = px(crate::theme::PROMPT_HOVER_BLEED);
-            assert_eq!(
-                tools.top() - (prompt.bottom() - bleed),
-                px(crate::theme::GAP_BLOCK)
-            );
+            // The prompt has no hover ground: its bounds are its line box.
+            assert_eq!(tools.top() - prompt.bottom(), px(crate::theme::GAP_BLOCK));
             assert_eq!(answer.top() - tools.bottom(), px(crate::theme::GAP_BLOCK));
             // The stamp is one block step under the turn's last block.
             assert_eq!(stamp.top() - answer.bottom(), px(crate::theme::GAP_BLOCK));

@@ -18,7 +18,7 @@
 //! | `menu-in` | [`MENU_IN`] 140ms | every Ferrite-drawn floating surface: the context menu, the nav's order and Project menus, the Composer's menus, the footer cards (session controls, context usage, checks) and the bell's panel, via [`menu_in`] / [`menu_in_at`], settling away from their opener ([`Opens`]) |
 //! | `menu-out` | none | a menu closes at once (see the rules in `theme.rs`) |
 //! | `dialog-in` | [`DIALOG_IN`] 180ms | the Settings and Project sheets via [`dialog_in`], their veil darkening in over [`FADE_QUICK`] ([`veil_in`]) |
-//! | chevron rotate | [`CHEVRON`] 150ms | the transcript's disclosure `▸` turns to `▾` as an eased `svg` rotation ([`settled`]) |
+//! | chevron rotate | [`CHEVRON`] 150ms | the transcript's trailing disclosure chevron turns a quarter as an eased `svg` rotation, on a pointer toggle only ([`settled`]) |
 //! | collapse | [`COLLAPSE`] 180ms | the nav's Parked fold grows open under its header ([`Settled::reveal_only`]); it folds shut at once |
 //! | icon swap | [`ICON_SWAP`] 300ms | the Composer's send ⇄ stop: both glyphs stay mounted and cross-fade, opacity with `svg` scale 0.25 → 1 |
 //! | `fade-in` | [`FADE_IN`] 500ms, 4px rise | a transcript row appended at the tail while the operator watches ([`fade_in_at`]); never first paint, a history window growing at its head, or scroll-back |

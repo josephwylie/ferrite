@@ -303,16 +303,25 @@ impl gpui::RenderOnce for Markdown {
                     format!("code-actions-{actions_namespace}-{:?}", block.span).into();
                 let code = block.code();
                 let language = block.lang();
-                let actions = window.use_keyed_state(id, cx, |_, _| CodeActions {
+                let selected = block.has_selection();
+                let key = id.clone();
+                let actions = window.use_keyed_state(id, cx, |_, cx| CodeActions {
                     code: code.clone(),
                     language: language.clone(),
                     copied: false,
+                    selected,
+                    focus: cx.focus_handle(),
+                    key,
                 });
                 actions.update(cx, |actions, cx| {
                     if actions.code != code || actions.language != language {
                         actions.code = code;
                         actions.language = language;
                         actions.copied = false;
+                        cx.notify();
+                    }
+                    if actions.selected != selected {
+                        actions.selected = selected;
                         cx.notify();
                     }
                 });
@@ -328,33 +337,80 @@ struct CodeActions {
     code: SharedString,
     language: Option<SharedString>,
     copied: bool,
+    /// The caret or a selection is inside the block.
+    selected: bool,
+    focus: gpui::FocusHandle,
+    /// The hover blend's key: the block's own actions id.
+    key: SharedString,
+}
+
+/// A fence's language id as the overlay names it: none for plain text.
+fn code_language(language: Option<&SharedString>) -> Option<SharedString> {
+    language
+        .filter(|lang| {
+            !["text", "txt", "plaintext"]
+                .iter()
+                .any(|plain| lang.eq_ignore_ascii_case(plain))
+        })
+        .cloned()
 }
 
 impl gpui::Render for CodeActions {
-    fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let code = self.code.clone();
-        let mut header = gpui::div()
+        // The overlay covers the whole block (the vendor lays it over the
+        // code with no layout of its own): the pointer anywhere on the block
+        // blends the actions in over 150ms; keyboard focus inside them, or
+        // the caret or a selection inside the block, shows them at once.
+        let revealed = self.selected || self.focus.contains_focused(window, cx);
+        let shown = if revealed {
+            1.
+        } else {
+            crate::motion::hover_t(&self.key)
+        };
+        // The transcript around this overlay is a cached view: while the
+        // blend is mid-flight, ask for the next frame's render here (the
+        // cached ancestors follow).
+        if shown > 0. && shown < 1. {
+            cx.notify();
+        }
+        let mut actions = gpui::div()
             .key_context("TranscriptCodeActions")
+            .track_focus(&self.focus)
+            .debug_selector(|| "code-actions".into())
+            .absolute()
+            .top(px(theme::CODE_ACTIONS_TOP))
+            .right(px(theme::CODE_ACTIONS_RIGHT))
             .flex()
             .items_center()
-            .w_full()
-            .min_w_0()
-            .h(px(theme::CODE_HEADER_H))
+            .justify_end()
+            .min_w(px(theme::CODE_ACTION_MIN_W))
             .gap(px(theme::SPACE_1))
+            .rounded(px(theme::R_CHIP))
+            .bg(rgb(theme::RAISED))
             .font_family(theme::FONT_UI)
             .text_size(px(theme::FS_SM))
             .line_height(px(theme::LH_META))
             .text_color(rgb(theme::TEXT_MUTED))
-            .when_some(self.language.clone(), |header, language| {
-                header.child(gpui::div().min_w_0().truncate().child(language))
-            })
-            .child(gpui::div().flex_1());
+            .opacity(shown)
+            .when_some(
+                code_language(self.language.as_ref()),
+                |actions, language| {
+                    actions.child(
+                        gpui::div()
+                            .flex_shrink_0()
+                            .pl(px(theme::SPACE_1))
+                            .font_family(theme::FONT_CODE)
+                            .child(language),
+                    )
+                },
+            );
         if self
             .language
             .as_ref()
             .is_some_and(|lang| lang.eq_ignore_ascii_case("html"))
         {
-            header = header.child(code_action("preview-html", cx).label("Preview").on_click(
+            actions = actions.child(code_action("preview-html", cx).label("Preview").on_click(
                 move |_, window, cx| {
                     use gpui::component::WindowExt as _;
                     let html = code.clone();
@@ -392,10 +448,11 @@ impl gpui::Render for CodeActions {
                 },
             ));
         }
-        header.child(
+        actions = actions.child(
             code_action("copy-code", cx)
                 .debug_selector(|| "copy-code".into())
                 .accessibility_label("Copy code")
+                .tooltip("Copy \u{2318}C")
                 .label(if self.copied { "Copied" } else { "Copy" })
                 .when(self.copied, |button| {
                     button.debug_selector(|| "code-copied".into())
@@ -406,13 +463,20 @@ impl gpui::Render for CodeActions {
                     view.copied = true;
                     cx.notify();
                 })),
-        )
+        );
+        gpui::div()
+            .id(SharedString::from(format!("{}-overlay", self.key)))
+            .relative()
+            .size_full()
+            .on_hover(crate::motion::hover_listener(self.key.clone()))
+            .child(actions)
     }
 }
 
-/// A quiet text action in a code block's header: mono `FS_SM` `TEXT_2` on
-/// the block's own `RAISED`, `FILL` under the pointer (the hover face on
-/// `RAISED`), a stable `CODE_ACTION_H` × `CODE_ACTION_MIN_W` target.
+/// A quiet text action in a fence's overlay: Geist `FS_SM` `TEXT_2` on the
+/// block's own `RAISED`, `FILL` under the pointer (the hover face on
+/// `RAISED`), pressed at once, a stable `CODE_ACTION_H` ×
+/// `CODE_ACTION_MIN_W` target.
 fn code_action(id: &'static str, cx: &App) -> gpui::component::button::Button {
     use gpui::component::button::{ButtonCustomVariant, ButtonVariants as _};
     crate::components::button(id)
@@ -426,7 +490,9 @@ fn code_action(id: &'static str, cx: &App) -> gpui::component::button::Button {
         .min_w(px(theme::CODE_ACTION_MIN_W))
         .px(px(theme::CODE_ACTION_PAD_X))
         .rounded(px(theme::R_CHIP))
+        .font_family(theme::FONT_UI)
         .text_size(px(theme::FS_SM))
+        .line_height(px(theme::LH_META))
         .flex_shrink_0()
         .tab_stop(true)
 }
@@ -442,6 +508,7 @@ pub fn style(rem_size: gpui::Pixels) -> TextViewStyle {
 pub fn style_at(rem_size: gpui::Pixels, base: gpui::Pixels) -> TextViewStyle {
     let rem = |value: f32| rems(value / f32::from(rem_size));
     let step = |value: f32| theme::reading_step(value, f32::from(base));
+    let reading = reading_size_at(f32::from(base));
     let mut style = TextViewStyle::default()
         .with_dark(true)
         .with_foreground(rgb(theme::TEXT).into())
@@ -465,56 +532,72 @@ pub fn style_at(rem_size: gpui::Pixels, base: gpui::Pixels) -> TextViewStyle {
                 .line_height(px(theme::LH_CODE))
                 .text_color(rgb(theme::SYN_PLAIN)),
         )
+        // Inline code is body ink at body weight whatever it sits in (a
+        // heading, `**strong**`): the chip, not the weight, sets it apart.
         .with_inline_code(gpui::HighlightStyle {
             color: Some(rgb(theme::INLINE_CODE_INK).into()),
+            font_weight: Some(theme::W_BODY),
             ..Default::default()
         })
         .with_inline_code_font(Some(theme::FONT_CODE.into()))
         .with_inline_code_wash(Some(gpui::base::text::InlineCodeWash {
-            color: rgba(theme::ACCENT_WASH).into(),
+            color: rgba(theme::INLINE_CODE_WASH).into(),
             radius: px(theme::R_CHIP),
             overhang: px(theme::INLINE_CODE_OVERHANG),
-            inset_y: px(theme::INLINE_CODE_INSET_Y),
+            inset_y: px(theme::inline_code_inset_y(reading)),
         }))
-        .with_border(rgba(theme::TABLE_RULE).into())
+        // No row rules: a transparent border draws none (the header keeps
+        // `TABLE_HEAD_RULE` through its own refinement).
+        .with_border(gpui::transparent_black())
         .with_table({
-            // No box and no ground: the rows' hairlines are the table.
+            // No box and no ground: the header's rule is the table.
             let mut table = gpui::StyleRefinement::default()
                 .border_0()
                 .bg(gpui::transparent_black());
             table.overflow.x = Some(gpui::Overflow::Scroll);
             table
         })
-        .with_table_cell(
+        .with_table_cell(crate::components::tabular(
             gpui::StyleRefinement::default()
                 .border_r_0()
-                .py(px(theme::TABLE_CELL_PAD_Y)),
-        )
+                .py(px(theme::TABLE_CELL_PAD_Y))
+                .text_size(px(theme::inline_code_size(reading)))
+                .line_height(px(theme::table_line_height(reading))),
+        ))
         .with_table_head(
             gpui::StyleRefinement::default()
                 .bg(gpui::transparent_black())
-                .text_color(rgb(theme::TEXT_2))
-                .font_weight(theme::W_LABEL)
+                .text_color(rgb(theme::TEXT_MUTED))
+                .font_weight(theme::W_BODY)
                 .border_color(rgba(theme::TABLE_HEAD_RULE)),
         )
         .with_blockquote(
             gpui::StyleRefinement::default()
                 .border_l(px(theme::QUOTE_RULE_W))
-                .border_color(rgb(theme::TEXT_FAINT))
+                .border_color(rgba(theme::HAIRLINE_STRONG))
                 .text_color(rgb(theme::TEXT_2))
                 .not_italic()
-                .pl(px(theme::QUOTE_PAD_L))
+                .pl(px(step(theme::PROSE_HANG) - theme::QUOTE_RULE_W))
                 .pr(px(0.)),
         )
         .with_rule(
             gpui::StyleRefinement::default()
                 .h(px(1.))
-                .bg(rgba(theme::HAIRLINE_STRONG))
+                .bg(rgba(theme::HAIRLINE))
                 .my(px(theme::RULE_MARGIN_Y)),
         )
+        // Paragraphs and list items hold to the prose measure; code, tables
+        // and rules keep the column.
+        .with_prose_max_width(Some(px(theme::PROSE_MEASURE)))
+        .with_list_hang(Some(gpui::base::text::ListHang {
+            width: px(step(theme::PROSE_HANG)),
+            gap: px(theme::LIST_MARKER_GAP),
+        }))
         .with_list_markers(
             gpui::StyleRefinement::default().text_color(rgb(theme::TEXT_MUTED)),
-            gpui::StyleRefinement::default().text_color(rgb(theme::TEXT_MUTED)),
+            crate::components::tabular(
+                gpui::StyleRefinement::default().text_color(rgb(theme::TEXT_MUTED)),
+            ),
         )
         // The gaps are em-proportional to the prose size, so a larger
         // reading size keeps the Standard rhythm.
@@ -524,20 +607,38 @@ pub fn style_at(rem_size: gpui::Pixels, base: gpui::Pixels) -> TextViewStyle {
             Some(rem(step(theme::HEADING_SPACE_BELOW))),
         )
         .with_heading_base_font_size(base)
-        .with_heading_font_size(|level, base| base * theme::heading_scale(level));
+        .with_heading_font_size(|level, base| px(heading_size(level, f32::from(base))));
     for level in 1..=6 {
         style = style.with_heading(level, heading(level, base));
     }
     style
 }
 
+/// The reading size whose answer size is `base` (Standard for anything
+/// else, as a Group always is).
+fn reading_size_at(base: f32) -> ferrite_core::settings::SoloReadingSize {
+    use ferrite_core::settings::SoloReadingSize;
+    [SoloReadingSize::Comfortable, SoloReadingSize::Large]
+        .into_iter()
+        .find(|size| theme::answer_text_size(*size) == base)
+        .unwrap_or(SoloReadingSize::Standard)
+}
+
+/// A heading's size at prose size `base`: the type table's ratio, rounded
+/// to a whole pixel (18 · 16 · 14 at Standard, 21 · 18 · 16 at Comfortable,
+/// 23 · 21 · 18 at Large), so no heading lands on a half pixel.
+fn heading_size(level: u8, base: f32) -> f32 {
+    (base * theme::heading_scale(level)).round()
+}
+
 /// A heading's weight, ink and pixel line height at prose size `base`.
+/// H4–H6 are set apart by weight alone: 600 is only for H1–H3.
 fn heading(level: u8, base: gpui::Pixels) -> gpui::StyleRefinement {
-    let size = f32::from(base) * theme::heading_scale(level);
+    let size = heading_size(level, f32::from(base));
     let (weight, ink) = if level <= 3 {
         (theme::W_STRONG, theme::TEXT_STRONG)
     } else {
-        (theme::W_LABEL, theme::TEXT_2)
+        (theme::W_LABEL, theme::TEXT_STRONG)
     };
     gpui::StyleRefinement::default()
         .font_weight(weight)
@@ -570,7 +671,7 @@ pub(crate) fn syntax_style(class: ferrite_core::transcript::Class) -> gpui::High
 /// leading heading's first line occupies (the answer mark centres on it).
 #[allow(dead_code)]
 pub fn heading_line_height(level: u8, size: f32) -> f32 {
-    theme::prose_line_height(size * theme::heading_scale(level))
+    theme::prose_line_height(heading_size(level, size))
 }
 
 /// Literal provider output shares Markdown's selection engine and keeps
@@ -862,6 +963,8 @@ pub mod testing {
     ) -> Option<gpui::Point<gpui::Pixels>> {
         let (state, style) = cx.global::<Views>().0.get(id)?;
         let bounds = state.read(cx).bounds();
+        // A paragraph wraps at the prose measure inside a wider view.
+        let wrap = bounds.size.width.min(px(theme::PROSE_MEASURE));
         let font_size = style.font_size.to_pixels(window.rem_size());
         let line_height = style.line_height_in_pixels(window.rem_size());
         let run = gpui::TextRun {
@@ -874,13 +977,7 @@ pub mod testing {
         };
         let layout = window
             .text_system()
-            .shape_text(
-                text.into(),
-                font_size,
-                &[run],
-                Some(bounds.size.width),
-                None,
-            )
+            .shape_text(text.into(), font_size, &[run], Some(wrap), None)
             .ok()?
             .into_iter()
             .next()?;
@@ -1013,7 +1110,81 @@ mod file_link_tests {
                 );
                 cx.simulate_resize(gpui::size(px(320.), px(720.)));
             }
+            // One hang for every list and quote: bullet text, ordinal text
+            // (one digit or two) and quoted text all start on the same x,
+            // `PROSE_HANG` in (scaled with the reading size).
+            view.update(cx, |view, cx| {
+                view.source = "- [bullet](ul.md)\n\ntext\n\n9. [nine](nine.md)\n10. [ten](ten.md)\n\ntext\n\n> [quoted](quote.md)".into();
+                cx.notify();
+            });
+            cx.run_until_parked();
+            let bullet = card(cx, "ul.md");
+            let hang = px(theme::reading_step(theme::PROSE_HANG, font_size));
+            assert!(
+                (bullet.left() - hang).abs() < px(0.5),
+                "list text hangs PROSE_HANG in at {font_size}px: {bullet:?}"
+            );
+            let quote = card(cx, "quote.md");
+            assert!(
+                (quote.left() - bullet.left()).abs() < px(0.5),
+                "quoted text shares the bullet's text column at {font_size}px: {quote:?}, {bullet:?}"
+            );
+            // An ordered list takes the same hang unless its widest marker
+            // (in the face the window shapes it in) and its gap outgrow it:
+            // with Geist's figures that is only from 100 up.
+            let ten = cx.update(|window, _| {
+                let run = gpui::TextRun {
+                    len: 3,
+                    font: window.text_style().font(),
+                    color: gpui::black(),
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                };
+                window
+                    .text_system()
+                    .layout_line("10.", px(font_size), &[run], None)
+                    .width
+            });
+            let column = hang.max(ten + px(theme::LIST_MARKER_GAP));
+            let (nine, ten) = (card(cx, "nine.md"), card(cx, "ten.md"));
+            assert!(
+                (nine.left() - ten.left()).abs() < px(0.5),
+                "9. and 10. share one column: {nine:?}, {ten:?}"
+            );
+            assert!(
+                (nine.left() - column).abs() < px(0.5),
+                "the ordered column is the hang or the widest marker: {nine:?} vs {column:?}"
+            );
         }
+    }
+
+    /// A fence is its code and its padding: the actions overlay takes no
+    /// layout, so a one-line block is 10 + 18 + 10, and revealing the
+    /// actions from the keyboard moves nothing.
+    #[gpui::test]
+    fn a_fence_is_its_code_and_padding_and_its_actions_take_no_room(cx: &mut TestAppContext) {
+        let (_, cx) = fixture(cx, "```rust\nfn main() {}\n```");
+        cx.simulate_resize(gpui::size(px(420.), px(300.)));
+        cx.run_until_parked();
+        let block = cx.update(|_, cx| testing::bounds("file-link-fixture", 0, cx).unwrap());
+        assert_eq!(
+            block.size.height,
+            px(2. * theme::CODE_PAD_Y + theme::LH_CODE),
+            "one line of code in its padding"
+        );
+        let actions = cx
+            .debug_bounds("code-actions")
+            .expect("the overlay is laid out at rest");
+        assert!(actions.top() >= block.top() && actions.right() <= block.right());
+        cx.update(|window, cx| window.focus_next(cx));
+        cx.run_until_parked();
+        assert_eq!(
+            cx.update(|_, cx| testing::bounds("file-link-fixture", 0, cx).unwrap()),
+            block,
+            "revealing the actions leaves the block where it was"
+        );
+        assert_eq!(cx.debug_bounds("code-actions"), Some(actions));
     }
 
     #[gpui::test]
@@ -1186,6 +1357,40 @@ mod file_link_tests {
         assert!(
             (chip.left() - (before.x - px(0.5))).abs() < px(0.5),
             "the chip follows text shaped at the prose size: {chip:?} vs {before:?}"
+        );
+    }
+
+    /// A file chip is measured in the face and size it is drawn in, so a
+    /// name whose measured width and chrome fit `INLINE_FILE_MAX_W` is drawn
+    /// whole: `transcript.rs:405` at the app's width is never ellipsized.
+    #[gpui::test]
+    fn a_file_chip_that_fits_is_drawn_whole(cx: &mut TestAppContext) {
+        let (_, cx) = fixture(cx, "Built in [transcript.rs](transcript.rs:405), then.");
+        cx.simulate_resize(gpui::size(px(720.), px(200.)));
+        cx.run_until_parked();
+        let chip = card(cx, "transcript.rs");
+        let want = cx.update(|window, _| {
+            crate::attachments::inline_file_width("transcript.rs", ":405", false, window)
+        });
+        assert!(want < px(theme::INLINE_FILE_MAX_W), "{want:?}");
+        assert_eq!(chip.size.width, want, "the chip is its measured width");
+        // The name box holds its whole shaped width: nothing to ellipsize.
+        let name = cx.update(|window, _| {
+            let mut face = window.text_style();
+            face.font_family = theme::FONT_CODE.into();
+            window
+                .text_system()
+                .shape_line(
+                    "transcript.rs".into(),
+                    px(theme::FS_UI),
+                    &[face.to_run("transcript.rs".len())],
+                    None,
+                )
+                .width()
+        });
+        assert!(
+            chip.size.width >= name + px(2. * theme::INLINE_FILE_PAD_X),
+            "{chip:?} holds {name:?}"
         );
     }
 
@@ -1750,7 +1955,7 @@ mod vendor_knob_tests {
             style
                 .with_inline_code_font(Some(theme::FONT_CODE.into()))
                 .with_inline_code_wash(Some(gpui::base::text::InlineCodeWash {
-                    color: rgba(theme::ACCENT_WASH).into(),
+                    color: rgba(theme::INLINE_CODE_WASH).into(),
                     radius: px(theme::R_CHIP),
                     overhang: px(2.),
                     inset_y: px(1.),
@@ -1804,12 +2009,9 @@ mod style_tests {
         let wash = style
             .inline_code_wash()
             .expect("inline code sits on a chip");
-        assert_eq!(wash.color, rgba(theme::ACCENT_WASH).into());
+        assert_eq!(wash.color, rgba(theme::INLINE_CODE_WASH).into());
         assert_eq!(wash.radius, px(theme::R_CHIP));
-        assert_eq!(
-            style.inline_code().color,
-            Some(solid(theme::INLINE_CODE_INK))
-        );
+        assert_eq!(style.inline_code().color, Some(solid(theme::TEXT)));
         assert_eq!(style.code_background(), solid(theme::RAISED));
     }
 
@@ -1817,7 +2019,10 @@ mod style_tests {
     fn headings_follow_the_type_table_at_every_reading_size() {
         for (base, h1_line) in [(14., 28.), (18., 36.)] {
             let style = style_at(px(theme::FS_UI), px(base));
-            assert_eq!(style.heading_font_size(1), Some(px(base * 18. / 14.)));
+            assert_eq!(
+                style.heading_font_size(1),
+                Some(px((base * 18. / 14.).round()))
+            );
             assert_eq!(style.heading_font_size(3), Some(px(base)));
             let h1 = style.heading(1);
             assert_eq!(h1.text.font_weight, Some(theme::W_STRONG));
@@ -1826,8 +2031,31 @@ mod style_tests {
             assert_eq!(heading_line_height(1, base), h1_line);
             let h4 = style.heading(4);
             assert_eq!(h4.text.font_weight, Some(theme::W_LABEL));
-            assert_eq!(h4.text.color, Some(solid(theme::TEXT_2)));
+            assert_eq!(h4.text.color, Some(solid(theme::TEXT_STRONG)));
             assert_eq!(h4.text.font_style, None, "headings are never italic");
+        }
+        // Every heading is a whole pixel at every reading size, on the type
+        // table: 18 · 16 · 14, 21 · 18 · 16, 23 · 21 · 18.
+        for (base, sizes) in [
+            (14., [18., 16., 14.]),
+            (16., [21., 18., 16.]),
+            (18., [23., 21., 18.]),
+        ] {
+            let style = style_at(px(theme::FS_UI), px(base));
+            for level in 1..=6 {
+                let size = f32::from(style.heading_font_size(level).unwrap());
+                assert_eq!(size.fract(), 0., "H{level} at {base}: {size}");
+                assert_eq!(
+                    size,
+                    sizes[(level as usize - 1).min(2)],
+                    "H{level} at {base}"
+                );
+                assert_eq!(
+                    style.heading(level).text.line_height,
+                    Some(px(theme::prose_line_height(size)).into()),
+                    "H{level} at {base} sits on its rounded size's line"
+                );
+            }
         }
         // Block gaps are em-proportional: the Standard rhythm at every
         // reading size, never smaller than 0.75em of the prose.
@@ -1844,6 +2072,99 @@ mod style_tests {
             assert!(near(style.heading_space_above(), above), "{base}");
             assert!(near(style.heading_space_below().unwrap(), below), "{base}");
         }
+    }
+
+    #[test]
+    fn inline_code_is_a_neutral_body_ink_chip_at_body_weight() {
+        use ferrite_core::settings::SoloReadingSize;
+        assert_eq!(theme::INLINE_CODE_INK, theme::TEXT);
+        assert_eq!(
+            theme::inline_code_size(SoloReadingSize::Standard),
+            theme::FS_UI
+        );
+        // The chip centres in the prose line box at every reading size.
+        for (size, chip, inset) in [
+            (SoloReadingSize::Standard, 18., 2.),
+            (SoloReadingSize::Comfortable, 20., 2.),
+            (SoloReadingSize::Large, 22., 3.),
+        ] {
+            assert_eq!(theme::inline_code_chip_h(size), chip);
+            assert_eq!(theme::inline_code_inset_y(size), inset);
+            let style = style_at(px(theme::FS_UI), px(theme::answer_text_size(size)));
+            assert_eq!(style.inline_code_wash().unwrap().inset_y, px(inset));
+        }
+        // Code inside `# heading` or `**strong**` shapes at 400: the code
+        // highlight is merged over the heading's or the strong run's weight.
+        let style = style(px(theme::FS_UI));
+        assert_eq!(style.inline_code().font_weight, Some(theme::W_BODY));
+        for weight in [theme::W_STRONG, style.strong().font_weight.unwrap()] {
+            let merged = gpui::HighlightStyle {
+                font_weight: Some(weight),
+                ..Default::default()
+            }
+            .highlight(style.inline_code());
+            assert_eq!(merged.font_weight, Some(theme::W_BODY));
+        }
+        let heading = gpui::TextStyle {
+            font_weight: theme::W_STRONG,
+            ..Default::default()
+        }
+        .highlight(style.inline_code());
+        assert_eq!(heading.font_weight, theme::W_BODY);
+    }
+
+    #[test]
+    fn markdown_never_tints_inline_code_with_the_accent() {
+        let source = include_str!("rich.rs");
+        assert!(!source.contains(concat!("ACCENT", "_WASH")));
+    }
+
+    #[test]
+    fn prose_holds_the_measure_and_code_keeps_the_column() {
+        let style = style(px(theme::FS_UI));
+        assert_eq!(style.prose_max_width(), Some(px(theme::PROSE_MEASURE)));
+        assert_eq!(style.code_block().max_size.width, None);
+        assert_eq!(style.table().max_size.width, None);
+    }
+
+    #[test]
+    fn tables_are_dense_rows_under_one_header_rule() {
+        let style = style(px(theme::FS_UI));
+        assert!(style.border().is_transparent(), "no row rules");
+        let cell = style.table_cell();
+        assert_eq!(cell.text.font_size, Some(px(theme::FS_UI).into()));
+        assert_eq!(cell.text.line_height, Some(px(theme::LH_UI).into()));
+        assert_eq!(
+            2. * theme::TABLE_CELL_PAD_Y + theme::LH_UI,
+            theme::MENU_ROW_H,
+            "a table row is the list pitch"
+        );
+        assert_eq!(
+            cell.text
+                .font_features
+                .as_ref()
+                .map(|features| features.tag_value_list().to_vec()),
+            Some(vec![("tnum".to_string(), 1)])
+        );
+        let head = style.table_head();
+        assert_eq!(head.text.font_weight, Some(theme::W_BODY));
+        assert_eq!(head.text.color, Some(solid(theme::TEXT_MUTED)));
+        assert_eq!(head.border_color, Some(rgba(theme::TABLE_HEAD_RULE).into()));
+    }
+
+    #[test]
+    fn quotes_and_breaks_are_hairlines() {
+        let style = style(px(theme::FS_UI));
+        assert_eq!(
+            style.blockquote().border_color,
+            Some(rgba(theme::HAIRLINE_STRONG).into())
+        );
+        assert_eq!(style.rule().background, Some(rgba(theme::HAIRLINE).into()));
+        assert_eq!(
+            style.blockquote().padding.left,
+            Some(px(theme::PROSE_HANG - theme::QUOTE_RULE_W).into()),
+            "quoted text starts where list text does"
+        );
     }
 
     #[test]

@@ -113,15 +113,14 @@ pub const PRESSED: u32 = FILL_HOVER;
 // ------------------------------------------------------------------ edges
 
 /// `#ffffff14` (8%) — the one rule weight: a Pane's resting edge, the rule
-/// under the Pane head, table rows, separators.
+/// under the Pane head, a Markdown thematic break, separators.
 pub const HAIRLINE: u32 = 0xffffff14;
 /// `#ffffff24` (14%) — the stronger rule: floating edges (menu, popover,
-/// tooltip, toast), the Composer's resting edge, a blockquote's rule.
+/// tooltip, toast), the Composer's resting edge, a blockquote's rule, the
+/// rule under a table's header.
 pub const HAIRLINE_STRONG: u32 = 0xffffff24;
 /// The Composer's resting edge.
 pub const COMPOSER_EDGE: u32 = HAIRLINE_STRONG;
-/// Rules between transcript table rows.
-pub const TABLE_RULE: u32 = HAIRLINE;
 /// `#696f78` — a resting checkbox, radio or switch boundary: solid and at
 /// least 3:1 on `PANE` and `RAISED`, so an unchecked control never vanishes.
 pub const INPUT_EDGE: u32 = 0x696f78;
@@ -177,8 +176,9 @@ pub const FOCUS_RING: u32 = 0x7d8ba1;
 /// `#afbaca66` — the accent as an outline that is not focus: a link's
 /// underline, a selected choice's edge, a drop target's edge.
 pub const ACCENT_EDGE: u32 = 0xafbaca66;
-/// `#afbaca24` (14%) — the accent as a ground: inline code, a selected accent
-/// row, the slot a dragged Pane would take.
+/// `#afbaca24` (14%) — the accent as a ground: a selected accent row, the
+/// slot a dragged Pane would take. Never inline code (rule 6 of the accent:
+/// inline code and chips are neutral, `INLINE_CODE_WASH`).
 pub const ACCENT_WASH: u32 = 0xafbaca24;
 /// `#afbaca40` (25%) — native text selection, painted over glyphs.
 pub const TEXT_SELECTION_WASH: u32 = 0xafbaca40;
@@ -190,8 +190,6 @@ pub const CARET: u32 = ACCENT;
 /// `#8cb59d` — live work (a sage, 22%): the running status dot, a running signal line, the
 /// pass chip, diff `+`.
 pub const RUNNING: u32 = 0x8cb59d;
-/// Running as a ground: an added hunk row, the pass chip.
-pub const RUNNING_WASH: u32 = 0x8cb59d1f;
 /// The halo that breathes behind a working Thread's dot in the nav.
 pub const RUNNING_HALO: u32 = 0x8cb59d59;
 /// `#cbb280` — a Decision (a muted ochre, 42%): the status dot, the signal line, the Pane's edge,
@@ -204,7 +202,8 @@ pub const ATTENTION_EDGE: u32 = 0xcbb28059;
 /// `#d29089` — blocked or failed (a dusty red, 45%): the status dot, the signal line, the
 /// Pane's edge, diff `−`, the word "failed".
 pub const BLOCKED: u32 = 0xd29089;
-/// Blocked as a ground: a removed hunk row.
+/// Blocked as a one-line ground (a refused drop, a destructive control
+/// under the pointer); never a multi-line wash (`DIFF_REMOVED_WASH`).
 pub const BLOCKED_WASH: u32 = 0xd290891f;
 /// The idle/parked status dot: the muted ink in a dot role.
 pub const IDLE: u32 = TEXT_MUTED;
@@ -869,13 +868,30 @@ pub fn init_components(cx: &mut gpui::App) {
 // - **Glyphs are drawn, never typed.** `❯` is `prompt.svg`, `∴` is
 //   `reasoning.svg`, the answer mark is the monochrome `ferrite-mono.svg`,
 //   the tool dot and the elbow are painted. None of them registers text.
-// - **One left edge.** A disclosure's `▸` leads, in the gutter where
-//   tool dots hang; nothing sits at the reading column's right but a
-//   settled call's trail (its diff stat, then its time, tabular).
+// - **One left edge, three gutter marks.** The gutter holds `❯` (you
+//   spoke), a `TOOL_DOT` (a machine action and its state; a group's dot is
+//   its worst member's) and the Ferrite mark (the agent spoke). A
+//   disclosure is a trailing `ICON_CHEVRON` after its row's label, its box
+//   always reserved, shown under the pointer or on the keyboard target and
+//   turned a quarter when open. No transcript row has a hover ground; the
+//   keyboard target alone wears `HOVER`. Nothing sits at the reading
+//   column's right but a call's trail (`applied · +N −M`, then its time,
+//   tabular; a live call's time ticks whole seconds at 1Hz and freezes when
+//   it settles).
 // - **State lives in the dot.** A tool's name is neutral ink whatever
-//   happened; its dot says how it went (`tool_dot`), and a failure colours
-//   the one word that says so. A collapsed group is one muted line whose only
-//   state ink is ` · N failed`.
+//   happened; its dot says how it went (`tool_dot`, static even while
+//   live), and a failure colours the one word that says so. A collapsed
+//   group is one `TEXT_MUTED` line with tabular figures whose only state ink
+//   is ` · N failed`.
+// - **One failure line.** A failed call and a failed or interrupted turn
+//   read `⎿ failed · 0.1s · <excerpt>`: the lowercase lead in its state ink
+//   (`BLOCKED`, or `TEXT_2` for `interrupted`), `·` in `TEXT_FAINT`, the
+//   duration `TEXT_MUTED`, and the excerpt the machine printed in the code
+//   face, soft-wrapped, never cut.
+// - **Machine text is never cut.** Diff lines soft-wrap inside their row
+//   (the number and sign on the first line, the wash under every line);
+//   only `HUNK_MAX_ROWS` and `OUTPUT_MAX_LINES` hide rows, and they say how
+//   many.
 // - **Rhythm in three steps**, each at least twice the one inside it
 //   (grouping by space, not lines). A turn opens `GAP_TURN` (32) under the
 //   one before it; the blocks inside a turn — a prose answer, a group
@@ -898,9 +914,10 @@ pub fn init_components(cx: &mut gpui::App) {
 //   row's identity, so a changed gap is a changed row and nothing is
 //   measured per frame.
 // - **The prompt anchors its turn.** The operator's line is the turn's
-//   heading: prose size (`FS_PROSE`/`LH_PROSE`) at `W_LABEL` in
-//   `TEXT_STRONG` under the accent `❯`, over answers at prose size, regular,
-//   in `TEXT`. An answer's own H1/H2 may be larger: they head sections of
+//   heading: the answer's size (`answer_text_size`/`answer_line_height`,
+//   14/22 at Standard) at `W_LABEL` in `TEXT_STRONG` under the accent `❯`,
+//   with no band, pill or hover ground, over answers at the same size,
+//   regular, in `TEXT`. An answer's own H1/H2 may be larger: they head sections of
 //   one answer, while the prompt heads the turn by place — the turn step
 //   above it, the accent in the gutter — not by size. Structural rows (tool
 //   calls, summaries) are `FS_UI`/`LH_UI`; the stamp and the trail are
@@ -950,11 +967,21 @@ pub const OUTPUT_INLINE_BYTES: usize = 8 * 1024;
 pub const DIFF_ADDED_INK: u32 = 0xb4cfc0;
 /// A removed diff line's code: `BLOCKED` lifted the same step.
 pub const DIFF_REMOVED_INK: u32 = 0xddb5b0;
-/// A diff card at C2: `RAISED`, `R_CHIP`, 4px above and inside it, 8px
-/// inline. Its columns are `[number][8][sign][4][code]`: the number column
-/// is as wide as the largest number's digits (`CODE_CELL` each), the sign is
-/// one whole-pixel mono cell, and code keeps its indentation.
-pub const HUNK_PAD_X: f32 = SPACE_2;
+/// A hunk row's wash, 8% of its state hue: a multi-line wash never passes
+/// 8%, and the sign and the code's ink carry the meaning. (`BLOCKED_WASH`
+/// is for one-line uses only.)
+pub const DIFF_ADDED_WASH: u32 = 0x8cb59d14;
+pub const DIFF_REMOVED_WASH: u32 = 0xd2908914;
+/// A diff card at the tool name's x (C1, under the call's first letter):
+/// `RAISED`, `R_BLOCK`, 4px above it, the fence's 12px inline. Its columns
+/// are `[number][8][sign][4][code]`: the number column (`TEXT_FAINT`) is as
+/// wide as the largest number's digits (`CODE_CELL` each), the sign is one
+/// whole-pixel mono cell in its row's code ink, and code keeps its
+/// indentation and soft-wraps rather than being cut. `HUNK_PAD_Y` 4 is the
+/// one deliberate difference from a fence (`CODE_PAD_Y` 10): the rows'
+/// washes run edge to edge, and 4px keeps the first and last rows' washes
+/// off the card's corners without a slab of empty ground.
+pub const HUNK_PAD_X: f32 = CODE_PAD_X;
 pub const HUNK_PAD_Y: f32 = SPACE_1;
 pub const HUNK_MARGIN_T: f32 = SPACE_1;
 pub const DIFF_SIGN_W: f32 = SPACE_2;
@@ -966,17 +993,9 @@ pub const DIFF_SIGN_GAP: f32 = SPACE_1;
 /// be the transcript rather than a note in it.
 pub const HUNK_MAX_ROWS: usize = 24;
 
-/// 20px — an invisible hit area, not a drawn thing: a disclosure's leading
-/// chevron target (the gutter, `GUTTER_W`) and a prompt action's button.
+/// 20px — an invisible hit area, not a drawn thing: a disclosure's gutter
+/// target (the whole row toggles too) and a prompt action's button.
 pub const TOOL_DISCLOSURE_HIT: f32 = GUTTER_W;
-/// 12px — the leading disclosure mark (`icons::DISCLOSURE`, a 5×6 filled
-/// `▸` in a 12 box: about the summary's x-height), drawn in the gutter's
-/// glyph box where the prompt's `❯` and the tool dots hang.
-pub const DISCLOSURE_MARK: f32 = GLYPH_BOX;
-/// 4px — how far a prompt's hover wash bleeds past its text on each side.
-pub const PROMPT_HOVER_BLEED: f32 = SPACE_1;
-/// 16px — a fallback list item's hang: `-` at C1, text 16px in.
-pub const UL_INDENT: f32 = SPACE_4;
 // (end WP-A) — append above this line only
 
 // ======================================== WP-B · markdown, prose, scrollbars
@@ -984,15 +1003,22 @@ pub const UL_INDENT: f32 = SPACE_4;
 // Edit values and append tokens only inside this section.
 
 /// **Markdown.** Agent prose is Geist in `TEXT` at the reading size
-/// (`answer_text_size`, set by the answer row). Blocks sit `PROSE_GAP` apart;
-/// a heading takes more space above (`PROSE_GAP + HEADING_SPACE_ABOVE` = 20)
-/// than below (`HEADING_SPACE_BELOW` = 8). H1–H3 are `W_STRONG`
-/// `TEXT_STRONG`, H4–H6 `W_LABEL` `TEXT_2`, never italic or underlined, each
-/// on its own pixel line (`prose_line_height`). Tables are horizontal
-/// hairlines only; a quote is a 2px `TEXT_FAINT` rule and `TEXT_2`, not
-/// italic; list markers are `TEXT_MUTED` in the vendor's measured column.
-/// Code is a `RAISED` block; inline code is mono on an `ACCENT_WASH` chip;
-/// links are `ACCENT` over an `ACCENT_EDGE` underline.
+/// (`answer_text_size`, set by the answer row), its paragraphs, list items
+/// and quotes held to `PROSE_MEASURE`; code, tables and diffs keep the whole
+/// column. Blocks sit `PROSE_GAP` apart; a heading takes more space above
+/// (`PROSE_GAP + HEADING_SPACE_ABOVE` = 20) than below (`HEADING_SPACE_BELOW`
+/// = 8). H1–H3 are `W_STRONG` `TEXT_STRONG`, H4–H6 `W_LABEL` `TEXT_STRONG`
+/// (set apart from prose by weight, never dimmer than it), never italic or
+/// underlined, each a whole pixel size on its own pixel line
+/// (`prose_line_height`). A table is its header rule alone: no row rules, a
+/// `W_BODY` `TEXT_MUTED` header, cells at the UI size, figures tabular. A
+/// quote is a 2px `HAIRLINE_STRONG` rule and `TEXT_2`, not italic; a
+/// thematic break is one `HAIRLINE`. List and quote text share one hang,
+/// `PROSE_HANG`, with markers `TEXT_MUTED` right-aligned in it. Code is a
+/// `RAISED` block whose language and `Copy` are a hover overlay, never a
+/// header row; **inline code is mono `FS_UI` on a neutral `INLINE_CODE_WASH`
+/// chip**, in `TEXT` at weight 400 whatever it sits in; links are `ACCENT`
+/// over an `ACCENT_EDGE` underline.
 ///
 /// 12px — between Markdown blocks (`SPACE_3`), the transcript's block
 /// step. This and the heading spaces are Standard values; other reading
@@ -1003,32 +1029,95 @@ pub const PROSE_GAP: f32 = SPACE_3;
 pub const HEADING_SPACE_ABOVE: f32 = SPACE_2;
 /// 8px — below a heading, in place of `PROSE_GAP`.
 pub const HEADING_SPACE_BELOW: f32 = SPACE_2;
-/// Inline code's ink on its chip (the Markdown path paints the chip; the
-/// plain-text fallback carries the ink alone).
-pub const INLINE_CODE_INK: u32 = TEXT_STRONG;
-/// The inline-code chip reaches 2px past its glyphs and stays 2px inside the
-/// line box top and bottom (18px tall on a 22px line). Painted, never laid
-/// out.
+/// Inline code's ink on its chip: body ink, never brighter than the prose
+/// around it (the Markdown path paints the chip; the plain-text fallback
+/// carries the ink alone).
+pub const INLINE_CODE_INK: u32 = TEXT;
+/// `#ffffff0f` (6%) — inline code's chip: a neutral ground that shows the
+/// copy boundary (`None`, `nav.rs`) without tinting the line.
+pub const INLINE_CODE_WASH: u32 = 0xffffff0f;
+/// The inline-code chip reaches 2px past its glyphs. Painted, never laid
+/// out; its height is `inline_code_chip_h`, centred in the prose line box.
 pub const INLINE_CODE_OVERHANG: f32 = SPACE_0_5;
-pub const INLINE_CODE_INSET_Y: f32 = SPACE_0_5;
-/// A quote's rule and its text inset.
+
+/// Inline code's size at each reading size: the UI size at Standard
+/// (`FS_UI`, so a code cell is `CODE_CELL`), 14 and 16 above it. Tables set
+/// their cells at the same size.
+pub fn inline_code_size(size: ferrite_core::settings::SoloReadingSize) -> f32 {
+    use ferrite_core::settings::SoloReadingSize;
+    match size {
+        SoloReadingSize::Standard => FS_UI,
+        SoloReadingSize::Comfortable => 14.,
+        SoloReadingSize::Large => 16.,
+    }
+}
+
+/// The inline-code chip's height at each reading size: 18 · 20 · 22.
+pub fn inline_code_chip_h(size: ferrite_core::settings::SoloReadingSize) -> f32 {
+    use ferrite_core::settings::SoloReadingSize;
+    match size {
+        SoloReadingSize::Standard => 18.,
+        SoloReadingSize::Comfortable => 20.,
+        SoloReadingSize::Large => 22.,
+    }
+}
+
+/// How far the chip stays inside the prose line box, top and bottom:
+/// `(answer_line_height − inline_code_chip_h) / 2` = 2 · 2 · 3.
+pub fn inline_code_inset_y(size: ferrite_core::settings::SoloReadingSize) -> f32 {
+    (answer_line_height(size) - inline_code_chip_h(size)) / 2.
+}
+
+/// A table row's line box at each reading size: `LH_UI` 20 · 22 · 24, so a
+/// Standard row is 4 + 20 + 4 = 28, the list pitch.
+pub fn table_line_height(size: ferrite_core::settings::SoloReadingSize) -> f32 {
+    use ferrite_core::settings::SoloReadingSize;
+    match size {
+        SoloReadingSize::Standard => LH_UI,
+        SoloReadingSize::Comfortable => 22.,
+        SoloReadingSize::Large => 24.,
+    }
+}
+
+/// 570px — the prose measure (~88 characters of Geist at 14px): the most a
+/// paragraph, a list item or a quote runs before it wraps. Fixed, not scaled
+/// by the reading size. Code, tables, diffs, tool rows and the Composer keep
+/// the whole `READING_MAX_W` column.
+pub const PROSE_MEASURE: f32 = 570.0;
+/// 28px — the one hang lists and quotes share at Standard: bullet and
+/// ordered text start this far in, their markers right-aligned inside it
+/// `LIST_MARKER_GAP` from the text (only a list whose ordinals reach 100
+/// widens), and a quote's text lands on the same x past its rule. Each
+/// nesting level adds another. Scales with the reading size (`reading_step`:
+/// 28 · 32 · 36).
+pub const PROSE_HANG: f32 = 28.0;
+/// 6px — between a list marker and its text.
+pub const LIST_MARKER_GAP: f32 = SPACE_1_5;
+/// A quote's rule. Its text inset is the hang less the rule
+/// (`PROSE_HANG − QUOTE_RULE_W`, 26 at Standard), so quoted text starts
+/// where list text does.
 pub const QUOTE_RULE_W: f32 = 2.0;
-pub const QUOTE_PAD_L: f32 = SPACE_3;
-/// 6px — a table cell's block padding (its inline padding is the vendor's
-/// 8px, which its column measurement assumes).
-pub const TABLE_CELL_PAD_Y: f32 = SPACE_1_5;
+/// 4px — a table cell's block padding, so a Standard row is 28px (its
+/// inline padding is the vendor's 8px, which its column measurement
+/// assumes).
+pub const TABLE_CELL_PAD_Y: f32 = SPACE_1;
 /// The rule under a table's header row: one step stronger than the rows'.
 pub const TABLE_HEAD_RULE: u32 = HAIRLINE_STRONG;
 /// 4px — a horizontal rule's own margin inside its block, so it sits 16px
 /// from its neighbours.
 pub const RULE_MARGIN_Y: f32 = SPACE_1;
 /// A fenced code block: 12px inline, 10px block padding (Zeron's code body;
-/// 10 is off the scale so the 24px header and an 18px line land on even
-/// pixels).
+/// 10 is off the scale so a one-line block is 10 + 18 + 10 = 38, and the
+/// hover overlay's 24px actions centre on its first line).
 pub const CODE_PAD_X: f32 = SPACE_3;
 pub const CODE_PAD_Y: f32 = 10.0;
-/// The code header row: language label, html `Preview`, `Copy`/`Copied`.
-pub const CODE_HEADER_H: f32 = 24.;
+/// A fence's actions overlay: the language id, html `Preview`,
+/// `Copy`/`Copied`, top-right over the block. It is always laid out (so it
+/// never moves the block) and only shown under the pointer (the 150ms
+/// hover blend), while its keys have focus, or while the caret or a
+/// selection is inside the block — those two instantly.
+pub const CODE_ACTIONS_TOP: f32 = 7.0;
+pub const CODE_ACTIONS_RIGHT: f32 = SPACE_1;
 /// Code actions keep a stable target when Copy becomes Copied.
 pub const CODE_ACTION_H: f32 = 24.;
 pub const CODE_ACTION_MIN_W: f32 = 56.;
@@ -1037,12 +1126,11 @@ pub const CODE_ACTION_PAD_X: f32 = SPACE_2;
 /// before its body scrolls.
 pub const HTML_PREVIEW_MAX_H: f32 = 520.0;
 /// An inline file chip: `CHIP_H` tall so it fits a 22px prose line without
-/// moving it; 6px inline padding; a 12px file mark (or a 14px thumbnail) 6px
-/// from the name; clamped between 64 and 280px wide.
+/// moving it; 6px inline padding; no file mark (an image leads with its
+/// 14px thumbnail, 6px from the name); clamped between 64 and 280px wide.
 pub const INLINE_FILE_H: f32 = CHIP_H;
 pub const INLINE_FILE_PAD_X: f32 = SPACE_1_5;
 pub const INLINE_FILE_GAP: f32 = SPACE_1_5;
-pub const INLINE_FILE_ICON: f32 = 12.0;
 pub const INLINE_FILE_THUMB: f32 = 14.0;
 pub const INLINE_FILE_MIN_W: f32 = 64.0;
 pub const INLINE_FILE_MAX_W: f32 = 280.0;
@@ -2025,6 +2113,29 @@ mod tests {
             .find(|record| &font[*record..*record + 4] == tag)
             .map(|record| &font[u32_at(record + 8)..][..u32_at(record + 12)])
             .unwrap_or_else(|| panic!("no {} table", String::from_utf8_lossy(tag)))
+    }
+
+    /// Rule 2.1.7 of the type: copy equals what is drawn, so the code face
+    /// must not ship ligatures (`calt`/`liga`) that would draw `->` or `!=`
+    /// as one glyph. Geist Mono ships none (its GSUB carries only case,
+    /// fractions, ordinals and stylistic sets), so no feature needs turning
+    /// off; this pins that, and a face update that adds them fails here.
+    #[test]
+    fn the_code_face_ships_no_ligatures() {
+        for (face, font) in [("Geist Mono", GEIST_MONO)] {
+            let gsub = table(font, b"GSUB");
+            let features = &gsub[be16(gsub, 6) as usize..];
+            let tags: Vec<String> = (0..be16(features, 0) as usize)
+                .map(|i| String::from_utf8_lossy(&features[2 + 6 * i..][..4]).into_owned())
+                .collect();
+            assert!(!tags.is_empty(), "{face}: read its GSUB features");
+            for ligature in ["calt", "liga", "dlig"] {
+                assert!(
+                    !tags.iter().any(|tag| tag == ligature),
+                    "{face} ships `{ligature}`: turn it off on every code run ({tags:?})"
+                );
+            }
+        }
     }
 
     fn be16(data: &[u8], at: usize) -> u32 {

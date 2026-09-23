@@ -34,6 +34,10 @@ use crate::{
     theme,
 };
 
+/// The answer's gutter mark: the monochrome Ferrite mark in structure ink,
+/// a glyph beside the prose, never brighter than a tool's settled dot.
+pub(crate) const ANSWER_MARK_INK: u32 = theme::TEXT_FAINT;
+
 /// Owned input for one selected Subject. Cockpit clones only its retained L1
 /// render window when this revision changes; rendering never borrows core.
 pub(crate) struct TranscriptInput {
@@ -106,6 +110,13 @@ pub(crate) struct TranscriptView {
     transcript_focus: FocusHandle,
     controls_end: FocusHandle,
     document: gpui::base::TextSelectionDocument,
+    /// The one-second clock a live tool call's trail ticks on: armed while
+    /// any call runs, for the next whole second of its count, and never
+    /// faster. Idle, nothing is armed.
+    second_tick: Option<gpui::Task<()>>,
+    /// The disclosure the pointer last flipped, and to which state: only
+    /// its chevron eases; a keyboard toggle turns it at once.
+    eased: Option<(DisclosureId, bool)>,
 }
 
 impl EventEmitter<TranscriptEvent> for TranscriptView {}
@@ -172,6 +183,8 @@ impl TranscriptView {
             transcript_focus: cx.focus_handle(),
             controls_end: cx.focus_handle(),
             document: gpui::base::TextSelectionDocument::new(scope, cx),
+            second_tick: None,
+            eased: None,
         };
         view.sync_members(cx);
         view
@@ -457,7 +470,6 @@ impl TranscriptView {
         if let Some(diff) = row.turn_diff() {
             return self.render_turn_diff(diff, selection, view, cx);
         }
-        let reduce_motion = cx.reduce_motion();
         let blocks = row.blocks();
         if let Some(source) = row.source() {
             let first = blocks
@@ -498,7 +510,7 @@ impl TranscriptView {
                         components::glyph_box(icons::icon(
                             icons::FERRITE_MONO,
                             theme::GLYPH_BOX,
-                            theme::TEXT_MUTED,
+                            ANSWER_MARK_INK,
                         ))
                         .debug_selector(|| "answer-mark".into()),
                         first_line,
@@ -524,12 +536,20 @@ impl TranscriptView {
                     view.as_ref()
                         .map(|view| self.control(call, view.clone(), cx))
                 },
-                reduce_motion,
             );
         }
         let Some(block) = blocks.first() else {
             return div().into_any_element();
         };
+        // A sent prompt's actions blend in under the pointer; this view is
+        // cached, so while the blend is mid-flight it renders again next
+        // frame.
+        if matches!(block.body, Body::Prompt(_)) {
+            let shown = crate::motion::hover_t(&pane::prompt_hover_key(block.id));
+            if shown > 0. && shown < 1. {
+                cx.notify();
+            }
+        }
         if matches!(&block.body, Body::Thinking(text) if text.trim().is_empty()) {
             return div().into_any_element();
         }
@@ -560,7 +580,7 @@ impl TranscriptView {
             None,
             &self.input.preview,
             view.map(|view| self.prompt_actions(block, view)),
-            reduce_motion,
+            self.input.reading_size,
         )
     }
 
@@ -599,26 +619,36 @@ impl TranscriptView {
         let disclosure = view
             .as_ref()
             .map(|view| self.control(&call, view.clone(), cx));
-        // The group recipe: a muted line at C1, the chevron leading in the
-        // gutter.
+        let targeted = disclosure.as_ref().is_some_and(|parts| parts.targeted);
+        let (overlay, chevron) = match disclosure {
+            Some(parts) => (Some(parts.overlay), Some(parts.chevron)),
+            None => (None, None),
+        };
+        // The group recipe: a muted line at C1, the chevron trailing it, no
+        // hover ground; the keyboard target alone is grounded.
         let header = div()
             .id(SharedString::from(format!(
                 "turn-diff-row-{}",
                 diff.turn_id
             )))
-            .group("disclosure-row")
+            .group(pane::DISCLOSURE_ROW)
             .relative()
             .flex()
             .items_center()
             .min_w_0()
             .pl(px(theme::GUTTER_W))
-            .rounded(px(theme::R_CHIP))
             .text_size(px(theme::FS_UI))
             .line_height(px(theme::LH_UI))
             .text_color(gpui::rgb(theme::TEXT_MUTED))
-            .hover_row()
+            .when(targeted, |header| {
+                header
+                    .bg(gpui::rgb(theme::HOVER))
+                    .rounded(px(theme::R_CHIP))
+                    .debug_selector(|| "tool-disclosure-keyboard-target".into())
+            })
             .child(selection.line(BlockId::TURN_DIFF, "Turn changes", Vec::new()))
-            .children(disclosure);
+            .children(chevron)
+            .children(overlay);
         let mut card = gpui::component::collapsible::Collapsible::new()
             .w_full()
             .open(expanded)
@@ -630,6 +660,7 @@ impl TranscriptView {
                 &diff.diff,
                 theme::TEXT_MUTED,
                 false,
+                true,
                 selection,
             ));
             if diff.omitted_bytes > 0 {
@@ -651,25 +682,25 @@ impl TranscriptView {
         call: &DisclosureId,
         view: Entity<Self>,
         _cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> pane::Disclosure {
         let call = call.clone();
         let clicked = call.clone();
-        let control = pane::tool_disclosure_control(
-            &call,
-            self.tool_state(&call) == DisclosureState::Expanded,
-            self.tool_targeted(&call),
-            &self.input.disclosure_focus,
-        )
-        // The disclosure overlay fills the rendered header. Keep the handler
-        // on it so the arrow, label, and trailing row text share one target.
-        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-            cx.stop_propagation();
-            gpui::base::TextSelection::clear(window, cx);
-            view.update(cx, |view, cx| {
-                view.clear_output_selection(cx);
-                cx.emit(TranscriptEvent::ToggleDisclosure(clicked.clone()));
-            });
-        });
+        let expanded = self.tool_state(&call) == DisclosureState::Expanded;
+        let targeted = self.tool_targeted(&call);
+        let control =
+            pane::tool_disclosure_control(&call, expanded, targeted, &self.input.disclosure_focus)
+                // The disclosure overlay fills the rendered header. Keep the handler
+                // on it so the chevron, label, and trailing row text share one target.
+                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                    cx.stop_propagation();
+                    gpui::base::TextSelection::clear(window, cx);
+                    view.update(cx, |view, cx| {
+                        view.clear_output_selection(cx);
+                        view.eased =
+                            Some((clicked.clone(), !view.input.expanded.contains(&clicked)));
+                        cx.emit(TranscriptEvent::ToggleDisclosure(clicked.clone()));
+                    });
+                });
         #[cfg(test)]
         let control = {
             let sink = self.input.disclosure_bounds.clone();
@@ -682,12 +713,49 @@ impl TranscriptView {
                 }
             })
         };
-        control.into_any_element()
+        let eased = self.eased.as_ref() == Some(&(call.clone(), expanded));
+        pane::Disclosure {
+            overlay: control.into_any_element(),
+            chevron: pane::disclosure_chevron(expanded, targeted, eased),
+            targeted,
+        }
+    }
+
+    /// Arm the one-second clock while a call runs: one notify at the next
+    /// whole second of the youngest-rounding live count, so a trail reading
+    /// `3s` turns to `4s` on time and no faster.
+    fn arm_second_tick(&mut self, cx: &mut Context<Self>) {
+        if self.second_tick.is_some() {
+            return;
+        }
+        let next = self
+            .input
+            .timings
+            .values()
+            .filter_map(|timing| match timing {
+                ToolTiming::Running(started) => {
+                    let elapsed = started.elapsed();
+                    Some(std::time::Duration::from_secs(elapsed.as_secs() + 1) - elapsed)
+                }
+                ToolTiming::Done(_) => None,
+            })
+            .min();
+        let Some(next) = next else {
+            return;
+        };
+        self.second_tick = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(next).await;
+            let _ = this.update(cx, |view, cx| {
+                view.second_tick = None;
+                cx.notify();
+            });
+        }));
     }
 }
 
 impl Render for TranscriptView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.arm_second_tick(cx);
         self.document.begin_viewport_update(cx);
         let rows = self.rows.clone();
         let selection = self.text_runs();

@@ -37,6 +37,9 @@ pub(super) struct Inline {
     // Ferrite: inline code's own family and rounded ground (`code_style`).
     code_font: Option<SharedString>,
     code_wash: Option<InlineCodeWash>,
+    // Ferrite: underlines drawn per wrapped line, trimmed of trailing
+    // whitespace, instead of by the shaped runs (`paint_underlines`).
+    underlines: Vec<(Range<usize>, gpui::UnderlineStyle)>,
 
     state: Arc<Mutex<InlineState>>,
 }
@@ -315,6 +318,54 @@ fn code_line_bounds(
     lines
 }
 
+/// Ferrite: the per-line spans an underline over `range` draws, as `(line
+/// top, left, right)`, each ending at the right edge of its line's last
+/// non-whitespace glyph — a wrapped link's underline never runs on under
+/// the space it wrapped at. `position` is the layout's index → position
+/// (at a soft wrap an index resolves to the end of the earlier line while
+/// its glyph is drawn at `left` on the next).
+fn underline_spans(
+    text: &str,
+    range: Range<usize>,
+    left: Pixels,
+    position: impl Fn(usize) -> Option<Point<Pixels>>,
+) -> Vec<(Pixels, Pixels, Pixels)> {
+    let mut spans: Vec<(Pixels, Pixels, Pixels)> = Vec::new();
+    // The line being walked: its top, its first glyph's left, and the right
+    // edge of its last non-whitespace glyph so far.
+    let mut line: Option<(Pixels, Pixels, Option<Pixels>)> = None;
+    let end = range.end.min(text.len());
+    let mut offset = range.start.min(end);
+    for c in text[offset..end].chars() {
+        let next = offset + c.len_utf8();
+        if let Some(mut pos) = position(offset) {
+            let next_pos = position(next);
+            if let Some(next_pos) = next_pos.filter(|next_pos| next_pos.y > pos.y) {
+                pos = point(left, next_pos.y);
+            }
+            let right = next_pos
+                .filter(|next_pos| next_pos.y == pos.y)
+                .map(|next_pos| next_pos.x);
+            if line.is_some_and(|(top, _, _)| top != pos.y) {
+                if let Some((top, start, Some(stop))) = line.take() {
+                    spans.push((top, start, stop));
+                }
+            }
+            let current = line.get_or_insert((pos.y, pos.x, None));
+            if !c.is_whitespace() {
+                if let Some(right) = right {
+                    current.2 = Some(right);
+                }
+            }
+        }
+        offset = next;
+    }
+    if let Some((top, start, Some(stop))) = line {
+        spans.push((top, start, stop));
+    }
+    spans
+}
+
 fn utf8_boundary_before(text: &str, mut offset: usize) -> usize {
     while offset > 0 && !text.is_char_boundary(offset) {
         offset -= 1;
@@ -344,6 +395,7 @@ impl Inline {
             link_click_handler,
             code_font: None,
             code_wash: None,
+            underlines: Vec::new(),
             state,
         }
     }
@@ -543,6 +595,33 @@ impl Inline {
         }
     }
 
+    /// Ferrite: each underline, one stroke per wrapped line, from its first
+    /// glyph to the right edge of its last non-whitespace glyph, on the
+    /// baseline offset gpui's own line painter uses.
+    fn paint_underlines(&self, text_layout: &TextLayout, window: &mut Window) {
+        if self.underlines.is_empty() {
+            return;
+        }
+        let line_height = text_layout.line_height();
+        let left = text_layout.bounds().left();
+        for (range, style) in &self.underlines {
+            let Some(layout) = text_layout.line_layout_for_index(range.start) else {
+                continue;
+            };
+            let metrics = &layout.unwrapped_layout;
+            let baseline = (line_height - metrics.ascent - metrics.descent).half() + metrics.ascent;
+            for (top, start, stop) in underline_spans(&self.text, range.clone(), left, |index| {
+                text_layout.position_for_index(index)
+            }) {
+                window.paint_underline(
+                    point(start, top + baseline + metrics.descent * 0.618),
+                    stop - start,
+                    style,
+                );
+            }
+        }
+    }
+
     /// Paint the selection background.
     fn paint_selection(
         selection: &Selection,
@@ -651,6 +730,7 @@ impl Element for Inline {
 
         let mut runs = Vec::new();
         let mut ix = 0;
+        self.underlines.clear();
         for (range, highlight) in self.highlights.iter() {
             if ix < range.start {
                 runs.push(text_style.clone().to_run(range.start - ix));
@@ -661,6 +741,17 @@ impl Element for Inline {
                 .filter(|_| highlight.fade_out == INLINE_CODE_MARK)
             {
                 run.font.family = family.clone();
+            }
+            // Ferrite: the underline is painted per line by `paint`, trimmed
+            // of the whitespace a wrap leaves at a line's end.
+            if let Some(underline) = run.underline.take() {
+                self.underlines.push((
+                    range.clone(),
+                    gpui::UnderlineStyle {
+                        color: Some(underline.color.unwrap_or(run.color)),
+                        ..underline
+                    },
+                ));
             }
             runs.push(run);
             ix = range.end;
@@ -734,6 +825,7 @@ impl Element for Inline {
         }
         self.styled_text
             .paint(global_id, None, bounds, &mut (), &mut (), window, cx);
+        self.paint_underlines(&text_layout, window);
 
         let (document_range, ordinal, source_offset) = GlobalState::global(cx)
             .text_view_state()
@@ -1041,6 +1133,30 @@ mod tests {
     use crate::{TextSelectionContentKey, text_selection::TextSelectionDocumentRange};
     use gpui::{Bounds, point, px};
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn a_wrapped_underline_ends_at_its_last_non_space_glyph() {
+        // "ab cd" wrapped after "ab ": a, b, space on line 0 (x 0/5/10, the
+        // line ending at 13), c, d on line 1 at the left edge. An index at
+        // the wrap resolves to the end of the earlier line.
+        let text = "ab cd";
+        let at = |index: usize| -> Option<Point<Pixels>> {
+            Some(match index {
+                0 => point(px(0.), px(0.)),
+                1 => point(px(5.), px(0.)),
+                2 => point(px(10.), px(0.)),
+                3 => point(px(13.), px(0.)),
+                4 => point(px(5.), px(20.)),
+                _ => point(px(10.), px(20.)),
+            })
+        };
+        let spans = underline_spans(text, 0..text.len(), px(0.), at);
+        assert_eq!(
+            spans,
+            vec![(px(0.), px(0.), px(10.)), (px(20.), px(0.), px(10.))],
+            "the first line's stroke stops at `b`'s right edge, not the space's"
+        );
+    }
 
     #[test]
     fn document_range_preserves_utf8_bytes_across_reflow() {

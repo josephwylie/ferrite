@@ -5471,7 +5471,7 @@ mod tests {
     /// of the exchange. Recorded rather than spawned: the suite must never
     /// shell out to a real CLI, let alone pay one.
     /// The completion observation now times every outcome, so an
-    /// interrupted turn's row reads `Interrupted · 4.1s`. Timing it must not
+    /// interrupted turn's row reads `interrupted · 4.1s`. Timing it must not
     /// make it a completion: no completed stamp, no "finished" notice, no
     /// follow-up prediction, and the transcript still reads not-completed.
     #[test]
@@ -5502,7 +5502,7 @@ mod tests {
         assert_eq!(ends.len(), 1, "the observation times the row, adds none");
         assert_eq!(ends[0].outcome, crate::TurnOutcome::Interrupted);
         assert!(ends[0].elapsed_ms.is_some(), "the interruption is timed");
-        assert!(ends[0].text().starts_with("Interrupted · "));
+        assert!(ends[0].text().starts_with("interrupted · "));
         assert!(!transcript.turn_completed());
         assert!(
             cockpit
@@ -5878,13 +5878,20 @@ mod tests {
             2,
             "the observed elapsed and the local completion time"
         );
-        let seconds: f64 = fields[0]
+        let elapsed = fields[0]
             .strip_prefix("Worked for ")
             .and_then(|elapsed| elapsed.strip_suffix('s'))
-            .expect("the stamp says how long the turn worked, not process runtime")
-            .parse()
-            .unwrap();
-        assert!(seconds + 0.1 >= before.as_secs_f64());
+            .expect("the stamp says how long the turn worked, not process runtime");
+        // Whole seconds, floored, or `<1` under one second.
+        let seconds: f64 = match elapsed.strip_prefix('<') {
+            Some(under) => {
+                assert_eq!(under, "1", "only a sub-second turn reads `<1s`");
+                assert!(before.as_secs_f64() < 1.);
+                0.
+            }
+            None => elapsed.parse().unwrap(),
+        };
+        assert!(seconds + 1. > before.as_secs_f64());
         assert!(fields[1].contains(':'), "human-readable completion time");
         assert!(
             !first.contains('$') && !first.contains("0.038"),

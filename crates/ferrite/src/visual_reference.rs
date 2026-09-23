@@ -14,6 +14,7 @@ use ferrite_core::{
     groups::{GroupChange, GroupId},
     layout::{Axis, Node, Tree},
     providers::Session,
+    settings::SoloReadingSize,
     store::{Provider, Store},
     workspace::WorkspaceChoice,
     Decision, DecisionAnswer, DecisionKind, Hunk, QueueEvent, QueuedPrompt, SessionCommand,
@@ -300,6 +301,9 @@ const STATES: &[(&str, &[&str])] = &[
 
     // ---- WP-B states (append above the end line)
     ("prose", &["narrow", "wide", "app"]),
+    ("prose-comfortable", &["app"]),
+    ("prose-large", &["app", "narrow"]),
+    ("formatting-large", &["app"]),
     // (end WP-B)
 
     // ---- WP-C states (append above the end line)
@@ -575,6 +579,10 @@ fn build(state: &str, label: &str) -> (Scene, Setup) {
 
         // ---- WP-B scene arms (append above the end line)
         "prose" => (prose(), none),
+        // The reading sizes: the same scenes read at Comfortable and Large.
+        "prose-comfortable" => (prose(), reading(SoloReadingSize::Comfortable)),
+        "prose-large" => (prose(), reading(SoloReadingSize::Large)),
+        "formatting-large" => (legacy("formatting").0, reading(SoloReadingSize::Large)),
         // (end WP-B)
 
         // ---- WP-C scene arms (append above the end line)
@@ -1530,6 +1538,14 @@ fn notifications() -> (Scene, Setup) {
 // (end WP-A)
 
 // ---- WP-B scene builders (append above the end line)
+
+/// A setup that reads the Solo Pane at `size`.
+fn reading(size: SoloReadingSize) -> Setup {
+    Box::new(move |view, _, cx| {
+        view.prefs.settings.solo_reading_size = size;
+        cx.notify();
+    })
+}
 
 /// Markdown the other states do not reach: file chips (with a line, an
 /// image, a long name), an html fence with Preview, a highlighted Rust fence,

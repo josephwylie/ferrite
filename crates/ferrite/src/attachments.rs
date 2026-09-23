@@ -341,11 +341,14 @@ impl RenderOnce for Attachments {
     }
 }
 
-/// A file link in prose, drawn as a chip that fits the prose line: a file
-/// mark (or the image's own thumbnail), then the name in UI type `TEXT` and a
-/// `:line` suffix in `TEXT_MUTED`, on `RAISED` (`FILL` under the
-/// pointer). The native Markdown flow reserves the returned size and wraps
-/// the chip atomically, so the width is measured in the face it is drawn in.
+/// A file link in prose, drawn as inline code is: the name in the code face
+/// at `FS_UI` in `TEXT` and a `:line` suffix in `TEXT_MUTED`, on the neutral
+/// `INLINE_CODE_WASH` chip at `R_CHIP` (`FILL` under the pointer). An image
+/// leads with its own thumbnail; any other file has no mark. The native
+/// Markdown flow reserves the returned size — the chip plus
+/// `INLINE_CODE_OVERHANG` after it, so a following `.` or `,` sits 2px off
+/// — and wraps the chip atomically, so the width is measured in the face and
+/// size it is drawn in: the name and the location each shaped whole.
 pub fn inline_file(
     file: crate::file_links::FileLink,
     label: &str,
@@ -355,7 +358,7 @@ pub fn inline_file(
 ) -> (gpui::Size<gpui::Pixels>, gpui::AnyElement) {
     use crate::pointer::{Pointer as _, PointerPressed as _};
     use crate::theme;
-    use gpui::{rgb, SharedString};
+    use gpui::{rgb, rgba};
 
     let name = file
         .path
@@ -375,30 +378,11 @@ pub fn inline_file(
         .map(|line| format!(":{line}"))
         .unwrap_or_default();
     let image = gpui::Img::extensions().contains(&extension.as_str());
-    let title = format!("{name}{location}");
-    let mut face = window.text_style();
-    face.font_family = theme::FONT_UI.into();
-    face.font_weight = theme::W_BODY;
-    face.font_style = gpui::FontStyle::Normal;
-    let text_w = window
-        .text_system()
-        .shape_line(
-            SharedString::from(title),
-            px(theme::FS_UI),
-            &[face.to_run(name.len() + location.len())],
-            None,
-        )
-        .width();
-    let mark = if image {
-        theme::INLINE_FILE_THUMB
-    } else {
-        theme::INLINE_FILE_ICON
-    };
-    let chrome = 2. * theme::INLINE_FILE_PAD_X + mark + theme::INLINE_FILE_GAP;
+    let chip_w = inline_file_width(&name, &location, image, window);
+    // The flow reserves the chip and its trailing margin; the chip draws at
+    // its own width inside that.
     let size = gpui::size(
-        // Whole pixels: a fractional shortfall would ellipsize a name that fits.
-        (text_w.ceil() + px(chrome))
-            .clamp(px(theme::INLINE_FILE_MIN_W), px(theme::INLINE_FILE_MAX_W)),
+        chip_w + px(theme::INLINE_CODE_OVERHANG),
         px(theme::INLINE_FILE_H),
     );
     let host = preview.cloned();
@@ -422,31 +406,27 @@ pub fn inline_file(
         .id("inline-file-chip")
         .flex()
         .items_center()
-        .size_full()
+        .w(chip_w)
+        .h_full()
         .min_w_0()
         .px(px(theme::INLINE_FILE_PAD_X))
         .gap(px(theme::INLINE_FILE_GAP))
-        .bg(rgb(theme::RAISED))
+        .bg(rgba(theme::INLINE_CODE_WASH))
         .hover_raised()
         .press_raised()
         .rounded(px(theme::R_CHIP))
-        .font_family(theme::FONT_UI)
+        .font_family(theme::FONT_CODE)
         .font_weight(theme::W_BODY)
         .not_italic()
         .text_size(px(theme::FS_UI))
         .line_height(px(theme::LH_UI))
-        .child(if image {
-            gpui::img(thumbnail)
-                .flex_none()
-                .size(px(theme::INLINE_FILE_THUMB))
-                .rounded(px(theme::R_TIGHT))
-                .into_any_element()
-        } else {
-            Icon::new(IconName::FileText)
-                .flex_none()
-                .size(px(theme::INLINE_FILE_ICON))
-                .text_color(rgb(theme::TEXT_MUTED))
-                .into_any_element()
+        .when(image, |chip| {
+            chip.child(
+                gpui::img(thumbnail)
+                    .flex_none()
+                    .size(px(theme::INLINE_FILE_THUMB))
+                    .rounded(px(theme::R_TIGHT)),
+            )
         })
         .child(
             // The name gives way to an ellipsis; the `:line` never does.
@@ -495,7 +475,7 @@ pub fn inline_file(
             .id("inline-file")
             .debug_selector(move || selector.clone())
             .relative()
-            .w_full()
+            .w(chip_w)
             .h(size.height)
             .cursor_pointer()
             .tooltip(move |window, cx| {
@@ -505,6 +485,46 @@ pub fn inline_file(
             .child(target)
             .into_any_element(),
     )
+}
+
+/// An inline file chip's width: its padding, an image's thumbnail and gap,
+/// and the name and `:line` each shaped whole in the code face at `FS_UI`,
+/// rounded up to whole pixels with 1px to spare, so a name that fits is
+/// never ellipsized. Clamped to `INLINE_FILE_MIN_W`…`INLINE_FILE_MAX_W`.
+pub(crate) fn inline_file_width(
+    name: &str,
+    location: &str,
+    image: bool,
+    window: &mut Window,
+) -> gpui::Pixels {
+    use crate::theme;
+    let mut face = window.text_style();
+    face.font_family = theme::FONT_CODE.into();
+    face.font_weight = theme::W_BODY;
+    face.font_style = gpui::FontStyle::Normal;
+    let width = |text: &str| {
+        if text.is_empty() {
+            return px(0.);
+        }
+        window
+            .text_system()
+            .shape_line(
+                gpui::SharedString::from(text.to_owned()),
+                px(theme::FS_UI),
+                &[face.to_run(text.len())],
+                None,
+            )
+            .width()
+            .ceil()
+    };
+    let text_w = width(name) + width(location) + px(1.);
+    let chrome = 2. * theme::INLINE_FILE_PAD_X
+        + if image {
+            theme::INLINE_FILE_THUMB + theme::INLINE_FILE_GAP
+        } else {
+            0.
+        };
+    (text_w + px(chrome)).clamp(px(theme::INLINE_FILE_MIN_W), px(theme::INLINE_FILE_MAX_W))
 }
 
 /// Concave shoulders turn the kit container's sides into the prompt's top

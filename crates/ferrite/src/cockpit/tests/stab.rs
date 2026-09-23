@@ -1215,10 +1215,11 @@ fn focus_is_drawn_only_beside_another_pane(cx: &mut TestAppContext) {
     );
 }
 
-/// A group's disclosure mark leads, in the gutter where tool dots hang,
-/// and the summary starts at C1 after it: nothing at the column's right.
+/// A group's gutter holds its worst-state dot and the disclosure's named
+/// hit box, the summary starts at C1 after it, and the chevron trails the
+/// summary: nothing at the column's right.
 #[gpui::test]
-fn a_group_chevron_leads_in_the_gutter(cx: &mut TestAppContext) {
+fn a_group_chevron_trails_its_summary_and_its_target_leads_in_the_gutter(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("group-chevron-leads", 1);
     let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
     cx.simulate_resize(gpui::size(px(1400.), px(900.)));
@@ -1248,9 +1249,17 @@ fn a_group_chevron_leads_in_the_gutter(cx: &mut TestAppContext) {
         .expect("the group's chevron");
     assert!(
         (control.left() - row.left()).abs() <= px(0.5),
-        "the chevron sits in the gutter: {control:?} / {row:?}"
+        "the target sits in the gutter: {control:?} / {row:?}"
     );
     assert!(control.right() <= row.left() + px(crate::theme::GUTTER_W) + px(0.5));
+    let chevron = cx
+        .debug_bounds("disclosure-chevron")
+        .expect("the chevron's box is always laid out");
+    assert!(
+        chevron.left() > control.right() && chevron.right() < row.left() + row.size.width / 2.,
+        "the chevron trails the summary, not the column's right: {chevron:?} / {row:?}"
+    );
+    assert_eq!(chevron.size.width, px(crate::theme::ICON_CHEVRON));
 }
 
 /// The Composer is one input row in its box — the line, then the model pair

@@ -39,6 +39,18 @@ pub struct TextViewStyle {
     rule: StyleRefinement,
     list_bullet: StyleRefinement,
     list_ordinal: StyleRefinement,
+    prose_max_width: Option<Pixels>,
+    list_hang: Option<ListHang>,
+}
+
+/// A fixed hang for list text: markers right-aligned in a box `width` wide,
+/// `gap` short of the text. A marker wider than the box widens it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ListHang {
+    /// Where item text starts, from the list's own left edge.
+    pub width: Pixels,
+    /// The space between a marker's right edge and the text.
+    pub gap: Pixels,
 }
 
 /// A rounded ground painted under inline code runs, per wrapped line.
@@ -105,6 +117,8 @@ impl PartialEq for TextViewStyle {
             && self.rule == other.rule
             && self.list_bullet == other.list_bullet
             && self.list_ordinal == other.list_ordinal
+            && self.prose_max_width == other.prose_max_width
+            && self.list_hang == other.list_hang
     }
 }
 
@@ -162,6 +176,8 @@ impl TextViewStyle {
             rule: StyleRefinement::default(),
             list_bullet: StyleRefinement::default(),
             list_ordinal: StyleRefinement::default(),
+            prose_max_width: None,
+            list_hang: None,
         }
     }
 
@@ -342,6 +358,31 @@ impl TextViewStyle {
         self.list_bullet = bullet;
         self.list_ordinal = ordinal;
         self
+    }
+
+    /// Holds paragraphs and list items to `width` (a prose measure); code
+    /// blocks, tables and rules keep the full width. `None` (the default)
+    /// leaves every block at the container's width.
+    pub fn with_prose_max_width(mut self, width: Option<Pixels>) -> Self {
+        self.prose_max_width = width;
+        self
+    }
+
+    /// Sets a fixed hang for list text (see [`ListHang`]). `None` (the
+    /// default) keeps the measured marker column.
+    pub fn with_list_hang(mut self, hang: Option<ListHang>) -> Self {
+        self.list_hang = hang;
+        self
+    }
+
+    /// The prose measure, when set.
+    pub fn prose_max_width(&self) -> Option<Pixels> {
+        self.prose_max_width
+    }
+
+    /// The fixed list hang, when set.
+    pub fn list_hang(&self) -> Option<ListHang> {
+        self.list_hang
     }
 
     /// The refinement for headings of `level`.
@@ -542,6 +583,15 @@ mod tests {
         assert!(base != base.clone().with_blockquote(heading.clone()));
         assert!(base != base.clone().with_rule(heading.clone()));
         assert!(base != base.clone().with_list_markers(heading.clone(), Default::default()));
+        assert_eq!(base.prose_max_width(), None);
+        assert_eq!(base.list_hang(), None);
+        assert!(base != base.clone().with_prose_max_width(Some(px(570.))));
+        assert!(
+            base != base.clone().with_list_hang(Some(ListHang {
+                width: px(28.),
+                gap: px(6.),
+            }))
+        );
     }
 
     #[test]

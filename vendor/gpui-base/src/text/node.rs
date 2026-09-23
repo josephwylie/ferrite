@@ -1275,10 +1275,9 @@ impl CodeBlock {
             .unwrap_or_default()
     }
 
-    /// Synchronously clear the selection stored in the inline state.
-    ///
-    /// Mirrors the [`selected_text`](Self::selected_text) traversal.
-    pub(super) fn has_selection(&self) -> bool {
+    /// Whether the caret or a selection lies inside this block (Ferrite:
+    /// its actions overlay shows while it does).
+    pub fn has_selection(&self) -> bool {
         self.state
             .lock()
             .is_ok_and(|state| state.selected_range().is_some())
@@ -1313,17 +1312,6 @@ impl CodeBlock {
                     .text_size(cx.theme().tokens.typography.mono_md.size)
                     .relative()
                     .refine_style(&style.code_block())
-                    // Actions occupy a header row rather than covering the first
-                    // source line. Literal blocks without actions keep their layout.
-                    .when_some(node_cx.code_block_actions.clone(), |this, actions| {
-                        this.child(
-                            div()
-                                .id("actions")
-                                .w_full()
-                                .mb_1()
-                                .child(actions(&self, window, cx)),
-                        )
-                    })
                     .child(
                         Inline::new(
                             "code",
@@ -1339,7 +1327,22 @@ impl CodeBlock {
                         // Ferrite: highlighter ranges marked `code_run()` are
                         // shaped in the inline-code family, with no wash.
                         .code_style(node_cx.style.inline_code_font(), None),
-                    ),
+                    )
+                    // Ferrite: actions are an overlay over the whole block,
+                    // painted after the code and taking no layout, so a block
+                    // with actions is exactly as tall as one without. The
+                    // actions element places itself inside the overlay.
+                    .when_some(node_cx.code_block_actions.clone(), |this, actions| {
+                        this.child(
+                            div()
+                                .id("actions")
+                                .absolute()
+                                .top_0()
+                                .left_0()
+                                .size_full()
+                                .child(actions(&self, window, cx)),
+                        )
+                    }),
             )
             .into_any_element()
     }
@@ -1834,6 +1837,7 @@ impl BlockNode {
         line_height: Pixels,
         marker_width: Pixels,
     ) -> Div {
+        let hang = style.list_hang();
         h_flex()
             .w_full()
             .flex_1()
@@ -1841,19 +1845,24 @@ impl BlockNode {
             .relative()
             .items_start()
             .content_start()
+            .when_some(style.prose_max_width(), |row, width| row.max_w(width))
             .when(!options.todo && checked.is_none(), |this| {
+                let prefix =
+                    list_item_prefix(ix, options.ordered, options.depth, options.list_start);
                 this.child(
                     div()
                         .flex_none()
                         .w(marker_width)
                         .text_right()
+                        // Ferrite: with a fixed hang the marker sits `gap` short
+                        // of the text, its own trailing space dropped.
+                        .when_some(hang, |marker, hang| marker.pr(hang.gap))
                         .refine_style(style.list_marker(options.ordered))
-                        .child(list_item_prefix(
-                            ix,
-                            options.ordered,
-                            options.depth,
-                            options.list_start,
-                        )),
+                        .child(if hang.is_some() {
+                            prefix.trim_end().to_string()
+                        } else {
+                            prefix
+                        }),
                 )
             })
             .when_some(checked, |this, checked| {
@@ -2222,7 +2231,13 @@ impl BlockNode {
                 div()
                     .id("row")
                     .w_full()
-                    .when(row_ix < row_count - 1, |this| this.border_b_1())
+                    // Ferrite: a transparent border colour draws no row rule and
+                    // takes no space; the header keeps its rule (its colour is
+                    // the header refinement's).
+                    .when(
+                        row_ix < row_count - 1 && (row_ix == 0 || !style.border().is_transparent()),
+                        |this| this.border_b_1(),
+                    )
                     .border_color(style.border())
                     .flex()
                     .flex_row()
@@ -2335,7 +2350,13 @@ impl BlockNode {
                 div()
                     .id("row")
                     .w_full()
-                    .when(row_ix < row_count - 1, |this| this.border_b_1())
+                    // Ferrite: a transparent border colour draws no row rule and
+                    // takes no space; the header keeps its rule (its colour is
+                    // the header refinement's).
+                    .when(
+                        row_ix < row_count - 1 && (row_ix == 0 || !style.border().is_transparent()),
+                        |this| this.border_b_1(),
+                    )
                     .border_color(style.border())
                     .flex()
                     .flex_row()
@@ -2420,6 +2441,7 @@ impl BlockNode {
             }
             BlockNode::Paragraph(paragraph) => div()
                 .id(("p", ix))
+                .when_some(node_cx.style.prose_max_width(), |p, width| p.max_w(width))
                 .child(paragraph.render(node_cx, window, cx))
                 .into_any_element(),
             BlockNode::Heading {
@@ -2506,7 +2528,10 @@ impl BlockNode {
                     // and larger reading type must scale nested indentation.
                     let text_style = window.text_style();
                     let font_size = text_style.font_size.to_pixels(window.rem_size());
-                    let mut marker_width = font_size;
+                    let hang = node_cx.style.list_hang();
+                    // Ferrite: a fixed hang is the floor, and a marker (plus
+                    // its gap) wider than it widens this list alone.
+                    let mut marker_width = hang.map_or(font_size, |hang| hang.width);
                     for (item_index, item) in children
                         .iter()
                         .filter(|item| item.is_list_item())
@@ -2517,6 +2542,10 @@ impl BlockNode {
                         } else {
                             let marker =
                                 list_item_prefix(item_index, *ordered, options.depth, *start);
+                            let marker = match hang {
+                                Some(_) => marker.trim_end().to_string(),
+                                None => marker,
+                            };
                             // Measure in the marker's own refined face.
                             let mut marker_style = text_style.clone();
                             marker_style.refine(&node_cx.style.list_marker(*ordered).text);
@@ -2525,7 +2554,8 @@ impl BlockNode {
                                 window
                                     .text_system()
                                     .layout_line(&marker, font_size, &[run], None)
-                                    .width,
+                                    .width
+                                    + hang.map_or(px(0.), |hang| hang.gap),
                             );
                         }
                     }

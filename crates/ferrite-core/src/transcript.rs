@@ -83,29 +83,32 @@ pub struct TurnEnd {
 
 impl TurnEnd {
     /// What the row says, and what copy and search see: `Worked for 38s ·
-    /// 8:53 pm`, `Interrupted · 4.1s`, `Failed · 4.1s · <the provider's
-    /// message>`. A time that was never observed (an older log) is left out
-    /// rather than guessed.
+    /// 8:53 pm` (whole seconds, `<1s` under one), `interrupted · 4.1s`,
+    /// `failed · 4.1s · <the provider's message>`. State words are always
+    /// lowercase, even leading a row (`INTERRUPTED`/`FAILED`: the app's
+    /// lexicon, `theme::words`, asserts they agree). A time that was never
+    /// observed (an older log) is left out rather than guessed.
     pub fn text(&self) -> String {
-        let elapsed = self
-            .elapsed_ms
-            .map(|ms| crate::progress::duration_label(std::time::Duration::from_millis(ms)));
+        let elapsed = self.elapsed_ms.map(std::time::Duration::from_millis);
         let mut parts: Vec<String> = Vec::new();
         match &self.outcome {
             TurnOutcome::Completed => {
-                parts.push(match &elapsed {
-                    Some(elapsed) => format!("Worked for {elapsed}"),
+                parts.push(match elapsed {
+                    Some(elapsed) => format!(
+                        "Worked for {}",
+                        crate::progress::settled_duration_label(elapsed)
+                    ),
                     None => "Worked".into(),
                 });
                 parts.extend(self.completed_at.clone().filter(|at| !at.is_empty()));
             }
             TurnOutcome::Interrupted => {
-                parts.push("Interrupted".into());
-                parts.extend(elapsed);
+                parts.push(Self::INTERRUPTED.into());
+                parts.extend(elapsed.map(crate::progress::duration_label));
             }
             TurnOutcome::Error(message) => {
-                parts.push("Failed".into());
-                parts.extend(elapsed);
+                parts.push(Self::FAILED.into());
+                parts.extend(elapsed.map(crate::progress::duration_label));
                 parts.extend((!message.is_empty()).then(|| message.clone()));
             }
         }
@@ -115,6 +118,11 @@ impl TurnEnd {
     pub fn completed(&self) -> bool {
         self.outcome == TurnOutcome::Completed
     }
+
+    /// The lead word of a turn the operator stopped.
+    pub const INTERRUPTED: &'static str = "interrupted";
+    /// The lead word of a turn that failed.
+    pub const FAILED: &'static str = "failed";
 }
 
 /// A tool call as one row: what ran, on what, how it went, and the bounded
@@ -230,11 +238,7 @@ impl<'a> ToolActivity<'a> {
                 if count == 1 { "" } else { "s" }
             ));
         }
-        let mut summary = parts.join(", ");
-        if self.running > 0 {
-            summary.push('…');
-        }
-        summary
+        parts.join(", ")
     }
 
     pub fn leader(&self) -> &'a ToolBlock {
@@ -1912,7 +1916,7 @@ mod tests {
         assert_eq!(group.blocks.len(), 4);
         assert_eq!(
             group.summary(),
-            "Reading 1 file, using 1 tool, updating 1 file, running 1 shell command…"
+            "Reading 1 file, using 1 tool, updating 1 file, running 1 shell command"
         );
         assert!(matches!(&blocks[5].body, Body::Thinking(s) if s == "The changes fit together."));
         assert_eq!(blocks[0].markdown.as_deref(), Some("Checking the files."));
@@ -3078,7 +3082,7 @@ mod tests {
             })
         ));
         // No observation timed it here, so the row claims no elapsed.
-        assert_eq!(body_text(last), "Interrupted");
+        assert_eq!(body_text(last), "interrupted");
     }
 
     #[test]
@@ -3099,18 +3103,18 @@ mod tests {
                 ..
             })
         ));
-        assert_eq!(body_text(last), "Failed · model overloaded");
+        assert_eq!(body_text(last), "failed · model overloaded");
     }
 
     #[test]
     fn an_observation_times_the_interrupted_or_failed_turn_it_follows() {
         for (outcome, said) in [
-            (crate::TurnOutcome::Interrupted, "Interrupted · 4.1s"),
+            (crate::TurnOutcome::Interrupted, "interrupted · 4.1s"),
             (
                 crate::TurnOutcome::Error("model overloaded".into()),
-                "Failed · 4.1s · model overloaded",
+                "failed · 4.1s · model overloaded",
             ),
-            (crate::TurnOutcome::Completed, "Worked for 4.1s · 8:53 pm"),
+            (crate::TurnOutcome::Completed, "Worked for 4s · 8:53 pm"),
         ] {
             let mut transcript = Transcript::default();
             transcript.apply(Input::Prompt("go".into()));
@@ -3133,6 +3137,22 @@ mod tests {
             assert_eq!(update.dirty, vec![ends[0].id]);
             assert!(transcript.blocks().len() <= rows + 1);
         }
+    }
+
+    #[test]
+    fn a_sub_second_turn_worked_for_under_a_second() {
+        let end = TurnEnd {
+            outcome: crate::TurnOutcome::Completed,
+            elapsed_ms: Some(400),
+            completed_at: Some("8:53 pm".into()),
+        };
+        assert_eq!(end.text(), "Worked for <1s \u{b7} 8:53 pm");
+        let end = TurnEnd {
+            elapsed_ms: Some(18_900),
+            completed_at: None,
+            ..end
+        };
+        assert_eq!(end.text(), "Worked for 18s");
     }
 
     #[test]

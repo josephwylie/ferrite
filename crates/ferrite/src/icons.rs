@@ -72,7 +72,6 @@ icons![
     "ferrite-mono",
     // ---- WP-A icons (append names above the end line)
     "reasoning",
-    "disclosure",
     // (end WP-A)
 
     // ---- WP-B icons (append names above the end line)
@@ -157,11 +156,6 @@ pub const FERRITE_MONO: &str = "icons/ferrite-mono.svg";
 // ---- WP-A icon names (append consts above the end line)
 /// `∴` (not in Geist Mono): the reasoning row's gutter mark, three dots.
 pub const REASONING: &str = "icons/reasoning.svg";
-/// `▸`, drawn: the transcript's disclosure mark, a small filled triangle
-/// that turns a quarter to point down when open. A fill glyph with a 1px
-/// round-joined edge in the same ink, so its corners are soft; its shape
-/// never resembles the prompt's stroked `❯`, which stays the prompt's own.
-pub const DISCLOSURE: &str = "icons/disclosure.svg";
 // (end WP-A)
 
 // ---- WP-B icon names (append consts above the end line)
@@ -404,7 +398,6 @@ mod tests {
             FERRITE_MONO,
             DIAMOND,
             REASONING,
-            DISCLOSURE,
         ] {
             let bytes = Assets
                 .load(key)
@@ -416,8 +409,8 @@ mod tests {
         }
         assert_eq!(
             ICONS.len(),
-            33,
-            "the prototype and app controls, including disclosure and close,              and the four Windows caption glyphs"
+            32,
+            "the prototype and app controls, including close,              and the four Windows caption glyphs"
         );
     }
 
@@ -485,18 +478,6 @@ mod tests {
             .parse()
             .unwrap();
         stroke * 16.0 / view
-    }
-
-    /// The disclosure mark is a filled triangle and the prompt mark a
-    /// stroked chevron: two different shapes in one gutter, so a group row
-    /// never reads as a prompt.
-    #[test]
-    fn the_disclosure_mark_is_filled_and_the_prompt_mark_stroked() {
-        let load = |key| String::from_utf8(Assets.load(key).unwrap().unwrap().to_vec()).unwrap();
-        let (disclosure, prompt) = (load(DISCLOSURE), load(PROMPT));
-        assert!(disclosure.contains(r#"fill="currentColor""#));
-        assert!(disclosure.contains('Z'), "a closed shape");
-        assert!(prompt.contains(r#"fill="none""#));
     }
 
     /// A name nothing embeds is `Ok(None)`, not an error: gpui asks for a
