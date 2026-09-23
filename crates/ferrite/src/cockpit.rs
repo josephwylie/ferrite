@@ -7610,7 +7610,17 @@ impl CockpitView {
                         .into_any_element(),
                     band: self.draft_band_element(index, cx),
                     picker: self.draft_model_picker(index, cx),
-                    usage_meter: (level == Level::Transcript)
+                    // A draft's meter answers "what is left" before the
+                    // prompt is written, but it is the first thing a narrow
+                    // draft gives up: the setup chips and the model pair
+                    // are what the draft cannot start without.
+                    usage_meter: (level == Level::Transcript
+                        && self
+                            .pane_rects(window)
+                            .into_iter()
+                            .find(|(at, _)| *at == index)
+                            .map_or(self.cell(window).width, |(_, rect)| rect.w)
+                            >= crate::theme::DRAFT_METER_MIN_W)
                         .then(|| self.usage_meter(index, cx))
                         .flatten(),
                     menu: (level == Level::Transcript)

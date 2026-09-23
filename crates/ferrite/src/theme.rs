@@ -1130,6 +1130,9 @@ pub const PREVIEW_MAX_W: f32 = 768.0;
 pub const BG_CHIP_MAX_W: f32 = 240.0;
 pub const BG_CHIP_STOP: f32 = 16.0;
 pub const BG_CHIP_STOP_GLYPH: f32 = 10.0;
+/// The narrowest draft Pane that still draws the usage meter beside its
+/// setup chips and model pair; below it the meter gives way first.
+pub const DRAFT_METER_MIN_W: f32 = 560.0;
 /// A pending file on the shelf: a 22px chip with a 16px thumbnail or file
 /// mark, the name cut at 200px.
 pub const ATTACH_CHIP_H: f32 = 22.0;

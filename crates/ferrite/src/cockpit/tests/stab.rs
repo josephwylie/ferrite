@@ -608,6 +608,15 @@ fn a_narrow_draft_keeps_its_controls_inside_the_composer(cx: &mut TestAppContext
     assert!(model.right() <= effort.left());
     let band = cx.debug_bounds("draft-band").expect("the setup chips");
     assert!(band.right() <= model.left(), "{band:?} / {model:?}");
+    // The meter gives way first, so the setup chips keep their names.
+    assert!(cx.debug_bounds("usage-meter-draft-1").is_none());
+    for chip in ["band-chip-0", "band-chip-1"] {
+        let chip = cx.debug_bounds(chip).expect("a setup chip");
+        assert!(
+            chip.size.width >= px(48.),
+            "{chip:?} keeps a readable label"
+        );
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
