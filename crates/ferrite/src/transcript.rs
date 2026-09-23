@@ -38,6 +38,54 @@ use crate::{
 /// a glyph beside the prose, never brighter than a tool's settled dot.
 pub(crate) const ANSWER_MARK_INK: u32 = theme::TEXT_FAINT;
 
+/// Who a transcript row speaks for, as the answer mark counts speakers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Speaker {
+    /// Agent prose: an answer's paragraphs, lists, headings and fences.
+    Agent,
+    /// The operator's prompt, or a machine action (a tool row or group).
+    Other,
+}
+
+impl Speaker {
+    /// A block's speaker; `None` for the rows that neither speak nor hand
+    /// the floor back (reasoning, notices, records, the stamp).
+    pub(crate) fn of(body: &Body) -> Option<Self> {
+        match body {
+            Body::Paragraph { .. }
+            | Body::Bullet { .. }
+            | Body::Heading { .. }
+            | Body::Code { .. } => Some(Self::Agent),
+            Body::Prompt(_) | Body::Tool(_) => Some(Self::Other),
+            Body::Thinking(_) | Body::Notice(_) | Body::Meta(_) | Body::TurnEnd(_) => None,
+        }
+    }
+}
+
+/// The answer mark's rule, one for every tier (the operator's ruling, Q2):
+/// the Ferrite mark is drawn once per speaker change to the agent — on the
+/// first prose after a prompt or after a tool or group row. Consecutive
+/// prose wears none; its gutter stays empty and its text keeps the C1 edge.
+/// Rows with no speaker are transparent to it.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct AnswerMarks {
+    agent_has_floor: bool,
+}
+
+impl AnswerMarks {
+    /// Feed the next row's speaker, oldest first: whether it wears the mark.
+    pub(crate) fn next(&mut self, speaker: Option<Speaker>) -> bool {
+        match speaker {
+            Some(Speaker::Agent) => !std::mem::replace(&mut self.agent_has_floor, true),
+            Some(Speaker::Other) => {
+                self.agent_has_floor = false;
+                false
+            }
+            None => false,
+        }
+    }
+}
+
 /// Owned input for one selected Subject. Cockpit clones only its retained L1
 /// render window when this revision changes; rendering never borrows core.
 pub(crate) struct TranscriptInput {
@@ -524,6 +572,7 @@ impl TranscriptView {
                 }
                 _ => line_height,
             };
+            let marked = row.answer_mark();
             return div()
                 .id(SharedString::from(format!(
                     "answer-{}-{first:?}",
@@ -540,22 +589,24 @@ impl TranscriptView {
                 .pl(px(theme::GUTTER_W))
                 .text_size(px(answer_size))
                 .line_height(px(line_height))
-                .child(
+                .when(marked, |answer| {
                     // The monochrome Ferrite mark, centred on the first line
                     // box at every reading size, a leading heading included.
-                    components::gutter(
-                        components::glyph_box(icons::icon(
-                            icons::FERRITE_MONO,
-                            theme::GLYPH_BOX,
-                            ANSWER_MARK_INK,
-                        ))
-                        .debug_selector(|| "answer-mark".into()),
-                        first_line,
+                    answer.child(
+                        components::gutter(
+                            components::glyph_box(icons::icon(
+                                icons::FERRITE_MONO,
+                                theme::GLYPH_BOX,
+                                ANSWER_MARK_INK,
+                            ))
+                            .debug_selector(|| "answer-mark".into()),
+                            first_line,
+                        )
+                        .absolute()
+                        .left_0()
+                        .top_0(),
                     )
-                    .absolute()
-                    .left_0()
-                    .top_0(),
-                )
+                })
                 .child(selection.answer(first, source.to_owned()))
                 .into_any_element();
         }

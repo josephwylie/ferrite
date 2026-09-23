@@ -2259,7 +2259,7 @@ pub(crate) fn tail_text(body: &Body, docked: bool) -> Option<String> {
 /// gutter grammar: every row is `components::gutter(mark, line_box)` then
 /// its text at C1 — a prompt behind `❯` (`FS_UI` `W_LABEL` `TEXT_STRONG`),
 /// prose behind the Ferrite mark (Geist `FS_PROSE_SM`/`LH_PROSE_SM`,
-/// `TEXT_2`, the mark on the first block of an answer as L1 marks it), a
+/// `TEXT_2`, the mark once per speaker change as L1 marks it), a
 /// tool row behind its `TOOL_DOT` (`Name(args)`, the args wrapping, never
 /// cut), a notice behind an `ATTENTION` dot with only its lead phrase
 /// coloured, and a stopped turn in the failure-line grammar. A completed
@@ -2356,8 +2356,8 @@ fn l2_tail_rows(transcript: &Transcript, namespace: &str, docked: bool) -> Vec<T
                 .map(|(id, _)| id)
         });
     let mut rows: Vec<TailRow> = Vec::new();
-    // L1 marks an answer once, on its first block.
-    let mut in_answer = false;
+    // The one answer-mark rule, as L1 draws it: once per speaker change.
+    let mut marks = crate::transcript::AnswerMarks::default();
     for block in tail {
         if live_reasoning == Some(block.id) {
             continue;
@@ -2365,12 +2365,7 @@ fn l2_tail_rows(transcript: &Transcript, namespace: &str, docked: bool) -> Vec<T
         let Some(text) = tail_text(&block.body, docked) else {
             continue;
         };
-        let prose_like = matches!(
-            block.body,
-            Body::Paragraph { .. } | Body::Bullet { .. } | Body::Heading { .. } | Body::Code { .. }
-        );
-        let lead_answer = prose_like && !in_answer;
-        in_answer = prose_like;
+        let lead_answer = marks.next(crate::transcript::Speaker::of(&block.body));
         let row = |mark: AnyElement, line: f32| {
             div()
                 .w_full()

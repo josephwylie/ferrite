@@ -936,7 +936,12 @@ pub fn init_components(cx: &mut gpui::App) {
 //   the tool dot and the elbow are painted. None of them registers text.
 // - **One left edge, three gutter marks.** The gutter holds `❯` (you
 //   spoke), a `TOOL_DOT` (a machine action and its state; a group's dot is
-//   its worst member's) and the Ferrite mark (the agent spoke). A
+//   its worst member's) and the Ferrite mark (the agent spoke). The mark is
+//   drawn once per speaker change to the agent, at every tier: on the first
+//   prose after a prompt or after a tool or group row. Prose that follows
+//   prose — across reasoning, a notice or a record, which neither speak nor
+//   hand the floor back — wears none; its gutter stays empty and its text
+//   keeps the C1 edge (`transcript::AnswerMarks`, the operator's Q2). A
 //   disclosure is a trailing `ICON_CHEVRON` after its row's label, its box
 //   always reserved, shown under the pointer or on the keyboard target and
 //   turned a quarter when open. No transcript row has a hover ground; the
