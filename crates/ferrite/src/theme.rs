@@ -408,6 +408,27 @@ pub const BOARD_TOP: f32 = WIN_CHROME_H + GRID_PAD;
 /// A toast's width: the nav column less 8px each side, so a toast stacked at
 /// the foot of the nav covers only the ground and never a Pane.
 pub const TOAST_W: f32 = NAV_WIDTH - 2.0 * SPACE_2;
+/// One toast's height: 12px padding around a title line over a meta line,
+/// inside its 1px edge. The kit stacks at most `TOAST_LAYERS` of them,
+/// each layer behind the front peeking `TOAST_PEEK` above it (the kit's
+/// collapsed-stack geometry).
+pub const TOAST_H: f32 = 2.0 * SPACE_3 + LH_UI + LH_META + 2.0;
+pub const TOAST_PEEK: f32 = 14.0;
+pub const TOAST_LAYERS: usize = 3;
+/// What the foot of the nav gives up while `layers` toasts are stacked on
+/// it: the stack, its bottom margin and 8px of air, so nothing in the nav
+/// (the Parked fold above all) ever sits under a toast.
+pub const fn toast_reserve(layers: usize) -> f32 {
+    if layers == 0 {
+        return 0.0;
+    }
+    let layers = if layers < TOAST_LAYERS {
+        layers
+    } else {
+        TOAST_LAYERS
+    };
+    GRID_PAD + TOAST_H + TOAST_PEEK * (layers - 1) as f32 + SPACE_2
+}
 
 // -------------------------------------------- pane body and the row column
 

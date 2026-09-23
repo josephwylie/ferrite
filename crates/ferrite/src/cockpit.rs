@@ -248,6 +248,12 @@ pub struct CockpitView {
     drop_preview: Option<(ThreadId, Zone)>,
     /// The Pane a live drag picked up: its cell dims until the release.
     pane_drag_source: Option<ThreadId>,
+    /// How many toasts stand at the foot of the nav, read off the kit's
+    /// list each frame; the nav reserves their room (`theme::toast_reserve`).
+    /// The watch repaints the cockpit when the list changes on its own (an
+    /// autohide, a dismiss).
+    toast_layers: usize,
+    toast_watch: Option<gpui::Subscription>,
     /// The Pane native files were last dragged over. Read only while a drag
     /// is live (`drop_target`), so a drag that leaves the window leaves no
     /// sheet behind.
@@ -793,6 +799,8 @@ impl CockpitView {
             seam_drag: None,
             drop_preview: None,
             pane_drag_source: None,
+            toast_layers: 0,
+            toast_watch: None,
             file_drop_over: None,
             prefs,
             settings_open: false,
@@ -9256,6 +9264,19 @@ impl CockpitView {
             })
             .collect();
         self.bell.present_requests(decisions, &handle, window, cx);
+        let list = window
+            .root::<gpui::component::Root>()
+            .flatten()
+            .map(|root| root.read(cx).notification.clone());
+        self.toast_layers = match (&list, self.nav_collapsed) {
+            (Some(list), false) => list.read(cx).notifications().len(),
+            _ => 0,
+        };
+        if self.toast_watch.is_none() {
+            if let Some(list) = list {
+                self.toast_watch = Some(cx.observe(&list, |_, _, cx| cx.notify()));
+            }
+        }
     }
 
     /// The bell in the nav's chrome band, its badge, and its panel.
@@ -9358,6 +9379,15 @@ impl CockpitView {
                         .child(nav::scrollbar(&self.nav_scroll)),
                 )
                 .children(self.nav_parked(&state, cx))
+                // The toasts' ground: nothing of the nav is drawn under them.
+                .when(self.toast_layers > 0, |nav| {
+                    nav.child(
+                        div()
+                            .debug_selector(|| "nav-toast-reserve".into())
+                            .flex_shrink_0()
+                            .h(px(crate::theme::toast_reserve(self.toast_layers))),
+                    )
+                })
         };
         if !self.nav_has_toggled {
             return nav::shell(state.collapsed)

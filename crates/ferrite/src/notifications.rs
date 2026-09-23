@@ -329,7 +329,9 @@ fn detail_line(row: &Row) -> Div {
 fn toast_body(row: &Row) -> Div {
     let ink = mark_ink(row);
     let title = row.title.clone();
+    let thread = row.thread.get();
     div()
+        .debug_selector(move || format!("toast-{thread}"))
         .flex()
         .items_start()
         .gap(px(SPACE_2))

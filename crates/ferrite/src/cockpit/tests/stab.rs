@@ -370,3 +370,77 @@ fn the_watchdog_sweeps_on_the_executor_clock(cx: &mut TestAppContext) {
         "the executor's time does"
     );
 }
+
+/// While toasts stand at the foot of the nav, the nav gives their ground
+/// up: the Parked fold sits above the whole stack, never under it, and gets
+/// its place back once the toasts are gone.
+#[gpui::test]
+fn the_parked_fold_stays_clear_of_the_toast_stack(cx: &mut TestAppContext) {
+    let (mut core, fake) = cockpit("toast-parked", 5);
+    let threads = core.threads();
+    core.park(threads[4]).unwrap();
+    for (n, thread) in threads[..4].iter().enumerate() {
+        core.send(*thread, format!("task {n}"));
+    }
+    core.pump();
+    core.focus_thread(threads[0]);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    let resting = cx.debug_bounds("nav-parked").expect("the Parked fold");
+    assert!(cx.debug_bounds("nav-toast-reserve").is_none());
+
+    for stream in &fake.streams.borrow()[1..4] {
+        stream
+            .send(SessionEvent::TurnEnded {
+                outcome: ferrite_core::TurnOutcome::Completed,
+                cost_usd: None,
+            })
+            .unwrap();
+    }
+    tick(cx);
+    // The kit's entrance slide runs on the wall clock and its stack springs
+    // on the executor's: let both settle before reading where toasts are.
+    std::thread::sleep(Duration::from_millis(600));
+    for _ in 0..8 {
+        cx.executor().advance_clock(Duration::from_millis(100));
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+    }
+    let layers = view.read_with(cx, |view, _| view.toast_layers);
+    assert!(layers >= 2, "the premise: a stack of toasts ({layers})");
+    let parked = cx.debug_bounds("nav-parked").expect("the Parked fold");
+    let window_h = cx.update(|window, _| window.viewport_size().height);
+    let stack_top = window_h - px(crate::theme::toast_reserve(layers) - crate::theme::SPACE_2);
+    assert!(
+        parked.bottom() <= stack_top,
+        "the fold {parked:?} ends above the stack's top {stack_top:?}"
+    );
+    for thread in &threads[1..4] {
+        if let Some(toast) = cx.debug_bounds(Box::leak(
+            format!("toast-{}", thread.get()).into_boxed_str(),
+        )) {
+            assert!(
+                parked.bottom() <= toast.top() - px(crate::theme::SPACE_3),
+                "the fold {parked:?} clears the toast {toast:?}"
+            );
+        }
+    }
+    assert!(
+        parked.top() < resting.top(),
+        "the fold moved up to make room"
+    );
+
+    cx.update(|window, cx| {
+        use gpui::component::WindowExt as _;
+        window.clear_notifications(cx)
+    });
+    cx.executor().advance_clock(Duration::from_secs(1));
+    tick(cx);
+    assert_eq!(view.read_with(cx, |view, _| view.toast_layers), 0);
+    assert_eq!(
+        cx.debug_bounds("nav-parked"),
+        Some(resting),
+        "room given back"
+    );
+}
