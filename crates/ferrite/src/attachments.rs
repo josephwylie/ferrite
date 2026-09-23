@@ -264,7 +264,7 @@ impl RenderOnce for Attachments {
 
 /// A file link in prose, drawn as a chip that fits the prose line: a file
 /// mark (or the image's own thumbnail), then the name in mono `TEXT` and a
-/// `:line` suffix in `TEXT_MUTED`, on `RAISED` (`RAISED_2` under the
+/// `:line` suffix in `TEXT_MUTED`, on `RAISED` (`FILL` under the
 /// pointer). The native Markdown flow reserves the returned size and wraps
 /// the chip atomically, so the width is measured in the face it is drawn in.
 pub fn inline_file(
