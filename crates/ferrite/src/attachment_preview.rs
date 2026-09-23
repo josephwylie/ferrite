@@ -1,5 +1,5 @@
 //! Pane-owned file previews: images use a focused overlay while text files
-//! use a reading rail beside the live transcript.
+//! open in a reader that takes its own slot on the board, beside its Pane.
 
 use std::{
     path::{Path, PathBuf},
@@ -131,60 +131,46 @@ impl Preview {
         window.refresh();
     }
 
-    fn close_document(&self, window: &mut Window) {
+    pub fn close_document(&self, window: &mut Window) {
         self.state.lock().unwrap().document = None;
         window.refresh();
     }
 
-    pub fn mount(&self, pane: Div, document_body: Option<AnyElement>) -> Div {
-        let Some(document) = self.document() else {
-            let preview = self.clone();
-            return pane
-                .child(
-                    canvas(
-                        move |bounds, window, cx| {
-                            if {
-                                let mut prior = preview.bounds.lock().unwrap();
-                                let changed = *prior != bounds;
-                                *prior = bounds;
-                                changed
-                            } && preview.state.lock().unwrap().image.is_some()
-                            {
-                                window.defer(cx, |window, _| window.refresh());
-                            }
-                        },
-                        |_, _, _, _| {},
-                    )
-                    .absolute()
-                    .inset_0(),
-                )
-                .child(PreviewLayer(self.clone()));
-        };
-        let Some(body) = document_body else {
-            return pane;
-        };
+    /// The Pane with its image layer: the overlay covers exactly the Pane's
+    /// own bounds. The text reader is not mounted here — it is a slot of
+    /// its own on the board (`reader`), laid out like any other Pane.
+    pub fn mount(&self, pane: Div) -> Div {
+        let preview = self.clone();
+        pane.child(
+            canvas(
+                move |bounds, window, cx| {
+                    if {
+                        let mut prior = preview.bounds.lock().unwrap();
+                        let changed = *prior != bounds;
+                        *prior = bounds;
+                        changed
+                    } && preview.state.lock().unwrap().image.is_some()
+                    {
+                        // refresh() is ignored during prepaint. Schedule the
+                        // new pane geometry after this frame completes.
+                        window.defer(cx, |window, _| window.refresh());
+                    }
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .inset_0(),
+        )
+        .child(PreviewLayer(self.clone()))
+    }
+
+    /// The open document as a board slot: a Pane-shaped shell whose head
+    /// is handed to `head` (the cockpit wires the drag that moves the slot)
+    /// and whose body is the rendered `body`. None while no document is open.
+    pub fn reader(&self, body: AnyElement, head: impl FnOnce(Div) -> AnyElement) -> Option<Div> {
+        let document = self.document()?;
         let markdown = document.is_markdown();
         let kind = if markdown { "MARKDOWN" } else { "FILE" };
-        let preview = self.clone();
-        let available = f32::from(self.bounds.lock().unwrap().size.width);
-        let document_width = px((available * 0.46).clamp(280., 640.));
-        let handle = std::rc::Rc::new(
-            |handle: &gpui::base::ResizeHandleContext, _: &mut Window, _: &mut App| {
-                Some(
-                    div()
-                        .h_full()
-                        .w(px(2.))
-                        .rounded(px(1.))
-                        .bg(rgb(if handle.is_active() {
-                            theme::FOCUS
-                        } else {
-                            theme::GROUND
-                        }))
-                        .group_hover("handle", |line| line.bg(rgb(theme::FOCUS)))
-                        .into_any_element(),
-                )
-            },
-        );
         let document_content = if markdown {
             div()
                 .id("markdown-reader-scroll")
@@ -212,8 +198,68 @@ impl Preview {
                 .child(div().size_full().child(body))
                 .into_any_element()
         };
-        let document_pane = {
-            let close = self.clone();
+        let close = self.clone();
+        let head_band = div()
+            .flex()
+            .items_center()
+            .h(px(theme::PANE_HEAD_H))
+            .flex_shrink_0()
+            .gap_2()
+            .px(px(theme::PANE_PAD_X))
+            .bg(rgb(theme::PANE_HEAD))
+            .rounded_t(px(theme::R_SURFACE - 1.))
+            .border_b_1()
+            .border_color(rgba(theme::PANE_HEAD_EDGE))
+            .child(
+                Icon::new(IconName::FileText)
+                    .size(px(theme::ROW_ICON))
+                    .text_color(rgb(theme::TEXT_2)),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .font_family(theme::FONT_UI)
+                    .text_size(px(theme::FS_MD))
+                    .text_color(rgb(theme::TEXT_STRONG))
+                    .child(document.title),
+            )
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .rounded(px(theme::R_CHIP))
+                    .bg(rgb(theme::RAISED))
+                    .px(px(theme::CHIP_PAD_X))
+                    .py(px(theme::CHIP_PAD_Y))
+                    .text_size(px(theme::FS_MONO))
+                    .text_color(rgb(theme::TEXT_MUTED))
+                    .child(kind),
+            )
+            .child(
+                div()
+                    .debug_selector(|| "close-markdown-reader".into())
+                    // A press here closes; it must not also pick the slot
+                    // up as a drag.
+                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(
+                        crate::components::button("close-markdown-reader")
+                            .w(px(theme::ICON_BUTTON))
+                            .h(px(theme::ICON_BUTTON))
+                            .p_0()
+                            .tooltip("Close document reader")
+                            .child(
+                                Icon::new(IconName::Close)
+                                    .size(px(theme::ICON_BUTTON_GLYPH))
+                                    .text_color(rgb(theme::TEXT_MUTED)),
+                            )
+                            .on_click(move |_, window, cx| {
+                                cx.stop_propagation();
+                                close.close_document(window);
+                            }),
+                    ),
+            );
+        Some(
             div()
                 .debug_selector(|| "markdown-reader".into())
                 .relative()
@@ -228,107 +274,9 @@ impl Preview {
                 .border_color(rgba(theme::TRANSPARENT))
                 .bg(rgb(theme::PANE))
                 .font_family(theme::FONT_MONO)
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .h(px(theme::PANE_HEAD_H))
-                        .flex_shrink_0()
-                        .gap_2()
-                        .px(px(theme::PANE_PAD_X))
-                        .bg(rgb(theme::PANE_HEAD))
-                        .rounded_t(px(theme::R_SURFACE - 1.))
-                        .border_b_1()
-                        .border_color(rgba(theme::PANE_HEAD_EDGE))
-                        .child(
-                            Icon::new(IconName::FileText)
-                                .size(px(theme::ROW_ICON))
-                                .text_color(rgb(theme::TEXT_2)),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .font_family(theme::FONT_UI)
-                                .text_size(px(theme::FS_MD))
-                                .text_color(rgb(theme::TEXT_STRONG))
-                                .child(document.title),
-                        )
-                        .child(
-                            div()
-                                .flex_shrink_0()
-                                .rounded(px(theme::R_CHIP))
-                                .bg(rgb(theme::RAISED))
-                                .px(px(theme::CHIP_PAD_X))
-                                .py(px(theme::CHIP_PAD_Y))
-                                .text_size(px(theme::FS_MONO))
-                                .text_color(rgb(theme::TEXT_MUTED))
-                                .child(kind),
-                        )
-                        .child(
-                            div()
-                                .debug_selector(|| "close-markdown-reader".into())
-                                .child(
-                                    crate::components::button("close-markdown-reader")
-                                        .w(px(theme::ICON_BUTTON))
-                                        .h(px(theme::ICON_BUTTON))
-                                        .p_0()
-                                        .tooltip("Close document reader")
-                                        .child(
-                                            Icon::new(IconName::Close)
-                                                .size(px(theme::ICON_BUTTON_GLYPH))
-                                                .text_color(rgb(theme::TEXT_MUTED)),
-                                        )
-                                        .on_click(move |_, window, cx| {
-                                            cx.stop_propagation();
-                                            close.close_document(window);
-                                        }),
-                                ),
-                        ),
-                )
-                .child(document_content)
-        };
-        let mounted = div()
-            .relative()
-            .flex()
-            .size_full()
-            .min_w_0()
-            .min_h_0()
-            .child(
-                gpui::base::h_resizable("markdown-reader-dock")
-                    .with_handle_appearance(handle)
-                    .child(gpui::base::resizable_panel().child(pane))
-                    .child(
-                        gpui::base::resizable_panel()
-                            .size(document_width)
-                            .size_range(px(260.)..px(900.))
-                            .flex_none()
-                            .ml(px(theme::GRID_GAP))
-                            .child(document_pane),
-                    ),
-            );
-        mounted.child(
-            canvas(
-                move |bounds, window, cx| {
-                    if {
-                        let mut prior = preview.bounds.lock().unwrap();
-                        let changed = *prior != bounds;
-                        *prior = bounds;
-                        changed
-                    } && preview.state.lock().unwrap().image.is_some()
-                    {
-                        // refresh() is ignored during prepaint. Schedule the
-                        // new pane geometry after this frame completes.
-                        window.defer(cx, |window, _| window.refresh());
-                    }
-                },
-                |_, _, _, _| {},
-            )
-            .absolute()
-            .inset_0(),
+                .child(head(head_band))
+                .child(document_content),
         )
-        .child(PreviewLayer(self.clone()))
     }
 }
 

@@ -681,7 +681,14 @@ pub struct PaneWiring {
     pub expand_question: Option<AnyElement>,
     pub question_measurement: Option<AnyElement>,
     pub child_footer: Option<AnyElement>,
+    /// Wires the whole L1 head as the Pane's drag handle (the cockpit
+    /// supplies it while the board has somewhere to move the Pane to).
+    pub head_drag: Option<HeadDrag>,
 }
+
+/// Turns the Pane head's band into its drag handle: the cockpit gives it an
+/// id and the drag payload, since only the cockpit knows the board.
+pub type HeadDrag = Box<dyn FnOnce(Div) -> AnyElement>;
 
 /// The wall's state matrix (glance.md §4), selected from O(1) reads plus the
 /// folded tests flag. Pure so the matrix is assertable without a window.
@@ -842,6 +849,7 @@ pub fn render_pane(
         expand_question,
         question_measurement,
         child_footer,
+        head_drag,
     } = wiring;
     let has_activity_decisions = activity_decisions.is_some() || expand_question.is_some();
     let subject = thread.and_then(|thread| thread.activity().subject(&view.selected));
@@ -980,6 +988,7 @@ pub fn render_pane(
             ci,
             attention: activity_attention,
             action: expand_question,
+            drag: head_drag,
         },
     ));
     match transcript {
@@ -1983,9 +1992,10 @@ struct PaneHeadState<'a> {
     ci: Option<AnyElement>,
     attention: Option<AnyElement>,
     action: Option<AnyElement>,
+    drag: Option<HeadDrag>,
 }
 
-fn pane_head(view: &PaneView, state: PaneHeadState<'_>) -> Div {
+fn pane_head(view: &PaneView, state: PaneHeadState<'_>) -> AnyElement {
     let PaneHeadState {
         branch,
         checkout,
@@ -1996,6 +2006,7 @@ fn pane_head(view: &PaneView, state: PaneHeadState<'_>) -> Div {
         ci,
         attention,
         action,
+        drag,
     } = state;
     // The dot's base is the muted ink — the parked look — and each live
     // state takes its own signal colour. The no-dot ruling is scoped to
@@ -2048,7 +2059,7 @@ fn pane_head(view: &PaneView, state: PaneHeadState<'_>) -> Div {
     // The checkout keeps its own line now, so the title line no longer
     // has to share its width with a branch name.
     let checkout_line = checkout_strip(checkout, branch, project_branches, ci);
-    div()
+    let head = div()
         .flex()
         .flex_col()
         .flex_shrink_0()
@@ -2060,7 +2071,11 @@ fn pane_head(view: &PaneView, state: PaneHeadState<'_>) -> Div {
         .border_b_1()
         .border_color(rgba(PANE_HEAD_EDGE))
         .child(top)
-        .children(checkout_line)
+        .children(checkout_line);
+    match drag {
+        Some(drag) => drag(head),
+        None => head.into_any_element(),
+    }
 }
 
 /// The header's second line (#29): the branch mark and name, then only

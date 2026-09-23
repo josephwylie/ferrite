@@ -142,9 +142,10 @@ their task finishes, and the tray goes with the last one.
 directories, or delete the project. The directory it was created from stays
 primary, and you can't delete a project that still has Threads.
 
-**Click a text file card** in the transcript to open the native reader as a
-docked Pane beside the live Thread. Drag the seam to resize it. Markdown links
-resolve from the document's folder, and opening another file replaces the
+**Click a text file card** in the transcript to open the native reader in
+its own slot beside the Thread, in Solo or in a Group. It resizes and moves
+like any Pane, and keeps its place until you quit. Markdown links resolve from
+the document's folder, and opening another file replaces that Thread's
 reader. Files edited by the Thread or its subagents stay listed in the
 **Files changed** row above the prompt for quick access.
 
@@ -172,9 +173,10 @@ inside the app.
 closed, dim idle, hollow parked.
 
 **In a Group**, drag the divider between two Panes to resize them. Drag a
-Pane's title onto another Pane to swap them (drop in the middle) or split that
+Pane's header onto another Pane to swap them (drop in the middle) or split that
 slot (drop near an edge). Works at any Pane size. Each Group remembers its own
-arrangement. Medium Panes keep their prompt box, so you can still tell a small
+arrangement. Drag a Thread from the sidebar onto a Pane to add it to the Group
+on that side; on a lone Thread, that starts a Group. Medium Panes keep their prompt box, so you can still tell a small
 Pane what to do.
 
 **The model picker** sits at the right edge of the prompt box and lists each

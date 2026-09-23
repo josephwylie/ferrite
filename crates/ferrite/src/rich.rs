@@ -781,19 +781,33 @@ mod file_link_tests {
                 }
             });
             use gpui::base::ElementExt;
-            self.preview.mount(
-                div().size_full().child(
-                    div()
-                        .text_size(px(self.font_size))
-                        .child(Markdown::new(
-                            "file-link-fixture",
-                            self.source.clone(),
-                            self.cache.clone(),
-                        ))
-                        .text_selection_scope(gpui::base::TextSelectionScopeId::default()),
-                ),
-                document_body,
-            )
+            // The reader is a board slot of its own; beside the fixture's
+            // Pane is where the cockpit first opens it.
+            let reader = document_body
+                .and_then(|body| self.preview.reader(body, |head| head.into_any_element()))
+                .map(|reader| div().flex_1().min_w_0().child(reader));
+            div()
+                .flex()
+                .size_full()
+                .child(
+                    div().flex_1().min_w_0().child(
+                        self.preview.mount(
+                            div().size_full().child(
+                                div()
+                                    .text_size(px(self.font_size))
+                                    .child(Markdown::new(
+                                        "file-link-fixture",
+                                        self.source.clone(),
+                                        self.cache.clone(),
+                                    ))
+                                    .text_selection_scope(
+                                        gpui::base::TextSelectionScopeId::default(),
+                                    ),
+                            ),
+                        ),
+                    ),
+                )
+                .children(reader)
         }
     }
 
