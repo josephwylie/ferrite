@@ -14,12 +14,12 @@ use gpui::component::button::{Button, ButtonCustomVariant, ButtonVariants};
 use gpui::component::{FocusableExt, Sizable};
 use gpui::prelude::*;
 use gpui::{
-    div, point, pulsating_between, px, rgb, rgba, Animation, AnimationExt, AnyElement, App,
-    BoxShadow, Div, ElementId, FontFeatures, HighlightStyle, SharedString, Stateful,
-    StyleRefinement,
+    div, point, pulsating_between, px, rgb, rgba, AnyElement, App, BoxShadow, Div, ElementId,
+    FontFeatures, HighlightStyle, SharedString, Stateful, StyleRefinement, Window,
 };
 
 use crate::icons;
+use crate::motion;
 use crate::pointer::{Pointer, PointerPressed};
 use crate::theme;
 
@@ -296,38 +296,55 @@ pub fn status_ring(ink: u32) -> Div {
 /// A status dot with a halo that breathes behind it on the `STATUS_PULSE_MS`
 /// loop; still when the operator asked for reduced motion. The halo is
 /// absolute and the box is a fixed `STATUS_DOT`, so nothing around it moves.
+/// The breath is read off the shared pulse clock (`motion::pulse_phase`), so
+/// every dot on screen breathes together and a window of them costs one
+/// ~30fps tick, not a frame each at the display's rate; `_id` is kept for
+/// callers only.
 pub fn pulsing_dot(
-    id: impl Into<ElementId>,
+    _id: impl Into<ElementId>,
     ink: u32,
     halo: u32,
     reduce_motion: bool,
 ) -> AnyElement {
-    let ring = div()
-        .absolute()
-        .left(px(-theme::STATUS_HALO_INSET))
-        .top(px(-theme::STATUS_HALO_INSET))
-        .size(px(theme::STATUS_DOT + 2. * theme::STATUS_HALO_INSET))
-        .rounded_full()
-        .bg(rgba(halo));
-    let ring = if reduce_motion {
-        ring.opacity(theme::PULSE_MIN).into_any_element()
-    } else {
-        ring.with_animation(
-            id,
-            Animation::new(Duration::from_millis(theme::STATUS_PULSE_MS))
-                .repeat()
-                .with_easing(pulsating_between(theme::PULSE_MIN, 1.0)),
-            |ring, delta| ring.opacity(delta),
-        )
-        .into_any_element()
-    };
-    div()
-        .relative()
-        .flex_shrink_0()
-        .size(px(theme::STATUS_DOT))
-        .child(ring)
-        .child(status_dot(ink))
-        .into_any_element()
+    PulsingDot {
+        ink,
+        halo,
+        reduce_motion,
+    }
+    .into_any_element()
+}
+
+#[derive(IntoElement)]
+struct PulsingDot {
+    ink: u32,
+    halo: u32,
+    reduce_motion: bool,
+}
+
+impl RenderOnce for PulsingDot {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let opacity = if self.reduce_motion {
+            theme::PULSE_MIN
+        } else {
+            let period = Duration::from_millis(theme::STATUS_PULSE_MS);
+            let phase = motion::pulse_phase(period, window.current_view(), cx);
+            pulsating_between(theme::PULSE_MIN, 1.0)(phase)
+        };
+        let ring = div()
+            .absolute()
+            .left(px(-theme::STATUS_HALO_INSET))
+            .top(px(-theme::STATUS_HALO_INSET))
+            .size(px(theme::STATUS_DOT + 2. * theme::STATUS_HALO_INSET))
+            .rounded_full()
+            .bg(rgba(self.halo))
+            .opacity(opacity);
+        div()
+            .relative()
+            .flex_shrink_0()
+            .size(px(theme::STATUS_DOT))
+            .child(ring)
+            .child(status_dot(self.ink))
+    }
 }
 
 /// The one keycap: `KBD_H`, at least square, `RAISED_2`, mono `FS_SM`

@@ -234,6 +234,7 @@ where
 }
 
 /// `fade-quick`: opacity only.
+#[allow(dead_code)] // after merge: row and chip arrivals
 pub fn fade_quick<E>(id: impl Into<ElementId>, element: E) -> AnimationElement<E>
 where
     E: Styled + IntoElement + 'static,
@@ -317,6 +318,15 @@ impl Tween {
         lerp(self.from, self.to, self.spec.progress_at(elapsed))
     }
 
+    /// Eased progress 0..1 along the tween; 1 once finished or reduced.
+    pub fn progress(&self, now: Instant, reduced: bool) -> f32 {
+        if !self.running(now, reduced) {
+            return 1.0;
+        }
+        self.spec
+            .progress_at(now.saturating_duration_since(self.started))
+    }
+
     /// Mid-flight: the owner must ask for another frame.
     pub fn running(&self, now: Instant, reduced: bool) -> bool {
         !reduced
@@ -395,9 +405,8 @@ pub fn pulse_phase(period: Duration, view: EntityId, cx: &mut App) -> f32 {
     let clock = cx.default_global::<PulseClock>();
     let epoch = *clock.epoch.get_or_insert(now);
     clock.leases.renew(view, now);
-    let start = !clock.running;
-    clock.running = true;
-    if start {
+    if !clock.running && drives(cx) {
+        cx.default_global::<PulseClock>().running = true;
         cx.spawn(async move |cx| loop {
             cx.background_executor().timer(pulse_tick()).await;
             let parked = cx.update(|cx| {
@@ -433,6 +442,34 @@ pub fn pulse_parked(cx: &App) -> bool {
         .is_none_or(|clock| !clock.running)
 }
 
+/// Whether leases start the clock. Always, except in unit tests, which opt
+/// in with [`testing::drive_pulse`]: gpui's test window keeps no
+/// `debug_bounds` for a cached view that a frame reuses, so a tick nobody
+/// asked for (it re-renders the cockpit, not its cached transcripts) would
+/// blank the transcript selectors other tests read. It keeps the old
+/// contract, too: a per-frame loop's frames were never delivered in a test.
+fn drives(cx: &App) -> bool {
+    #[cfg(test)]
+    return cx.has_global::<testing::DrivePulse>();
+    #[cfg(not(test))]
+    {
+        let _ = cx;
+        true
+    }
+}
+
+#[cfg(test)]
+pub mod testing {
+    /// Present: this test's leases start the pulse clock.
+    pub struct DrivePulse;
+
+    impl gpui::Global for DrivePulse {}
+
+    pub fn drive_pulse(cx: &mut gpui::App) {
+        cx.set_global(DrivePulse);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Hover blend: `transition-colors` for gpui's snapping hover
 // ---------------------------------------------------------------------------
@@ -445,7 +482,8 @@ pub fn pulse_parked(cx: &App) -> bool {
 // at once: a press never waits on the fade.
 //
 // The store is a main-thread `thread_local`, so row builders without a `cx`
-// can blend. An element that unmounts mid-hover never hears its leave, so
+// can blend; the root view stamps each frame's time on it first
+// ([`hover_frame_start`]). An element that unmounts mid-hover never hears its leave, so
 // every read stamps the entry with the frame counter and
 // [`hover_fades_active`] (once per frame, at the root view's tail) prunes
 // an entry a full frame goes unread.
@@ -536,11 +574,26 @@ impl HoverFades {
 
 thread_local! {
     static HOVER_FADES: RefCell<HoverFades> = RefCell::new(HoverFades::default());
+    /// The frame's clock, stamped by [`hover_frame_start`]: every blend in a
+    /// frame reads one time, the executor's, so tests can step it.
+    static HOVER_NOW: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) };
+}
+
+fn hover_now() -> Instant {
+    HOVER_NOW.with(|now| now.get()).unwrap_or_else(Instant::now)
+}
+
+/// The frame hook's first half: call once per window frame, at the top of
+/// the root view's render, before any blend is read.
+pub fn hover_frame_start(cx: &App) {
+    let now = cx.background_executor().now();
+    HOVER_NOW.with(|cell| cell.set(Some(now)));
 }
 
 /// Hover progress (0..1) for `key` this frame.
 pub fn hover_t(key: &str) -> f32 {
-    HOVER_FADES.with(|fades| fades.borrow_mut().value_at(key, Instant::now()))
+    let now = hover_now();
+    HOVER_FADES.with(|fades| fades.borrow_mut().value_at(key, now))
 }
 
 /// An `on_hover` listener driving the blend for `key`: pair it with a
@@ -548,11 +601,8 @@ pub fn hover_t(key: &str) -> f32 {
 pub fn hover_listener(key: SharedString) -> impl Fn(&bool, &mut Window, &mut App) + 'static {
     move |hovered, window, cx| {
         let reduced = reduced_motion(cx);
-        HOVER_FADES.with(|fades| {
-            fades
-                .borrow_mut()
-                .set_at(&key, *hovered, reduced, Instant::now())
-        });
+        let now = cx.background_executor().now();
+        HOVER_FADES.with(|fades| fades.borrow_mut().set_at(&key, *hovered, reduced, now));
         // Dispatch runs outside any view's draw, so `request_animation_frame`
         // cannot name a view here: refresh (what a gpui `.hover()` style does
         // on the same event), and the root's tail keeps frames coming.
@@ -560,10 +610,12 @@ pub fn hover_listener(key: SharedString) -> impl Fn(&bool, &mut Window, &mut App
     }
 }
 
-/// The frame hook: call once per window frame, at the root view's render
-/// tail. True while a blend is mid-flight and frames must keep coming.
+/// The frame hook's second half: call once per window frame, at the root
+/// view's render tail. True while a blend is mid-flight and frames must keep
+/// coming.
 pub fn hover_fades_active() -> bool {
-    HOVER_FADES.with(|fades| fades.borrow_mut().tick_at(Instant::now()))
+    let now = hover_now();
+    HOVER_FADES.with(|fades| fades.borrow_mut().tick_at(now))
 }
 
 /// Blend two colours the way a browser transitions them: sRGB components
@@ -866,6 +918,7 @@ mod tests {
     /// the window is left with no timer and no frame.
     #[gpui::test]
     fn the_pulse_clock_ticks_while_leased_and_parks_when_unmounted(cx: &mut TestAppContext) {
+        cx.update(testing::drive_pulse);
         let (view, cx) = cx.add_window_view(|_, _| Loop {
             painting: true,
             renders: 0,
@@ -916,6 +969,7 @@ mod tests {
     /// Reduced motion holds a loop at its start and leases nothing.
     #[gpui::test]
     fn reduced_motion_holds_a_loop_at_its_start(cx: &mut TestAppContext) {
+        cx.update(testing::drive_pulse);
         cx.update(|cx| cx.set_reduce_motion(true));
         let (view, cx) = cx.add_window_view(|_, _| Loop {
             painting: true,

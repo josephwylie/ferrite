@@ -24,11 +24,12 @@ use std::borrow::Cow;
 
 use gpui::prelude::*;
 use gpui::{
-    div, point, px, rgb, svg, Animation, AnimationExt, AnyElement, AssetSource, ElementId,
-    SharedString, Svg, Transformation,
+    div, point, px, rgb, svg, AnyElement, App, AssetSource, ElementId, SharedString, Svg,
+    Transformation, Window,
 };
 use std::time::Duration;
 
+use crate::motion;
 use crate::theme;
 
 macro_rules! icons {
@@ -249,53 +250,58 @@ pub fn ferrite_icon(size: f32) -> AnyElement {
 
 /// Ferrite's two shards pull apart and snap home on the supplied logo's
 /// three-second timeline. GPUI rasterizes SVG rather than running its CSS, so
-/// the two paths are embedded separately and their transforms run on GPUI's
-/// animation clock. That also gives reduced-motion users the assembled mark.
-pub fn animated_ferrite_icon(size: f32, id: impl Into<ElementId>) -> AnyElement {
-    let id = id.into();
-    let animation = || {
-        Animation::new(Duration::from_millis(theme::FERRITE_SNAP_MS))
-            .repeat_synced()
-            .with_easing(ferrite_snap)
-    };
-    let shard = |path, id: ElementId, x: f32, y: f32| {
-        svg()
-            .absolute()
-            .top_0()
-            .left_0()
-            .w(px(size))
-            .h(px(size))
-            .path(path)
-            // GPUI skips `paint_svg` entirely without a concrete text color,
-            // even when the SVG paints only its own gradient. Set it on the
-            // shard itself because AnimationElement does not carry the
-            // surrounding text style into the animated child.
-            .text_color(rgb(theme::TEXT))
-            .with_animation(id, animation(), move |shard, displacement| {
-                shard.with_transformation(Transformation::translate(point(
+/// the two paths are embedded separately and translated by hand. The phase
+/// comes from the shared pulse clock (`motion::pulse_phase`), not a
+/// per-frame `with_animation` loop: the painting view re-renders at ~30fps
+/// while the mark is mounted and nothing is scheduled once it is gone. Every
+/// mark reads the same clock, so no per-element state keys it and `_id` is
+/// kept for callers only. Reduced motion holds the assembled mark.
+pub fn animated_ferrite_icon(size: f32, _id: impl Into<ElementId>) -> AnyElement {
+    FerriteSnap { size }.into_any_element()
+}
+
+#[derive(IntoElement)]
+struct FerriteSnap {
+    size: f32,
+}
+
+impl RenderOnce for FerriteSnap {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let period = Duration::from_millis(theme::FERRITE_SNAP_MS);
+        let displacement = ferrite_snap(motion::pulse_phase(period, window.current_view(), cx));
+        let size = self.size;
+        let shard = |path, x: f32, y: f32| {
+            svg()
+                .absolute()
+                .top_0()
+                .left_0()
+                .w(px(size))
+                .h(px(size))
+                .path(path)
+                // GPUI skips `paint_svg` entirely without a concrete text
+                // color, even when the SVG paints only its own gradient.
+                .text_color(rgb(theme::TEXT))
+                .with_transformation(Transformation::translate(point(
                     px(x * size * displacement),
                     px(y * size * displacement),
                 )))
-            })
-    };
-    div()
-        .relative()
-        .flex_shrink_0()
-        .w(px(size))
-        .h(px(size))
-        .child(shard(
-            FERRITE_UPPER,
-            (id.clone(), "upper").into(),
-            theme::FERRITE_SHARD_X,
-            -theme::FERRITE_SHARD_Y,
-        ))
-        .child(shard(
-            FERRITE_LOWER,
-            (id, "lower").into(),
-            -theme::FERRITE_SHARD_X,
-            theme::FERRITE_SHARD_Y,
-        ))
-        .into_any_element()
+        };
+        div()
+            .relative()
+            .flex_shrink_0()
+            .w(px(size))
+            .h(px(size))
+            .child(shard(
+                FERRITE_UPPER,
+                theme::FERRITE_SHARD_X,
+                -theme::FERRITE_SHARD_Y,
+            ))
+            .child(shard(
+                FERRITE_LOWER,
+                -theme::FERRITE_SHARD_X,
+                theme::FERRITE_SHARD_Y,
+            ))
+    }
 }
 
 fn ferrite_snap(phase: f32) -> f32 {
