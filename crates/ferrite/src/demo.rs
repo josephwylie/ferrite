@@ -17,7 +17,11 @@ use ferrite_core::groups::GroupChange;
 use ferrite_core::providers::Session;
 use ferrite_core::store::Provider;
 use ferrite_core::workspace::WorkspaceChoice;
-use ferrite_core::{Decision, DecisionAnswer, SessionEvent, ThreadId, TurnOutcome};
+use ferrite_core::{
+    ContextCategory, ContextDetails, ControlKind, Decision, DecisionAnswer, McpServer, McpStatus,
+    PermissionModeChoice, SessionControl, SessionEvent, ThreadId, TurnOutcome, UsageDetails,
+    UsageScope,
+};
 
 use crate::cockpit::here;
 
@@ -49,6 +53,31 @@ impl Session for DemoSession {
     fn respond_to_decision(&mut self, _id: &str, answer: DecisionAnswer) -> io::Result<()> {
         self.respond(answer);
         Ok(())
+    }
+
+    // Every native control, answered with nothing: the demo draws the
+    // controls menu and the usage card the way a live Session does.
+    fn supports_control(&self, _kind: ControlKind) -> bool {
+        true
+    }
+
+    fn control(&mut self, _action: SessionControl) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn permission_modes(&self) -> Vec<PermissionModeChoice> {
+        [
+            ("default", "Default"),
+            ("acceptEdits", "Accept edits"),
+            ("plan", "Plan"),
+            ("bypassPermissions", "Bypass permissions"),
+        ]
+        .into_iter()
+        .map(|(value, label)| PermissionModeChoice {
+            value: value.into(),
+            label: label.into(),
+        })
+        .collect()
     }
 }
 
@@ -333,6 +362,80 @@ fn boot(session_id: &str) -> Vec<Step> {
             10,
             SessionEvent::PermissionMode {
                 mode: "acceptEdits".into(),
+            },
+        ),
+        // What a live Session reports about its context and its MCP
+        // servers, so the usage card and the controls menu have rows.
+        Step::new(
+            10,
+            SessionEvent::TokenUsage {
+                total_tokens: 65_500,
+                input_tokens: 63_600,
+                cached_input_tokens: 51_200,
+                output_tokens: 1_830,
+                reasoning_output_tokens: 640,
+                context_window: Some(200_000),
+            },
+        ),
+        Step::new(
+            10,
+            SessionEvent::ContextDetails {
+                details: ContextDetails {
+                    usable_window: Some(167_000),
+                    auto_compact_threshold: Some(155_000),
+                    is_auto_compact_enabled: Some(true),
+                    categories: [
+                        ("Messages", 38_400),
+                        ("System tools", 14_200),
+                        ("MCP tools", 6_200),
+                        ("Skills", 2_100),
+                        ("System prompt", 3_400),
+                        ("Memory files", 1_200),
+                        ("Autocompact buffer", 33_000),
+                        ("Free space", 101_500),
+                        ("MCP tools (deferred)", 9_000),
+                    ]
+                    .into_iter()
+                    .map(|(name, tokens)| ContextCategory {
+                        name: name.into(),
+                        tokens,
+                    })
+                    .collect(),
+                },
+            },
+        ),
+        Step::new(
+            10,
+            SessionEvent::UsageDetails {
+                details: UsageDetails {
+                    scope: UsageScope::Turn,
+                    input_tokens: 12_400,
+                    cached_input_tokens: 51_200,
+                    output_tokens: 1_830,
+                    reasoning_output_tokens: 640,
+                },
+            },
+        ),
+        Step::new(
+            10,
+            SessionEvent::McpServers {
+                servers: vec![
+                    McpServer {
+                        name: "github".into(),
+                        status: McpStatus::Connected,
+                        error: None,
+                    },
+                    McpServer {
+                        name: "linear".into(),
+                        status: McpStatus::NeedsAuth,
+                        error: Some("Sign in to use this server".into()),
+                    },
+                    McpServer {
+                        name: "sentry".into(),
+                        status: McpStatus::Failed,
+                        error: Some("Connection refused".into()),
+                    },
+                ],
             },
         ),
     ]
