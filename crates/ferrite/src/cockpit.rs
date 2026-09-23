@@ -48,8 +48,8 @@ use gpui::prelude::*;
 use gpui::{
     actions, anchored, deferred, div, ease_out_quint, px, rgb, rgba, Animation, AnimationExt,
     AnyElement, ClickEvent, ClipboardItem, Context, Div, Entity, FocusHandle, Focusable,
-    FontWeight, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
-    ScrollHandle, SharedString, Stateful, Window,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle,
+    SharedString, Stateful, Window,
 };
 
 use crate::composer::{Composer, Edited};
@@ -3156,7 +3156,7 @@ impl CockpitView {
                 return div()
                     .min_w_0()
                     .flex_1()
-                    .font_weight(FontWeight::NORMAL)
+                    .font_weight(crate::theme::W_BODY)
                     .child(editor.clone())
                     .on_mouse_down(
                         MouseButton::Left,
@@ -5977,7 +5977,11 @@ impl CockpitView {
                         pane::picker_section(
                             provider_of_title(&row.name).unwrap(),
                             row.detail.clone(),
-                        ),
+                        )
+                        // A section after rows stands a group gap off them.
+                        .when(at > 0, |section| {
+                            section.mt(px(crate::theme::MENU_GROUP_GAP))
+                        }),
                         at,
                         cx,
                     )
@@ -7741,17 +7745,28 @@ impl CockpitView {
     }
     /// The board with no Pane open: one quiet line and the three keys that
     /// start work, spelled from the platform's own key table. No icon, no
-    /// button — the nav's `+` is the pointer's way in.
+    /// button — the nav's `+` is the pointer's way in. The keys stand in one
+    /// column and their verbs in another, so every verb starts on the same
+    /// edge however long its keys; the line sits twice the hints' own gap
+    /// above them, so it reads as their heading.
     fn empty_board(&self) -> Div {
         use crate::theme::*;
-        let hint = |action: &str, verb: &'static str| {
-            div()
-                .flex()
-                .items_center()
-                .gap(px(EMPTY_BOARD_GAP))
-                .children(Self::key_label(action).map(|keys| crate::components::kbd_keys(&keys)))
-                .child(verb)
-        };
+        let hints = [
+            ("cockpit::NewThread", "new thread"),
+            ("cockpit::NewWorktreeThread", "new worktree thread"),
+            ("cockpit::ReopenThread", "reopen last"),
+        ];
+        let column = || div().flex().flex_col().gap(px(EMPTY_BOARD_GAP));
+        let cell = || div().flex().items_center().h(px(KBD_H));
+        let keys =
+            hints.iter().fold(column(), |keys, (action, _)| {
+                keys.child(cell().children(
+                    Self::key_label(action).map(|keys| crate::components::kbd_keys(&keys)),
+                ))
+            });
+        let verbs = hints.iter().fold(column(), |verbs, (_, verb)| {
+            verbs.child(cell().child(*verb))
+        });
         div()
             .debug_selector(|| "empty-board".into())
             .flex_1()
@@ -7759,7 +7774,6 @@ impl CockpitView {
             .flex_col()
             .items_center()
             .justify_center()
-            .gap(px(EMPTY_BOARD_GAP))
             .font_family(FONT_UI)
             .text_size(px(FS_SM))
             .line_height(px(LH_META))
@@ -7769,7 +7783,7 @@ impl CockpitView {
                     .flex()
                     .flex_col()
                     .items_start()
-                    .gap(px(EMPTY_BOARD_GAP))
+                    .gap(px(2. * EMPTY_BOARD_GAP))
                     .child(
                         div()
                             .text_size(px(FS_UI))
@@ -7777,9 +7791,13 @@ impl CockpitView {
                             .text_color(rgb(TEXT_2))
                             .child("no thread open"),
                     )
-                    .child(hint("cockpit::NewThread", "new thread"))
-                    .child(hint("cockpit::NewWorktreeThread", "new worktree thread"))
-                    .child(hint("cockpit::ReopenThread", "reopen last")),
+                    .child(
+                        div()
+                            .flex()
+                            .gap(px(EMPTY_BOARD_GAP))
+                            .child(keys)
+                            .child(verbs),
+                    ),
             )
     }
 
@@ -8359,12 +8377,11 @@ impl CockpitView {
                         .child(verb),
                 )
         };
-        let head = |title: &'static str| {
-            crate::components::text_meta()
-                .px(px(crate::theme::MENU_ROW_PAD_X))
-                .pt(px(crate::theme::SPACE_1_5))
-                .pb(px(crate::theme::SPACE_0_5))
-                .child(title)
+        // A section head is the one menu section title; one that follows
+        // rows stands a group gap off them, so it heads what is below it.
+        let head = |title: &'static str, after: bool| {
+            crate::components::menu_section(title, None, None)
+                .when(after, |head| head.mt(px(crate::theme::MENU_GROUP_GAP)))
         };
         let row = || {
             div()
@@ -8381,13 +8398,14 @@ impl CockpitView {
             .w(px(crate::theme::SESSION_CARD_W))
             .max_h(px(crate::theme::MENU_MAX_H))
             .overflow_y_scroll();
-        if let Some((_, _, error)) =
-            self.session_control_error
-                .as_ref()
-                .filter(|(shown, shown_generation, _)| {
-                    *shown == thread && *shown_generation == generation
-                })
-        {
+        let error = self
+            .session_control_error
+            .as_ref()
+            .filter(|(shown, shown_generation, _)| {
+                *shown == thread && *shown_generation == generation
+            });
+        let errored = error.is_some();
+        if let Some((_, _, error)) = error {
             card = card.child(
                 row()
                     .id("session-control-error")
@@ -8410,8 +8428,9 @@ impl CockpitView {
             );
         }
         let modes = open.permission_modes();
-        if !modes.is_empty() {
-            card = card.child(head("mode"));
+        let modes_empty = modes.is_empty();
+        if !modes_empty {
+            card = card.child(head("mode", errored));
         }
         let current = open.permission_mode().map(str::to_owned);
         for (index, mode) in modes.into_iter().enumerate() {
@@ -8464,7 +8483,7 @@ impl CockpitView {
                     })),
             );
         }
-        card = card.child(head("mcp"));
+        card = card.child(head("mcp", errored || !modes_empty));
         if transcript.mcp_servers().is_empty() {
             card = card.child(crate::components::menu_note("no MCP servers reported"));
         }
@@ -8612,7 +8631,7 @@ impl CockpitView {
         }
         let tasks = transcript.progress().background();
         if !tasks.is_empty() || open.supports_control(ferrite_core::ControlKind::BackgroundTasks) {
-            card = card.child(head("tasks"));
+            card = card.child(head("tasks", true));
         }
         for (index, task) in tasks.iter().enumerate() {
             let working = task.status == ferrite_core::progress::TaskStatus::Working;
@@ -9321,9 +9340,10 @@ impl CockpitView {
                         .border_1()
                         .border_color(rgba(HAIRLINE_STRONG))
                         .font_family(FONT_UI)
-                        .text_size(px(FS_BADGE))
+                        .text_size(px(FS_SM))
                         .text_color(rgb(TEXT_2))
-                        .child(SharedString::from(format!("+{more}"))),
+                        .child(SharedString::from(format!("+{more}")))
+                        .map(crate::components::tabular),
                 )
                 .into_any_element(),
         )

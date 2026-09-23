@@ -670,7 +670,7 @@ impl CockpitView {
         let mut strip = div()
             .id(("subject-strip", thread.get()))
             .font_family(theme::FONT_UI)
-            .font_weight(FontWeight::NORMAL)
+            .font_weight(theme::W_BODY)
             .flex()
             .items_center()
             .flex_1()
