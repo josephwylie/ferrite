@@ -149,19 +149,6 @@ pub fn tabular<E: Styled>(mut element: E) -> E {
     element
 }
 
-/// An elapsed time in compact units: `0.3s`, `12s`, `1m04s`.
-pub fn duration_label(elapsed: Duration) -> SharedString {
-    let secs = elapsed.as_secs_f64().max(0.1);
-    if secs < 10.0 {
-        SharedString::from(format!("{secs:.1}s"))
-    } else if secs < 60.0 {
-        SharedString::from(format!("{}s", secs as u64))
-    } else {
-        let whole = secs as u64;
-        SharedString::from(format!("{}m{:02}s", whole / 60, whole % 60))
-    }
-}
-
 // ------------------------------------------------- planes and elevation
 
 /// An in-flow raised block (Composer, code, cards): `RAISED`, `R_BLOCK`, no
@@ -515,8 +502,9 @@ pub fn icon_button(
 /// button shares the name: `group_hover` resolves to the nearest one.
 const ICON_BUTTON_GROUP: &str = "icon-button";
 
-/// A quiet text control: `CONTROL_H`, UI `FS_UI` `W_LABEL` `TEXT_2`;
-/// hover `RAISED_2`, press `FILL_HOVER`.
+/// A quiet text control: `CONTROL_H`, UI `FS_UI` `W_BODY` `TEXT_2`;
+/// hover `RAISED_2`, press `FILL_HOVER`. A button is read like any row, so
+/// it never takes the heading weight.
 pub fn ghost_button(id: impl Into<ElementId>, label: impl Into<SharedString>, cx: &App) -> Button {
     button(id)
         .custom(
@@ -529,7 +517,7 @@ pub fn ghost_button(id: impl Into<ElementId>, label: impl Into<SharedString>, cx
         .px(px(theme::CONTROL_PAD_X))
         .child(
             text_ui()
-                .font_weight(theme::W_LABEL)
+                .font_weight(theme::W_BODY)
                 .text_color(rgb(theme::TEXT_2))
                 .child(label.into()),
         )
@@ -720,7 +708,6 @@ pub fn menu_row_content(item: &MenuItem, cursor: bool, armed: bool) -> Div {
             div()
                 .min_w_0()
                 .truncate()
-                .when(armed, |label| label.font_weight(theme::W_LABEL))
                 .when_some(item.label_w, |label, width| {
                     // An aligned column holds names that are code.
                     label
@@ -1307,16 +1294,5 @@ mod tests {
         assert_eq!(cursor_steps(&picked), 4, "0 → Sonnet → Opus → GPT");
         assert_eq!(cursor_steps(&[row("a", false), row("b", true)]), 2);
         assert_eq!(cursor_steps(&[row("a", false)]), 1);
-    }
-
-    #[test]
-    fn durations_read_in_compact_units() {
-        assert_eq!(duration_label(Duration::from_millis(340)).as_ref(), "0.3s");
-        assert_eq!(
-            duration_label(Duration::from_millis(8_200)).as_ref(),
-            "8.2s"
-        );
-        assert_eq!(duration_label(Duration::from_secs(42)).as_ref(), "42s");
-        assert_eq!(duration_label(Duration::from_secs(134)).as_ref(), "2m14s");
     }
 }

@@ -106,31 +106,40 @@ impl Row {
         }
     }
 
-    /// The detail split for drawing: its state word, that word's ink (only
-    /// a failure or a waiting Decision is coloured), and the rest.
+    /// The detail split for drawing: its lexicon lead word, that word's ink
+    /// (only a failure or a waiting Decision is coloured), and the rest,
+    /// which starts at its first ` · ` seam.
     fn detail_parts(&self) -> (SharedString, u32, SharedString) {
+        let lead = self.lead();
         let detail = self.detail();
-        let (lead, ink) = match &self.kind {
-            RowKind::Completion(TurnOutcome::Error(_)) => ("Failed", BLOCKED),
-            RowKind::Completion(_) => ("Finished", TEXT_MUTED),
-            RowKind::Request(RequestKind::Question) => ("Question waiting", ATTENTION),
-            RowKind::Request(RequestKind::Permission) => ("Approval needed", ATTENTION),
-        };
         let rest = detail.strip_prefix(lead).unwrap_or(&detail).to_string();
-        (lead.into(), ink, rest.into())
+        (lead.into(), word_ink(lead), rest.into())
     }
 
-    fn detail(&self) -> SharedString {
-        let detail = match &self.kind {
-            RowKind::Completion(TurnOutcome::Error(error)) => format!("Failed · {error}"),
-            RowKind::Completion(_) => "Finished".to_string(),
-            RowKind::Request(RequestKind::Question) => "Question waiting".to_string(),
-            RowKind::Request(RequestKind::Permission) => "Approval needed".to_string(),
-        };
-        match &self.project {
-            Some(project) => format!("{detail} · {project}").into(),
-            None => detail.into(),
+    /// The row's state in the shared lexicon.
+    fn lead(&self) -> &'static str {
+        match &self.kind {
+            RowKind::Completion(TurnOutcome::Error(_)) => words::FAILED,
+            RowKind::Completion(TurnOutcome::Interrupted) => words::INTERRUPTED,
+            RowKind::Completion(TurnOutcome::Completed) => words::DONE,
+            RowKind::Request(_) => words::NEEDS_YOU,
         }
+    }
+
+    /// `<state> · <what> · <project>`: the lead word, what a request needs
+    /// or the error a turn failed with, then the project.
+    fn detail(&self) -> SharedString {
+        let mut parts = vec![self.lead().to_string()];
+        match &self.kind {
+            RowKind::Completion(TurnOutcome::Error(error)) => parts.push(error.clone()),
+            RowKind::Completion(_) => {}
+            RowKind::Request(RequestKind::Question) => parts.push(words::QUESTION.into()),
+            RowKind::Request(RequestKind::Permission) => parts.push(words::APPROVAL.into()),
+        }
+        if let Some(project) = &self.project {
+            parts.push(project.to_string());
+        }
+        parts.join(" \u{b7} ").into()
     }
 }
 
@@ -327,7 +336,25 @@ fn detail_line(row: &Row) -> Div {
         .flex()
         .min_w_0()
         .child(div().flex_shrink_0().text_color(rgb(ink)).child(lead))
-        .child(div().min_w_0().truncate().child(rest))
+        .child(div().min_w_0().truncate().child(seamed(rest)))
+}
+
+/// A detail's tail with each `·` seam in `TEXT_FAINT`: highlighted in place,
+/// so the line stays one run and copies back exactly as written.
+fn seamed(text: SharedString) -> gpui::StyledText {
+    let seams: Vec<_> = text
+        .match_indices('\u{b7}')
+        .map(|(at, dot)| {
+            (
+                at..at + dot.len(),
+                gpui::HighlightStyle {
+                    color: Some(rgb(TEXT_FAINT).into()),
+                    ..Default::default()
+                },
+            )
+        })
+        .collect();
+    gpui::StyledText::new(text).with_highlights(seams)
 }
 
 /// A toast's body in the UI voice: the status mark, the Thread's
@@ -590,20 +617,24 @@ mod tests {
         let failed = row(TurnOutcome::Error("rate limited".into()), Some("ferrite"));
         assert_eq!(
             failed.detail_parts(),
-            ("Failed".into(), BLOCKED, " · rate limited · ferrite".into())
+            (
+                "failed".into(),
+                BLOCKED,
+                " \u{b7} rate limited \u{b7} ferrite".into()
+            )
         );
         let done = row(TurnOutcome::Completed, None);
-        assert_eq!(
-            done.detail_parts(),
-            ("Finished".into(), TEXT_MUTED, "".into())
-        );
+        assert_eq!(done.detail_parts(), ("done".into(), TEXT_MUTED, "".into()));
         assert_eq!(mark_ink(&done), TEXT_MUTED, "green never means finished");
         assert_eq!(mark_ink(&failed), BLOCKED);
         let waiting = Row {
             kind: RowKind::Request(RequestKind::Permission),
             ..done
         };
-        assert_eq!(waiting.detail_parts().1, ATTENTION);
+        assert_eq!(
+            waiting.detail_parts(),
+            ("needs you".into(), ATTENTION, " \u{b7} approval".into())
+        );
         assert_eq!(mark_ink(&waiting), ATTENTION);
         assert_eq!(badge_inks(true), (ATTENTION, GROUND));
         assert_eq!(badge_inks(false), (ACCENT_STRONG, ON_ACCENT));
@@ -612,8 +643,63 @@ mod tests {
     #[test]
     fn a_rows_detail_names_the_outcome_and_the_project() {
         let done = row(TurnOutcome::Completed, Some("ferrite"));
-        assert_eq!(done.detail(), SharedString::from("Finished · ferrite"));
+        assert_eq!(done.detail(), SharedString::from("done \u{b7} ferrite"));
         let failed = row(TurnOutcome::Error("rate limited".into()), None);
-        assert_eq!(failed.detail(), SharedString::from("Failed · rate limited"));
+        assert_eq!(
+            failed.detail(),
+            SharedString::from("failed \u{b7} rate limited")
+        );
+        let stopped = row(TurnOutcome::Interrupted, Some("ferrite"));
+        assert_eq!(
+            stopped.detail(),
+            SharedString::from("interrupted \u{b7} ferrite")
+        );
+        let approval = Row {
+            kind: RowKind::Request(RequestKind::Permission),
+            ..row(TurnOutcome::Completed, Some("ferrite"))
+        };
+        assert_eq!(
+            approval.detail(),
+            SharedString::from("needs you \u{b7} approval \u{b7} ferrite")
+        );
+        let question = Row {
+            kind: RowKind::Request(RequestKind::Question),
+            ..row(TurnOutcome::Completed, Some("ferrite"))
+        };
+        assert_eq!(
+            question.detail(),
+            SharedString::from("needs you \u{b7} question \u{b7} ferrite")
+        );
+    }
+
+    /// The lead words are the shared lexicon's, never a local literal.
+    #[test]
+    fn the_lead_words_are_the_lexicon() {
+        let lead = |kind: RowKind| {
+            Row {
+                kind,
+                ..row(TurnOutcome::Completed, Some("ferrite"))
+            }
+            .detail_parts()
+            .0
+        };
+        assert_eq!(
+            lead(RowKind::Completion(TurnOutcome::Completed)),
+            SharedString::from(words::DONE)
+        );
+        assert_eq!(
+            lead(RowKind::Completion(TurnOutcome::Interrupted)),
+            SharedString::from(words::INTERRUPTED)
+        );
+        assert_eq!(
+            lead(RowKind::Completion(TurnOutcome::Error("x".into()))),
+            SharedString::from(words::FAILED)
+        );
+        for kind in [RequestKind::Permission, RequestKind::Question] {
+            assert_eq!(
+                lead(RowKind::Request(kind)),
+                SharedString::from(words::NEEDS_YOU)
+            );
+        }
     }
 }

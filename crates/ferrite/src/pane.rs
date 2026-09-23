@@ -962,7 +962,7 @@ pub fn render_pane(
     if level == Level::Wall {
         return frame(
             shell
-                .child(wall_cell(view, wall, state, focused, title))
+                .child(wall_cell(view, wall, state, attention, focused, title))
                 .children(drop_target.then(crate::prompt_drop::sheet)),
         );
     }
@@ -1023,6 +1023,7 @@ pub fn render_pane(
             workspace,
             branch.as_ref(),
             state,
+            attention,
             timings,
             decide,
             title,
@@ -1040,7 +1041,7 @@ pub fn render_pane(
             branch: branch.as_ref(),
             checkout,
             project_branches,
-            status,
+            dot: Some(head_dot(view.is_main(), state, attention, status)),
             title,
             agents,
             ci,
@@ -1710,6 +1711,7 @@ fn wall_cell(
     view: &PaneView,
     card: &WallCard,
     state: WallState,
+    unread: bool,
     focused: bool,
     title: Option<AnyElement>,
 ) -> Div {
@@ -1756,7 +1758,7 @@ fn wall_cell(
                 .items_center()
                 .gap(px(theme::CELL_DOT_GAP))
                 .min_w_0()
-                .child(cell_dot(state).size(px(theme::WALL_DOT)))
+                .child(cell_dot(state, unread).size(px(theme::WALL_DOT)))
                 .child(
                     div()
                         .min_w_0()
@@ -1788,17 +1790,33 @@ fn cell_is_hot(state: WallState) -> bool {
     )
 }
 
-/// A cell's status dot, one recipe for L2 and the wall (and the nav's
-/// meaning): running green, a Decision amber, closed red, done and idle the
-/// idle ink — green never means finished — and a parked Thread hollow.
-fn cell_dot(state: WallState) -> Div {
-    match state {
-        WallState::Working | WallState::Failing => components::status_dot(RUNNING),
-        WallState::Decision => components::status_dot(ATTENTION),
-        WallState::Blocked => components::status_dot(BLOCKED),
-        WallState::Done | WallState::Idle => components::status_dot(IDLE),
-        WallState::Parked => components::status_ring(TEXT_MUTED),
+/// A cell's status dot, one recipe for L2, the wall, the Pane head and the
+/// nav (`cockpit::thread_status`): running green, a Decision ochre, a
+/// failing suite or a closed Session red, unread the accent, done and idle
+/// the idle ink — green never means finished — and a parked Thread hollow.
+pub(crate) fn cell_dot(state: WallState, unread: bool) -> Div {
+    crate::cockpit::thread_status(state, unread).dot()
+}
+
+/// The Pane head's dot. The main Thread's is the status truth the nav and
+/// the cells share (`thread_status`); a subagent tab's is that agent's own
+/// transcript state, which unread never touches.
+fn head_dot(
+    main: bool,
+    state: WallState,
+    unread: bool,
+    subject: Option<Status>,
+) -> crate::cockpit::ThreadStatus {
+    if main {
+        return crate::cockpit::thread_status(state, unread);
     }
+    let state = match subject {
+        Some(Status::Streaming) => WallState::Working,
+        Some(Status::Blocked) => WallState::Decision,
+        Some(Status::Closed) => WallState::Blocked,
+        _ => WallState::Idle,
+    };
+    crate::cockpit::thread_status(state, false)
 }
 
 /// The wall's signal: what the cell is doing, in words, and the only ink
@@ -1809,9 +1827,14 @@ fn cell_signal(state: WallState, card: &WallCard) -> (SharedString, u32) {
     match state {
         WallState::Working => (card.working.clone(), TEXT_2),
         WallState::Failing => (card.failing.clone(), BLOCKED),
-        WallState::Decision => (SharedString::from("needs you"), ATTENTION),
+        // The status truth's own word, in the lexicon's ink.
+        WallState::Decision | WallState::Done => {
+            let word = crate::cockpit::thread_status(state, false)
+                .word
+                .unwrap_or_default();
+            (SharedString::from(word), word_ink(word))
+        }
         WallState::Blocked => (card.context.clone(), BLOCKED),
-        WallState::Done => (SharedString::from("done"), TEXT_MUTED),
         WallState::Idle => (SharedString::from("idle"), TEXT_MUTED),
         WallState::Parked => (SharedString::from("parked"), TEXT_MUTED),
     }
@@ -1833,6 +1856,7 @@ fn l2_cell(
     workspace: Option<&WorkspaceBinding>,
     branch: Option<&SharedString>,
     state: WallState,
+    unread: bool,
     _timings: Option<&HashMap<String, ToolTiming>>,
     decide: Option<AnyElement>,
     title: Option<AnyElement>,
@@ -1853,7 +1877,7 @@ fn l2_cell(
         .h(px(theme::CELL_HEADER_H))
         .gap(px(theme::CELL_DOT_GAP))
         .px(px(theme::CELL_PAD))
-        .child(cell_dot(state))
+        .child(cell_dot(state, unread))
         .child(
             div()
                 .debug_selector({
@@ -2359,7 +2383,9 @@ struct PaneHeadState<'a> {
     branch: Option<&'a SharedString>,
     checkout: Option<&'a BranchStatus>,
     project_branches: &'a [(SharedString, SharedString)],
-    status: Option<Status>,
+    /// The head's dot (`head_dot`); a draft, which has no Thread yet, draws
+    /// the idle dot.
+    dot: Option<crate::cockpit::ThreadStatus>,
     title: Option<AnyElement>,
     agents: Option<AnyElement>,
     ci: Option<AnyElement>,
@@ -2377,7 +2403,7 @@ fn pane_head(view: &PaneView, state: PaneHeadState<'_>) -> Div {
         branch,
         checkout,
         project_branches,
-        status,
+        dot,
         title,
         agents,
         ci,
@@ -2386,15 +2412,8 @@ fn pane_head(view: &PaneView, state: PaneHeadState<'_>) -> Div {
         tasks,
         column,
     } = state;
-    // The dot's base is the muted ink — the parked look — and each live
-    // state takes its own signal colour. The no-dot ruling is scoped to
-    // navigation; a Pane head keeps its dot.
-    let dot_color = match status {
-        Some(Status::Streaming) => RUNNING,
-        Some(Status::Blocked) => ATTENTION,
-        Some(Status::Closed) => BLOCKED,
-        _ => IDLE,
-    };
+    // The no-dot ruling is scoped to navigation; a Pane head keeps its dot.
+    let dot = || dot.map_or_else(|| components::status_dot(IDLE), |dot| dot.dot());
     let key = view.thread().map_or(0, ThreadId::get);
     // The title holds its width up to `HEAD_TITLE_MAX_W`, where it
     // truncates, and never shrinks below `HEAD_TITLE_MIN_W` (or its whole
@@ -2411,9 +2430,9 @@ fn pane_head(view: &PaneView, state: PaneHeadState<'_>) -> Div {
         .overflow_hidden()
         .items_center()
         .child(if column {
-            components::gutter(components::status_dot(dot_color), theme::LH_UI)
+            components::gutter(dot(), theme::LH_UI)
         } else {
-            components::status_dot(dot_color).mr(px(theme::HEAD_GAP))
+            dot().mr(px(theme::HEAD_GAP))
         })
         .child(
             div()
@@ -3095,7 +3114,7 @@ fn working_line(
 ) -> Div {
     let mut facts: Vec<String> = Vec::new();
     if let Some(elapsed) = transcript.turn_elapsed() {
-        facts.push(components::duration_label(elapsed).to_string());
+        facts.push(ferrite_core::progress::duration_label(elapsed));
     }
     let tokens = transcript.turn_output_tokens();
     if tokens > 0 && !compact {
@@ -5255,7 +5274,7 @@ fn render_tool(
         trail = trail.child(components::tabular(
             div()
                 .text_color(rgb(TEXT_MUTED))
-                .child(components::duration_label(total)),
+                .child(ferrite_core::progress::duration_label(total)),
         ));
         trailing = true;
     }
@@ -7316,19 +7335,19 @@ mod tests {
     #[test]
     fn durations_read_at_the_comps_grammar() {
         assert_eq!(
-            components::duration_label(Duration::from_millis(340)).as_ref(),
+            ferrite_core::progress::duration_label(Duration::from_millis(340)),
             "0.3s"
         );
         assert_eq!(
-            components::duration_label(Duration::from_millis(8_200)).as_ref(),
+            ferrite_core::progress::duration_label(Duration::from_millis(8_200)),
             "8.2s"
         );
         assert_eq!(
-            components::duration_label(Duration::from_secs(42)).as_ref(),
+            ferrite_core::progress::duration_label(Duration::from_secs(42)),
             "42s"
         );
         assert_eq!(
-            components::duration_label(Duration::from_secs(134)).as_ref(),
+            ferrite_core::progress::duration_label(Duration::from_secs(134)),
             "2m14s"
         );
     }

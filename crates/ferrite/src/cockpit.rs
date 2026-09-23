@@ -37,6 +37,64 @@ enum NavRank {
 fn ongoing(status: nav::RowStatus) -> bool {
     matches!(status, nav::RowStatus::Working | nav::RowStatus::Failing)
 }
+
+/// A status dot's shape: filled for a live Thread, hollow for a parked one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DotShape {
+    Solid,
+    Ring,
+}
+
+/// What a Thread's state looks like wherever it is drawn: the dot's shape
+/// and ink, and its lexicon word (`theme::words`) when the state has one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ThreadStatus {
+    pub shape: DotShape,
+    pub ink: u32,
+    pub word: Option<&'static str>,
+}
+
+impl ThreadStatus {
+    /// The still dot: the face every surface draws (motion is layered on
+    /// by the surface that needs it, never by changing the ink).
+    pub fn dot(self) -> Div {
+        match self.shape {
+            DotShape::Solid => crate::components::status_dot(self.ink),
+            DotShape::Ring => crate::components::status_ring(self.ink),
+        }
+    }
+}
+
+/// **The one status truth.** The nav row, the Pane head, the L2 cell, the
+/// wall cell (and, later, the rail and the titlebar) all read a Thread's
+/// face from here, so no two surfaces can disagree about a Thread.
+///
+/// Unread is its own axis, never a state: a quiet Thread that finished
+/// while the operator looked elsewhere wears `ACCENT`, never the ochre that
+/// means an agent is stopped until the operator acts. A live state (work,
+/// a failure, a Decision) is the louder truth and ignores unread.
+pub(crate) fn thread_status(state: pane::WallState, unread: bool) -> ThreadStatus {
+    use crate::theme::{words, ACCENT, ATTENTION, BLOCKED, IDLE, RUNNING, TEXT_MUTED};
+    use pane::WallState;
+    let solid = |ink, word| ThreadStatus {
+        shape: DotShape::Solid,
+        ink,
+        word,
+    };
+    match state {
+        WallState::Working => solid(RUNNING, Some(words::WORKING)),
+        WallState::Failing => solid(BLOCKED, Some(words::FAILING)),
+        WallState::Decision => solid(ATTENTION, Some(words::NEEDS_YOU)),
+        WallState::Blocked => solid(BLOCKED, Some(words::FAILED)),
+        WallState::Done => solid(if unread { ACCENT } else { IDLE }, Some(words::DONE)),
+        WallState::Idle => solid(if unread { ACCENT } else { IDLE }, None),
+        WallState::Parked => ThreadStatus {
+            shape: DotShape::Ring,
+            ink: TEXT_MUTED,
+            word: None,
+        },
+    }
+}
 use ferrite_core::settings::UsageMeterStyle;
 use ferrite_core::store::Provider;
 use ferrite_core::workspace::registry::ProjectId;
@@ -6274,40 +6332,25 @@ impl CockpitView {
             None => nav::RowStatus::Parked,
             Some(open) => {
                 let failing = facts.is_some_and(|facts| facts.wall.tests_failing);
-                match pane::wall_state(
+                nav::RowStatus::of(pane::wall_state(
                     Some(open.transcript()),
                     open.activity()
                         .pending_decisions()
                         .iter()
                         .any(|pending| pending.decision.blocks_execution()),
                     failing,
-                ) {
-                    pane::WallState::Working => nav::RowStatus::Working,
-                    pane::WallState::Failing => nav::RowStatus::Failing,
-                    pane::WallState::Decision => nav::RowStatus::Attention,
-                    pane::WallState::Blocked => nav::RowStatus::Blocked,
-                    pane::WallState::Parked => nav::RowStatus::Parked,
-                    pane::WallState::Idle | pane::WallState::Done => nav::RowStatus::Idle,
-                }
+                ))
             }
         };
-        // A Thread that finished while the operator was elsewhere holds an
-        // unread Notice: its Pane rings, but from the tree a quiet Idle dot
-        // is indistinguishable from a Thread that never ran. Lift it to
-        // Attention so the tree names the Thread the toast was about. Only
-        // an Idle row is lifted — Working, Failing and Blocked are the
-        // louder truth, and a Decision is already Attention.
-        let status =
-            if status == nav::RowStatus::Idle && self.cockpit.notifications().attention(thread) {
-                nav::RowStatus::Attention
-            } else {
-                status
-            };
         let now = std::time::SystemTime::now();
         nav::ThreadRow {
             thread,
             name: self.facts.name(thread),
             status,
+            // Unread is its own axis: a Thread that finished while the
+            // operator was elsewhere keeps its state and wears the unread
+            // face (`thread_status`), never a Decision's ochre.
+            unread: self.cockpit.notifications().attention(thread),
             project: facts.and_then(|facts| facts.project_label.clone()),
             branch: facts.and_then(|facts| facts.branch.clone()),
             provider: self
@@ -20191,8 +20234,9 @@ mod tests {
     }
 
     /// The tree names the Thread the toast was about: an unread finish
-    /// lifts its nav row's dot from Idle to Attention, and landing on the
-    /// Pane — which reads the Notice — puts it back.
+    /// marks its nav row unread (its own axis — the state stays Idle, the
+    /// dot wears `ACCENT`, never a Decision's ochre), and landing on the
+    /// Pane — which reads the Notice — clears it.
     #[gpui::test]
     fn a_finished_thread_marks_its_nav_row_until_it_is_read(cx: &mut TestAppContext) {
         let (mut core, fake) = cockpit("finished-nav-row", 2);
@@ -20209,21 +20253,38 @@ mod tests {
             .unwrap();
         tick(cx);
         view.read_with(cx, |view, _| {
-            assert_eq!(
-                view.thread_row(threads[1]).status,
-                nav::RowStatus::Attention,
+            let finished = view.thread_row(threads[1]);
+            assert!(
+                finished.unread,
                 "the unfocused Thread that finished is marked in the tree"
             );
-            assert_eq!(view.thread_row(threads[0]).status, nav::RowStatus::Idle);
+            assert_eq!(
+                finished.status,
+                nav::RowStatus::Idle,
+                "unread never lifts a quiet Thread to needs you"
+            );
+            assert_eq!(
+                thread_status(finished.status.wall(), finished.unread).ink,
+                crate::theme::ACCENT,
+                "the mark is the unread accent, never ochre"
+            );
+            let other = view.thread_row(threads[0]);
+            assert_eq!(other.status, nav::RowStatus::Idle);
+            assert!(!other.unread);
         });
 
         cx.simulate_keystrokes("cmd-]");
         tick(cx);
         view.read_with(cx, |view, _| {
-            assert_eq!(
-                view.thread_row(threads[1]).status,
-                nav::RowStatus::Idle,
+            let read = view.thread_row(threads[1]);
+            assert_eq!(read.status, nav::RowStatus::Idle);
+            assert!(
+                !read.unread,
                 "landing on the Pane reads the Notice and clears the mark"
+            );
+            assert_eq!(
+                thread_status(read.status.wall(), read.unread).ink,
+                crate::theme::IDLE
             );
         });
     }

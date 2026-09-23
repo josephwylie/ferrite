@@ -44,8 +44,10 @@ use gpui::{
     SharedString, Stateful, Transformation,
 };
 
+use crate::cockpit::thread_status;
 use crate::components;
 use crate::icons::{self, icon};
+use crate::pane::WallState;
 use crate::pointer::{Pointer, PointerFaded, PointerPressed};
 use crate::theme::*;
 
@@ -204,6 +206,10 @@ pub struct ThreadRow {
     /// This is the focused Pane's Thread: it carries the tree's one selected
     /// fill and the `TEXT_STRONG` title.
     pub current: bool,
+    /// The Thread finished while the operator looked elsewhere (an unread
+    /// Notice). Its own axis, never a state: a quiet unread row wears the
+    /// unread dot and a `TEXT_STRONG` title, ink only, never weight.
+    pub unread: bool,
     /// How long since the Thread was last used — `40m`, `2h`, `3d` — at the
     /// tail of the Project line. `None` says nothing at all.
     pub last_used: Option<SharedString>,
@@ -214,25 +220,54 @@ pub struct ThreadRow {
 
 /// A Thread row's state, for its dot. The nav's original no-dot ruling
 /// gave way to the operator's need to see, from the tree, which Threads
-/// are working and which sit idle or wait on them.
+/// are working and which sit idle or wait on them. The face itself comes
+/// from `cockpit::thread_status`, the one status truth the Panes share.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RowStatus {
     Working,
     /// Working with a red test suite.
     Failing,
     /// A Decision waits on the operator.
-    Attention,
+    NeedsYou,
     /// The Session closed under it.
-    Blocked,
+    Failed,
     #[default]
     Idle,
     Parked,
 }
 
+impl RowStatus {
+    /// The row's state from the Pane's own reading. Done and Idle are one
+    /// quiet row; unread is carried beside it (`ThreadRow::unread`).
+    pub fn of(state: WallState) -> Self {
+        match state {
+            WallState::Working => RowStatus::Working,
+            WallState::Failing => RowStatus::Failing,
+            WallState::Decision => RowStatus::NeedsYou,
+            WallState::Blocked => RowStatus::Failed,
+            WallState::Parked => RowStatus::Parked,
+            WallState::Idle | WallState::Done => RowStatus::Idle,
+        }
+    }
+
+    /// The Pane state this row stands for, to read its face from
+    /// `thread_status`.
+    pub fn wall(self) -> WallState {
+        match self {
+            RowStatus::Working => WallState::Working,
+            RowStatus::Failing => WallState::Failing,
+            RowStatus::NeedsYou => WallState::Decision,
+            RowStatus::Failed => WallState::Blocked,
+            RowStatus::Idle => WallState::Idle,
+            RowStatus::Parked => WallState::Parked,
+        }
+    }
+}
+
 /// The status dot before a row's title, one recipe for the tree and the
-/// rail: running green (the only green in the column, and it means live),
-/// a Decision amber, closed or failing red, idle the idle ink, and parked a
-/// hollow ring.
+/// rail (`thread_status`): running green (the only green in the column, and
+/// it means live), a Decision ochre, closed or failing red, unread the
+/// accent, idle the idle ink, and parked a hollow ring.
 ///
 /// A **working** Thread's dot breathes: a halo behind it swells and fades
 /// on a 1.4s loop. Motion is the one thing a still row cannot fake, and
@@ -240,24 +275,19 @@ pub enum RowStatus {
 /// Thread is still inferring, so it breathes too, in its failure's ink.
 /// Under reduced motion the halo holds still at its dimmest. The halo is
 /// absolute inside a fixed `STATUS_DOT` box, so nothing in the row moves.
-fn status_dot(thread: ThreadId, status: RowStatus, reduce_motion: bool) -> AnyElement {
-    let id = ("nav-working", thread.get() as usize);
-    match status {
+fn status_dot(row: &ThreadRow, reduce_motion: bool) -> AnyElement {
+    let id = ("nav-working", row.thread.get() as usize);
+    match row.status {
         RowStatus::Working => components::pulsing_dot(id, RUNNING, RUNNING_HALO, reduce_motion),
         RowStatus::Failing => components::pulsing_dot(id, BLOCKED, NAV_FAILING_HALO, reduce_motion),
-        status => dot_face(status).into_any_element(),
+        _ => dot_face(row).into_any_element(),
     }
 }
 
-/// The still face of a status: the dot alone, no halo.
-fn dot_face(status: RowStatus) -> Div {
-    match status {
-        RowStatus::Working => components::status_dot(RUNNING),
-        RowStatus::Failing | RowStatus::Blocked => components::status_dot(BLOCKED),
-        RowStatus::Attention => components::status_dot(ATTENTION),
-        RowStatus::Idle => components::status_dot(IDLE),
-        RowStatus::Parked => components::status_ring(TEXT_MUTED),
-    }
+/// The still face of a row: the dot alone, no halo — the same face the
+/// Thread's Pane draws.
+fn dot_face(row: &ThreadRow) -> Div {
+    thread_status(row.status.wall(), row.unread).dot()
 }
 
 /// The lead slot: `NAV_LEAD_W` wide, one title line high, its glyph
@@ -788,7 +818,7 @@ pub fn thread_row_with_title(
         div()
             .flex()
             .items_center()
-            .child(lead(status_dot(row.thread, row.status, reduce_motion)))
+            .child(lead(status_dot(row, reduce_motion)))
             .child(title_cell(row, title).ml(px(NAV_LEAD_GAP)))
             .child(mark_cell(row)),
     )
@@ -820,7 +850,7 @@ pub fn project_thread_row_with_title(
     })
     .flex_row()
     .items_center()
-    .child(lead(status_dot(row.thread, row.status, reduce_motion)))
+    .child(lead(status_dot(row, reduce_motion)))
     .child(title_cell(row, title).ml(px(NAV_LEAD_GAP)))
     .children(grouped.then(|| group_membership_indicator(row.thread)))
     .child(meta_tail(row.thread, row.subagents, row.last_used.clone()))
@@ -842,10 +872,12 @@ fn title_cell(row: &ThreadRow, title: impl IntoElement) -> Div {
         .child(title)
 }
 
-/// The focused Thread's title is the strongest ink in the tree; a parked
-/// Thread's steps down a rung, so what is running reads first.
+/// The focused Thread's title is the strongest ink in the tree, and so is
+/// an unread one's: both ask to be read. A parked Thread's steps down a
+/// rung, so what is running reads first. Ink only: the weight is always
+/// `W_BODY`, so a row never reflows when it is read.
 fn title_ink(row: &ThreadRow) -> u32 {
-    if row.current {
+    if row.current || row.unread {
         TEXT_STRONG
     } else if row.status == RowStatus::Parked {
         TEXT_2
@@ -1274,7 +1306,7 @@ pub fn rail_item(row: &ThreadRow, current: bool) -> Button {
                         .absolute()
                         .right(px(NAV_RAIL_DOT_INSET))
                         .bottom(px(NAV_RAIL_DOT_INSET))
-                        .child(dot_face(row.status)),
+                        .child(dot_face(row)),
                 ),
         )
 }
@@ -1395,6 +1427,7 @@ mod tests {
             branch: Some("feat/ui-overhaul".into()),
             provider,
             current,
+            unread: false,
             last_used: Some("2h".into()),
             subagents: 2,
         }
@@ -1459,8 +1492,9 @@ mod tests {
         );
     }
 
-    /// The focused title is the strongest ink in the tree, a parked title
-    /// steps down a rung, and every other title is the body ink.
+    /// The focused title is the strongest ink in the tree, an unread one is
+    /// as strong, a parked title steps down a rung, and every other title is
+    /// the body ink. Unread changes ink only, never weight.
     #[test]
     fn titles_rank_focus_then_running_then_parked() {
         assert_eq!(title_ink(&current_thread(None, true)), TEXT_STRONG);
@@ -1470,6 +1504,32 @@ mod tests {
             ..thread(None)
         };
         assert_eq!(title_ink(&parked), TEXT_2);
+        let unread = ThreadRow {
+            unread: true,
+            ..thread(None)
+        };
+        assert_eq!(title_ink(&unread), TEXT_STRONG);
+        assert_eq!(
+            title_ink(&ThreadRow {
+                status: RowStatus::Parked,
+                ..unread.clone()
+            }),
+            TEXT_STRONG,
+            "unread outranks the parked step-down"
+        );
+        assert_eq!(
+            title_ink(&ThreadRow {
+                current: true,
+                ..unread.clone()
+            }),
+            TEXT_STRONG
+        );
+        let weight = |row: &ThreadRow| {
+            let mut cell = title_cell(row, row.name.clone());
+            cell.style().text.font_weight
+        };
+        assert_eq!(weight(&unread), Some(W_BODY), "unread is ink, never weight");
+        assert_eq!(weight(&unread), weight(&thread(None)));
     }
 
     /// Every expanded row is a drag source before it is a button, so it
@@ -1512,6 +1572,7 @@ mod tests {
             branch: None,
             provider: None,
             current: false,
+            unread: false,
             last_used: None,
             subagents: 0,
         };
@@ -1578,22 +1639,73 @@ mod tests {
 
     /// The dots are the Pane's own colours: green only for live work, a
     /// failing Thread in the failure's red (it still breathes, because it
-    /// is still inferring), a Decision amber, idle muted, parked hollow.
+    /// is still inferring), a Decision ochre, unread the accent, idle muted,
+    /// parked hollow.
     #[test]
     fn status_dots_say_state_and_green_only_means_live() {
-        let fill = |status| dot_face(status).style().background.clone();
+        let face = |status, unread| {
+            dot_face(&ThreadRow {
+                status,
+                unread,
+                ..thread(None)
+            })
+        };
+        let fill = |status| face(status, false).style().background.clone();
         assert_eq!(fill(RowStatus::Working), Some(rgb(RUNNING).into()));
         assert_eq!(fill(RowStatus::Failing), Some(rgb(BLOCKED).into()));
-        assert_eq!(fill(RowStatus::Blocked), Some(rgb(BLOCKED).into()));
-        assert_eq!(fill(RowStatus::Attention), Some(rgb(ATTENTION).into()));
+        assert_eq!(fill(RowStatus::Failed), Some(rgb(BLOCKED).into()));
+        assert_eq!(fill(RowStatus::NeedsYou), Some(rgb(ATTENTION).into()));
         assert_eq!(fill(RowStatus::Idle), Some(rgb(IDLE).into()));
-        let mut parked = dot_face(RowStatus::Parked);
+        assert_eq!(
+            face(RowStatus::Idle, true).style().background,
+            Some(rgb(ACCENT).into()),
+            "an unread quiet row is the accent, never ochre"
+        );
+        for status in [
+            RowStatus::Working,
+            RowStatus::Failing,
+            RowStatus::NeedsYou,
+            RowStatus::Failed,
+        ] {
+            assert_eq!(
+                face(status, true).style().background,
+                fill(status),
+                "{status:?}: a live state is the louder truth"
+            );
+        }
+        let mut parked = face(RowStatus::Parked, false);
         assert_eq!(parked.style().background, None, "a parked dot is a ring");
         assert_eq!(
             parked.style().border_color,
             Some(rgb(TEXT_MUTED).into()),
             "the ring is the metadata ink"
         );
+    }
+
+    /// One status truth: for every Pane state and either side of unread,
+    /// the nav row's dot is the Pane's own dot, face and ink.
+    #[test]
+    fn the_nav_dot_is_the_panes_dot() {
+        use WallState::*;
+        let paint = |mut dot: Div| {
+            let style = dot.style();
+            (style.background.clone(), style.border_color)
+        };
+        for state in [Working, Failing, Decision, Blocked, Done, Idle, Parked] {
+            for unread in [false, true] {
+                let row = ThreadRow {
+                    status: RowStatus::of(state),
+                    unread,
+                    ..thread(None)
+                };
+                assert_eq!(
+                    paint(dot_face(&row)),
+                    paint(crate::pane::cell_dot(state, unread)),
+                    "{state:?} unread={unread}"
+                );
+                assert_eq!(RowStatus::of(row.status.wall()), row.status);
+            }
+        }
     }
 
     /// The grid: the head's folder, every row's lead glyph and the Parked

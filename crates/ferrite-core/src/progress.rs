@@ -359,6 +359,29 @@ pub fn duration_label(elapsed: std::time::Duration) -> String {
     }
 }
 
+/// A live counter's reading, ticked at 1Hz: whole seconds, floored, so it
+/// never runs ahead of the clock — `0s` … `59s`, then `1m04s`. A frozen
+/// fact keeps its tenths (`duration_label`).
+pub fn live_seconds(elapsed: std::time::Duration) -> String {
+    let whole = elapsed.as_secs();
+    if whole < 60 {
+        format!("{whole}s")
+    } else {
+        format!("{}m{:02}s", whole / 60, whole % 60)
+    }
+}
+
+/// A settled span, printed once the work is over: `<1s` for anything under
+/// a second (never `0s`, which reads as nothing happened), otherwise the
+/// live counter's whole seconds — `3s`, `1m04s`.
+pub fn settled_duration_label(elapsed: std::time::Duration) -> String {
+    if elapsed < std::time::Duration::from_secs(1) {
+        "<1s".to_string()
+    } else {
+        live_seconds(elapsed)
+    }
+}
+
 /// The bound on a one-line row's text: wider than any row can show, so a
 /// row cuts its line by width (an ellipsis at its edge) and this only caps
 /// what a pathological line costs to shape. Never a display length.
@@ -460,5 +483,41 @@ impl ProgressEvent {
                 .sum(),
         }
         .saturating_add(64)
+    }
+}
+
+#[cfg(test)]
+mod duration_tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn durations_read_in_compact_units() {
+        assert_eq!(duration_label(Duration::from_millis(340)), "0.3s");
+        assert_eq!(duration_label(Duration::from_millis(8_200)), "8.2s");
+        assert_eq!(duration_label(Duration::from_secs(42)), "42s");
+        assert_eq!(duration_label(Duration::from_secs(134)), "2m14s");
+    }
+
+    #[test]
+    fn a_live_counter_floors_to_whole_seconds() {
+        assert_eq!(live_seconds(Duration::from_millis(340)), "0s");
+        assert_eq!(live_seconds(Duration::from_millis(1_600)), "1s");
+        assert_eq!(live_seconds(Duration::from_millis(8_200)), "8s");
+        assert_eq!(live_seconds(Duration::from_millis(9_900)), "9s");
+        assert_eq!(live_seconds(Duration::from_millis(59_999)), "59s");
+        assert_eq!(live_seconds(Duration::from_secs(64)), "1m04s");
+        assert_eq!(live_seconds(Duration::from_secs(134)), "2m14s");
+    }
+
+    #[test]
+    fn a_settled_span_never_reads_zero() {
+        assert_eq!(settled_duration_label(Duration::ZERO), "<1s");
+        assert_eq!(settled_duration_label(Duration::from_millis(200)), "<1s");
+        assert_eq!(settled_duration_label(Duration::from_millis(300)), "<1s");
+        assert_eq!(settled_duration_label(Duration::from_millis(999)), "<1s");
+        assert_eq!(settled_duration_label(Duration::from_secs(1)), "1s");
+        assert_eq!(settled_duration_label(Duration::from_millis(3_800)), "3s");
+        assert_eq!(settled_duration_label(Duration::from_secs(64)), "1m04s");
     }
 }

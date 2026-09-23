@@ -209,6 +209,49 @@ pub const BLOCKED_WASH: u32 = 0xd290891f;
 /// The idle/parked status dot: the muted ink in a dot role.
 pub const IDLE: u32 = TEXT_MUTED;
 
+/// **The lexicon.** Every state word Ferrite prints about a Thread or an
+/// agent, defined once next to the inks that colour them. State and value
+/// words are always lowercase, even when they lead a row, and never carry an
+/// em dash: a status line is `word · detail · project`, the `·` in
+/// `TEXT_FAINT`. Render sites name a word from here, never a literal, so the
+/// notifications, the subagent strip, the nav and the Pane heads cannot
+/// drift apart. Only the lead word of a line takes a colour (`word_ink`).
+pub mod words {
+    /// An agent is stopped until the operator acts (`ATTENTION`).
+    pub const NEEDS_YOU: &str = "needs you";
+    /// What a waiting agent needs: a permission request.
+    pub const APPROVAL: &str = "approval";
+    /// What a waiting agent needs: an answer.
+    pub const QUESTION: &str = "question";
+    /// A turn finished cleanly.
+    pub const DONE: &str = "done";
+    /// A turn or an agent failed (`BLOCKED`).
+    pub const FAILED: &str = "failed";
+    /// Tests are failing (`BLOCKED`).
+    pub const FAILING: &str = "failing";
+    /// The operator (or the runtime) stopped the work.
+    pub const INTERRUPTED: &str = "interrupted";
+    /// Live work.
+    pub const WORKING: &str = "working";
+    /// Launched, not yet working.
+    pub const STARTING: &str = "starting";
+    /// Held by the operator.
+    pub const PAUSED: &str = "paused";
+    /// Ferrite cannot observe it.
+    pub const UNAVAILABLE: &str = "unavailable";
+}
+
+/// The ink a lexicon word wears when it leads a line: `needs you` is
+/// `ATTENTION`, `failed`/`failing` are `BLOCKED`, every other word is
+/// `TEXT_MUTED` — colour always means something needs you.
+pub fn word_ink(word: &str) -> u32 {
+    match word {
+        words::NEEDS_YOU => ATTENTION,
+        words::FAILED | words::FAILING => BLOCKED,
+        _ => TEXT_MUTED,
+    }
+}
+
 /// A provider's logomark in its own brand colour — Claude's clay, Codex's
 /// green. Only the mark wears it: never a label, a row or a state.
 pub const PROVIDER_CODEX: u32 = 0x10a37f;
@@ -281,11 +324,12 @@ pub const SHADOW_NEAR_BLUR: f32 = 1.5;
 // weight: its one title `W_LABEL`, section titles `FS_SM` `W_LABEL`
 // `TEXT_MUTED`, rows `FS_UI` `W_BODY`, details `FS_SM` `W_BODY`.
 //
-// **Weights:** `W_BODY` (400) for everything that is read; `W_LABEL` (500)
-// for a surface's single title, a section title and an armed row;
-// `W_STRONG` (600) only where prose says so (headings, `**strong**`, the
-// Decision question). 700 is never used, and no render site names a
-// `FontWeight` itself.
+// **Weights:** `W_BODY` (400) for everything that is read — rows, buttons,
+// armed menu rows, all mono. W_LABEL once per heading role; weight never
+// signals state on a row that can truncate (unread, selected and armed
+// change ink or fill, never weight). `W_STRONG` (600) only where prose says
+// so (headings, `**strong**`, the Decision question). 700 is never used,
+// and no render site names a `FontWeight` itself.
 //
 // **Figures:** any number that changes while it is on screen — counts,
 // percentages, ages, durations, costs, tallies — is `components::tabular`,
@@ -1691,6 +1735,48 @@ pub const MOTION_PULSE_LEASE_MS: u64 = 300;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every lexicon word, so the casing rule below covers them all.
+    const LEXICON: &[&str] = &[
+        words::NEEDS_YOU,
+        words::APPROVAL,
+        words::QUESTION,
+        words::DONE,
+        words::FAILED,
+        words::FAILING,
+        words::INTERRUPTED,
+        words::WORKING,
+        words::STARTING,
+        words::PAUSED,
+        words::UNAVAILABLE,
+    ];
+
+    #[test]
+    fn every_state_word_is_lowercase_and_dashless() {
+        for word in LEXICON {
+            assert!(!word.is_empty());
+            assert_eq!(*word, word.to_lowercase(), "{word:?} is not lowercase");
+            assert!(!word.contains('\u{2014}'), "{word:?} carries an em dash");
+            assert!(!word.contains('\u{b7}'), "{word:?} carries a separator");
+            assert_eq!(*word, word.trim(), "{word:?} carries padding");
+        }
+    }
+
+    #[test]
+    fn only_needs_you_and_failure_words_take_a_colour() {
+        for word in LEXICON {
+            let expected = match *word {
+                words::NEEDS_YOU => ATTENTION,
+                words::FAILED | words::FAILING => BLOCKED,
+                _ => TEXT_MUTED,
+            };
+            assert_eq!(word_ink(word), expected, "{word:?}");
+        }
+        assert_eq!(word_ink("needs you"), ATTENTION);
+        assert_eq!(word_ink("failed"), BLOCKED);
+        assert_eq!(word_ink("failing"), BLOCKED);
+        assert_eq!(word_ink("done"), TEXT_MUTED);
+    }
 
     /// WCAG 2.x relative luminance of an opaque `0xRRGGBB`.
     fn luminance(rgb: u32) -> f32 {

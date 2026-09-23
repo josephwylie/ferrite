@@ -246,21 +246,30 @@ pub(crate) fn transcript_status(status: AgentStatus, fresh: bool) -> Status {
     }
 }
 
-fn status_label(status: AgentStatus, fresh: bool) -> &'static str {
+/// An agent's state in the shared lexicon (`theme::words`); an idle or
+/// unclassified agent has none, and nothing is drawn for it.
+fn status_label(status: AgentStatus, fresh: bool) -> Option<&'static str> {
+    use theme::words;
     if !fresh {
-        return "Observation unavailable";
+        return Some(words::UNAVAILABLE);
     }
     match status {
-        AgentStatus::Working => "Working",
-        AgentStatus::Waiting => "Needs input",
-        AgentStatus::Idle => "Idle",
-        AgentStatus::Pending => "Starting",
-        AgentStatus::Paused => "Paused",
-        AgentStatus::Interrupted => "Interrupted",
-        AgentStatus::Failed => "Failed",
-        AgentStatus::Shutdown => "Stopped",
-        AgentStatus::NotFound | AgentStatus::NotLoaded => "Unavailable",
-        AgentStatus::Unknown => "Status unknown",
+        AgentStatus::Working => Some(words::WORKING),
+        AgentStatus::Waiting => Some(words::NEEDS_YOU),
+        AgentStatus::Pending => Some(words::STARTING),
+        AgentStatus::Paused => Some(words::PAUSED),
+        AgentStatus::Interrupted | AgentStatus::Shutdown => Some(words::INTERRUPTED),
+        AgentStatus::Failed | AgentStatus::NotFound => Some(words::FAILED),
+        AgentStatus::NotLoaded => Some(words::UNAVAILABLE),
+        AgentStatus::Idle | AgentStatus::Unknown => None,
+    }
+}
+
+/// `name · word`, or the bare name when the agent has no state word.
+fn name_and_status(name: &str, status: AgentStatus, fresh: bool) -> String {
+    match status_label(status, fresh) {
+        Some(word) => format!("{name} \u{b7} {word}"),
+        None => name.to_string(),
     }
 }
 
@@ -644,7 +653,7 @@ impl CockpitView {
                     _ => "main",
                 }
             );
-            let tooltip = format!("{name} — {}", status_label(agent.status(), agent.fresh()));
+            let tooltip = name_and_status(&name, agent.status(), agent.fresh());
             let tab = subject_tab_face(
                 at + 1,
                 selected_at == Some(at + 1),
@@ -687,10 +696,10 @@ impl CockpitView {
             let choices = hidden
                 .iter()
                 .map(|agent| components::Choice {
-                    label: format!(
-                        "{} — {}",
-                        agent_name(agent.info()),
-                        status_label(agent.status(), agent.fresh())
+                    label: name_and_status(
+                        &agent_name(agent.info()),
+                        agent.status(),
+                        agent.fresh(),
                     )
                     .into(),
                     checked: agent.subject() == pane.selected,
@@ -2439,4 +2448,41 @@ fn form_defaults(fields: &[ferrite_core::FormField]) -> serde_json::Map<String, 
             Some((field.id.clone(), value))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod status_word_tests {
+    use super::*;
+
+    #[test]
+    fn every_agent_state_reads_in_the_lexicon() {
+        use theme::words;
+        let cases = [
+            (AgentStatus::Working, Some(words::WORKING)),
+            (AgentStatus::Waiting, Some(words::NEEDS_YOU)),
+            (AgentStatus::Failed, Some(words::FAILED)),
+            (AgentStatus::NotFound, Some(words::FAILED)),
+            (AgentStatus::Interrupted, Some(words::INTERRUPTED)),
+            (AgentStatus::Shutdown, Some(words::INTERRUPTED)),
+            (AgentStatus::Pending, Some(words::STARTING)),
+            (AgentStatus::Paused, Some(words::PAUSED)),
+            (AgentStatus::NotLoaded, Some(words::UNAVAILABLE)),
+            (AgentStatus::Idle, None),
+            (AgentStatus::Unknown, None),
+        ];
+        for (status, word) in cases {
+            assert_eq!(status_label(status, true), word, "{status:?}");
+            assert_eq!(
+                status_label(status, false),
+                Some(words::UNAVAILABLE),
+                "{status:?} unobserved"
+            );
+        }
+        assert_eq!(
+            name_and_status("scout", AgentStatus::Waiting, true),
+            "scout \u{b7} needs you"
+        );
+        assert_eq!(name_and_status("scout", AgentStatus::Idle, true), "scout");
+        assert!(!name_and_status("scout", AgentStatus::Failed, true).contains('\u{2014}'));
+    }
 }
