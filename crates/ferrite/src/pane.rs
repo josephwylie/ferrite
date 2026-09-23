@@ -2223,6 +2223,7 @@ fn pane_head(view: &PaneView, state: PaneHeadState<'_>) -> Div {
         .flex()
         .min_w_0()
         .flex_shrink(1.)
+        .overflow_hidden()
         .items_center()
         .gap(px(theme::HEAD_GAP))
         .child(components::status_dot(dot_color))
@@ -2313,7 +2314,7 @@ fn checkout_strip(
     };
     let mut strip = div()
         .flex()
-        .min_w_0()
+        .min_w(px(theme::HEAD_CHECKOUT_MIN_W))
         .flex_shrink(theme::HEAD_CHECKOUT_SHRINK)
         .overflow_hidden()
         .items_center()
@@ -2321,7 +2322,7 @@ fn checkout_strip(
         .child(icon(icons::BRANCH, theme::ROW_ICON, TEXT_FAINT));
     let mut branch_list = div()
         .flex()
-        .min_w_0()
+        .min_w(px(theme::HEAD_BRANCH_MIN_W))
         .flex_shrink(1.)
         .items_center()
         .gap(px(theme::CHECKOUT_GAP));
@@ -2343,14 +2344,26 @@ fn checkout_strip(
     let Some(status) = checkout else {
         return Some(strip);
     };
-    if status.ahead > 0 {
-        strip = strip.child(mark(format!("↑{}", status.ahead)));
-    }
-    if status.behind > 0 {
-        strip = strip.child(mark(format!("↓{}", status.behind)));
-    }
-    if status.dirty > 0 {
-        strip = strip.child(mark(format!("±{}", status.dirty)));
+    let marks: Vec<String> = [
+        (status.ahead, "↑"),
+        (status.behind, "↓"),
+        (status.dirty, "±"),
+    ]
+    .into_iter()
+    .filter(|(count, _)| *count > 0)
+    .map(|(count, sign)| format!("{sign}{count}"))
+    .collect();
+    if !marks.is_empty() {
+        strip = strip.child(
+            div()
+                .flex()
+                .min_w_0()
+                .flex_shrink(theme::HEAD_CHECKOUT_SHRINK * 2.)
+                .overflow_hidden()
+                .items_center()
+                .gap(px(theme::ROW_ICON_GAP))
+                .children(marks.into_iter().map(mark)),
+        );
     }
     Some(strip)
 }
@@ -2481,25 +2494,41 @@ pub fn checks_head(pr: &PullRequest) -> Div {
     .filter(|(count, _, _)| *count > 0)
     .map(|(count, word, ink)| (format!("{count} {word}"), ink))
     .collect();
-    let mut tally_line = div()
-        .flex()
-        .min_w_0()
-        .overflow_hidden()
-        .items_center()
-        .gap(px(theme::SPACE_1_5))
-        .text_size(px(theme::FS_SM))
-        .line_height(px(theme::LH_META));
+    // One run, so a narrow card truncates it with an ellipsis; the `·`
+    // seams are structure ink and only the failure is coloured.
+    let mut text = String::new();
+    let mut runs = Vec::new();
     for (index, (part, ink)) in parts.into_iter().enumerate() {
         if index > 0 {
-            tally_line = tally_line.child(div().text_color(rgb(TEXT_FAINT)).child("·"));
+            let at = text.len();
+            text.push_str(" · ");
+            runs.push((at..text.len(), TEXT_FAINT));
         }
-        tally_line = tally_line.child(
-            div()
-                .flex_shrink_0()
-                .text_color(rgb(ink))
-                .child(SharedString::from(part)),
-        );
+        let at = text.len();
+        text.push_str(&part);
+        if ink != TEXT_MUTED {
+            runs.push((at..text.len(), ink));
+        }
     }
+    let runs = runs
+        .into_iter()
+        .map(|(range, ink)| {
+            (
+                range,
+                HighlightStyle {
+                    color: Some(rgb(ink).into()),
+                    ..Default::default()
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    let tally_line = div()
+        .min_w_0()
+        .truncate()
+        .text_size(px(theme::FS_SM))
+        .line_height(px(theme::LH_META))
+        .text_color(rgb(TEXT_MUTED))
+        .child(StyledText::new(text).with_highlights(runs));
     div()
         .flex()
         .flex_shrink_0()

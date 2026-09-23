@@ -882,8 +882,12 @@ pub const HEAD_GAP: f32 = SPACE_2;
 /// the right (tasks · PR/CI · attention · action).
 pub const HEAD_CLUSTER_GAP: f32 = SPACE_3;
 /// How much more the checkout shrinks than the title when the head is
-/// narrow: the branch name gives way first.
-pub const HEAD_CHECKOUT_SHRINK: f32 = 8.0;
+/// narrow. Drift and dirt give way first, then the branch name — never
+/// below a few characters, so a narrow Pane still says where the work is.
+pub const HEAD_CHECKOUT_SHRINK: f32 = 4.0;
+pub const HEAD_BRANCH_MIN_W: f32 = 64.0;
+/// The checkout's floor: its branch mark, the gap and that minimum name.
+pub const HEAD_CHECKOUT_MIN_W: f32 = ROW_ICON + ROW_ICON_GAP + HEAD_BRANCH_MIN_W;
 /// Between a checkout's directory/branch pairs.
 pub const CHECKOUT_GAP: f32 = SPACE_2;
 /// The tasks meter in the head: 6 × 3 segments, 1px radius, 2px apart (an

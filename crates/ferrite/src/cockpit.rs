@@ -7588,17 +7588,17 @@ impl CockpitView {
             .text_color(rgb(TEXT_MUTED))
             .child(
                 div()
-                    .text_size(px(FS_UI))
-                    .line_height(px(LH_UI))
-                    .text_color(rgb(TEXT_2))
-                    .child("no thread open"),
-            )
-            .child(
-                div()
                     .flex()
                     .flex_col()
                     .items_start()
                     .gap(px(EMPTY_BOARD_GAP))
+                    .child(
+                        div()
+                            .text_size(px(FS_UI))
+                            .line_height(px(LH_UI))
+                            .text_color(rgb(TEXT_2))
+                            .child("no thread open"),
+                    )
                     .child(hint("cockpit::NewThread", "new thread"))
                     .child(hint("cockpit::NewWorktreeThread", "new worktree thread"))
                     .child(hint("cockpit::ReopenThread", "reopen last")),
