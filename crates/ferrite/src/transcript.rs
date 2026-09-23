@@ -16,8 +16,8 @@ use ferrite_core::{
     ThreadId,
 };
 use gpui::{
-    base::ElementExt, div, list, prelude::*, px, relative, App, Context, Entity, EventEmitter,
-    FocusHandle, IntoElement, MouseButton, Render, SharedString, Window,
+    base::ElementExt, div, list, prelude::*, px, App, Context, Entity, EventEmitter, FocusHandle,
+    IntoElement, MouseButton, Render, SharedString, Window,
 };
 
 use self::{
@@ -413,10 +413,7 @@ impl TranscriptView {
                 .markdown_run
                 .unwrap_or(blocks[0].id);
             let answer_size = theme::answer_text_size(self.input.reading_size);
-            let first_line_size = match &blocks[0].body {
-                Body::Heading { level, .. } => answer_size * theme::heading_scale(*level),
-                _ => answer_size,
-            };
+            let line_height = theme::answer_line_height(self.input.reading_size);
             let pad_y = if blocks.len() == 1 && matches!(&blocks[0].body, Body::Paragraph { .. }) {
                 theme::COMMENTARY_PAD_Y
             } else {
@@ -438,14 +435,17 @@ impl TranscriptView {
                 .pl(px(theme::GUTTER_W + theme::ANSWER_GAP))
                 .py(px(pad_y))
                 .text_size(px(answer_size))
+                .line_height(px(line_height))
                 .child(
                     div()
                         .absolute()
                         .left(px(0.))
+                        // Centred on the first line box, which is the pixel
+                        // line height whatever the first block is (a leading
+                        // heading included).
                         .top(px(pad_y
                             + theme::ANSWER_MARK_TOP
-                            + (first_line_size - theme::FS_ANSWER) * theme::LINE_BODY
-                                / 2.))
+                            + (line_height - theme::LH_PROSE) / 2.))
                         .w(px(theme::GUTTER_W))
                         .child(icons::ferrite_icon(theme::ANSWER_MARK)),
                 )
@@ -547,8 +547,8 @@ impl TranscriptView {
             .min_w_0()
             .gap(px(theme::EVENT_GAP))
             .py(px(theme::EVENT_PAD_Y))
-            .text_size(px(theme::FS_MD))
-            .line_height(relative(theme::LINE_BODY))
+            .text_size(px(theme::FS_UI))
+            .line_height(px(theme::LH_UI))
             .text_color(gpui::rgb(theme::TEXT_MUTED))
             .hover(|style| style.text_color(gpui::rgb(theme::TEXT)))
             .active(|style| style.text_color(gpui::rgb(theme::TEXT_STRONG)))
@@ -679,8 +679,8 @@ impl Render for TranscriptView {
             .px(px(theme::PANE_PAD_X))
             .pt(px(theme::BODY_PAD_T))
             .pb(px(theme::BODY_PAD_B))
-            .text_size(px(theme::FS_MD))
-            .line_height(relative(theme::LINE_BODY))
+            .text_size(px(theme::FS_UI))
+            .line_height(px(theme::LH_UI))
             .text_color(gpui::rgb(theme::TEXT_2))
             .hover_text()
             .track_focus(&self.transcript_focus)

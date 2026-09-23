@@ -11,10 +11,10 @@ use gpui::{div, point, px, rgb, rgba, App, BoxShadow, Div, FontWeight, SharedStr
 use crate::components;
 use crate::icons::{self, icon};
 use crate::theme::{
-    BLOCKED, FILL, FONT_MONO, FONT_UI, FORM_CONTROL_H, FS_LG, FS_MD, FS_MONO, GROUND, ICON_BUTTON,
+    BLOCKED, FILL, FONT_MONO, FONT_UI, FORM_CONTROL_H, FS_SM, FS_UI, GROUND, ICON_BUTTON,
     ICON_BUTTON_GLYPH, MENU, MODAL_GAP, MODAL_HEAD_H, MODAL_PAD, MODAL_VIEWPORT_FRACTION, PANE,
-    RAISED, R_CONTROL, R_MENU, SHADOW_FAR, SHADOW_FAR_BLUR, SHADOW_FAR_SPREAD, SHADOW_FAR_Y,
-    SHADOW_NEAR, SHADOW_NEAR_BLUR, SHADOW_NEAR_Y, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG,
+    RAISED, R_BLOCK, R_CONTROL, SHADOW_FAR, SHADOW_FAR_BLUR, SHADOW_FAR_SPREAD, SHADOW_FAR_Y,
+    SHADOW_NEAR, SHADOW_NEAR_BLUR, SHADOW_NEAR_Y, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG, W_LABEL,
 };
 
 const WIDTH: f32 = 600.;
@@ -47,10 +47,10 @@ pub fn card(directory_count: usize) -> Div {
         .h(px(height))
         .max_h(gpui::relative(MODAL_VIEWPORT_FRACTION))
         .overflow_hidden()
-        .rounded(px(R_MENU))
+        .rounded(px(R_BLOCK))
         .bg(rgb(MENU))
         .font_family(FONT_UI)
-        .text_size(px(FS_MD))
+        .text_size(px(FS_UI))
         .text_color(rgb(TEXT))
         .shadow(vec![
             BoxShadow {
@@ -83,15 +83,15 @@ pub fn head(title: SharedString, close: impl IntoElement) -> Div {
                 .min_w_0()
                 .flex_1()
                 .truncate()
-                .text_size(px(FS_LG))
-                .font_weight(FontWeight::SEMIBOLD)
+                .text_size(px(FS_UI))
+                .font_weight(W_LABEL)
                 .text_color(rgb(TEXT_STRONG))
                 .child(title),
         )
         .child(
             div()
                 .font_family(FONT_MONO)
-                .text_size(px(FS_MONO))
+                .text_size(px(FS_SM))
                 .text_color(rgb(TEXT_MUTED))
                 .child("esc close"),
         )
@@ -133,14 +133,14 @@ pub fn section_label(title: &'static str, hint: &'static str) -> Div {
         .pb(px(2.))
         .child(
             div()
-                .text_size(px(FS_MD))
+                .text_size(px(FS_UI))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(rgb(TEXT_STRONG))
                 .child(title),
         )
         .child(
             div()
-                .text_size(px(FS_MONO))
+                .text_size(px(FS_SM))
                 .text_color(rgb(TEXT_MUTED))
                 .child(hint),
         )
@@ -157,7 +157,7 @@ pub fn name_field(editor: impl IntoElement) -> Div {
         .pt(px(4.))
         .child(
             div()
-                .text_size(px(FS_MD))
+                .text_size(px(FS_UI))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(rgb(TEXT_STRONG))
                 .child("Name"),
@@ -184,7 +184,7 @@ pub fn error_line(message: SharedString) -> Div {
         .flex_shrink_0()
         .pt(px(4.))
         .font_family(FONT_MONO)
-        .text_size(px(FS_MONO))
+        .text_size(px(FS_SM))
         .text_color(rgb(BLOCKED))
         .child(message)
 }
@@ -201,7 +201,7 @@ pub fn empty_directories() -> Div {
         .rounded(px(R_CONTROL))
         .bg(rgb(RAISED))
         .font_family(FONT_MONO)
-        .text_size(px(FS_MONO))
+        .text_size(px(FS_SM))
         .text_color(rgb(TEXT_MUTED))
         .child("No directory yet — add the main directory to begin.")
 }
@@ -269,14 +269,14 @@ pub fn directory_row(path: SharedString, role: &'static str, actions: impl IntoE
                             div()
                                 .min_w_0()
                                 .truncate()
-                                .text_size(px(FS_MD))
+                                .text_size(px(FS_UI))
                                 .text_color(rgb(TEXT))
                                 .child(name),
                         )
                         .child(
                             div()
                                 .flex_shrink_0()
-                                .text_size(px(FS_MONO))
+                                .text_size(px(FS_SM))
                                 .text_color(rgb(TEXT_MUTED))
                                 .child(role),
                         ),
@@ -284,7 +284,7 @@ pub fn directory_row(path: SharedString, role: &'static str, actions: impl IntoE
                 .child(
                     div()
                         .font_family(FONT_MONO)
-                        .text_size(px(FS_MONO))
+                        .text_size(px(FS_SM))
                         .text_color(rgb(TEXT_MUTED))
                         .truncate()
                         .child(path),

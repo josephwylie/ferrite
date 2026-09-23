@@ -36,8 +36,8 @@ use gpui::{
 use crate::icons::{self, icon};
 use crate::pointer::{Pointer, PointerPressed};
 use crate::theme::{
-    ATTENTION, ATTENTION_WASH, BLOCKED, CAPTION_GLYPH, CAPTION_RESIZE_EDGE, CAPTION_W, FS_LG,
-    FS_SM, GRID_PAD, ICON_BUTTON, ICON_BUTTON_GLYPH, R_CHIP, TEXT, TEXT_MUTED, WIN_CHROME_H,
+    ATTENTION, ATTENTION_WASH, BLOCKED, CAPTION_GLYPH, CAPTION_RESIZE_EDGE, CAPTION_W, FS_SM,
+    FS_UI, GRID_PAD, ICON_BUTTON, ICON_BUTTON_GLYPH, R_CHIP, TEXT, TEXT_MUTED, WIN_CHROME_H,
 };
 
 /// The active location named in the window chrome. A Group may span
@@ -222,7 +222,8 @@ fn title_region(title: Title) -> Div {
             div()
                 .debug_selector(|| "group-titlebar-name".into())
                 .truncate()
-                .text_size(px(FS_LG))
+                .text_size(px(FS_UI))
+                .font_weight(crate::theme::W_LABEL)
                 .text_color(rgb(TEXT))
                 .child(group)
         }))

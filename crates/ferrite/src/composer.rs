@@ -905,7 +905,7 @@ fn runs_for(
             .is_some_and(|marked| marked.start <= from && to <= marked.end)
         {
             run.underline = Some(UnderlineStyle {
-                color: Some(rgb(crate::theme::SEP).into()),
+                color: Some(rgb(crate::theme::TEXT_FAINT).into()),
                 thickness: px(1.),
                 wavy: false,
             });

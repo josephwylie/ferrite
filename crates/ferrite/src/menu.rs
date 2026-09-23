@@ -12,7 +12,7 @@ use gpui::{div, point, px, rgb, rgba, BoxShadow, Div, SharedString, Stateful};
 
 use crate::pointer::{Pointer, PointerPressed};
 use crate::theme::{
-    BLOCKED, BLOCKED_WASH, FS_MD, FS_MONO, MENU, MENU_PAD, MENU_ROW_H, R_CONTROL, R_MENU,
+    BLOCKED, BLOCKED_WASH, FS_SM, FS_UI, MENU, MENU_PAD, MENU_ROW_H, R_BLOCK, R_CONTROL,
     SHADOW_FAR, SHADOW_FAR_BLUR, SHADOW_FAR_SPREAD, SHADOW_FAR_Y, SHADOW_NEAR, SHADOW_NEAR_BLUR,
     SHADOW_NEAR_Y, TEXT, TEXT_MUTED, TEXT_STRONG,
 };
@@ -72,7 +72,7 @@ pub fn shell() -> Div {
         .flex_col()
         .w(px(WIDTH))
         .p(px(MENU_PAD))
-        .rounded(px(R_MENU))
+        .rounded(px(R_BLOCK))
         .bg(rgb(MENU))
         .shadow(vec![
             BoxShadow {
@@ -122,14 +122,14 @@ pub fn row(index: usize, item: &Item, armed: bool) -> Stateful<Div> {
         .h(px(MENU_ROW_H))
         .px(px(9.))
         .rounded(px(R_CONTROL))
-        .text_size(px(FS_MD))
+        .text_size(px(FS_UI))
         .text_color(rgb(ink))
         .child(div().min_w_0().truncate().child(label));
     if let Some(hint) = &item.hint {
         row = row.child(
             div()
                 .flex_shrink_0()
-                .text_size(px(FS_MONO))
+                .text_size(px(FS_SM))
                 .text_color(rgb(TEXT_MUTED))
                 .child(hint.clone()),
         );

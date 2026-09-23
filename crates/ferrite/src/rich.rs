@@ -232,7 +232,7 @@ impl gpui::RenderOnce for Markdown {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let state = self.cache.state(self.id.clone(), &self.source, window, cx);
         // Prose sets its own face; the inherited style is the Pane's.
-        let face: SharedString = theme::FONT_UI.into();
+        let face: SharedString = theme::FONT_PROSE.into();
         #[cfg(test)]
         testing::record(
             self.id.clone(),
@@ -408,18 +408,18 @@ pub fn style(rem_size: gpui::Pixels) -> TextViewStyle {
         .with_muted_foreground(rgb(theme::TEXT_2).into())
         .with_link(rgb(theme::LINK_INK).into())
         .with_selection(rgba(theme::TEXT_SELECTION_WASH).into())
-        .with_code_background(rgb(theme::PANE_HEAD).into())
+        .with_code_background(rgb(theme::RAISED).into())
         .with_code_block(
             gpui::StyleRefinement::default()
                 .p(px(theme::CODE_PAD))
                 .rounded(px(theme::R_CHIP))
-                .text_size(px(theme::FS_MD)),
+                .text_size(px(theme::FS_UI)),
         )
         .with_inline_code(gpui::HighlightStyle {
             color: Some(rgb(theme::INLINE_CODE_INK).into()),
             ..Default::default()
         })
-        .with_border(rgb(theme::TABLE_RULE).into())
+        .with_border(rgba(theme::TABLE_RULE).into())
         .with_table({
             let mut table = gpui::StyleRefinement::default().bg(rgb(theme::PANE));
             table.overflow.x = Some(gpui::Overflow::Scroll);
@@ -432,7 +432,7 @@ pub fn style(rem_size: gpui::Pixels) -> TextViewStyle {
                 .font_weight(gpui::FontWeight::SEMIBOLD),
         )
         .with_paragraph_gap(rems(theme::BLOCK_GAP / f32::from(rem_size)))
-        .with_heading_base_font_size(px(theme::FS_MD))
+        .with_heading_base_font_size(px(theme::FS_UI))
         .with_heading_font_size(|level, base| base * theme::heading_scale(level))
 }
 
@@ -629,7 +629,7 @@ pub mod testing {
             .0
             .iter()
             .find(|(id, _)| id.starts_with(prefix))
-            .map(|(_, (_, style))| style.font_size.to_pixels(px(theme::FS_MD)))
+            .map(|(_, (_, style))| style.font_size.to_pixels(px(theme::FS_UI)))
     }
 
     pub fn record(
@@ -788,7 +788,7 @@ mod file_link_tests {
                 source: source.into(),
                 cwd: std::env::temp_dir(),
                 preview,
-                font_size: 13.,
+                font_size: theme::FS_PROSE,
             });
             gpui::component::Root::new(view, window, cx).bordered(false)
         });
@@ -815,7 +815,7 @@ mod file_link_tests {
     ) {
         let (view, cx) = fixture(cx, "");
         cx.simulate_resize(gpui::size(px(320.), px(720.)));
-        for font_size in [13., 17.] {
+        for font_size in [14., 18.] {
             for start in [9_u32, 99] {
                 let indent = " ".repeat(start.to_string().len() + 2);
                 let source = format!(
@@ -1170,7 +1170,7 @@ mod spacing_tests {
 
     impl Render for SpacingRoot {
         fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-            window.set_rem_size(px(theme::FS_MD));
+            window.set_rem_size(px(theme::FS_UI));
             div()
                 .w(px(360.))
                 .children(self.samples.iter().enumerate().map(|(ix, source)| {

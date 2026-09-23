@@ -220,7 +220,7 @@ fn request_island(
                     .max_w(px(680.))
                     .min_w_0()
                     .overflow_hidden()
-                    .font_family(theme::FONT_UI)
+                    .font_family(theme::FONT_PROSE)
                     .child(
                         GroupBox::new()
                             .id("question-surface")
@@ -1114,7 +1114,7 @@ impl CockpitView {
                         let serial = handle.serial;
                         move || format!("request-title-{}-{serial}", thread.get())
                     })
-                    .text_size(px(theme::FS_MD))
+                    .text_size(px(theme::FS_UI))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(rgb(theme::TEXT))
                     .child(format!(
@@ -1697,8 +1697,8 @@ impl CockpitView {
                 .gap(px(12.))
                 .child(
                     div()
-                        .text_size(px(theme::FS_ANSWER))
-                        .line_height(gpui::relative(theme::LINE_UI))
+                        .text_size(px(theme::FS_PROSE))
+                        .line_height(px(theme::LH_PROSE))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(rgb(theme::TEXT_STRONG))
                         .child(question.question.clone()),
@@ -1725,7 +1725,7 @@ impl CockpitView {
                             .rounded(px(theme::R_CONTROL))
                             .border_1()
                             .border_color(if checked {
-                                rgb(theme::FOCUS)
+                                rgb(theme::FOCUS_RING)
                             } else {
                                 rgba(theme::TRANSPARENT)
                             })
@@ -1734,7 +1734,7 @@ impl CockpitView {
                                 row.cursor_pointer().hover(|style| {
                                     style
                                         .bg(rgb(theme::FILL_HOVER))
-                                        .border_color(rgb(theme::SEP))
+                                        .border_color(rgb(theme::TEXT_FAINT))
                                 })
                             })
                             .child(
@@ -1788,7 +1788,7 @@ impl CockpitView {
                                 .rounded(px(theme::R_CONTROL))
                                 .border_1()
                                 .border_color(if checked {
-                                    rgb(theme::FOCUS)
+                                    rgb(theme::FOCUS_RING)
                                 } else {
                                     rgba(theme::TRANSPARENT)
                                 })
@@ -1797,7 +1797,7 @@ impl CockpitView {
                                     row.cursor_pointer().hover(|style| {
                                         style
                                             .bg(rgb(theme::FILL_HOVER))
-                                            .border_color(rgb(theme::SEP))
+                                            .border_color(rgb(theme::TEXT_FAINT))
                                     })
                                 })
                                 .px(px(10.))
@@ -1883,7 +1883,7 @@ impl CockpitView {
                     .gap(px(8.))
                     .child(
                         div()
-                            .text_size(px(theme::FS_MD))
+                            .text_size(px(theme::FS_UI))
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .text_color(rgb(theme::ATTENTION))
                             .child(if questions.len() == 1 {
@@ -2195,8 +2195,8 @@ fn question_choice(choice: &ferrite_core::questions::Choice) -> impl IntoElement
         .flex()
         .flex_col()
         .gap(px(3.))
-        .text_size(px(theme::FS_MD))
-        .line_height(gpui::relative(theme::LINE_BODY))
+        .text_size(px(theme::FS_PROSE_SM))
+        .line_height(px(theme::LH_PROSE_SM))
         .child(
             div()
                 .font_weight(gpui::FontWeight::MEDIUM)

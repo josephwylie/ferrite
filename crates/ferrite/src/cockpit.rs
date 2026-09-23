@@ -2181,7 +2181,7 @@ impl CockpitView {
                     // The seam brightens under the pointer and while it is
                     // held: the whole resize affordance.
                     .child(line.rounded(px(1.0)).bg(rgb(if dragging {
-                        crate::theme::FOCUS
+                        crate::theme::FOCUS_RING
                     } else {
                         crate::theme::GROUND
                     })))
@@ -2209,7 +2209,7 @@ impl CockpitView {
                         .top(px(wash.y))
                         .w(px(wash.w))
                         .h(px(wash.h))
-                        .rounded(px(crate::theme::R_SURFACE))
+                        .rounded(px(crate::theme::R_PANE))
                         .bg(rgba(crate::theme::DROP_WASH))
                         .border_1()
                         .border_color(rgb(crate::theme::DROP_VALID))
@@ -18193,7 +18193,9 @@ mod tests {
             "About must scroll into the panel"
         );
         cx.simulate_click(
-            card.origin + gpui::point(px(60.), px(90.)),
+            // The first page's row, below the search header (both scale with
+            // the kit's font size, `theme::FS_UI`).
+            card.origin + gpui::point(px(60.), px(106.)),
             gpui::Modifiers::none(),
         );
         tick(cx);

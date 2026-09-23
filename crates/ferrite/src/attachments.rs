@@ -297,7 +297,7 @@ pub fn inline_file(
         .unwrap_or_default();
     let title = format!("{name}{location}");
     let image = gpui::Img::extensions().contains(&kind.to_ascii_lowercase().as_str());
-    let font_size = px(crate::theme::FS_MD);
+    let font_size = px(crate::theme::FS_UI);
     let run = window.text_style().to_run(title.len() + kind.len());
     let width = window
         .text_system()

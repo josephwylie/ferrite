@@ -2,7 +2,7 @@
 //! Values and persistence remain owned by the cockpit.
 
 use gpui::prelude::*;
-use gpui::{div, point, px, rgb, rgba, App, Axis, BoxShadow, Div, FontWeight, SharedString};
+use gpui::{div, point, px, rgb, rgba, App, Axis, BoxShadow, Div, SharedString};
 
 use gpui::component::button::Button;
 use gpui::component::menu::{DropdownMenu, PopupMenuItem};
@@ -14,11 +14,10 @@ use std::rc::Rc;
 use crate::components;
 use crate::icons::{self, icon};
 use crate::theme::{
-    FILL, FILL_HOVER, FONT_MONO, FONT_UI, FORM_CHOICE_PAD, FORM_CONTROL_H, FORM_FIELD_W, FS_LG,
-    FS_MD, FS_MONO, ICON_BUTTON, ICON_BUTTON_GLYPH, MENU, MODAL_HEAD_H, MODAL_PAD,
-    MODAL_VIEWPORT_FRACTION, PANE, R_CHIP, R_CONTROL, R_MENU, SHADOW_FAR, SHADOW_FAR_BLUR,
-    SHADOW_FAR_SPREAD, SHADOW_FAR_Y, SHADOW_NEAR, SHADOW_NEAR_BLUR, SHADOW_NEAR_Y, TEXT, TEXT_2,
-    TEXT_MUTED, TEXT_STRONG,
+    FILL, FILL_HOVER, FONT_MONO, FONT_UI, FORM_CHOICE_PAD, FORM_CONTROL_H, FORM_FIELD_W, FS_SM,
+    FS_UI, ICON_BUTTON, ICON_BUTTON_GLYPH, MENU, MODAL_HEAD_H, MODAL_PAD, MODAL_VIEWPORT_FRACTION,
+    PANE, R_BLOCK, R_CHIP, R_CONTROL, SHADOW_FAR, SHADOW_FAR_BLUR, SHADOW_FAR_SPREAD, SHADOW_FAR_Y,
+    SHADOW_NEAR, SHADOW_NEAR_BLUR, SHADOW_NEAR_Y, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG, W_LABEL,
 };
 
 /// The card's width; tall enough sections scroll inside it.
@@ -52,9 +51,9 @@ pub fn card() -> Div {
         .h(px(680.))
         .max_h(gpui::relative(MODAL_VIEWPORT_FRACTION))
         .overflow_hidden()
-        .text_size(px(FS_MD))
+        .text_size(px(FS_UI))
         .text_color(rgb(TEXT))
-        .rounded(px(R_MENU))
+        .rounded(px(R_BLOCK))
         .bg(rgb(MENU))
         .font_family(FONT_UI)
         .shadow(vec![
@@ -88,15 +87,15 @@ pub fn head(close: impl IntoElement) -> Div {
         .gap(px(ROW_GAP))
         .child(
             div()
-                .text_size(px(FS_LG))
-                .font_weight(FontWeight::SEMIBOLD)
+                .text_size(px(FS_UI))
+                .font_weight(W_LABEL)
                 .text_color(rgb(TEXT_STRONG))
                 .child("Settings"),
         )
         .child(div().flex_1())
         .child(
             div()
-                .text_size(px(FS_MONO))
+                .text_size(px(FS_SM))
                 .font_family(FONT_MONO)
                 .text_color(rgb(TEXT_MUTED))
                 .child("esc close"),
@@ -122,7 +121,7 @@ pub fn body(pages: Vec<SettingPage>) -> Div {
     // GPUI's overflow mask alone does not clip descendants to rounded corners.
     let sidebar = gpui::StyleRefinement::default()
         .bg(rgb(MENU))
-        .rounded_bl(px(R_MENU));
+        .rounded_bl(px(R_BLOCK));
     let settings = Settings::new("ferrite-settings")
         .small()
         .sidebar_width(px(SIDEBAR_WIDTH))
@@ -369,7 +368,7 @@ pub fn fact(title: &'static str, value: SharedString) -> SettingItem {
                 .id(title)
                 .debug_selector(move || format!("settings-fact-{title}"))
                 .font_family(FONT_MONO)
-                .text_size(px(FS_MONO))
+                .text_size(px(FS_SM))
                 .text_color(rgb(TEXT_2))
                 .child(value.clone())
         }),

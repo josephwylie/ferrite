@@ -29,10 +29,10 @@ use gpui::{
 use crate::components;
 use crate::pointer::{Pointer, PointerPressed};
 use crate::theme::{
-    ATTENTION, BLOCKED, FONT_UI, FS_MD, FS_SM, ICON_BUTTON, ICON_BUTTON_GLYPH, LINE_TIGHT, MENU,
-    MENU_PAD, MENU_ROW_H, ROW_GAP, ROW_PAD_X, R_CONTROL, R_MENU, SHADOW_FAR, SHADOW_FAR_BLUR,
-    SHADOW_FAR_SPREAD, SHADOW_FAR_Y, SHADOW_NEAR, SHADOW_NEAR_BLUR, SHADOW_NEAR_Y, STATUS_DOT,
-    TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG,
+    ATTENTION, BLOCKED, FONT_UI, FS_SM, FS_UI, ICON_BUTTON, ICON_BUTTON_GLYPH, LH_META, LH_TIGHT,
+    MENU, MENU_PAD, MENU_ROW_H, ROW_GAP, ROW_PAD_X, R_BLOCK, R_CONTROL, SHADOW_FAR,
+    SHADOW_FAR_BLUR, SHADOW_FAR_SPREAD, SHADOW_FAR_Y, SHADOW_NEAR, SHADOW_NEAR_BLUR, SHADOW_NEAR_Y,
+    STATUS_DOT, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG,
 };
 
 /// What a click on the bell's surfaces means. The cockpit answers each
@@ -413,8 +413,8 @@ fn row_element(index: usize, row: &Row, handle: Handle) -> Stateful<Div> {
                 .min_w_0()
                 .child(
                     div()
-                        .text_size(px(FS_MD))
-                        .line_height(gpui::relative(LINE_TIGHT))
+                        .text_size(px(FS_UI))
+                        .line_height(px(LH_TIGHT))
                         .text_color(rgb(if row.read { TEXT_2 } else { TEXT_STRONG }))
                         .when(!row.read, |title| title.font_weight(FontWeight::MEDIUM))
                         .truncate()
@@ -423,7 +423,7 @@ fn row_element(index: usize, row: &Row, handle: Handle) -> Stateful<Div> {
                 .child(
                     div()
                         .text_size(px(FS_SM))
-                        .line_height(gpui::relative(LINE_TIGHT))
+                        .line_height(px(LH_META))
                         .text_color(rgb(TEXT_MUTED))
                         .truncate()
                         .child(row.detail()),
@@ -479,7 +479,7 @@ fn surface() -> Div {
         .max_h(px(420.))
         .gap(px(ROW_GAP))
         .p(px(MENU_PAD))
-        .rounded(px(R_MENU))
+        .rounded(px(R_BLOCK))
         .bg(rgb(MENU))
         .font_family(FONT_UI)
         .text_color(rgb(TEXT))

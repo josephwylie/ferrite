@@ -42,15 +42,15 @@ use crate::components;
 use crate::icons::{self, icon};
 use crate::pointer::{Pointer, PointerPressed};
 use crate::theme::{
-    ATTENTION, BLOCKED, FILL, FONT_UI, FS_LG, FS_MD, FS_SM, GROUP_GAP, GROUP_RAIL, GROUP_ROW_H,
-    ICON_BUTTON, ICON_BUTTON_GLYPH, ICON_CHEVRON_LG, IDLE, LINE_TIGHT, MEMBERS_TOP, MEMBER_GAP,
-    MEMBER_INDENT, MENU, MENU_PAD, MENU_ROW_H, MENU_TOP, NAV, NAV_HEAD_H, NAV_TREE_PAD,
+    ATTENTION, BLOCKED, FILL, FONT_UI, FS_SM, FS_UI, GROUP_GAP, GROUP_RAIL, GROUP_ROW_H,
+    ICON_BUTTON, ICON_BUTTON_GLYPH, ICON_CHEVRON_LG, IDLE, LH_META, LH_TIGHT, LH_UI, MEMBERS_TOP,
+    MEMBER_GAP, MEMBER_INDENT, MENU, MENU_PAD, MENU_ROW_H, MENU_TOP, NAV, NAV_HEAD_H, NAV_TREE_PAD,
     NAV_TREE_PAD_B, PROVIDER_CLAUDE, PROVIDER_CODEX, PROVIDER_MARK, PULSE_MIN, RAIL_INSET,
     RAIL_OFFSET, ROW_GAP, ROW_ICON, ROW_ICON_GAP, ROW_PAD_X, ROW_PAD_Y, ROW_TEXT_W, RUNNING,
-    RUNNING_HALO, R_CONTROL, R_MENU, R_TIGHT, SEP, SHADOW_FAR, SHADOW_FAR_BLUR, SHADOW_FAR_SPREAD,
+    RUNNING_HALO, R_BLOCK, R_CONTROL, R_TIGHT, SHADOW_FAR, SHADOW_FAR_BLUR, SHADOW_FAR_SPREAD,
     SHADOW_FAR_Y, SHADOW_NEAR, SHADOW_NEAR_BLUR, SHADOW_NEAR_Y, SOLOS_TOP, STATUS_DOT,
-    STATUS_HALO_INSET, STATUS_PULSE_MS, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG, THREAD_ROW_H,
-    TRAFFIC_RESERVE, WIN_CHROME_H,
+    STATUS_HALO_INSET, STATUS_PULSE_MS, TEXT, TEXT_2, TEXT_FAINT, TEXT_MUTED, TEXT_STRONG,
+    THREAD_ROW_H, TRAFFIC_RESERVE, WIN_CHROME_H, W_LABEL,
 };
 
 /// The nav's two widths—286px, and the platform rail cmd-b folds it to.
@@ -59,13 +59,13 @@ use crate::theme::{
 /// of the semantic-zoom input rather than a special case.
 pub use crate::theme::{NAV_RAIL_WIDTH as RAIL_WIDTH, NAV_WIDTH as WIDTH};
 
-/// A Group row's title line: 13px on the tight 1.25 leading → 16.25px.
-const TITLE_LG_H: f32 = FS_LG * LINE_TIGHT;
-/// A Thread row's title line: 12px tight → 15px.
-const TITLE_MD_H: f32 = FS_MD * LINE_TIGHT;
-/// The Project and checkout lines: 11px tight → 13.75px. A row keeps this
-/// height even when the fact is unknown, so nothing reflows on a cache fill.
-const META_H: f32 = FS_SM * LINE_TIGHT;
+/// A Group row's title line: `FS_UI` on the tight 16px line box.
+const TITLE_LG_H: f32 = LH_TIGHT;
+/// A Thread row's title line: the same box.
+const TITLE_MD_H: f32 = LH_TIGHT;
+/// The Project and checkout lines: `FS_SM` on 16px. A row keeps this height
+/// even when the fact is unknown, so nothing reflows on a cache fill.
+const META_H: f32 = LH_META;
 /// The Group card's mark spans both text rows instead of reading as title
 /// decoration. It is deliberately larger than the 12px inline row icons.
 const GROUP_MARK_LG: f32 = 20.0;
@@ -304,7 +304,7 @@ fn status_dot(thread: ThreadId, status: RowStatus) -> AnyElement {
         RowStatus::Attention => dot.bg(rgb(ATTENTION)),
         RowStatus::Blocked => dot.bg(rgb(BLOCKED)),
         RowStatus::Idle => dot.bg(rgb(IDLE)),
-        RowStatus::Parked => dot.border_1().border_color(rgb(SEP)),
+        RowStatus::Parked => dot.border_1().border_color(rgb(TEXT_FAINT)),
     };
     if !matches!(status, RowStatus::Working | RowStatus::Failing) {
         return dot.into_any_element();
@@ -525,7 +525,7 @@ pub fn order_option(index: usize, label: &'static str, selected: bool) -> Button
                 .w_full()
                 .min_w_0()
                 .gap(px(ROW_PAD_X))
-                .text_size(px(FS_MD))
+                .text_size(px(FS_UI))
                 .child(
                     div()
                         .min_w_0()
@@ -609,14 +609,9 @@ pub fn filter_trigger(state: &FilterState) -> Stateful<Div> {
         .pr(px(R_CONTROL))
         .gap(px(TRIGGER_GAP))
         .rounded(px(R_CONTROL))
-        .text_size(px(FS_LG))
-        .font_weight(FontWeight::SEMIBOLD)
-        // NOT `relative(LINE_UI)`: 13 x 1.45 = 18.85 leaves the line box at
-        // 53.575 inside the 28px control, taffy rounds that to 54, and the run
-        // lands a pixel below the prototype. 20.5 puts the box top at a whole
-        // 53 and the baseline at 63.25 - measured cap band y58-67, ink bottom
-        // y70, matching 00-target-soft.png exactly.
-        .line_height(px(20.5))
+        .text_size(px(FS_UI))
+        .font_weight(W_LABEL)
+        .line_height(px(LH_UI))
         // An open trigger wears its hover face: the menu is the hover made
         // permanent, so the control does not blink when the pointer leaves.
         .when(state.open, |open| {
@@ -655,7 +650,7 @@ pub fn filter_menu() -> Div {
         .flex_col()
         .gap(px(ROW_GAP))
         .p(px(MENU_PAD))
-        .rounded(px(R_MENU))
+        .rounded(px(R_BLOCK))
         .bg(rgb(MENU))
         .shadow(vec![
             BoxShadow {
@@ -691,7 +686,7 @@ pub fn filter_option(index: usize, option: &FilterOption) -> Stateful<Div> {
         .pr(px(ROW_PAD_X))
         .gap(px(ROW_PAD_X))
         .rounded(px(R_CONTROL))
-        .text_size(px(FS_MD))
+        .text_size(px(FS_UI))
         .when(option.selected, |on| {
             on.bg(rgb(FILL))
                 .text_color(rgb(TEXT_STRONG))
@@ -749,7 +744,7 @@ pub fn filter_action(index: usize, label: &'static str) -> Stateful<Div> {
         .pr(px(ROW_PAD_X))
         .gap(px(ROW_ICON_GAP))
         .rounded(px(R_CONTROL))
-        .text_size(px(FS_MD))
+        .text_size(px(FS_UI))
         .text_color(rgb(TEXT_2))
         .hover_row()
         .press_row()
@@ -890,9 +885,9 @@ pub fn group_row_with_title(row: &GroupBlock, title: impl IntoElement) -> Statef
                         .max_w(px(ROW_TEXT_W - GROUP_MARK_LG - ROW_PAD_X + TRUNCATE_SLOP))
                         .truncate()
                         .h(px(TITLE_LG_H))
-                        .text_size(px(FS_LG))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .line_height(relative(LINE_TIGHT))
+                        .text_size(px(FS_UI))
+                        .font_weight(W_LABEL)
+                        .line_height(px(LH_TIGHT))
                         .text_color(rgb(if row.current { TEXT_STRONG } else { TEXT }))
                         .child(title),
                 ),
@@ -963,9 +958,9 @@ pub fn thread_row_with_title(row: &ThreadRow, title: impl IntoElement) -> Statef
                     .min_w_0()
                     .truncate()
                     .h(px(TITLE_MD_H))
-                    .text_size(px(FS_MD))
+                    .text_size(px(FS_UI))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .line_height(relative(LINE_TIGHT))
+                    .line_height(px(LH_TIGHT))
                     .text_color(rgb(if row.current { TEXT_STRONG } else { TEXT }))
                     .child(title),
             )
@@ -1017,9 +1012,9 @@ pub fn project_thread_row_with_title(
             .flex_1()
             .min_w_0()
             .truncate()
-            .text_size(px(FS_MD))
+            .text_size(px(FS_UI))
             .font_weight(FontWeight::MEDIUM)
-            .line_height(relative(LINE_TIGHT))
+            .line_height(px(LH_TIGHT))
             .text_color(rgb(if row.current { TEXT_STRONG } else { TEXT }))
             .child(title),
     )
@@ -1124,7 +1119,7 @@ fn since_tail(thread: ThreadId, label: Option<SharedString>) -> Div {
 fn meta_text() -> Div {
     div()
         .text_size(px(FS_SM))
-        .line_height(relative(LINE_TIGHT))
+        .line_height(px(LH_META))
         .text_color(rgb(TEXT_MUTED))
 }
 
@@ -1183,7 +1178,7 @@ pub fn empty_filter(project: &str, parked_below: bool) -> Div {
     div()
         .my(px(RAIL_ITEMS_TOP))
         .mx(px(ROW_PAD_X))
-        .text_size(px(FS_MD))
+        .text_size(px(FS_UI))
         .text_color(rgb(TEXT_MUTED))
         .child(SharedString::from(message))
 }
@@ -1414,7 +1409,7 @@ pub fn rail_item(row: &ThreadRow, current: bool) -> Button {
                 .w(px(RAIL_CONTROL))
                 .h(px(RAIL_CONTROL))
                 .text_size(px(if cfg!(target_os = "macos") {
-                    FS_MD
+                    FS_UI
                 } else {
                     FS_SM
                 }))
@@ -1441,7 +1436,7 @@ fn rail_status_dot(status: RowStatus) -> Div {
         RowStatus::Attention => dot.bg(rgb(ATTENTION)),
         RowStatus::Blocked => dot.bg(rgb(BLOCKED)),
         RowStatus::Idle => dot.bg(rgb(IDLE)),
-        RowStatus::Parked => dot.border_1().border_color(rgb(SEP)),
+        RowStatus::Parked => dot.border_1().border_color(rgb(TEXT_FAINT)),
     }
 }
 
@@ -1509,7 +1504,7 @@ fn meta_line(mark: &'static str, label: Option<SharedString>, ink: u32) -> Div {
                 .min_w_0()
                 .truncate()
                 .text_size(px(FS_SM))
-                .line_height(relative(LINE_TIGHT))
+                .line_height(px(LH_META))
                 .text_color(rgb(ink))
                 .child(label),
         )

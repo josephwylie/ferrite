@@ -61,15 +61,21 @@ fn keep_mouse_cursor_visible(cx: &mut App) {
 const RSS_LIMIT: u64 = 4 * 1024 * 1024 * 1024;
 
 /// The bundled faces, compiled in. gpui has no variation-axis support, so
-/// each weight is its own static file. All four share the typographic
-/// family `theme::FONT_MONO`, and CoreText resolves the right face from
-/// `.font_weight(..)` — see that constant's own doc for the measured
-/// FontId table, and never reach a weight by family name.
-static FONTS: [&[u8]; 4] = [
-    include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf"),
-    include_bytes!("../assets/fonts/JetBrainsMono-Medium.ttf"),
-    include_bytes!("../assets/fonts/JetBrainsMono-SemiBold.ttf"),
-    include_bytes!("../assets/fonts/JetBrainsMono-Bold.ttf"),
+/// each weight is its own static file. Every face in a family shares its
+/// typographic family name (`theme::FONT_MONO` = Geist Mono,
+/// `theme::FONT_PROSE` = Geist), and CoreText / DirectWrite resolve the right
+/// face from `.font_weight(..)` — never reach a weight by family name.
+pub(crate) static FONTS: [&[u8]; 10] = [
+    include_bytes!("../assets/fonts/GeistMono.ttf"),
+    include_bytes!("../assets/fonts/GeistMono-Italic.ttf"),
+    include_bytes!("../assets/fonts/GeistMono-Medium.ttf"),
+    include_bytes!("../assets/fonts/GeistMono-SemiBold.ttf"),
+    include_bytes!("../assets/fonts/GeistMono-Bold.ttf"),
+    include_bytes!("../assets/fonts/Geist.ttf"),
+    include_bytes!("../assets/fonts/Geist-Italic.ttf"),
+    include_bytes!("../assets/fonts/Geist-Medium.ttf"),
+    include_bytes!("../assets/fonts/Geist-SemiBold.ttf"),
+    include_bytes!("../assets/fonts/Geist-Bold.ttf"),
 ];
 
 /// Registers the bundled faces. Call it before anything lays out text:

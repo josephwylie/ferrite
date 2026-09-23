@@ -684,7 +684,7 @@ fn long_subagent_approval_keeps_allow_and_deny_inside_the_island(cx: &mut TestAp
         let deny = bounds(cx, format!("request-deny-{}-{serial}", thread.get()));
         let title = bounds(cx, format!("request-title-{}-{serial}", thread.get()));
         assert!(
-            title.size.height >= px(crate::theme::FS_MD * crate::theme::LINE_UI * 3.),
+            title.size.height >= px(crate::theme::LH_UI * 3.),
             "the repro must retain a title spanning at least three lines: {title:?}"
         );
         assert!(

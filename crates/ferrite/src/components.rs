@@ -71,7 +71,7 @@ pub fn primary_button(id: impl Into<ElementId>, disabled: bool, cx: &App) -> But
 pub fn label(text: impl Into<SharedString>, ink: u32) -> impl IntoElement {
     div()
         .text_size(px(theme::FS_SM))
-        .line_height(gpui::relative(theme::LINE_UI))
+        .line_height(gpui::px(theme::LH_META))
         .text_color(rgb(ink))
         .child(text.into())
 }
@@ -80,8 +80,8 @@ pub fn label(text: impl Into<SharedString>, ink: u32) -> impl IntoElement {
 /// their labels. Dense pane chrome continues to use `label`.
 pub fn form_label(text: impl Into<SharedString>, ink: u32) -> impl IntoElement {
     div()
-        .text_size(px(theme::FS_MD))
-        .line_height(gpui::relative(theme::LINE_UI))
+        .text_size(px(theme::FS_UI))
+        .line_height(gpui::px(theme::LH_UI))
         .text_color(rgb(ink))
         .child(text.into())
 }

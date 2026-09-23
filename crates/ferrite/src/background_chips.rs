@@ -145,7 +145,7 @@ fn chip(
         .px(px(theme::MODE_CHIP_PAD_X))
         .rounded(px(theme::R_CHIP))
         .bg(rgb(theme::HOVER))
-        .text_size(px(theme::FS_MONO))
+        .text_size(px(theme::FS_SM))
         .text_color(rgb(theme::TEXT_2))
         .tooltip(move |window, cx| {
             gpui::component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)

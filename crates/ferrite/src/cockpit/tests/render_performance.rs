@@ -128,11 +128,10 @@ fn thinking_details(
     })
 }
 
-/// The prefix repeats leave the disclosed paragraph one word wider than the
-/// shaping helper's grid at this width, so nudge the fixture until the two
-/// agree: the reflow assertions below compare native positions, and they are
-/// only meaningful where the helper models the same wrap.
-
+/// Aim at a byte of a disclosed Thinking row's body through its native wrap.
+/// The offsets are into the disclosed body (`thinking_details`), so that is
+/// the text the helper shapes; shaping the whole thought would wrap a
+/// different string and aim off the row's own lines.
 fn wrapped_thinking_caret(
     view: &gpui::Entity<CockpitView>,
     cx: &mut gpui::VisualTestContext,
@@ -140,22 +139,7 @@ fn wrapped_thinking_caret(
     byte: usize,
 ) -> gpui::Point<gpui::Pixels> {
     let id = thinking_id(view, cx, row);
-    let text = view.read_with(cx, |view, _| {
-        let thread = view.panes[0].thread().unwrap();
-        let block = &view
-            .cockpit
-            .thread(thread)
-            .unwrap()
-            .activity()
-            .subject(&view.panes[0].selected)
-            .unwrap()
-            .transcript()
-            .blocks()[row];
-        let Body::Thinking(text) = &block.body else {
-            unreachable!("fixture has one Thinking Block per virtual row")
-        };
-        text.trim().to_owned()
-    });
+    let text = thinking_details(view, cx, row);
     cx.update(|window, cx| {
         crate::rich::testing::wrapped_caret(&id, &text, byte, window, cx)
             .expect("the wrapped native Thinking row is mounted")
@@ -820,7 +804,7 @@ fn solo_reading_size_reflows_without_replacing_text_or_selection(cx: &mut TestAp
         format!("markdown-{}-", view.panes[index].text_namespace())
     });
     let (identity, selected) = cx.update(|_, cx| {
-        assert_eq!(crate::rich::testing::font_size(&prefix, cx), Some(px(13.)));
+        assert_eq!(crate::rich::testing::font_size(&prefix, cx), Some(px(14.)));
         (
             crate::rich::testing::first_entity(&prefix, cx).unwrap(),
             crate::rich::testing::full_text(&prefix, cx).unwrap(),
@@ -832,7 +816,7 @@ fn solo_reading_size_reflows_without_replacing_text_or_selection(cx: &mut TestAp
     });
     tick(cx);
     cx.update(|_, cx| {
-        assert_eq!(crate::rich::testing::font_size(&prefix, cx), Some(px(17.)));
+        assert_eq!(crate::rich::testing::font_size(&prefix, cx), Some(px(18.)));
         assert_eq!(
             crate::rich::testing::first_entity(&prefix, cx),
             Some(identity)
@@ -845,7 +829,7 @@ fn solo_reading_size_reflows_without_replacing_text_or_selection(cx: &mut TestAp
     view.update(cx, |view, cx| view.enter_group(group, cx));
     tick(cx);
     cx.update(|_, cx| {
-        assert_eq!(crate::rich::testing::font_size(&prefix, cx), Some(px(13.)));
+        assert_eq!(crate::rich::testing::font_size(&prefix, cx), Some(px(14.)));
         assert_eq!(
             crate::rich::testing::first_entity(&prefix, cx),
             Some(identity)
@@ -858,7 +842,7 @@ fn solo_reading_size_reflows_without_replacing_text_or_selection(cx: &mut TestAp
     });
     tick(cx);
     cx.update(|_, cx| {
-        assert_eq!(crate::rich::testing::font_size(&prefix, cx), Some(px(17.)));
+        assert_eq!(crate::rich::testing::font_size(&prefix, cx), Some(px(18.)));
         assert_eq!(
             crate::rich::testing::first_entity(&prefix, cx),
             Some(identity)

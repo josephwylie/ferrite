@@ -61,13 +61,13 @@ fn group_question_stays_between_its_thread_header_and_growing_composer(cx: &mut 
         });
         let content = cx.debug_bounds("question-scroll-content").unwrap();
         assert!(
-            content.size.height >= px(crate::theme::FS_MD * crate::theme::LINE_UI),
+            content.size.height >= px(crate::theme::LH_UI),
             "the question has a real scroll viewport: {content:?}"
         );
         assert!(content.top() >= island.top());
         let send = bounds(cx, format!("request-submit-{}-{serial}", thread.get()));
         assert!(
-            send.top() - content.top() >= px(crate::theme::FS_MD * crate::theme::LINE_UI),
+            send.top() - content.top() >= px(crate::theme::LH_UI),
             "content keeps a usable viewport above the fixed actions"
         );
         assert!(
@@ -160,7 +160,7 @@ fn compact_group_paints_complete_latest_rows_after_composer_growth(cx: &mut Test
                     "a whole semantic row must fit the remaining slot: {row:?} / {tail:?}"
                 );
                 assert!(
-                    row.size.height >= px(crate::theme::FS_MONO * crate::theme::LINE_BODY - 1.),
+                    row.size.height >= px(crate::theme::LH_META - 1.),
                     "glyph lines must not shrink: {row:?}"
                 );
                 painted.push(*id);

@@ -54,9 +54,9 @@ use gpui::component::scroll::ScrollableElement;
 use crate::theme;
 use crate::theme::{
     ATTENTION, ATTENTION_EDGE, ATTENTION_WASH, BLOCKED, BLOCKED_WASH, COMPOSER_EDGE,
-    DIFF_ADDED_INK, DIFF_REMOVED_INK, FOCUS, HOVER, IDLE, INLINE_CODE_INK, LINK_INK, METER_OFF,
-    PANE, PANE_HEAD, PANE_HEAD_EDGE, RAISED, RUNNING, RUNNING_WASH, SEP, SYN_KEYWORD, SYN_NUMBER,
-    SYN_STRING, TEXT, TEXT_2, TEXT_MUTED, TEXT_STRONG, TRANSPARENT,
+    DIFF_ADDED_INK, DIFF_REMOVED_INK, FOCUS_RING, HOVER, IDLE, INLINE_CODE_INK, LINK_INK,
+    METER_OFF, PANE, PANE_HEAD, PANE_HEAD_EDGE, RAISED, RUNNING, RUNNING_WASH, SYN_KEYWORD,
+    SYN_NUMBER, SYN_STRING, TEXT, TEXT_2, TEXT_FAINT, TEXT_MUTED, TEXT_STRONG, TRANSPARENT,
 };
 
 /// One Pane's view state: what the window owns per Pane. Everything it
@@ -1098,7 +1098,7 @@ fn pane_shell(edge: gpui::Hsla) -> Div {
         .bg(rgb(PANE))
         .border_1()
         .border_color(edge)
-        .rounded(px(theme::R_SURFACE))
+        .rounded(px(theme::R_PANE))
         .font_family(theme::FONT_MONO)
         .overflow_hidden()
 }
@@ -1117,10 +1117,10 @@ fn focus_wrapper(shell: Div, focused: bool, pulse: Option<ThreadId>, alert: bool
             .absolute()
             .inset(px(if alert { theme::FOCUS_RING_W * 2. } else { 0. }))
             .rounded(px(
-                theme::R_SURFACE - if alert { theme::FOCUS_RING_W * 2. } else { 0. }
+                theme::R_PANE - if alert { theme::FOCUS_RING_W * 2. } else { 0. }
             ))
             .border(px(theme::FOCUS_RING_W))
-            .border_color(rgb(FOCUS))
+            .border_color(rgb(FOCUS_RING))
     };
     div()
         .relative()
@@ -1317,14 +1317,14 @@ pub fn draft_band() -> Div {
 /// popover opens on ↵ and the chip must say where ↵ will land.
 pub fn band_chip(slot: usize, label: SharedString, accent: bool, focused: bool) -> Stateful<Div> {
     let edge: gpui::Hsla = if focused {
-        rgb(FOCUS).into()
+        rgb(FOCUS_RING).into()
     } else {
         rgba(TRANSPARENT).into()
     };
     div()
         .id(("band-chip", slot))
         .flex_shrink_0()
-        .text_size(px(theme::FS_MONO))
+        .text_size(px(theme::FS_SM))
         .text_color(rgb(if accent { TEXT_2 } else { TEXT_MUTED }))
         .when(accent, |chip| chip.bg(rgb(RAISED)))
         .border_1()
@@ -1351,7 +1351,7 @@ pub fn draft_picker(
     control: Div,
 ) -> gpui::component::button::Button {
     let edge: gpui::Hsla = if focused {
-        rgb(FOCUS).into()
+        rgb(FOCUS_RING).into()
     } else {
         rgba(TRANSPARENT).into()
     };
@@ -1378,7 +1378,7 @@ fn wall_cell(
         WallState::Decision => (ATTENTION, false),
         WallState::Blocked => (BLOCKED, false),
         WallState::Idle => (IDLE, false),
-        WallState::Parked => (SEP, true),
+        WallState::Parked => (TEXT_FAINT, true),
     };
     let mut cell = div()
         .flex()
@@ -1404,7 +1404,7 @@ fn wall_cell(
                         .min_w_0()
                         .truncate()
                         .font_family(theme::FONT_UI)
-                        .text_size(px(theme::FS_MONO))
+                        .text_size(px(theme::FS_SM))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(rgb(if focused { TEXT_STRONG } else { TEXT_2 }))
                         .child(match title {
@@ -1422,7 +1422,7 @@ fn wall_cell(
                 .flex_shrink_0()
                 .w_full()
                 .truncate()
-                .text_size(px(theme::FS_MONO))
+                .text_size(px(theme::FS_SM))
                 .text_color(rgb(TEXT_2))
                 .child(card.meter.clone()),
         );
@@ -1440,36 +1440,28 @@ fn wall_cell(
     };
     match state {
         WallState::Working => {
-            cell = cell.child(status_line(
-                card.working.clone(),
-                theme::FS_MONO,
-                TEXT_MUTED,
-            ));
+            cell = cell.child(status_line(card.working.clone(), theme::FS_SM, TEXT_MUTED));
         }
         WallState::Failing => {
-            cell = cell.child(status_line(card.failing.clone(), theme::FS_MONO, BLOCKED));
+            cell = cell.child(status_line(card.failing.clone(), theme::FS_SM, BLOCKED));
         }
         WallState::Decision => {
             cell = cell.child(status_line(
                 SharedString::from("⚠ needs you"),
-                theme::FS_MONO,
+                theme::FS_SM,
                 ATTENTION,
             ));
             if !card.context.is_empty() {
-                cell = cell.child(status_line(
-                    card.context.clone(),
-                    theme::FS_MONO,
-                    TEXT_MUTED,
-                ));
+                cell = cell.child(status_line(card.context.clone(), theme::FS_SM, TEXT_MUTED));
             }
         }
         WallState::Blocked => {
             // The close reason is the alert; the disposition is the
             // context (#22 C14).
-            cell = cell.child(status_line(card.context.clone(), theme::FS_MONO, BLOCKED));
+            cell = cell.child(status_line(card.context.clone(), theme::FS_SM, BLOCKED));
             cell = cell.child(status_line(
                 SharedString::from("blocked"),
-                theme::FS_MONO,
+                theme::FS_SM,
                 TEXT_MUTED,
             ));
         }
@@ -1477,7 +1469,7 @@ fn wall_cell(
             cell = cell
                 .child(status_line(
                     SharedString::from("✓ done"),
-                    theme::FS_MONO,
+                    theme::FS_SM,
                     RUNNING,
                 ))
                 .opacity(theme::DONE_WALL_OPACITY);
@@ -1485,15 +1477,15 @@ fn wall_cell(
         WallState::Idle => {
             cell = cell.child(status_line(
                 SharedString::from("❯ idle"),
-                theme::FS_MONO,
+                theme::FS_SM,
                 TEXT_MUTED,
             ));
         }
         WallState::Parked => {
             cell = cell.child(status_line(
                 SharedString::from("parked"),
-                theme::FS_MONO,
-                SEP,
+                theme::FS_SM,
+                TEXT_FAINT,
             ));
         }
     }
@@ -1531,7 +1523,7 @@ fn l2_cell(
         WallState::Blocked | WallState::Failing => BLOCKED,
         WallState::Working | WallState::Done => RUNNING,
         WallState::Idle => IDLE,
-        WallState::Parked => SEP,
+        WallState::Parked => TEXT_FAINT,
     };
     let mut header = div()
         .flex()
@@ -1564,7 +1556,7 @@ fn l2_cell(
             WallState::Done => header.child(
                 div()
                     .flex_shrink_0()
-                    .text_size(px(theme::FS_MONO))
+                    .text_size(px(theme::FS_SM))
                     .text_color(rgb(RUNNING))
                     .child("done"),
             ),
@@ -1574,7 +1566,7 @@ fn l2_cell(
             _ => header.child(
                 div()
                     .flex_shrink_0()
-                    .text_size(px(theme::FS_MONO))
+                    .text_size(px(theme::FS_SM))
                     .text_color(rgb(TEXT_MUTED))
                     .child(binding_label(workspace)),
             ),
@@ -1636,7 +1628,7 @@ fn l2_cell(
                 .w_full()
                 .flex_shrink_0()
                 .truncate()
-                .text_size(px(theme::FS_MONO))
+                .text_size(px(theme::FS_SM))
                 .text_color(rgb(TEXT_MUTED))
                 .child(SharedString::from(meta.join(" · "))),
         );
@@ -1652,7 +1644,7 @@ fn l2_cell(
                 .flex_1()
                 .items_center()
                 .justify_center()
-                .text_size(px(theme::FS_MONO))
+                .text_size(px(theme::FS_SM))
                 .text_color(rgb(TEXT_MUTED))
                 .child("❯ idle — waiting for work"),
         );
@@ -1673,7 +1665,7 @@ fn l2_cell(
                 .w_full()
                 .flex_shrink_0()
                 .truncate()
-                .text_size(px(theme::FS_MONO))
+                .text_size(px(theme::FS_SM))
                 .text_color(rgb(fill))
                 .child(meter(todos.done, todos.total)),
         );
@@ -1703,7 +1695,7 @@ fn l2_cell(
     if read.added > 0 || read.removed > 0 {
         badges = badges.child(
             diff_stat(read.added, read.removed)
-                .text_size(px(theme::FS_MONO))
+                .text_size(px(theme::FS_SM))
                 .bg(rgb(RAISED))
                 .rounded(px(theme::R_CHIP))
                 .px(px(6.))
@@ -1714,7 +1706,7 @@ fn l2_cell(
     if read.files() > 0 {
         badges = badges.child(
             div()
-                .text_size(px(theme::FS_MONO))
+                .text_size(px(theme::FS_SM))
                 .text_color(rgb(TEXT_MUTED))
                 .child(SharedString::from(format!(
                     "{} file{}",
@@ -1786,8 +1778,8 @@ fn l2_tail(transcript: &Transcript, namespace: SharedString) -> Div {
             div()
                 .w_full()
                 .flex_shrink_0()
-                .text_size(px(theme::FS_MONO))
-                .line_height(relative(theme::LINE_BODY))
+                .text_size(px(theme::FS_SM))
+                .line_height(px(theme::LH_META))
                 .text_color(rgb(ink))
                 .child(SharedString::from(text))
         };
@@ -1816,7 +1808,7 @@ fn l2_tail(transcript: &Transcript, namespace: SharedString) -> Div {
                 if text.is_empty() {
                     continue;
                 }
-                line(text, TEXT).font_family(theme::FONT_UI)
+                line(text, TEXT).font_family(theme::FONT_PROSE)
             }
             Body::Heading { spans, .. } => {
                 let text = prose(spans);
@@ -1868,8 +1860,7 @@ fn l2_tail(transcript: &Transcript, namespace: SharedString) -> Div {
                     let mut remaining = bounds.size.height;
                     let mut visible = Vec::new();
                     for (id, row, padding, limit) in rows.into_iter().rev() {
-                        let available_lines = ((f32::from(remaining) - padding)
-                            / (theme::FS_MONO * theme::LINE_BODY))
+                        let available_lines = ((f32::from(remaining) - padding) / theme::LH_META)
                             .floor()
                             .max(0.) as usize;
                         if available_lines == 0 {
@@ -1935,7 +1926,7 @@ fn l2_decision_body(decision: &Decision, decide: Option<AnyElement>) -> Div {
             div()
                 .w_full()
                 .truncate()
-                .text_size(px(theme::FS_MONO))
+                .text_size(px(theme::FS_SM))
                 .text_color(rgb(TEXT_STRONG))
                 .child(command),
         )
@@ -1944,7 +1935,7 @@ fn l2_decision_body(decision: &Decision, decide: Option<AnyElement>) -> Div {
                 .w_full()
                 .truncate()
                 .font_family(theme::FONT_UI)
-                .text_size(px(theme::FS_MONO))
+                .text_size(px(theme::FS_SM))
                 .text_color(rgb(TEXT_MUTED))
                 .child(wants),
         )
@@ -2006,7 +1997,7 @@ fn pane_head(view: &PaneView, state: PaneHeadState<'_>) -> Div {
         .gap(px(theme::EVENT_GAP))
         .px(px(theme::PANE_PAD_X))
         .text_size(px(theme::FS_SM))
-        .line_height(relative(theme::LINE_UI))
+        .line_height(px(theme::LH_META))
         .text_color(rgb(TEXT_MUTED))
         .child(led(px(theme::STATUS_DOT), dot_color))
         .child(
@@ -2014,13 +2005,13 @@ fn pane_head(view: &PaneView, state: PaneHeadState<'_>) -> Div {
                 .min_w_0()
                 .flex_shrink(1.)
                 .when(has_agents, |title| title.max_w(relative(0.32)))
-                .text_size(px(theme::FS_LG))
-                .line_height(relative(theme::LINE_UI))
+                .text_size(px(theme::FS_UI))
+                .line_height(px(theme::LH_UI))
                 // gpui seats a run one pixel lower in this 32px head than
                 // CSS half-leading does. 2px of bottom padding grows the
                 // centred box by two and so lifts the glyphs by one.
                 .pb(px(2.))
-                .font_weight(FontWeight::SEMIBOLD)
+                .font_weight(theme::W_LABEL)
                 .text_color(rgb(TEXT_STRONG))
                 .child(match title {
                     Some(title) => title,
@@ -2047,7 +2038,7 @@ fn pane_head(view: &PaneView, state: PaneHeadState<'_>) -> Div {
         // The shell's radius is 8 outside a 1px border, so its padding box
         // curves at 7 — the band's own ground must follow that curve or it
         // paints square shoulders into the Pane's rounded top.
-        .rounded_t(px(theme::R_SURFACE - 1.))
+        .rounded_t(px(theme::R_PANE - 1.))
         .border_b_1()
         .border_color(rgba(PANE_HEAD_EDGE))
         .child(top)
@@ -2125,8 +2116,8 @@ fn checkout_strip(
         .h(px(theme::PANE_CHECKOUT_H))
         .px(px(theme::PANE_PAD_X))
         .pb(px(2.))
-        .text_size(px(theme::FS_MONO))
-        .line_height(relative(theme::LINE_UI))
+        .text_size(px(theme::FS_SM))
+        .line_height(px(theme::LH_META))
         .text_color(rgb(TEXT_MUTED))
         .child(
             div()
@@ -2261,7 +2252,7 @@ pub fn checks_card() -> Div {
         .w(px(theme::CHECKS_CARD_W))
         .gap(px(theme::CHECKS_CARD_GAP))
         .p(px(theme::CHECKS_CARD_PAD))
-        .text_size(px(theme::FS_MONO))
+        .text_size(px(theme::FS_SM))
         .text_color(rgb(TEXT))
 }
 
@@ -2415,7 +2406,7 @@ fn tasks_strip(todos: Todos, current: Option<&str>) -> Div {
         .h(px(theme::TASKS_STRIP_H))
         .px(px(theme::PANE_PAD_X))
         .text_size(px(theme::FS_SM))
-        .line_height(relative(theme::LINE_UI))
+        .line_height(px(theme::LH_META))
         .text_color(rgb(TEXT_MUTED))
         .child(meter)
         .child(tabular(
@@ -2619,8 +2610,8 @@ fn working_line(
         .flex_shrink_0()
         .w_full()
         .min_w_0()
-        .text_size(px(theme::FS_MD))
-        .line_height(relative(theme::LINE_BODY));
+        .text_size(px(theme::FS_UI))
+        .line_height(px(theme::LH_UI));
     if let Some(caption) = caption {
         let selector = format!("progress-caption-{caption}");
         row = row.debug_selector(move || selector.clone());
@@ -2804,13 +2795,13 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         // gpui's `overflow_hidden()` content mask is an axis-aligned rect, so
         // the shell's 8px radius never clips this ground. The bottom-most
         // child carries the shell's padding-box radius itself: 8 - 1 border.
-        .rounded_bl(px(theme::R_SURFACE - 1.))
-        .rounded_br(px(theme::R_SURFACE - 1.))
+        .rounded_bl(px(theme::R_PANE - 1.))
+        .rounded_br(px(theme::R_PANE - 1.))
         .pt(px(theme::COMPOSER_PAD_T))
         .px(px(theme::PANE_PAD_X))
         .pb(px(theme::COMPOSER_PAD_B))
-        .text_size(px(theme::FS_MD))
-        .line_height(relative(theme::LINE_UI))
+        .text_size(px(theme::FS_UI))
+        .line_height(px(theme::LH_UI))
         .text_color(rgb(TEXT_2))
         .when(decision.is_some(), |region| region.key_context("Decision"));
     if let Some(error) = draft_error {
@@ -2819,7 +2810,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
                 .flex()
                 .flex_shrink_0()
                 .items_center()
-                .text_size(px(theme::FS_MONO))
+                .text_size(px(theme::FS_SM))
                 .text_color(rgb(BLOCKED))
                 .child(div().min_w_0().whitespace_normal().child(error)),
         );
@@ -2979,7 +2970,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
             .items_center()
             .h(px(theme::COMPOSER_ROW_H))
             .whitespace_nowrap()
-            .text_size(px(theme::FS_MONO))
+            .text_size(px(theme::FS_SM))
             .text_color(rgb(TEXT_MUTED))
             .child(if compact && empty {
                 "@ files · /"
@@ -3199,7 +3190,7 @@ pub fn menu_row(row: &MenuRow, selected: bool) -> Div {
         .child(
             div()
                 .flex_shrink_0()
-                .text_size(px(theme::FS_MD))
+                .text_size(px(theme::FS_UI))
                 .text_color(rgb(name_ink))
                 .child(StyledText::new(row.name.clone()).with_highlights(highlights)),
         );
@@ -3220,10 +3211,10 @@ pub fn menu_row(row: &MenuRow, selected: bool) -> Div {
             .child(row.detail.clone());
         detail = if row.prose_detail {
             detail
-                .font_family(theme::FONT_UI)
+                .font_family(theme::FONT_PROSE)
                 .text_size(px(theme::FS_SM))
         } else {
-            detail.text_size(px(theme::FS_MONO))
+            detail.text_size(px(theme::FS_SM))
         };
         drawn = drawn.child(detail);
     }
@@ -3233,7 +3224,7 @@ pub fn menu_row(row: &MenuRow, selected: bool) -> Div {
         drawn = drawn.child(div().flex_1()).child(
             div()
                 .flex_shrink_0()
-                .text_size(px(theme::FS_MONO))
+                .text_size(px(theme::FS_SM))
                 .text_color(rgb(TEXT_MUTED))
                 .child("↵"),
         );
@@ -3311,7 +3302,7 @@ fn queued_line(held: &str, index: usize, count: usize) -> impl IntoElement {
             row.child(
                 div()
                     .flex_shrink_0()
-                    .text_size(px(theme::FS_MONO))
+                    .text_size(px(theme::FS_SM))
                     .text_color(rgb(TEXT_MUTED))
                     .child("⌫ unqueue"),
             )
@@ -3359,8 +3350,8 @@ fn decision_card(
                 .child(
                     div()
                         .flex_shrink_0()
-                        .text_size(px(theme::FS_MD))
-                        .line_height(relative(theme::LINE_UI))
+                        .text_size(px(theme::FS_UI))
+                        .line_height(px(theme::LH_UI))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(rgb(TEXT_STRONG))
                         .child(subject),
@@ -3370,7 +3361,7 @@ fn decision_card(
                         .flex_shrink_0()
                         .truncate()
                         .text_size(px(theme::FS_SM))
-                        .line_height(relative(theme::LINE_UI))
+                        .line_height(px(theme::LH_META))
                         .text_color(rgb(TEXT_MUTED))
                         .child(wants),
                 )
@@ -3479,8 +3470,8 @@ fn keycap(id: &'static str, key: &'static str, label: &'static str, ink: u32) ->
         .flex()
         .flex_shrink_0()
         .items_center()
-        .text_size(px(theme::FS_MONO))
-        .line_height(relative(theme::LINE_UI))
+        .text_size(px(theme::FS_SM))
+        .line_height(px(theme::LH_META))
         .text_color(rgb(ink))
         .bg(rgb(RAISED))
         .rounded(px(theme::R_CHIP))
@@ -3556,7 +3547,7 @@ fn hollow_dot(size: gpui::Pixels) -> Div {
         .h(size)
         .rounded_full()
         .border_1()
-        .border_color(rgb(SEP))
+        .border_color(rgb(TEXT_FAINT))
 }
 
 /// `+N −N` (§E.12): the added count in `--running`, **a literal space**,
@@ -3593,7 +3584,7 @@ fn diff_stat(added: usize, removed: usize) -> Div {
             .flex()
             .flex_shrink_0()
             .items_center()
-            .text_size(px(theme::FS_MONO))
+            .text_size(px(theme::FS_SM))
             .child(StyledText::new(SharedString::from(text)).with_highlights(highlights)),
     )
 }
@@ -3815,7 +3806,7 @@ pub fn context_usage(
         .w(px(theme::USAGE_CARD_W))
         .gap(px(theme::USAGE_CARD_GAP))
         .p(px(theme::USAGE_CARD_PAD))
-        .text_size(px(theme::FS_MONO))
+        .text_size(px(theme::FS_SM))
         .text_color(rgb(TEXT))
         .child(window(
             "Context",
@@ -4159,7 +4150,7 @@ fn popover_shell() -> Div {
         .flex_col()
         .p(px(theme::MENU_PAD))
         .bg(rgb(theme::MENU))
-        .rounded(px(theme::R_MENU))
+        .rounded(px(theme::R_BLOCK))
         .shadow(vec![
             BoxShadow {
                 inset: false,
@@ -4197,7 +4188,7 @@ pub fn picker_row(
         .h(px(theme::MENU_ROW_H))
         .px(px(8.))
         .rounded(px(theme::R_CONTROL))
-        .text_size(px(theme::FS_MD))
+        .text_size(px(theme::FS_UI))
         .text_color(rgb(if inert {
             TEXT_MUTED
         } else if selected {
@@ -4221,7 +4212,7 @@ pub fn picker_row(
         row = row.child(
             div()
                 .flex_shrink_0()
-                .text_size(px(theme::FS_MONO))
+                .text_size(px(theme::FS_SM))
                 .text_color(rgb(TEXT_MUTED))
                 .child(detail),
         );
@@ -4266,7 +4257,7 @@ pub fn picker_section(provider: Provider, note: SharedString) -> Div {
             div()
                 .ml(px(theme::KEYS_GAP))
                 .font_weight(FontWeight::NORMAL)
-                .text_size(px(theme::FS_MONO))
+                .text_size(px(theme::FS_SM))
                 .text_color(rgb(TEXT_MUTED))
                 .child(note),
         );
@@ -4284,7 +4275,7 @@ pub fn picker_hint(text: &'static str) -> Div {
         .items_center()
         .h(px(theme::MENU_ROW_H))
         .px(px(8.))
-        .text_size(px(theme::FS_MONO))
+        .text_size(px(theme::FS_SM))
         .text_color(rgb(TEXT_MUTED))
         .child(text)
 }
@@ -4299,7 +4290,7 @@ pub fn popover_footer(hints: &'static str) -> Div {
         .h(px(theme::CHIP_H))
         .px(px(8.))
         .mt(px(2.))
-        .text_size(px(theme::FS_MONO))
+        .text_size(px(theme::FS_SM))
         .text_color(rgb(TEXT_MUTED))
         .child(hints)
 }
@@ -4405,7 +4396,7 @@ pub(crate) fn render_block(
                         .left(px(0.))
                         .top(px(theme::PROMPT_PAD_Y))
                         .w(px(theme::GUTTER_W))
-                        .text_color(rgb(SEP))
+                        .text_color(rgb(TEXT_FAINT))
                         .child("❯"),
                 )
                 .child(
@@ -4435,7 +4426,7 @@ pub(crate) fn render_block(
                 .into_any_element()
         }
         Body::Paragraph { spans } => paragraph(row, TEXT)
-            .font_family(theme::FONT_UI)
+            .font_family(theme::FONT_PROSE)
             .child(prose(block.id, spans, selection))
             .into_any_element(),
         // Fallback headings share the transcript's block rhythm.
@@ -4488,14 +4479,14 @@ pub(crate) fn render_block(
                 .items_center()
                 .min_w_0()
                 .gap(px(theme::EVENT_GAP))
-                .font_family(theme::FONT_UI)
+                .font_family(theme::FONT_PROSE)
                 .hover(|style| style.text_color(rgb(TEXT)))
                 .active(|style| style.text_color(rgb(TEXT_STRONG)))
                 .child(
                     div()
                         .flex_shrink_0()
                         .w(px(theme::GUTTER_W))
-                        .h(px(theme::FS_MD * theme::LINE_BODY)),
+                        .h(px(theme::LH_UI)),
                 )
                 .child(
                     div()
@@ -4543,8 +4534,8 @@ pub(crate) fn render_block(
                     .flex()
                     .flex_col()
                     .overflow_hidden()
-                    .text_size(px(theme::FS_MD))
-                    .line_height(relative(theme::LINE_BODY))
+                    .text_size(px(theme::FS_UI))
+                    .line_height(px(theme::LH_CODE))
                     .child(
                         div()
                             .flex()
@@ -4595,7 +4586,7 @@ fn separators(text: &str) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
             (
                 at..at + dot.len(),
                 HighlightStyle {
-                    color: Some(rgb(SEP).into()),
+                    color: Some(rgb(TEXT_FAINT).into()),
                     font_weight: Some(FontWeight::NORMAL),
                     ..Default::default()
                 },
@@ -4660,7 +4651,7 @@ fn render_tool(
     let glyph_ink = match tool.state {
         ToolState::Ok if !task => RUNNING,
         ToolState::Failed(_) => BLOCKED,
-        _ => SEP,
+        _ => TEXT_FAINT,
     };
     let summary = text::tool_label(tool);
     let call = div().min_w_0().truncate().child(selection.line(
@@ -4692,8 +4683,8 @@ fn render_tool(
         .min_w_0()
         .gap(px(theme::EVENT_GAP))
         .py(px(theme::EVENT_PAD_Y))
-        .text_size(px(theme::FS_MD))
-        .line_height(relative(theme::LINE_BODY))
+        .text_size(px(theme::FS_UI))
+        .line_height(px(theme::LH_UI))
         .text_color(rgb(TEXT_MUTED))
         .hover(|style| style.text_color(rgb(TEXT)))
         .active(|style| style.text_color(rgb(TEXT_STRONG)))
@@ -4744,8 +4735,8 @@ fn render_tool(
             trail = trail.child(tabular(
                 div()
                     .flex_shrink_0()
-                    .text_size(px(theme::FS_MONO))
-                    .line_height(relative(theme::LINE_BODY))
+                    .text_size(px(theme::FS_SM))
+                    .line_height(px(theme::LH_META))
                     .text_color(rgb(TEXT_MUTED))
                     .child(SharedString::from(format!(
                         "{} elapsed",
@@ -4909,8 +4900,8 @@ where
         .items_center()
         .gap(px(theme::EVENT_GAP))
         .py(px(theme::EVENT_PAD_Y))
-        .text_size(px(theme::FS_MD))
-        .line_height(relative(theme::LINE_BODY))
+        .text_size(px(theme::FS_UI))
+        .line_height(px(theme::LH_UI))
         .text_color(rgb(if activity.failed > 0 {
             BLOCKED
         } else if activity.running > 0 {
@@ -4924,7 +4915,7 @@ where
             div()
                 .flex_shrink_0()
                 .w(px(theme::GUTTER_W))
-                .h(px(theme::FS_MD * theme::LINE_BODY)),
+                .h(px(theme::LH_UI)),
         )
         .child(summary)
         .children(disclosure);
@@ -5072,8 +5063,8 @@ pub(crate) fn output_block(
         .min_w_0()
         .pl(px(theme::INDENT))
         .pt(px(1.))
-        .text_size(px(theme::FS_MD))
-        .line_height(relative(theme::LINE_BODY))
+        .text_size(px(theme::FS_UI))
+        .line_height(px(theme::LH_CODE))
         .text_color(rgb(ink));
     // Bound native layout work as output grows. A single read-only control
     // keeps the original text selectable and scrolls within twelve rows.
@@ -5087,8 +5078,8 @@ pub(crate) fn output_block(
                 .child(
                     div()
                         .flex_shrink_0()
-                        .w(px(theme::FS_MD * theme::MONO_ADVANCE))
-                        .text_color(rgb(SEP))
+                        .w(px(theme::FS_UI * theme::MONO_ADVANCE))
+                        .text_color(rgb(TEXT_FAINT))
                         .child("⎿"),
                 )
                 .child(
@@ -5108,8 +5099,8 @@ pub(crate) fn output_block(
             .child(
                 div()
                     .flex_shrink_0()
-                    .w(px(theme::FS_MD * theme::MONO_ADVANCE))
-                    .text_color(rgb(SEP))
+                    .w(px(theme::FS_UI * theme::MONO_ADVANCE))
+                    .text_color(rgb(TEXT_FAINT))
                     .child("⎿"),
             )
             .child(div().flex_1().min_w_0().child(selection.line(
@@ -5138,10 +5129,10 @@ pub(crate) fn result_line(ink: u32) -> Div {
         // the tool row's.
         .pt(px(theme::RESULT_PAD_T))
         .pb(px(theme::RESULT_PAD_B))
-        .text_size(px(theme::FS_MD))
-        .line_height(relative(theme::LINE_BODY))
+        .text_size(px(theme::FS_UI))
+        .line_height(px(theme::LH_UI))
         .text_color(rgb(ink))
-        .child(div().flex_shrink_0().text_color(rgb(SEP)).child("⎿"))
+        .child(div().flex_shrink_0().text_color(rgb(TEXT_FAINT)).child("⎿"))
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -5217,8 +5208,8 @@ pub fn tool_disclosure_control(
                 .track_focus(focus)
                 .key_context("ToolDisclosure")
                 .child(
-                    ring_overlay(FOCUS, theme::R_CONTROL)
-                        .border_color(rgb(FOCUS))
+                    ring_overlay(FOCUS_RING, theme::R_CONTROL)
+                        .border_color(rgb(FOCUS_RING))
                         .debug_selector(|| "tool-disclosure-keyboard-target".into()),
                 )
         })
@@ -5339,12 +5330,11 @@ fn render_diff(block: BlockId, diff: &Diff, selection: &TextRuns) -> impl IntoEl
         .ml(px(theme::INDENT))
         .rounded(px(theme::R_CHIP))
         .overflow_hidden()
-        .text_size(px(theme::FS_MD))
-        // Pinned to a whole pixel. At `relative(LINE_HUNK)` each row box is
-        // 17.325px, so consecutive rows round their origin and their height
-        // independently and the added/removed washes can leave a 1px
-        // unpainted seam between them.
-        .line_height(px((theme::FS_MD * theme::LINE_HUNK).round()))
+        .text_size(px(theme::FS_UI))
+        // A whole-pixel line box: a fractional one rounds each row's origin
+        // and height independently, and the added/removed washes can leave a
+        // 1px unpainted seam between them.
+        .line_height(px(theme::LH_CODE))
         .text_color(rgb(TEXT_MUTED));
     let (cap, omitted) = hunk_rows(diff.hunks.iter().map(|hunk| hunk.lines.len()).sum());
     let mut drawn = 0usize;
@@ -5607,10 +5597,10 @@ fn code_lines(
 /// Pane's state signals where it can.
 fn class_ink(class: Class) -> u32 {
     match class {
-        Class::Plain => TEXT_2,
+        Class::Plain => theme::SYN_PLAIN,
         Class::Keyword => SYN_KEYWORD,
         Class::Str => SYN_STRING,
-        Class::Comment => TEXT_MUTED,
+        Class::Comment => theme::SYN_COMMENT,
         Class::Number => SYN_NUMBER,
     }
 }
@@ -6619,10 +6609,10 @@ mod tests {
             inks,
             vec![
                 (0..3, rgb(SYN_KEYWORD).into()),
-                (3..8, rgb(TEXT_2).into()),
+                (3..8, rgb(theme::SYN_PLAIN).into()),
                 (8..12, rgb(SYN_STRING).into()),
-                (12..14, rgb(TEXT_2).into()),
-                (14..19, rgb(TEXT_MUTED).into()),
+                (12..14, rgb(theme::SYN_PLAIN).into()),
+                (14..19, rgb(theme::SYN_COMMENT).into()),
             ]
         );
         assert_eq!(class_ink(Class::Number), SYN_NUMBER);
