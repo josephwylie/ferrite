@@ -11,13 +11,16 @@
 //! The rules every render site follows:
 //!
 //! 1. **One hue family.** Neutrals carry a trace of chroma at hue 258, the app
-//!    icon's hue. The accent (`ACCENT` and its family) is that hue with more
-//!    chroma, and it marks the prompt `❯`, the caret, links, focus, selection
-//!    and primary actions. Nothing else is blue.
+//!    icon's hue. The accent (`ACCENT` and its family) is that hue with only
+//!    a little more chroma — a pale steel that reads as a tint, never as
+//!    "blue" — and it marks the prompt `❯`, the caret, links, focus,
+//!    selection and primary actions. Nothing else is tinted.
+//!    The whole palette is quiet: saturation stays at or under ~45% (state)
+//!    and ~22% (everything else), so the window reads as grey with signals.
 //! 2. **Colour is state.** `RUNNING`, `ATTENTION` and `BLOCKED` mark status
 //!    only. A failure colours the word that says so, never the whole row.
-//!    Green never means "finished". Provider logomarks are monochrome except
-//!    inside the provider/model picker rows.
+//!    Green never means "finished". Provider logomarks are monochrome
+//!    everywhere, the picker included.
 //! 3. **Opaque faces, alpha edges.** Planes and hover/fill faces are opaque
 //!    `rgb()` values (a hover must never be tinted by what lies under it, see
 //!    `pointer.rs`). Hairlines, washes, rings over content and veils are alpha
@@ -146,74 +149,79 @@ pub const TEXT_FAINT: u32 = 0x616670;
 
 // ----------------------------------------------------------------- accent
 
-/// `#8daedf` — steel blue from the app icon (hue 258): the prompt `❯`, links,
-/// the active indicator, a selected check, a drop target.
-pub const ACCENT: u32 = 0x8daedf;
-/// `#b3cbed` — the icon's light stop: link hover, accent on `FILL` or on a
-/// selection.
-pub const ACCENT_HI: u32 = 0xb3cbed;
-/// `#4368a0` — the accent as a fill: the primary button (white ink 5.6:1).
-pub const ACCENT_STRONG: u32 = 0x4368a0;
+/// `#afbaca` — pale steel at the app icon's hue (HSL 216°, 20%): the prompt
+/// `❯`, links, the active indicator, a selected check, a drop target. The
+/// icon's own stops run 34–42% saturated; the accent stays under them so the
+/// chrome never out-colours the logo.
+pub const ACCENT: u32 = 0xafbaca;
+/// `#cdd4df` — the accent a step lighter: link hover, accent on `FILL` or on
+/// a selection.
+pub const ACCENT_HI: u32 = 0xcdd4df;
+/// `#4f5d72` — the accent as a fill: the primary button (white ink 6.7:1).
+pub const ACCENT_STRONG: u32 = 0x4f5d72;
 /// A primary button under the pointer and held down.
-pub const PRIMARY_HOVER: u32 = 0x5075af;
-pub const PRIMARY_ACTIVE: u32 = 0x395b90;
+pub const PRIMARY_HOVER: u32 = 0x5a6a81;
+pub const PRIMARY_ACTIVE: u32 = 0x475466;
 /// Ink on an `ACCENT_STRONG` fill.
 pub const ON_ACCENT: u32 = 0xffffff;
-/// `#6381b0` — **the** keyboard-focus ink: the focused Pane's ring, the kit's
+/// `#7d8ba1` — **the** keyboard-focus ink: the focused Pane's ring, the kit's
 /// `ring`, every focus outline. At least 3:1 on `GROUND` and `PANE`.
-pub const FOCUS_RING: u32 = 0x6381b0;
-/// `#8daedf66` — the accent as an outline that is not focus: a link's
+pub const FOCUS_RING: u32 = 0x7d8ba1;
+/// `#afbaca66` — the accent as an outline that is not focus: a link's
 /// underline, a selected choice's edge, a drop target's edge.
-pub const ACCENT_EDGE: u32 = 0x8daedf66;
-/// `#8daedf24` (14%) — the accent as a ground: inline code, a selected accent
+pub const ACCENT_EDGE: u32 = 0xafbaca66;
+/// `#afbaca24` (14%) — the accent as a ground: inline code, a selected accent
 /// row, the slot a dragged Pane would take.
-pub const ACCENT_WASH: u32 = 0x8daedf24;
-/// `#8daedf40` (25%) — native text selection, painted over glyphs.
-pub const TEXT_SELECTION_WASH: u32 = 0x8daedf40;
+pub const ACCENT_WASH: u32 = 0xafbaca24;
+/// `#afbaca40` (25%) — native text selection, painted over glyphs.
+pub const TEXT_SELECTION_WASH: u32 = 0xafbaca40;
 /// The caret.
 pub const CARET: u32 = ACCENT;
 
 // -------------------------------------------------------- state + signals
 
-/// `#7cc49a` — live work: the running status dot, a running signal line, the
+/// `#8cb59d` — live work (a sage, 22%): the running status dot, a running signal line, the
 /// pass chip, diff `+`.
-pub const RUNNING: u32 = 0x7cc49a;
+pub const RUNNING: u32 = 0x8cb59d;
 /// Running as a ground: an added hunk row, the pass chip.
-pub const RUNNING_WASH: u32 = 0x7cc49a1f;
+pub const RUNNING_WASH: u32 = 0x8cb59d1f;
 /// The halo that breathes behind a working Thread's dot in the nav.
-pub const RUNNING_HALO: u32 = 0x7cc49a59;
-/// `#e2b86b` — a Decision: the status dot, the signal line, the Pane's edge,
+pub const RUNNING_HALO: u32 = 0x8cb59d59;
+/// `#cbb280` — a Decision (a muted ochre, 42%): the status dot, the signal line, the Pane's edge,
 /// the Decision card's mark.
-pub const ATTENTION: u32 = 0xe2b86b;
+pub const ATTENTION: u32 = 0xcbb280;
 /// A Decision card's ground.
-pub const ATTENTION_WASH: u32 = 0xe2b86b14;
+pub const ATTENTION_WASH: u32 = 0xcbb28014;
 /// A Decision card's 1px inset ring. An inset ring takes no layout.
-pub const ATTENTION_EDGE: u32 = 0xe2b86b59;
-/// `#e8877c` — blocked or failed: the status dot, the signal line, the
+pub const ATTENTION_EDGE: u32 = 0xcbb28059;
+/// `#d29089` — blocked or failed (a dusty red, 45%): the status dot, the signal line, the
 /// Pane's edge, diff `−`, the word "failed".
-pub const BLOCKED: u32 = 0xe8877c;
+pub const BLOCKED: u32 = 0xd29089;
 /// Blocked as a ground: a removed hunk row.
-pub const BLOCKED_WASH: u32 = 0xe8877c1f;
+pub const BLOCKED_WASH: u32 = 0xd290891f;
 /// The idle/parked status dot: the muted ink in a dot role.
 pub const IDLE: u32 = TEXT_MUTED;
 
-/// Brand marks, not UI colour: only the provider/model picker rows wear them.
-pub const PROVIDER_CODEX: u32 = 0x10a37f;
-pub const PROVIDER_CLAUDE: u32 = 0xd97757;
+/// Provider marks are monochrome: the glyph's shape tells the providers
+/// apart, so no brand colour enters the chrome.
+pub const PROVIDER_CODEX: u32 = TEXT_2;
+pub const PROVIDER_CLAUDE: u32 = TEXT_2;
 
 // ------------------------------------------------------- transcript colour
 
-/// Syntax sits in the accent family (hue 258) so code never reads as state.
-/// Keywords.
-pub const SYN_KEYWORD: u32 = 0xa2c0eb;
-/// Function names.
-pub const SYN_FUNCTION: u32 = 0xc8d5e8;
-/// Type names, at hue 240 so they separate from keywords.
-pub const SYN_TYPE: u32 = 0xaecce2;
-/// String literals: a green quieter than `RUNNING`.
-pub const SYN_STRING: u32 = 0x9fcfa8;
-/// Number literals, at hue 65 so a number never reads as a Decision.
-pub const SYN_NUMBER: u32 = 0xe0b48b;
+/// Syntax is near-monochrome: each class is a faint tint (≤ 22%) at a
+/// distinct lightness, so structure reads without the block turning into a
+/// colour chart, and code never reads as state.
+/// Keywords: the accent's steel.
+pub const SYN_KEYWORD: u32 = 0xc3cad5;
+/// Function names: nearly `TEXT_STRONG`.
+pub const SYN_FUNCTION: u32 = 0xd8dbdf;
+/// Type names: a cooler steel, apart from keywords.
+pub const SYN_TYPE: u32 = 0xbfcacf;
+/// String literals: a grey-green, far quieter than `RUNNING`.
+pub const SYN_STRING: u32 = 0xaec2b1;
+/// Number literals: a warm grey, never read as a Decision.
+pub const SYN_NUMBER: u32 = 0xcbbdae;
 /// Comments are read, not decoration: at least 4.5:1 on `RAISED`.
 pub const SYN_COMMENT: u32 = 0x818790;
 /// Punctuation.
@@ -771,9 +779,9 @@ pub const OUTPUT_MAX_LINES: usize = 12;
 pub const OUTPUT_INLINE_BYTES: usize = 8 * 1024;
 
 /// An added diff line's code: `RUNNING` lifted a step to read on its wash.
-pub const DIFF_ADDED_INK: u32 = 0xa7d9b8;
+pub const DIFF_ADDED_INK: u32 = 0xb4cfc0;
 /// A removed diff line's code: `BLOCKED` lifted the same step.
-pub const DIFF_REMOVED_INK: u32 = 0xefa89f;
+pub const DIFF_REMOVED_INK: u32 = 0xddb5b0;
 /// A diff card at C2: `RAISED`, `R_CHIP`, 4px above and inside it, 8px
 /// inline. Its columns are `[number][8][sign][4][code]`: the number column
 /// is as wide as the largest number's digits (`MONO_CELL` each), the sign is
@@ -1368,7 +1376,7 @@ pub const NAV_GROUP_RAIL: u32 = HAIRLINE_STRONG;
 pub const PROVIDER_MARK: f32 = GLYPH_BOX;
 /// A failing Thread's halo: it is still inferring, so it still breathes,
 /// in the failure's ink (`BLOCKED` at the running halo's 35%).
-pub const NAV_FAILING_HALO: u32 = 0xe8877c59;
+pub const NAV_FAILING_HALO: u32 = 0xd2908959;
 /// How far a rail item's status dot sits in from its box's corner.
 pub const NAV_RAIL_DOT_INSET: f32 = SPACE_1;
 /// The collapsed rail. On macOS its controls are 36px — the rail owns the
