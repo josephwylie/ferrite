@@ -3066,37 +3066,34 @@ impl CockpitView {
         if let Some(project) = editing {
             let in_use = self.project_in_use(project);
             right = right.child(
-                project_editor::destructive_button(
-                    "remove-project",
-                    if in_use {
-                        "Project has Threads"
-                    } else {
-                        "Remove Project"
-                    },
-                    in_use,
-                    cx,
-                )
-                .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
-                    cx.stop_propagation();
-                    if view.project_in_use(project) {
-                        return;
-                    }
-                    match view.cockpit.remove_project(project) {
-                        Err(error) => {
-                            if let Some(editor) = view.project_editor.as_mut() {
-                                editor.error = Some(format!("remove refused: {error}").into());
+                // The verb stays the verb while it cannot run; why it cannot
+                // is the tooltip's to say.
+                project_editor::destructive_button("remove-project", "Remove Project", in_use, cx)
+                    .debug_selector(|| "remove-project".into())
+                    .when(in_use, |button| {
+                        button.tooltip("Park or move its Threads first")
+                    })
+                    .on_click(cx.listener(move |view, _: &ClickEvent, _, cx| {
+                        cx.stop_propagation();
+                        if view.project_in_use(project) {
+                            return;
+                        }
+                        match view.cockpit.remove_project(project) {
+                            Err(error) => {
+                                if let Some(editor) = view.project_editor.as_mut() {
+                                    editor.error = Some(format!("remove refused: {error}").into());
+                                }
+                            }
+                            Ok(()) => {
+                                if view.nav_filter == Some(project) {
+                                    view.nav_filter = None;
+                                }
+                                view.group_error = None;
+                                view.project_editor = None;
                             }
                         }
-                        Ok(()) => {
-                            if view.nav_filter == Some(project) {
-                                view.nav_filter = None;
-                            }
-                            view.group_error = None;
-                            view.project_editor = None;
-                        }
-                    }
-                    cx.notify();
-                })),
+                        cx.notify();
+                    })),
             );
         }
         let ready = self.project_editor_ready();

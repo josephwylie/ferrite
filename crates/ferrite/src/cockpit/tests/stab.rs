@@ -873,3 +873,23 @@ fn the_checks_card_grows_to_its_tally(cx: &mut TestAppContext) {
         "the tally `{text}` is whole: {tally:?} for {natural:?}"
     );
 }
+
+/// A Project with Threads still offers "Remove Project", disabled, with the
+/// reason in its tooltip; pressing it removes nothing.
+#[gpui::test]
+fn a_project_in_use_keeps_its_remove_verb_disabled(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("remove-project-in-use", 1);
+    let thread = core.threads()[0];
+    let project = core.project_id(thread).expect("the Thread's Project");
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    view.update(cx, |view, cx| view.open_project_editor(project, cx));
+    tick(cx);
+    let remove = cx.debug_bounds("remove-project").expect("the remove verb");
+    cx.simulate_click(remove.center(), gpui::Modifiers::none());
+    tick(cx);
+    view.read_with(cx, |view, _| {
+        assert!(view.cockpit.registry().project(project).is_some());
+        assert!(view.project_editor.is_some(), "the sheet stays up");
+    });
+}
