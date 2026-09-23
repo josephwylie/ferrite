@@ -1215,7 +1215,7 @@ fn focus_is_drawn_only_beside_another_pane(cx: &mut TestAppContext) {
     );
 }
 
-/// A group's disclosure chevron leads, in the gutter where tool dots hang,
+/// A group's disclosure mark leads, in the gutter where tool dots hang,
 /// and the summary starts at C1 after it: nothing at the column's right.
 #[gpui::test]
 fn a_group_chevron_leads_in_the_gutter(cx: &mut TestAppContext) {
@@ -1305,7 +1305,7 @@ fn the_composer_is_one_row_over_a_quiet_meta_row(cx: &mut TestAppContext) {
 
 /// The prompt heads its turn: the operator's line is at prose size, the
 /// same size as the answer under it, and turns sit `GAP_TURN` apart while
-/// the blocks inside one sit a block step apart.
+/// the blocks inside one (the stamp included) sit a block step apart.
 #[gpui::test]
 fn the_prompt_heads_its_turn_at_prose_size(cx: &mut TestAppContext) {
     let (core, fake) = cockpit("prompt-heads-turn", 1);
@@ -1334,24 +1334,41 @@ fn the_prompt_heads_its_turn_at_prose_size(cx: &mut TestAppContext) {
             .unwrap();
         tick(cx);
     }
-    let (namespace, prompts) = view.read_with(cx, |view, _| {
+    let (namespace, prompts, stamps) = view.read_with(cx, |view, _| {
         let pane = &view.panes[0];
         let thread = view.cockpit.thread(pane.thread().unwrap()).unwrap();
-        let prompts: Vec<_> = thread
-            .transcript()
-            .blocks()
-            .iter()
-            .filter(|block| matches!(block.body, Body::Prompt(_)))
-            .map(|block| block.id)
-            .collect();
-        (pane.text_namespace(), prompts)
+        let ids = |kind: fn(&Body) -> bool| -> Vec<_> {
+            thread
+                .transcript()
+                .blocks()
+                .iter()
+                .filter(|block| kind(&block.body))
+                .map(|block| block.id)
+                .collect()
+        };
+        (
+            pane.text_namespace(),
+            ids(|body| matches!(body, Body::Prompt(_))),
+            ids(|body| matches!(body, Body::TurnEnd(_))),
+        )
     });
     let size = cx.update(|_, cx| {
         crate::rich::testing::font_size(&format!("literal-{namespace}-{:?}-0", prompts[1]), cx)
     });
     assert_eq!(size, Some(px(crate::theme::FS_PROSE)), "prose size");
     assert_eq!(crate::theme::GAP_TURN, 32.);
-    assert_eq!(crate::theme::GAP_STAMP, crate::theme::GAP_SECTION);
+    let mut line = |id| {
+        cx.update(|_, cx| {
+            crate::rich::testing::bounds(&format!("literal-{namespace}-{id:?}-0"), 0, cx).unwrap()
+        })
+    };
+    // Measured, not just declared: the first turn's stamp to the second
+    // prompt is the turn step.
+    assert_eq!(
+        line(prompts[1]).top() - line(stamps[0]).bottom(),
+        px(crate::theme::GAP_TURN),
+        "turns sit a turn step apart"
+    );
 }
 
 /// A Decision card's head names its kind and says nothing more while it

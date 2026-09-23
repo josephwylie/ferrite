@@ -5349,9 +5349,11 @@ where
             }),
     );
     highlights.sort_by_key(|(range, _)| range.start);
-    // The gutter is the chevron's (`tool_disclosure_control`): a running
-    // member says so on its own line under the header, with its dot.
-    let mut header = gutter_row(div(), theme::LH_UI)
+    // The gutter is the disclosure's (`tool_disclosure_control`): a running
+    // member says so on its own line under the header, with its dot. The
+    // counts climb while the run is live, so their digits are tabular and
+    // the words after them hold still.
+    let mut header = components::tabular(gutter_row(div(), theme::LH_UI))
         .id(SharedString::from(format!("tool-group-row-{call}")))
         .group(DISCLOSURE_ROW)
         .relative()
@@ -5393,16 +5395,35 @@ where
         .w_full()
         .open(expanded)
         .child(header);
+    // Members hang a row step under the summary and under each other: one
+    // run of work, its rows evenly spaced.
     if expanded {
         let mut details = div().flex().flex_col().min_w_0().pl(px(theme::GUTTER_W));
-        for (index, block) in activity.blocks.iter().enumerate() {
+        for block in activity.blocks {
             let Body::Tool(tool) = &block.body else {
                 continue;
             };
-            details = details.child(
-                div()
-                    .when(index > 0, |member| member.pt(px(theme::GAP_TOOL)))
-                    .child(render_tool(
+            details = details.child(div().pt(px(theme::GAP_ROW)).child(render_tool(
+                div(),
+                block.id,
+                tool,
+                selection,
+                timings,
+                state(&DisclosureId::Tool(tool.call.clone())) == DisclosureState::Expanded,
+                control(&DisclosureId::Tool(tool.call.clone())),
+                true,
+                reduce_motion,
+            )));
+        }
+        group = group.content(details);
+    } else {
+        for block in activity.blocks {
+            let Body::Tool(tool) = &block.body else {
+                continue;
+            };
+            if matches!(tool.state, ToolState::Failed(_)) {
+                group = group.child(div().pl(px(theme::GUTTER_W)).pt(px(theme::GAP_ROW)).child(
+                    render_tool(
                         div(),
                         block.id,
                         tool,
@@ -5412,27 +5433,8 @@ where
                         control(&DisclosureId::Tool(tool.call.clone())),
                         true,
                         reduce_motion,
-                    )),
-            );
-        }
-        group = group.content(details);
-    } else {
-        for block in activity.blocks {
-            let Body::Tool(tool) = &block.body else {
-                continue;
-            };
-            if matches!(tool.state, ToolState::Failed(_)) {
-                group = group.child(div().pl(px(theme::GUTTER_W)).child(render_tool(
-                    div(),
-                    block.id,
-                    tool,
-                    selection,
-                    timings,
-                    state(&DisclosureId::Tool(tool.call.clone())) == DisclosureState::Expanded,
-                    control(&DisclosureId::Tool(tool.call.clone())),
-                    true,
-                    reduce_motion,
-                )));
+                    ),
+                ));
             }
         }
     }
@@ -5599,7 +5601,11 @@ pub fn tool_disclosure_control(
         (_, false) => "Show tool details",
         (_, true) => "Hide tool details",
     };
-    let shown = targeted || matches!(call, DisclosureId::Group(_) | DisclosureId::TurnDiff(_));
+    // A group or the turn's changes has no mark of its own, so its `▸` is
+    // always drawn. A tool or reasoning row shows it only under the pointer,
+    // where its own mark yields the glyph box; a keyboard target keeps its
+    // mark and says so with the ring alone, so two marks never share a box.
+    let shown = matches!(call, DisclosureId::Group(_) | DisclosureId::TurnDiff(_));
     let control = div()
         .id(SharedString::from(format!("tool-button-{call}")))
         .flex()
@@ -5615,15 +5621,15 @@ pub fn tool_disclosure_control(
                 .invisible()
                 .group_hover(DISCLOSURE_ROW, |style| style.visible())
         })
-        .child(components::glyph_box(icon(
-            if expanded {
-                icons::CHEVRON_DOWN
-            } else {
-                icons::CHEVRON_RIGHT
-            },
-            theme::DISCLOSURE_CHEVRON,
-            TEXT_MUTED,
-        )));
+        // `▸`, turned a quarter when open: a filled mark, so a disclosure
+        // never reads as the prompt's stroked `❯` in the same gutter.
+        .child(components::glyph_box(
+            icon(icons::DISCLOSURE, theme::DISCLOSURE_MARK, TEXT_MUTED).when(expanded, |mark| {
+                mark.with_transformation(gpui::Transformation::rotate(gpui::radians(
+                    std::f32::consts::FRAC_PI_2,
+                )))
+            }),
+        ));
     div()
         .absolute()
         .inset_0()
