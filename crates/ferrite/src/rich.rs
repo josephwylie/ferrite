@@ -49,6 +49,11 @@ pub struct TextCache(
 );
 
 impl TextCache {
+    #[cfg(test)]
+    pub(crate) fn retained_handles(&self) -> usize {
+        Rc::strong_count(&self.0)
+    }
+
     pub fn file_context(
         &self,
         cwd: Option<&std::path::Path>,

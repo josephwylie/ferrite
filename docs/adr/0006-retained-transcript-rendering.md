@@ -46,6 +46,13 @@ window publishes projections once after the frame. Pointer actions publish
 immediately. Actual history eviction or scope changes invalidate selection;
 ordinary scrolling does not.
 
+Membership updates collect plain text fragments without constructing GPUI
+elements. They also run between frames and while a window is occluded, when
+GPUI's fallback element arena does not release temporary elements. Building
+discarded rows there retained every streaming revision (September 2026 heap
+investigation). Shared text formatters and a native-render parity test keep
+logical copy order aligned with the visible disclosure rules.
+
 Logical members hold weak references to native views. Only selection endpoints
 pin their native state beyond the existing text cache. Recreated views match
 endpoints by logical member key. Native endpoints carry inline and UTF-8
