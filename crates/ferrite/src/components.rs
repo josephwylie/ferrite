@@ -756,19 +756,29 @@ pub fn menu_section(
     leading: Option<(&'static str, u32)>,
     note: Option<SharedString>,
 ) -> Div {
+    // The title's line box sits on the row's foot; the mark is centred on
+    // that line box, not on the row, so it rides the text's cap band instead
+    // of hanging below its baseline.
     text_meta()
         .flex()
         .items_end()
-        .gap(px(theme::SPACE_2))
         .h(px(theme::MENU_SECTION_H))
         .px(px(theme::MENU_ROW_PAD_X))
         .pb(px(theme::SPACE_1))
         .cursor_default()
-        .when_some(leading, |row, (path, ink)| {
-            row.child(icons::icon(path, theme::ROW_ICON, ink))
-        })
-        .child(div().font_weight(theme::W_LABEL).child(title.into()))
-        .children(note)
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(theme::SPACE_2))
+                .h(px(theme::LH_META))
+                .min_w_0()
+                .when_some(leading, |line, (path, ink)| {
+                    line.child(icons::icon(path, theme::MENU_SECTION_ICON, ink))
+                })
+                .child(div().font_weight(theme::W_LABEL).child(title.into()))
+                .children(note),
+        )
 }
 
 /// The one separator inside a floating surface: `MENU_GROUP_GAP` of space.

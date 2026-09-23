@@ -2720,19 +2720,12 @@ pub fn checks_head(pr: &PullRequest) -> Div {
 /// A workflow's heading in the card, above the runs it owns. Actions
 /// groups its jobs under a workflow and the card says so; a run that
 /// belongs to no workflow — a posted commit status — is grouped under
-/// `status` rather than being given a heading it does not have.
+/// `status` rather than being given a heading it does not have. It is the
+/// one menu section title, so the card's groups read as a menu's do.
 pub fn checks_group(workflow: Option<&str>, first: bool) -> Div {
-    div()
-        .flex()
+    components::menu_section(workflow.unwrap_or("status").to_string(), None, None)
         .flex_shrink_0()
-        .items_center()
-        .h(px(theme::CHECKS_GROUP_H))
-        .px(px(theme::MENU_ROW_PAD_X))
         .when(!first, |group| group.mt(px(theme::CHECKS_GROUP_GAP)))
-        .text_size(px(theme::FS_SM))
-        .line_height(px(theme::LH_META))
-        .text_color(rgb(TEXT_MUTED))
-        .child(SharedString::from(workflow.unwrap_or("status").to_string()))
 }
 
 /// One run in the card: its state's dot, its name, and the forge's own
@@ -2753,7 +2746,9 @@ pub fn check_row(index: usize, run: &Check) -> Stateful<Div> {
         .flex()
         .flex_shrink_0()
         .items_center()
-        .gap(px(theme::ROW_ICON_GAP))
+        // A status dot sits 8px from its text on every floating surface
+        // (notification rows, MCP servers, runs).
+        .gap(px(theme::SPACE_2))
         .h(px(theme::CHECKS_ROW_H))
         .px(px(theme::MENU_ROW_PAD_X))
         .rounded(px(theme::R_CHIP))

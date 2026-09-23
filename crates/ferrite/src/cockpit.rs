@@ -8501,10 +8501,14 @@ impl CockpitView {
                 .child(crate::components::status_dot(dot))
                 .child(
                     div()
+                        .id(("mcp-server-name", index))
                         .flex_1()
                         .min_w_0()
                         .truncate()
                         .text_color(rgb(crate::theme::TEXT))
+                        // A long server name gives way to its state and
+                        // actions; the whole of it is one hover away.
+                        .tooltip(crate::menu::tooltip(server.name.clone()))
                         .child(server.name.clone()),
                 )
                 .child(

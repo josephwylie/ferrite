@@ -587,6 +587,9 @@ pub const R_MENU_ROW: f32 = R_CHIP;
 /// A menu section title row: 24px, its `FS_SM` title sat on the row's foot
 /// so it hugs the rows it heads.
 pub const MENU_SECTION_H: f32 = 24.0;
+/// 10px — a section title's mark: the `FS_SM` cap band (`KEY_GLYPH`), so a
+/// provider mark beside an 11.5px title is no heavier than its letters.
+pub const MENU_SECTION_ICON: f32 = KEY_GLYPH;
 /// 8px — what splits one group of rows from the next inside any floating
 /// surface (context-menu groups, a section after rows, a key-hint footer, a
 /// panel's head). Space, never a rule: rows sit flush (their 8px of air is
@@ -1096,13 +1099,13 @@ pub const CHECKS_CARD_PAD: f32 = FLOAT_PAD;
 /// Between the card's heading and its runs: space, not a rule
 /// (`MENU_GROUP_GAP`, as between any two groups on a floating surface).
 pub const CHECKS_CARD_GAP: f32 = MENU_GROUP_GAP;
-/// The card's heading row and one run's row.
-pub const CHECKS_HEAD_H: f32 = 28.0;
-pub const CHECKS_ROW_H: f32 = 24.0;
-/// A workflow's heading above the runs it owns, and the space that sets
-/// that group off from the one before it.
-pub const CHECKS_GROUP_H: f32 = 20.0;
-pub const CHECKS_GROUP_GAP: f32 = SPACE_1_5;
+/// The card's heading row and one run's row: a menu row's height, so the
+/// card lists at the same pitch as every other floating list.
+pub const CHECKS_HEAD_H: f32 = MENU_ROW_H;
+pub const CHECKS_ROW_H: f32 = MENU_ROW_H;
+/// The space that sets a workflow's group off from the one before it. The
+/// heading itself is the menu section title (`MENU_SECTION_H`).
+pub const CHECKS_GROUP_GAP: f32 = MENU_GROUP_GAP;
 
 /// The wall cell: 8px padding, 4px between rows, an 8px status dot — the
 /// wall's whole job is the signal, so its dot is bigger than a row's.
