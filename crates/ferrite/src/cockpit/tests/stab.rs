@@ -1213,7 +1213,7 @@ fn focus_is_drawn_only_beside_another_pane(cx: &mut TestAppContext) {
     );
 }
 
-/// A group's disclosure chevron leads, in the gutter where tool dots hang,
+/// A group's disclosure mark leads, in the gutter where tool dots hang,
 /// and the summary starts at C1 after it: nothing at the column's right.
 #[gpui::test]
 fn a_group_chevron_leads_in_the_gutter(cx: &mut TestAppContext) {

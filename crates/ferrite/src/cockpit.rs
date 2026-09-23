@@ -14154,7 +14154,7 @@ mod tests {
                     && (control.size.width - px(crate::theme::TOOL_DISCLOSURE_HIT)).abs() <= px(1.)
                     && (summary.left() - control.left() - px(crate::theme::GUTTER_W)).abs()
                         <= px(0.5),
-                "the chevron leads in the gutter, the text at C1: {summary:?} / {control:?}"
+                "the disclosure mark leads in the gutter, the text at C1: {summary:?} / {control:?}"
             );
         }
 
