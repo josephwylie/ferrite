@@ -582,3 +582,31 @@ fn l2_tail_tool_rows_stay_inside_the_cell(cx: &mut TestAppContext) {
     );
     assert_eq!(row.size.height, px(crate::theme::LH_META), "one line");
 }
+
+/// A draft in a narrow Pane keeps its whole controls row inside the
+/// Composer: the Project and branch chips truncate first, and the model
+/// and effort pair stays whole and in the block.
+#[gpui::test]
+fn a_narrow_draft_keeps_its_controls_inside_the_composer(cx: &mut TestAppContext) {
+    let (mut core, _fake) = cockpit("narrow-draft-controls", 1);
+    let dir = scratch("narrow-draft-controls-a-rather-long-project-directory-name");
+    std::fs::create_dir_all(&dir).unwrap();
+    core.register_project(&dir).unwrap();
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(720.), px(900.)));
+    view.update(cx, |view, cx| view.open_draft(DraftTarget::Main, cx));
+    tick(cx);
+    let block = cx
+        .debug_bounds("composer-block")
+        .expect("the draft Composer");
+    let effort = cx.debug_bounds("draft-effort-picker").expect("effort");
+    let model = cx.debug_bounds("draft-model-picker").expect("model");
+    assert!(
+        effort.right() <= block.right() - px(crate::theme::COMPOSER_PAD_X) + px(0.5),
+        "effort {effort:?} stays inside the block {block:?}"
+    );
+    assert!(model.right() <= effort.left());
+    let band = cx.debug_bounds("draft-band").expect("the setup chips");
+    assert!(band.right() <= model.left(), "{band:?} / {model:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -1595,11 +1595,14 @@ pub fn draft_close_button(draft: DraftId) -> gpui::component::button::Button {
         .child(icon(icons::CLOSE, theme::ICON_BUTTON_GLYPH, TEXT_MUTED))
 }
 
-/// Draft setup controls use the same 20px hint row as a live Composer.
+/// Draft setup controls use the same 20px hint row as a live Composer. In
+/// a narrow Pane they give way first: their labels truncate before the
+/// model and effort pair or the usage meter loses a pixel.
 pub fn draft_band() -> Div {
     div()
+        .debug_selector(|| "draft-band".into())
         .flex()
-        .flex_shrink_0()
+        .flex_shrink(1.)
         .min_w_0()
         .items_center()
         .gap(px(theme::PICKER_GAP))
@@ -1613,14 +1616,18 @@ pub fn draft_band() -> Div {
 pub fn band_chip(slot: usize, label: SharedString, accent: bool, focused: bool) -> Stateful<Div> {
     div()
         .id(("band-chip", slot))
-        .flex_shrink_0()
+        .debug_selector(move || format!("band-chip-{slot}"))
+        .flex_shrink(1.)
+        .min_w_0()
         .border_1()
         .border_color(band_edge(focused))
         .rounded(px(theme::R_CONTROL))
         .press_raised()
         .child(
             control_chip(if accent { TEXT } else { TEXT_2 })
-                .child(div().flex_shrink_0().child(label))
+                .flex_shrink(1.)
+                .min_w_0()
+                .child(div().min_w_0().truncate().child(label))
                 .child(chip_chevron()),
         )
 }
@@ -1649,6 +1656,7 @@ pub fn draft_picker(
     control: Div,
 ) -> gpui::component::button::Button {
     crate::components::button(id)
+        .debug_selector(move || id.to_string())
         .p_0()
         .h_auto()
         .flex()
