@@ -20,10 +20,9 @@ pub(crate) use cache::ModelCache;
 /// The effort ladder every Claude model but Haiku takes, as the CLI
 /// announces it.
 const CLAUDE_EFFORTS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
-/// The Codex ladders, as `model/list` announced them (0.144.4).
+/// The Codex ladders, as `model/list` announced them (0.156.0).
 const CODEX_EFFORTS_ULTRA: &[&str] = &["low", "medium", "high", "xhigh", "max", "ultra"];
 const CODEX_EFFORTS_MAX: &[&str] = &["low", "medium", "high", "xhigh", "max"];
-const CODEX_EFFORTS_XHIGH: &[&str] = &["low", "medium", "high", "xhigh"];
 
 /// One fallback row: value, resolved id (the full id an Init names, where
 /// an alias has one), display, detail, effort ladder, default effort.
@@ -61,17 +60,9 @@ pub fn fallback(provider: Provider) -> Vec<ModelInfo> {
             ),
             (
                 "opus[1m]",
-                Some("claude-opus-5[1m]"),
-                "Opus 5 (1M)",
-                "Opus 5 with 1M context, best for everyday, complex tasks",
-                CLAUDE_EFFORTS,
-                None,
-            ),
-            (
-                "opus",
-                Some("claude-opus-5"),
-                "Opus 5",
-                "Best for everyday, complex tasks",
+                Some("claude-opus-5-5[1m]"),
+                "Opus 5.5 (1M)",
+                "Opus 5.5 with 1M context, for long sessions with large codebases",
                 CLAUDE_EFFORTS,
                 None,
             ),
@@ -94,51 +85,27 @@ pub fn fallback(provider: Provider) -> Vec<ModelInfo> {
         ],
         Provider::Codex => &[
             (
-                "gpt-5.6-sol",
+                "gpt-6-astra",
                 None,
-                "GPT-5.6 Sol",
-                "Reliable agentic workhorse for everyday tasks",
-                CODEX_EFFORTS_ULTRA,
-                Some("low"),
-            ),
-            (
-                "gpt-5.6-terra",
-                None,
-                "GPT-5.6 Terra",
-                "Balanced agentic coding model for everyday work",
+                "GPT-6 Astra",
+                "Frontier intelligence for the most demanding work",
                 CODEX_EFFORTS_ULTRA,
                 Some("medium"),
             ),
             (
-                "gpt-5.6-luna",
+                "gpt-6-sol",
                 None,
-                "GPT-5.6 Luna",
-                "Fast and affordable agentic coding model",
+                "GPT-6 Sol",
+                "Workhorse model for coding and everyday work",
+                CODEX_EFFORTS_ULTRA,
+                Some("medium"),
+            ),
+            (
+                "gpt-6-luna",
+                None,
+                "GPT-6 Luna",
+                "Fast and affordable model for easier tasks",
                 CODEX_EFFORTS_MAX,
-                Some("medium"),
-            ),
-            (
-                "gpt-5.5",
-                None,
-                "GPT-5.5",
-                "Proven previous-generation model for coding and general work",
-                CODEX_EFFORTS_XHIGH,
-                Some("medium"),
-            ),
-            (
-                "gpt-5.4",
-                None,
-                "GPT-5.4",
-                "Strong model for everyday coding",
-                CODEX_EFFORTS_XHIGH,
-                Some("medium"),
-            ),
-            (
-                "gpt-5.4-mini",
-                None,
-                "GPT-5.4 Mini",
-                "Small, fast, and cost-efficient for simpler coding tasks",
-                CODEX_EFFORTS_XHIGH,
                 Some("medium"),
             ),
         ],
@@ -312,12 +279,16 @@ mod tests {
             ("claude-fable-5", "Fable 5"),
             ("claude-opus-5", "Opus 5"),
             ("claude-opus-5[1m]", "Opus 5 (1M)"),
+            ("claude-opus-5-5", "Opus 5.5"),
+            ("claude-opus-5-5[1m]", "Opus 5.5 (1M)"),
             ("claude-sonnet-5", "Sonnet 5"),
             ("claude-sonnet-4-5", "Sonnet 4.5"),
             ("claude-haiku-4-5-20251001", "Haiku 4.5"),
             ("opus[1m]", "Opus (1M)"),
             ("sonnet", "Sonnet"),
             ("default", "Default"),
+            ("gpt-6-sol", "GPT-6 Sol"),
+            ("gpt-6-luna", "GPT-6 Luna"),
             ("gpt-5.6-sol", "GPT-5.6 Sol"),
             ("gpt-5.6-terra", "GPT-5.6 Terra"),
             ("gpt-5.6", "GPT-5.6"),
@@ -357,16 +328,12 @@ mod tests {
         for (value, display) in [
             ("default", "Default"),
             ("fable", "Fable 5.1"),
-            ("opus[1m]", "Opus 5 (1M)"),
-            ("opus", "Opus 5"),
+            ("opus[1m]", "Opus 5.5 (1M)"),
             ("sonnet", "Sonnet 5"),
             ("haiku", "Haiku 4.5"),
-            ("gpt-5.6-sol", "GPT-5.6 Sol"),
-            ("gpt-5.6-terra", "GPT-5.6 Terra"),
-            ("gpt-5.6-luna", "GPT-5.6 Luna"),
-            ("gpt-5.5", "GPT-5.5"),
-            ("gpt-5.4", "GPT-5.4"),
-            ("gpt-5.4-mini", "GPT-5.4 Mini"),
+            ("gpt-6-astra", "GPT-6 Astra"),
+            ("gpt-6-sol", "GPT-6 Sol"),
+            ("gpt-6-luna", "GPT-6 Luna"),
         ] {
             let provider = if value.starts_with("gpt") {
                 Provider::Codex
@@ -382,7 +349,8 @@ mod tests {
         }
         for (id, display) in [
             ("claude-fable-5-1", "Fable 5.1"),
-            ("claude-opus-5[1m]", "Opus 5 (1M)"),
+            ("claude-opus-5-5[1m]", "Opus 5.5 (1M)"),
+            ("claude-opus-5-5", "Opus 5.5"),
             ("claude-sonnet-5", "Sonnet 5"),
             ("claude-haiku-4-5-20251001", "Haiku 4.5"),
         ] {
@@ -407,8 +375,8 @@ mod tests {
     }
 
     /// The fallback ladders are the probed ones: every Claude model but
-    /// Haiku takes five levels; Codex's Sol and Terra add `ultra`, Luna
-    /// stops at `max`, the 5.5 and 5.4 line at `xhigh`.
+    /// Haiku takes five levels; Codex's Astra and Sol add `ultra`, Luna
+    /// stops at `max`.
     #[test]
     fn the_fallback_carries_each_models_effort_ladder() {
         let claude = fallback(Provider::Claude);
@@ -429,13 +397,10 @@ mod tests {
                 .efforts
                 .clone()
         };
-        assert_eq!(ladder("gpt-5.6-sol"), CODEX_EFFORTS_ULTRA);
-        assert_eq!(ladder("gpt-5.6-terra"), CODEX_EFFORTS_ULTRA);
-        assert_eq!(ladder("gpt-5.6-luna"), CODEX_EFFORTS_MAX);
-        assert_eq!(ladder("gpt-5.5"), CODEX_EFFORTS_XHIGH);
-        assert_eq!(ladder("gpt-5.4"), CODEX_EFFORTS_XHIGH);
-        assert_eq!(ladder("gpt-5.4-mini"), CODEX_EFFORTS_XHIGH);
-        assert_eq!(codex[0].default_effort.as_deref(), Some("low"));
+        assert_eq!(ladder("gpt-6-astra"), CODEX_EFFORTS_ULTRA);
+        assert_eq!(ladder("gpt-6-sol"), CODEX_EFFORTS_ULTRA);
+        assert_eq!(ladder("gpt-6-luna"), CODEX_EFFORTS_MAX);
+        assert_eq!(codex[0].default_effort.as_deref(), Some("medium"));
     }
 
     /// The effort menu follows the chosen model: its own ladder, the
@@ -455,8 +420,8 @@ mod tests {
         assert!(efforts_for(Provider::Claude, Some("haiku"), &[]).is_empty());
         assert!(efforts_for(Provider::Claude, Some("claude-haiku-4-5-20251001"), &[]).is_empty());
         assert_eq!(
-            efforts_for(Provider::Codex, Some("gpt-5.4"), &[]),
-            CODEX_EFFORTS_XHIGH
+            efforts_for(Provider::Codex, Some("gpt-6-luna"), &[]),
+            CODEX_EFFORTS_MAX
         );
         assert_eq!(
             efforts_for(Provider::Codex, Some("gpt-9-unheard-of"), &[]),
