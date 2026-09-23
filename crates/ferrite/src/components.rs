@@ -1128,6 +1128,9 @@ mod tests {
         assert_eq!(layers[0].spread_radius, px(theme::SHADOW_FAR_SPREAD));
         assert_eq!(layers[1].color, rgba(theme::SHADOW_NEAR).into());
         assert!(layers.iter().all(|layer| !layer.inset));
+        // gpui blurs are σ, half the CSS value: a CSS 24px haze is σ 12.
+        assert_eq!(layers[0].blur_radius, px(12.));
+        assert_eq!(layers[1].blur_radius, px(1.5));
     }
 
     #[test]

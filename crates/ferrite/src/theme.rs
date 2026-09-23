@@ -227,15 +227,20 @@ pub const DROP_WASH: u32 = ACCENT_WASH;
 
 // ---------------------------------------------------------------- shadows
 
-/// `--shadow-float` layer 1: `0 10px 28px -10px rgba(0,0,0,0.62)`.
-pub const SHADOW_FAR: u32 = 0x0000009e;
-pub const SHADOW_FAR_Y: f32 = 10.0;
-pub const SHADOW_FAR_BLUR: f32 = 28.0;
-pub const SHADOW_FAR_SPREAD: f32 = -10.0;
-/// `--shadow-float` layer 2: `0 2px 6px rgba(0,0,0,0.3)`.
-pub const SHADOW_NEAR: u32 = 0x0000004d;
-pub const SHADOW_NEAR_Y: f32 = 2.0;
-pub const SHADOW_NEAR_BLUR: f32 = 6.0;
+/// The float shadow (`components::float_shadow`), two layers under every
+/// floating surface. Blurs are gpui's gaussian σ, half a CSS blur: the far
+/// layer is CSS `0 8px 24px -4px` at 55%, its −4 spread keeping it *under*
+/// the surface rather than a halo around it; the near layer is a CSS
+/// `0 1px 3px` contact line at 40%. On the near-black ground the hairline
+/// edge carries the elevation and the shadow only lifts the surface off
+/// the Panes.
+pub const SHADOW_FAR: u32 = 0x0000008c;
+pub const SHADOW_FAR_Y: f32 = 8.0;
+pub const SHADOW_FAR_BLUR: f32 = 12.0;
+pub const SHADOW_FAR_SPREAD: f32 = -4.0;
+pub const SHADOW_NEAR: u32 = 0x00000066;
+pub const SHADOW_NEAR_Y: f32 = 1.0;
+pub const SHADOW_NEAR_BLUR: f32 = 1.5;
 
 // ------------------------------------------------------------------- type
 
