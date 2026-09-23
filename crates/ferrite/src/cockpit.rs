@@ -115,8 +115,9 @@ fn pump_interval() -> Duration {
     Duration::from_millis(ms)
 }
 
-/// The one branch every project is assumed to have: the workspace menu's
-/// second choice, and the label for a checkout git cannot name.
+/// The label for a checkout git cannot name — the branch a fresh clone
+/// would be sitting on. Never a menu row of its own: the workspace chip
+/// offers `main` only where git lists it, like any other branch.
 const MAIN_BRANCH: &str = "main";
 
 const PUMP_MS: u64 = 8;
@@ -147,6 +148,11 @@ pub struct CockpitView {
     /// asked every frame. Cleared whenever a band popover opens, so the
     /// menu always answers about the checkout as it stands now.
     checked_out: std::cell::RefCell<Option<(ProjectId, SharedString)>>,
+    /// What git lists for a draft's chosen repo — its other worktrees and
+    /// its local branches — read off the UI thread when the workspace
+    /// popover opens and kept by project: the rows show the last answer
+    /// at once and take the fresh one when it lands. Never read per frame.
+    repo_listing: Option<(ProjectId, RepoListing)>,
     /// Stable text-run identities; selection itself belongs to GPUI.
     selection: TranscriptText,
     native_copy: Option<String>,
@@ -751,6 +757,7 @@ impl CockpitView {
             pending_discovery: None,
             launch_project,
             checked_out: std::cell::RefCell::new(None),
+            repo_listing: None,
             rename: None,
             context_menu: None,
             context_usage: None,
@@ -5112,7 +5119,9 @@ impl CockpitView {
     /// Open one chip's popover on the focused draft — the shared tail of a
     /// chip click and ↵ on a tab-focused chip. Toggles shut when the same
     /// chip's popover is already up. Rows are registry reads, discovered at
-    /// open — never per frame, never a filesystem scan.
+    /// open — never per frame, never a filesystem scan. The workspace chip
+    /// alone asks git, once per open and off the UI thread, what the repo
+    /// holds; its rows fill in when the answer lands.
     fn open_band_popover(&mut self, chip: pane::BandChip, cx: &mut Context<Self>) {
         let Some(pane) = self.panes.get(self.focused()) else {
             return;
@@ -5128,6 +5137,7 @@ impl CockpitView {
             return;
         }
         let identity = pane.identity;
+        let project = draft.binding.project();
         self.checked_out.replace(None);
         let rows = self.band_rows(draft, chip, cx);
         // The arrows start on the standing choice — bare ↵ re-picks it.
@@ -5138,6 +5148,69 @@ impl CockpitView {
             rows,
             selected,
         });
+        if chip == pane::BandChip::Workspace {
+            self.refresh_repo_listing(project, cx);
+        }
+        cx.notify();
+    }
+
+    /// Ask git, off the UI thread, what `project`'s repo holds for the
+    /// workspace popover — its worktrees and its local branches — and fill
+    /// the open popover's rows in when the answer lands. One listing per
+    /// open, never per frame.
+    fn refresh_repo_listing(&mut self, project: ProjectId, cx: &mut Context<Self>) {
+        let Some(root) = self
+            .cockpit
+            .registry()
+            .project(project)
+            .map(|project| project.root.clone())
+        else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let listing = cx
+                .background_executor()
+                .spawn(async move { read_repo_listing(&root) })
+                .await;
+            this.update(cx, |view, cx| {
+                view.repo_listing = Some((project, listing));
+                view.sync_workspace_rows(cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// The repo listing landed while the workspace popover is up: rebuild
+    /// its rows and keep the highlighted choice by value, as a finished
+    /// model discovery does for the provider picker.
+    fn sync_workspace_rows(&mut self, cx: &mut Context<Self>) {
+        let Some(open) = self.popover.as_ref() else {
+            return;
+        };
+        if !matches!(open.kind, Kind::Band(pane::BandChip::Workspace)) {
+            return;
+        }
+        let Some(draft) = self
+            .panes
+            .iter()
+            .find(|pane| pane.identity == open.pane)
+            .and_then(PaneView::draft)
+        else {
+            return;
+        };
+        let rows = self.band_rows(draft, pane::BandChip::Workspace, cx);
+        let Some(open) = &mut self.popover else {
+            return;
+        };
+        let highlighted = open.rows.get(open.selected);
+        open.selected = highlighted
+            .and_then(|chosen| {
+                rows.iter()
+                    .position(|row| row.consequence == chosen.consequence)
+            })
+            .unwrap_or(0);
+        open.rows = rows;
         cx.notify();
     }
 
@@ -5161,8 +5234,12 @@ impl CockpitView {
     }
 
     /// One chip's rows for the focused draft. The workspace chip is scoped
-    /// to the chosen project alone: its checked-out branch, `main`, and the
-    /// two ways to start a fresh branch — no global list anywhere.
+    /// to the chosen project alone: its checked-out branch, each of the
+    /// repo's other worktrees (as git lists them, hand-made ones included),
+    /// each other local branch, and the two ways to start a fresh branch —
+    /// no global list anywhere. The git half comes from `repo_listing`,
+    /// read once at open; until it lands the rows are the checkout and the
+    /// fresh starts.
     fn band_rows(
         &self,
         draft: &pane::DraftBinding,
@@ -5262,28 +5339,70 @@ impl CockpitView {
                 rows
             }
             pane::BandChip::Workspace => {
-                // Four choices, always the same four: stay where the
-                // checkout already is, move to `main`, or start fresh —
-                // beside the operator, or off in an isolated worktree.
-                let checked_out = self.checked_out_branch(draft.binding.project());
+                // Where the repo already stands, then the fresh starts:
+                // the checkout as it is, each other worktree, each other
+                // branch, then a new branch — beside the operator, or off
+                // in an isolated worktree.
+                let project = draft.binding.project();
+                let target = draft.binding.target();
+                let checked_out = self.checked_out_branch(project);
                 let mut rows = vec![band_row(
                     checked_out.clone(),
                     SharedString::from("checked out"),
-                    *draft.binding.target() == DraftTarget::Main,
+                    *target == DraftTarget::Main,
                     BandChoice::Target(DraftTarget::Main),
                 )];
-                // On `main` the two would be one row twice; the honest
-                // name of the checkout is the one that survives.
-                if checked_out.as_ref() != MAIN_BRANCH {
+                let listing = self
+                    .repo_listing
+                    .as_ref()
+                    .filter(|(listed, _)| *listed == project)
+                    .map(|(_, listing)| listing);
+                // A branch already on offer as the checkout or as a
+                // worktree is not offered again as a plain branch: git
+                // would refuse to switch the checkout onto it anyway.
+                let mut offered: Vec<&str> = vec![checked_out.as_ref()];
+                for worktree in listing
+                    .map(|listing| listing.worktrees.as_slice())
+                    .unwrap_or_default()
+                {
+                    let directory = worktree
+                        .path
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| worktree.path.display().to_string());
+                    let (name, detail) = match &worktree.branch {
+                        Some(branch) => (branch.clone(), format!("worktree · {directory}")),
+                        None => (directory, "worktree · detached".to_string()),
+                    };
+                    if let Some(branch) = &worktree.branch {
+                        offered.push(branch);
+                    }
                     rows.push(band_row(
-                        SharedString::from(MAIN_BRANCH),
-                        SharedString::from("existing branch"),
+                        SharedString::from(name.clone()),
+                        SharedString::from(detail),
                         matches!(
-                            draft.binding.target(),
-                            DraftTarget::Branch { name } if name == MAIN_BRANCH
+                            target,
+                            DraftTarget::Existing { path, .. } if *path == worktree.path
                         ),
+                        BandChoice::Target(DraftTarget::Existing {
+                            branch: name,
+                            path: worktree.path.clone(),
+                        }),
+                    ));
+                }
+                for branch in listing
+                    .map(|listing| listing.branches.as_slice())
+                    .unwrap_or_default()
+                {
+                    if offered.contains(&branch.as_str()) {
+                        continue;
+                    }
+                    rows.push(band_row(
+                        SharedString::from(branch.clone()),
+                        SharedString::from("existing branch"),
+                        matches!(target, DraftTarget::Branch { name } if name == branch),
                         BandChoice::Target(DraftTarget::Branch {
-                            name: MAIN_BRANCH.to_string(),
+                            name: branch.clone(),
                         }),
                     ));
                 }
@@ -5559,7 +5678,7 @@ impl CockpitView {
             DraftTarget::Main => self.checked_out_branch(draft.binding.project()),
             DraftTarget::Branch { name } => SharedString::from(name.clone()),
             DraftTarget::NewBranch => SharedString::from("new branch"),
-            DraftTarget::Existing { branch } => SharedString::from(branch.clone()),
+            DraftTarget::Existing { branch, .. } => SharedString::from(branch.clone()),
             DraftTarget::New => SharedString::from("new worktree"),
         };
         let chips = [
@@ -6478,6 +6597,38 @@ fn age_label(modified: Option<std::time::SystemTime>, now: std::time::SystemTime
     }
 }
 
+/// What git lists for one repo, for the workspace chip: its worktrees
+/// other than the main checkout, and its local branches — each in git's
+/// own order.
+#[derive(Clone, Default)]
+struct RepoListing {
+    worktrees: Vec<ferrite_core::workspace::ListedWorktree>,
+    branches: Vec<String>,
+}
+
+/// Read `root`'s repo for the workspace chip — two git calls, on the
+/// background executor. The main checkout is left out (it is the `checked
+/// out` row already), as is any worktree whose directory is gone: git
+/// still lists a prunable one, but it is no place to work. A root git
+/// cannot answer for lists nothing, and the chip offers the fresh starts
+/// alone.
+fn read_repo_listing(root: &std::path::Path) -> RepoListing {
+    let checkout = ferrite_core::workspace::follow::canonical(root);
+    let worktrees = ferrite_core::workspace::worktrees(root)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|worktree| {
+            worktree.path.is_dir()
+                && ferrite_core::workspace::follow::canonical(&worktree.path) != checkout
+        })
+        .collect();
+    let branches = ferrite_core::workspace::branches(root).unwrap_or_default();
+    RepoListing {
+        worktrees,
+        branches,
+    }
+}
+
 /// One band row: a label and its detail beside the choice it makes.
 fn band_row(label: SharedString, detail: SharedString, active: bool, choice: BandChoice) -> Row {
     Row {
@@ -7327,6 +7478,9 @@ impl CockpitView {
             composer_actions: (level != Level::Wall)
                 .then(|| self.composer_actions(index, cx))
                 .flatten(),
+            background: (level != Level::Wall)
+                .then(|| self.background_chips(index, cx))
+                .flatten(),
             menu: l1.then(|| self.popover_element(index, cx)).flatten(),
             model_picker: l1.then(|| self.model_picker(index, cx)).flatten(),
             usage_meter: l1.then(|| self.usage_meter(index, cx)).flatten(),
@@ -7756,6 +7910,64 @@ impl CockpitView {
                 }),
             }
             .into_any_element(),
+        )
+    }
+
+    /// The Pane's background shelf: the Session's running background tasks
+    /// as chips at the Composer's right edge, each `×` wired to `StopTask`
+    /// where the Session can stop one. Main only — a Subagent Subject's
+    /// Composer is Main's, but a shelf there would claim the tasks were the
+    /// Subagent's own. None while nothing runs, so the shelf leaves with
+    /// the last task.
+    fn background_chips(&self, index: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let pane = &self.panes[index];
+        if !pane.is_main() {
+            return None;
+        }
+        let thread = pane.thread()?;
+        let open = self.cockpit.thread(thread)?;
+        let generation = open.generation();
+        let chips = crate::background_chips::BackgroundChips::new(
+            SharedString::from(format!("background-chips-{}", thread.get())),
+            open.transcript().progress().background().iter().cloned(),
+        );
+        if chips.is_empty() {
+            return None;
+        }
+        if !open.supports_control(ferrite_core::ControlKind::StopTask) {
+            return Some(chips.into_any_element());
+        }
+        let view = cx.entity().downgrade();
+        Some(
+            chips
+                .on_stop(move |id, _, cx| {
+                    let id = id.to_string();
+                    let _ = view.update(cx, |view, cx| {
+                        // Only a task this very Session still reports as
+                        // working: a chip clicked as its snapshot changes
+                        // must not stop whatever took its place.
+                        let running =
+                            view.cockpit.thread(thread).is_some_and(|open| {
+                                open.generation() == generation
+                                    && open.transcript().progress().background().iter().any(
+                                        |task| {
+                                            task.id == id
+                                                && task.status
+                                                    == ferrite_core::progress::TaskStatus::Working
+                                        },
+                                    )
+                            });
+                        if running {
+                            view.run_session_control(
+                                thread,
+                                generation,
+                                ferrite_core::SessionControl::StopTask { id },
+                            );
+                        }
+                        cx.notify();
+                    });
+                })
+                .into_any_element(),
         )
     }
 
@@ -12017,14 +12229,17 @@ mod tests {
         });
     }
 
-    /// The branch selector names the checkout honestly and offers the two
-    /// ways to start fresh: beside the operator or in an isolated worktree.
+    /// The branch selector names the checkout honestly, offers the branch
+    /// the repo was on as an existing branch, and the two ways to start
+    /// fresh: beside the operator or in an isolated worktree.
     #[gpui::test]
-    fn the_branch_chip_offers_the_checked_out_branch_main_and_both_new_branch_modes(
+    fn the_branch_chip_offers_the_checkout_its_other_branch_and_both_new_branch_modes(
         cx: &mut TestAppContext,
     ) {
         let base = scratch("branch-menu");
         let repo = repo_in(&base);
+        // Whatever this machine's `git init` called its first branch.
+        let default = ferrite_core::workspace::checkout_branch(&repo).expect("a branch");
         let switched = std::process::Command::new("git")
             .args(["switch", "-q", "-c", "feature/checked-out"])
             .current_dir(&repo)
@@ -12060,7 +12275,7 @@ mod tests {
                 rows,
                 vec![
                     ("feature/checked-out", "checked out", true),
-                    ("main", "existing branch", false),
+                    (default.as_str(), "existing branch", false),
                     ("New branch", "in the project checkout", false),
                     ("New branch + worktree", "in an isolated checkout", false),
                 ]
@@ -12094,6 +12309,9 @@ mod tests {
                 .expect("git");
             assert!(out.status.success(), "git {args:?}: {out:?}");
         }
+        // Whatever this machine's `git init` called each first branch.
+        let default_one = ferrite_core::workspace::checkout_branch(&repo_one).expect("a branch");
+        let default_two = ferrite_core::workspace::checkout_branch(&repo_two).expect("a branch");
         let fake = Fake::default();
         let store = Store::open(base.join("threads")).unwrap();
         let core = Cockpit::new(store, Box::new(fake));
@@ -12160,8 +12378,9 @@ mod tests {
             draft.binding.project()
         });
 
-        // tab: the workspace chip; ↵ opens its popover, naming the chosen
-        // project's own checkout and the two ways to start fresh.
+        // tab: the workspace chip; ↵ opens its popover, scoped to the
+        // chosen project only — its one worktree between the checkout
+        // and the two ways to start fresh.
         cx.simulate_keystrokes("tab");
         cx.simulate_keystrokes("enter");
         view.read_with(cx, |view, _| {
@@ -12173,8 +12392,13 @@ mod tests {
             let labels: Vec<&str> = band.rows.iter().map(|row| row.name.as_ref()).collect();
             assert_eq!(
                 labels,
-                vec!["master", "main", "New branch", "New branch + worktree"],
-                "the chosen repo's checkout, then main and the fresh starts"
+                vec![
+                    default_two.as_str(),
+                    "ferrite/wt-1",
+                    "New branch",
+                    "New branch + worktree"
+                ],
+                "the chosen repo's checkout, its worktree, then the fresh starts"
             );
         });
 
@@ -12201,8 +12425,203 @@ mod tests {
             let labels: Vec<&str> = band.rows.iter().map(|row| row.name.as_ref()).collect();
             assert_eq!(
                 labels,
-                vec!["master", "main", "New branch", "New branch + worktree"],
+                vec![default_one.as_str(), "New branch", "New branch + worktree"],
                 "the other repo's own checkout, and nothing from the first"
+            );
+        });
+    }
+
+    /// A repo on `trunk` with `main` and `topic/spare` as plain branches
+    /// and one hand-made worktree, `wt-feature`, on `feature/wt` — every
+    /// shape the workspace chip must tell apart, normalised off whatever
+    /// this machine's `git init` called its first branch.
+    fn repo_with_worktree_and_branches(base: &std::path::Path) -> std::path::PathBuf {
+        let repo = repo_in(base);
+        let worktree = base.join("wt-feature");
+        let worktree = worktree.to_str().unwrap();
+        for args in [
+            vec!["branch", "-M", "trunk"],
+            vec!["branch", "main"],
+            vec!["branch", "topic/spare"],
+            vec!["worktree", "add", "-q", worktree, "-b", "feature/wt"],
+        ] {
+            let out = std::process::Command::new("git")
+                .args(&args)
+                .current_dir(&repo)
+                .output()
+                .expect("git");
+            assert!(out.status.success(), "git {args:?}: {out:?}");
+        }
+        repo
+    }
+
+    /// The workspace chip lists what the repo actually holds: the checkout,
+    /// every other worktree git lists — hand-made ones included, named by
+    /// branch with the directory as detail — every other local branch, then
+    /// the fresh starts. A branch a worktree sits on is not offered twice.
+    #[gpui::test]
+    fn the_workspace_chip_lists_the_repos_other_worktrees_and_local_branches(
+        cx: &mut TestAppContext,
+    ) {
+        let base = scratch("workspace-rows");
+        let repo = repo_with_worktree_and_branches(&base);
+        let fake = Fake::default();
+        let store = Store::open(base.join("threads")).unwrap();
+        let core = Cockpit::new(store, Box::new(fake));
+        bind_band_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, _| view.aim_launch(&repo));
+        tick(cx);
+
+        cx.simulate_keystrokes("tab");
+        cx.simulate_keystrokes("tab");
+        cx.simulate_keystrokes("tab");
+        cx.simulate_keystrokes("tab");
+        cx.simulate_keystrokes("enter");
+
+        view.read_with(cx, |view, _| {
+            let popover = view
+                .popover
+                .as_ref()
+                .expect("the workspace popover is open");
+            assert!(matches!(
+                popover.kind,
+                Kind::Band(pane::BandChip::Workspace)
+            ));
+            let rows: Vec<(&str, &str, bool)> = popover
+                .rows
+                .iter()
+                .map(|row| (row.name.as_ref(), row.detail.as_ref(), row.active))
+                .collect();
+            assert_eq!(
+                rows,
+                vec![
+                    ("trunk", "checked out", true),
+                    ("feature/wt", "worktree · wt-feature", false),
+                    ("main", "existing branch", false),
+                    ("topic/spare", "existing branch", false),
+                    ("New branch", "in the project checkout", false),
+                    ("New branch + worktree", "in an isolated checkout", false),
+                ]
+            );
+        });
+    }
+
+    /// Picking a worktree row binds the draft to that worktree's path, and
+    /// the first send lands the Thread there — adopting the standing tree:
+    /// nothing minted, nothing registered, nothing created.
+    #[gpui::test]
+    fn picking_an_existing_worktree_binds_the_thread_to_its_path(cx: &mut TestAppContext) {
+        let base = scratch("workspace-pick");
+        let repo = repo_with_worktree_and_branches(&base);
+        let worktree = std::fs::canonicalize(base.join("wt-feature")).unwrap();
+        let fake = Fake::default();
+        let store = Store::open(base.join("threads")).unwrap();
+        let core = Cockpit::new(store, Box::new(fake));
+        bind_production_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, _| view.aim_launch(&repo));
+        tick(cx);
+
+        // tab ×4 to the workspace chip, ↵ opens it; down reaches the
+        // worktree row, ↵ picks it.
+        cx.simulate_keystrokes("tab");
+        cx.simulate_keystrokes("tab");
+        cx.simulate_keystrokes("tab");
+        cx.simulate_keystrokes("tab");
+        cx.simulate_keystrokes("enter");
+        cx.simulate_keystrokes("down");
+        cx.simulate_keystrokes("enter");
+        view.read_with(cx, |view, _| {
+            assert!(view.popover.is_none(), "the pick closed the popover");
+            let draft = view.panes[view.focused()].draft().expect("still a draft");
+            match draft.binding.target() {
+                DraftTarget::Existing { branch, path } => {
+                    assert_eq!(branch, "feature/wt");
+                    assert_eq!(std::fs::canonicalize(path).unwrap(), worktree);
+                }
+                other => panic!("the pick bound the worktree: {other:?}"),
+            }
+        });
+
+        // escape returns to the prompt; the first send bootstraps.
+        cx.simulate_keystrokes("escape");
+        cx.simulate_input("run the tests");
+        cx.simulate_keystrokes("enter");
+        tick(cx);
+
+        view.read_with(cx, |view, _| {
+            let thread = view.panes[view.focused()]
+                .thread()
+                .expect("the draft became a Thread");
+            let cwd = view
+                .cockpit
+                .thread(thread)
+                .unwrap()
+                .workspace()
+                .unwrap()
+                .cwd()
+                .to_path_buf();
+            assert_eq!(std::fs::canonicalize(cwd).unwrap(), worktree);
+            let project = view.cockpit.registry().projects()[0].id;
+            assert!(
+                view.cockpit.registry().worktrees(project).is_empty(),
+                "adoption minted nothing"
+            );
+            assert_eq!(
+                ferrite_core::workspace::worktree_paths(&repo)
+                    .unwrap()
+                    .len(),
+                2,
+                "adoption created nothing"
+            );
+        });
+    }
+
+    /// `main` is a row only where the repo has one: a repo whose sole
+    /// branch is `trunk` offers the checkout and the fresh starts, and
+    /// nothing named `main` — a row that would only fail at first send.
+    #[gpui::test]
+    fn a_repo_without_a_main_branch_offers_no_main_row(cx: &mut TestAppContext) {
+        let base = scratch("workspace-no-main");
+        let repo = repo_in(&base);
+        let renamed = std::process::Command::new("git")
+            .args(["branch", "-M", "trunk"])
+            .current_dir(&repo)
+            .output()
+            .expect("git branch");
+        assert!(renamed.status.success(), "git branch: {renamed:?}");
+        let fake = Fake::default();
+        let store = Store::open(base.join("threads")).unwrap();
+        let core = Cockpit::new(store, Box::new(fake));
+        bind_band_keys(cx);
+        let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+        view.update(cx, |view, _| view.aim_launch(&repo));
+        tick(cx);
+
+        cx.simulate_keystrokes("tab");
+        cx.simulate_keystrokes("tab");
+        cx.simulate_keystrokes("tab");
+        cx.simulate_keystrokes("tab");
+        cx.simulate_keystrokes("enter");
+
+        view.read_with(cx, |view, _| {
+            let popover = view
+                .popover
+                .as_ref()
+                .expect("the workspace popover is open");
+            let rows: Vec<(&str, &str)> = popover
+                .rows
+                .iter()
+                .map(|row| (row.name.as_ref(), row.detail.as_ref()))
+                .collect();
+            assert_eq!(
+                rows,
+                vec![
+                    ("trunk", "checked out"),
+                    ("New branch", "in the project checkout"),
+                    ("New branch + worktree", "in an isolated checkout"),
+                ]
             );
         });
     }
@@ -16105,6 +16524,7 @@ mod tests {
                 .binding
                 .choose_target(DraftTarget::Existing {
                     branch: worktree.branch,
+                    path: worktree.path,
                 });
         });
         cx.simulate_resize(gpui::size(px(1000.), px(700.)));
@@ -16159,12 +16579,15 @@ mod tests {
                 .update(cx, |composer, cx| composer.set(String::new(), cx));
             let focused = view.focused();
             let project = view.panes[focused].draft().unwrap().binding.project();
-            let branch = view.cockpit.registry().worktrees(project)[0].branch.clone();
+            let worktree = view.cockpit.registry().worktrees(project)[0].clone();
             view.panes[focused]
                 .draft_mut()
                 .unwrap()
                 .binding
-                .choose_target(DraftTarget::Existing { branch });
+                .choose_target(DraftTarget::Existing {
+                    branch: worktree.branch,
+                    path: worktree.path,
+                });
         });
         cx.simulate_input("@worktree-only");
         cx.run_until_parked();
@@ -16207,6 +16630,7 @@ mod tests {
                 .binding
                 .choose_target(DraftTarget::Existing {
                     branch: "removed-worktree".into(),
+                    path: base.join("removed-worktree"),
                 });
         });
         tick(cx);

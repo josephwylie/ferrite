@@ -598,7 +598,8 @@ fn rollup_state(runs: &[Check]) -> CheckState {
     CheckState::Pending
 }
 
-/// The local branches of `repo`, in git's own ref order.
+/// The local branches of `repo`, in git's own ref order. The workspace
+/// chip's `existing branch` rows.
 pub fn branches(repo: &Path) -> Result<Vec<String>, GitError> {
     let listed = git(
         repo,
@@ -607,16 +608,56 @@ pub fn branches(repo: &Path) -> Result<Vec<String>, GitError> {
     Ok(listed.lines().map(str::to_string).collect())
 }
 
+/// One worktree as `git worktree list --porcelain` names it: the path git
+/// prints (symlinks resolved) and the branch it has checked out — none
+/// when its HEAD is detached, or for a bare repository's own stanza.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListedWorktree {
+    pub path: PathBuf,
+    pub branch: Option<String>,
+}
+
+/// Every worktree git itself registers for `repo`, main checkout first as
+/// git lists it — one stanza each, its `worktree` line the path and its
+/// `branch refs/heads/…` line the branch. Hand-made worktrees (a repo's
+/// own `.worktrees/*`, say) are listed exactly like Ferrite's own: this is
+/// git's answer, not the registry's, and the workspace chip's worktree
+/// rows read it.
+pub fn worktrees(repo: &Path) -> Result<Vec<ListedWorktree>, GitError> {
+    let listed = git(repo, &["worktree", "list", "--porcelain"])?;
+    Ok(parse_worktrees(&listed))
+}
+
+/// The stanzas of `git worktree list --porcelain`: each opens with its
+/// `worktree <path>` line; a `branch refs/heads/<name>` line follows on a
+/// checked-out branch, `detached` on none. `HEAD`, `bare`, `locked` and
+/// `prunable` lines are passed over — the path and branch are the facts
+/// a row needs.
+fn parse_worktrees(listed: &str) -> Vec<ListedWorktree> {
+    let mut found: Vec<ListedWorktree> = Vec::new();
+    for line in listed.lines() {
+        if let Some(path) = line.strip_prefix("worktree ") {
+            found.push(ListedWorktree {
+                path: PathBuf::from(path),
+                branch: None,
+            });
+        } else if let Some(branch) = line.strip_prefix("branch refs/heads/") {
+            if let Some(last) = found.last_mut() {
+                last.branch = Some(branch.to_string());
+            }
+        }
+    }
+    found
+}
+
 /// The worktree paths git itself registers for `repo` — the first line of
 /// each `git worktree list --porcelain` stanza, main checkout included.
 /// The adoption conflict check's ground truth (#29), and what a Thread's
 /// `follow` is handed to learn where its agent may have moved.
 pub fn worktree_paths(repo: &Path) -> Result<Vec<PathBuf>, GitError> {
-    let listed = git(repo, &["worktree", "list", "--porcelain"])?;
-    Ok(listed
-        .lines()
-        .filter_map(|line| line.strip_prefix("worktree "))
-        .map(PathBuf::from)
+    Ok(worktrees(repo)?
+        .into_iter()
+        .map(|worktree| worktree.path)
         .collect())
 }
 
@@ -893,6 +934,77 @@ mod tests {
         // its own branch.
         ensure_worktree(&repo, &second, "ferrite/thread-9").unwrap();
         assert_eq!(branch_of(&second), "ferrite/thread-9");
+    }
+
+    /// The porcelain listing read stanza by stanza: the path from the
+    /// `worktree` line, the branch from `branch refs/heads/…`, none on a
+    /// detached HEAD — and the other lines git prints passed over.
+    #[test]
+    fn the_worktree_listing_parses_paths_and_branches_per_stanza() {
+        let listed = concat!(
+            "worktree /srv/repo\n",
+            "HEAD 0123456789abcdef0123456789abcdef01234567\n",
+            "branch refs/heads/main\n",
+            "\n",
+            "worktree /srv/repo/.worktrees/feature\n",
+            "HEAD 0123456789abcdef0123456789abcdef01234567\n",
+            "branch refs/heads/feature/rows\n",
+            "locked\n",
+            "\n",
+            "worktree /srv/elsewhere\n",
+            "HEAD 0123456789abcdef0123456789abcdef01234567\n",
+            "detached\n",
+            "prunable gitdir file points to non-existent location\n",
+            "\n",
+        );
+        assert_eq!(
+            parse_worktrees(listed),
+            vec![
+                ListedWorktree {
+                    path: PathBuf::from("/srv/repo"),
+                    branch: Some("main".into()),
+                },
+                ListedWorktree {
+                    path: PathBuf::from("/srv/repo/.worktrees/feature"),
+                    branch: Some("feature/rows".into()),
+                },
+                ListedWorktree {
+                    path: PathBuf::from("/srv/elsewhere"),
+                    branch: None,
+                },
+            ]
+        );
+    }
+
+    /// Against real git: the main checkout leads, every added worktree
+    /// follows with its branch, and `worktree_paths` is the same listing
+    /// with the branches dropped.
+    #[test]
+    fn worktrees_lists_the_main_checkout_and_every_added_tree_with_its_branch() {
+        let root = scratch("listing");
+        let repo = init_repo(&root);
+        let tree = root.join("side");
+        ensure_worktree(&repo, &tree, "feature/side").unwrap();
+
+        let listed = worktrees(&repo).unwrap();
+        assert_eq!(listed.len(), 2, "{listed:?}");
+        assert_eq!(
+            fs::canonicalize(&listed[0].path).unwrap(),
+            fs::canonicalize(&repo).unwrap()
+        );
+        assert_eq!(listed[0].branch.as_deref(), Some("main"));
+        assert_eq!(
+            fs::canonicalize(&listed[1].path).unwrap(),
+            fs::canonicalize(&tree).unwrap()
+        );
+        assert_eq!(listed[1].branch.as_deref(), Some("feature/side"));
+        assert_eq!(
+            worktree_paths(&repo).unwrap(),
+            listed
+                .into_iter()
+                .map(|worktree| worktree.path)
+                .collect::<Vec<_>>()
+        );
     }
 
     /// A brand-new repo with no commits still gets a worktree: git infers an

@@ -449,8 +449,11 @@ impl Registry {
         Ok(())
     }
 
-    /// The registered worktrees of one project — the workspace chip's rows.
-    /// Scoped by construction: no verb answers a cross-project list.
+    /// The worktrees Ferrite itself minted for one project — its record of
+    /// what `reserve_worktree` placed, not the repo's worktrees: the
+    /// workspace chip lists those from `git worktree list`, hand-made ones
+    /// included. Scoped by construction: no verb answers a cross-project
+    /// list.
     pub fn worktrees(&self, project: ProjectId) -> &[WorktreeEntry] {
         self.worktrees
             .get(&project)

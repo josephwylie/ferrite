@@ -313,3 +313,102 @@ fn the_composer_mode_chip_opens_a_native_mode_menu_while_idle(cx: &mut TestAppCo
         fake.controls.borrow()
     );
 }
+
+#[gpui::test]
+fn contract_background_tasks_ride_the_composer_shelf(cx: &mut TestAppContext) {
+    use ferrite_core::progress::{BackgroundTask, ProgressEvent, TaskStatus};
+    let (core, fake) = cockpit("native-background-chips", 1);
+    let thread = core.threads()[0];
+    *fake.native_controls.borrow_mut() = true;
+    let (_view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1100.), px(800.)));
+    assert!(
+        cx.debug_bounds("background-chips").is_none(),
+        "nothing running, no shelf"
+    );
+    let task = |id: &str, label: &str, status| BackgroundTask {
+        id: id.into(),
+        label: label.into(),
+        detail: "local_bash".into(),
+        status,
+    };
+    let snapshot = |tasks| SessionEvent::Progress {
+        event: ProgressEvent::BackgroundSnapshot { tasks },
+    };
+    fake.streams.borrow()[0]
+        .send(snapshot(vec![
+            task("task:1", "cargo test --workspace", TaskStatus::Working),
+            task("task:2", "already finished", TaskStatus::Completed),
+        ]))
+        .unwrap();
+    tick(cx);
+    let shelf = cx
+        .debug_bounds("background-chips")
+        .expect("a running task docks a chip above the prompt");
+    let chip = cx.debug_bounds("background-chip-0").unwrap();
+    assert!(
+        cx.debug_bounds("background-chip-1").is_none(),
+        "finished tasks leave the shelf"
+    );
+    let editor = cx
+        .debug_bounds("focused-prompt-editor")
+        .or_else(|| cx.debug_bounds("prompt-editor"))
+        .unwrap();
+    assert!(
+        shelf.bottom() <= editor.top(),
+        "the shelf stays above the editable prompt"
+    );
+    assert!(
+        chip.center().x > editor.center().x,
+        "chips hang at the right edge of the prompt box, not the left"
+    );
+    // Send closes the prompt row on the right, beside the editor.
+    let send = bounds(cx, format!("composer-send-{:?}", PaneIdentity::Thread(thread)));
+    assert!(
+        (shelf.right() - send.right()).abs() <= px(2.),
+        "the shelf's right edge is the prompt box's right edge: shelf {:?} vs send {:?}",
+        shelf.right(),
+        send.right()
+    );
+    let stop = cx.debug_bounds("background-chip-stop-0").unwrap();
+    cx.simulate_click(stop.center(), gpui::Modifiers::none());
+    cx.run_until_parked();
+    assert!(fake
+        .controls
+        .borrow()
+        .contains(&ferrite_core::SessionControl::StopTask {
+            id: "task:1".into()
+        }));
+    assert!(
+        fake.sent.borrow().is_empty(),
+        "a chip's × is a control, never a prompt"
+    );
+    // A Session that cannot stop tasks still shows what runs — read-only.
+    *fake.native_controls.borrow_mut() = false;
+    fake.streams.borrow()[0]
+        .send(snapshot(vec![task(
+            "task:1",
+            "cargo test --workspace",
+            TaskStatus::Working,
+        )]))
+        .unwrap();
+    tick(cx);
+    assert!(cx.debug_bounds("background-chip-0").is_some());
+    assert!(
+        cx.debug_bounds("background-chip-stop-0").is_none(),
+        "no stop control where the Session offers none"
+    );
+    // The last task finishing takes the shelf with it.
+    fake.streams.borrow()[0]
+        .send(snapshot(vec![task(
+            "task:1",
+            "cargo test --workspace",
+            TaskStatus::Completed,
+        )]))
+        .unwrap();
+    tick(cx);
+    assert!(
+        cx.debug_bounds("background-chips").is_none(),
+        "the shelf leaves with the last running task"
+    );
+}

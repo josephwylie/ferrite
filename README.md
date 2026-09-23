@@ -77,7 +77,9 @@ or `backspace` on an empty prompt box to remove it.
 Shortcuts below use `cmd`; on Windows use `ctrl`.
 
 - `cmd-t` / `cmd-n` — new Thread. You pick the provider, model, project folder,
-  and whether to use the checkout or a fresh worktree.
+  and where it works: the checkout as it stands, one of the repo's existing
+  worktrees or branches, or a new branch — in the checkout or in a fresh
+  worktree.
 - `cmd-shift-n` — new Thread in its own git worktree
 - `escape` — interrupt whatever's running
 - `y` / `n` / `a` — answer a Decision: allow, deny, or always allow. Works from
@@ -129,6 +131,12 @@ after you send, and they're still there when you reopen the Thread. Attachments
 follow queued prompts and history recall too. Claude and Codex get supported
 images as real image input; anything else is passed as a file path for their
 tools to read.
+
+**Background work shows as chips** on the right of that same tray: when Claude
+sends a shell command or a subagent to the background, or Codex leaves a command
+running as a background terminal, each running task gets a chip with a green
+pulse and its description. Hit a chip's × to stop that task. Chips leave when
+their task finishes, and the tray goes with the last one.
 
 **Click the pencil next to a Project** in the project filter to add or remove
 directories, or delete the project. The directory it was created from stays

@@ -9,6 +9,7 @@
 mod activity;
 pub(super) mod discovery;
 mod file_search;
+mod menu;
 mod queue;
 mod suggestions;
 pub(super) mod wire;
@@ -186,7 +187,9 @@ pub struct ClaudeCapabilities {
     /// The CLI's effective slash-command menu — built-ins, skills, project
     /// commands and plugins in one list, disabled overrides already honoured
     /// (#23). The reader announces it as `SessionEvent::Commands`; submitting
-    /// `/name args` as plain prompt text is how one is invoked.
+    /// `/name args` as plain prompt text is how one is invoked. MCP prompts
+    /// are missing here — their servers have not connected this early —
+    /// and join by a later `Commands` once they have (see `menu`).
     pub commands: Vec<crate::SessionCommand>,
 }
 
@@ -692,6 +695,7 @@ fn read_stdout(
         let mut reader = BufReader::new(stdout);
         let mut line = Vec::new();
         let mut handshake = Some(handshake);
+        let mut menu = menu::McpMenu::default();
         loop {
             line.clear();
             match reader.read_until(b'\n', &mut line) {
@@ -733,6 +737,21 @@ fn read_stdout(
                     };
                     let _ = reply.send(result);
                     continue;
+                }
+                if value["type"] == "system" && value["subtype"] == "init" {
+                    menu.init_line(&value, &stdin);
+                }
+                if value["type"] == "control_response" {
+                    if let Some(step) =
+                        menu.take(response["request_id"].as_str().unwrap_or_default())
+                    {
+                        if let Some(event) = menu.answered(step, text, &value, &stdin) {
+                            if sender.send(event).is_err() {
+                                return;
+                            }
+                        }
+                        continue;
+                    }
                 }
                 let control = lock(&control_replies)
                     .remove(response["request_id"].as_str().unwrap_or_default());
@@ -788,6 +807,9 @@ fn read_stdout(
             }
             if handshake.is_some() {
                 if let Some(capabilities) = wire::parse_capabilities(text, HANDSHAKE_REQUEST_ID) {
+                    // The MCP prompts are not in this menu yet; the settle
+                    // that fetches them starts now, before spawn returns.
+                    menu.begin(&capabilities.commands, &stdin);
                     // The command menu rides the same handshake line; announce
                     // it on the event stream so the cockpit can fold it (#23).
                     // An install that lists none announces nothing.
@@ -830,6 +852,9 @@ fn read_stdout(
             // the result's count is in before the turn is over.
             let events = lock(&decoder).decode(text);
             for event in events {
+                if let SessionEvent::Commands { commands } = &event {
+                    menu.announced(commands);
+                }
                 // A full channel parks this thread, the OS pipe fills, and the
                 // CLI blocks on its own write. Backpressure, never loss.
                 if sender.send(event).is_err() {

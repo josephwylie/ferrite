@@ -145,31 +145,75 @@ pub(in crate::providers) fn parse_capabilities(
             })
             .unwrap_or_default(),
         // The CLI's effective menu — one list mixing built-ins, skills,
-        // project commands and plugins, `skillOverrides` already applied
-        // (#23 wire study §1). Entry shape `{name, description, argumentHint,
-        // aliases?}`; only what the `/` menu shows is lifted, and an entry
-        // with no name could never be typed, so it is skipped.
+        // project commands, plugins and, once their servers have connected,
+        // MCP prompts, `skillOverrides` already applied (#23 wire study
+        // §1). Entry shape `{name, description, argumentHint, aliases?}`;
+        // only what the `/` menu shows is lifted, and an entry with no
+        // name could never be typed, so it is skipped.
         commands: body
             .get("commands")
             .and_then(Value::as_array)
-            .map(|commands| {
-                commands
-                    .iter()
-                    .filter_map(|command| {
-                        Some(crate::SessionCommand {
-                            name: command.get("name")?.as_str()?.to_string(),
-                            description: command
-                                .get("description")
-                                .and_then(Value::as_str)
-                                .unwrap_or_default()
-                                .to_string(),
-                            path: None,
-                        })
-                    })
-                    .collect()
-            })
+            .map(|commands| commands.iter().filter_map(command_entry).collect())
             .unwrap_or_default(),
     })
+}
+
+/// One entry of the CLI's command list as a menu row.
+///
+/// The CLI names an MCP prompt the way its own menu shows it,
+/// `server:prompt (MCP)`, but what dispatches is the prompt's command name,
+/// `mcp__server__prompt` — the form every `system:init` line's
+/// `slash_commands` lists. Verified by capture (2.1.275):
+/// `/mcp__reui__improve` runs the prompt, `/reui:improve` is "not
+/// available". The row is therefore named the typeable way, and the
+/// display name leads its description so the menu still reads as the
+/// CLI's does.
+fn command_entry(command: &Value) -> Option<crate::SessionCommand> {
+    let display = command.get("name")?.as_str()?;
+    let description = command
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    Some(match mcp_prompt_command(display) {
+        Some(name) => crate::SessionCommand {
+            name,
+            description: if description.is_empty() {
+                display.to_string()
+            } else {
+                format!("{display} · {description}")
+            },
+            path: None,
+        },
+        None => crate::SessionCommand {
+            name: display.to_string(),
+            description: description.to_string(),
+            path: None,
+        },
+    })
+}
+
+/// `server:prompt (MCP)` → `mcp__server__prompt`, the server's name
+/// normalized the way the CLI normalizes it for every `mcp__` id: anything
+/// but a letter, digit or underscore becomes an underscore, as its tool
+/// ids show (`claude.ai Claude Docs` → `mcp__claude_ai_Claude_Docs__…`).
+/// Anything else is not an MCP prompt.
+pub(in crate::providers) fn mcp_prompt_command(display: &str) -> Option<String> {
+    let base = display.strip_suffix(" (MCP)")?;
+    let (server, prompt) = base.split_once(':')?;
+    if server.is_empty() || prompt.is_empty() || prompt.contains(char::is_whitespace) {
+        return None;
+    }
+    let server: String = server
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    Some(format!("mcp__{server}__{prompt}"))
 }
 
 /// `None` means "nothing Ferrite models": hook chatter, status lines,
@@ -1181,17 +1225,7 @@ fn parse_system(value: &Value) -> Option<SessionEvent> {
                 .get("commands")?
                 .as_array()?
                 .iter()
-                .filter_map(|command| {
-                    Some(crate::SessionCommand {
-                        name: command.get("name")?.as_str()?.to_string(),
-                        description: command
-                            .get("description")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_string(),
-                        path: None,
-                    })
-                })
+                .filter_map(command_entry)
                 .collect(),
         }),
         "status" => value
@@ -1895,6 +1929,52 @@ mod tests {
         // Claude commands are invoked as plain `/name args` text — there is
         // no path for a typed item to carry.
         assert!(capabilities.commands.iter().all(|c| c.path.is_none()));
+    }
+
+    /// An MCP prompt is listed by its display name but typed by its
+    /// command name; the row carries the one that dispatches.
+    #[test]
+    fn an_mcp_prompt_row_is_named_the_way_it_is_typed() {
+        assert_eq!(
+            mcp_prompt_command("reui:improve (MCP)").as_deref(),
+            Some("mcp__reui__improve")
+        );
+        assert_eq!(
+            mcp_prompt_command("claude.ai Claude Docs:summarize (MCP)").as_deref(),
+            Some("mcp__claude_ai_Claude_Docs__summarize")
+        );
+        for plain in [
+            "compact",
+            "impeccable:impeccable",
+            "reui: (MCP)",
+            ":x (MCP)",
+            "a:b c (MCP)",
+        ] {
+            assert_eq!(mcp_prompt_command(plain), None, "{plain}");
+        }
+        let line = serde_json::json!({
+            "type": "control_response",
+            "response": {"subtype": "success", "request_id": "ferrite_mcp_init_2", "response": {
+                "commands": [
+                    {"name": "reui:improve (MCP)", "description": "Refine ReUI UI", "argumentHint": ""},
+                    {"name": "reui:build (MCP)", "description": ""},
+                    {"name": "compact", "description": "Free up context"}
+                ]
+            }}
+        })
+        .to_string();
+        let commands = parse_capabilities(&line, "ferrite_mcp_init_2")
+            .expect("answers the given id")
+            .commands;
+        assert_eq!(commands[0].name, "mcp__reui__improve");
+        assert_eq!(
+            commands[0].description,
+            "reui:improve (MCP) · Refine ReUI UI"
+        );
+        assert_eq!(commands[1].name, "mcp__reui__build");
+        assert_eq!(commands[1].description, "reui:build (MCP)");
+        assert_eq!(commands[2].name, "compact");
+        assert_eq!(commands[2].description, "Free up context");
     }
 
     /// The response to somebody else's request is not this Session's answer.

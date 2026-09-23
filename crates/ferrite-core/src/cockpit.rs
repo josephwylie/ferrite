@@ -4953,6 +4953,50 @@ mod tests {
         assert_eq!(cockpit.parked().unwrap(), vec![], "no half-born Thread");
     }
 
+    /// A worktree the operator made by hand — one git lists, the registry
+    /// never minted — adopts the same way: the Thread binds to its path,
+    /// the Session spawns there, and nothing is created or registered.
+    #[test]
+    fn a_hand_made_worktree_is_adopted_without_minting_or_registering() {
+        let root = scratch("adopt-hand-made");
+        let (mut cockpit, fake) = cockpit("adopt-hand-made-store");
+        let repo = init_repo(&root);
+        let hand_made = root.join("hand-made");
+        crate::workspace::ensure_worktree(&repo, &hand_made, "feature/hand-made").unwrap();
+
+        let thread = cockpit
+            .open(
+                Provider::Claude,
+                WorkspaceChoice::ExistingWorktree {
+                    repo: repo.clone(),
+                    path: hand_made.clone(),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(
+            cockpit.thread(thread).and_then(|open| open.workspace()),
+            Some(&WorkspaceBinding::Worktree {
+                repo: repo.clone(),
+                path: hand_made.clone(),
+            })
+        );
+        assert_eq!(
+            fake.cwds.borrow().last().unwrap().as_deref(),
+            Some(hand_made.as_path())
+        );
+        let project = cockpit.registry().projects()[0].id;
+        assert!(
+            cockpit.registry().worktrees(project).is_empty(),
+            "adoption registers nothing"
+        );
+        assert_eq!(
+            crate::workspace::worktree_paths(&repo).unwrap().len(),
+            2,
+            "adoption creates nothing"
+        );
+    }
+
     /// #29's bootstrap failure contract: a Session that will not spawn
     /// takes the half-born Thread with it — the draft Pane stays draft and
     /// nothing claims to exist. The worktree just created stays, real and
