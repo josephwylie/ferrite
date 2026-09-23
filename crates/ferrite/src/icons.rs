@@ -88,6 +88,7 @@ icons![
     // (end WP-E)
 
     // ---- WP-F icons (append names above the end line)
+    "diamond",
     // (end WP-F)
 
     // ---- WP-G icons (append names above the end line)
@@ -173,6 +174,9 @@ pub const COMMAND: &str = "icons/command.svg";
 // (end WP-E)
 
 // ---- WP-F icon names (append consts above the end line)
+/// `◆`, drawn (Geist Mono lacks it): a Decision's mark — the card's head and
+/// the L2 cell's. A fill glyph, like the logomarks.
+pub const DIAMOND: &str = "icons/diamond.svg";
 // (end WP-F)
 
 // ---- WP-G icon names (append consts above the end line)
@@ -379,6 +383,7 @@ mod tests {
             RESEND,
             PROMPT,
             FERRITE_MONO,
+            DIAMOND,
         ] {
             let bytes = Assets
                 .load(key)

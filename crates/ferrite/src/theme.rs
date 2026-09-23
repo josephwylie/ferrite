@@ -686,6 +686,12 @@ pub fn init_components(cx: &mut gpui::App) {
     theme.scrollbar = rgba(TRANSPARENT).into();
     theme.scrollbar_thumb = rgb(SCROLLBAR).into();
     theme.scrollbar_thumb_hover = rgb(SCROLLBAR_HOVER).into();
+    // The subject strip (the app's only TabBar, plain Tab variant): no bar
+    // ground, the active tab a FILL pill in TEXT_STRONG, the rest muted.
+    theme.tab_bar = rgba(TRANSPARENT).into();
+    theme.tab_active = rgb(FILL).into();
+    theme.tab_active_foreground = rgb(TEXT_STRONG).into();
+    theme.tab_foreground = rgb(TEXT_MUTED).into();
     // `Theme::change` resolved the kit's pre-computed tokens from its default
     // palette, and nothing recomputes them: widgets that read `tokens.*`
     // (Button::primary, menu rows, tooltips, checkboxes) would paint the
@@ -1220,89 +1226,187 @@ pub const MENU_PATH_TAIL: usize = 48;
 // Owner: WP-F (decision.rs, subagents.rs, the Decision card and keycaps.)
 // Edit values and append tokens only inside this section.
 
-/// The Decision card: 12px inline margin, 8px below, 8/10 padding, a 10px
-/// gap, and a 15px warning mark.
-#[allow(dead_code)]
-pub const DECISION_MARGIN_X: f32 = 12.0;
-#[allow(dead_code)]
-pub const DECISION_MARGIN_B: f32 = 8.0;
-#[allow(dead_code)]
-pub const DECISION_PAD_X: f32 = 10.0;
-#[allow(dead_code)]
-pub const DECISION_PAD_Y: f32 = 8.0;
-#[allow(dead_code)]
-pub const DECISION_GAP: f32 = 10.0;
-pub const ICON_WARNING: f32 = 15.0;
-/// The Decision card's keycaps today: 3px block, 7px inline padding.
-#[allow(dead_code)]
-pub const KEYCAP_PAD_X: f32 = 7.0;
-#[allow(dead_code)]
-pub const KEYCAP_PAD_Y: f32 = 3.0;
-/// The native checkbox/radio indicator's box.
-const CHOICE_CONTROL: f32 = 16.0;
-/// The lift that drops a question choice's label onto the native
-/// checkbox/radio indicator's center. The control top-aligns with the label
-/// column, whose first line boxes `LH_PROSE_SM`, so the label rides half that
-/// difference too low. Lifting the label rather than sinking the control
-/// keeps a wrapped choice and its description flowing from the same edge.
-pub const CHOICE_LABEL_LIFT: f32 = (LH_PROSE_SM - CHOICE_CONTROL) / 2.0;
+/// The Decision card (approvals, questions, forms, links — Main's and a
+/// Subagent's alike): a `RAISED` block under an `ATTENTION_WASH` ground with
+/// a 1px `ATTENTION_EDGE` (35%) edge, in the reading column above the
+/// Composer. Mono head (`◆` drawn, the kind word `W_LABEL` `ATTENTION`),
+/// prose question (Geist `FS_PROSE` `W_STRONG` `TEXT_STRONG`), option rows
+/// that each show the one key that picks them, a mono footer. Colour is
+/// state: Deny is not red; the card's amber is the only hue it carries.
+/// 12px inline and 10px block padding; 8px between sections.
+pub const DECISION_PAD_X: f32 = SPACE_3;
+pub const DECISION_PAD_Y: f32 = 10.0;
+pub const DECISION_GAP: f32 = SPACE_2;
+/// The head's drawn diamond: 8px in a `LH_META` line.
+pub const DECISION_MARK: f32 = SPACE_2;
+/// From the card to the Composer below it, and between stacked cards.
+pub const DECISION_DOCK_GAP: f32 = SPACE_2;
+/// An option row: 8px inline, 4px block padding around a `LH_PROSE_SM` line
+/// (26px with no description), 2px apart; its keycap sits 8px before the
+/// label. Hover is `FILL` (the row rests on `RAISED`), selected is `FILL`
+/// plus a trailing `ACCENT` check — never a focus-coloured border.
+pub const DECISION_ROW_PAD_X: f32 = SPACE_2;
+pub const DECISION_ROW_PAD_Y: f32 = SPACE_1;
+pub const DECISION_ROW_GAP: f32 = SPACE_0_5;
+pub const DECISION_ROW_INNER_GAP: f32 = SPACE_2;
+/// The selected row's trailing check.
+pub const DECISION_CHECK: f32 = SPACE_3;
+/// A question's text to its rows, and one question to the next.
+pub const DECISION_QUESTION_GAP: f32 = SPACE_2;
+pub const DECISION_QUESTIONS_GAP: f32 = SPACE_4;
+/// The command well: `GROUND`, 6/10 padding, scrolling past 160px.
+pub const DECISION_WELL_PAD_X: f32 = 10.0;
+pub const DECISION_WELL_PAD_Y: f32 = SPACE_1_5;
+pub const DECISION_INPUT_MAX_H: f32 = 160.0;
+/// A question body's scroll cap inside the card (head and footer stay
+/// pinned); container-relative, never a window fraction.
+pub const DECISION_BODY_MAX_H: f32 = 320.0;
+/// Below a 360px Pane the body caps at two described option rows and
+/// scrolls, so the head and the answer row always stay in reach.
+pub const DECISION_SHORT_PANE_H: f32 = 360.0;
+pub const DECISION_SHORT_BODY_MAX_H: f32 =
+    2.0 * (2.0 * LH_PROSE_SM + 2.0 * DECISION_ROW_PAD_Y) + DECISION_ROW_GAP;
+/// The scroll gutter a body keeps free for its thumb.
+pub const DECISION_SCROLL_GUTTER: f32 = SPACE_1;
+/// An L2 keycap pair (`y allow`): key, 4px, verb; pairs 12px apart.
+pub const DECISION_KEY_GAP: f32 = SPACE_1;
+pub const DECISION_KEYS_GAP: f32 = SPACE_3;
+/// The L2 Decision body: the cell's padding, 6px between its lines.
+pub const DECISION_L2_GAP: f32 = SPACE_1_5;
+
+/// Subagent tabs: the kit's plain `Tab` variant at XSmall (20px high, 8px
+/// inline padding inside a 1px edge each side, packed with no gap), the
+/// active tab a `FILL` pill; labels truncate at 112px. A mark sits 6px
+/// after its label; the `+N` overflow keeps 4px either side.
+pub const SUBJECT_TAB_PAD_X: f32 = SPACE_2;
+pub const SUBJECT_TAB_EDGE: f32 = 1.0;
+pub const SUBJECT_TAB_GAP: f32 = SPACE_1;
+pub const SUBJECT_TAB_INNER_GAP: f32 = SPACE_1_5;
+pub const SUBJECT_LABEL_MAX_W: f32 = 112.0;
+/// The strip's row: the 20px pills with 2px of air above and below.
+pub const SUBJECT_STRIP_H: f32 = CHIP_H + 2.0 * SPACE_0_5;
+/// A working tab's busy dots: three 2px dots 2px apart (10px, no slack),
+/// lifting 2px on a 650ms loop; still under reduced motion.
+pub const BUSY_DOT_D: f32 = SPACE_0_5;
+pub const BUSY_DOT_GAP: f32 = SPACE_0_5;
+pub const BUSY_DOT_LIFT: f32 = SPACE_0_5;
+pub const BUSY_DOTS_MS: u64 = 650;
+pub const BUSY_DOTS_W: f32 = 3.0 * BUSY_DOT_D + 2.0 * BUSY_DOT_GAP;
+/// The one needs-you dot: a waiting tab and the head's jump control.
+pub const ATTENTION_DOT: f32 = 5.0;
+/// A failed agent's drawn `✗`, in `BLOCKED`, beside its label.
+pub const SUBJECT_FAILED_MARK: f32 = SPACE_2;
+/// The head's jump control: a `CHIP_H` square around the dot.
+pub const ATTENTION_JUMP: f32 = CHIP_H;
 // (end WP-F) — append above this line only
 
 // ======================================== WP-G · nav
 // Owner: WP-G (nav.rs and its cockpit wiring.)
 // Edit values and append tokens only inside this section.
+//
+// **The nav is one column grid on `GROUND`.** Every row — a Thread, a Group,
+// a Project heading, the Parked header, and the filter trigger in the head —
+// lays out `ROW_PAD_X | lead slot NAV_LEAD_W | NAV_LEAD_GAP | text … | mark`.
+// The lead slot holds the row's one glyph (status dot, Group glyph, folder,
+// fold chevron), so every title, label and meta line starts on one x, and
+// the head's folder sits on the same axis as the rows' dots (head inset 8 +
+// trigger inset 8 = tree inset 8 + row inset 8). The meta line hangs under
+// the title at that x, and its tail (subagents · age) ends under the mark.
+// Selection is one `FILL` on the focused Thread's row; nothing else fills.
 
-/// A nav row that will accept the drag.
-#[allow(dead_code)]
-pub const DROP_VALID: u32 = ACCENT;
-/// A nav row that refuses the drag.
-#[allow(dead_code)]
-pub const DROP_REFUSED: u32 = BLOCKED;
 /// 42px — the nav head band, which holds the Project filter.
-#[allow(dead_code)]
 pub const NAV_HEAD_H: f32 = 42.0;
+/// 6px between the head's controls.
+pub const NAV_HEAD_GAP: f32 = SPACE_1_5;
 /// The nav tree's padding: 8px top and inline, 16px bottom.
-#[allow(dead_code)]
-pub const NAV_TREE_PAD: f32 = 8.0;
-#[allow(dead_code)]
-pub const NAV_TREE_PAD_B: f32 = 16.0;
-/// 14px — the nav filter trigger's chevron.
-#[allow(dead_code)]
-pub const ICON_CHEVRON_LG: f32 = 14.0;
+pub const NAV_TREE_PAD: f32 = SPACE_2;
+pub const NAV_TREE_PAD_B: f32 = SPACE_4;
 /// 28px — the Project filter trigger.
-#[allow(dead_code)]
-pub const FILTER_TRIGGER_H: f32 = 28.0;
-/// 38px — the filter menu's offset below the nav head's top edge.
-#[allow(dead_code)]
-pub const MENU_TOP: f32 = 38.0;
+pub const FILTER_TRIGGER_H: f32 = ICON_BUTTON;
+/// Where the filter and order menus hang: under the trigger, which is
+/// centred in the head, plus the float offset every popup keeps from its
+/// opener.
+pub const MENU_TOP: f32 = (NAV_HEAD_H + FILTER_TRIGGER_H) / 2.0 + FLOAT_OFFSET;
+/// 224px — the order menu, anchored to its button at the head's right.
+pub const NAV_ORDER_MENU_W: f32 = 224.0;
+/// 12px — a row's lead slot: the status dot, the Group glyph, the folder in
+/// the filter trigger and a Project heading, the Parked chevron.
+pub const NAV_LEAD_W: f32 = GLYPH_BOX;
+/// 6px — from the lead slot to the row's text.
+pub const NAV_LEAD_GAP: f32 = SPACE_1_5;
+/// 18px — where a row's text starts inside its own padding: the title, the
+/// hanging meta line, a heading's label.
+pub const NAV_TEXT_X: f32 = NAV_LEAD_W + NAV_LEAD_GAP;
+/// 8px — from a title to the provider mark at the row's right.
+pub const NAV_MARK_GAP: f32 = SPACE_2;
+/// 4px — between the facts at the tail of a meta line (subagents, age) and
+/// between a meta fact and its `·` seam.
+pub const NAV_TAIL_GAP: f32 = SPACE_1;
 /// 254px — the content box of a root-level nav row: the column less the
 /// tree's inline padding, less the row's own. A truncating title has to be
 /// pinned to it, because gpui only measures an ellipsis against a width it
 /// knows on the line's very first measure (see `nav::group_row`).
-#[allow(dead_code)]
 pub const ROW_TEXT_W: f32 = NAV_WIDTH - 2.0 * NAV_TREE_PAD - 2.0 * ROW_PAD_X;
-/// 16px between Group blocks; 6px between a Group row and its members;
-/// 2px between sibling rows; 24px above the solo section.
-#[allow(dead_code)]
-pub const GROUP_GAP: f32 = 16.0;
-#[allow(dead_code)]
-pub const MEMBERS_TOP: f32 = 6.0;
-#[allow(dead_code)]
-pub const MEMBER_GAP: f32 = 2.0;
-#[allow(dead_code)]
-pub const SOLOS_TOP: f32 = 24.0;
-/// The member indent: rows move 20px right, and the 1px rail sits 7px left
-/// of them (13px right of the Group row's own edge), inset 3px top and
-/// bottom of the members box.
-#[allow(dead_code)]
-pub const MEMBER_INDENT: f32 = 20.0;
-#[allow(dead_code)]
-pub const RAIL_OFFSET: f32 = 7.0;
-#[allow(dead_code)]
+/// 28px — a one-line row: a Thread in Project order, or a parked row in
+/// that order. The same padding as a two-line row around one title line.
+pub const NAV_COMPACT_ROW_H: f32 = 2.0 * ROW_PAD_Y + LH_TIGHT;
+/// 28px — a section heading's row (a Project heading, the Parked header):
+/// one metadata line in the rows' own padding.
+pub const NAV_SECTION_H: f32 = 2.0 * ROW_PAD_Y + LH_META;
+/// 16px — every block boundary in the tree: between two Group blocks (a
+/// drop band as well as air), above a run of solos after a Group, above a
+/// Project heading. The 44px rows carry their own air, so one step is
+/// enough to say "new block".
+pub const GROUP_GAP: f32 = SPACE_4;
+pub const SOLOS_TOP: f32 = GROUP_GAP;
+/// 6px between a Group row and its members; 2px between sibling rows.
+pub const MEMBERS_TOP: f32 = SPACE_1_5;
+pub const MEMBER_GAP: f32 = SPACE_0_5;
+/// 18px — the member indent: a member's lead slot starts under its Group's
+/// title, the tree grammar of a child's marker under its parent's text.
+pub const MEMBER_INDENT: f32 = NAV_TEXT_X;
+/// The 1px rail hangs from the Group glyph's centre: `RAIL_OFFSET` left of
+/// the members box, inset 3px top and bottom. Translucent — draw it with
+/// `rgba`.
+pub const RAIL_OFFSET: f32 = MEMBER_INDENT - ROW_PAD_X - NAV_LEAD_W / 2.0;
 pub const RAIL_INSET: f32 = 3.0;
-/// 14px — the provider logomark in a nav row.
-#[allow(dead_code)]
-pub const PROVIDER_MARK: f32 = 14.0;
+pub const NAV_GROUP_RAIL: u32 = HAIRLINE_STRONG;
+/// 12px — the provider logomark in a nav row: the lead slot's size, so the
+/// row's two glyph columns match.
+pub const PROVIDER_MARK: f32 = GLYPH_BOX;
+/// A failing Thread's halo: it is still inferring, so it still breathes,
+/// in the failure's ink (`BLOCKED` at the running halo's 35%).
+pub const NAV_FAILING_HALO: u32 = 0xe8877c59;
+/// How far a rail item's status dot sits in from its box's corner.
+pub const NAV_RAIL_DOT_INSET: f32 = SPACE_1;
+/// The collapsed rail. On macOS its controls are 36px — the rail owns the
+/// traffic lights' 77px reserve, and a 28px control would float in it —
+/// and its first control starts below the native lights' band. Elsewhere
+/// the rail keeps the compact `ICON_BUTTON` and an 8px inset.
+pub const NAV_RAIL_CONTROL: f32 = if cfg!(target_os = "macos") {
+    36.0
+} else {
+    ICON_BUTTON
+};
+pub const NAV_RAIL_CHROME_PAD_T: f32 = if cfg!(target_os = "macos") {
+    WIN_CHROME_H
+} else {
+    SPACE_2
+};
+pub const NAV_RAIL_CHROME_PAD_B: f32 = SPACE_1;
+/// The rail's own block padding, the gap between its items, and the gap
+/// above its first item (also the empty-filter message's block margin).
+pub const NAV_RAIL_PAD_Y: f32 = SPACE_2;
+pub const NAV_RAIL_ITEM_GAP: f32 = if cfg!(target_os = "macos") {
+    SPACE_1
+} else {
+    MEMBER_GAP
+};
+pub const NAV_RAIL_ITEMS_TOP: f32 = SPACE_3;
+/// The most of the column the open Parked section may take. Its list
+/// scrolls past this, so a hundred parked Threads never push the running
+/// tree out of sight.
+pub const NAV_PARKED_MAX_SHARE: f32 = 0.5;
 // (end WP-G) — append above this line only
 
 #[cfg(test)]
@@ -1526,6 +1630,7 @@ mod tests {
             assert_eq!(tokens.accent.color, solid(FILL));
             assert_eq!(tokens.popover.color, solid(MENU));
             assert_eq!(tokens.muted.color, solid(RAISED));
+            assert_eq!(tokens.tab_active.color, solid(FILL));
             assert_eq!(tokens.ring.color, solid(FOCUS_RING));
             assert_eq!(tokens.input.color, solid(INPUT_EDGE));
             assert_eq!(tokens.border.color, alpha(HAIRLINE_STRONG));

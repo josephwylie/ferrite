@@ -464,9 +464,10 @@ impl Render for NavDragPreview {
 }
 
 /// What a row says while a drag hovers it: the wash of the answer core
-/// already knows. Soft draws the ring version of this as a 1px inset, which
-/// a row with no border cannot carry without moving 2px mid-drag, so the
-/// wash alone speaks — `--drop-valid` or `--drop-refused`, never both.
+/// already knows — `DROP_WASH`, the accent as a ground, where the drop would
+/// land, or `BLOCKED_WASH` where core refuses it. The wash alone speaks: a
+/// ring would need an edge the rows do not have, and adding one mid-drag
+/// would move the row.
 fn drop_feedback<E: gpui::InteractiveElement>(element: E, groups: Groups, target: DropTarget) -> E {
     element.drag_over::<NavDrag>(move |style, drag, _, _| {
         if matches!(groups.preview_drop(drag.drag, target), Plan::Refused(_)) {
@@ -3421,6 +3422,11 @@ impl CockpitView {
         if !self.panes[self.focused()].is_main() {
             return;
         }
+        // ↵ on an empty line sends a pending question whose every question
+        // is answered (digits toggled a multi-select; ↵ sends it).
+        if self.panes[self.focused()].composer.read(cx).is_empty() && self.send_ready_question(cx) {
+            return;
+        }
         let composer = self.panes[self.focused()].composer.clone();
         let text = composer.update(cx, |composer, cx| composer.take(cx));
         let text = text.trim().to_string();
@@ -5996,7 +6002,6 @@ impl CockpitView {
 
         // Drafts are not rows: nothing runs, nothing parks, nothing to aim
         // the nav at (#29) — the grid is where a draft lives.
-        let focused = self.cockpit.roster().focused_thread();
         let groups: Vec<nav::GroupBlock> = self
             .cockpit
             .groups()
@@ -6035,7 +6040,6 @@ impl CockpitView {
                     // Summarize the whole Group even when the filter hides
                     // some member rows; opening it still shows every Pane.
                     projects: project_summary,
-                    current: focused.is_some_and(|thread| group.members.contains(&thread)),
                     members,
                 })
             })
@@ -6208,6 +6212,7 @@ impl CockpitView {
             name: self.facts.name(thread),
             status,
             project: facts.and_then(|facts| facts.project_label.clone()),
+            branch: facts.and_then(|facts| facts.branch.clone()),
             provider: self
                 .cockpit
                 .thread(thread)
@@ -7052,6 +7057,12 @@ impl Render for CockpitView {
                     Level::Transcript if pane.has_tool_target() => Some(pane.tool_focus()),
                     // An L2 cell draws a Composer too, and the keys go
                     // where the caret is.
+                    // An L2 Decision cell draws its card in the Composer's
+                    // place; the keyboard goes to the card's own `Decision`
+                    // context, so y/n answer as its keycaps say.
+                    Level::Instruments if self.l2_decision_card(self.focused()) => {
+                        Some(pane.decision_focus.clone())
+                    }
                     Level::Transcript | Level::Instruments if !pane.is_main() => {
                         Some(pane.transcript_focus.clone())
                     }
@@ -7721,14 +7732,13 @@ impl CockpitView {
         cx.notify();
     }
 
-    /// The pending Decision of `thread` when it is a question — parsed
-    /// fresh, which is cheap: a Decision's input is a few hundred bytes.
+    /// The pending Decision of `thread` when it is a question, borrowed.
     fn pending_questions(
         &self,
         thread: ThreadId,
     ) -> Option<(
         ferrite_core::activity::DecisionHandle,
-        Vec<ferrite_core::questions::Question>,
+        &[ferrite_core::questions::Question],
     )> {
         let request = self
             .cockpit
@@ -7737,18 +7747,32 @@ impl CockpitView {
             .pending_decisions()
             .iter()
             .find(|request| request.subject == Some(ferrite_core::activity::Subject::Main))?;
-        let questions = pane::question_of(&request.decision)?;
+        let questions = pane::questions_of(&request.decision)?;
         Some((request.handle.clone(), questions))
     }
 
+    /// A digit key (`PickOption1..4`, bound where a Decision holds the
+    /// keyboard): on an empty line — or wherever no line is being typed —
+    /// it picks row `option` of the request this Pane shows (a single
+    /// single-select question then answers at once); with text on the line,
+    /// or nothing to pick, it is a digit again.
     fn pick_or_type(
         &mut self,
-        _option: usize,
+        option: usize,
         digit: &'static str,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(pane) = self.panes.get(self.focused()) {
+        let index = self.focused();
+        let typing = self.level_now(window) == Level::Transcript
+            && self
+                .panes
+                .get(index)
+                .is_some_and(|pane| pane.is_main() && !pane.composer.read(cx).is_empty());
+        if !typing && self.pick_request_row(index, option, window, cx) {
+            return;
+        }
+        if let Some(pane) = self.panes.get(index) {
             pane.composer
                 .clone()
                 .update(cx, |composer, cx| composer.insert(digit, cx));
@@ -7875,23 +7899,24 @@ impl CockpitView {
         }
     }
 
-    /// The pending Decision's keycaps (#26), each press wired to the exact
-    /// decide verb its key runs — no new semantics, the mouse presses the
-    /// keycap it depicts. Assembled here like `pane_controls`; presses land
-    /// on the clicked Pane first (the keyboard may be elsewhere) and stop
-    /// propagation so the Pane's own press handler cannot re-target them.
-    /// L1 draws y/n and, where the request offered a standing answer, a;
-    /// the L2 card keeps y/n alone.
+    /// The L2 Decision cell's keycaps (#26), each press wired to the exact
+    /// decide verb its key runs — the mouse presses the keycap it depicts.
+    /// Only keys that act are drawn (`y` where the provider allows it, `n`
+    /// where it allows a deny), and only where the cell draws its own
+    /// compact card: at L1 every request is the overlay card, whose rows
+    /// carry their keys. Presses land on the clicked Pane first (the
+    /// keyboard may be elsewhere) and stop propagation so the Pane's own
+    /// press handler cannot re-target them.
     fn decide_keycaps(
         &self,
         index: usize,
         level: Level,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let thread = self.panes[index].thread()?;
-        if !self.panes[index].is_main() {
+        if level != Level::Instruments || !self.l2_decision_card(index) {
             return None;
         }
+        let thread = self.panes[index].thread()?;
         let request = self
             .cockpit
             .thread(thread)?
@@ -7900,8 +7925,7 @@ impl CockpitView {
             .iter()
             .find(|request| request.subject == Some(ferrite_core::activity::Subject::Main))?
             .clone();
-        let decision = &request.decision;
-        let offers_always = level == Level::Transcript && decision.standing_answer().is_some();
+        let policy = request.decision.policy;
         let wire = |keycap: Stateful<Div>, answer: Answer, cx: &mut Context<Self>| {
             let request = request.clone();
             keycap.on_mouse_down(
@@ -7915,11 +7939,12 @@ impl CockpitView {
                 }),
             )
         };
-        let mut cluster = pane::decide_row(level)
-            .child(wire(pane::keycap_allow(), Answer::Allow, cx))
-            .child(wire(pane::keycap_deny(), Answer::Deny, cx));
-        if offers_always {
-            cluster = cluster.child(wire(pane::keycap_always(), Answer::Always, cx));
+        let mut cluster = decision::key_actions();
+        if policy.allow && !policy.interaction_required {
+            cluster = cluster.child(wire(pane::keycap_allow(), Answer::Allow, cx));
+        }
+        if policy.deny {
+            cluster = cluster.child(wire(pane::keycap_deny(), Answer::Deny, cx));
         }
         Some(cluster.into_any_element())
     }
@@ -9371,6 +9396,7 @@ impl CockpitView {
             menu = menu.child(row);
         }
         let count = state.filter.options.len();
+        menu = menu.child(crate::components::menu_separator());
         menu = menu.child(nav::filter_action(count, "Add Project…").on_mouse_down(
             MouseButton::Left,
             cx.listener(|view, _: &MouseDownEvent, _, cx| {
@@ -9393,17 +9419,11 @@ impl CockpitView {
         let origin = self.cockpit.roster().view();
         let mut tree = nav::nav_tree(&self.nav_scroll);
         if let Some(error) = &self.group_error {
-            tree = tree.child(
-                div()
-                    .px(px(crate::theme::ROW_PAD_X))
-                    .py(px(crate::theme::ROW_PAD_Y))
-                    .rounded(px(crate::theme::R_CONTROL))
-                    .text_size(px(crate::theme::FS_SM))
-                    .text_color(rgb(crate::theme::ATTENTION))
-                    .bg(rgba(crate::theme::ATTENTION_WASH))
-                    .child(error.clone()),
-            );
+            tree = tree.child(nav::notice(error.clone()));
         }
+        // An empty tree names the Project the filter chose; `All Projects`
+        // is a filter state, not a Project, and is not named.
+        let filtered = self.nav_filter.map(|_| state.filter.label.as_ref());
         if state.thread_list_order == ThreadListOrder::ByProject {
             for (index, section) in state.project_sections.iter().enumerate() {
                 let heading =
@@ -9425,10 +9445,7 @@ impl CockpitView {
                 }
             }
             if state.project_sections.is_empty() {
-                tree = tree.child(nav::empty_filter(
-                    &state.filter.label,
-                    !state.parked.is_empty(),
-                ));
+                tree = tree.child(nav::empty_filter(filtered, !state.parked.is_empty()));
             }
             return tree;
         }
@@ -9484,10 +9501,7 @@ impl CockpitView {
             ),
         );
         if state.order.is_empty() {
-            tree = tree.child(nav::empty_filter(
-                &state.filter.label,
-                !state.parked.is_empty(),
-            ));
+            tree = tree.child(nav::empty_filter(filtered, !state.parked.is_empty()));
         }
         tree
     }
@@ -9584,11 +9598,12 @@ impl CockpitView {
             group,
             self.editable_group_title(id, group.title.clone(), cx),
         );
+        let badge = group.title.clone();
         let mut block = nav::group_block()
             // A Group separates itself from whatever is above it: nothing
             // when it opens the tree, the 16px band from another Group —
             // prepended below, because that band is a drop target and not a
-            // margin — and the solos' own 24px from a run of rows.
+            // margin — and the same 16px from a run of rows.
             .when(!first_in_tree && !after_group, |block| {
                 block.mt(px(crate::theme::SOLOS_TOP))
             })
@@ -9603,7 +9618,10 @@ impl CockpitView {
                         drag: Drag::Group(id),
                         origin,
                     },
-                    move |_, _, _, cx| cx.new(|_| NavDragPreview("group".into())),
+                    move |_, _, _, cx| {
+                        let badge = badge.clone();
+                        cx.new(|_| NavDragPreview(badge))
+                    },
                 )
                 .on_drop(cx.listener(move |view, drag: &NavDrag, _, cx| {
                     view.apply_drop(*drag, DropTarget::GroupHeader(id), cx)
@@ -9727,9 +9745,9 @@ impl CockpitView {
         };
         let title = self.editable_thread_title(thread, row.name.clone(), cx);
         let head = if compact {
-            nav::project_thread_row_with_title(row, title, group.is_some())
+            nav::project_thread_row_with_title(row, title, group.is_some(), cx.reduce_motion())
         } else {
-            nav::thread_row_with_title(row, title)
+            nav::thread_row_with_title(row, title, cx.reduce_motion())
         };
         let badge = self.facts.name(thread);
         drop_feedback(head, self.cockpit.groups().clone(), target)
@@ -16055,11 +16073,17 @@ mod tests {
                 .position(|row| row.thread == thread)
                 .expect("every open Thread has a row")
         };
-        // Row `n`: the 42px window band, the 42px nav head, the tree's 8px
-        // inset, n rows of `THREAD_ROW_H` each with the 2px between siblings, then
-        // halfway down its own row. No strip, no section header.
-        let row_y =
-            |n: usize| px(42. + 42. + 8. + n as f32 * (crate::theme::THREAD_ROW_H + 2.) + 28.);
+        // Row `n`: the window band, the nav head, the tree's inset, n rows
+        // of `THREAD_ROW_H` each with the gap between siblings, then halfway
+        // down its own row. No strip, no section header.
+        let row_y = |n: usize| {
+            use crate::theme::*;
+            px(WIN_CHROME_H
+                + NAV_HEAD_H
+                + NAV_TREE_PAD
+                + n as f32 * (THREAD_ROW_H + MEMBER_GAP)
+                + THREAD_ROW_H / 2.)
+        };
         let (second, first) = view.read_with(cx, |view, _| (row_of(view, 1), row_of(view, 0)));
         cx.simulate_click(
             gpui::point(px(104.), row_y(second)),

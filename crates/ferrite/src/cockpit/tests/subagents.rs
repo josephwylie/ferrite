@@ -564,7 +564,10 @@ fn native_tab_overflow_keeps_main_and_selected_subject_visible_in_child_order(
     let overflow = cx.debug_bounds("subject-overflow-1").unwrap();
     let strip = cx.debug_bounds("subject-strip-1").unwrap();
     assert!(main.right() <= selected.left() && selected.right() <= overflow.left());
-    assert!(strip.contains(&main.origin) && strip.contains(&overflow.bottom_right()));
+    assert!(
+        strip.contains(&main.origin) && strip.contains(&overflow.bottom_right()),
+        "the strip holds Main and the overflow: {strip:?} / {main:?} / {overflow:?}"
+    );
     emit(
         &fake,
         ActivityEvent::Status {

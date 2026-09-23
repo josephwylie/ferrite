@@ -1031,6 +1031,17 @@ pub fn render_pane(
         Some(_) => {
             view.rich
                 .file_context(workspace.map(WorkspaceBinding::cwd), &view.preview);
+            // A child's tab has no Composer to carry the `Decision` key
+            // context: while that child's request pends, its body does, so
+            // y/n/a and the digits reach the card from the transcript.
+            let child_request = !view.is_main()
+                && thread.is_some_and(|thread| {
+                    thread
+                        .activity()
+                        .pending_decisions()
+                        .iter()
+                        .any(|request| request.subject.as_ref() == Some(&view.selected))
+                });
             pane = pane.child(
                 div()
                     .relative()
@@ -1039,6 +1050,7 @@ pub fn render_pane(
                     .flex_1()
                     .min_h_0()
                     .min_w_0()
+                    .when(child_request, |body| body.key_context("Decision"))
                     .child(
                         retained_transcript.expect("L1 transcript entity is wired by CockpitView"),
                     )
@@ -1142,40 +1154,16 @@ fn l1_tasks(cx: &mut PaneCtx) -> Option<AnyElement> {
     )
 }
 
-/// WP-F · between the body and the Composer: a failed answer's error, the
-/// plain Decision card, and activity requests not docked in the body.
-///
-/// The Decision card is a **sibling of the body**, not a child of the
-/// Composer (§D.5): its margin is measured from the Pane's own content box,
-/// so nesting it inside the Composer's padding would inset it twice.
+/// WP-F · between the body and the Composer. Every L1 request — Main's
+/// plain approval included — is the one Decision card in the body's
+/// requests overlay (`activity_decisions`), and a failed send is that
+/// card's own error line, so nothing docks here at L1; the slot keeps any
+/// activity requests a level hands it undocked.
 fn l1_dock(cx: &mut PaneCtx) -> Vec<AnyElement> {
-    let mut dock = Vec::new();
-    if cx.view.is_main() {
-        if let Some((_, error)) = &cx.view.request_error {
-            dock.push(
-                div()
-                    .px(px(theme::PANE_PAD_X))
-                    .py(px(4.))
-                    .text_size(px(theme::FS_SM))
-                    .text_color(rgb(theme::BLOCKED))
-                    .child(format!("Could not send answer: {error}"))
-                    .into_any_element(),
-            );
-        }
+    if !cx.has_activity_decisions {
+        return Vec::new();
     }
-    if let Some(decision) = cx.decision.filter(|_| !cx.has_activity_decisions) {
-        dock.push(
-            decision_card(
-                decision,
-                cx.decide.take(),
-                &cx.view.rich,
-                cx.view.text_namespace(),
-            )
-            .into_any_element(),
-        );
-    }
-    dock.extend(cx.activity_decisions.take());
-    dock
+    cx.activity_decisions.take().into_iter().collect()
 }
 
 /// WP-D · the L1 Composer, or a Subagent's footer in its place.
@@ -1495,7 +1483,10 @@ pub fn render_draft(view: &PaneView, state: DraftState<'_>, level: Level) -> imp
         editing,
         reduce_motion: _,
     } = state;
-    let shell = pane_shell(rgba(TRANSPARENT).into());
+    // A draft wears the live Pane's edge: the resting hairline (stepping up
+    // under the pointer) or the focus ink. It has no state to announce.
+    let edge = PaneEdge::of(focused, false, false);
+    let shell = pane_shell(edge.ink()).when(edge == PaneEdge::Rest, |shell| shell.hover_edge());
 
     if level != Level::Transcript {
         return focus_wrapper(
@@ -2177,38 +2168,40 @@ fn l2_tail(transcript: &Transcript, namespace: SharedString) -> Div {
         )
 }
 
-/// The Cockpit board's Decision cell body: the command, who wants it, and
-/// the y/n keycaps — no `a always` at L2. The whole group hangs directly
-/// under the header; a spacer here would strand the keycaps on the cell
-/// floor with dead black between (#22 A2). The keycaps arrive wired from
-/// the cockpit (#26), like every other pointer.
+/// The Cockpit board's Decision cell body: the `◆ approve` head, the
+/// subject (two lines at most), where it runs, and the y/n keycaps — no
+/// `a always` at L2. The group hangs directly under the header; a spacer
+/// would strand the keycaps on the cell floor (#22 A2). The keycaps arrive
+/// wired from the cockpit (#26), each only where its key would act.
 fn l2_decision_body(decision: &Decision, decide: Option<AnyElement>) -> Div {
-    let command = decision_subject(decision);
-    let wants = decision_wants(decision);
     div()
         .flex()
         .flex_col()
         .flex_1()
         .min_h_0()
         .p(px(theme::CELL_PAD))
-        .gap(px(6.))
+        .gap(px(theme::DECISION_L2_GAP))
+        .font_family(theme::FONT_MONO)
+        .child(decision::head(decision::kind_word(decision), None, None))
         .child(
             div()
                 .w_full()
-                .truncate()
-                .text_size(px(theme::FS_SM))
+                .min_w_0()
+                .line_clamp(2)
+                .text_size(px(theme::FS_UI))
+                .line_height(px(theme::LH_UI))
                 .text_color(rgb(TEXT_STRONG))
-                .child(command),
+                .child(decision_subject(decision)),
         )
-        .child(
+        .children(decision_place(decision).map(|place| {
             div()
                 .w_full()
                 .truncate()
-                .font_family(theme::FONT_UI)
                 .text_size(px(theme::FS_SM))
+                .line_height(px(theme::LH_META))
                 .text_color(rgb(TEXT_MUTED))
-                .child(wants),
-        )
+                .child(place)
+        }))
         .children(decide)
 }
 
@@ -3236,11 +3229,14 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
     // mode to be in (its chip is None). It is not tied to a turn in
     // flight — the mode is exactly what an operator changes *between*
     // prompts.
+    // The plain chip (no menu: L2) rides the hint row's wrap, so in a
+    // narrow cell it gives way whole before Send/Stop ever would.
+    let mut plain_mode = None;
     if let Some(mode) = mode.filter(|_| !blocking) {
-        controls = controls.child(match mode_picker {
-            Some(picker) => div().flex_shrink_0().child(picker),
-            None => mode_chip(mode, false),
-        });
+        match mode_picker {
+            Some(picker) => controls = controls.child(div().flex_shrink_0().child(picker)),
+            None => plain_mode = Some(mode_chip(mode, false).mr(px(theme::SPACE_1))),
+        }
     }
     let hints = if compact && empty {
         COMPACT_HINTS
@@ -3255,7 +3251,7 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
                 .is_some(),
         )
     };
-    controls = controls.child(hint_row(hints));
+    controls = controls.child(hint_row(plain_mode, hints));
     if let Some(meter) = usage_meter {
         controls = controls.child(div().flex_shrink_0().child(meter));
     }
@@ -3393,8 +3389,9 @@ pub fn session_chip() -> Div {
 /// difference: each pair keeps its width, and pairs that do not fit wrap
 /// onto a second line the row's height clips away — a narrow row drops
 /// whole hints, never half of one. A zero-width lead keeps even the first
-/// pair honest: a line always takes one item, and it is the lead.
-fn hint_row(hints: &[(&'static str, &'static str)]) -> Div {
+/// pair honest: a line always takes one item, and it is the lead. `lead`
+/// (the plain mode chip) goes first and gives way the same way.
+fn hint_row(lead: Option<Div>, hints: &[(&'static str, &'static str)]) -> Div {
     components::text_meta()
         .flex()
         .flex_1()
@@ -3404,6 +3401,7 @@ fn hint_row(hints: &[(&'static str, &'static str)]) -> Div {
         .pt(px((theme::COMPOSER_ROW_H - theme::LH_META) / 2.))
         .overflow_hidden()
         .child(div().flex_shrink_0().w(px(0.)).h(px(theme::LH_META)))
+        .children(lead.map(|lead| lead.mt(px((theme::LH_META - theme::CHIP_H) / 2.))))
         .children(hints.iter().map(|(key, verb)| {
             div()
                 .flex()
@@ -3672,71 +3670,6 @@ fn queued_line(held: &str, index: usize, count: usize, empty: bool) -> impl Into
         })
 }
 
-/// The Decision card (§D.5): a sibling of the body, not a child of it.
-/// `margin: 0 12px 8px` so it aligns with the body's own inset,
-/// `padding: 8px 10px`, a 4px radius on the amber wash, and a 1px amber
-/// **inset** ring — an overlay, because it must take no layout. Warning
-/// mark, the subject and wants lines, then the keycaps.
-///
-/// Kept free of focus and key wiring so it can be drawn — and smoke-
-/// rendered — on its own; the keycaps arrive wired from the cockpit (#26).
-fn decision_card(
-    decision: &Decision,
-    decide: Option<AnyElement>,
-    cache: &crate::rich::TextCache,
-    namespace: SharedString,
-) -> Div {
-    let subject = decision_subject(decision);
-    let wants = decision_wants(decision);
-    div()
-        .relative()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .min_w_0()
-        .gap(px(theme::DECISION_GAP))
-        .mx(px(theme::DECISION_MARGIN_X))
-        .mb(px(theme::DECISION_MARGIN_B))
-        .px(px(theme::DECISION_PAD_X))
-        .py(px(theme::DECISION_PAD_Y))
-        .rounded(px(theme::R_CHIP))
-        .bg(rgba(ATTENTION_WASH))
-        .child(ring_overlay(ATTENTION_EDGE, theme::R_CHIP))
-        .child(icon(icons::WARNING, theme::ICON_WARNING, ATTENTION))
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(theme::KEYS_GAP))
-                .flex_1()
-                .min_w_0()
-                .child(
-                    div()
-                        .flex_shrink_0()
-                        .text_size(px(theme::FS_UI))
-                        .line_height(px(theme::LH_UI))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(TEXT_STRONG))
-                        .child(subject),
-                )
-                .child(
-                    div()
-                        .flex_shrink_0()
-                        .truncate()
-                        .text_size(px(theme::FS_SM))
-                        .line_height(px(theme::LH_META))
-                        .text_color(rgb(TEXT_MUTED))
-                        .child(wants),
-                )
-                .children(approval_input(
-                    decision,
-                    cache,
-                    format!("approval-input-{namespace}-{}", decision.id).into(),
-                )),
-        )
-        .children(decide)
-}
-
 /// The exact tool input an approval would send. Commands retain their source;
 /// other provider input remains inspectable as its JSON value.
 pub(crate) fn approval_input(
@@ -3746,7 +3679,7 @@ pub(crate) fn approval_input(
 ) -> Option<AnyElement> {
     use gpui::component::scroll::ScrollableElement as _;
 
-    if question_of(decision).is_some() {
+    if questions_of(decision).is_some() {
         return None;
     }
     let source = decision
@@ -3770,7 +3703,7 @@ pub(crate) fn approval_input(
             // Let the bar measure this row's content height; an unspecified
             // height inherits the toolkit wrapper's full-height default.
             .h_auto()
-            .max_h(px(160.))
+            .max_h(px(theme::DECISION_INPUT_MAX_H))
             .overflow_y_scrollbar()
             .child(crate::rich::Literal {
                 id,
@@ -3788,8 +3721,8 @@ pub(crate) fn approval_input(
 /// description, else the honest unreadable fallback. Every surface that
 /// names a Decision (L1 card, L2 cell, wall alert) goes through here.
 fn decision_subject(decision: &Decision) -> SharedString {
-    if let Some(questions) = question_of(decision) {
-        return SharedString::from(ferrite_core::questions::summary(&questions));
+    if let Some(questions) = questions_of(decision) {
+        return SharedString::from(ferrite_core::questions::summary(questions));
     }
     match (
         decision.tool_name.is_empty(),
@@ -3804,80 +3737,26 @@ fn decision_subject(decision: &Decision) -> SharedString {
     }
 }
 
-/// A Decision card's subtitle — `Write · wants approval`, carrying the
-/// request's cwd when it names one — or the unreadable fallback when the
-/// provider named no tool.
-fn decision_wants(decision: &Decision) -> SharedString {
-    if question_of(decision).is_some() {
-        return SharedString::from("the agent asks · answer in the Pane");
+/// Where an approval would run — `in /work/api` — when the request names
+/// its cwd.
+fn decision_place(decision: &Decision) -> Option<SharedString> {
+    if questions_of(decision).is_some() {
+        return None;
     }
-    if decision.tool_name.is_empty() {
-        return SharedString::from("the provider sent a request Ferrite could not read");
-    }
-    match decision.input.get("cwd").and_then(|cwd| cwd.as_str()) {
-        Some(cwd) => SharedString::from(format!("{} · wants approval · {cwd}", decision.tool_name)),
-        None => SharedString::from(format!("{} · wants approval", decision.tool_name)),
-    }
+    decision
+        .input
+        .get("cwd")
+        .and_then(|cwd| cwd.as_str())
+        .map(|cwd| SharedString::from(format!("in {cwd}")))
 }
 
-/// One keycap (§D.5): `padding: 3px 7px`, a 4px radius on `--raised`,
-/// 10.5px `--text-2` — and **no border**. The key letter leads in `--text`
-/// at weight 600 and the label follows in the cap's own ink — one text run
-/// with a highlight over the letter, not two sibling elements, so the cap
-/// rounds once rather than once per span and keeps the prototype's width.
-/// The label doubles as the element id the pressed shade tracks; two
-/// keycaps never share one in a card.
-fn keycap(id: &'static str, key: &'static str, label: &'static str, ink: u32) -> Stateful<Div> {
-    div()
-        .id(id)
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .text_size(px(theme::FS_SM))
-        .line_height(px(theme::LH_META))
-        .text_color(rgb(ink))
-        .bg(rgb(RAISED))
-        .rounded(px(theme::R_CHIP))
-        .px(px(theme::KEYCAP_PAD_X))
-        .py(px(theme::KEYCAP_PAD_Y))
-        .hover_raised()
-        .press_raised()
-        .child(
-            StyledText::new(SharedString::from(format!("{key}{label}"))).with_highlights(vec![(
-                0..key.len(),
-                HighlightStyle {
-                    color: Some(rgb(TEXT).into()),
-                    font_weight: Some(FontWeight::SEMIBOLD),
-                    ..Default::default()
-                },
-            )]),
-        )
-}
-
-/// The decide keycaps, one constructor per verb, so the cockpit can wire
+/// The L2 decide keycaps, one constructor per verb, so the cockpit can wire
 /// each press without respelling the keycap grammar (#26).
 pub fn keycap_allow() -> Stateful<Div> {
-    keycap("y allow", "y", " allow", TEXT_2)
+    decision::key_action("y allow", "y", "allow")
 }
 pub fn keycap_deny() -> Stateful<Div> {
-    keycap("n deny", "n", " deny", TEXT_2).debug_selector(|| "decision-deny".into())
-}
-pub fn keycap_always() -> Stateful<Div> {
-    keycap("a always", "a", " always", TEXT_2)
-}
-
-/// The keycaps' cluster: 5px apart in the L1 card (§D.5), packed at 4 in
-/// the L2 body, which the prototype does not specify.
-pub fn decide_row(level: Level) -> Div {
-    div()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .gap(px(if level == Level::Transcript {
-            theme::KEYS_GAP
-        } else {
-            4.
-        }))
+    decision::key_action("n deny", "n", "deny").debug_selector(|| "decision-deny".into())
 }
 
 // -------------------------------------------------------------- questions
@@ -3885,8 +3764,13 @@ pub fn decide_row(level: Level) -> Div {
 /// The normalized questions a Decision carries. Providers classify the wire
 /// request before it reaches the shared renderer.
 pub fn question_of(decision: &Decision) -> Option<Vec<ferrite_core::questions::Question>> {
+    questions_of(decision).map(<[_]>::to_vec)
+}
+
+/// `question_of`, borrowed: no clone per frame.
+pub fn questions_of(decision: &Decision) -> Option<&[ferrite_core::questions::Question]> {
     match &decision.kind {
-        ferrite_core::DecisionKind::Questions(questions) => Some(questions.clone()),
+        ferrite_core::DecisionKind::Questions(questions) => Some(questions),
         _ => None,
     }
 }
@@ -6299,25 +6183,49 @@ mod tests {
                 .w(px(900.))
                 .font_family(crate::theme::FONT_MONO)
                 .text_size(px(12.))
-                .children(self.decisions.iter().map(|decision| {
-                    decision_card(
-                        decision,
-                        Some(
-                            decide_row(Level::Transcript)
-                                .child(keycap_allow())
-                                .child(keycap_deny())
-                                .child(keycap_always())
-                                .into_any_element(),
-                        ),
-                        &self.cache,
-                        "decision-reference".into(),
+                .children(self.decisions.iter().enumerate().map(|(at, decision)| {
+                    let rows = decision::approval_rows(decision)
+                        .into_iter()
+                        .enumerate()
+                        .map(|(row_at, row)| {
+                            decision::option_row(
+                                ("decision-row", at * 16 + row_at),
+                                decision::Row {
+                                    key: row.key,
+                                    label: row.label,
+                                    description: None,
+                                    recommended: false,
+                                    selected: false,
+                                    enabled: row.enabled,
+                                    prose: false,
+                                },
+                            )
+                            .into_any_element()
+                        });
+                    decision::card(
+                        at as u64,
+                        [
+                            decision::head(
+                                decision::kind_word(decision),
+                                Some(decision.tool_name.clone().into()),
+                                None,
+                            )
+                            .into_any_element(),
+                            decision::prose(decision_subject(decision)).into_any_element(),
+                        ]
+                        .into_iter()
+                        .chain(
+                            approval_input(decision, &self.cache, "decision-reference".into())
+                                .map(|input| decision::well(input).into_any_element()),
+                        )
+                        .chain(rows),
                     )
                 }))
                 .children(self.decisions.iter().map(|decision| {
                     l2_decision_body(
                         decision,
                         Some(
-                            decide_row(Level::Instruments)
+                            decision::key_actions()
                                 .child(keycap_allow())
                                 .child(keycap_deny())
                                 .into_any_element(),
@@ -6438,7 +6346,6 @@ mod tests {
         // The decide keycaps answer the mouse (#26) and say so.
         assert_eq!(cursor(keycap_allow()), Some(CursorStyle::PointingHand));
         assert_eq!(cursor(keycap_deny()), Some(CursorStyle::PointingHand));
-        assert_eq!(cursor(keycap_always()), Some(CursorStyle::PointingHand));
     }
 
     /// The app is thin by design, so its render test is that every Block kind
@@ -6885,14 +6792,11 @@ mod tests {
         };
         let full = decision("Bash", "gh issue close 212");
         assert_eq!(decision_subject(&full).as_ref(), "Bash: gh issue close 212");
-        assert_eq!(decision_wants(&full).as_ref(), "Bash · wants approval");
-        // A request naming its cwd carries it on the wants line (#22 C7).
+        assert_eq!(decision_place(&full), None);
+        // A request naming its cwd carries it on the place line (#22 C7).
         let mut placed = decision("Bash", "gh issue close 212");
         placed.input = serde_json::json!({ "command": "gh issue close 212", "cwd": "/work/api" });
-        assert_eq!(
-            decision_wants(&placed).as_ref(),
-            "Bash · wants approval · /work/api"
-        );
+        assert_eq!(decision_place(&placed).as_deref(), Some("in /work/api"));
         // No description: the tool's name is the subject.
         let bare = decision("Write", "");
         assert_eq!(decision_subject(&bare).as_ref(), "Write");
@@ -6902,10 +6806,7 @@ mod tests {
             decision_subject(&unreadable).as_ref(),
             "unreadable permission request"
         );
-        assert_eq!(
-            decision_wants(&unreadable).as_ref(),
-            "the provider sent a request Ferrite could not read"
-        );
+        assert_eq!(decision_place(&unreadable), None);
         // The wall's alert context runs through the same derivation.
         let transcript = Transcript::default();
         assert_eq!(

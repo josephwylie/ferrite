@@ -12,29 +12,36 @@
 //! the 24-Pane wall smooth with the nav open. Click wiring stays in
 //! `cockpit.rs`, the same split `pane_cell` uses.
 //!
-//! What the nav deliberately does **not** draw, per the approved prototype:
-//! no state word, no badges, no provider text tag, no section headers, no
-//! dividers, and no border on the column itself. Thread state stays in its
-//! compact dot; the selected fill lands on the **Group** and focused Thread.
+//! **One column grid, on the window's own ground.** The nav is `GROUND`,
+//! the plane the Panes sit on, with no edge: the Panes separate themselves.
+//! Every row lays out lead slot · text · mark (see the WP-G section of
+//! `theme.rs`), so a Thread's dot, a Group's glyph, the Parked chevron and
+//! the head's folder share one axis, and every title, label and meta line
+//! starts on the next. The meta line hangs under the title — `project ·
+//! branch` — and its tail (subagents · age) ends under the provider mark.
+//!
+//! The voice is mono, the chrome face. A Thread title is body weight in
+//! `TEXT`; a Group title is the one `W_LABEL` title of its block; metadata
+//! is `TEXT_MUTED`. Colour is state: the status dot is the only hue in a
+//! row, provider marks are monochrome, and selection is one `FILL` on the
+//! focused Thread's row with its title in `TEXT_STRONG` — nothing else in
+//! the tree fills.
 //!
 //! Every colour and metric is a `theme` token; this file holds no literal
-//! of its own. Everything outside a Pane is the system UI face, which —
-//! unlike the bundled mono family — exposes a real weight axis, so
-//! `.font_weight(..)` is correct here.
+//! of its own.
 
 use ferrite_core::groups::GroupId;
 use ferrite_core::settings::ThreadListOrder;
 use ferrite_core::store::Provider;
 use ferrite_core::workspace::registry::ProjectId;
 use ferrite_core::ThreadId;
-use std::time::Duration;
 
 use gpui::component::button::Button;
 use gpui::component::tooltip::Tooltip;
 use gpui::prelude::*;
 use gpui::{
-    div, pulsating_between, px, radians, relative, rgb, rgba, Animation, AnimationExt, AnyElement,
-    CursorStyle, Div, FontWeight, ScrollHandle, SharedString, Stateful, Transformation,
+    div, px, radians, relative, rgb, rgba, AnyElement, CursorStyle, Div, ScrollHandle,
+    SharedString, Stateful, Transformation,
 };
 
 use crate::components;
@@ -48,29 +55,22 @@ use crate::theme::*;
 /// of the semantic-zoom input rather than a special case.
 pub use crate::theme::{NAV_RAIL_WIDTH as RAIL_WIDTH, NAV_WIDTH as WIDTH};
 
-/// A Group row's title line: `FS_UI` on the tight 16px line box.
-const TITLE_LG_H: f32 = LH_TIGHT;
-/// A Thread row's title line: the same box.
-const TITLE_MD_H: f32 = LH_TIGHT;
-/// The Project and checkout lines: `FS_SM` on 16px. A row keeps this height
-/// even when the fact is unknown, so nothing reflows on a cache fill.
+/// A row's title line: `FS_UI` on the stacked rows' 16px line box.
+const TITLE_H: f32 = LH_TIGHT;
+/// The meta line: `FS_SM` on 16px. A row keeps this height even when the
+/// facts are unknown, so nothing reflows when a cache fills.
 const META_H: f32 = LH_META;
-/// The Group card's mark spans both text rows instead of reading as title
-/// decoration. It is deliberately larger than the 12px inline row icons.
-const GROUP_MARK_LG: f32 = 20.0;
 
 /// The slack a truncating title's budget gets over its visible box.
 ///
 /// gpui truncates by summing each character's advance measured **alone**
 /// (gpui-0.2.2 text_system/line_wrapper.rs:193 `width_for_char`, cached per
 /// char) and keeps a prefix only while `width + suffix_width <
-/// truncate_width` — a strict `<`, against CSS's `<=`. The rendered line is
-/// *shaped*, so the kerned run is narrower than that sum, and the last
-/// glyph that would still fit is dropped: the prototype's Group title ends
-/// `& r…` where the unslacked port ends `& …`, 8px of the 254px cell left
-/// empty. Handing the truncator this much extra budget restores the glyph;
-/// the visible box below stays exactly `ROW_TEXT_W`, and clips.
-const TRUNCATE_SLOP: f32 = 4.0;
+/// truncate_width` — a strict `<`, against CSS's `<=`. At an exact fit the
+/// last glyph that would still fit is dropped and its cell is left empty.
+/// Handing the truncator this much extra budget restores the glyph; the
+/// visible box stays exactly its pinned width, and clips.
+const TRUNCATE_SLOP: f32 = SPACE_1;
 
 /// The two icon buttons tint their glyph on hover, and a child SVG paints
 /// from its **own** style — an ambient text colour reaches text but never an
@@ -79,53 +79,10 @@ const TRUNCATE_SLOP: f32 = 4.0;
 const COLLAPSE_GROUP: &str = "nav-collapse";
 const RAIL_FILTER_GROUP: &str = "nav-rail-filter";
 const FILTER_GROUP: &str = "nav-filter";
-const FILTER_OPTION_GROUP: &str = "nav-filter-option";
 const ORDER_GROUP: &str = "nav-order";
 const PROJECT_SECTION_GROUP: &str = "nav-project-section";
 const PROJECT_ADD_GROUP: &str = "nav-project-add";
 const PARKED_GROUP: &str = "nav-parked";
-
-// The handful of nav metrics `theme.rs` does not name, kept here rather
-// than written inline so each one is said once and explained once.
-//
-/// 7px — enough separation for the leading folder, label, and trailing
-/// chevron to remain legible as one compact field.
-const TRIGGER_GAP: f32 = 7.0;
-/// 9px — a filter option's leading inset. One more than a row's, so the
-/// option's label hangs under the trigger's label rather than under its box.
-const MENU_ROW_PAD_L: f32 = 9.0;
-/// The collapsed rail begins below the native macOS titlebar controls.
-/// Other platforms keep the compact inset used by the expanded column.
-const RAIL_CHROME_PAD_T: f32 = if cfg!(target_os = "macos") {
-    WIN_CHROME_H
-} else {
-    7.0
-};
-const RAIL_CHROME_PAD_B: f32 = 4.0;
-/// 7px — the collapsed rail's own block padding.
-const RAIL_PAD_Y: f32 = 7.0;
-/// The wider macOS rail earns larger, easier targets instead of leaving a
-/// 28px control floating in 77px of chrome. Windows keeps the denser size.
-const RAIL_CONTROL: f32 = if cfg!(target_os = "macos") {
-    36.0
-} else {
-    ICON_BUTTON
-};
-const RAIL_ITEM_GAP: f32 = if cfg!(target_os = "macos") {
-    5.0
-} else {
-    MEMBER_GAP
-};
-/// 12px — the gap between the rail's filter button and its first item, and
-/// the empty-filter message's block margin.
-const RAIL_ITEMS_TOP: f32 = 12.0;
-/// 30px — a section heading's row: the Project headings in Project order,
-/// and the Parked section's header at the foot of the column.
-const SECTION_H: f32 = 30.0;
-/// The most of the column the open Parked section may take. Its list
-/// scrolls past this, so a hundred parked Threads never push the running
-/// tree out of sight.
-const PARKED_MAX_SHARE: f32 = 0.5;
 
 /// What the nav draws this frame: one filter, then Groups with their
 /// members, then the solos, then the Parked section. Nothing here is a
@@ -222,16 +179,13 @@ pub struct GroupBlock {
     /// One Project's name, or the count of Projects across the whole Group.
     /// None when no member resolves one.
     pub projects: Option<SharedString>,
-    /// This Group holds the focused Pane's Thread: it carries the selected
-    /// fill **and** the white title. The Group carries the fill; a Thread
-    /// row never does.
-    pub current: bool,
     pub members: Vec<ThreadRow>,
 }
 
 /// One Thread's row — identical whether it is a Group member or a solo; only
-/// the container differs. Title, Project, and the provider mark in
-/// the top-right corner, plus a subagent count when the Thread has children.
+/// the container differs. Status dot, title and provider mark on line 1;
+/// `project · branch` hanging under the title on line 2, with the subagent
+/// count and the age at its tail.
 #[derive(Clone)]
 pub struct ThreadRow {
     pub thread: ThreadId,
@@ -239,13 +193,16 @@ pub struct ThreadRow {
     /// What the Thread is doing right now — the one glance the operator
     /// asked for from the tree: which agents are working, which wait.
     pub status: RowStatus,
-    /// `None` → line 2 draws neither icon nor label, and keeps its height.
+    /// `None` → line 2 starts at the branch, or is empty and keeps its
+    /// height.
     pub project: Option<SharedString>,
+    /// The branch the Thread's checkout is on, from the facts cache.
+    /// `None` says nothing; it is never guessed.
+    pub branch: Option<SharedString>,
     /// `None` → no logomark. Never a `cl`/`cx` string.
     pub provider: Option<Provider>,
-    /// This is the focused Pane's Thread: it carries the selected fill and
-    /// the white title. The Group around it carries the fill too, so the
-    /// pair reads as one selection.
+    /// This is the focused Pane's Thread: it carries the tree's one selected
+    /// fill and the `TEXT_STRONG` title.
     pub current: bool,
     /// How long since the Thread was last used — `40m`, `2h`, `3d` — at the
     /// tail of the Project line. `None` says nothing at all.
@@ -272,62 +229,56 @@ pub enum RowStatus {
     Parked,
 }
 
-/// The status dot before a row's title: the Pane head's own colours, so
-/// the tree and the Pane can never disagree. An idle Thread keeps a dim
-/// dot — it is alive, just quiet — and a parked one a hollow ring.
+/// The status dot before a row's title, one recipe for the tree and the
+/// rail: running green (the only green in the column, and it means live),
+/// a Decision amber, closed or failing red, idle the idle ink, and parked a
+/// hollow ring.
 ///
 /// A **working** Thread's dot breathes: a halo behind it swells and fades
 /// on a 1.4s loop. Motion is the one thing a still row cannot fake, and
-/// inference is the one fact the operator scans the tree for — every other
-/// state stays as still as the column around it. The halo is absolute and
-/// the box is a fixed `STATUS_DOT`, so nothing in the row moves with it.
-fn status_dot(thread: ThreadId, status: RowStatus) -> AnyElement {
-    let dot = div()
-        .flex_shrink_0()
-        .w(px(STATUS_DOT))
-        .h(px(STATUS_DOT))
-        .rounded_full();
-    let dot = match status {
-        RowStatus::Working => dot.bg(rgb(RUNNING)),
-        RowStatus::Failing => dot.bg(rgb(RUNNING)).border_1().border_color(rgb(BLOCKED)),
-        RowStatus::Attention => dot.bg(rgb(ATTENTION)),
-        RowStatus::Blocked => dot.bg(rgb(BLOCKED)),
-        RowStatus::Idle => dot.bg(rgb(IDLE)),
-        RowStatus::Parked => dot.border_1().border_color(rgb(TEXT_FAINT)),
-    };
-    if !matches!(status, RowStatus::Working | RowStatus::Failing) {
-        return dot.into_any_element();
+/// inference is the one fact the operator scans the tree for. A failing
+/// Thread is still inferring, so it breathes too, in its failure's ink.
+/// Under reduced motion the halo holds still at its dimmest. The halo is
+/// absolute inside a fixed `STATUS_DOT` box, so nothing in the row moves.
+fn status_dot(thread: ThreadId, status: RowStatus, reduce_motion: bool) -> AnyElement {
+    let id = ("nav-working", thread.get() as usize);
+    match status {
+        RowStatus::Working => components::pulsing_dot(id, RUNNING, RUNNING_HALO, reduce_motion),
+        RowStatus::Failing => components::pulsing_dot(id, BLOCKED, NAV_FAILING_HALO, reduce_motion),
+        status => dot_face(status).into_any_element(),
     }
-    let halo = div()
-        .absolute()
-        .left(px(-STATUS_HALO_INSET))
-        .top(px(-STATUS_HALO_INSET))
-        .w(px(STATUS_DOT + 2. * STATUS_HALO_INSET))
-        .h(px(STATUS_DOT + 2. * STATUS_HALO_INSET))
-        .rounded_full()
-        .bg(rgba(RUNNING_HALO))
-        .with_animation(
-            ("nav-working", thread.get() as usize),
-            Animation::new(Duration::from_millis(STATUS_PULSE_MS))
-                .repeat()
-                .with_easing(pulsating_between(PULSE_MIN, 1.0)),
-            |halo, delta| halo.opacity(delta),
-        );
-    div()
-        .relative()
-        .flex_shrink_0()
-        .w(px(STATUS_DOT))
-        .h(px(STATUS_DOT))
-        .child(halo)
-        .child(dot)
-        .into_any_element()
 }
 
-/// The nav column itself: full height, the `--nav` ground, and **no border
-/// on any edge** — `#232323` meets the Cockpit's `#0e0e0e` directly, because
-/// Soft separates by fill contrast and draws no hairlines at all. The
-/// column is the lightest field in the system: navigation reads as nearer
-/// than the Cockpit, which is the inversion Soft makes.
+/// The still face of a status: the dot alone, no halo.
+fn dot_face(status: RowStatus) -> Div {
+    match status {
+        RowStatus::Working => components::status_dot(RUNNING),
+        RowStatus::Failing | RowStatus::Blocked => components::status_dot(BLOCKED),
+        RowStatus::Attention => components::status_dot(ATTENTION),
+        RowStatus::Idle => components::status_dot(IDLE),
+        RowStatus::Parked => components::status_ring(TEXT_MUTED),
+    }
+}
+
+/// The lead slot: `NAV_LEAD_W` wide, one title line high, its glyph
+/// centred — so a dot, a Group glyph or a chevron centres on the first
+/// line's box, and the text after it starts at `NAV_TEXT_X`.
+fn lead(glyph: impl IntoElement) -> Div {
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .justify_center()
+        .w(px(NAV_LEAD_W))
+        .h(px(TITLE_H))
+        .child(glyph)
+}
+
+/// The nav column itself: full height, on `GROUND` — the window's own
+/// plane — with **no edge on any side**. The Panes sit on the same ground
+/// and separate themselves by their own plane and hairline; the nav is the
+/// field they lie on, not a slab of its own. The ground is painted
+/// explicitly because the width animation slides the column over the board.
 ///
 /// Nothing is clipped here — the tree scrolls itself.
 pub fn shell(collapsed: bool) -> Div {
@@ -339,23 +290,22 @@ pub fn shell(collapsed: bool) -> Div {
         .w(px(if collapsed { RAIL_WIDTH } else { WIDTH }))
         .overflow_hidden()
         .bg(rgb(NAV))
-        .font_family(FONT_UI)
+        .font_family(FONT_MONO)
 }
 
 /// The 42px window-chrome band at the top of the column.
 ///
 /// On macOS the traffic lights are the **host's**, positioned by
 /// `TitlebarOptions`, so the band reserves their room rather than drawing
-/// fakes: a `TRAFFIC_RESERVE`-wide spacer that holds nothing. The prototype
-/// reaches the same x = 77 button edge with 13px of padding plus an 8px flex
-/// gap plus a 4px margin; those three sum into the reserve here, because the
-/// binding fact is the button's left edge and the empty band before it —
-/// anything drawn or hit-testable in that strip kills AppKit's drag region.
+/// fakes: a `TRAFFIC_RESERVE`-wide spacer that holds nothing, so the
+/// collapse button's left edge lands at x = 77. The binding fact is that
+/// edge and the empty band before it — anything drawn or hit-testable in
+/// that strip kills AppKit's drag region.
 ///
 /// Everywhere else there are no lights to reserve for, and reserving anyway
 /// is what pushed the collapse button 77px off the column it belongs to:
-/// the band takes the row inset instead, so the button's left edge lines up
-/// with every nav row under it. The caption buttons sit at the *window's*
+/// the band takes the row inset instead, so the sidebar glyph centres on
+/// the same axis as every row's lead slot under it. The caption buttons sit at the *window's*
 /// corner, not the column's — `titlebar.rs` draws them.
 ///
 /// Collapsed the band becomes the rail's single expand control. On macOS
@@ -368,9 +318,8 @@ pub fn win_chrome(collapsed: bool) -> Div {
             .flex_col()
             .flex_shrink_0()
             .items_center()
-            .pt(px(RAIL_CHROME_PAD_T))
-            .pb(px(RAIL_CHROME_PAD_B))
-            .gap(px(ROW_PAD_X));
+            .pt(px(NAV_RAIL_CHROME_PAD_T))
+            .pb(px(NAV_RAIL_CHROME_PAD_B));
     }
     let band = div()
         .flex()
@@ -387,7 +336,11 @@ pub fn win_chrome(collapsed: bool) -> Div {
 /// The collapse button and its 16px sidebar glyph. It grows with the macOS
 /// rail while the expanded column keeps the compact 28px titlebar control.
 pub fn collapse_button(collapsed: bool) -> Stateful<Div> {
-    let size = if collapsed { RAIL_CONTROL } else { ICON_BUTTON };
+    let size = if collapsed {
+        NAV_RAIL_CONTROL
+    } else {
+        ICON_BUTTON
+    };
     div()
         .id(("nav-collapse", 0usize))
         .group(COLLAPSE_GROUP)
@@ -409,7 +362,8 @@ pub fn collapse_button(collapsed: bool) -> Stateful<Div> {
 /// The 42px nav head. `relative`, because the filter menu hangs off it. The
 /// caller supplies the trigger and, when open, the menu — and the menu must
 /// be wrapped in `gpui::deferred(..)` so the scrolling tree below cannot
-/// overpaint it.
+/// overpaint it. Its inline inset is the tree's, so the trigger's folder
+/// lands in the rows' lead slot and the `+` glyph centres over their marks.
 pub fn nav_head() -> Div {
     div()
         .relative()
@@ -417,8 +371,8 @@ pub fn nav_head() -> Div {
         .flex_shrink_0()
         .items_center()
         .h(px(NAV_HEAD_H))
-        .px(px(ROW_PAD_X))
-        .gap(px(ROW_PAD_Y))
+        .px(px(NAV_TREE_PAD))
+        .gap(px(NAV_HEAD_GAP))
 }
 
 /// The persistent door to a new Thread. It sits beside the Project filter,
@@ -439,8 +393,8 @@ pub fn add_thread_button() -> Button {
 pub fn rail_add_thread_button() -> Button {
     components::button("rail-add-thread")
         .debug_selector(|| "rail-add-thread".into())
-        .w(px(RAIL_CONTROL))
-        .h(px(RAIL_CONTROL))
+        .w(px(NAV_RAIL_CONTROL))
+        .h(px(NAV_RAIL_CONTROL))
         .p_0()
         .tooltip("New Thread")
         .child(icon(icons::PLUS, ICON_BUTTON_GLYPH, TEXT_MUTED))
@@ -474,91 +428,69 @@ pub fn order_button(active: bool, open: bool) -> Button {
         )
 }
 
-/// Ordering menu anchored to the compact button rather than occupying the
-/// full Project-filter width.
+/// The order menu: a floating surface anchored under its button at the
+/// head's right, a caption naming what the rows choose, then the rows.
 pub fn order_menu() -> Div {
-    filter_menu().left_auto().w(px(218.)).child(
-        div()
-            .h(px(24.))
-            .px(px(ROW_PAD_X))
-            .flex()
-            .items_center()
-            .text_size(px(FS_SM))
-            .font_weight(FontWeight::MEDIUM)
-            .text_color(rgb(TEXT_MUTED))
-            .child("Order threads by"),
-    )
+    components::floating_surface()
+        .absolute()
+        .top(px(MENU_TOP))
+        .right(px(NAV_TREE_PAD))
+        .w(px(NAV_ORDER_MENU_W))
+        .child(components::menu_section("Order threads by", None, None))
 }
 
+/// One order row: the shared menu row, its check in the accent on the
+/// chosen order. It stays a tab stop, so the keyboard reaches it.
 pub fn order_option(index: usize, label: &'static str, selected: bool) -> Button {
     components::button(("thread-list-order-option", index))
         .tab_stop(true)
         .debug_selector(move || format!("thread-list-order-option-{index}"))
-        .group(FILTER_OPTION_GROUP)
         .w_full()
-        .min_h(px(MENU_ROW_H))
-        .pl(px(MENU_ROW_PAD_L))
-        .pr(px(ROW_PAD_X))
-        .rounded(px(R_CONTROL))
-        .when(selected, |on| {
-            on.bg(rgb(FILL))
-                .text_color(rgb(TEXT_STRONG))
-                .font_weight(FontWeight::MEDIUM)
-        })
-        .when(!selected, |off| off.text_color(rgb(TEXT_2)))
+        .h(px(MENU_ROW_H))
+        .p_0()
+        .rounded(px(R_MENU_ROW))
         .child(
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .w_full()
-                .min_w_0()
-                .gap(px(ROW_PAD_X))
-                .text_size(px(FS_UI))
-                .child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .group_hover(FILTER_OPTION_GROUP, |style| {
-                            style.text_color(rgb(TEXT_STRONG))
-                        })
-                        .child(label),
-                )
-                .children(selected.then(|| icon(icons::CHECK, ICON_CHEVRON_LG, TEXT))),
+            components::menu_row_content(
+                &components::MenuItem::new(label).checked(selected),
+                false,
+                false,
+            )
+            .w_full(),
         )
 }
 
-/// A quiet Project label separates grouped runs without turning each one
-/// into a card. The count helps scan long lists and costs no extra row.
-/// The caller hangs `project_add_button` on the end: the heading is the
-/// only place a Project is named in this view, so it is where a new Thread
-/// in that Project is asked for.
+/// A Project heading in Project order: the folder in the lead slot, the
+/// Project's name and its row count in the metadata voice — a quiet label
+/// over its rows, not a card. The caller hangs `project_add_button` on the
+/// end: the heading is the only place a Project is named in this view, so
+/// it is where a new Thread in that Project is asked for. No right inset,
+/// so the `+` glyph centres over the rows' provider marks.
 pub fn project_section(label: SharedString, count: usize, first: bool) -> Div {
     div()
         .group(PROJECT_SECTION_GROUP)
         .flex()
         .flex_shrink_0()
         .items_center()
-        .h(px(SECTION_H))
-        .when(!first, |section| section.mt(px(SOLOS_TOP)))
-        .px(px(ROW_PAD_X))
-        .gap(px(ROW_ICON_GAP))
-        .text_size(px(FS_SM))
-        .font_weight(FontWeight::MEDIUM)
-        .text_color(rgb(TEXT_2))
-        .child(div().flex_1().min_w_0().truncate().child(label))
+        .h(px(NAV_SECTION_H))
+        .when(!first, |section| section.mt(px(GROUP_GAP)))
+        .pl(px(ROW_PAD_X))
+        .child(lead(icon(icons::FOLDER, ROW_ICON, TEXT_FAINT)))
         .child(
-            div()
-                .font_weight(FontWeight::NORMAL)
-                .text_color(rgb(TEXT_MUTED))
-                .child(count.to_string()),
+            components::text_meta()
+                .flex()
+                .flex_1()
+                .min_w_0()
+                .gap(px(NAV_TAIL_GAP))
+                .ml(px(NAV_LEAD_GAP))
+                .child(div().min_w_0().truncate().child(label))
+                .child(div().flex_shrink_0().child(count.to_string())),
         )
 }
 
 /// New Thread in *this* Project. It keeps a heading's reserved slot at all
 /// times — a control that appears only under the pointer cannot be found —
-/// and rests at the muted weight the count beside it uses, brightening
-/// when the pointer is anywhere on the heading.
+/// and rests at the muted ink, brightening when the pointer is anywhere on
+/// the heading.
 pub fn project_add_button(index: usize) -> Button {
     components::button(("nav-project-add", index))
         .tab_stop(true)
@@ -575,11 +507,11 @@ pub fn project_add_button(index: usize) -> Button {
         )
 }
 
-/// The Project filter trigger rests transparently with its neighboring actions.
-/// Its folder and edge-aligned chevron frame the current Project name; hover
-/// and open states supply the ground only while the control is engaged.
+/// The Project filter trigger: the head's one title. Its folder sits in the
+/// rows' lead slot and its label on their text column; it rests on the
+/// ground, and hover and open supply a face only while it is engaged.
 pub fn filter_trigger(state: &FilterState) -> Stateful<Div> {
-    let chevron = icon(icons::CHEVRON_DOWN, ICON_CHEVRON_LG, TEXT_MUTED);
+    let chevron = icon(icons::CHEVRON_DOWN, ICON_CHEVRON, TEXT_MUTED);
     let chevron = if state.open {
         chevron.with_transformation(Transformation::rotate(radians(std::f32::consts::PI)))
     } else {
@@ -593,10 +525,10 @@ pub fn filter_trigger(state: &FilterState) -> Stateful<Div> {
         .flex_1()
         .min_w_0()
         .items_center()
-        .h(px(ICON_BUTTON))
+        .h(px(FILTER_TRIGGER_H))
         .pl(px(ROW_PAD_X))
-        .pr(px(R_CONTROL))
-        .gap(px(TRIGGER_GAP))
+        .pr(px(ROW_PAD_X))
+        .gap(px(NAV_LEAD_GAP))
         .rounded(px(R_CONTROL))
         .text_size(px(FS_UI))
         .font_weight(W_LABEL)
@@ -609,10 +541,10 @@ pub fn filter_trigger(state: &FilterState) -> Stateful<Div> {
         .when(!state.open, |shut| shut.text_color(rgb(TEXT)))
         .hover_control()
         .press_control()
-        .child(
+        .child(lead(
             icon(icons::FOLDER, ROW_ICON, TEXT_MUTED)
                 .group_hover(FILTER_GROUP, |style| style.text_color(rgb(TEXT))),
-        )
+        ))
         .child(
             div()
                 .flex_1()
@@ -624,65 +556,26 @@ pub fn filter_trigger(state: &FilterState) -> Stateful<Div> {
         .child(chevron)
 }
 
-/// The floating filter menu: `--menu` ground, the two-layer float shadow,
-/// and **no border** — Soft's elevation is shadow and fill, never a line.
-/// The caller pushes `filter_option` children and defers the whole thing.
+/// The floating filter menu: the shared floating surface, spanning the
+/// head under the trigger. The caller pushes `filter_option` rows, then a
+/// separator and `filter_action`, and defers the whole thing.
 pub fn filter_menu() -> Div {
-    div()
+    components::floating_surface()
         .absolute()
         .top(px(MENU_TOP))
-        .left(px(ROW_PAD_X))
-        .right(px(ROW_PAD_X))
-        .cursor_default()
-        .occlude()
-        .flex()
-        .flex_col()
-        .gap(px(ROW_GAP))
-        .p(px(MENU_PAD))
-        .rounded(px(R_BLOCK))
-        .bg(rgb(MENU))
-        .shadow(crate::components::float_shadow())
+        .left(px(NAV_TREE_PAD))
+        .right(px(NAV_TREE_PAD))
 }
 
-/// One filter row. The selected Project carries a restrained fill as well as
-/// white medium-weight type and a trailing check, so the current scope is
-/// apparent before the operator starts scanning labels.
+/// One filter row: the shared menu row, the current scope checked in the
+/// accent.
 pub fn filter_option(index: usize, option: &FilterOption) -> Stateful<Div> {
-    div()
-        .id(("nav-filter-option", index))
-        .group(FILTER_OPTION_GROUP)
-        .flex()
-        .items_center()
-        .justify_between()
-        .w_full()
-        .min_h(px(MENU_ROW_H))
-        .pl(px(MENU_ROW_PAD_L))
-        .pr(px(ROW_PAD_X))
-        .gap(px(ROW_PAD_X))
-        .rounded(px(R_CONTROL))
-        .text_size(px(FS_UI))
-        .when(option.selected, |on| {
-            on.bg(rgb(FILL))
-                .text_color(rgb(TEXT_STRONG))
-                .font_weight(FontWeight::MEDIUM)
-        })
-        .when(!option.selected, |off| off.text_color(rgb(TEXT_2)))
-        .hover_row()
-        .press_row()
-        .child(
-            div()
-                .min_w_0()
-                .truncate()
-                .group_hover(FILTER_OPTION_GROUP, |style| {
-                    style.text_color(rgb(TEXT_STRONG))
-                })
-                .child(option.label.clone()),
-        )
-        .children(
-            option
-                .selected
-                .then(|| icon(icons::CHECK, ICON_CHEVRON_LG, TEXT)),
-        )
+    components::menu_row(
+        ("nav-filter-option", index),
+        &components::MenuItem::new(option.label.clone()).checked(option.selected),
+        false,
+        false,
+    )
 }
 
 /// The visible door to Project management: the pencil directly right of
@@ -703,38 +596,15 @@ pub fn project_edit_button() -> gpui::component::button::Button {
 }
 
 /// The filter menu's last row: a verb, not an option — `Add Project…`
-/// with a `+` mark, in the muted ink until hovered. The caller wires the
+/// with a `+` mark. The caller sets a separator above it and wires the
 /// press to the folder picker.
 pub fn filter_action(index: usize, label: &'static str) -> Stateful<Div> {
-    div()
-        .id(("nav-filter-action", index))
-        .group(FILTER_OPTION_GROUP)
-        .flex()
-        .items_center()
-        .w_full()
-        .min_h(px(MENU_ROW_H))
-        .mt(px(MENU_PAD))
-        .pl(px(MENU_ROW_PAD_L))
-        .pr(px(ROW_PAD_X))
-        .gap(px(ROW_ICON_GAP))
-        .rounded(px(R_CONTROL))
-        .text_size(px(FS_UI))
-        .text_color(rgb(TEXT_2))
-        .hover_row()
-        .press_row()
-        .child(
-            icon(icons::PLUS, ROW_ICON, TEXT_MUTED)
-                .group_hover(FILTER_OPTION_GROUP, |style| style.text_color(rgb(TEXT))),
-        )
-        .child(
-            div()
-                .min_w_0()
-                .truncate()
-                .group_hover(FILTER_OPTION_GROUP, |style| {
-                    style.text_color(rgb(TEXT_STRONG))
-                })
-                .child(label),
-        )
+    components::menu_row(
+        ("nav-filter-action", index),
+        &components::MenuItem::new(label).leading(icons::PLUS, TEXT_MUTED),
+        false,
+        false,
+    )
 }
 
 /// The scrolling tree. It is the only thing in the column that scrolls, and
@@ -766,8 +636,8 @@ pub fn group_block() -> Div {
     div().relative().flex().flex_col().flex_shrink_0()
 }
 
-/// The 16px band between two Group blocks — real space the prototype
-/// already draws, doubling as the "insert between these two" drop target.
+/// The 16px band between two Group blocks — real air between the blocks,
+/// doubling as the "insert between these two" drop target.
 pub fn group_gap(index: usize) -> Stateful<Div> {
     div()
         .id(("group-gap", index))
@@ -777,7 +647,7 @@ pub fn group_gap(index: usize) -> Stateful<Div> {
 }
 
 /// "Insert above the first Group", which has no band of its own: the tree
-/// starts at its own padding and the prototype draws nothing there. So the
+/// starts at its own padding and draws nothing there. So the
 /// target is absolute — laid over the first Group header's top edge, taking
 /// no layout and, without `occlude`, stealing none of its clicks either.
 pub fn group_gap_lead(index: usize) -> Stateful<Div> {
@@ -804,11 +674,11 @@ pub fn member_tail(id: GroupId) -> Stateful<Div> {
         .h(px(MEMBER_GAP))
 }
 
-/// The 43px Group parent row: the title, then its Projects summary.
-/// **The Group is what carries the selected fill** — a Thread row never
-/// does — and the current Group also takes the white title. Its four-Pane
-/// mark is the same one Project order uses for grouped Threads. No provider
-/// mark, no checkout line, no disclosure glyph, no member count.
+/// The 44px (`GROUP_ROW_H`) Group parent row: the four-Pane Group glyph in
+/// the lead slot, the title — the block's one `W_LABEL` title — and its
+/// Projects summary hanging under it. No fill: the one selected fill is the
+/// focused member's. No provider mark, no disclosure glyph, no member
+/// count.
 #[cfg(test)]
 pub fn group_row(row: &GroupBlock) -> Stateful<Div> {
     group_row_with_title(row, row.title.clone())
@@ -818,62 +688,60 @@ pub fn group_row(row: &GroupBlock) -> Stateful<Div> {
 /// hands in a click-to-rename wrapper, or the live editor while renaming.
 /// The cell around it is unchanged either way: the geometry below is what
 /// makes the title truncate at all, and an editor swapped in at the row
-/// level instead would take the Project line with it.
+/// level instead would take the Project line with it. The title box sets
+/// the 16px line the editor inherits, so renaming never moves the row.
 pub fn group_row_with_title(row: &GroupBlock, title: impl IntoElement) -> Stateful<Div> {
-    row_frame(
-        ("nav-group", row.id.get() as usize),
-        GROUP_ROW_H,
-        row.current,
-    )
-    .debug_selector({
-        let id = row.id;
-        move || format!("nav-group-{}", id.get())
-    })
-    .flex_row()
-    .items_center()
-    .gap(px(ROW_PAD_X))
-    // A truncating title needs a **definite** width on its very first
-    // measure. gpui caches a nowrap line's first measure permanently
-    // (gpui-0.2.2 elements/text.rs:373 — `wrap_width` is `None` for
-    // nowrap, so the early return fires on every later call), and taffy
-    // only hands a text leaf a definite width when the leaf's flex
-    // container is a **column** whose own available width is definite —
-    // which taffy derives from the child's own min/max width
-    // (taffy-0.9.0 compute/flexbox.rs:661-679). A `flex_1`, a `w_full` or
-    // even a `w(px(..))` cell is measured at max-content first, so
-    // `truncate_line` never runs and the line is only visually clipped.
-    // Hence: flex **column**, with min and max width pinned to the row's
-    // own content box.
-    .child(
-        div()
-            .w(px(ROW_TEXT_W - GROUP_MARK_LG - ROW_PAD_X))
-            .flex()
-            .flex_col()
-            .gap(px(ROW_GAP))
-            .child(
-                div().h(px(TITLE_LG_H)).overflow_hidden().child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .min_w(px(ROW_TEXT_W - GROUP_MARK_LG - ROW_PAD_X + TRUNCATE_SLOP))
-                        .max_w(px(ROW_TEXT_W - GROUP_MARK_LG - ROW_PAD_X + TRUNCATE_SLOP))
-                        .truncate()
-                        .h(px(TITLE_LG_H))
-                        .text_size(px(FS_UI))
-                        .font_weight(W_LABEL)
-                        .line_height(px(LH_TIGHT))
-                        .text_color(rgb(if row.current { TEXT_STRONG } else { TEXT }))
-                        .child(title),
-                ),
-            )
-            .child(meta_line(icons::FOLDER, row.projects.clone(), TEXT_2)),
-    )
-    .child(group_header_icon(row.id))
+    const TEXT_W: f32 = ROW_TEXT_W - NAV_TEXT_X;
+    row_frame(("nav-group", row.id.get() as usize), GROUP_ROW_H, false)
+        .debug_selector({
+            let id = row.id;
+            move || format!("nav-group-{}", id.get())
+        })
+        .flex_row()
+        .items_start()
+        .gap(px(NAV_LEAD_GAP))
+        .child(group_header_icon(row.id))
+        // A truncating title needs a **definite** width on its very first
+        // measure. gpui caches a nowrap line's first measure permanently
+        // (gpui-0.2.2 elements/text.rs:373 — `wrap_width` is `None` for
+        // nowrap, so the early return fires on every later call), and taffy
+        // only hands a text leaf a definite width when the leaf's flex
+        // container is a **column** whose own available width is definite —
+        // which taffy derives from the child's own min/max width
+        // (taffy-0.9.0 compute/flexbox.rs:661-679). A `flex_1`, a `w_full` or
+        // even a `w(px(..))` cell is measured at max-content first, so
+        // `truncate_line` never runs and the line is only visually clipped.
+        // Hence: flex **column**, with min and max width pinned to the row's
+        // own text box.
+        .child(
+            div()
+                .w(px(TEXT_W))
+                .flex()
+                .flex_col()
+                .gap(px(ROW_GAP))
+                .child(
+                    div().h(px(TITLE_H)).overflow_hidden().child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .min_w(px(TEXT_W + TRUNCATE_SLOP))
+                            .max_w(px(TEXT_W + TRUNCATE_SLOP))
+                            .truncate()
+                            .h(px(TITLE_H))
+                            .text_size(px(FS_UI))
+                            .font_weight(W_LABEL)
+                            .line_height(px(TITLE_H))
+                            .text_color(rgb(TEXT))
+                            .child(title),
+                    ),
+                )
+                .child(meta_line(row.projects.clone(), None)),
+        )
 }
 
-/// The members container, and the one line the whole Soft system draws: a
-/// 1px rail 7px left of the indented rows, inset 3px top and bottom. Square
-/// ends, no radius, full opacity. It is the indent made visible, so it is
+/// The members container, and the one line the tree draws: a 1px
+/// `NAV_GROUP_RAIL` hanging from the Group glyph's centre, inset 3px top and
+/// bottom. Square ends, no radius. It is the indent made visible, so it is
 /// absolute and takes no layout of its own.
 pub fn members(rows: Vec<AnyElement>) -> Div {
     div()
@@ -890,27 +758,28 @@ pub fn members(rows: Vec<AnyElement>) -> Div {
                 .top(px(RAIL_INSET))
                 .bottom(px(RAIL_INSET))
                 .w(px(1.))
-                .bg(rgb(GROUP_RAIL)),
+                .bg(rgba(NAV_GROUP_RAIL)),
         )
         .children(rows)
 }
 
-/// The 44px (`THREAD_ROW_H`) Thread row: title and provider mark on line 1, the Project
-/// on line 2. The prototype's grid is
-/// `minmax(0, 1fr) 14px` with an 8px column gap; gpui's grid has uniform
-/// tracks only, so line 1 is flex — a `flex_1().min_w_0()` title beside a
-/// fixed 14px mark is the same two columns, and the mark's box is drawn even
-/// when the provider is unknown so the title never widens by 22px.
-///
-/// The row never carries the selected fill: that belongs to its Group.
+/// The 44px (`THREAD_ROW_H`) Thread row. Line 1: the status dot in the
+/// lead slot, the title, the provider mark in a fixed 12px slot at the
+/// right — drawn even when the provider is unknown, so the title never
+/// widens. Line 2: `project · branch` hanging under the title, and the
+/// subagent count and age at its tail, ending under the mark.
 #[cfg(test)]
 pub fn thread_row(row: &ThreadRow) -> Stateful<Div> {
-    thread_row_with_title(row, row.name.clone())
+    thread_row_with_title(row, row.name.clone(), false)
 }
 
 /// `thread_row` with the title leaf supplied by the caller — see
-/// `group_row_with_title`.
-pub fn thread_row_with_title(row: &ThreadRow, title: impl IntoElement) -> Stateful<Div> {
+/// `group_row_with_title`. `reduce_motion` holds a working dot's halo still.
+pub fn thread_row_with_title(
+    row: &ThreadRow,
+    title: impl IntoElement,
+    reduce_motion: bool,
+) -> Stateful<Div> {
     row_frame(
         ("nav-thread", row.thread.get() as usize),
         THREAD_ROW_H,
@@ -924,86 +793,84 @@ pub fn thread_row_with_title(row: &ThreadRow, title: impl IntoElement) -> Statef
         div()
             .flex()
             .items_center()
-            .gap(px(ROW_PAD_X))
-            .child(status_dot(row.thread, row.status))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .h(px(TITLE_MD_H))
-                    .text_size(px(FS_UI))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .line_height(px(LH_TIGHT))
-                    .text_color(rgb(if row.current { TEXT_STRONG } else { TEXT }))
-                    .child(title),
-            )
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .debug_selector({
-                        let thread = row.thread;
-                        move || format!("nav-mark-{}", thread.get())
-                    })
-                    .child(provider_mark(row.provider, PROVIDER_MARK)),
-            ),
+            .child(lead(status_dot(row.thread, row.status, reduce_motion)))
+            .child(title_cell(row, title).ml(px(NAV_LEAD_GAP)))
+            .child(mark_cell(row)),
     )
     .child(
-        meta_line(icons::FOLDER, row.project.clone(), TEXT_2).child(meta_tail(
-            row.thread,
-            row.subagents,
-            row.last_used.clone(),
-        )),
+        meta_line(row.project.clone(), row.branch.clone())
+            .pl(px(NAV_TEXT_X))
+            .child(meta_tail(row.thread, row.subagents, row.last_used.clone())),
     )
 }
 
 /// The grouped view has already named the Project, so its Thread rows keep
-/// the useful title, state, provider, subagent count and recency while
-/// dropping only the now-redundant Project label. This is the screenshot's
-/// compact section rhythm, expressed in Ferrite's existing row grammar.
+/// the title, state, provider, subagent count and recency on one line and
+/// drop the Project line. A Thread that is still a Group member says so with
+/// the Group glyph after its title, so every title keeps the same x.
 pub fn project_thread_row_with_title(
     row: &ThreadRow,
     title: impl IntoElement,
     grouped: bool,
+    reduce_motion: bool,
 ) -> Stateful<Div> {
     row_frame(
         ("nav-thread", row.thread.get() as usize),
-        ICON_BUTTON,
+        NAV_COMPACT_ROW_H,
         row.current,
     )
     .debug_selector({
         let thread = row.thread;
         move || format!("nav-thread-{}", thread.get())
     })
-    .flex()
     .flex_row()
     .items_center()
-    .gap(px(ROW_PAD_X))
-    .child(status_dot(row.thread, row.status))
+    .child(lead(status_dot(row.thread, row.status, reduce_motion)))
+    .child(title_cell(row, title).ml(px(NAV_LEAD_GAP)))
     .children(grouped.then(|| group_membership_indicator(row.thread)))
-    .child(
-        div()
-            .flex_1()
-            .min_w_0()
-            .truncate()
-            .text_size(px(FS_UI))
-            .font_weight(FontWeight::MEDIUM)
-            .line_height(px(LH_TIGHT))
-            .text_color(rgb(if row.current { TEXT_STRONG } else { TEXT }))
-            .child(title),
-    )
     .child(meta_tail(row.thread, row.subagents, row.last_used.clone()))
-    .child(
-        div()
-            .flex_shrink_0()
-            .debug_selector({
-                let thread = row.thread;
-                move || format!("nav-mark-{}", thread.get())
-            })
-            .child(provider_mark(row.provider, PROVIDER_MARK)),
-    )
+    .child(mark_cell(row))
 }
 
+/// A Thread row's title: one mono line in body weight that truncates, in
+/// `title_ink`. The box sets the 16px line the rename editor inherits.
+fn title_cell(row: &ThreadRow, title: impl IntoElement) -> Div {
+    div()
+        .flex_1()
+        .min_w_0()
+        .truncate()
+        .h(px(TITLE_H))
+        .text_size(px(FS_UI))
+        .font_weight(W_BODY)
+        .line_height(px(TITLE_H))
+        .text_color(rgb(title_ink(row)))
+        .child(title)
+}
+
+/// The focused Thread's title is the strongest ink in the tree; a parked
+/// Thread's steps down a rung, so what is running reads first.
+fn title_ink(row: &ThreadRow) -> u32 {
+    if row.current {
+        TEXT_STRONG
+    } else if row.status == RowStatus::Parked {
+        TEXT_2
+    } else {
+        TEXT
+    }
+}
+
+/// The provider mark's fixed slot at a row's right edge.
+fn mark_cell(row: &ThreadRow) -> Div {
+    let thread = row.thread;
+    div()
+        .flex()
+        .flex_shrink_0()
+        .ml(px(NAV_MARK_GAP))
+        .debug_selector(move || format!("nav-mark-{}", thread.get()))
+        .child(provider_mark(row.provider, PROVIDER_MARK))
+}
+
+/// The Group glyph in a Group row's lead slot, centred on the title line.
 fn group_header_icon(group: GroupId) -> Stateful<Div> {
     div()
         .id(("nav-group-icon", group.get() as usize))
@@ -1012,15 +879,15 @@ fn group_header_icon(group: GroupId) -> Stateful<Div> {
         .flex_shrink_0()
         .items_center()
         .justify_center()
-        .w(px(GROUP_MARK_LG))
-        .h_full()
-        .child(icon(icons::GROUP, GROUP_MARK_LG, TEXT_MUTED))
+        .w(px(NAV_LEAD_W))
+        .h(px(TITLE_H))
+        .child(icon(icons::GROUP, ROW_ICON, TEXT_MUTED))
         .tooltip(|window, cx| Tooltip::new("Group").build(window, cx))
 }
 
-/// The four-Pane Group mark. Project order flattens Groups into their
-/// Projects, so this keeps durable membership visible without competing
-/// with the Thread's status dot or provider mark.
+/// The four-Pane Group mark after a title in Project order. Project order
+/// flattens Groups into their Projects, so this keeps durable membership
+/// visible without competing with the Thread's status dot or provider mark.
 fn group_membership_indicator(thread: ThreadId) -> Stateful<Div> {
     div()
         .id(("nav-group-membership", thread.get() as usize))
@@ -1028,6 +895,7 @@ fn group_membership_indicator(thread: ThreadId) -> Stateful<Div> {
         .flex()
         .flex_shrink_0()
         .items_center()
+        .ml(px(NAV_MARK_GAP))
         .child(icon(icons::GROUP, ROW_ICON, TEXT_MUTED))
         .tooltip(|window, cx| Tooltip::new("In a group").build(window, cx))
 }
@@ -1041,10 +909,10 @@ fn meta_tail(thread: ThreadId, subagents: usize, since: Option<SharedString>) ->
         .flex_shrink_0()
         .items_center()
         .ml_auto()
-        .pl(px(ROW_ICON_GAP))
-        .gap(px(ROW_ICON_GAP))
+        .pl(px(NAV_MARK_GAP))
+        .gap(px(NAV_TAIL_GAP))
         .child(subagent_tail(thread, subagents))
-        .children(separated.then(|| meta_text().flex_shrink_0().child("·")))
+        .children(separated.then(seam))
         .child(since_tail(thread, since))
 }
 
@@ -1052,12 +920,12 @@ fn meta_tail(thread: ThreadId, subagents: usize, since: Option<SharedString>) ->
 /// the compact count distinct from recency without spelling out a noun.
 /// Threads without children spend no space here.
 fn subagent_tail(thread: ThreadId, count: usize) -> Stateful<Div> {
-    let cell = meta_text()
+    let cell = components::text_meta()
         .id(("nav-subagents", thread.get() as usize))
         .flex()
         .flex_shrink_0()
         .items_center()
-        .gap(px(3.))
+        .gap(px(NAV_TAIL_GAP))
         .debug_selector(move || format!("nav-subagents-{}", thread.get()));
     let Some(label) = subagent_label(count) else {
         return cell;
@@ -1081,7 +949,7 @@ fn subagent_label(count: usize) -> Option<SharedString> {
 /// whose Project is unknown still puts the age where every other row's age
 /// is. Never a date: the nav says how long ago, and the Pane says when.
 fn since_tail(thread: ThreadId, label: Option<SharedString>) -> Div {
-    let cell = meta_text()
+    let cell = components::text_meta()
         .flex_shrink_0()
         .debug_selector(move || format!("nav-since-{}", thread.get()));
     let Some(label) = label else {
@@ -1090,11 +958,12 @@ fn since_tail(thread: ThreadId, label: Option<SharedString>) -> Div {
     cell.child(label)
 }
 
-fn meta_text() -> Div {
-    div()
-        .text_size(px(FS_SM))
-        .line_height(px(LH_META))
-        .text_color(rgb(TEXT_MUTED))
+/// The `·` between two metadata facts: structure, so the faint ink.
+fn seam() -> Div {
+    components::text_meta()
+        .flex_shrink_0()
+        .text_color(rgb(TEXT_FAINT))
+        .child("·")
 }
 
 /// One run of solo Threads — those no Group claims — at root indent with
@@ -1139,22 +1008,52 @@ pub fn loose_ground(index: usize) -> Stateful<Div> {
         .min_h(px(SOLOS_TOP))
 }
 
-/// What an empty tree says. It names the Project rather than shrugging,
-/// so the way out is obvious — and when the Parked section below holds
-/// Threads the filter admits, it says *open*, so the operator is not told
-/// a Project is empty while its Threads sit one fold away.
-pub fn empty_filter(project: &str, parked_below: bool) -> Div {
-    let message = if parked_below {
-        format!("No open Groups or Threads in {project}.")
-    } else {
-        format!("No Groups or Threads in {project}.")
+/// What an empty tree says, on the rows' text column: a line in the
+/// secondary ink and, where there is one, a way forward in the metadata
+/// voice. Filtered to a Project it names the Project rather than shrugging;
+/// when the Parked section below holds Threads the filter admits, it says
+/// *open*, so the operator is not told a tree is empty while its Threads
+/// sit one fold away.
+pub fn empty_filter(project: Option<&str>, parked_below: bool) -> Div {
+    let (message, hint) = match (project, parked_below) {
+        (Some(project), false) => (format!("No Groups or Threads in {project}."), None),
+        (Some(project), true) => (
+            format!("No open Groups or Threads in {project}."),
+            Some("Its parked Threads wait below."),
+        ),
+        (None, false) => ("No Threads yet.".to_string(), Some("+ starts one.")),
+        (None, true) => (
+            "No open Threads.".to_string(),
+            Some("Parked Threads wait below."),
+        ),
     };
     div()
-        .my(px(RAIL_ITEMS_TOP))
-        .mx(px(ROW_PAD_X))
-        .text_size(px(FS_UI))
-        .text_color(rgb(TEXT_MUTED))
-        .child(SharedString::from(message))
+        .flex()
+        .flex_col()
+        .flex_shrink_0()
+        .py(px(ROW_PAD_Y))
+        .pl(px(ROW_PAD_X + NAV_TEXT_X))
+        .pr(px(ROW_PAD_X))
+        .child(
+            components::text_ui()
+                .text_color(rgb(TEXT_2))
+                .child(SharedString::from(message)),
+        )
+        .children(hint.map(|hint| components::text_meta().child(hint)))
+}
+
+/// A refusal from the last Group change, at the top of the tree: the
+/// metadata voice in the Decision ink on its wash, until the next change
+/// succeeds.
+pub fn notice(text: SharedString) -> Div {
+    components::text_meta()
+        .flex_shrink_0()
+        .px(px(ROW_PAD_X))
+        .py(px(ROW_PAD_Y))
+        .rounded(px(R_CONTROL))
+        .text_color(rgb(ATTENTION))
+        .bg(rgba(ATTENTION_WASH))
+        .child(text)
 }
 
 /// The Parked section at the foot of the column, under the scrolling tree
@@ -1167,53 +1066,49 @@ pub fn parked_section() -> Div {
         .flex()
         .flex_col()
         .flex_shrink_0()
-        .max_h(relative(PARKED_MAX_SHARE))
+        .max_h(relative(NAV_PARKED_MAX_SHARE))
         .px(px(NAV_TREE_PAD))
         .pb(px(NAV_TREE_PAD))
 }
 
-/// The Parked section's header: a chevron saying which way it is folded,
-/// the word, and how many wait. A heading in the Project headings' voice,
-/// but a control — the press toggles the fold, and a right press offers
-/// the section's own menu. The cockpit wires both.
+/// The Parked section's header: the fold chevron in the lead slot, the
+/// word on the text column, and how many wait — a heading in the Project
+/// headings' quiet voice, but a control: the press toggles the fold, and a
+/// right press offers the section's own menu. The cockpit wires both.
 pub fn parked_header(count: usize, open: bool) -> Stateful<Div> {
     let chevron = if open {
         icons::CHEVRON_DOWN
     } else {
         icons::CHEVRON_RIGHT
     };
-    div()
+    components::text_meta()
         .id(("nav-parked", 0usize))
         .debug_selector(|| "nav-parked".into())
         .group(PARKED_GROUP)
         .flex()
         .flex_shrink_0()
         .items_center()
-        .h(px(SECTION_H))
+        .h(px(NAV_SECTION_H))
         .px(px(ROW_PAD_X))
-        .gap(px(ROW_ICON_GAP))
         .rounded(px(R_CONTROL))
-        .text_size(px(FS_SM))
-        .font_weight(FontWeight::MEDIUM)
-        .text_color(rgb(TEXT_2))
         .hover_row()
         .press_row()
-        .child(
-            icon(chevron, ROW_ICON, TEXT_MUTED)
-                .group_hover(PARKED_GROUP, |style| style.text_color(rgb(TEXT))),
-        )
+        .child(lead(
+            icon(chevron, ROW_ICON, TEXT_FAINT)
+                .group_hover(PARKED_GROUP, |style| style.text_color(rgb(TEXT_MUTED))),
+        ))
         .child(
             div()
-                .flex_1()
                 .min_w_0()
                 .truncate()
-                .group_hover(PARKED_GROUP, |style| style.text_color(rgb(TEXT_STRONG)))
+                .ml(px(NAV_LEAD_GAP))
+                .group_hover(PARKED_GROUP, |style| style.text_color(rgb(TEXT)))
                 .child("Parked"),
         )
         .child(
             div()
-                .font_weight(FontWeight::NORMAL)
-                .text_color(rgb(TEXT_MUTED))
+                .flex_shrink_0()
+                .ml(px(NAV_TAIL_GAP))
                 .child(count.to_string()),
         )
 }
@@ -1241,8 +1136,6 @@ pub fn parked_scrollbar(scroll: &ScrollHandle) -> Div {
     components::scrollbar("nav-parked-scrollbar", scroll)
 }
 
-/// The badge that follows the pointer while a row is being dragged into a
-/// Group. It rides the menu ground — it is floating, like a menu is.
 /// A Group title that can be renamed: the row's own title text, and
 /// nothing else. It wears **no** hover wash — the wash would advertise a
 /// control the single click no longer operates, and a title box lighting
@@ -1254,31 +1147,44 @@ pub fn rename_target_group(id: GroupId, title: SharedString) -> Stateful<Div> {
         .debug_selector(move || format!("rename-group-{}", id.get()))
         .min_w_0()
         .truncate()
-        .rounded(px(R_TIGHT))
         .child(title)
 }
 
 /// A Thread title that can be renamed — `rename_target_group`'s twin, on
-/// the smaller row, and equally unwashed.
+/// the Thread row, and equally unwashed.
 pub fn rename_target_thread(thread: ThreadId, title: SharedString) -> Stateful<Div> {
     div()
         .id(("rename-thread", thread.get() as usize))
         .debug_selector(move || format!("rename-thread-{}", thread.get()))
         .min_w_0()
         .truncate()
-        .rounded(px(R_TIGHT))
         .child(title)
 }
 
+/// The badge that follows the pointer while a row is dragged — the Pane
+/// drag's own badge (`PaneDragPreview`), so the two drags read as one
+/// gesture: a raised mono tag with a strong edge and the float shadow, the
+/// dragged Thread's or Group's title in `TEXT_STRONG`, truncating rather
+/// than trailing a banner. Its face is set here because a drag preview is
+/// its own window-level view and inherits nothing.
 pub fn drag_badge(label: SharedString) -> Div {
     div()
-        .bg(rgb(MENU))
+        .flex()
+        .items_center()
+        .h(px(DRAG_BADGE_H))
+        .max_w(px(DRAG_BADGE_MAX_W))
+        .px(px(DRAG_BADGE_PAD_X))
         .rounded(px(R_CONTROL))
-        .px(px(ROW_PAD_X))
-        .py(px(ROW_PAD_Y))
-        .text_size(px(FS_SM))
-        .text_color(rgb(TEXT))
-        .child(label)
+        .bg(rgb(RAISED))
+        .border_1()
+        .border_color(rgba(HAIRLINE_STRONG))
+        .shadow(components::float_shadow())
+        .font_family(FONT_MONO)
+        .text_size(px(FS_UI))
+        .line_height(px(LH_UI))
+        .font_weight(W_LABEL)
+        .text_color(rgb(TEXT_STRONG))
+        .child(div().min_w_0().truncate().child(label))
 }
 
 /// The collapsed rail. Primary navigation actions sit at the top, recent
@@ -1291,7 +1197,7 @@ pub fn rail(_filtered: bool) -> Div {
         .flex_1()
         .min_h_0()
         .items_center()
-        .py(px(RAIL_PAD_Y))
+        .py(px(NAV_RAIL_PAD_Y))
 }
 
 /// A compact cluster for the rail's primary actions.
@@ -1301,7 +1207,7 @@ pub fn rail_actions() -> Div {
         .flex_col()
         .flex_shrink_0()
         .items_center()
-        .gap(px(RAIL_ITEM_GAP))
+        .gap(px(NAV_RAIL_ITEM_GAP))
 }
 
 /// Utilities stay pinned to the bottom rather than competing with Threads.
@@ -1312,11 +1218,11 @@ pub fn rail_utilities() -> Div {
         .flex_shrink_0()
         .items_center()
         .gap(px(MEMBER_GAP))
-        .pt(px(RAIL_PAD_Y))
+        .pt(px(NAV_RAIL_PAD_Y))
 }
 
 /// The rail's filter button: the compact column's Project affordance.
-/// Its glyph brightens to `--text` when a Project filter is active — the
+/// Its glyph brightens to `TEXT` when a Project filter is active — the
 /// only way the collapsed nav can admit it is hiding Threads.
 pub fn rail_filter(filtered: bool) -> Stateful<Div> {
     let resting = if filtered { TEXT } else { TEXT_MUTED };
@@ -1328,8 +1234,8 @@ pub fn rail_filter(filtered: bool) -> Stateful<Div> {
         .flex_shrink_0()
         .items_center()
         .justify_center()
-        .w(px(RAIL_CONTROL))
-        .h(px(RAIL_CONTROL))
+        .w(px(NAV_RAIL_CONTROL))
+        .h(px(NAV_RAIL_CONTROL))
         .rounded(px(R_CONTROL))
         .hover_control()
         .press_control()
@@ -1340,9 +1246,10 @@ pub fn rail_filter(filtered: bool) -> Stateful<Div> {
 }
 
 /// The rail's item column scrolls independently between the pinned primary
-/// actions and utilities. A stable element id retains its scroll offset as
-/// Thread status updates arrive; the fixed-size buttons keep their targets
-/// instead of being squeezed into the available height.
+/// actions and utilities, with no thumb: the rail is too narrow to carry
+/// one. A stable element id retains its scroll offset as Thread status
+/// updates arrive; the fixed-size buttons keep their targets instead of
+/// being squeezed into the available height.
 pub fn rail_items() -> Stateful<Div> {
     div()
         .id("nav-rail-items")
@@ -1353,23 +1260,24 @@ pub fn rail_items() -> Stateful<Div> {
         .min_h_0()
         .w_full()
         .items_center()
-        .gap(px(RAIL_ITEM_GAP))
-        .mt(px(RAIL_ITEMS_TOP))
+        .gap(px(NAV_RAIL_ITEM_GAP))
+        .mt(px(NAV_RAIL_ITEMS_TOP))
         .overflow_y_scroll()
 }
 
-/// One rail item: a Thread reduced to a two-letter monogram plus its live
-/// status dot. Provider logos made every Codex or Claude Thread identical;
-/// this keeps the rail scannable while the tooltip preserves the full name.
-/// `current` is the Group's, not the Thread's—the expanded tree uses the
-/// same selection ownership.
+/// One rail item: a Thread reduced to a two-letter mono monogram plus its
+/// still status dot in the corner (the rail's box is too tight for a
+/// breathing halo). Provider logos made every Codex or Claude Thread
+/// identical; the monogram keeps the rail scannable while the tooltip
+/// preserves the full name. The focused Thread's item carries the tree's
+/// one selected fill and the strong ink.
 pub fn rail_item(row: &ThreadRow, current: bool) -> Button {
     let title = row.name.clone();
     let monogram = rail_monogram(&row.name);
     components::button(("nav-rail-item", row.thread.get() as usize))
         .debug_selector(move || format!("nav-rail-item-{}", row.thread.get()))
-        .w(px(RAIL_CONTROL))
-        .h(px(RAIL_CONTROL))
+        .w(px(NAV_RAIL_CONTROL))
+        .h(px(NAV_RAIL_CONTROL))
         .p_0()
         .tooltip(title.clone())
         .accessibility_label(title)
@@ -1380,38 +1288,25 @@ pub fn rail_item(row: &ThreadRow, current: bool) -> Button {
                 .flex()
                 .items_center()
                 .justify_center()
-                .w(px(RAIL_CONTROL))
-                .h(px(RAIL_CONTROL))
+                .w(px(NAV_RAIL_CONTROL))
+                .h(px(NAV_RAIL_CONTROL))
+                .font_family(FONT_MONO)
                 .text_size(px(if cfg!(target_os = "macos") {
                     FS_UI
                 } else {
                     FS_SM
                 }))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(TEXT_2))
+                .font_weight(W_BODY)
+                .text_color(rgb(if current { TEXT_STRONG } else { TEXT_2 }))
                 .child(monogram)
                 .child(
                     div()
                         .absolute()
-                        .right(px(4.0))
-                        .bottom(px(4.0))
-                        .child(rail_status_dot(row.status)),
+                        .right(px(NAV_RAIL_DOT_INSET))
+                        .bottom(px(NAV_RAIL_DOT_INSET))
+                        .child(dot_face(row.status)),
                 ),
         )
-}
-
-/// The expanded row's breathing halo needs more room than a 28px avatar.
-/// Rail state stays still so it cannot clip into duplicate marks.
-fn rail_status_dot(status: RowStatus) -> Div {
-    let dot = div().w(px(STATUS_DOT)).h(px(STATUS_DOT)).rounded_full();
-    match status {
-        RowStatus::Working => dot.bg(rgb(RUNNING)),
-        RowStatus::Failing => dot.bg(rgb(RUNNING)).border_1().border_color(rgb(BLOCKED)),
-        RowStatus::Attention => dot.bg(rgb(ATTENTION)),
-        RowStatus::Blocked => dot.bg(rgb(BLOCKED)),
-        RowStatus::Idle => dot.bg(rgb(IDLE)),
-        RowStatus::Parked => dot.border_1().border_color(rgb(TEXT_FAINT)),
-    }
 }
 
 fn rail_monogram(name: &str) -> String {
@@ -1428,18 +1323,18 @@ fn rail_monogram(name: &str) -> String {
     }
 }
 
-/// The frame both row kinds share: the 6px-radius box, its padding, the
-/// 1px gap between stacked lines, and the fill language. The height is
-/// fixed so a row that cannot resolve its Project or its checkout still
-/// occupies exactly the space it will occupy once the cache fills.
+/// The frame every tree row shares: the `R_CONTROL` box, its padding, and
+/// the fill language. The height is fixed so a row that cannot resolve its
+/// Project or its checkout still occupies exactly the space it will occupy
+/// once the cache fills.
 ///
-/// `carries_fill` is only ever true for a Group: hover cannot wash over a
-/// ground stronger than itself, so a carrying row steps its ground up
-/// instead (`FILL` → `FILL_HOVER`) rather than being washed down.
-fn row_frame(id: (&'static str, usize), height: f32, carries_fill: bool) -> Stateful<Div> {
+/// `selected` is only ever the focused Thread's row, the tree's one fill:
+/// hover cannot wash over a ground stronger than itself, so that row steps
+/// its ground up instead (`FILL` → `FILL_HOVER`) rather than being washed
+/// down.
+fn row_frame(id: (&'static str, usize), height: f32, selected: bool) -> Stateful<Div> {
     let frame = div()
         .id(id)
-        // The current mark hangs off this box's left edge.
         .relative()
         .flex()
         .flex_col()
@@ -1449,7 +1344,7 @@ fn row_frame(id: (&'static str, usize), height: f32, carries_fill: bool) -> Stat
         .py(px(ROW_PAD_Y))
         .gap(px(ROW_GAP))
         .rounded(px(R_CONTROL));
-    let frame = if carries_fill {
+    let frame = if selected {
         frame.bg(rgb(FILL)).hover_carried().press_row()
     } else {
         frame.hover_row().press_row()
@@ -1462,36 +1357,45 @@ fn row_frame(id: (&'static str, usize), height: f32, carries_fill: bool) -> Stat
     frame.cursor(CursorStyle::OpenHand)
 }
 
-/// A Project or checkout line: a 12px mark, 5px, then the label. When the
-/// fact is unknown the line is drawn **empty** — icon included — and keeps
-/// its height. A row never invents a Project it cannot name.
-fn meta_line(mark: &'static str, label: Option<SharedString>, ink: u32) -> Div {
-    let line = div().flex().items_center().h(px(META_H));
-    let Some(label) = label else {
-        return line;
-    };
-    line.gap(px(ROW_ICON_GAP))
-        .child(icon(mark, ROW_ICON, ink))
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .truncate()
-                .text_size(px(FS_SM))
-                .line_height(px(LH_META))
-                .text_color(rgb(ink))
-                .child(label),
-        )
+/// A row's meta line: `project · branch` in the metadata voice, drawn from
+/// whichever facts are known. With both, the Project takes at most half the
+/// line and the branch truncates into the rest; with one, it takes the
+/// line; with neither the line is **empty** and keeps its height. A row
+/// never invents a Project or a branch it cannot name.
+fn meta_line(project: Option<SharedString>, branch: Option<SharedString>) -> Div {
+    let line = components::text_meta()
+        .flex()
+        .items_center()
+        .min_w_0()
+        .h(px(META_H))
+        .gap(px(NAV_TAIL_GAP));
+    match (project, branch) {
+        (Some(project), Some(branch)) => line
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .max_w(relative(0.5))
+                    .truncate()
+                    .child(project),
+            )
+            .child(seam())
+            .child(div().flex_1().min_w_0().truncate().child(branch)),
+        (Some(fact), None) | (None, Some(fact)) => {
+            line.child(div().flex_1().min_w_0().truncate().child(fact))
+        }
+        (None, None) => line,
+    }
 }
 
-/// The provider logomark in its brand colour, or an empty box of the same
-/// width when the provider is unknowable (an unreadable parked log). The
-/// box is never a placeholder glyph and never a `cl` / `cx` string: it holds
-/// the column open and says nothing.
+/// The provider logomark, monochrome in the metadata ink — colour is state,
+/// and a green Codex mark beside a green running dot would read as one — or
+/// an empty box of the same width when the provider is unknowable (an
+/// unreadable parked log). The box is never a placeholder glyph and never a
+/// `cl` / `cx` string: it holds the column open and says nothing.
 fn provider_mark(provider: Option<Provider>, size: f32) -> AnyElement {
     match provider {
-        Some(Provider::Codex) => icon(icons::CODEX, size, PROVIDER_CODEX).into_any_element(),
-        Some(Provider::Claude) => icon(icons::CLAUDE, size, PROVIDER_CLAUDE).into_any_element(),
+        Some(Provider::Codex) => icon(icons::CODEX, size, TEXT_MUTED).into_any_element(),
+        Some(Provider::Claude) => icon(icons::CLAUDE, size, TEXT_MUTED).into_any_element(),
         None => div()
             .flex_shrink_0()
             .w(px(size))
@@ -1515,6 +1419,7 @@ mod tests {
             status: RowStatus::Idle,
             name: "thread-08".into(),
             project: Some("ferrite".into()),
+            branch: Some("feat/ui-overhaul".into()),
             provider,
             current,
             last_used: Some("2h".into()),
@@ -1522,38 +1427,56 @@ mod tests {
         }
     }
 
-    fn group(current: bool) -> GroupBlock {
+    fn group() -> GroupBlock {
         GroupBlock {
             id: GroupId::new(1),
             title: "Project-scoped navigation prototype".into(),
             projects: Some("ferrite".into()),
-            current,
-            members: vec![thread(Some(Provider::Codex))],
+            members: vec![current_thread(Some(Provider::Codex), true)],
         }
     }
 
-    /// The selection rule: the fill lands on the focused Thread's row and
-    /// on the Group holding it — and on nothing else. A Thread that merely
+    /// The selection rule: one fill in the whole tree, on the focused
+    /// Thread's row. The Group holding it stays unfilled — two stacked
+    /// pills would say two things are selected — and a Thread that merely
     /// sits in the current Group is not itself current.
     #[test]
-    fn only_the_current_row_carries_the_selected_fill() {
+    fn one_fill_marks_the_focused_thread() {
         let fill = |mut drawn: Stateful<Div>| drawn.style().background.clone();
         assert_eq!(
-            fill(group_row(&group(true))),
-            Some(rgb(FILL).into()),
-            "the current Group carries the selected fill"
+            fill(group_row(&group())),
+            None,
+            "the Group holding the focused Thread draws no fill of its own"
         );
-        assert_eq!(fill(group_row(&group(false))), None);
         assert_eq!(
             fill(thread_row(&current_thread(Some(Provider::Claude), true))),
             Some(rgb(FILL).into()),
-            "the focused Thread's own row carries it too"
+            "the focused Thread's own row carries the tree's one fill"
         );
+        assert_eq!(fill(thread_row(&thread(Some(Provider::Claude)))), None);
         assert_eq!(
-            fill(thread_row(&thread(Some(Provider::Claude)))),
-            None,
-            "a Thread that is not focused is not filled by its Group's state"
+            fill(project_thread_row_with_title(
+                &current_thread(None, true),
+                "thread-08",
+                true,
+                false
+            )),
+            Some(rgb(FILL).into()),
+            "Project order marks the same row the same way"
         );
+    }
+
+    /// The focused title is the strongest ink in the tree, a parked title
+    /// steps down a rung, and every other title is the body ink.
+    #[test]
+    fn titles_rank_focus_then_running_then_parked() {
+        assert_eq!(title_ink(&current_thread(None, true)), TEXT_STRONG);
+        assert_eq!(title_ink(&thread(None)), TEXT);
+        let parked = ThreadRow {
+            status: RowStatus::Parked,
+            ..thread(None)
+        };
+        assert_eq!(title_ink(&parked), TEXT_2);
     }
 
     /// Every expanded row is a drag source before it is a button, so it
@@ -1565,11 +1488,11 @@ mod tests {
             cursor(thread_row(&thread(None))),
             Some(CursorStyle::OpenHand)
         );
-        assert_eq!(cursor(group_row(&group(true))), Some(CursorStyle::OpenHand));
         assert_eq!(
-            cursor(group_row(&group(false))),
+            cursor(thread_row(&current_thread(None, true))),
             Some(CursorStyle::OpenHand)
         );
+        assert_eq!(cursor(group_row(&group())), Some(CursorStyle::OpenHand));
     }
 
     #[test]
@@ -1593,13 +1516,23 @@ mod tests {
             status: RowStatus::Idle,
             name: "thread-09".into(),
             project: None,
+            branch: None,
             provider: None,
             current: false,
             last_used: None,
             subagents: 0,
         };
+        let branch_only = ThreadRow {
+            branch: Some("main".into()),
+            ..bare.clone()
+        };
         let height = |mut drawn: Stateful<Div>| drawn.style().size.height;
         assert_eq!(height(thread_row(&bare)), height(thread_row(&thread(None))));
+        assert_eq!(
+            height(thread_row(&bare)),
+            height(thread_row(&branch_only)),
+            "a branch without its Project is the same box"
+        );
         assert_eq!(
             height(thread_row(&bare)),
             height(thread_row(&current_thread(None, true))),
@@ -1608,13 +1541,26 @@ mod tests {
         assert_eq!(
             height(thread_row(&bare)),
             Some(px(THREAD_ROW_H).into()),
-            "6 + LH_TIGHT 16 + ROW_GAP 0 + LH_META 16 + 6"
+            "ROW_PAD_Y 6 + LH_TIGHT 16 + ROW_GAP 0 + LH_META 16 + ROW_PAD_Y 6"
         );
+        assert_eq!(THREAD_ROW_H, 2.0 * ROW_PAD_Y + TITLE_H + ROW_GAP + META_H);
         assert_eq!(
-            height(group_row(&group(false))),
+            height(group_row(&group())),
             Some(px(GROUP_ROW_H).into()),
             "the same two lines as a Thread row"
         );
+        assert_eq!(GROUP_ROW_H, THREAD_ROW_H);
+        assert_eq!(
+            height(project_thread_row_with_title(
+                &bare,
+                "thread-09",
+                false,
+                false
+            )),
+            Some(px(NAV_COMPACT_ROW_H).into()),
+            "Project order's one-line row: the same padding around the title line"
+        );
+        assert_eq!(NAV_COMPACT_ROW_H, 2.0 * ROW_PAD_Y + TITLE_H);
     }
 
     /// The working halo is absolute inside a fixed dot box, so a Thread
@@ -1622,16 +1568,72 @@ mod tests {
     /// it — by a pixel.
     #[test]
     fn a_working_row_is_the_same_box_as_a_quiet_one() {
-        let working = ThreadRow {
-            status: RowStatus::Working,
-            ..thread(Some(Provider::Claude))
-        };
         let height = |mut drawn: Stateful<Div>| drawn.style().size.height;
+        for status in [RowStatus::Working, RowStatus::Failing] {
+            let live = ThreadRow {
+                status,
+                ..thread(Some(Provider::Claude))
+            };
+            assert_eq!(
+                height(thread_row(&live)),
+                height(thread_row(&thread(Some(Provider::Claude)))),
+                "{status:?}"
+            );
+            assert_eq!(height(thread_row(&live)), Some(px(THREAD_ROW_H).into()));
+        }
+    }
+
+    /// The dots are the Pane's own colours: green only for live work, a
+    /// failing Thread in the failure's red (it still breathes, because it
+    /// is still inferring), a Decision amber, idle muted, parked hollow.
+    #[test]
+    fn status_dots_say_state_and_green_only_means_live() {
+        let fill = |status| dot_face(status).style().background.clone();
+        assert_eq!(fill(RowStatus::Working), Some(rgb(RUNNING).into()));
+        assert_eq!(fill(RowStatus::Failing), Some(rgb(BLOCKED).into()));
+        assert_eq!(fill(RowStatus::Blocked), Some(rgb(BLOCKED).into()));
+        assert_eq!(fill(RowStatus::Attention), Some(rgb(ATTENTION).into()));
+        assert_eq!(fill(RowStatus::Idle), Some(rgb(IDLE).into()));
+        let mut parked = dot_face(RowStatus::Parked);
+        assert_eq!(parked.style().background, None, "a parked dot is a ring");
         assert_eq!(
-            height(thread_row(&working)),
-            height(thread_row(&thread(Some(Provider::Claude))))
+            parked.style().border_color,
+            Some(rgb(TEXT_MUTED).into()),
+            "the ring is the metadata ink"
         );
-        assert_eq!(height(thread_row(&working)), Some(px(THREAD_ROW_H).into()));
+    }
+
+    /// The grid: the head's folder, every row's lead glyph and the Parked
+    /// chevron sit on one axis, every title and meta line on the next, a
+    /// member's lead slot starts under its Group's title, and the rail
+    /// hangs from the Group glyph's centre.
+    #[test]
+    fn every_row_shares_one_column_grid() {
+        assert_eq!(NAV_TEXT_X, NAV_LEAD_W + NAV_LEAD_GAP);
+        assert_eq!(MEMBER_INDENT, NAV_TEXT_X);
+        assert_eq!(
+            MEMBER_INDENT - RAIL_OFFSET,
+            ROW_PAD_X + NAV_LEAD_W / 2.0,
+            "the rail's x is the Group glyph's centre"
+        );
+        assert_eq!(PROVIDER_MARK, NAV_LEAD_W, "the two glyph columns match");
+        let mut head = nav_head();
+        assert_eq!(
+            head.style().padding.left,
+            Some(px(NAV_TREE_PAD).into()),
+            "the head takes the tree's inset"
+        );
+        let mut trigger = filter_trigger(&FilterState {
+            label: "All Projects".into(),
+            open: false,
+            options: Vec::new(),
+        });
+        assert_eq!(
+            trigger.style().padding.left,
+            Some(px(ROW_PAD_X).into()),
+            "head inset + trigger inset == tree inset + row inset"
+        );
+        assert_eq!(trigger.style().gap.width, Some(px(NAV_LEAD_GAP).into()));
     }
 
     #[test]
@@ -1642,16 +1644,18 @@ mod tests {
     }
 
     /// The Parked header is a control in a heading's clothes: it is
-    /// pressed like a row, and it is the same 30px box the Project
+    /// pressed like a row, and it is the same 28px box the Project
     /// headings are, folded or not — unfolding must not move the tree's
     /// bottom edge by a pixel.
     #[test]
     fn the_parked_header_is_a_row_sized_heading() {
         let mut shut = parked_header(3, false);
         assert_eq!(shut.style().mouse_cursor, Some(CursorStyle::PointingHand));
-        assert_eq!(shut.style().size.height, Some(px(SECTION_H).into()));
+        assert_eq!(shut.style().size.height, Some(px(NAV_SECTION_H).into()));
         let mut open = parked_header(3, true);
         assert_eq!(open.style().size.height, shut.style().size.height);
+        let mut heading = project_section("ferrite".into(), 3, true);
+        assert_eq!(heading.style().size.height, shut.style().size.height);
     }
 
     /// The section is capped at half the column and its list scrolls,
@@ -1661,7 +1665,7 @@ mod tests {
         let mut section = parked_section();
         assert_eq!(
             section.style().max_size.height,
-            Some(relative(PARKED_MAX_SHARE).into())
+            Some(relative(NAV_PARKED_MAX_SHARE).into())
         );
         let scroll = ScrollHandle::new();
         let mut list = parked_list(&scroll);
@@ -1672,14 +1676,17 @@ mod tests {
         );
     }
 
-    /// The nav column draws no border on any edge: Soft separates the
-    /// `#232323` column from the `#0e0e0e` Cockpit by fill contrast alone.
+    /// One plane with the window: the column is `GROUND` with no edge on
+    /// any side. The Panes separate themselves by their own plane and
+    /// hairline; the nav is the field they lie on, not a slab.
     #[test]
     fn the_column_has_no_edge() {
         let mut column = shell(false);
         let style = column.style();
-        assert_eq!(style.background, Some(rgb(NAV).into()));
-        assert!(style.border_widths.right.is_none());
+        assert_eq!(style.background, Some(rgb(GROUND).into()));
+        let edges = &style.border_widths;
+        assert!(edges.top.is_none() && edges.right.is_none());
+        assert!(edges.bottom.is_none() && edges.left.is_none());
         assert_eq!(style.size.width, Some(px(WIDTH).into()));
         let mut rail = shell(true);
         assert_eq!(rail.style().size.width, Some(px(RAIL_WIDTH).into()));

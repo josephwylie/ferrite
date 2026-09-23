@@ -696,12 +696,30 @@ fn long_subagent_approval_keeps_allow_and_deny_inside_the_island(cx: &mut TestAp
                 island.contains(&button.origin) && island.contains(&button.bottom_right()),
                 "{label} must sit inside the island: button={button:?} island={island:?}"
             );
-            let gap = button.top() - input.bottom();
-            assert!(
-                gap >= px(0.) && gap <= px(16.),
-                "the command-to-{label} gap must stay near the 12px design gap: {gap:?}"
-            );
         }
+        // The verbs are option rows under the command well: Allow first,
+        // close under the well; Deny last, directly under it. A short Pane
+        // scrolls the command inside its well rather than push them out.
+        let well = cx.debug_bounds("approval-well").unwrap();
+        assert!(
+            input.top() >= well.top() && well.bottom() <= input.bottom() + px(8.),
+            "the command starts in its well: {well:?} / {input:?}"
+        );
+        let gap = allow.top() - well.bottom();
+        assert!(
+            gap >= px(0.) && gap <= px(16.),
+            "the command-to-Allow gap must stay near the well's design gap: {gap:?}"
+        );
+        let row_h = 2. * crate::theme::DECISION_ROW_PAD_Y + crate::theme::LH_PROSE_SM;
+        assert!(
+            allow.size.height <= px(row_h + 1.),
+            "an approval row is one line: {allow:?}"
+        );
+        let step = deny.top() - allow.bottom();
+        assert!(
+            step >= px(0.) && step <= px(crate::theme::DECISION_ROW_GAP + 1.),
+            "Deny sits directly under Allow: {step:?}"
+        );
         if let Some((previous_width, previous_island)) = previous {
             let previous_island: gpui::Bounds<gpui::Pixels> = previous_island;
             assert!(
