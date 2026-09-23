@@ -45,7 +45,7 @@
 //! 7. **Pixel line heights.** Every text role is a (size, line height) pair,
 //!    and fixed row heights are `const` expressions of those pairs, never
 //!    hand-summed literals.
-//! 8. **A space scale:** 2 · 4 · 6 · 8 · 12 · 16 · 20 · 24 · 32 (`SPACE_*`,
+//! 8. **A space scale:** 2 · 4 · 6 · 8 · 12 · 16 · 24 · 32 (`SPACE_*`,
 //!    named in gpui's 4px units). A metric off the scale says why in its doc.
 //!    More space above a heading or a new turn than below it.
 //! 9. **Radii say role, not size:** Pane 10 · block 8 · control 6 · chip 4 ·
@@ -79,9 +79,6 @@ pub const PANE: u32 = 0x131518;
 /// The nav column: the ground itself. Navigation is the field the Panes sit
 /// on, not a slab of its own.
 pub const NAV: u32 = GROUND;
-/// The Pane header: the Pane's own plane. The header is chrome by its type and
-/// its hairline, not by a band.
-pub const PANE_HEAD: u32 = PANE;
 /// `#1a1d21` — raised in-flow blocks: the Composer, code blocks, cards, and
 /// every floating surface's ground.
 pub const RAISED: u32 = 0x1a1d21;
@@ -115,9 +112,6 @@ pub const PANE_HEAD_EDGE: u32 = HAIRLINE;
 pub const COMPOSER_EDGE: u32 = HAIRLINE_STRONG;
 /// Rules between transcript table rows.
 pub const TABLE_RULE: u32 = HAIRLINE;
-/// `#32363c` — the 1px rail that indents a Group's member Threads in the nav.
-#[allow(dead_code)]
-pub const GROUP_RAIL: u32 = 0x32363c;
 /// `#696f78` — a resting checkbox, radio or switch boundary: solid and at
 /// least 3:1 on `PANE` and `RAISED`, so an unchecked control never vanishes.
 pub const INPUT_EDGE: u32 = 0x696f78;
@@ -125,7 +119,6 @@ pub const INPUT_EDGE: u32 = 0x696f78;
 pub const SCROLLBAR: u32 = 0x2f3339;
 pub const SCROLLBAR_HOVER: u32 = 0x43484f;
 /// `#ffffff1a` — an unlit tasks-meter segment and the usage lines' tracks.
-#[allow(dead_code)]
 pub const METER_OFF: u32 = 0xffffff1a;
 /// `#000000a6` — the veil behind a modal sheet.
 pub const VEIL: u32 = 0x000000a6;
@@ -205,9 +198,7 @@ pub const BLOCKED_WASH: u32 = 0xe8877c1f;
 pub const IDLE: u32 = TEXT_MUTED;
 
 /// Brand marks, not UI colour: only the provider/model picker rows wear them.
-#[allow(dead_code)]
 pub const PROVIDER_CODEX: u32 = 0x10a37f;
-#[allow(dead_code)]
 pub const PROVIDER_CLAUDE: u32 = 0xd97757;
 
 // ------------------------------------------------------- transcript colour
@@ -238,17 +229,12 @@ pub const DROP_WASH: u32 = ACCENT_WASH;
 
 /// `--shadow-float` layer 1: `0 10px 28px -10px rgba(0,0,0,0.62)`.
 pub const SHADOW_FAR: u32 = 0x0000009e;
-#[allow(dead_code)]
 pub const SHADOW_FAR_Y: f32 = 10.0;
-#[allow(dead_code)]
 pub const SHADOW_FAR_BLUR: f32 = 28.0;
-#[allow(dead_code)]
 pub const SHADOW_FAR_SPREAD: f32 = -10.0;
 /// `--shadow-float` layer 2: `0 2px 6px rgba(0,0,0,0.3)`.
 pub const SHADOW_NEAR: u32 = 0x0000004d;
-#[allow(dead_code)]
 pub const SHADOW_NEAR_Y: f32 = 2.0;
-#[allow(dead_code)]
 pub const SHADOW_NEAR_BLUR: f32 = 6.0;
 
 // ------------------------------------------------------------------- type
@@ -326,14 +312,15 @@ pub fn prose_line_height(size: f32) -> f32 {
 /// 0.6em — Geist Mono's advance width (600/1000 em), the pitch a
 /// per-character cell must be laid out on so it cannot round up to a whole
 /// pixel.
-#[allow(dead_code)]
 pub const MONO_ADVANCE: f32 = 0.6;
 /// 7.5px — one mono column at `FS_UI`.
 pub const MONO_CELL: f32 = FS_UI * MONO_ADVANCE;
 
 /// The non-ASCII glyphs mono text may use: every one is in the bundled Geist
 /// Mono cmap (asserted by `theme::tests`). Anything else — `❯ ⎿ ∴ ✻ ✓ ✗ ☐`
-/// and friends — is an SVG in a glyph box, never text.
+/// and friends — is an SVG in a glyph box, never text. A rule the tests
+/// enforce, so it compiles only with them.
+#[cfg(test)]
 pub const CHROME_GLYPHS: &[char] = &[
     '↳', '±', '↑', '↓', '⇥', '⇧', '↵', '⌫', '•', '●', '…', '→', '·', '−', '—', '│', '└', '─', '›',
 ];
@@ -352,7 +339,6 @@ pub const SPACE_1_5: f32 = 6.0;
 pub const SPACE_2: f32 = 8.0;
 pub const SPACE_3: f32 = 12.0;
 pub const SPACE_4: f32 = 16.0;
-pub const SPACE_5: f32 = 20.0;
 pub const SPACE_6: f32 = 24.0;
 pub const SPACE_8: f32 = 32.0;
 
@@ -379,18 +365,18 @@ pub const R_TIGHT: f32 = 3.0;
 /// platforms keep the conventional compact 56px rail.
 /// `CockpitView::cell()` subtracts whichever is live, so the nav stays part
 /// of the semantic-zoom input.
-#[allow(dead_code)]
 pub const NAV_WIDTH: f32 = 286.0;
-#[allow(dead_code)]
 pub const NAV_RAIL_WIDTH: f32 = if cfg!(target_os = "macos") {
     TRAFFIC_RESERVE
 } else {
     56.0
 };
-/// 42px — the window-chrome band at the top of the nav (traffic lights and
-/// the collapse button). **The Cockpit has no band of any kind above it:**
-/// the Pane grid starts at y = 0.
-#[allow(dead_code)]
+/// 42px — the window-chrome band across the top of the window. Over the nav
+/// it is the column's own chrome row (the traffic-light reserve and the
+/// collapse button, `nav::win_chrome`); over the board it is the titlebar
+/// strip (location, `dev` tag, add control; on Windows the caption buttons,
+/// `titlebar::strip`), an overlay that adds no layout. The Pane board
+/// starts under it, at `BOARD_TOP`.
 pub const WIN_CHROME_H: f32 = 42.0;
 /// 77px — the horizontal room the window-chrome band reserves before the
 /// collapse button: the traffic lights plus the prototype's 8px flex gap
@@ -398,7 +384,6 @@ pub const WIN_CHROME_H: f32 = 42.0;
 /// x = 77). On macOS the *host* lights occupy it; nothing else may be drawn
 /// there, and nothing interactive may sit in the band's top 28px or AppKit's
 /// native drag region stops working.
-#[allow(dead_code)]
 pub const TRAFFIC_RESERVE: f32 = 77.0;
 /// Where the host traffic-light group's close button sits: 13px in from the
 /// window's left edge, vertically centred for a 14px button in the 42px band.
@@ -426,7 +411,6 @@ pub const PANE_PAD_X: f32 = SPACE_4;
 /// The Pane body's padding: 16px top, so the first line never kisses the
 /// head rule, and 32px bottom, the room the working line overlays.
 pub const BODY_PAD_T: f32 = SPACE_4;
-#[allow(dead_code)]
 pub const BODY_PAD_B: f32 = SPACE_8;
 /// 12px — the glyph box every transcript and Composer row hangs its mark in
 /// (`❯`, a tool dot, the answer mark, an elbow).
@@ -437,19 +421,14 @@ pub const GUTTER_GAP: f32 = 8.0;
 /// `GLYPH_BOX + GUTTER_GAP`. An elbow result sits at C2 = C1 + `ELBOW_INDENT`.
 pub const GUTTER_W: f32 = GLYPH_BOX + GUTTER_GAP;
 /// C2 − C1: an elbow row indents by one gutter.
-#[allow(dead_code)]
 pub const ELBOW_INDENT: f32 = GUTTER_W;
 /// 13px — a raised box's content inset (1px edge + 12px padding). Transcript
 /// rows sit the same distance inside the reading column, so the transcript `❯`
 /// and the Composer `❯` share one axis.
-#[allow(dead_code)]
 pub const BOX_INSET_X: f32 = 13.0;
 /// 8px — between a row's glyph column and its text (tool rows, the working
 /// line, the turn diff, controls beside a label).
-#[allow(dead_code)]
 pub const EVENT_GAP: f32 = 8.0;
-/// 10px — between transcript blocks and Markdown siblings.
-pub const BLOCK_GAP: f32 = 10.0;
 /// 1px — the focused Pane's ring (`FOCUS_RING` ink), lying exactly on the
 /// Pane's own border box: focus changes colour and nothing else. It is an
 /// absolutely positioned overlay inside a non-clipping wrapper, since a ring
@@ -459,13 +438,10 @@ pub const FOCUS_RING_W: f32 = 1.0;
 // ------------------------------------------------ shared controls and rows
 
 /// 28px — an icon button, a rail item and the Project filter trigger.
-#[allow(dead_code)]
 pub const ICON_BUTTON: f32 = 28.0;
 /// 16px — an icon button's glyph, centred in `ICON_BUTTON`.
-#[allow(dead_code)]
 pub const ICON_BUTTON_GLYPH: f32 = 16.0;
 /// 12px — the chevron beside a picker or a disclosure.
-#[allow(dead_code)]
 pub const ICON_CHEVRON: f32 = 12.0;
 /// 28px — a text button in pane and nav chrome, decisions and footers, with
 /// 12px inline padding. Sheet controls are `FORM_CONTROL_H`.
@@ -474,16 +450,10 @@ pub const CONTROL_PAD_X: f32 = SPACE_3;
 /// A keycap: 18px high (it fits inside a 20px UI row), 5px inline padding.
 pub const KBD_H: f32 = 18.0;
 pub const KBD_PAD_X: f32 = 5.0;
-/// 5px — between keycaps, and between a hint's key and its verb.
-#[allow(dead_code)]
-pub const KEYS_GAP: f32 = 5.0;
-/// A chip: 20px high, 6px inline and 1px block padding — the mode chip, the
-/// pass chip, the changed strip's file chips, background tasks.
+/// A chip: 20px high, 6px inline padding — the mode chip, the pass chip, the
+/// changed strip's file chips, background tasks.
 pub const CHIP_H: f32 = 20.0;
-#[allow(dead_code)]
 pub const CHIP_PAD_X: f32 = 6.0;
-#[allow(dead_code)]
-pub const CHIP_PAD_Y: f32 = 1.0;
 /// 4px — a floating menu's inset around its rows (`FLOAT_PAD`).
 pub const MENU_PAD: f32 = 4.0;
 /// 28px — one menu row: `LH_UI` plus 4px above and below.
@@ -491,13 +461,10 @@ pub const MENU_ROW_H: f32 = 28.0;
 /// A floating surface's inset around its rows (the same 4px as `MENU_PAD`),
 /// and the gap it keeps from the control that opened it.
 pub const FLOAT_PAD: f32 = MENU_PAD;
-#[allow(dead_code)]
 pub const FLOAT_OFFSET: f32 = 6.0;
 /// The context menu's width, and any floating list's height cap before it
 /// scrolls.
-#[allow(dead_code)]
 pub const MENU_W: f32 = 256.0;
-#[allow(dead_code)]
 pub const MENU_MAX_H: f32 = 420.0;
 /// A menu row's inline padding and the gap between its label and trailing
 /// parts; its radius nests inside the surface (`R_BLOCK` − `FLOAT_PAD`).
@@ -512,27 +479,19 @@ pub const MENU_NAME_MIN_W: f32 = 96.0;
 pub const MENU_NAME_MAX_W: f32 = 220.0;
 /// A nav or list row's padding — 8px inline, 6px block — and no gap between
 /// its stacked lines: their pixel line boxes already carry the air.
-#[allow(dead_code)]
 pub const ROW_PAD_X: f32 = 8.0;
-#[allow(dead_code)]
 pub const ROW_PAD_Y: f32 = 6.0;
-#[allow(dead_code)]
 pub const ROW_GAP: f32 = 0.0;
 /// 44px — a Thread row: its padding around a title line over a meta line,
 /// 6 + 16 + 0 + 16 + 6. Derived from the type, never summed by hand.
-#[allow(dead_code)]
 pub const THREAD_ROW_H: f32 = 2.0 * ROW_PAD_Y + LH_TIGHT + ROW_GAP + LH_META;
 /// A Group parent row: the same two lines, so the same 44px.
-#[allow(dead_code)]
 pub const GROUP_ROW_H: f32 = THREAD_ROW_H;
 /// The folder and branch marks on the Project and checkout lines (12px), and
 /// the 5px gap to their labels.
-#[allow(dead_code)]
 pub const ROW_ICON: f32 = 12.0;
-#[allow(dead_code)]
 pub const ROW_ICON_GAP: f32 = 5.0;
 /// 12px — the provider logomark in a picker row and the Composer's chip.
-#[allow(dead_code)]
 pub const PROVIDER_MARK_SM: f32 = 12.0;
 /// 24px — an L2 cell's header row; 10px its padding.
 pub const CELL_HEADER_H: f32 = 24.0;
@@ -565,10 +524,6 @@ pub const FERRITE_HOLD_END: f32 = 0.54;
 pub const FERRITE_SNAP_END: f32 = 0.615;
 pub const FERRITE_PULL_EASING: [f32; 4] = [0.4, 0.0, 0.2, 1.0];
 pub const FERRITE_SNAP_EASING: [f32; 4] = [0.16, 1.0, 0.3, 1.0];
-/// 120ms ease-out — every hover/press transition the prototype declares.
-/// gpui 0.2.2 refines styles without interpolation; recorded, not applied.
-#[allow(dead_code)]
-pub const TRANSITION_MS: u64 = 120;
 
 // ------------------------------------------------------------------ faces
 
@@ -918,11 +873,9 @@ const _: () = assert!(SCROLLBAR_GUTTER <= PANE_PAD_X);
 /// own — the snap-layout flyout aligns to it, so a narrower button would
 /// hang the flyout off-centre — and they run the band's full height,
 /// flush to the window's top-right corner.
-#[allow(dead_code)]
 pub const CAPTION_W: f32 = 46.0;
 /// 10px — the caption mark inside that button. Window chrome is smaller
 /// than UI: `ICON_BUTTON_GLYPH` at 16px would read as an app control.
-#[allow(dead_code)]
 pub const CAPTION_GLYPH: f32 = 10.0;
 /// 4px — the top edge a drag region leaves untagged, so the window can
 /// still be resized from its top border. `SM_CYFRAME` is 4 logical pixels,
@@ -930,16 +883,12 @@ pub const CAPTION_GLYPH: f32 = 10.0;
 /// answered first: a drag region flush to y = 0 would eat the resize edge
 /// along the whole strip. A maximized window has no such edge and insets
 /// nothing.
-#[allow(dead_code)]
 pub const CAPTION_RESIZE_EDGE: f32 = 4.0;
 /// Platform chrome, not a Ferrite state colour: Windows' own close-button
 /// field under the pointer and pressed, with its white mark. Muscle memory
 /// wins over "colour is state" for this one control.
-#[allow(dead_code)]
 pub const CAPTION_CLOSE: u32 = 0xc42b1c;
-#[allow(dead_code)]
 pub const CAPTION_CLOSE_PRESSED: u32 = 0x9b2218;
-#[allow(dead_code)]
 pub const CAPTION_CLOSE_INK: u32 = 0xffffff;
 /// The titlebar location's segments: 6px apart, one mono baseline.
 pub const TITLE_GAP: f32 = SPACE_1_5;
@@ -1098,7 +1047,6 @@ pub const COMPOSER_ACTION_PAD_X: f32 = PICKER_PAD_X;
 /// The context ring: a 14px box, 5.4px radius, 2px stroke, sweeping
 /// clockwise from 12 o'clock with a round cap. No text, ever.
 pub const USAGE_RING_D: f32 = 14.0;
-#[allow(dead_code)]
 pub const USAGE_RING_R: f32 = 5.4;
 pub const USAGE_RING_W: f32 = 2.0;
 /// The usage meter's detail card: one column of labelled bars, sized so

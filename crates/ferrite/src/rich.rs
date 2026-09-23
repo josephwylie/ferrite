@@ -816,7 +816,7 @@ pub mod testing {
     ) -> Option<gpui::Point<gpui::Pixels>> {
         let (state, style) = cx.global::<Views>().0.get(id)?;
         let mut bounds = state.read(cx).bounds();
-        let gap = px(theme::BLOCK_GAP);
+        let gap = px(theme::PROSE_GAP);
         let stride = (bounds.size.height + gap) / paragraphs.max(1) as f32;
         let line_height = stride - gap;
         bounds.origin.y += stride * item as f32;

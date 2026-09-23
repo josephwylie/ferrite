@@ -3808,23 +3808,6 @@ fn diff_stat(added: usize, removed: usize) -> Div {
     )
 }
 
-/// The one chip recipe the prototype draws (§E.11, `.pass`):
-/// `padding: 1px 6px`, a 4px radius, 11px ink on its own ground. The
-/// ground arrives resolved because the prototype's own chip sits on a
-/// translucent wash while the R-09 stand-ins sit on the opaque `--raised`,
-/// and `rgb`/`rgba` read a `u32`'s bytes differently.
-fn chip(label: impl Into<SharedString>, ink: u32, ground: gpui::Hsla) -> Div {
-    div()
-        .flex_shrink_0()
-        .text_size(px(theme::FS_SM))
-        .text_color(rgb(ink))
-        .bg(ground)
-        .rounded(px(theme::R_CHIP))
-        .px(px(theme::CHIP_PAD_X))
-        .py(px(theme::CHIP_PAD_Y))
-        .child(label.into())
-}
-
 /// A subscription window's plausible Unix reset instant in compact, useful
 /// units. Providers disagree on the field's units, so only a future value
 /// inside the window's own maximum span is safe to present as a countdown.
