@@ -902,3 +902,49 @@ fn a_project_in_use_keeps_its_remove_verb_disabled(cx: &mut TestAppContext) {
         assert!(view.project_editor.is_some(), "the sheet stays up");
     });
 }
+
+/// With an approval pending in an L2 cell, `y` allows whether the keyboard
+/// is in the Composer or on the card — the L1 rule. The cockpit's focus
+/// rule puts the keyboard in the Composer on every frame, so the card case
+/// focuses the card and presses `y` in the same turn, before any frame can
+/// move it.
+#[gpui::test]
+fn an_l2_approval_allows_on_y_with_the_card_or_the_composer_focused(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("l2-approval-focus", 1);
+    bind_production_keys(cx);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(560.), px(700.)));
+    tick(cx);
+    assert_eq!(
+        cx.update(|window, cx| view.read(cx).level_now(window)),
+        Level::Instruments
+    );
+    for (n, holder) in ["composer", "card"].into_iter().enumerate() {
+        let id = format!("l2-focus-{n}");
+        fake.streams.borrow()[0].send(decision(&id)).unwrap();
+        tick(cx);
+        assert!(
+            cx.debug_bounds("composer-block").is_some(),
+            "the cell keeps its Composer"
+        );
+        let on_card = cx.update(|window, cx| {
+            let card = view.read(cx).panes[0].decision_focus.clone();
+            if holder == "card" {
+                window.focus(&card, cx);
+            }
+            let on_card = card.is_focused(window);
+            window.dispatch_keystroke(gpui::Keystroke::parse("y").unwrap(), cx);
+            on_card
+        });
+        assert_eq!(on_card, holder == "card", "the premise: {holder} holds it");
+        tick(cx);
+        assert!(
+            matches!(
+                fake.answered.borrow().last(),
+                Some((answered, DecisionAnswer::Allow { .. })) if *answered == id
+            ),
+            "y allows with the {holder} holding the keyboard: {:?}",
+            fake.answered.borrow()
+        );
+    }
+}
