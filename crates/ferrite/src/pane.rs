@@ -5304,16 +5304,35 @@ where
         .w_full()
         .open(expanded)
         .child(header);
+    // Members hang a row step under the summary and under each other: one
+    // run of work, its rows evenly spaced.
     if expanded {
         let mut details = div().flex().flex_col().min_w_0().pl(px(theme::GUTTER_W));
-        for (index, block) in activity.blocks.iter().enumerate() {
+        for block in activity.blocks {
             let Body::Tool(tool) = &block.body else {
                 continue;
             };
-            details = details.child(
-                div()
-                    .when(index > 0, |member| member.pt(px(theme::GAP_TOOL)))
-                    .child(render_tool(
+            details = details.child(div().pt(px(theme::GAP_ROW)).child(render_tool(
+                div(),
+                block.id,
+                tool,
+                selection,
+                timings,
+                state(&DisclosureId::Tool(tool.call.clone())) == DisclosureState::Expanded,
+                control(&DisclosureId::Tool(tool.call.clone())),
+                true,
+                reduce_motion,
+            )));
+        }
+        group = group.content(details);
+    } else {
+        for block in activity.blocks {
+            let Body::Tool(tool) = &block.body else {
+                continue;
+            };
+            if matches!(tool.state, ToolState::Failed(_)) {
+                group = group.child(div().pl(px(theme::GUTTER_W)).pt(px(theme::GAP_ROW)).child(
+                    render_tool(
                         div(),
                         block.id,
                         tool,
@@ -5323,27 +5342,8 @@ where
                         control(&DisclosureId::Tool(tool.call.clone())),
                         true,
                         reduce_motion,
-                    )),
-            );
-        }
-        group = group.content(details);
-    } else {
-        for block in activity.blocks {
-            let Body::Tool(tool) = &block.body else {
-                continue;
-            };
-            if matches!(tool.state, ToolState::Failed(_)) {
-                group = group.child(div().pl(px(theme::GUTTER_W)).child(render_tool(
-                    div(),
-                    block.id,
-                    tool,
-                    selection,
-                    timings,
-                    state(&DisclosureId::Tool(tool.call.clone())) == DisclosureState::Expanded,
-                    control(&DisclosureId::Tool(tool.call.clone())),
-                    true,
-                    reduce_motion,
-                )));
+                    ),
+                ));
             }
         }
     }

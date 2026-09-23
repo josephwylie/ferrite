@@ -441,6 +441,7 @@ pub fn style(rem_size: gpui::Pixels) -> TextViewStyle {
 /// (`theme::heading_scale`), each on its own pixel line height.
 pub fn style_at(rem_size: gpui::Pixels, base: gpui::Pixels) -> TextViewStyle {
     let rem = |value: f32| rems(value / f32::from(rem_size));
+    let step = |value: f32| theme::reading_step(value, f32::from(base));
     let mut style = TextViewStyle::default()
         .with_dark(true)
         .with_foreground(rgb(theme::TEXT).into())
@@ -515,10 +516,12 @@ pub fn style_at(rem_size: gpui::Pixels, base: gpui::Pixels) -> TextViewStyle {
             gpui::StyleRefinement::default().text_color(rgb(theme::TEXT_MUTED)),
             gpui::StyleRefinement::default().text_color(rgb(theme::TEXT_MUTED)),
         )
-        .with_paragraph_gap(rem(theme::PROSE_GAP))
+        // The gaps are em-proportional to the prose size, so a larger
+        // reading size keeps the Standard rhythm.
+        .with_paragraph_gap(rem(step(theme::PROSE_GAP)))
         .with_heading_spacing(
-            rem(theme::HEADING_SPACE_ABOVE),
-            Some(rem(theme::HEADING_SPACE_BELOW)),
+            rem(step(theme::HEADING_SPACE_ABOVE)),
+            Some(rem(step(theme::HEADING_SPACE_BELOW))),
         )
         .with_heading_base_font_size(base)
         .with_heading_font_size(|level, base| base * theme::heading_scale(level));
@@ -826,11 +829,11 @@ pub mod testing {
     ) -> Option<gpui::Point<gpui::Pixels>> {
         let (state, style) = cx.global::<Views>().0.get(id)?;
         let mut bounds = state.read(cx).bounds();
-        let gap = px(theme::PROSE_GAP);
+        let size = style.font_size.to_pixels(window.rem_size());
+        let gap = px(theme::reading_step(theme::PROSE_GAP, f32::from(size)));
         let stride = (bounds.size.height + gap) / paragraphs.max(1) as f32;
         let line_height = stride - gap;
         bounds.origin.y += stride * item as f32;
-        let size = style.font_size.to_pixels(window.rem_size());
         let run = gpui::TextRun {
             len: text.len(),
             font: style.font(),
@@ -1825,6 +1828,21 @@ mod style_tests {
             assert_eq!(h4.text.font_weight, Some(theme::W_LABEL));
             assert_eq!(h4.text.color, Some(solid(theme::TEXT_2)));
             assert_eq!(h4.text.font_style, None, "headings are never italic");
+        }
+        // Block gaps are em-proportional: the Standard rhythm at every
+        // reading size, never smaller than 0.75em of the prose.
+        let rem = px(theme::FS_UI);
+        for (base, gap, above, below) in
+            [(14., 12., 8., 8.), (16., 14., 9., 9.), (18., 15., 10., 10.)]
+        {
+            let style = style_at(rem, px(base));
+            let near = |value: gpui::Rems, want: f32| {
+                (f32::from(value.to_pixels(rem)) - want).abs() < 0.01
+            };
+            assert!(near(style.paragraph_gap(), gap), "{base}");
+            assert!(gap >= 0.75 * base, "{base}");
+            assert!(near(style.heading_space_above(), above), "{base}");
+            assert!(near(style.heading_space_below().unwrap(), below), "{base}");
         }
     }
 

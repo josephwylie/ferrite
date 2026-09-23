@@ -14332,10 +14332,11 @@ mod tests {
             let bleed = px(crate::theme::PROMPT_HOVER_BLEED);
             assert_eq!(
                 tools.top() - (prompt.bottom() - bleed),
-                px(crate::theme::GAP_SECTION)
+                px(crate::theme::GAP_BLOCK)
             );
-            assert_eq!(answer.top() - tools.bottom(), px(crate::theme::GAP_SECTION));
-            assert_eq!(stamp.top() - answer.bottom(), px(crate::theme::GAP_STAMP));
+            assert_eq!(answer.top() - tools.bottom(), px(crate::theme::GAP_BLOCK));
+            // The stamp is one block step under the turn's last block.
+            assert_eq!(stamp.top() - answer.bottom(), px(crate::theme::GAP_BLOCK));
             // One content edge: the prompt's text, the group summary and the
             // answer's prose all start on C1.
             let prompt_start = caret(&view, cx, 0, 0).x;

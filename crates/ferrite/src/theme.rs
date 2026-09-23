@@ -762,33 +762,54 @@ pub fn init_components(cx: &mut gpui::App) {
 //   happened; its dot says how it went (`tool_dot`), and a failure colours
 //   the one word that says so. A collapsed group is one muted line whose only
 //   state ink is ` · N failed`.
-// - **Rhythm in three steps.** A turn opens `GAP_TURN` (32) under the one
-//   before it; blocks inside a turn — answer, summary, tool row, stamp —
-//   sit `GAP_SECTION` (12, the block step) apart; rows of one run of work
-//   (and a one-paragraph commentary into the call it introduces) sit
-//   `GAP_TOOL` (4, the row step) apart. The space above a row is chosen
-//   once, at reconcile, from the row before it and its own kind, and is
-//   part of the row's identity, so a changed gap is a changed row and
-//   nothing is measured per frame.
+// - **Rhythm in three steps**, each at least twice the one inside it
+//   (grouping by space, not lines). A turn opens `GAP_TURN` (32) under the
+//   one before it; the blocks inside a turn — a prose answer, a group
+//   summary, a lone tool row, the stamp — sit `GAP_BLOCK` (12, the block
+//   step) apart; the rows of one run of work sit `GAP_ROW` (4, the row
+//   step) apart: tool rows, a group's members under its summary, a
+//   one-paragraph commentary over the call it introduces, and any row that
+//   hangs on an elbow under the row it answers (a decision record, an
+//   interrupted or failed turn's end). A call and its own `⎿` result are
+//   one unit, with no step between them. Paragraphs inside an answer sit a
+//   block step apart too (`PROSE_GAP`, 0.86em), so an answer's paragraphs
+//   and the blocks around it read as siblings of one turn.
+// - **The rhythm scales with the reading size.** The turn and block steps
+//   and the prose gaps are em-proportional to the answer's size
+//   (`reading_step`): exactly the tokens at Standard, 37/14 at Comfortable,
+//   41/15 at Large, so a paragraph gap never outgrows the block step. The
+//   row step spaces UI rows, which do not scale, and stays 4.
+// - **Chosen once.** The space above a row is chosen at reconcile from the
+//   row before it, its own kind and the reading size, and is part of the
+//   row's identity, so a changed gap is a changed row and nothing is
+//   measured per frame.
 // - **The prompt anchors its turn.** The operator's line is the turn's
 //   heading: prose size (`FS_PROSE`/`LH_PROSE`) at `W_LABEL` in
 //   `TEXT_STRONG` under the accent `❯`, over answers at prose size, regular,
-//   in `TEXT`. Structural rows (tool calls, summaries) are `FS_UI`/`LH_UI`;
-//   the stamp and the trail are `FS_SM`/`LH_META`.
+//   in `TEXT`. An answer's own H1/H2 may be larger: they head sections of
+//   one answer, while the prompt heads the turn by place — the turn step
+//   above it, the accent in the gutter — not by size. Structural rows (tool
+//   calls, summaries) are `FS_UI`/`LH_UI`; the stamp and the trail are
+//   `FS_SM`/`LH_META`, their changing digits tabular.
 
 /// 32px — above every prompt but the first: the turn boundary. No rule is
 /// drawn between turns; this space, the prompt's weight and the stamp do the
 /// job.
 pub const GAP_TURN: f32 = SPACE_8;
-/// 12px — a change of voice: prompt → the agent's first row, prose ↔ tools,
-/// anything ↔ reasoning, notices, the turn's changes.
-pub const GAP_SECTION: f32 = SPACE_3;
-/// 4px — tool rows in one run of work, and a one-paragraph commentary that
-/// introduces the tool row under it.
-pub const GAP_TOOL: f32 = SPACE_1;
-/// The last row of a turn → its stamp (and a decision record under the row
-/// it answers): the block step, like any block of the turn.
-pub const GAP_STAMP: f32 = GAP_SECTION;
+/// 12px — the block step: between the blocks of one turn (prompt → the
+/// agent's first row, prose ↔ tools, anything ↔ reasoning, notices, the
+/// turn's changes, the last block → its stamp).
+pub const GAP_BLOCK: f32 = SPACE_3;
+/// 4px — the row step: rows of one run of work, and a row hung on an elbow
+/// under the row it answers.
+pub const GAP_ROW: f32 = SPACE_1;
+
+/// A prose-relative vertical step at answer size `size`: em-proportional to
+/// the Standard prose size, whole pixels. `GAP_TURN`, `GAP_BLOCK` and the
+/// Markdown gaps go through it; UI-row steps do not.
+pub fn reading_step(step: f32, size: f32) -> f32 {
+    (step * size / FS_PROSE).round()
+}
 
 /// 6px — a tool call's state dot, the size of every status dot.
 pub const TOOL_DOT: f32 = STATUS_DOT;
@@ -857,7 +878,9 @@ pub const UL_INDENT: f32 = SPACE_4;
 /// Code is a `RAISED` block; inline code is mono on an `ACCENT_WASH` chip;
 /// links are `ACCENT` over an `ACCENT_EDGE` underline.
 ///
-/// 12px — between Markdown blocks (`SPACE_3`).
+/// 12px — between Markdown blocks (`SPACE_3`), the transcript's block
+/// step. This and the heading spaces are Standard values; other reading
+/// sizes scale them with `reading_step`.
 pub const PROSE_GAP: f32 = SPACE_3;
 /// 8px — added above a heading that follows a sibling, on top of
 /// `PROSE_GAP`, so a heading opens a section rather than closing one.
