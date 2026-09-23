@@ -1,5 +1,6 @@
 //! One image preview per Pane. The kit owns dialog focus and dismissal;
-//! this module supplies the owning Pane's bounds instead of the window's.
+//! this module supplies the owning Pane's bounds, which place and size the
+//! sheet, while the scrim covers the window like every modal's.
 
 use std::{
     path::{Path, PathBuf},
@@ -118,7 +119,7 @@ fn open_original(path: &Path, window: &mut Window, cx: &mut App) {
 struct PreviewLayer(Preview);
 
 impl RenderOnce for PreviewLayer {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let preview = self.0;
         let image = preview.state.lock().unwrap().image.clone();
         let Some((path, title)) = image else {
@@ -217,17 +218,29 @@ impl RenderOnce for PreviewLayer {
                             ),
                     ),
             );
+        // The scrim is the window's, as under Settings and the Project
+        // sheet: the nav and the titlebar dim too. The sheet itself stays
+        // centred on, and sized by, the Pane that owns it.
+        let window_size = window.viewport_size();
         gpui::base::Dialog::new(cx)
             .focus_handle(preview.focus.clone())
-            .left(bounds.origin.x)
-            .top(bounds.origin.y)
-            .w(bounds.size.width)
-            .h(bounds.size.height)
-            .backdrop(div().size_full().bg(Theme::global(cx).overlay))
+            .left(px(0.))
+            .top(px(0.))
+            .w(window_size.width)
+            .h(window_size.height)
+            .backdrop(
+                div()
+                    .debug_selector(|| "attachment-preview-scrim".into())
+                    .size_full()
+                    .bg(Theme::global(cx).overlay),
+            )
             .popup(
                 div()
                     .absolute()
-                    .inset_0()
+                    .left(bounds.origin.x)
+                    .top(bounds.origin.y)
+                    .w(bounds.size.width)
+                    .h(bounds.size.height)
                     .flex()
                     .items_center()
                     .justify_center()

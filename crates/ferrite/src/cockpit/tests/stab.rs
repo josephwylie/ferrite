@@ -748,3 +748,33 @@ fn the_own_answer_field_is_a_full_control_on_the_label_column(cx: &mut TestAppCo
         "the field's text starts on the labels' column"
     );
 }
+
+/// The image preview's scrim covers the whole window, nav and titlebar
+/// included, like every modal's; its sheet stays centred on its Pane.
+#[gpui::test]
+fn the_image_preview_dims_the_whole_window(cx: &mut TestAppContext) {
+    let (core, _fake) = cockpit("preview-scrim", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+    tick(cx);
+    let image = scratch("preview-scrim-image").join("shot.png");
+    std::fs::create_dir_all(image.parent().unwrap()).unwrap();
+    std::fs::write(&image, include_bytes!("../../../assets/app-icon.png")).unwrap();
+    view.update_in(cx, |view, window, cx| {
+        view.panes[0]
+            .preview
+            .open(image.clone(), "Screenshot".into(), window, cx);
+    });
+    tick(cx);
+    tick(cx);
+    let scrim = cx
+        .debug_bounds("attachment-preview-scrim")
+        .expect("a scrim");
+    let window = cx.update(|window, _| window.viewport_size());
+    assert_eq!(scrim.origin, gpui::point(px(0.), px(0.)));
+    assert_eq!(scrim.size, window, "the scrim covers the window");
+    let sheet = cx.debug_bounds("attachment-preview-content").unwrap();
+    let pane = cx.update(|window, cx| view.read(cx).pane_rects(window)[0].1);
+    assert!((sheet.center().x - px(pane.x + pane.w / 2.)).abs() <= px(2.));
+    let _ = std::fs::remove_dir_all(image.parent().unwrap());
+}
