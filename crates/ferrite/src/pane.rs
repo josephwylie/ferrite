@@ -1930,13 +1930,24 @@ fn l2_cell(
     // holds the keyboard, so y/n answer; a press in the Composer takes
     // typing, and there an empty line's y/n answer as they do at L1.
     if let Some(decision) = decision.filter(|_| !compact_question) {
+        // The facts line sits where every cell has it, and the card follows
+        // it at the row step instead of its own top padding.
+        let facts = cell_facts(view, transcript, branch);
+        let card = l2_decision_body(decision, decide)
+            .when(facts.is_some(), |card| card.pt(px(theme::CELL_ROW_GAP)))
+            .key_context("Decision")
+            .track_focus(&view.decision_focus);
         return cell
             .child(header)
-            .child(
-                l2_decision_body(decision, decide)
-                    .key_context("Decision")
-                    .track_focus(&view.decision_focus),
-            )
+            .children(facts.map(|facts| {
+                div()
+                    .px(px(theme::CELL_PAD))
+                    .text_size(px(theme::FS_SM))
+                    .line_height(px(theme::LH_META))
+                    .text_color(rgb(TEXT_MUTED))
+                    .child(facts)
+            }))
+            .child(card)
             .children(sheet())
             .children(composer);
     }
@@ -1955,28 +1966,7 @@ fn l2_cell(
         .line_height(px(theme::LH_META))
         .text_color(rgb(TEXT_MUTED));
 
-    // The facts the head has no room for at this size: the model serving
-    // and the checkout, one muted line — the two things an operator
-    // running nine of these asks first.
-    let facts: Vec<String> = [
-        transcript
-            .model()
-            .map(ferrite_core::providers::models::display_name),
-        branch.map(|branch| branch.to_string()),
-    ]
-    .into_iter()
-    .flatten()
-    .filter(|part| !part.is_empty())
-    .collect();
-    if !facts.is_empty() {
-        body = body.child(
-            div()
-                .w_full()
-                .flex_shrink_0()
-                .truncate()
-                .child(SharedString::from(facts.join(" · "))),
-        );
-    }
+    body = body.children(cell_facts(view, transcript, branch));
 
     // One row of readings: the plan's meter, the latest test run, the diff
     // and how many files it touched. Omitted when there is nothing to read.
@@ -2292,6 +2282,35 @@ fn l2_tail(transcript: &Transcript, namespace: SharedString) -> Div {
 /// `a always` at L2. The group hangs directly under the header; a spacer
 /// would strand the keycaps on the cell floor (#22 A2). The keycaps arrive
 /// wired from the cockpit (#26), each only where its key would act.
+/// The facts the head has no room for at L2: the model serving and the
+/// checkout, one muted line — the two things an operator running nine of
+/// these asks first. Every cell with a Session has it, a Decision's too.
+fn cell_facts(
+    view: &PaneView,
+    transcript: &Transcript,
+    branch: Option<&SharedString>,
+) -> Option<Div> {
+    let facts: Vec<String> = [
+        transcript
+            .model()
+            .map(ferrite_core::providers::models::display_name),
+        branch.map(|branch| branch.to_string()),
+    ]
+    .into_iter()
+    .flatten()
+    .filter(|part| !part.is_empty())
+    .collect();
+    let key = view.thread().map_or(0, ThreadId::get);
+    (!facts.is_empty()).then(|| {
+        div()
+            .debug_selector(move || format!("l2-facts-{key}"))
+            .w_full()
+            .flex_shrink_0()
+            .truncate()
+            .child(SharedString::from(facts.join(" · ")))
+    })
+}
+
 fn l2_decision_body(decision: &Decision, decide: Option<AnyElement>) -> Div {
     div()
         .flex()
@@ -3446,16 +3465,23 @@ fn composer_region(view: &PaneView, transcript: Option<&Transcript>, stack: Comp
         meta = meta.child(setup);
     }
     // The chip is the live Session's permission mode, so it rides every
-    // Pane whose Session has announced one and is not blocked: a Decision
-    // owns the keyboard until it is answered, and a closed Session has no
-    // mode to be in (its chip is None). It is not tied to a turn in
+    // Pane whose Session has announced one and, at L1, is not blocked: a
+    // Decision owns the keyboard until it is answered, and a closed Session
+    // has no mode to be in (its chip is None). It is not tied to a turn in
     // flight — the mode is exactly what an operator changes *between*
-    // prompts. L2 draws it plain (no menu).
-    if let Some(mode) = mode.filter(|_| !blocking) {
-        meta = meta.child(div().flex_shrink_0().child(match mode_picker {
-            Some(picker) => picker,
-            None => mode_chip(mode, false).into_any_element(),
-        }));
+    // prompts. L2 draws it plain (no menu), so a Decision's cell keeps it
+    // like every other cell.
+    if let Some(mode) = mode.filter(|_| compact || !blocking) {
+        let key = view.thread().map_or(0, ThreadId::get);
+        meta = meta.child(
+            div()
+                .debug_selector(move || format!("composer-mode-{key}"))
+                .flex_shrink_0()
+                .child(match mode_picker {
+                    Some(picker) => picker,
+                    None => mode_chip(mode, false).into_any_element(),
+                }),
+        );
     }
     meta = meta.child(div().flex_1());
     if let Some(session_controls) = session_controls {

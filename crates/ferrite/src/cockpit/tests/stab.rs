@@ -1446,3 +1446,51 @@ fn the_head_title_starts_at_c1_on_a_wide_pane(cx: &mut TestAppContext) {
         "a narrow Pane keeps its head at its own padding"
     );
 }
+
+/// An L2 cell with an approval reads like every other cell around its
+/// card: the `model · branch` facts line under the head and the Composer's
+/// meta row with the Session's mode. L1 still drops the mode while a
+/// Decision owns the keyboard.
+#[gpui::test]
+fn an_l2_approval_cell_keeps_its_facts_and_mode(cx: &mut TestAppContext) {
+    let (core, fake) = cockpit("l2-approval-facts", 1);
+    let (view, cx) = add_cockpit_window(cx, |_, cx| CockpitView::new(core, cx));
+    cx.simulate_resize(gpui::size(px(560.), px(700.)));
+    for event in [
+        SessionEvent::Init {
+            session_id: "facts".into(),
+            model: "claude-opus-5-5[1m]".into(),
+        },
+        SessionEvent::PermissionMode {
+            mode: "acceptEdits".into(),
+        },
+    ] {
+        fake.streams.borrow()[0].send(event).unwrap();
+    }
+    tick(cx);
+    assert_eq!(
+        cx.update(|window, cx| view.read(cx).level_now(window)),
+        Level::Instruments
+    );
+    let thread = view.read_with(cx, |view, _| view.panes[0].thread().unwrap().get());
+    let facts: &'static str = Box::leak(format!("l2-facts-{thread}").into_boxed_str());
+    let mode: &'static str = Box::leak(format!("composer-mode-{thread}").into_boxed_str());
+    let quiet_facts = cx.debug_bounds(facts).expect("a quiet cell's facts line");
+    assert!(cx.debug_bounds(mode).is_some(), "a quiet cell's mode");
+
+    fake.streams.borrow()[0].send(decision("l2-facts")).unwrap();
+    tick(cx);
+    let asked = cx
+        .debug_bounds(facts)
+        .expect("the approval cell's facts line");
+    assert_eq!(asked, quiet_facts, "the facts line holds its place");
+    assert!(cx.debug_bounds(mode).is_some(), "the approval cell's mode");
+
+    // At L1 the Decision owns the keyboard, and the mode steps aside.
+    cx.simulate_resize(gpui::size(px(1440.), px(900.)));
+    tick(cx);
+    assert!(
+        cx.debug_bounds(mode).is_none(),
+        "L1 drops the mode under a Decision"
+    );
+}
