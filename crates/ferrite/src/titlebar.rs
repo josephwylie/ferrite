@@ -258,12 +258,16 @@ fn title_region(title: Title, board: Board) -> Div {
         .font_family(FONT_UI)
         .text_size(px(FS_UI))
         .line_height(px(LH_UI))
+        // Either name may truncate when the band is narrow; the whole of it
+        // is one hover away.
         .children(project.map(|project| {
             div()
+                .id("project-titlebar-name")
                 .debug_selector(|| "project-titlebar-name".into())
                 .min_w_0()
                 .flex_shrink(2.)
                 .truncate()
+                .tooltip(crate::menu::tooltip(project.clone()))
                 .when(solo, |name| name.font_weight(W_LABEL))
                 .text_color(rgb(if solo { TEXT_2 } else { TEXT_MUTED }))
                 .child(project)
@@ -271,10 +275,12 @@ fn title_region(title: Title, board: Board) -> Div {
         .when(has_group, |title| title.child(separator("/")))
         .children(group.map(|group| {
             div()
+                .id("group-titlebar-name")
                 .debug_selector(|| "group-titlebar-name".into())
                 .min_w_0()
                 .flex_shrink(1.)
                 .truncate()
+                .tooltip(crate::menu::tooltip(group.clone()))
                 .font_weight(W_LABEL)
                 .text_color(rgb(TEXT_STRONG))
                 .child(group)
@@ -285,7 +291,9 @@ fn title_region(title: Title, board: Board) -> Div {
                 .flex_shrink_0()
                 .gap(px(TITLE_GAP))
                 .child(separator("·"))
-                .child(fact(SharedString::from(count.to_string())))
+                .child(crate::components::tabular(fact(SharedString::from(
+                    count.to_string(),
+                ))))
         }))
         .when(fullscreen, |title| {
             title

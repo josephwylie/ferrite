@@ -257,26 +257,61 @@ pub const SHADOW_NEAR_Y: f32 = 1.0;
 pub const SHADOW_NEAR_BLUR: f32 = 1.5;
 
 // ------------------------------------------------------------------- type
+//
+// **The type scale.** Four sizes, each one role, each paired with one pixel
+// line height (rule 7). Render sites name a role, never a number:
+//
+// | role          | size | line | face          | used for                              |
+// |---------------|------|------|---------------|---------------------------------------|
+// | `FS_PROSE`    | 14   | 22   | UI            | agent prose, the Decision question    |
+// | `FS_UI`       | 12.5 | 20   | UI or code    | every chrome line: rows, titles,      |
+// |               |      |      |               | labels, values, buttons, menu rows    |
+// | `FS_PROSE_SM` | 12.5 | 18   | UI            | a description that wraps (Settings,   |
+// |               |      |      |               | sheets, option descriptions)          |
+// | `FS_SM`       | 11.5 | 16   | UI or code    | metadata: details, hints, section     |
+// |               |      |      |               | titles, keycaps, chips, ages, counts, |
+// |               |      |      |               | badges, tooltips                      |
+//
+// Headings step up from the prose size (`heading_scale`: 18 · 16 · 14) and
+// only inside the transcript. No surface outside it — menus, popovers,
+// sheets, cards, notifications, toasts, tooltips, the titlebar, empty
+// states — uses any size but `FS_UI` and `FS_SM`, plus `FS_PROSE_SM` for a
+// sheet's wrapping descriptions. A surface's hierarchy comes from ink and
+// weight: its one title `W_LABEL`, section titles `FS_SM` `W_LABEL`
+// `TEXT_MUTED`, rows `FS_UI` `W_BODY`, details `FS_SM` `W_BODY`.
+//
+// **Weights:** `W_BODY` (400) for everything that is read; `W_LABEL` (500)
+// for a surface's single title, a section title and an armed row;
+// `W_STRONG` (600) only where prose says so (headings, `**strong**`, the
+// Decision question). 700 is never used, and no render site names a
+// `FontWeight` itself.
+//
+// **Figures:** any number that changes while it is on screen — counts,
+// percentages, ages, durations, costs, tallies — is `components::tabular`,
+// so a tick never moves its neighbours.
 
 /// 14px — agent prose (Geist), the size an operator reads at length; also the
 /// Decision question and option descriptions. Paired with `LH_PROSE`.
 pub const FS_PROSE: f32 = 14.0;
-/// 12.5px — the mono UI size: prompts, tool rows, the Composer, menu rows,
-/// nav and Pane titles, code. Paired with `LH_UI` (single-line rows) or
+/// 12.5px — the UI size: every chrome line (menu rows, nav and Pane titles,
+/// Settings labels, buttons) in Geist, and code in Geist Mono (prompts, tool
+/// output, the Composer). Paired with `LH_UI` (single-line rows) or
 /// `LH_CODE` (multi-line mono blocks).
 pub const FS_UI: f32 = 12.5;
-/// 12.5px — secondary prose (Geist): option labels and descriptions, notes.
-/// Prose is never smaller. Paired with `LH_PROSE_SM`.
+/// 12.5px — secondary prose (Geist): option labels and descriptions, notes,
+/// a Settings row's description. Prose is never smaller. Paired with
+/// `LH_PROSE_SM`.
 pub const FS_PROSE_SM: f32 = 12.5;
 /// 11.5px — metadata: checkout lines, durations, hints, keycaps, chips,
-/// timestamps. Paired with `LH_META`.
+/// timestamps, section titles, badges, tooltips. The floor: nothing is
+/// smaller. Paired with `LH_META`.
 pub const FS_SM: f32 = 11.5;
 
 /// 22px — prose.
 pub const LH_PROSE: f32 = 22.0;
 /// 18px — secondary prose.
 pub const LH_PROSE_SM: f32 = 18.0;
-/// 20px — single-line mono rows.
+/// 20px — single-line UI and mono rows.
 pub const LH_UI: f32 = 20.0;
 /// 18px — multi-line mono blocks: code, diffs, tool output.
 pub const LH_CODE: f32 = 18.0;
@@ -285,8 +320,9 @@ pub const LH_META: f32 = 16.0;
 /// 16px — the stacked two-line rows (a nav row's title over its meta).
 pub const LH_TIGHT: f32 = 16.0;
 
-/// Weights: 400 body; 500 a surface's single title and labels; 600 prose
-/// headings, `**strong**` and the Decision question. 700 is not used.
+/// Weights (see the type scale above): 400 body; 500 a surface's single
+/// title, section titles and labels; 600 prose headings, `**strong**` and
+/// the Decision question. 700 is not used.
 pub const W_BODY: FontWeight = FontWeight::NORMAL;
 pub const W_LABEL: FontWeight = FontWeight::MEDIUM;
 pub const W_STRONG: FontWeight = FontWeight::SEMIBOLD;
@@ -375,16 +411,40 @@ pub const SPACE_6: f32 = 24.0;
 pub const SPACE_8: f32 = 32.0;
 
 // ------------------------------------------------------------------ radii
+//
+// **Radii say role**, and a nested surface is **concentric** with the one
+// it sits in: `inner = outer − inset`, where the inset is the outer
+// surface's padding. Its 1px hairline is not counted — at 1px the arcs
+// still read as one family — except for a child painted flush to the
+// edge, which takes the exact padding-box radius `outer − 1`. Every
+// nesting in the app lands on a token:
+//
+// | outer                         | inset            | inner                    |
+// |-------------------------------|------------------|--------------------------|
+// | floating surface `R_BLOCK` 8  | `FLOAT_PAD` 4    | menu row `R_MENU_ROW` 4  |
+// | checks card `R_BLOCK` 8       | `FLOAT_PAD` 4    | run row `R_CHIP` 4       |
+// | segmented tray `R_CONTROL` 6  | `FORM_CHOICE_PAD` 2 | choice chip `R_CHIP` 4 |
+// | sheet `R_PANE` 10             | flush            | sidebar corner `R_PANE − 1` |
+//
+// Where the inset is at least the outer radius (a field 16px inside a
+// sheet, a chip in a card's row, a keycap in a Decision option) the inner
+// corner no longer shares the outer arc, and the inner surface takes its
+// own role radius. The one exception is the kit's popup menu (the choice
+// menus, the Settings chooser): it rounds its surface and its rows alike
+// from the kit's single `radius` (`R_CONTROL`), and its wrapper follows the
+// surface so the float shadow hugs it.
 
-/// 10px — a Pane.
+/// 10px — a Pane, and a sheet (Settings, the Project editor).
 pub const R_PANE: f32 = 10.0;
 /// 8px — blocks: the Composer, code, cards, menus, popovers, toasts. The
 /// kit's `radius_lg`.
 pub const R_BLOCK: f32 = 8.0;
-/// 6px — controls: buttons, nav rows, pickers. The kit's `radius`.
+/// 6px — controls: buttons, fields, nav rows, pickers, a segmented tray,
+/// tooltips. The kit's `radius`.
 pub const R_CONTROL: f32 = 6.0;
-/// 4px — chips, keycaps, inline code, and a menu's rows (`R_BLOCK` less the
-/// menu's 4px inset).
+/// 4px — chips, keycaps, inline code, and anything nested one inset inside
+/// a larger radius: a menu's rows (`R_BLOCK` less `FLOAT_PAD`), a segmented
+/// choice's chips (`R_CONTROL` less `FORM_CHOICE_PAD`).
 pub const R_CHIP: f32 = 4.0;
 /// 3px — meter segments and other tiny marks only.
 pub const R_TIGHT: f32 = 3.0;
@@ -524,9 +584,15 @@ pub const MENU_MAX_H: f32 = 420.0;
 pub const MENU_ROW_PAD_X: f32 = 8.0;
 pub const MENU_ROW_GAP: f32 = SPACE_3;
 pub const R_MENU_ROW: f32 = R_CHIP;
-/// A menu section title row, and the space either side of a separator.
+/// A menu section title row: 24px, its `FS_SM` title sat on the row's foot
+/// so it hugs the rows it heads.
 pub const MENU_SECTION_H: f32 = 24.0;
-pub const MENU_SEP_Y: f32 = 4.0;
+/// 8px — what splits one group of rows from the next inside any floating
+/// surface (context-menu groups, a section after rows, a key-hint footer, a
+/// panel's head). Space, never a rule: rows sit flush (their 8px of air is
+/// inside the 28px row), so a group gap doubles the air between two lines
+/// of text — the 2× that makes the split read (`components::menu_separator`).
+pub const MENU_GROUP_GAP: f32 = SPACE_2;
 /// An aligned name column (slash commands): clamped between these.
 pub const MENU_NAME_MIN_W: f32 = 96.0;
 pub const MENU_NAME_MAX_W: f32 = 220.0;
@@ -1026,9 +1092,10 @@ pub const UNREAD_PULSE_MAX: f32 = 0.7;
 pub const CHECKS_CARD_W: f32 = 312.0;
 /// The card's widest: it grows to its tally and run names up to here.
 pub const CHECKS_CARD_MAX_W: f32 = 420.0;
-pub const CHECKS_CARD_PAD: f32 = SPACE_1;
-/// Between the card's heading and its runs.
-pub const CHECKS_CARD_GAP: f32 = SPACE_1;
+pub const CHECKS_CARD_PAD: f32 = FLOAT_PAD;
+/// Between the card's heading and its runs: space, not a rule
+/// (`MENU_GROUP_GAP`, as between any two groups on a floating surface).
+pub const CHECKS_CARD_GAP: f32 = MENU_GROUP_GAP;
 /// The card's heading row and one run's row.
 pub const CHECKS_HEAD_H: f32 = 28.0;
 pub const CHECKS_ROW_H: f32 = 24.0;
@@ -1062,7 +1129,8 @@ pub const DROP_LABEL_PAD_X: f32 = SPACE_2;
 pub const DROP_LABEL_PAD_Y: f32 = SPACE_1;
 /// The Pane a live drag picked up, dimmed in its slot until the release.
 pub const DRAG_SOURCE_OPACITY: f32 = 0.5;
-/// The empty board's hint column: lines 8px apart, a key 8px from its verb.
+/// The empty board's hints: lines 8px apart, the keys in one column 8px
+/// from their verbs' shared edge, the heading twice that above them.
 pub const EMPTY_BOARD_GAP: f32 = SPACE_2;
 // (end WP-C) — append above this line only
 
@@ -1180,11 +1248,14 @@ pub const USAGE_RING_R: f32 = 5.4;
 pub const USAGE_RING_W: f32 = 2.0;
 /// The usage meter's detail card: one column of labelled bars, sized so
 /// the three windows read at a glance without the card becoming a panel.
+/// Its padding puts the text on the same edge as a menu row's inside the
+/// floating surface (`FLOAT_PAD` + `MENU_ROW_PAD_X`).
 pub const USAGE_CARD_W: f32 = 216.0;
-pub const USAGE_CARD_PAD: f32 = 10.0;
-/// Between one window's block and the next, and inside one block.
-pub const USAGE_CARD_GAP: f32 = 12.0;
-pub const USAGE_CARD_ROW_GAP: f32 = 5.0;
+pub const USAGE_CARD_PAD: f32 = MENU_ROW_PAD_X;
+/// Between one window's block and the next, and inside one block: the
+/// blocks stand twice as far apart as their own lines.
+pub const USAGE_CARD_GAP: f32 = SPACE_3;
+pub const USAGE_CARD_ROW_GAP: f32 = SPACE_1_5;
 pub const USAGE_CARD_BAR_H: f32 = 4.0;
 /// Where a usage reading turns from neutral to ATTENTION, and from
 /// ATTENTION to BLOCKED — a fraction of the window, not a count. Below
@@ -1239,8 +1310,10 @@ pub const ATTACH_THUMB: f32 = 16.0;
 pub const FORM_CONTROL_H: f32 = 32.0;
 /// Selected-value controls share a comfortable measure inside wider forms.
 pub const FORM_FIELD_W: f32 = 320.0;
-/// Inset around the chips of a segmented choice control.
-pub const FORM_CHOICE_PAD: f32 = SPACE_1;
+/// Inset around the chips of a segmented choice control, and the gap
+/// between them: 2px, so the chips nest concentrically (`R_CHIP` inside the
+/// tray's `R_CONTROL`) and the tray reads as one control.
+pub const FORM_CHOICE_PAD: f32 = SPACE_0_5;
 /// A choice chip's and a chooser's inline padding inside the 32px row.
 pub const FORM_CHIP_PAD_X: f32 = SPACE_2;
 pub const FORM_FIELD_PAD_X: f32 = SPACE_2 + SPACE_0_5;
@@ -1256,18 +1329,21 @@ pub const SWITCH_THUMB: f32 = SWITCH_H - 2.0 * SWITCH_INSET;
 pub const SWITCH_TRAVEL: f32 = SWITCH_W - 2.0 * SWITCH_INSET - SWITCH_THUMB;
 /// A sheet text button's inline padding (Add Directory, Remove, Done).
 pub const FORM_BUTTON_PAD_X: f32 = SPACE_3;
-/// A tooltip: mono `FS_SM`, 8px × 4px, at most 280px before it wraps.
+/// A tooltip: UI `FS_SM`, 8px × 4px, `R_CONTROL`, at most 280px before it
+/// wraps. It is how a truncated label keeps its full value reachable.
 pub const TOOLTIP_PAD_X: f32 = SPACE_2;
 pub const TOOLTIP_PAD_Y: f32 = SPACE_1;
 pub const TOOLTIP_MAX_W: f32 = 280.0;
 /// The notifications panel: 340px holds a title, a detail line and an age
-/// without wrapping; a row is two lines in 6px of air each side.
+/// without wrapping; a row is two lines in 6px of air each side. No rules
+/// inside it: its head sits `NOTICE_HEAD_GAP` above the first row, twice
+/// the 12px of air between two rows' text.
 pub const NOTICE_PANEL_W: f32 = 340.0;
 pub const NOTICE_ROW_H: f32 = LH_UI + LH_META + 2.0 * SPACE_1_5;
-/// The bell's unread pill: 14px, 10.5px mono figures, 2px in from the
-/// button's corner.
-pub const BADGE_H: f32 = 14.0;
-pub const FS_BADGE: f32 = 10.5;
+pub const NOTICE_HEAD_GAP: f32 = SPACE_3;
+/// The bell's unread pill: one `FS_SM` line high, tabular UI figures, 2px
+/// in from the button's corner.
+pub const BADGE_H: f32 = LH_META;
 pub const BADGE_INSET: f32 = SPACE_0_5;
 /// With the nav collapsed, toasts stack BottomRight this far up: the
 /// board's padding, the Pane's edge, a one-line Composer and its inset,
@@ -1288,6 +1364,15 @@ pub const FACT_KEY_W: f32 = 136.0;
 pub const MODAL_HEAD_H: f32 = 48.0;
 pub const MODAL_PAD: f32 = 16.0;
 pub const MODAL_GAP: f32 = 12.0;
+/// The kit lays a Settings page out in rems, and its rem is the theme's
+/// font size (`FS_UI`), so the page list's own inset is 12.5px while the
+/// page header keeps `MODAL_PAD`. Each group adds the difference, so labels,
+/// descriptions, controls and the header share one leading edge.
+pub const SETTINGS_GROUP_INSET_X: f32 = MODAL_PAD - FS_UI;
+/// Between a Settings group's title and its first row: closer than the
+/// rows are to each other (the kit's 1rem), so a title belongs to what it
+/// heads, and groups stand 2rem apart.
+pub const SETTINGS_TITLE_GAP: f32 = SPACE_1_5;
 /// Editors leave an even breathing edge while making room for a scrolling
 /// form at short desktop heights.
 pub const MODAL_VIEWPORT_FRACTION: f32 = 0.92;

@@ -2,7 +2,8 @@
 //! or a Pane offers. Drawing only, like `nav.rs` — the cockpit decides the
 //! rows and runs the verbs. It is the one floating surface
 //! (`components::floating_surface`), anchored at the pointer, its rows the
-//! one menu row (`components::menu_row`), its groups split by a hairline.
+//! one menu row (`components::menu_row`), its groups split by space
+//! (`MENU_GROUP_GAP`), never a rule.
 //!
 //! A destructive verb never runs on one press: its row arms on the first
 //! (the label becomes the confirmation, on the blocked wash) and runs on
@@ -26,7 +27,8 @@ pub fn shell() -> Div {
     components::floating_surface().min_w(px(MENU_W))
 }
 
-/// The line between two groups of rows.
+/// The space between two groups of rows: twice the air between two rows,
+/// so the groups read without a rule.
 pub fn gap() -> Div {
     components::menu_separator()
 }
@@ -52,9 +54,10 @@ fn shortcut(keys: &SharedString, ink: u32) -> Div {
     components::key_combo(keys, ink).text_size(px(FS_SM))
 }
 
-/// A tooltip in the floating vocabulary: UI `FS_SM`, 8px × 4px, at most
-/// `TOOLTIP_MAX_W` wide (a long path wraps), the float shadow over the kit's
-/// raised ground and strong hairline edge.
+/// A tooltip in the floating vocabulary: UI `FS_SM`, 8px × 4px, `R_CONTROL`,
+/// at most `TOOLTIP_MAX_W` wide (a long path wraps), the float shadow over
+/// the kit's raised ground and strong hairline edge. It is also how a label
+/// that truncates keeps its full value reachable.
 pub fn tooltip(
     text: impl Into<SharedString>,
 ) -> impl Fn(&mut gpui::Window, &mut gpui::App) -> gpui::AnyView + 'static {
@@ -67,6 +70,7 @@ pub fn tooltip(
             .px(px(TOOLTIP_PAD_X))
             .py(px(TOOLTIP_PAD_Y))
             .max_w(px(TOOLTIP_MAX_W))
+            .rounded(px(R_CONTROL))
             .shadow(components::float_shadow())
             .build(window, cx)
     }

@@ -33,8 +33,8 @@ use ferrite_core::{Decision, ThreadId};
 use gpui::prelude::*;
 use gpui::{
     canvas, deferred, div, point, pulsating_between, px, relative, rgb, rgba, Animation,
-    AnimationExt, AnyElement, Context, Div, Entity, FocusHandle, FontWeight, HighlightStyle,
-    PathBuilder, SharedString, Stateful, Styled, StyledText,
+    AnimationExt, AnyElement, Context, Div, Entity, FocusHandle, HighlightStyle, PathBuilder,
+    SharedString, Stateful, Styled, StyledText,
 };
 #[cfg(test)]
 use std::cell::RefCell;
@@ -2682,8 +2682,10 @@ pub fn checks_card() -> Div {
 /// The card's heading: the PR by number at the left, and how its runs
 /// divide at the right — the counts the head's chip had no room for. Only
 /// states with runs in them are named, so the line never reads `0 failed`,
-/// and only the failure is coloured. A hairline separates summary from
-/// runs: the one rule the card draws.
+/// and only the failure is coloured; its figures are tabular, so a run
+/// finishing never shifts the tally. Space, not a rule, separates summary
+/// from runs (`CHECKS_CARD_GAP`); the heading, the workflow titles and the
+/// runs' dots share one leading edge, a menu row's.
 pub fn checks_head(pr: &PullRequest) -> Div {
     let tally = pr.tally();
     let parts: Vec<(String, u32)> = [
@@ -2732,6 +2734,7 @@ pub fn checks_head(pr: &PullRequest) -> Div {
         .line_height(px(theme::LH_META))
         .text_color(rgb(TEXT_MUTED))
         .child(StyledText::new(text).with_highlights(runs));
+    let tally_line = components::tabular(tally_line);
     div()
         .flex()
         .flex_shrink_0()
@@ -2739,10 +2742,8 @@ pub fn checks_head(pr: &PullRequest) -> Div {
         .justify_between()
         .gap(px(theme::EVENT_GAP))
         .h(px(theme::CHECKS_HEAD_H))
-        .px(px(theme::CHIP_PAD_X))
+        .px(px(theme::MENU_ROW_PAD_X))
         .mb(px(theme::CHECKS_CARD_GAP))
-        .border_b_1()
-        .border_color(rgba(HAIRLINE))
         .child(
             div()
                 .flex()
@@ -2769,7 +2770,7 @@ pub fn checks_group(workflow: Option<&str>, first: bool) -> Div {
         .flex_shrink_0()
         .items_center()
         .h(px(theme::CHECKS_GROUP_H))
-        .px(px(theme::CHIP_PAD_X))
+        .px(px(theme::MENU_ROW_PAD_X))
         .when(!first, |group| group.mt(px(theme::CHECKS_GROUP_GAP)))
         .text_size(px(theme::FS_SM))
         .line_height(px(theme::LH_META))
@@ -2788,6 +2789,7 @@ pub fn checks_group(workflow: Option<&str>, first: bool) -> Div {
 /// nothing.
 pub fn check_row(index: usize, run: &Check) -> Stateful<Div> {
     let openable = run.url.is_some();
+    let name = SharedString::from(run.name.clone());
     div()
         .id(("check-row", index))
         .debug_selector(move || format!("check-row-{index}"))
@@ -2796,8 +2798,11 @@ pub fn check_row(index: usize, run: &Check) -> Stateful<Div> {
         .items_center()
         .gap(px(theme::ROW_ICON_GAP))
         .h(px(theme::CHECKS_ROW_H))
-        .px(px(theme::CHIP_PAD_X))
+        .px(px(theme::MENU_ROW_PAD_X))
         .rounded(px(theme::R_CHIP))
+        // A matrix job's name can outrun the card; the whole of it is one
+        // hover away.
+        .tooltip(crate::menu::tooltip(name.clone()))
         .child(components::status_dot(check_ink(run.state)))
         .child(
             div()
@@ -2805,7 +2810,7 @@ pub fn check_row(index: usize, run: &Check) -> Stateful<Div> {
                 .flex_1()
                 .truncate()
                 .text_color(rgb(if openable { TEXT } else { TEXT_2 }))
-                .child(SharedString::from(run.name.clone())),
+                .child(name),
         )
         .child(
             div()
@@ -3704,7 +3709,13 @@ pub fn menu_row(
     cursor: bool,
     label_w: Option<f32>,
 ) -> Stateful<Div> {
+    // A description or a path cut at the popover's width keeps its whole
+    // text one hover away.
+    let detail = (!row.detail.is_empty()).then(|| row.detail.clone());
     components::menu_row(id, &menu_item(row, cursor, label_w), cursor, false)
+        .when_some(detail, |row, detail| {
+            row.tooltip(crate::menu::tooltip(detail))
+        })
 }
 
 /// A `MenuRow` as the shared menu row's content.
@@ -4280,7 +4291,10 @@ pub fn context_usage(
                 .debug_selector(move || format!("usage-cost-{cost}")),
         );
     }
-    card.max_h(px(440.)).overflow_y_scrollbar()
+    // Counts, percentages and the cost tick while the card is open.
+    components::tabular(card)
+        .max_h(px(theme::MENU_MAX_H))
+        .overflow_y_scrollbar()
 }
 
 /// A usage reading's ink: neutral `TEXT_2` until the window runs tight,
@@ -5982,7 +5996,7 @@ fn span_style(style: Style) -> Option<HighlightStyle> {
         // `strong` (§E.5): weight 600 in `--text-strong`.
         Style::Bold => Some(HighlightStyle {
             color: Some(rgb(TEXT_STRONG).into()),
-            font_weight: Some(FontWeight::SEMIBOLD),
+            font_weight: Some(W_STRONG),
             ..Default::default()
         }),
         // `a` (§E.6): underlined 1px. The prototype sets it in `--text`
